@@ -81,7 +81,7 @@ syntax differs.
 
 ## 3. Syntax options
 
-### Option A — Extended regex-style DSL (recommended)
+### Option A — Extended regex-style DSL (recommended until 2026-09-28; see Option D and §4)
 
 This keeps your notation as the core and adds a few keywords. Existing sequence expressions stay valid.
 
@@ -220,12 +220,174 @@ end
   order). The workload is no longer data, so it's hard to validate, diff, or reason about. It
   undercuts the "abstract" idea.
 
+### Option D — Full Python as the authoring language, building Option B's AST (added 2026-09-28)
+
+**Three layers, and what this option changes.** The language does three jobs: (1) *authoring*,
+how a human or a converter writes a workload; (2) *the contract*, the artifact that is
+fingerprinted, archived with results, and validated for CLOSED; (3) *execution*, what runs inside
+each actor state machine. Option D changes layer 1 only. Layer 2 stays the serde AST of Option B
+and layer 3 stays the Rust VM. Every guarantee in §2 and §4 lives in layers 2 and 3, so Python at
+layer 1 cannot weaken execution determinism or performance.
+
+**Roles.** The MLPerf Storage WG authors workloads in Python and publishes the resulting AST and
+its hash. Submitters run layers 2 and 3 only, with the published AST. Other users of the tool
+author their own ASTs the same way; the runner treats every AST identically and none is
+"official" except by the WG's published hash.
+
+**The AST is the artifact.** The only thing a nondeterministic script can do is produce a
+*different but valid* AST on a second run. That is a provenance problem (can this AST be
+regenerated from this source?), not a benchmark problem, because submitters run the hash. The
+techniques below make source→AST reproducible and auditable; they are the standard
+reproducible-builds toolkit.
+
+#### Builder sketch
+
+```python
+from mlps_abstract import Workload, const, normal, MiB, ms
+
+w = Workload("unet3d_train")
+
+# Parameters are symbolic references, not ints. P.steps is a ParamRef node; arithmetic on it
+# produces an Expr node. This is what stops Python from expanding the workload.
+P = w.params(batch=7, workers=4, prefetch=2, steps=500, sync_every=500,
+             xfer=1 * MiB, compute=323 * ms)        # or compute=normal(323 * ms, 10 * ms)
+
+train = w.dataset("train",
+                  pattern="train/{id/10000:05}/sample_{id:09}.npz",
+                  count=50_000_000,
+                  size=const(140 * MiB),
+                  seed=0x5eed_da7a)                  # dataset seed, independent of --seed
+
+with w.actor("gpu") as gpu:
+    # finite: exactly P.steps batches; the loader binds `b` (batch index)
+    with gpu.loader("batches", workers=P.workers, prefetch=P.prefetch,
+                    batches=P.steps, ordered=True) as worker:
+        with worker.loop("j", P.batch):
+            f = worker.consume(train)               # position = gpu + G·(b·batch + j)
+            worker.open(f, "RDONLY")
+            worker.fstat(f)
+            worker.read(f, P.xfer, repeat="until_eof")
+            worker.close(f)
+
+    with gpu.loop("step", P.steps) as step:
+        gpu.take("batches")
+        gpu.compute(P.compute)
+        with gpu.every(P.sync_every):               # tests `step`
+            gpu.barrier("global")
+
+w.write("unet3d_train.ast.yaml")   # canonical form + provenance block; prints the AST hash
+```
+
+Checkpoint fragment, showing symbolic arithmetic and loop-index references:
+
+```python
+        with gpu.every(100):
+            gpu.barrier("global")
+            c = gpu.file("ckpt/{step:06}/rank_{gpu:05}.pt")   # `step` is bound by the loop
+            gpu.open(c, "WRONLY|CREAT|TRUNC")
+            gpu.write(c, 64 * MiB, repeat=P.ckpt_bytes // (64 * MiB))   # Expr node
+            gpu.fsync(c)
+            gpu.close(c)
+            gpu.barrier("global")
+```
+
+The loader desugared to the primitives, as in Option A:
+
+```python
+    ch = gpu.channel("batches", capacity=P.workers * P.prefetch, ordered=True)
+    with gpu.parallel("w", P.workers) as worker:
+        with worker.loop("b", P.steps, step=P.workers, start=worker.index):   # b = w, w+W, …
+            with worker.loop("j", P.batch):
+                ...
+            worker.put(ch, seq="b")
+```
+
+What the builder refuses or the lint flags:
+
+```python
+for j in range(7):                  # unrolled: 7 sibling subtrees instead of a loop node.
+    worker.consume(train)           # Lint: "run of identical siblings; use worker.loop".
+
+n = random.randint(1, 10)           # Hermetic mode: `random` unseeded → raises.
+worker.read(f, n * MiB)             # (Distributions belong in the AST: worker.read(f, uniform(1*MiB, 10*MiB)).)
+
+worker.read(f, callback=lambda r: …)   # TypeError at construction: nodes hold no callables.
+```
+
+#### Techniques that make source→AST reproducible, in leverage order
+
+1. **Serialization is the firewall.** The builder emits YAML/JSON and the runner reads only that.
+   A lambda, a callback, an open file, or an array of already-drawn values cannot be serialized
+   and therefore cannot reach layer 2. Structural, not a lint.
+2. **Runner-side validation is the enforcement point.** On load the runner checks the AST against
+   a published JSON Schema plus the semantic rules of §4 (finite loops, conditionals only on loop
+   indices and parameters, no wall-clock phases in CLOSED, dataset matches manifest, op count
+   computable). A misbehaving generator produces a rejected AST, never a drifting execution.
+   Everything below this line is hygiene on top of the guarantee.
+3. **The AST stays symbolic.** Python computes parameters; it never expands the workload.
+   Distributions, consumers, and random offsets are nodes evaluated by the positional RNG at run
+   time, so a script has no reason to draw random numbers. Loops stay loop nodes. An AST size
+   limit and a lint for runs of identical siblings catch accidental unrolling. This also keeps the
+   AST readable and diffable for WG review.
+4. **Content-addressed AST with provenance.** The AST's identity is the hash of its canonical
+   form: sorted keys, fixed float formatting, site ids derived from structural position rather
+   than from Python object ids or creation order. A provenance block records the script hash, its
+   git commit, the Python version, and the lockfile hash. The runner prints the AST hash with
+   every result.
+
+   ```yaml
+   provenance:
+     generator: { script: unet3d_train.py, sha256: 3f9c…, git: a1b2c3d }
+     python: "3.12.6"
+     lock: { file: uv.lock, sha256: 77e1… }
+     built_twice_identical: true
+   ```
+5. **Build twice, compare, in CI.** Generate the AST in two fresh processes with different
+   `PYTHONHASHSEED` values, ideally on two machines, and fail if the hashes differ. This catches
+   set-iteration order, hash-dependent ordering, timestamps, and unpinned dependency drift without
+   anticipating them (the Debian/Nix reproducible-builds test).
+6. **Hermetic generation environment.** `abstract-build --hermetic script.py` runs the script with
+   a pinned interpreter and hash-locked dependencies (`uv run --locked`), in isolated mode
+   (`python -I -E -s`) so user site-packages and environment variables cannot leak in, with no
+   network. PEP 578 audit hooks deny socket connections, subprocesses, and file opens outside the
+   declared inputs. Audit hooks do not see clock reads, so the harness also stubs `time.time`,
+   `datetime.now`, `os.urandom`, `uuid.uuid4`, and unseeded `random`/`numpy.random` to raise.
+   Item 5 is what proves this worked.
+7. **Builder API hygiene.** Typed, immutable node constructors validated with pydantic against
+   the same schema the runner uses, so most mistakes fail at construction with a Python
+   traceback. Three documented don'ts: iterate sets, use `id()`/`hash()` for identity, read the
+   environment.
+
+**What this does not cover, accepted:** a script can be deliberately nondeterministic in a way
+that survives item 5 by chance, or can embed a value from a declared input file. Neither affects
+submitters, who run the published hash. For the WG, the published AST is the normative artifact;
+the script and provenance are attached for audit.
+
+- **Pros:** well-known syntax; the whole Python ecosystem for authoring (numpy for distributions,
+  pandas for trace analysis, an `strace`→AST converter in the same package); no parser or grammar
+  to design or document; PyTorch implementors can read it; Python lives only on the authoring
+  station, never on the bare-Linux client nodes; layers 2 and 3 are untouched.
+- **Cons:** a Python toolchain and lockfile discipline on the authoring side; reproducibility of
+  *authoring* is CI-enforced rather than by construction (Starlark would give it by construction
+  but loses numpy and familiarity); two representations to keep readable (Python source and
+  YAML AST), though only the AST is normative.
+
+**Relation to the other options.** D subsumes A (a Python builder is a better front end than a
+bespoke parser, and A's syntax would become a third representation to maintain), keeps B as the
+contract, and differs from C in kind: C puts an interpreter in layer 3; D puts one in layer 1.
+
 ## 4. Recommendation
 
-**Option A for the language people write, with Option B's tree as the canonical AST
-serialization.** The parser produces a serde AST. `--dump-ast` emits YAML/JSON, and the runner
-also accepts that AST directly. We get a readable language and still have a machine-friendly
-format for generated abstracts (e.g. from traces), with a single semantic model.
+**Revised 2026-09-28.** Option B's tree remains the canonical AST and the only thing the runner
+executes. For the authoring language the leading candidate is now **Option D**: a Python builder
+package that emits the AST, with the reproducibility techniques above enforced by CI and by the
+runner's validator. Option A is dropped from the recommendation rather than kept as a third
+representation. The choice is still the user's.
+
+The earlier recommendation (Option A for the language people write, Option B as the canonical
+serialization, `--dump-ast` to emit it) is retained here for the record; its reasoning about a
+single semantic model and a machine-friendly format for generated abstracts applies unchanged
+to D.
 
 Guardrails to keep the language from growing into a general-purpose language:
 

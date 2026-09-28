@@ -127,13 +127,15 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Deployment | Bare Linux on the client nodes, **no containers**. |
 | I/O crate | `io-uring` (Rust). |
 | A/B testing | Agreed. Backend × cache mode × io_uring features × NFS mount options (`NAPKIN_MATH.md` §8.5). The key metric is client CPU per op. |
-| Grammar | Options written up. Recommended: extended regex-style DSL, with a serde AST (YAML/JSON) as the canonical form. **User has not yet chosen.** |
+| Grammar | Three layers: authoring language, the AST contract, the Rust VM. The AST (serde YAML/JSON) is the contract and the only thing the runner executes; the WG publishes ASTs and their hashes, submitters run those. Leading candidate for authoring (2026-09-28): **Option D**, a Python builder package that emits the AST, with source→AST reproducibility enforced by CI (build twice, compare) and by the runner's validator. Python stays on the authoring station, never on client nodes. **User has not yet chosen.** |
 
 ## 6. Open items / next steps
 
 1. **Write paper abstracts** for the four target workloads, derived from `strace` of the real
    loaders: small-file training, large-sample training, checkpoint write, checkpoint restore.
-2. **User to choose a grammar option** (A/B/C in `GRAMMAR_OPTIONS.md`).
+2. **User to choose an authoring option** (A/B/C/D in `GRAMMAR_OPTIONS.md`; D is the leading
+   candidate). Then: publish the AST JSON Schema, write the builder package and the
+   `abstract-build --hermetic` harness, and add the build-twice check to CI.
 3. Build the VM with `--dry-run` and the fingerprint; test against ext4 and a loopback NFS mount
    on WSL2 (see §7). Golden-test the fingerprint in CI.
 4. **Spike 1:** blocking thread pool first, then io_uring; buffered vs. O_DIRECT, for
