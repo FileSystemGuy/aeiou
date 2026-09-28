@@ -314,6 +314,92 @@ worker.read(f, n * MiB)             # (Distributions belong in the AST: worker.r
 worker.read(f, callback=lambda r: …)   # TypeError at construction: nodes hold no callables.
 ```
 
+#### How the AST is built (staging), and the three routes to an AST
+
+**The Python never runs the workload.** It is the same kind of thing the DSL of Option A was: a
+description of what the execution layer should do. The DSL was *parsed* into the tree; the Python
+*constructs* the tree by running once, and the calls that look like I/O are declarations. This
+technique is called staging and is how JAX tracing, PyTorch FX, TensorFlow graph mode, and Halide
+work.
+
+Mechanically:
+- `worker.read(f, P.xfer)` reads nothing; it appends a `Read` node at the builder's current
+  cursor.
+- `with gpu.loop("step", P.steps) as step:` pushes a `Loop` node, makes it the cursor, and hands
+  back `step` as a symbolic `LoopIndex`. Leaving the block pops the cursor.
+- Parameters are `ParamRef` objects. Symbolic values overload operators, so
+  `step % P.sync_every == 0` does not evaluate to a boolean; it returns an `Expr` node holding
+  the formula, and `gpu.when(...)` / `gpu.every(...)` wrap it in a `Cond` node.
+- `w.write()` walks the finished tree, validates it against the schema, and emits canonical
+  YAML. Nothing is extracted from Python source; Python's own syntax tree is never parsed.
+  About 500 lines of Python with pydantic.
+
+The unet3d step loop becomes:
+
+```yaml
+- loop: { index: step, count: { param: steps } }
+  body:
+    - take: batches
+    - compute: { param: compute }
+    - cond:
+        expr: { eq: [ { mod: [ { index: step }, { param: sync_every } ] }, 0 ] }
+        then: [ { barrier: global } ]
+```
+
+**The one discipline.** Python control flow runs at build time; builder control flow runs at
+execution time. A Python `for` over a symbolic `P.steps` cannot iterate at all, which is the
+same error JAX raises for `if` on a traced value, and it tells the author to use `gpu.loop`.
+Python loops remain useful for generating *structure*: four similar actor templates, a `choose`
+whose weights come from a table, the seven fixed syscalls of a Python `open()`. Rule of thumb:
+**Python loops generate structure; builder loops generate iterations.** The identical-siblings
+lint catches hand-unrolled iterations.
+
+**Authoring is abstraction, not emulation.** The author reproduces the real application's I/O
+skeleton: the order and nesting of I/O calls, which run in parallel, what waits on what, what
+repeats and how often. The application's logic, data structures, and data-dependent branching
+are either gone or reduced to a `compute` node or a distribution slot. The skeleton comes from
+knowing how the real system is built (the DataLoader shape came from PyTorch's design, not from
+a trace), and the same is true for a VDB or a KV cache. The author also decides the *cuts*: the
+behaviors that cannot be carried into the shape without breaking determinism (cross-actor
+reuse, cache eviction, §5.3) and are replaced by statistical inputs. Cuts are listed in the
+workload's documentation.
+
+**Three sources fill the AST's slots**, and it helps to keep shape and fitted parameters as
+separate artifacts (the AST with named distribution slots, plus a parameter file that fills
+them; the WG can publish one shape with several parameter sets):
+1. *Configuration* of the real system: batch size, workers, block size, beam width, nprobe.
+2. *Measurement* of the real system's compute: the `compute` distributions.
+3. *An I/O trace* of the real system, for what only the data determines: sizes, offsets, reuse
+   distances, hop counts, popularity skew, hit lengths. The trace never enters the AST; it
+   informs the parameter file, validates the result (§5.4), and is then set aside.
+
+**Three routes to an AST**, answering different questions:
+1. **Builder** (this option). A human writes the shape and names the slots. Exact by
+   construction.
+2. **Trace and fit.** Capture a trace of the real application (`strace`, eBPF, an `LD_PRELOAD`
+   shim) and fit the distributions in the slots. A trace is one *linearization* of the workload:
+   it yields distributions but not the dependency graph, because the graph is exactly what the
+   linearization threw away. Fitting therefore fills in the numbers of a shape a human already
+   wrote; it does not discover the shape. Automated shape inference from traces is a research
+   problem and is not promised. The trace also *tests* the shape: a locality metric (§5.4) that
+   no choice of parameters can match is the signal that the shape is missing a construct, for
+   example a reuse-distance curve with no `recent` reference to produce it. The loop is: write
+   the shape, capture, fit, compare, revise the shape, repeat.
+3. **Replay.** The trace itself as a literal `replay` node, bounded to small-scale calibration
+   (§5.4). Never a CLOSED workload.
+
+Running a *Python model* that performs fake I/O and recording it would be route 2 applied to a
+model instead of the real application. It needs a Python execution engine with a simulated
+scheduler to produce an interleaving (Option C's problems, in Python) and it still loses the
+graph. Route 1 already has the graph and route 2 already has real numbers, so the model adds
+nothing.
+
+**Variant D2, for later if wanted.** A decorator could translate a restricted Python subset by
+reading its syntax tree, so `for step in range(P.steps):` becomes a loop node and
+`if step % 500 == 0:` a cond (the Numba/Triton/Taichi approach). It reads more naturally but
+needs a translator, a precise definition of the allowed subset, and harder error messages.
+Start with the builder; add the decorator only if authors find the `with` blocks tedious.
+
 #### Techniques that make source→AST reproducible, in leverage order
 
 1. **Serialization is the firewall.** The builder emits YAML/JSON and the runner reads only that.
