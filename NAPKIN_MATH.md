@@ -1,6 +1,7 @@
 # Abstract-Driven I/O Benchmark Runner — Napkin Math & Risk Assessment
 
-Status: pre-implementation analysis (2026-09-24, revised same day with user decisions — see §8).
+Status: pre-implementation analysis (2026-09-24, revised same day with user decisions — see §8;
+revised 2026-09-25 after design review — see `DESIGN_REVIEW.md`).
 Nothing here has been measured yet.
 Numbers marked **[verify]** are from general experience/literature, not from this project,
 and should be confirmed by the spikes listed at the end before design decisions depend on them.
@@ -58,20 +59,22 @@ possible orderings. This is irrelevant for I/O fidelity.
 |---|---|---|---|
 | Abstract AST | size of the abstract file | — | KB |
 | File names | **computed** from pattern + file id (`train/{id/1e6:03}/{id/1e3%1e3:03}/img_{id:09}.jpg`), ~50–100 ns to format | — | 0 |
-| File sizes | constant, or `dist.sample(hash(seed, file_id))` | — | 0 |
+| File sizes | constant, or `dist.sample(hash(dataset_seed, file_id))`. The dataset seed lives in the dataset definition and the `datagen` manifest, **not** in `--seed`, so a different run seed never changes what the corpus is expected to look like. | — | 0 |
 | File sizes from a manifest (only if real, irregular datasets must be replayed) | 4 B × N | 50M / 100M | 200 MB / 400 MB |
 | *Materialized path strings (anti-pattern, for reference)* | ~64 B path + 24 B `String` + allocator overhead | 50M / 100M | **~5 GB / ~10 GB** |
 | Actor state (GPU + W workers + reorder window + interpreter stack) | ~256 B + 64 B × W + ~16 B × stack depth | W=8 → ~1 KB; 50K GPUs | ~50 MB |
 | In-flight op records (slab indexed by `user_data`) | ~64 B × ops in flight | 1M in flight | 64 MB |
 | io_uring rings | SQE 64 B, CQE 16 B; 4K SQ + 8K CQ ≈ 400 KB per ring | 64 threads | ~26 MB |
-| Read buffers — **shared "sink" buffers** (data is discarded, concurrent reads may target the same buffer) | threads × 2 × max transfer | 64 × 2 × 1 MiB | 128 MB |
+| Read buffers — per-thread **ring of sink buffers, sized larger than L3** (data is discarded, but the copy must miss cache the way a real loader's does; a hot 2 MiB region would hide the memory-bandwidth cost and understate client CPU per op, which is the key A/B metric) | threads × ~64 MiB | 64 × 64 MiB | 4 GB (tunable; 16 MiB/thread is the floor) |
 | *Read buffers — one per in-flight op (anti-pattern)* | in-flight × transfer | 344K × 128 KiB | **~44 GB** |
 | Write source buffers (must be non-dedupable/non-compressible, see §5) | pool, or regenerate with fast PRNG | 64 threads × 16 MiB | ~1 GB |
-| Latency stats: HDR histograms per (thread × op type) + 1 s time series | ~30–200 KB each | 64 × 8 | ~50 MB |
+| Latency stats: HDR histograms per (thread × op type × step bucket) + 1 s time series | ~30–200 KB each | 64 × 8 × 10 | ~500 MB worst case; use sparse buckets |
+| Per-step stall time per GPU (time from end of `compute` to the next `take` returning) | 4 B × steps × GPUs on host | 500 × 2,500 | 5 MB. **Not** per-op logging; this is the most useful single output and shows the cache-fill transition of §8.C directly. |
 | *Per-op latency log (anti-pattern)* | ~24 B × ops | 50M files × 4 ops per epoch | **~5 GB / epoch** — stream to disk if ever needed |
 
 **Runner total, recommended design, 100M files, ~50K simulated GPUs, 1M ops in flight:
-well under 1 GB.** DRAM is not the constraint on the runner. It *is* a constraint on the kernel
+well under 1 GB of state, plus a tunable 1–4 GB of sink buffers.** DRAM is not the constraint on
+the runner. It *is* a constraint on the kernel
 of the client host (next section).
 
 ### 2.3 Hidden memory: the client kernel
@@ -156,12 +159,20 @@ realistic, latency-sensitive, closed-loop load, and scales it up only by adding 
 
 Requirements that follow:
 
-1. **Counter-based RNG**, keyed on `(seed, actor_id, epoch, step, draw#)` (e.g. SplitMix/
-   wyhash/Philox-style hash). Never a shared, stateful RNG: its output would depend on
-   thread count and completion order.
-2. **Static sharding of the consumer**: GPU g takes permutation indices `g, g+G, g+2G, …`
-   (like `DistributedSampler`). A shared dynamic "next file" pool would make file→GPU
-   assignment timing-dependent and would also need cross-thread/cross-host synchronization.
+1. **Positional, counter-based RNG**, keyed on `(seed, actor_id, site_id, [enclosing loop
+   indices])` (e.g. SplitMix/wyhash/Philox-style hash). Never a shared, stateful RNG: its output
+   would depend on thread count and completion order. Also **no per-actor draw counter**: the
+   loop indices are the counter, so the op at (GPU g, step s) can be computed without simulating
+   steps `0..s`. See `GRAMMAR_OPTIONS.md` §2.
+2. **Static sharding of the consumer by formula**: GPU g, batch b, item j takes permutation
+   position `g + G·(b·B + j)`, and batch b is built by worker `b mod W` (this is
+   `DistributedSampler` + round-robin `BatchSampler` + round-robin worker assignment). A shared
+   dynamic "next file" pool, or a per-GPU counter shared by its W workers, would make file→worker
+   assignment timing-dependent. Epoch wrap is `drop_last`: an epoch is `floor(N / (G·B))` steps,
+   and all GPUs switch keys at the same step.
+3. **Finite producers.** A loader is declared with its total batch count (`steps`) and dispatches
+   exactly that many, so workers never prefetch past the last step and no in-flight op has to be
+   cancelled at the end. The op multiset is fixed before the run starts.
 
 ### 4.2 Threading model
 
@@ -171,16 +182,33 @@ Requirements that follow:
   dispatch to actor via `user_data` → repeat.
 - Emulated compute (`sleep`): thread-local **timer wheel** (tens of thousands of concurrent
   timers), not one `IORING_OP_TIMEOUT` per actor. Timescale is ~100 ms, so accuracy is not a
-  concern.
+  concern. **Gotcha:** with only timers pending and no I/O outstanding, a plain
+  `submit_and_wait` never wakes. Use the submit variant that takes a timeout
+  (`IORING_ENTER_EXT_ARG`, kernel ≥ 5.11) set to the next timer-wheel expiry.
+- I/O backend behind a trait. **The blocking thread pool (one OS thread per worker actor,
+  blocking `pread`) is the fidelity reference, not a fallback**: it is literally what PyTorch
+  does. io_uring is the scaling lever. Build the pool backend first; it is smaller and gives the
+  baseline for the A/B in §8.5.
+- The trait has two halves: `issue(op, buffer) -> token` and a **completion source** the event
+  loop can wait on. Blocking APIs (`sync`, `sync-direct`, `posix-aio`, `mmap`, `libnfs` sync
+  calls, `cuFileRead`) complete on the thread pool, which writes the per-thread `eventfd`.
+  Submit-and-poll APIs (`libaio`, cuFile batch, NIXL) get a poller thread per event-loop thread
+  that feeds the same `eventfd`. io_uring is the only backend whose completions arrive natively.
+  The full backend list and its three axes (initiation, completion, memory target) are in
+  `PROJECT_BRIEF.md` §4.
+- Buffers: per-thread ring larger than L3, so read copies miss cache the way a real loader's do
+  (§2.2).
 - Barrier: per-host atomic counter + cross-host coordinator. At one barrier per 500 steps
   (~150 s at T=0.3 s), even a 10 ms network barrier costs nothing.
 
 ### 4.3 Multi-host
 
 Because every actor's behavior depends only on (seed, actor id), hosts can be given actor ranges
-(`--gpus 10000 --host-rank 3 --host-count 20`) and need to communicate only for barriers,
-start/stop, and stats aggregation. **Decision: use MPI** (`mpi` crate / rsmpi) — see §8.A for
-how barriers integrate with the io_uring event loop.
+(`--gpus 10000 --rank 3 --ranks 20 --coordinator host:port`) and need to communicate only for
+a start gate, barriers, one stats/fingerprint reduction at the end, and stop. **Decision
+(2026-09-28): a small pure-Rust TCP coordinator, not MPI** — see §8.A for the protocol and how
+barrier release integrates with the io_uring event loop. "Rank" in this document means the host
+index that selects a GPU id range, nothing more.
 
 ### 4.4 The abstract language needs more than the regex sketch
 
@@ -191,9 +219,9 @@ training workload as described also needs:
 |---|---|
 | **Variable binding** (`f = consume(files)`) and references (`open(f)`, `read(f, …)`) | The selection picks *which file*, and the following fixed sequence must act on it. |
 | **Replication / actors** (`per gpu`, `workers W`) | Scaling is by instantiating the abstract G×W times. |
-| **Fork/join** (`parallel`, `join`) | Batch = W concurrent readers; the step waits for all of them. |
-| **Pipelining / bounded prefetch** (`prefetch N`) | The next batch loads while the GPU computes. |
-| **In-order delivery** | Faithful DataLoader head-of-line behavior. |
+| **Explicit loop indices** (`for step in $steps`) | The RNG key, file names such as `ckpt/{step:06}`, and `every N` all refer to them. No actor-local counters. |
+| **`parallel(W)` + bounded `channel(capacity, ordered/unordered)`** as primitives | Fork/join, bounded prefetch, and in-order (head-of-line) or unordered delivery all fall out of these two. PyTorch's `loader` is sugar; tf.data-style unordered interleave, DALI, and checkpoint writer pools need nothing new. |
+| **Finite producers** (`loader … batches = $steps`) | Workers must not prefetch past the last step, or the op multiset depends on when the run stops. |
 | **Barrier(scope)** | Every-500-steps all-reduce; checkpoint phases. |
 | **Distributions as parameters** (sizes, counts, sleep times, repeat counts) | Already in the sketch; must accept CLI overrides. |
 | **Per-epoch reset** of consumers | Reshuffle = new key. |
@@ -221,18 +249,24 @@ of the previous one.
 
 | # | Risk | Impact | Likelihood | Mitigation / early test |
 |---|---|---|---|---|
-| **R1** | **io_uring on NFS runs largely through io-wq worker threads.** `openat`/`close`/`statx` usually punt, and buffered reads that miss the page cache likely punt on NFS (async buffered read support is filesystem-dependent) **[verify]**. In that case io_uring behaves like a kernel thread pool, so its advantage over a user-space blocking thread pool may be small for this workload. | CPU per op much higher than expected; per-host op rate lower; "use io_uring" stops being the main performance lever. | High | **Spike 1** (below). Design the I/O backend behind a trait so a blocking-thread-pool backend is a drop-in fallback/baseline. Tune `IORING_REGISTER_IOWQ_MAX_WORKERS`. |
+| **R1** | **io_uring on NFS runs largely through io-wq worker threads.** `openat`/`close`/`statx` usually punt, and buffered reads that miss the page cache likely punt on NFS (async buffered read support is filesystem-dependent) **[verify]**. In that case io_uring behaves like a kernel thread pool, so its advantage over a user-space blocking thread pool may be small for this workload. **Hypothesis to test:** NFS direct I/O is AIO-capable (the client issues the RPCs and returns `-EIOCBQUEUED` for a non-synchronous kiocb), so an O_DIRECT read should *release* its io-wq worker immediately, while a buffered cache-missing read *holds* one for the whole RPC round trip. If so, O_DIRECT keeps `iou-wrk` count small at tens of thousands of outstanding reads and only opens/closes cost a worker each **[verify]**. | CPU per op much higher than expected; per-host op rate lower; "use io_uring" stops being the main performance lever. | High | **Spike 1** (below), measuring `iou-wrk` count separately for open-heavy and read-heavy phases. I/O backend behind a trait; the blocking thread pool is the fidelity reference and is built first (§4.2). Tune `IORING_REGISTER_IOWQ_MAX_WORKERS`; consider `IORING_SETUP_ATTACH_WQ` to share one io-wq pool across rings. |
 | **R2** | **The client is the bottleneck, not the storage.** Per-mount NFS slot/session limits, RPC processing, per-host NIC. | Can't saturate the SUT from one host; the results measure the client. | High for small-file workloads | Multi-host from the start (§4.3). Report per-host client CPU and NFS RPC stats (`/proc/self/mountstats`) with every run. `nconnect`, multiple mounts. |
 | **R3** | **Client caching distorts the workload.** Page cache, dentry/inode cache (~50–60 GB for 50M files), attribute cache, NFSv4 delegations (can turn OPEN/CLOSE into local ops). | Server sees a different (lighter) op mix than intended; results drift across a run as caches warm. | High | Options for O_DIRECT, drop caches per epoch, recommended mount options (`actimeo`, `lookupcache`), and a check that dataset ≫ aggregate client RAM. Record server-side op counts to validate. |
 | **R4** | **Abstract language under- or over-designed** (§4.4). | Can't express the target workloads, or the PoC turns into a compiler project. | Medium–High | Write the 3–4 target abstracts (training small-file, training large-sample, checkpoint write burst, checkpoint restore) *by hand, on paper* before writing the parser. |
-| **R5** | **Determinism is broken by accident.** Shared RNG, dynamic work distribution, `HashMap` iteration order, thread-count-dependent sharding. | "Same seed, same workload" stops being true, and runs are no longer comparable. | Medium | Counter-based RNG; static sharding; a `--dry-run` mode that prints each actor's op stream so two runs can be diffed (and golden-tested in CI). |
+| **R5** | **Determinism is broken by accident.** Shared RNG, dynamic work distribution, `HashMap` iteration order, thread-count-dependent sharding, per-actor counters shared by concurrent workers, producers that run past the last step, an order-dependent fingerprint. | "Same seed, same workload" stops being true, and runs are no longer comparable. | Medium | Positional RNG keyed on loop indices, no draw counters; sharding by formula; finite producers; order-independent fingerprint (§8.D); dataset seed separate from run seed; a `--dry-run` mode that prints any actor's op stream for any step range (`--dry-run --gpu 17 --steps 300..302`) so two runs can be diffed and golden-tested in CI. |
 | **R6** | **Dataset generation cost.** 50M creates at 5–50K creates/s = **17 min – 2.8 h**; directory fan-out affects both creation and lookup performance. | Slow iteration; layout mismatch between generator and abstract. | High (certain to be slow) | `datagen` mode in the same binary, driven by the *same* filename pattern and size distribution as the abstract. Hierarchical layout (≤~10K entries/dir). Resumable. |
-| **R7** | **Write data is dedupable/compressible** (shared buffer reused for every write). | Inflated write and checkpoint numbers on systems with data reduction. | Medium | Per-write unique content: fast PRNG fill (≥10 GB/s/core with SIMD-friendly generators) or a large random pool with unique per-block headers. Same rule for `datagen`. |
-| **R8** | **io_uring disabled by the OS.** Containers are out of scope (runner runs on bare Linux), so the remaining exposure is the `kernel.io_uring_disabled` sysctl (6.6+) set by some hardened/enterprise distros **[verify target OS]**, and `RLIMIT_MEMLOCK` on kernels <5.12. | Runner won't start on some lab hosts. | Low | Startup probe with a clear error message naming the sysctl; blocking-thread-pool backend as fallback. |
-| **R9** | **Measurement volume.** Per-op logging = GBs per epoch. | Measurement perturbs the run or fills disks. | Medium | HDR histograms per thread/op type + 1 s time series; merge at end. Optional sampled tracing. |
+| **R7** | **Write data is dedupable/compressible** (shared buffer reused for every write). | Inflated write and checkpoint numbers on systems with data reduction. | Medium | Per-write unique content: fast PRNG fill (≥10 GB/s/core with SIMD-friendly generators) keyed on `(dataset seed, file id, block offset)`, with a per-block header carrying the same tuple. Same rule for `datagen`. The header doubles as the verification target (R18). |
+| **R8** | **io_uring disabled by the OS, or resource limits too low.** Containers are out of scope (runner runs on bare Linux), so the remaining exposure is the `kernel.io_uring_disabled` sysctl (6.6+) set by some hardened/enterprise distros **[verify target OS]**, `RLIMIT_MEMLOCK` on kernels <5.12, and **`RLIMIT_NOFILE`**: 2,000 GPUs per host × W=8 is 16K files open at once per host, plus a fixed-file table of the same size, plus hundreds of thousands of NFSv4 open stateids server-side across the cluster. | Runner won't start on some lab hosts, or fails mid-run with `EMFILE`. | Low–Medium | Startup probe that computes the needed fd count from G, W, and the abstract, raises the soft limit, and fails early with a clear message naming the sysctl or limit. Report open-file high-water mark with the run. |
+| **R9** | **Measurement volume.** Per-op logging = GBs per epoch. | Measurement perturbs the run or fills disks. | Medium | HDR histograms per thread/op type, bucketed by step range so steady state can be selected after the run; 1 s time series; per-step stall time per GPU (§2.2); merge at end. Optional sampled tracing. |
 | **R10** | **Emulating PyTorch too literally or not literally enough** (Python `open()` side syscalls, in-order batch delivery, worker sequential reads). | Results don't match real training runs. | Medium | Validate against real `strace`/NFS server op-mix captures of a small real training run; compare op mix and per-file latency distribution. |
 | **R11** | **Long runtimes at realistic scale** (6 h/epoch at 100 GPUs on 50M files). | Painful testing; tempting to cut corners on fidelity. | Certain | Step/time-bounded runs; "accelerator utilization ≥ X%" as the pass metric (MLPerf Storage style), which converges long before an epoch ends. |
-| **R12** | **Dev environment is WSL2.** io_uring works on WSL2's 6.x kernel, but there's no realistic NFS target, and `/mnt/c` (9p/drvfs) behaves nothing like production. | Wrong conclusions from local testing. | Medium | Develop logic locally against ext4/tmpfs; run all performance work on real Linux clients against real NFS. |
+| **R12** | **Dev environment is WSL2.** io_uring works on WSL2's 6.x kernel, but there's no realistic NFS target, and `/mnt/c` (9p/drvfs) behaves nothing like production. | Wrong conclusions from local testing. | Medium | Develop logic locally against ext4/tmpfs **and a loopback NFS mount** (`nfs-kernel-server` exporting a tmpfs directory, mounted from `localhost`; needs systemd enabled in WSL2). No performance meaning, but it exercises the real NFS client paths (io-wq punting, O_DIRECT on NFS, attribute caches), which ext4 does not. Run all performance work on real Linux clients against real NFS. |
+| **R14** | **`mmap`-based loaders** (safetensors, Arrow-backed Hugging Face datasets, `np.load(mmap_mode=…)`). | Page faults are not submittable through io_uring, and fault-around/readahead, not the abstract, decide the RPC sizes. | Medium | **In scope as a backend (revised 2026-09-28):** runs on the blocking thread pool; `read(f, off, len)` maps to `MADV_POPULATE_READ` (5.14+) or touching the pages, with `MADV_WILLNEED` as a prefetch variant. The abstract is unchanged; the RPC pattern is reported, not assumed. |
+| **R15** | **GDS silently in compat mode.** cuFile falls back to a POSIX bounce buffer when the filesystem, driver, or MOFED stack lacks true GDS support, which on NFS is the common case. | A "GDS" result that measured a bounce-buffer path. | High on NFS | The `gds` backend reads `cufile_stats`/the cuFile JSON config and the per-handle compat flag at startup and after the run, prints it in the report, and fails if `--require-gds` is set. |
+| **R16** | **GPU-memory backends need a CUDA device on every client.** `gds` and `nixl-posix` cannot run on CPU-only client nodes, and the GPU is only a sink. | Those rows of the A/B matrix run on fewer hosts than the rest. | Certain | Record it in the matrix; keep the abstract and fingerprint identical so the rows are still like-for-like on the hosts that can run them. |
+| **R18** | **A shim or client below the interposition line returns wrong or stale data fast.** The application-level fingerprint proves what was *asked for*, not what was *delivered*; a cache from a previous run, a fabricating shim, or a dataset that drifted from its manifest all look identical to it. | A fast, invalid result. | Medium | Data verification (`PROJECT_BRIEF.md` §5): per-block headers written by `datagen`, sampled header checks on reads (default 1 in 64 blocks, ~0.1% of the bytes touched, one cache line per block), 100% in `--verify` runs, read-back phase after checkpoint writes. Mismatch = run failure. |
+| **R19** | **The solution learns the file order.** With a known seed and abstract, a shim or client could prefetch the next file and defeat the closed loop. | Results that do not reflect the real workload, where the sampler is inside the application. | Low–Medium | Seed privacy (`PROJECT_BRIEF.md` §5): seed, abstract, and file order are application-private; reviews re-run with a fresh seed and expect the same result within noise. |
+| **R17** | **Backend is part of the application.** Two runs with different backends are two different applications, not two storage solutions. Mixing the two comparisons attributes client-stack differences to storage. | Wrong conclusions from the matrix. | Medium | Comparison policy in `PROJECT_BRIEF.md` §5 (decided 2026-09-28): CLOSED uses the framework's real API (`sync` for PyTorch); other backends measure the SUT's speed of light and advise implementors; fix the backend when comparing storage; fix the storage when comparing backends. RPC counts, client CPU, and client DRAM are audit data. |
 | **R13** | ~~liburing vs. Rust crate~~ **Decided:** use the pure-Rust `io-uring` crate. | — | — | — |
 
 ---
@@ -242,37 +276,52 @@ of the previous one.
 1. **io_uring vs. blocking thread pool on the real NFS target** (addresses R1, R2, R8).
    Microbenchmark `open → read(S) → close` on random files at QD 1…4096, S ∈ {4K, 128K, 1M},
    buffered and O_DIRECT. Measure ops/s, client CPU per op, and how many io-wq workers are
-   spawned (`ps -eLf | grep iou-wrk`). This decides whether io_uring is the main lever or
-   just a convenience.
+   spawned (`ps -eLf | grep iou-wrk`), **separately for an open-heavy phase and a read-heavy
+   phase**. Hypothesis (R1): O_DIRECT reads release their worker immediately because NFS direct
+   I/O completes asynchronously; buffered cache-missing reads hold one per outstanding RPC. This
+   decides whether io_uring is the main lever or just a convenience, and whether O_DIRECT is
+   required for scale as well as for reclaim.
 2. **Feistel permutation**: correctness (a bijection over [0, N) for N = 50M/100M, checked
    with a bitmap), throughput (target <50 ns/draw), and a quick check that there's no locality
    (distribution of |Δ| between consecutive draws).
 3. **Client cache behavior at scale**: `stat`/`open` 50M files from one host, watching slab
    growth (`slabtop`) and the NFS op mix (`nfsstat -c`, `mountstats`).
-4. **Paper abstracts** for the 3–4 target workloads (R4), then decide the grammar.
+4. **Paper abstracts** for the four target workloads (R4), derived from `strace` of the real
+   loaders, then decide the grammar: small-file training, large-sample training, checkpoint
+   write, and **checkpoint restore** (the one workload where many ranks read the same files, so
+   delegations and page cache matter).
+
+Order of work after the abstracts: build the VM with `--dry-run` and the fingerprint against
+ext4 and loopback NFS (R12), then Spike 1 on the real target with the thread-pool backend first.
 
 ---
 
 ## 7. Bottom line
 
 - **DRAM is a non-issue for the runner** if the consumer is a keyed permutation and filenames
-  and sizes are computed, not stored: under 1 GB even at 100M files and ~50K simulated GPUs.
+  and sizes are computed, not stored: under 1 GB of state even at 100M files and ~50K simulated
+  GPUs, plus a few GB of sink buffers chosen deliberately to defeat the cache.
   The 200/400 MB shuffled-list approach is also perfectly viable. The bitmap's slowdown is
   real (N·ln N total probes, near-N probes for the last draws) but it's a tail-latency problem,
   not a throughput one.
 - **Client-side DRAM (kernel caches) is an issue**, mostly as a fidelity problem.
 - **IOPS ceiling is set by the NFS client path and io-wq punting, not by the runner's state
   machine.** Plan for many client hosts and validate io_uring's benefit on NFS early.
-- **The biggest design risk is the abstract language.** It needs binding, fork/join,
-  prefetch, and barriers beyond the regex-style sketch.
+- **The biggest design risk is the abstract language.** It needs binding, explicit loop
+  indices, `parallel` + `channel`, finite producers, and barriers beyond the regex-style sketch.
+- **Exactness is a property of the whole design, not just the RNG.** Positional randomness, a
+  sharding formula instead of counters, finite producers, a dataset seed separate from the run
+  seed, and an order-independent fingerprint are each necessary (§4.1, §8.D).
 
 ---
 
 ## 8. Round 2: user decisions and follow-up analysis (2026-09-24)
 
 User inputs recorded:
-- **Multi-host via MPI.** All ranks use the same seed, and each rank takes its own subset of the
-  work with no negotiation over the network.
+- **Multi-host with one shared seed.** Each rank takes its own subset of the work with no
+  negotiation over the network. Originally MPI; **revised 2026-09-28 to a pure-Rust TCP
+  coordinator** (see §8.A) to avoid installing and ABI-matching OpenMPI/MPICH plus libclang on
+  every bare-Linux client and build host.
 - **Run length.** Runs are bounded by a step count (currently 500, adjustable).
 - **Dataset sizing.** The dataset must be ≥ 5× the total DRAM of all client nodes.
 - **Why the page cache matters.** Finding pages to evict gets non-linearly slower as memory
@@ -283,9 +332,9 @@ User inputs recorded:
 - **Grammar.** Extensions are agreed; see `GRAMMAR_OPTIONS.md`.
 - **Backends.** A/B testing of I/O backends is agreed; see §8.5.
 
-### 8.A MPI + same seed + rank-based sharding — yes, with two refinements
+### 8.A Same seed + rank-based sharding — yes, with two refinements
 
-1. **Shard by global GPU id, not by MPI rank.** Rank r owns GPU ids `[r·G/R, (r+1)·G/R)`.
+1. **Shard by global GPU id, not by rank.** Rank r owns GPU ids `[r·G/R, (r+1)·G/R)`.
    GPU g consumes permutation positions `g, g+G, g+2G, …`, so the work per GPU does not depend on
    R. A 1,000-GPU run on 10 nodes and on 20 nodes issues exactly the same operations. The only
    change is which node sends them.
@@ -295,16 +344,39 @@ User inputs recorded:
    epoch, which is closer to `DistributedSampler`. The node-to-node communication cost is still
    zero.
 
-**Integrating the barrier with io_uring:** a dedicated MPI thread (`MPI_THREAD_FUNNELED`)
-does the blocking `MPI_Barrier`. When it returns, the thread writes to an `eventfd`. Each
-event-loop thread keeps an io_uring read posted on that eventfd, so the release shows up as an
-ordinary completion.
+**Cross-host coordination: a pure-Rust TCP coordinator (decided 2026-09-28, replaces MPI).**
+The runner needs only a start gate, a barrier every few hundred steps, one reduction of stats
+and the fingerprint at the end, and stop. That is a few hundred lines over TCP, and it removes
+the OpenMPI/MPICH + libclang dependency from the build host and the MPI runtime (and its ABI
+matching) from every client node. The result is one static binary copied with `scp`.
 
-Within a node, the threads first gather through an atomic counter. The last thread to arrive
-asks the MPI thread to enter the barrier. At one barrier per ~150 s the cost does not matter.
+- **Topology:** star. Rank 0 (or a separate `runner coordinate` process) listens. Every rank
+  connects once at startup and keeps the socket for the whole run.
+- **Transport:** blocking `std::net` on a dedicated coordinator thread. No tokio, no tonic/gRPC:
+  HTTP/2, protobuf codegen, and a second async runtime buy nothing for one barrier per ~150 s.
+- **Wire format:** length-prefixed structs serialized with `postcard` (or `bincode`):
+  `Hello { rank, ranks, config_fingerprint }`, `Ready`, `Start { t0 }`, `Arrive { barrier_id }`,
+  `Release { barrier_id }`, `Stats { bytes }`, `Stop { reason }`, plus a periodic `Heartbeat`.
+- **Config check:** `Hello` carries a hash of the abstract, parameters, seed, G, and the dataset
+  manifest. The coordinator refuses any rank whose hash differs, before any I/O starts. This
+  replaces the protection `mpirun`'s single command line used to give.
+- **Start gate:** all ranks send `Ready` after rings, buffers, and the manifest check are done;
+  the coordinator replies `Start` with a common `t0` so AU windows and step buckets align.
+- **Barrier:** the last event-loop thread on a host to arrive (atomic counter) tells the
+  coordinator thread, which sends `Arrive`. When all ranks have arrived the coordinator sends
+  `Release` to every rank; the coordinator thread writes the local `eventfd`, and each event-loop
+  thread keeps an io_uring read posted on that eventfd, so the release shows up as an ordinary
+  completion. Fan-out to 20 hosts is well under 1 ms against a 300 ms step.
+- **Reduction:** at the end each rank sends its histograms (a few MB) and its fingerprint partial
+  sum; the coordinator merges histograms and adds fingerprints modulo 2^64.
+- **Faults:** a missed heartbeat or a closed socket aborts the run on every rank, which is what
+  MPI would have done.
+- **Launch:** `pdsh` or an ssh loop starting `runner --rank r --ranks R --coordinator host:port`
+  on each host, replacing `mpirun`.
 
-**Build note:** the `mpi` crate (rsmpi) needs an MPI installation (Open MPI or MPICH) and
-libclang at build time.
+**Coordinator trait.** The TCP coordinator sits behind a `Coordinator` trait (`start`, `barrier`,
+`reduce`, `stop`). A single-host run uses an in-process implementation and opens no sockets, which
+keeps WSL2 development and CI simple. There is no MPI build dependency in any configuration.
 
 ### 8.B Does O_DIRECT keep the NFS client out of the page cache? Yes, for data.
 
@@ -330,8 +402,12 @@ Consequences and caveats **[verify on the target kernel]**:
 - **Metadata is unchanged.** OPEN, CLOSE, GETATTR, and LOOKUP cost the same, and the
   dentry/inode slab (§2.3) still grows. O_DIRECT fixes the data path only. For the small-file,
   metadata-heavy regime, the per-host op ceiling in §3.2 still applies.
-- **io_uring + O_DIRECT on NFS may still go through io-wq.** Whether NFS direct I/O supports
-  non-blocking submission is exactly what Spike 1 must measure.
+- **io_uring + O_DIRECT on NFS may still go through io-wq for submission**, because the NFS
+  client does not advertise non-blocking submission (`FMODE_NOWAIT`). The expected shape is one
+  worker *dispatch* per read (a context switch), but the worker is released as soon as the RPCs
+  are queued, because NFS direct I/O completes asynchronously through the kiocb. Buffered reads
+  that miss the cache, by contrast, hold a worker for the whole round trip. Spike 1 measures
+  exactly this (R1). If confirmed, O_DIRECT is what keeps the worker count bounded at scale.
 - **Fidelity.** Real PyTorch uses buffered I/O. Accepting O_DIRECT is a benchmark-policy
   decision; with the explicit readahead-size emulation above, the load the server sees can be
   kept representative.
@@ -365,13 +441,18 @@ Other levers for more client throughput per host:
   dependence. Otherwise, report only the steady state after memory is full.
 - `steps` and `sync_every` are separate parameters. With `steps = sync_every = 500`, there is one
   barrier, at the end.
+- **`--dry-run` prints total ops and bytes per host and compares bytes to the host's DRAM**, so the
+  regime the run will be in (free memory, reclaim, or both) is known before it starts.
 
 ### 8.D Is the workload exactly reproducible? Yes: per-GPU op streams are identical; timing and interleaving are not.
 
 With these rules, the **exact multiset of operations and each GPU's exact op order** are
 identical from run to run:
-- a counter-based RNG keyed on `(seed, gpu_id, epoch, step, site, draw)`;
-- Feistel permutation positions sharded by global GPU id;
+- a positional RNG keyed on `(seed, gpu_id, site, [enclosing loop indices])`, with no draw
+  counters;
+- Feistel permutation positions sharded by global GPU id by formula, `g + G·(b·B + j)`, with
+  `drop_last` epochs;
+- finite producers (the loader dispatches exactly `steps` batches);
 - step-bounded runs;
 - no conditionals on timing or completion order;
 - file sizes known from the dataset definition.
@@ -393,29 +474,50 @@ Things that would break this, and are treated as run failures rather than silent
 - a "shared stateful RNG where each rank skips to every R-th value". That approach *is*
   reproducible, but each rank has to generate the whole stream. Counter-based RNG is O(1) instead.
 
-**Workload fingerprint:**
-- Each actor keeps a rolling hash (xxh3) of `(op, file_id, offset, len)` in issue order.
-- These are combined in actor-id order through `MPI_Reduce` and printed with the results.
-- `--dry-run` computes the fingerprint without doing any I/O, which gives a golden value for CI.
+**Workload fingerprint (order-independent):**
+- Issue order within a GPU actor is *not* deterministic: its W workers run concurrently, so a
+  rolling hash "in issue order" would change with storage timing. The fingerprint is therefore a
+  **sum modulo 2^64 of per-op hashes** (xxh3) of
+  `(actor_id, [enclosing loop indices], op, file_id, offset, len)`. Including the position makes
+  the sum sensitive to *which* op happened *where*, so it is as strong as an ordered hash for this
+  purpose while being independent of interleaving.
+- Per-thread partial sums are added on the host and summed across ranks by the coordinator at
+  the end of the run, then printed with the results.
+- `--dry-run` computes the fingerprint without doing any I/O, in parallel and in any order, which
+  gives a golden value for CI. `--dry-run --gpu g --steps a..b` prints one actor's op stream for a
+  step range for diffing.
 - Two runs with the same fingerprint executed the same workload. This also proves that A/B
   backend comparisons (§8.5) are like-for-like.
+- Preconditions for exactness: finite producers (the loader dispatches exactly `steps` batches,
+  §4.1), a dataset seed separate from `--seed`, and a manifest check that the corpus matches its
+  definition.
 
 ### 8.5 A/B test matrix (all rows run the same abstract, seed, and G, so the fingerprints are equal)
 
 | Dimension | Variants |
 |---|---|
-| Submission backend | io_uring · blocking thread pool (pread/pwrite) |
-| Cache mode | buffered · O_DIRECT · buffered + FADV_DONTNEED · RWF_DONTCACHE (if supported) |
+| I/O backend (`--io-backend`) | `sync` · `sync-direct` · `posix-aio` · `libaio` · `io_uring` · `mmap` (touch / `MADV_POPULATE_READ` / `MADV_WILLNEED`) · `gds` (sync / batch / stream) · `nixl-posix` · `libnfs`; `s3` deferred. See `PROJECT_BRIEF.md` §4. |
+| Memory target (`--buffer`) | pageable host · pinned host · GPU (the last two only where the backend supports them) |
+| Cache mode (`--cache`) | buffered · O_DIRECT · buffered + FADV_DONTNEED · RWF_DONTCACHE (if supported); a validity table rejects impossible pairs |
 | io_uring features | fixed files (direct descriptors) on/off · fixed buffers on/off · `SINGLE_ISSUER`+`DEFER_TASKRUN` · SQPOLL · io-wq max workers · op linking on/off |
 | NFS client | nconnect 1/4/16 · rsize 256K/1M · TCP vs RDMA · v3 / v4.1 / v4.2 / pNFS |
 
 Measured for each run:
 - ops/s and bytes/s;
 - **client CPU per op** (the number that decides how many client hosts are needed);
-- peak `iou-wrk` thread count;
-- accelerator utilization (AU%);
-- per-op latency histograms;
-- `/proc/self/mountstats` RPC counts.
+- peak `iou-wrk` thread count and open-file high-water mark;
+- backend-specific counters: libaio context depth, cuFile compat-mode flag and `cufile_stats`,
+  NIXL plugin selected, `mmap` fault and populate counts;
+- accelerator utilization (AU%), overall and per step bucket;
+- **per-step stall time per GPU** (end of `compute` to next `take` returning);
+- per-op latency histograms, bucketed by step range;
+- `/proc/self/mountstats` RPC counts, kernel version, mount options, and the fingerprint.
+
+Which rows may be compared with which is set by the comparison policy in `PROJECT_BRIEF.md`
+§5 (R17): CLOSED results come only from the `sync` row; the other rows are speed-of-light and
+advisory data. Before trusting any backend's numbers, run fio with the matching engine (`psync`,
+`posixaio`, `libaio`, `io_uring`, `mmap`, `libcufile`, `nfs`) against the same files as a
+cross-check.
 
 ### 8.E Deployment
 

@@ -1,13 +1,21 @@
 # CLAUDE.md
 
-Abstract-driven I/O benchmark runner (Rust + `io-uring` crate + MPI). Pre-implementation stage.
+Abstract-driven I/O benchmark runner (Rust + `io-uring` crate + a pure-Rust TCP coordinator for multi-host; no MPI). Pre-implementation stage.
 
 Read these before any design or coding work:
 - `PROJECT_BRIEF.md`: original requirements, decisions made so far, open items
 - `NAPKIN_MATH.md`: DRAM/IOPS estimates, risk register, spikes, round-2 decisions (§8)
 - `GRAMMAR_OPTIONS.md`: abstract-language extension options
+- `DESIGN_REVIEW.md`: the 2026-09-25 review and the reasoning behind the determinism rules below
 
 Invariants that must not be broken:
-- Exact per-GPU reproducibility. Use a counter-based RNG keyed on (seed, gpu_id, epoch, step, site, draw). Never use shared stateful RNGs or distribute work based on timing.
-- Split work by global GPU id over positions in the Feistel shuffle, never by MPI rank or by file id.
+- Exact per-GPU reproducibility. Randomness is positional: keyed on (seed, gpu_id, site, enclosing loop indices). No per-actor draw counters, no shared stateful RNGs, no work distributed based on timing.
+- Split work by global GPU id over positions in the Feistel shuffle, never by host rank or by file id. Position is a formula, `g + G·(b·B + j)`, never a counter shared by a GPU's workers. Epochs are `drop_last`.
+- Producers are finite: a loader dispatches exactly `steps` batches. The op multiset is fixed before the run starts.
+- The workload fingerprint is order-independent (sum of per-op hashes). Issue order within a GPU is timing-dependent and must never be hashed.
+- The dataset seed is separate from `--seed` and lives in the dataset definition and the datagen manifest.
 - Never materialize per-file data structures. Filenames and sizes are computed from patterns.
+- Data is verifiable: every 4 KiB block written by `datagen` or a write op starts with a header `(magic, dataset seed, file id, block offset)` plus PRNG fill keyed on the same tuple. Reads verify a sample of headers; mismatches fail the run.
+- The application/solution boundary is the interposition test (`PROJECT_BRIEF.md` §5): CLOSED runs the `sync` backend; anything an `LD_PRELOAD` shim could do under an unmodified app is solution. The run seed and file order are application-private.
+- The abstract is POSIX-shaped and identical for every I/O backend. Backends (`sync`, `sync-direct`, `posix-aio`, `libaio`, `io_uring`, `mmap`, `gds`, `nixl-posix`, `libnfs`) map ops to APIs behind one trait with an issue half and a completion-source half; they never change the op stream or the fingerprint. List and axes in `PROJECT_BRIEF.md` §4.
+- No MPI, no tokio/tonic in the runner. Cross-host coordination is blocking `std::net` on one thread behind the `Coordinator` trait (`NAPKIN_MATH.md` §8.A).

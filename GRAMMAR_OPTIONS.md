@@ -23,7 +23,7 @@ These describe one sequential stream of operations. The PyTorch training workloa
 | 5 | **Barrier(scope)** | Periodic all-GPU sync (all-reduce); checkpoints. |
 | 6 | **Named parameters with CLI override** | `batch`, `workers`, `xfer`, `compute`, `steps`, … set per run. |
 | 7 | **Data-dependent repeat** (`read(f, xfer)[until_eof]`, `[ceil(size(f)/xfer)]`) | The read count depends on the file's size. The file sizes come from the dataset definition, so the count is still known ahead of time. |
-| 8 | **Step counter and conditionals** (`every 500`, `if step % n == 0`) | Periodic barriers and checkpoints. |
+| 8 | **Explicit loop indices and conditionals on them** (`for step in $steps`, `every 500`, `if step % n == 0`) | Periodic barriers and checkpoints; file names such as `ckpt/{step:06}`; the RNG key (see §2). |
 
 The semantic model below is the same for all three syntax options. Only the surface
 syntax differs.
@@ -31,21 +31,53 @@ syntax differs.
 ## 2. Semantic model (common to all options)
 
 - A **workload** declares `params`, `datasets`, and one or more **actor templates** (e.g. `gpu`).
-- `--gpus G` instantiates G actors of the `gpu` template, with **global** ids `0..G`. MPI ranks
-  own contiguous id ranges. The ids do not depend on the number of ranks, so the same run can be
+- `--gpus G` instantiates G actors of the `gpu` template, with **global** ids `0..G`. Hosts
+  (ranks) own contiguous id ranges. The ids do not depend on the number of ranks, so the same run can be
   spread over 10 or 20 nodes and produce the same workload.
 - An actor runs a **program** (a tree of elements). An element can suspend on:
   an I/O completion, a timer, a join, a channel `take`, or a barrier.
-- **`loader`** is a built-in pattern that expands to W worker sub-actors plus an in-order ring
-  buffer of `W × prefetch` batch slots. Worker w builds batches `w, w+W, w+2W, …`, matching
-  PyTorch's worker assignment. `take(loader)` waits for the *next batch in order*.
-- **`consume(ds)`** is `perm_{seed,epoch}(position)`, where positions are sharded by global actor
-  id (`gpu_id + k·G`). Position counters are per actor, so no shared state is needed.
-- **Randomness** at any point is `hash(seed, actor_id, epoch, step, site_id, draw#)`.
-  `site_id` is a stable id for the place in the abstract where the draw happens.
+- **Every repeat binds an explicit index variable** (`for step in $steps { … }`,
+  `for j in $batch { … }`). A bare `( … )[n]` is sugar for a loop with an anonymous index. The
+  vector of enclosing loop indices is the actor's *position* in the program's iteration space.
+  Everything random or name-like (draws, file names such as `ckpt/{step:06}`, `every`) is a
+  function of that position, never of a counter that the actor increments.
+- **Randomness** at any point is `hash(seed, actor_id, site_id, [enclosing loop indices])`.
+  `site_id` is a stable id for the place in the abstract where the draw happens. There is no
+  `draw#` counter and nothing to reset at epoch boundaries. Consequence: "what does GPU 17 issue
+  at step 300" is computable without simulating steps 0–299, which makes `--dry-run` fast and
+  parallel and lets a single actor be debugged in isolation.
+- **Primitives for concurrency are `parallel(W) { … }` and a bounded
+  `channel(capacity, ordered | unordered)`** with `put` and `take`. `take` on an ordered channel
+  waits for the *next item in sequence number order* (head-of-line blocking); on an unordered
+  channel it takes whatever is ready. The VM needs channels anyway, so making them primitives
+  costs nothing and keeps tf.data-style unordered interleave, DALI, or a pool of checkpoint
+  writers expressible without new VM instructions.
+- **`loader`** is syntactic sugar over those primitives: W worker sub-actors plus an ordered
+  channel of `W × prefetch` slots. Worker w builds batches `w, w+W, w+2W, …`, matching PyTorch's
+  round-robin worker assignment. **A loader is finite:** it is declared with its total batch count
+  (`batches = $steps`), like a sampler of finite length, and dispatches exactly that many. Workers
+  never prefetch past the last step, so the op multiset does not depend on when the run stops and
+  nothing has to be cancelled at the end.
+- **`consume(ds)`** is `perm_{dataset,seed,epoch}(position)`. The position is a **formula, not a
+  counter**: GPU g, batch b, item j uses position `g + G·(b·B + j)`, and batch b is built by
+  worker `b mod W`. This is `DistributedSampler` (rank takes positions `rank, rank+R, …`) followed
+  by the round-robin `BatchSampler` and the DataLoader's round-robin worker assignment. No
+  per-actor or per-GPU counter exists, so the file a worker draws cannot depend on which worker
+  finished first.
+- **Epoch wrap uses `drop_last` semantics.** An epoch is `floor(N / (G·B))` steps long; every GPU
+  switches to the next epoch's permutation key at the same step. The `N mod (G·B)` leftover
+  positions of each epoch are never drawn. Epoch = `step div epoch_len`, position within the
+  epoch uses `b = step mod epoch_len`.
+- **Datasets carry their own seed.** File sizes are `size_dist.sample(hash(dataset_seed,
+  file_id))`, independent of `--seed`, so changing the run seed never changes what the dataset is
+  expected to look like. `datagen` writes a manifest at the corpus root (pattern, count, size
+  distribution, dataset seed, generator version); the runner validates the abstract's dataset
+  declaration against it before starting.
 - **The implementation compiles the tree to bytecode** that runs on a per-actor VM, in the style
-  of a regex VM: a stack of `(pc, remaining_count)` frames plus a few registers for bindings.
-  `parallel`/`loader` spawn child VMs, and `join`/`take` are wait instructions.
+  of a regex VM: a stack of `(pc, loop index, loop bound)` frames plus a few registers for
+  bindings. Because there is no hidden state, the VM is a pure step function
+  `next_op(state) -> (op, state')`, which is what `--dry-run` iterates. `parallel`/`loader`
+  spawn child VMs, and `join`/`take` are wait instructions.
 
 ## 3. Syntax options
 
@@ -65,30 +97,47 @@ workload unet3d_train {
 
   dataset train = files("train/{id/10000:05}/sample_{id:09}.npz",
                         count = 50_000_000,
-                        size  = const(140MiB))
+                        size  = const(140MiB),
+                        seed  = 0x5eed_da7a)      # dataset seed, independent of --seed
 
   per gpu {
-    loader batches(workers = $workers, prefetch = $prefetch, order = in_order) {
-      # one worker builds one batch
-      ( let f = consume(train),
+    # finite: exactly $steps batches, so workers never prefetch past the last step
+    loader batches(workers = $workers, prefetch = $prefetch, order = in_order,
+                   batches = $steps) {
+      # one worker builds one batch; the loader binds `b` (batch index), `j` is the item
+      for j in $batch {
+        let f = consume(train)          # position = gpu + G·(b·$batch + j)
         open(f, RDONLY), fstat(f),
         read(f, $xfer)[until_eof],
         close(f)
-      )[$batch]
+      }
     }
 
-    ( take(batches),
+    for step in $steps {
+      take(batches),
       compute($compute),
-      every $sync_every { barrier(global) }
-    )[$steps]
+      every $sync_every { barrier(global) }   # tests `step`
+    }
   }
 }
+```
+
+The same loader written out in the primitives it desugars to, to show there is nothing hidden:
+
+```
+    channel batches(capacity = $workers * $prefetch, ordered)
+    parallel w in $workers {
+      for b in $steps step $workers from w {      # b = w, w+W, w+2W, …
+        for j in $batch { … }
+        put(batches, seq = b)
+      }
+    }
 ```
 
 Checkpoint fragment, as an example of what writes look like:
 
 ```
-    every 100 {
+    every 100 {                        # inside `for step in $steps`, so `step` is bound
       barrier(global),
       ( let c = file("ckpt/{step:06}/rank_{gpu:05}.pt"),
         open(c, WRONLY|CREAT|TRUNC),
@@ -125,8 +174,9 @@ actors:
         name: batches
         workers: $workers
         prefetch: $prefetch
+        batches: $steps
         body:
-          - repeat: $batch
+          - for: { j: $batch }
             do:
               - let: { f: { consume: train } }
               - open: { file: f, flags: RDONLY }
@@ -134,7 +184,7 @@ actors:
               - repeat: until_eof
                 do: [ { read: { file: f, size: $xfer } } ]
               - close: f
-    - repeat: $steps
+    - for: { step: $steps }
       do:
         - take: batches
         - compute: $compute
@@ -182,7 +232,14 @@ Guardrails to keep the language from growing into a general-purpose language:
 - No unbounded loops. Every repeat count is a constant, a distribution, a parameter, or a
   function of dataset metadata (`size(f)`), and `until_eof` is resolved from the known file size.
   This means the total op count of a run can be computed before it starts.
-- Conditionals are allowed only on the step/epoch counters and parameters, never on timing or
+- Conditionals are allowed only on loop indices, the epoch, and parameters, never on timing or
   completion order. This is what makes the workload fingerprint (see `NAPKIN_MATH.md` §8) exact.
+- No actor-local mutable counters. Every draw, name, and condition is a function of the actor id
+  and the enclosing loop indices (§2). This is what makes the op stream randomly accessible.
+- Producers are finite. A `loader` or `parallel` block declares how many items it produces, so
+  the run's op multiset is fixed before it starts.
 - Wall-clock-bounded phases (`for 60s`) are allowed only as an opt-in that turns off the exact
   fingerprint guarantee.
+- The abstract is POSIX-shaped and has no `mmap` op. `mmap`-based loaders are handled by the
+  `mmap` backend, which maps `read(f, off, len)` onto populating that range of a mapping
+  (`PROJECT_BRIEF.md` §4). The op stream and fingerprint are therefore the same for every backend.
