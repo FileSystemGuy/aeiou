@@ -405,3 +405,128 @@ Guardrails to keep the language from growing into a general-purpose language:
 - The abstract is POSIX-shaped and has no `mmap` op. `mmap`-based loaders are handled by the
   `mmap` backend, which maps `read(f, off, len)` onto populating that range of a mapping
   (`PROJECT_BRIEF.md` §4). The op stream and fingerprint are therefore the same for every backend.
+
+## 5. Expressiveness beyond training: data-dependent workloads (added 2026-09-28)
+
+Training and checkpointing are not the hard cases. Vector-database (VDB) and KV-cache workloads
+are, because their access pattern is determined by the data. The question examined here is
+whether "random" is an acceptable stand-in for data-dependent sequences. **Answer: only as a null
+model.** Random is equivalent to a data-dependent sequence exactly along the dimensions a storage
+system cannot see, and a storage system (server readahead, client cache, SSD firmware) can see
+and exploit a short, well-known list of dimensions. The abstract must reproduce every one of
+those that the real workload has, and none that it does not.
+
+### 5.1 What storage can exploit
+
+| Property | Real examples | What uniform random gets wrong |
+|---|---|---|
+| **Reuse** (temporal locality) | HNSW entry points and upper layers on every query; DiskANN medoid and first hops; KV-cache system prompts and conversations that return within minutes | none, so caches are penalized unfairly |
+| **Sequential runs and strides** | posting lists, KV block chains, interleaved per-thread streams that firmware de-interleaves | no runs, so readahead/prefetch are denied a real benefit |
+| **Size and popularity skew** | IVF cluster sizes vary by orders of magnitude; queries hit popular clusters because they come from the same distribution as the data | uniform sizes and ids |
+| **Dependency shape** | beam search: a burst of parallel reads, then a dependent hop | independent draws at a fixed queue depth |
+| **Write-then-read with a lag** | KV blocks written at prefill, read at a later prefix hit | no relation between writes and reads |
+
+A synthetic stream that matches a real trace on these dimensions is indistinguishable to any
+cache or prefetcher that works on them. Firmware that identified an application by a signature
+outside them would be fooled by every synthetic benchmark (fio and DLIO included); the answer to
+that is end-to-end validation against the real application (R10, and the replay mode in §5.4).
+
+The asymmetry: the Feistel shuffle deliberately removes *accidental* structure so storage cannot
+get an unfair benefit. Real structure must then be deliberately *added back*, or the benchmark
+under-reports what the storage would do in production.
+
+### 5.2 Additions to the semantic model
+
+Three additions. None touches layers 2 or 3 beyond new node types; every draw remains a pure
+function of `(seed, actor, site, loop indices)`.
+
+1. **Distributions over ids and offsets.**
+   - `pick(ds, dist = zipf(s))`, `pick(ds, dist = hotset(fraction, weight))`, and mixtures.
+   - `read(f, offset = draw(dist), len)`: random offsets within a file. Today's model only has
+     uniform consumers and sequential offsets; this is the main gap.
+2. **Recency references** (the stack-distance model of temporal locality).
+   `recent(site, d)` refers to the object drawn at `site` `d` iterations ago, with `d` drawn from
+   a reuse-distance distribution. Because every draw is positional, the draw at step `s − d` is
+   recomputable, so this needs **no stored history**. It is what makes KV-cache workloads
+   expressible.
+3. **Positional names for write-then-read.** A writer names its object from its position
+   (`file("kv/{prefix_id:016x}/blk_{k:04}")` with `prefix_id` drawn positionally); a later reader
+   recomputes the same name. Within one actor this is exact.
+
+Already expressible with the primitives of §2: dependent chains with fan-out
+(`for hop in H { parallel(beam) { … } }`), hop counts and burst widths from distributions,
+periodic compaction/rebuild phases, LSM-style `choose { hit%: …, miss%: … }` lookups.
+
+### 5.3 The limit: cross-actor read-after-write
+
+A KV block written by one GPU's prefill and read by another GPU's decode is a hit only because it
+exists, and existence is timing. The model cannot make one actor wait on another actor's
+unrelated write without becoming timing-dependent, which would break the fingerprint. Therefore:
+
+- cross-actor reuse lives in **phases separated by barriers** (write phase, `barrier`, read
+  phase), or
+- it is **modeled statistically**: a hit ratio and a lag distribution are inputs, and misses are
+  emitted as reads that fail-soft (`ENOENT` counted, not fatal, in a declared "miss-tolerant" op).
+
+Cache capacity and eviction are treated the same way: an input property of the workload, not
+something that emerges from a simulated cache. For a storage benchmark this is the right cut,
+but it is a stated fidelity loss and belongs in the workload's documentation.
+
+### 5.4 Method: locality-metrics check and replay mode
+
+- **Locality-metrics check.** From a real trace, compute: reuse-distance distribution,
+  sequential run-length distribution, popularity skew (rank–frequency), request-size
+  distribution, dependency depth and fan-out, read/write mix. From `--dry-run`, compute the same
+  metrics on the abstract's op stream. An abstract is accepted for a workload class only when the
+  two match within stated tolerances. This sits next to the fingerprint: the fingerprint proves
+  *which* stream ran, the metrics prove it is the *right* stream.
+- **Replay mode.** The AST may be a literal captured sequence (a `replay` node holding ops with
+  their dependencies). It is bounded to small-scale calibration runs and exists so each workload
+  class's abstract can be validated end to end against the real application on the same storage.
+  It is never a CLOSED workload.
+
+### 5.5 Sketches
+
+**DiskANN-style search** (per query): hop count `H ~ dist`, beam width `beam`; the first hops from
+a small hot set, later hops at random 4 KiB offsets in the index file.
+
+```
+for q in $queries {
+  for hop in draw(hops) {
+    parallel(beam) {
+      read(index, offset = if hop < 2 { draw(hot_offsets) } else { draw(uniform_offsets) }, 4KiB)
+    }
+  }
+  compute($rerank)
+}
+```
+
+**IVF search**: `nprobe` clusters from a popularity-skewed draw, each read sequentially with its
+own (skewed) size.
+
+```
+for q in $queries {
+  parallel(nprobe) { let c = pick(clusters, dist = zipf($s)); read(c, size(c)) }
+  compute($distance)
+}
+```
+
+**Index build**: training-shaped: large sequential reads, emulated compute, large sequential
+writes. Data-dependent only in compute time.
+
+**KV cache** (per request): prefix identity from a Zipf-with-recency draw, hit length from a
+distribution, sequential reads of the hit blocks, writes of the new blocks with positional names.
+
+```
+for r in $requests {
+  let p = choose { $reuse%: recent(prefix_site, draw(reuse_dist)), else: draw(new_prefix) }
+  let hit = draw(hit_len), let total = draw(prompt_len)
+  for k in hit   { read(file("kv/{p:016x}/blk_{k:04}"), $blk) }        # sequential chain
+  compute($decode)
+  for k in hit..total { write(file("kv/{p:016x}/blk_{k:04}"), $blk) }  # new blocks
+}
+```
+
+Every one of these has a shape we can write; every one has parameters (`hops`, `zipf` exponent,
+`reuse_dist`, `hit_len`, cluster sizes) that must be **measured from a real index on real data**,
+exactly as compute time is measured.

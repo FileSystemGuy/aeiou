@@ -16,6 +16,7 @@ Invariants that must not be broken:
 - The dataset seed is separate from `--seed` and lives in the dataset definition and the datagen manifest.
 - Never materialize per-file data structures. Filenames and sizes are computed from patterns.
 - Data is verifiable: every 4 KiB block written by `datagen` or a write op starts with a header `(magic, dataset seed, file id, block offset)` plus PRNG fill keyed on the same tuple. Reads verify a sample of headers; mismatches fail the run.
+- Random access is the null model, never the model, for data-dependent workloads (VDB, KV cache). Structure storage can exploit (reuse, runs, skew, dependency shape, write-then-read lag) is expressed with positional distributions and `recent(site, d)`, and checked against real traces with `--dry-run --metrics` (`GRAMMAR_OPTIONS.md` §5).
 - The application/solution boundary is the interposition test (`PROJECT_BRIEF.md` §5): CLOSED runs the `sync` backend; anything an `LD_PRELOAD` shim could do under an unmodified app is solution. The run seed and file order are application-private.
 - The abstract is POSIX-shaped and identical for every I/O backend. Backends (`sync`, `sync-direct`, `posix-aio`, `libaio`, `io_uring`, `mmap`, `gds`, `nixl-posix`, `libnfs`) map ops to APIs behind one trait with an issue half and a completion-source half; they never change the op stream or the fingerprint. List and axes in `PROJECT_BRIEF.md` §4.
 - No MPI, no tokio/tonic in the runner. Cross-host coordination is blocking `std::net` on one thread behind the `Coordinator` trait (`NAPKIN_MATH.md` §8.A).

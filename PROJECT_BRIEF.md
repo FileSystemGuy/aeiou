@@ -131,8 +131,10 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 
 ## 6. Open items / next steps
 
-1. **Write paper abstracts** for the four target workloads, derived from `strace` of the real
-   loaders: small-file training, large-sample training, checkpoint write, checkpoint restore.
+1. **Write paper abstracts** for the target workloads, derived from `strace` of the real
+   applications: small-file training, large-sample training, checkpoint write, checkpoint
+   restore, and (added 2026-09-28) **vector-database search (DiskANN-style and IVF), index build,
+   and KV-cache serving**. Sketches in `GRAMMAR_OPTIONS.md` §5.5.
 2. **User to choose an authoring option** (A/B/C/D in `GRAMMAR_OPTIONS.md`; D is the leading
    candidate). Then: publish the AST JSON Schema, write the builder package and the
    `abstract-build --hermetic` harness, and add the build-twice check to CI.
@@ -156,6 +158,17 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 12. Define the block header format and the PRNG fill for `datagen` and the verifier, and add
     `--verify-sample` / `--verify` to the CLI. Decide how GPU-memory backends verify (device-side
     kernel vs. sampled copy-back).
+13. **Data-dependent workloads (2026-09-28).** Add to the semantic model: distributions over ids
+    and offsets (`zipf`, `hotset`, random `offset` in `read`), recency references
+    (`recent(site, d)`, positional, no stored history), and positional names for
+    write-then-read. Cross-actor read-after-write is limited to barrier-separated phases or a
+    statistical hit model; state this limit in each such workload's documentation.
+    `GRAMMAR_OPTIONS.md` §5.
+14. **Locality-metrics check and replay mode (2026-09-28).** `--dry-run --metrics` computes
+    reuse-distance, sequential run-length, popularity skew, request-size, dependency depth, and
+    read/write mix on the abstract's stream; a trace tool computes the same from a real trace; an
+    abstract is accepted for a workload class only when they match within tolerances. A `replay`
+    AST node holds a literal captured sequence for small-scale calibration; never CLOSED.
 
 ## 7. Environment
 

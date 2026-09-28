@@ -183,6 +183,20 @@ id, block offset)` and the runner verifies a sample of reads (R18). And a shim t
 seed could prefetch, so the seed, abstract, and file order are application-private and reviews
 re-run with a fresh seed (R19).
 
+### 3.14 Data-dependent workloads: random is the null model, not the model (added 2026-09-28)
+
+The user challenged an earlier claim that a data-dependent access pattern (VDB search, KV cache)
+can be approximated by a random one, citing SSD firmware that recognizes and prefetches for
+application-specific patterns. The claim was too cavalier. The corrected position, now in
+`GRAMMAR_OPTIONS.md` §5: storage exploits a short list of properties (reuse, sequential runs,
+size and popularity skew, dependency shape, write-then-read lag); random matches a real trace
+only on dimensions storage cannot see; the Feistel shuffle removes accidental structure, so real
+structure must be deliberately added back. Three model additions (distributions over ids and
+offsets, positional recency references, positional write-then-read names), one stated limit
+(cross-actor read-after-write is phase-separated or statistical), and two method additions
+(a locality-metrics check next to the fingerprint, and a bounded replay mode for calibration).
+Risks R20 and R21.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
