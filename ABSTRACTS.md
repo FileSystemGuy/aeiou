@@ -102,7 +102,7 @@ workload train_small_files {
 
   per gpu {
     when ($enumerate) {
-      phase("enumerate") {                                # ImageFolder walks the tree at start
+      phase("enumerate") {                                # every actor walks: ImageFolder has no broadcast
         for d in dirs(train) {                            # 38,462 class directories
           open(d, RDONLY|DIRECTORY), readdir(d)[until_end], close(d)
         }
@@ -148,9 +148,19 @@ workload train_small_files {
 - Decode CPU time in the worker is not modeled; the worker is I/O-bound in the abstract. If a
   trace shows the decode gap between `close` and the next `openat` matters for the offered
   concurrency, add `compute($decode)` after `close`.
-- The `enumerate` phase is what the real application does at startup, once per DataLoader
-  process, i.e. G full walks of 38K directories. Whether it is part of the CLOSED measurement is
-  a WG policy question; here it is a separately reported phase, off by default.
+- The `enumerate` phase is what the real application does at startup. **Every actor runs the
+  walk** (added 2026-09-29): `ImageFolder` is a plain constructor that `os.walk`s the tree in
+  the process that builds the dataset, and under DDP every rank builds its own; nothing is
+  broadcast, and `DistributedSampler` shards indices on the assumption that every rank holds the
+  same sorted list. DataLoader workers are forked after the list exists and inherit it, so they
+  issue no walk. Hence G full walks of 38K directories, one per actor, which is why the phase is
+  inside `per gpu` and not under `when (gpu == 0)`. On one client node the G walks race over the
+  same directories in the same order, so the server sees roughly one walk per node while the
+  client pays dentry/inode slab and the file list G times; the runner reproduces the former by
+  issuing real `getdents64` per actor and does not reproduce the list's RAM. A pipeline that
+  lists on rank 0 and broadcasts is modeled by wrapping the phase in `when (gpu == 0)` (§9.1).
+  Whether the walk is part of the CLOSED measurement is a WG policy question; here it is a
+  separately reported phase, off by default.
 
 **What it stresses.** Metadata: LOOKUP/OPEN/CLOSE per 110 KiB, client dentry/inode slab growth
 (`NAPKIN_MATH.md` §2.3), attribute-cache and delegation behaviour, and how the client copes when
