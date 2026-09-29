@@ -534,7 +534,10 @@ function of `(seed, actor, site, loop indices)`.
    `recent(site, d)` refers to the object drawn at `site` `d` iterations ago, with `d` drawn from
    a reuse-distance distribution. Because every draw is positional, the draw at step `s − d` is
    recomputable, so this needs **no stored history**. It is what makes KV-cache workloads
-   expressible.
+   expressible. *Refinement proposed 2026-09-29 (`ABSTRACTS.md` §9.5): the primitive should be
+   `x @ i`, a binding evaluated at another index of its loop, with self-reference at a strictly
+   smaller index allowed, so that a conversation's identity chains back to its origin; `recent`
+   becomes sugar. Not yet decided.*
 3. **Positional names for write-then-read.** A writer names its object from its position
    (`file("kv/{prefix_id:016x}/blk_{k:04}")` with `prefix_id` drawn positionally); a later reader
    recomputes the same name. Within one actor this is exact.
@@ -572,6 +575,8 @@ but it is a stated fidelity loss and belongs in the workload's documentation.
   It is never a CLOSED workload.
 
 ### 5.5 Sketches
+
+Superseded in detail by the full drafts in `ABSTRACTS.md` (2026-09-29); kept as the short form.
 
 **DiskANN-style search** (per query): hop count `H ~ dist`, beam width `beam`; the first hops from
 a small hot set, later hops at random 4 KiB offsets in the index file.

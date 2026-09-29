@@ -6,6 +6,7 @@ are in:
 - `NAPKIN_MATH.md`: DRAM and IOPS estimates, risk register, spikes, and the round-2 decisions (§8)
 - `GRAMMAR_OPTIONS.md`: options for extending the abstract language, with a recommendation
 - `DESIGN_REVIEW.md`: the 2026-09-25 review, with the reasoning behind the fixes applied here
+- `ABSTRACTS.md`: paper abstracts for the eight target workloads (2026-09-29) and the constructs they surfaced
 
 ## 1. Core idea
 
@@ -135,6 +136,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    applications: small-file training, large-sample training, checkpoint write, checkpoint
    restore, and (added 2026-09-28) **vector-database search (DiskANN-style and IVF), index build,
    and KV-cache serving**. Sketches in `GRAMMAR_OPTIONS.md` §5.5.
+   **Drafted 2026-09-29 in `ABSTRACTS.md`**, from how the applications are built; no trace has
+   been captured yet, so every skeleton detail is tagged `[verify]` and every quantity
+   `[measure]`, with a capture plan in its §11. The exercise surfaced nine construct proposals
+   (`ABSTRACTS.md` §9: actor-id conditionals, `until_eof` semantics, `expect` errnos, offset
+   expressions, `x @ i` and chains replacing `recent`, `regions`, `namespace`, `phase`/`readdir`,
+   distribution-selecting `when`); they need a decision before the AST schema (item 2) is
+   written. Remaining: capture the traces and fill the slots.
 2. **User to choose an authoring option** (A/B/C/D in `GRAMMAR_OPTIONS.md`; D is the leading
    candidate). Then: publish the AST JSON Schema, write the builder package and the
    `abstract-build --hermetic` harness, and add the build-twice check to CI.

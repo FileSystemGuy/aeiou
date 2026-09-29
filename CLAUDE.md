@@ -7,6 +7,7 @@ Read these before any design or coding work:
 - `NAPKIN_MATH.md`: DRAM/IOPS estimates, risk register, spikes, round-2 decisions (§8)
 - `GRAMMAR_OPTIONS.md`: abstract-language extension options
 - `DESIGN_REVIEW.md`: the 2026-09-25 review and the reasoning behind the determinism rules below
+- `ABSTRACTS.md`: paper abstracts for the eight target workloads, and the constructs they surfaced (§9)
 
 Invariants that must not be broken:
 - Exact per-GPU reproducibility. Randomness is positional: keyed on (seed, gpu_id, site, enclosing loop indices). No per-actor draw counters, no shared stateful RNGs, no work distributed based on timing.

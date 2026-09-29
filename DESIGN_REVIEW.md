@@ -197,11 +197,39 @@ offsets, positional recency references, positional write-then-read names), one s
 (a locality-metrics check next to the fingerprint, and a bounded replay mode for calibration).
 Risks R20 and R21.
 
+### 3.15 Paper abstracts written; what they demanded of the grammar (added 2026-09-29)
+
+The eight abstracts of `ABSTRACTS.md` were written against the semantic model of
+`GRAMMAR_OPTIONS.md` §2 and §5.2 without a parser or VM, as R4 prescribed. The model held for
+the training shapes with no change. The other shapes each exposed one missing piece, and the
+common thread is that the model had *files* and *steps* but the real applications also have
+*pieces of files* (zip members, index sectors, inverted lists), *objects the run creates*
+(checkpoints, KV blocks), *ops that are supposed to fail* (`ENOTTY`, `EEXIST`, `ENOENT`), and
+*the actor's own identity* in names and conditions. None of these threatens the invariants;
+they are node types.
+
+The one substantive finding is in the KV-cache shape. `recent(site, d)` as specified in §5.2
+is not self-consistent: a request that continues a conversation must name the blocks by the
+conversation's *original* id, which the request `d` back may itself have inherited. The
+reference has to be a recurrence, `conv @ r = conv @ (r − d)` or a fresh draw, evaluated by
+walking the chain positionally. That is still a pure function of the position and needs no
+stored history, but `--dry-run` becomes O(chain length) per request rather than O(1), and the
+index space needs a warm prefix so early requests have something to reach back to. The
+derived hit length (blocks the earlier request actually wrote) replaces a fitted `hit_len`
+distribution, which is a fidelity gain: the reads land on blocks that exist. The proposal is
+to make `x @ i` the primitive and `recent` sugar (`ABSTRACTS.md` §9.5).
+
+Two things the abstracts made concrete for policy rather than grammar: the ImageFolder
+directory walk at startup (G full walks of the tree) is real application I/O that no current
+benchmark includes, and whether it is CLOSED is a WG question; and the `mmap` backend's value
+shows up in model load (§4b), where tensor-parallel ranks fault in strided slices of every
+shard and the RPC pattern is the kernel's choice, not the application's.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
   restore, the one workload where many ranks read the same files, so delegations and page cache
-  matter.
+  matter. Drafted 2026-09-29 (`ABSTRACTS.md`, §3.15); traces still to be captured.
 - Then: fix the determinism items in the docs (done), build the VM with `--dry-run` and the
   fingerprint against ext4 and loopback NFS, then Spike 1 on the real target with the thread-pool
   backend first.
