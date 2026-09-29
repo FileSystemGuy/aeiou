@@ -67,6 +67,10 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   (batch size, readahead/transfer size, workers, prefetch, compute time, steps, …).
 - It must handle corpora of **50M–100M files** without one data structure per file. Filenames
   follow patterns (e.g. `data_NNNN_of_MMMM`, or hierarchical) and are computed, not stored.
+- **Multi-sample container formats** (added 2026-09-29): Parquet, HDF5, TFRecord, Arrow IPC,
+  WebDataset tar, MDS shards, Megatron token files. The unit of shuffling is the sample; the
+  container is found by formula; the format's reader protocol comes from a built-in format class.
+  See §5 and `GRAMMAR_OPTIONS.md` §6.
 - Tracking "consumed" files: the user asked about a bitmap vs. a fully populated shuffled list.
   The **recommendation is a keyed Feistel permutation**, which needs no memory and has O(1),
   constant-cost draws.
@@ -122,7 +126,10 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Backend order | The blocking thread pool (one OS thread per worker actor) is the **fidelity reference** and is built first. io_uring is the scaling lever. Both sit behind one trait. Spike 1 tests the hypothesis that O_DIRECT reads on NFS complete asynchronously and so keep the io-wq worker count bounded, while opens/closes still punt. |
 | Measurement | Per-step stall time per GPU (not per-op logs); histograms bucketed by step range so steady state is selected after the run; `--dry-run` prints total bytes per host against host DRAM. Read sink buffers are sized larger than L3 so copies cost what a real loader's do. |
 | Divisions and comparison policy | **Decided 2026-09-28.** The backend is part of the application, so the line between "must be the same" and "may vary" is the backend's call boundary: the backend implementation is benchmark code; everything it calls (libc, kernel, NFS client, libnfs, cuFile, drivers, network, server) is the solution under test. **CLOSED** fixes the application-level I/O interface to what the real framework uses: for PyTorch that is buffered POSIX with PyTorch's concurrency structure, i.e. the `sync` backend. The other backends are for speed-of-light measurement of the SUT and for advising implementors; results from them are reported separately and never compared against CLOSED results as if they were storage differences. Compare storage solutions with the backend fixed; compare backends with the storage fixed. **The boundary is stated as an interposition test (decided 2026-09-28):** the solution may do anything that a dynamic-linker shim (`LD_PRELOAD`) placed under the *unmodified* application could do, provided the application's dependency graph of operations, the buffers they target, their data, and their semantics are preserved. What a shim cannot do is therefore application: the concurrency structure (workers, prefetch depth, in-order delivery), the memory target (host vs. GPU), and the choice of the next file. What a shim can do is solution: user-space clients (libnfs, vendor clients), O_DIRECT or io_uring or libaio underneath buffered calls, kernel and mount configuration, transport, and the server. A vendor-supplied shim under CLOSED is legal by this test, which is why the two requirements below (data verification, seed privacy) exist. Below the line, an optimization counts only if the real workload would get it too: no benefit from the synthetic data, no cache warmth from a previous run, no re-reads within a run, no relaxed semantics the customer would not run. RPC counts, client CPU, and client DRAM are reported as audit data and cost, not as a score. |
-| Data verification | **Required (2026-09-28).** Because a shim or client may return anything, the application must be able to check what it read. `datagen` writes verifiable content: every 4 KiB block starts with a small header `(magic, dataset seed, file id, block offset)` followed by non-dedupable PRNG fill derived from the same tuple. The runner verifies headers on a sampled fraction of reads (`--verify-sample`, default 1 in 64 blocks; 100% in a `--verify` run) at negligible CPU cost, and counts mismatches as run failures. Checkpoint-write abstracts are paired with a read-back phase that verifies the written content after `fsync`/`close`, which is also the durability check. Verification reads the buffer the backend delivered, so it works for every backend, including GPU-memory ones via a device-side check or a sampled copy-back. |
+| Data verification | ~~**Required (2026-09-28).** Because a shim or client may return anything, the application must be able to check what it read. `datagen` writes verifiable content: every 4 KiB block starts with a small header `(magic, dataset seed, file id, block offset)` followed by non-dedupable PRNG fill derived from the same tuple. The runner verifies headers on a sampled fraction of reads (`--verify-sample`, default 1 in 64 blocks; 100% in a `--verify` run) at negligible CPU cost, and counts mismatches as run failures.~~ **Revised 2026-09-29: data is reproducible, not self-describing.** A per-block header makes every block unique and defeats any dedupe control, so there are no headers. Instead the expected bytes at `(dataset seed, file id, offset)` are a pure function that a verifier can regenerate, at block granularity, with dedupe and compression ratios as generator parameters (§6 item 12). The **runner does structural checks only**: byte counts, sizes, short reads, and that index bytes it reads (footers, chunk indexes) match the computed layout. **Content verification is a separate Python `verify` tool** next to `datagen`, run after generation and by reviewers on request, never in a scored run. Rationale: the realistic failure is a wrong corpus (old generator, partial regeneration, wrong seed, wrong dedupe setting), which invalidates the result through data reduction; a fabricating shim is fraud and is handled by rules and review, and a warm cache from a previous run has correct content and is not detectable by any content check (it is handled by fresh seeds and dataset sizing). Checkpoint read-back remains as a workload phase (the restore shape), not a content check. The benchmark never interprets sample data; it moves the bytes into the destination memory (copy, or page-fault under `mmap`) and stops. Reasoning in `DESIGN_REVIEW.md` §3.16. |
+| Multi-sample containers | **Decided 2026-09-29.** Datasets are sample spaces, not file lists. The Feistel shuffle runs over **sample ids**; one sample per file is the special case. A dataset declares its **access mode**: `map` (Feistel over samples, positions `g + G·(b·B + j)`, `drop_last` over samples; what map-style PyTorch does over HDF5, Arrow, MDS, Megatron token files) or `stream` (Feistel over *shards* with the same sharding formula, sequential reads within a shard, an in-memory shuffle buffer that produces no I/O; what tf.data, WebDataset, HF streaming and Ray Data do over TFRecord, Parquet, tar). Random sample access inside Parquet or TFRecord is refused by the validator because no production reader does it. Container layout is computed by formula: fixed samples per file, sizes from the dataset seed, per-file prefix sums computed once per `open` and held while open (O(open files), so the per-file invariant survives). `GRAMMAR_OPTIONS.md` §6. |
+| Format classes | **Decided 2026-09-29.** Each container format is a built-in library with **two contracts**. The *format* contract carries only what a trace of the reader library shows regardless of application: the layout writer for `datagen`, locate formulas (sample → file, unit, offset, length), the reader's fixed protocol emitted as ordinary POSIX nodes (Parquet: 8 bytes at EOF−8 then the footer; HDF5: superblock and chunk index; TFRecord: none), the access modes it supports, and compute slots for decode and index parsing. The *loader* contract stays with the abstract: access mode, interleave, prefetch, column projection. The class is tied to a reader library and version (`parquet(reader="pyarrow")`) and is validated against a trace like any abstract. It lives in the Python builder; **the Rust runner stays POSIX-only and format-ignorant**, and index bytes are read as I/O but not parsed. `GRAMMAR_OPTIONS.md` §6. |
+| Payload generator | **Decided 2026-09-29, pending one check.** `datagen` is the term for writing the synthetic corpus (as in MLPerf Storage). Use **dgen-py** (MLPerf Storage's generator, fast, with controllable dedupe and compression ratios) for payload bytes if it can produce the bytes at an arbitrary `(file, offset)` without generating the prefix **[verify]**. If it is a stateful stream generator, wrap it block-wise: each block generated from `hash(dataset seed, file id, block index)`, dedupe controlled by drawing block seeds from a pool of K values. Either way the manifest records generator, version, and parameters so a verifier can regenerate. |
 | Seed privacy | **Required (2026-09-28).** The run seed, the abstract, and the resulting file order are application-private. The solution (anything below the interposition line) may not use knowledge of them, for example to prefetch the next file. A submission review may re-run with a fresh seed; the results must match within noise. The dataset seed is not secret (it is in the manifest) because it determines content, not order. |
 | Coordinator | Star topology over plain TCP with blocking `std::net` on one coordinator thread; length-prefixed `postcard` messages (`Hello` with a config hash, `Ready`/`Start`, `Arrive`/`Release`, `Stats`, `Stop`, `Heartbeat`). No tokio, no tonic/gRPC. Sits behind a `Coordinator` trait; single-host runs use an in-process implementation. See `NAPKIN_MATH.md` §8.A. |
 | Deployment | Bare Linux on the client nodes, **no containers**. |
@@ -155,17 +162,24 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 6. Spike 3: client dentry/inode slab growth and NFS op mix when touching 50M files.
 7. Check `RWF_DONTCACHE` support in the NFS client on the target kernels.
 8. Build `datagen` mode, driven by the same filename pattern, size distribution, and dataset seed
-   as the abstract, writing **verifiable, non-dedupable** data (per-block headers, §5) and a
-   manifest at the corpus root.
+   as the abstract, writing ~~**verifiable, non-dedupable** data (per-block headers, §5)~~
+   **reproducible data with controlled dedupe and compression ratios (revised 2026-09-29, §5)**
+   and a manifest at the corpus root. Container formats are written through their format class
+   (real Parquet/HDF5/TFRecord/Arrow files, uncompressed, PLAIN encoding, payload from the
+   generator); containers mean thousands of files, so a Python `datagen` for them is acceptable.
 9. Startup checks: `kernel.io_uring_disabled`, `RLIMIT_MEMLOCK`, and `RLIMIT_NOFILE` computed
    from G, W, and the abstract.
 10. Coordinator protocol and launch script (`pdsh`/ssh loop); test it on WSL2 with several
     ranks on `localhost`.
 11. ~~Comparison policy~~ Decided 2026-09-28, including the interposition test, data
     verification, and seed privacy; see §5.
-12. Define the block header format and the PRNG fill for `datagen` and the verifier, and add
+12. ~~Define the block header format and the PRNG fill for `datagen` and the verifier, and add
     `--verify-sample` / `--verify` to the CLI. Decide how GPU-memory backends verify (device-side
-    kernel vs. sampled copy-back).
+    kernel vs. sampled copy-back).~~ **Revised 2026-09-29.** Check whether dgen-py generates
+    positionally (bytes at an arbitrary offset without the prefix) **[verify]**; if not, define
+    the block-wise wrapper. Define the manifest fields for regeneration (generator, version,
+    parameters, dedupe/compression settings). Write the Python `verify` tool. The runner gets
+    structural checks only; no `--verify-sample` in scored runs.
 13. **Data-dependent workloads (2026-09-28).** Add to the semantic model: distributions over ids
     and offsets (`zipf`, `hotset`, random `offset` in `read`), recency references
     (`recent(site, d)`, positional, no stored history), and positional names for
@@ -177,6 +191,14 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     read/write mix on the abstract's stream; a trace tool computes the same from a real trace; an
     abstract is accepted for a workload class only when they match within tolerances. A `replay`
     AST node holds a literal captured sequence for small-scale calibration; never CLOSED.
+
+15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
+    HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
+    reader library; add a ninth abstract for streaming training over TFRecord or Parquet (the
+    MLPerf Storage ResNet50/CosmoFlow shape) and a tenth for the Parquet→Arrow conversion pass
+    plus training from a memory-mapped Arrow cache, with cache placement (local vs. SUT) as a
+    parameter. Extend the `loader` sugar so items per batch are decoupled from reads per item.
+    `GRAMMAR_OPTIONS.md` §6.
 
 ## 7. Environment
 

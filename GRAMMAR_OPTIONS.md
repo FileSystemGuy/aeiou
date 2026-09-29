@@ -621,3 +621,85 @@ for r in $requests {
 Every one of these has a shape we can write; every one has parameters (`hops`, `zipf` exponent,
 `reuse_dist`, `hit_len`, cluster sizes) that must be **measured from a real index on real data**,
 exactly as compute time is measured.
+
+## 6. Multi-sample containers and format classes (decided 2026-09-29)
+
+Training data is more often packed into containers (Parquet, HDF5, TFRecord, Arrow IPC,
+WebDataset tar shards, Mosaic MDS shards, Megatron `.bin`/`.idx` token files) than stored one
+sample per file. This section records how the model covers them. Reasoning in
+`DESIGN_REVIEW.md` §3.16; risk R22.
+
+### 6.1 Datasets are sample spaces
+
+A dataset declares `count` **samples**, not files. `consume(ds)` returns a sample handle `s`
+with `file(s)`, `offset(s)`, `size(s)`, and `unit(s)` (the row group, chunk, or shard that
+contains it). One sample per file is the special case `samples_per_file = 1`, and the
+`regions` dataset of `ABSTRACTS.md` §9.6 is the special case of one container file. Epochs are
+`drop_last` over samples; the position formula `g + G·(b·B + j)` is unchanged.
+
+### 6.2 Two access modes, declared per dataset
+
+| Mode | Shuffle | Within a container | Real loaders | Formats that support it |
+|---|---|---|---|---|
+| `map` | Feistel over **sample ids** | seek to `offset(s)`, read `size(s)` (or the unit that holds it) | map-style PyTorch `Dataset`, HF memory-mapped Arrow, DLIO HDF5 | HDF5 (contiguous or one sample per chunk), Arrow IPC, MDS, Megatron token files, LMDB, `regions` |
+| `stream` | Feistel over **shard ids**, same sharding formula | sequential reads in `xfer` chunks; an in-memory shuffle buffer that produces no I/O | tf.data `TFRecordDataset` + `interleave` + `shuffle`, WebDataset, HF `streaming=True`, Ray Data, DALI | TFRecord, Parquet (by row group), tar, and any of the above |
+
+The format class (§6.4) lists the modes it supports and the validator refuses the rest:
+`map` over TFRecord is impossible (no index) and `map` over Parquet is refused because no
+production reader does it (a row costs its whole row group). tf.data's `interleave(cycle_length
+= C)` is `parallel(C)` inside a worker over an unordered channel; the shuffle buffer is
+application memory. The `loader` sugar gains one knob: items per batch are decoupled from reads
+per item, since a batch is `B` records out of a stream rather than `B` files.
+
+### 6.3 Container layout by formula
+
+Samples per file is fixed (the normal case for shards; the last file may be short). Sample sizes
+come from the dataset seed as today. A sample's offset inside its file is a prefix sum over
+that file's samples, computed once per `open` and held while the file is open. This is
+O(open files), not O(files), so the "never materialize per-file structures" invariant holds.
+When samples must sit at fixed strides, the padded-slot layout of `ABSTRACTS.md` §9.6 applies.
+Because the layout is a formula, `--dry-run` and the fingerprint never need the files.
+
+### 6.4 Format classes: two contracts
+
+A format is a built-in library in the Python builder. It has exactly two halves, and the line
+between them is the fidelity guard.
+
+**The format contract** carries what a trace of the named reader library shows regardless of
+which application drives it:
+- a **layout writer** for `datagen` (real files in the real format, uncompressed, PLAIN
+  encoding, payload from the generator), deterministic from the dataset seed and the layout
+  parameters (rows per group, page size, columns, samples per file);
+- **locate formulas**: sample → (file, unit, offset, length) and unit → (offset, length);
+- the reader's **fixed protocol** as ordinary POSIX nodes: on open (Parquet: 8 bytes at EOF−8,
+  then the footer; HDF5: superblock, object header, chunk index; TFRecord: nothing), per unit
+  (Parquet: the column chunks of the projected columns), per sample (TFRecord: 12-byte header,
+  payload, in the buffered reader's request size);
+- the **access modes** it supports (§6.2);
+- **compute slots** for decode and index parsing, filled by measurement.
+
+**The loader contract** stays in the abstract: access mode, interleave width, prefetch depth,
+column projection, batch composition. Column projection is the clearest case: reading 2 of 50
+columns turns one sequential row-group read into many small column-chunk reads, and only the
+loader knows the projection.
+
+Consequences:
+- A class is tied to a reader library and version (`parquet(reader = "pyarrow")`) and is
+  derived from and validated against a trace of that library, exactly as an abstract is.
+- **The Rust runner stays POSIX-only and format-ignorant.** Nothing about Parquet exists in the
+  runner. Index bytes are read because the real reader reads them, and compared to the expected
+  layout as drift detection, but never parsed.
+- The benchmark never interprets sample data. Content-dependent control flow in real readers
+  (TFRecord length prefixes, Parquet page headers) is recomputed from the layout, decode CPU is
+  a `compute` slot, and under the `mmap` backend every page of a sample is touched so the fault
+  happens.
+- An author writes `dataset train = parquet(pattern, count, rows_per_group = …, columns = …,
+  seed = …)` plus a loader shape; the class supplies the rest.
+
+### 6.5 Derived workloads to add
+
+- Streaming training over TFRecord or Parquet shards (the MLPerf Storage ResNet50 and CosmoFlow
+  shape).
+- The HF non-streaming path: a one-time sequential conversion of Parquet to Arrow cache files
+  (both sides on the SUT when `HF_HOME` is the shared filesystem), then map-style training from
+  the memory-mapped cache. Cache placement (local disk vs. SUT) is a stated parameter.

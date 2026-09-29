@@ -328,9 +328,10 @@ Variants, each a small edit:
   `every $ckpt_every` (a `channel(capacity = 1)` between the trainer and a writer sub-actor).
   The loader keeps running in both variants; only the trainer's `compute` overlaps differently.
 - **Multiple files per rank** (`thread_count > 1`): `parallel($threads) { … __{gpu}_{i}.distcp }`.
-- **Read-back verification** (required by the comparison policy, `PROJECT_BRIEF.md` §5): after
-  the final barrier, each rank reads its own file back with `read(c, 1MiB)[until_eof]` under
-  `--verify`; it doubles as the durability check. Reported as its own phase.
+- **Read-back** (revised 2026-09-29): after the final barrier, each rank reads its own file
+  back with `read(c, 1MiB)[until_eof]`. It is the restore shape run immediately, and a
+  durability check in the sense that the bytes come back; it is not a content check (content
+  verification is the separate tool, `PROJECT_BRIEF.md` §5). Reported as its own phase.
 
 **Cuts.** The collective (NCCL/Gloo) that gathers the write plan is network, not storage, and
 becomes a `barrier`. `O_DIRECT` checkpoint writers (some vendor plugins) are a backend choice,
@@ -847,10 +848,11 @@ constant (sectors, rows), `slot = size` and the layout is exact.
 Checkpoints and KV blocks are created by the run, named positionally, with no fixed count and
 sizes known only from the writes. **Proposal:** `namespace n = objects(pattern, size)`, where
 `size = as_written` for objects the run creates, or a constant. Its objects are not in any
-manifest; the runner's startup check confirms the directory exists and is writable. Data
-verification for these objects uses the workload's own namespace seed and the hash of the path
-as the file id in the block header (`PROJECT_BRIEF.md` §5). Op-count computability holds because
-every loop over a namespace is bounded by a drawn or parameterized count.
+manifest; the runner's startup check confirms the directory exists and is writable. Written
+content for these objects is generated positionally from the workload's namespace seed and the
+hash of the path, with the same dedupe/compression controls as `datagen` (`PROJECT_BRIEF.md`
+§5; no block headers, revised 2026-09-29). Op-count computability holds because every loop over
+a namespace is bounded by a drawn or parameterized count.
 
 A related small addition for *datasets*: `chunk = c` on a `files` dataset realizes each file of
 the size distribution as `ceil(size / c)` block objects named by the pattern's `{k}`, so a

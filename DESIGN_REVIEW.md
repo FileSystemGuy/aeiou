@@ -178,10 +178,11 @@ Coverage caveats (stdio bypasses the PLT, raw syscalls, fork-unsafe io_uring rin
 implementation nuisances, not boundary questions.
 
 Two requirements follow, both adopted. A vendor shim under CLOSED is legal by the test, and a
-shim can return anything fast, so `datagen` writes per-block headers `(magic, dataset seed, file
-id, block offset)` and the runner verifies a sample of reads (R18). And a shim that knows the
-seed could prefetch, so the seed, abstract, and file order are application-private and reviews
-re-run with a fresh seed (R19).
+shim can return anything fast, so ~~`datagen` writes per-block headers `(magic, dataset seed, file
+id, block offset)` and the runner verifies a sample of reads (R18)~~ data must be verifiable
+(R18; *how* was revised on 2026-09-29, §3.16: reproducible content and an offline tool, no
+headers). And a shim that knows the seed could prefetch, so the seed, abstract, and file order
+are application-private and reviews re-run with a fresh seed (R19).
 
 ### 3.14 Data-dependent workloads: random is the null model, not the model (added 2026-09-28)
 
@@ -224,6 +225,59 @@ directory walk at startup (G full walks of the tree) is real application I/O tha
 benchmark includes, and whether it is CLOSED is a WG question; and the `mmap` backend's value
 shows up in model load (§4b), where tensor-parallel ranks fault in strided slices of every
 shard and the RPC pattern is the kernel's choice, not the application's.
+
+### 3.16 Containers, format classes, and the end of block headers (added 2026-09-29)
+
+The user asked whether the Feistel shuffle could run over *samples* rather than files, with a
+mapping from sample id to the containing Parquet, HDF5, or TFRecord file. Three decisions came
+out of the discussion; the reasoning is kept here.
+
+**Samples are the unit, but the shuffle structure is format-dependent.** Feistel over sample
+ids is exactly `DistributedSampler` plus `__getitem__`, and one sample per file is the special
+case, so it unifies the model rather than extending it. But it is faithful only for formats
+that support cheap random access (HDF5, Arrow IPC, MDS, Megatron token files). Parquet and
+TFRecord readers do not access samples randomly: TFRecord has no index, and a Parquet row is
+reachable only by reading and decoding its row group. Production loaders over those formats
+shuffle *shards* and stream sequentially within them, with an in-memory shuffle buffer. Random
+sample reads inside Parquet would therefore be the null-model error of §3.14 in reverse, adding
+randomness the real workload lacks. Hence two access modes declared per dataset (`map`,
+`stream`), with the validator refusing combinations the format cannot do (R22). HF's
+non-streaming path is a third shape worth its own abstract: a one-time sequential conversion of
+Parquet to Arrow cache files, then memory-mapped random row access on the cache, whose location
+(local disk or the shared filesystem) is a parameter the author states.
+
+**Format classes with two contracts.** A built-in "Parquet" library is a good idea as long as
+it stops at the format's edge. What a trace of the reader library shows regardless of
+application (footer protocol, locate formulas, supported modes, layout writer, decode compute
+slots) goes in the format class; what differs between Ray Data, HF streaming, tf.data and a
+map-style dataset (access mode, interleave, prefetch, column projection) stays in the abstract.
+A class that absorbed the second half would cost fidelity. Column projection is the example
+that makes the split concrete: reading 2 of 50 columns turns one sequential row-group read into
+many small column-chunk reads, and only the loader knows the projection. The classes live in
+the Python builder and emit ordinary POSIX nodes; the Rust runner stays format-ignorant. Index
+bytes (footers, chunk indexes) are read as I/O because the real reader reads them, but not
+parsed: the layout is already known from the formula, and comparing the bytes to the expected
+layout is free drift detection. This is also why the benchmark never needs to interpret sample
+data: content-dependent control flow in real readers (TFRecord's length prefix, Parquet page
+headers) is recomputable from the layout, decode CPU is a `compute` slot, and under `mmap` the
+backend must still touch every page so the fault actually happens.
+
+**Reproducible, not self-describing, data.** The 2026-09-28 header design was wrong on two
+counts. A unique 32-byte header in every 4 KiB block makes every block unique, so any dedupe
+engine, fixed-size or content-defined, sees a ratio of one; the dedupe control the generator is
+supposed to provide is destroyed. And R18 claimed the header check would catch a warm cache from
+a previous run; it cannot, because cached content is correct. What verification is actually for
+is the benchmark's own validity: a corpus generated with the wrong generator version, seed, or
+dedupe setting hands the SUT's data reduction a free lunch. A fabricating shim is fraud, and
+MLPerf handles fraud with rules and review. So the expected bytes at `(dataset seed, file id,
+offset)` become a pure function that a verifier regenerates, the runner keeps only structural
+checks (byte counts, short reads, index bytes), and content verification moves to a Python tool
+beside `datagen`, sharing its generator, run after generation and by reviewers, never in a
+scored run. The user proposed dgen-py (MLPerf Storage's generator, fast, with controllable
+dedupe and compression) for the payload; the one property it must have is positional generation,
+producing the bytes at an arbitrary offset without the prefix. If it is a stateful stream
+generator, a block-wise wrapper (block seed from `hash(seed, file, block)`, dedupe from a pool of
+K block seeds) gives the same controls at the granularity dedupe engines already use.
 
 ## 4. Plan changes
 
