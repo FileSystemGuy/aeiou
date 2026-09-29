@@ -279,6 +279,50 @@ producing the bytes at an arbitrary offset without the prefix. If it is a statef
 generator, a block-wise wrapper (block seed from `hash(seed, file, block)`, dedupe from a pool of
 K block seeds) gives the same controls at the granularity dedupe engines already use.
 
+### 3.17 dgen-py: positional by construction, not by API (added 2026-09-29)
+
+The open question from §3.16 was whether dgen-py can produce the bytes at an arbitrary offset
+without generating the prefix. Answered by reading `dgen-data` 0.3.0 (`src/generator.rs`,
+`src/rolling_pool.rs`) and testing the PyPI wheel on Python 3.12.
+
+**API:** the streaming `Generator` has `fill_chunk` from the current position, `reset`,
+read-only `position`, and `set_seed`, which restarts the block-index epoch at the current
+block. No seek. `generate_buffer` and `BufferPool` take no seed at all.
+
+**Algorithm:** the stream is cut into 1 MiB blocks (`BLOCK_SIZE`). For a generator of
+`nblocks` blocks and dedupe ratio D, `unique_blocks = round(nblocks / D)`. Block `i` is filled
+by `Xoshiro256PlusPlus::seed_from_u64(seed + (i mod unique_blocks))`; for compression ratio N
+the last `(N−1)/N` of the block is zero-filled (a January 2026 change from back-references,
+adopted because it matches DLIO and is much faster). No state crosses block boundaries. Hence
+block `i` of stream S equals block 0 of a 1 MiB generator seeded `S + (i mod unique_blocks)`.
+
+**Test on the wheel:** an 8 MiB stream with seed S, no dedupe: every block `i` matched a 1 MiB
+generator seeded `S + i`. Dedupe 2:1 over 8 blocks: block `i` equalled block `i mod 4`, and
+block 5 equalled the positional seed `S + 1`. Compression 2:1: first half keystream, second
+half zeros, as read.
+
+**What follows for the design.**
+- Positional regeneration is seed arithmetic on the public API, at 1 MiB granularity; a 4 KiB
+  piece is a slice. Datagen and the verifier call the Rust crate directly.
+- Dedupe is scoped to a generator's stream, so it is ours to build corpus-wide: a file's seed
+  (or a 1 MiB block's, for large files) is `hash(dataset seed, index mod (total / D))`. Without
+  this a small-file corpus, where every file is a single block with its own seed, has a dedupe
+  ratio of 1 regardless of the requested value. The "block-wise wrapper" of §3.16 is therefore
+  required, not a fallback; dgen supplies the fast fill and the compression layout.
+- Ratios whose zero-fill length does not divide 1 MiB (3, 5) spread a one-byte remainder over
+  unique blocks by error accumulation; seed arithmetic then differs by one byte at the boundary.
+  Exact for 2, 4, 8. Reproducing the accumulation is trivial if ever needed.
+- Compression is bimodal per 4 KiB (pure keystream or pure zeros). A per-chunk compressor still
+  lands at ratio N over a block; it is not what real data looks like. Stated in the manifest.
+- Version pinning is mandatory: the fill algorithm has already changed once. The manifest
+  records the `dgen-data` version and the verifier uses the same one.
+- The library defaults to unseeded generation and its documentation discourages seeds; we always
+  seed.
+
+**Upstream.** A public `fill_block(seed, block_index, ratios)` or `seek(offset)` would remove
+the workaround. The author (Russ Fellows) and the user are both on the MLPerf Storage
+leadership team; the request will be made once this code shows it is what the WG needs.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
