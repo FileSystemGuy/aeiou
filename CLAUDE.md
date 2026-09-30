@@ -12,6 +12,7 @@ Read these before any design or coding work:
 - `ABSTRACTS.md`: paper abstracts for the eight target workloads, and the constructs they surfaced (§9, all accepted 2026-09-30)
 - `schema/README.md` and `schema/abstract-ast.schema.json`: the AST contract (v0.1), canonical form, and validator rules
 - `builder/README.md`: the Python builder (`aeiou`), its API, the build-time discipline, and the hermetic harness; `builder/abstracts/*.py` are the eight workloads as authoring scripts and `schema/examples/*.ast.json` their generated ASTs (never edit them by hand; JSON is the only format on the contract)
+- `runner/README.md`: the Rust runner (`aeiou check`, `aeiou dry-run`), the definitions it fixes on top of the schema (keys, words, permutation, `consume` position, `x @ i`, `until_eof`, the fingerprint), and its golden tests; changing a definition changes every fingerprint and is a recorded decision
 
 Invariants that must not be broken:
 - Exact per-GPU reproducibility. Randomness is positional: keyed on (seed, gpu_id, site, enclosing loop indices). No per-actor draw counters, no shared stateful RNGs, no work distributed based on timing.

@@ -531,6 +531,62 @@ all depend on the declared count; and the manifest is not a security boundary, s
 the system under test, which is the fraud domain of rules, the published dataset id, and the
 offline verifier, whose input the manifest now is.
 
+### 3.22 The runner's first half: the VM, `aeiou dry-run`, and the definitions it fixed (added 2026-09-30)
+
+`runner/` holds the Rust crate `aeiou` (`runner/README.md`): the AST loader, the canonical
+hash, the validator, the positional VM, and `aeiou dry-run`, which walks every actor
+instance of an AST without I/O and prints op counts, bytes, and the fingerprint. All nine
+committed ASTs run; `aeiou check` prints byte-identical output to `schema/check.py` over
+them and CI diffs the two. Building it forced the choices the schema had left to the runner
+(`schema/README.md` §5, "its exact definition belongs to the runner"). Each is listed in
+`runner/README.md` §2 and pinned by a golden test; the reasoning behind the ones that were
+not obvious:
+
+- **One hash family.** xxh3-64 for every key (draw sites, per-id dataset draws, permutation
+  keys, the per-op fingerprint hash) and SplitMix64 for the words a draw consumes. One
+  function to implement in any future verifier, no dependence on a crate's RNG stream
+  semantics, and the key of a draw is a pure function of five integers. The site is the hash
+  of the node's JSON pointer, which is what "no site ids" in §3.18 amounts to: the site is the
+  structural path, and the pointer is the canonical spelling of a path.
+- **`consume` generalized without a new construct.** The formula `g + G·(b·B + j)` is stated
+  for the loader. The VM defines the batch frame as the nearest enclosing `loader` (else the
+  innermost loop), `b` as the row-major ordinal of the frames down to it, and `j`, `B` from
+  the frames inside it. For the loader sugar this is the formula; for an `epoch` loop around a
+  loader, or a plain loop, it is the formula's obvious extension, and there is no second
+  spelling for the author to choose.
+- **`x @ i` by re-evaluation, not by history.** The shifted evaluation re-runs the binding's
+  definition with its loop frame set to `i`; sibling `let`s of the same body are recomputed at
+  that index and memoized for the duration; draws inside use the shifted index. This is the
+  "walk the chain, one hash per link" of §3.15, and it needs no per-actor storage. The
+  below-`from` rule is implemented literally: an `at` below the loop's start raises a signal
+  that the enclosing `cond` expression catches by taking its other arm. The KV-cache chain
+  test checks that every continued request names its origin's conversation.
+- **`as_written` is an accumulator over the actor's own writes, by path.** The rule of §3.18
+  makes the reader that uses `until_eof` on such an object the writer at the same position,
+  so the VM keeps the sum of write lengths it issued per object path (reset by `TRUNC`,
+  moved by `rename`, dropped by `unlink`) and resolves `until_eof` from it. Nothing is
+  observed; a different actor or position cannot see the sum, which is what V4 requires.
+- **`zipf` without a table.** A rank comes from the inverse CDF of the continuous envelope
+  of `r^-s` on `[1, N+1)`, O(1) per draw with no per-dataset array, and ranks map to ids
+  through a permutation keyed by the *dataset* seed, so which ids are popular is a property
+  of the corpus, not of the run. The envelope is an approximation of the discrete Zipf; the
+  locality-metrics check (`PROJECT_BRIEF.md` §6 item 14) is where it would show if it mattered.
+- **`readdir` is one op** in the fingerprint. How many `getdents64` calls it takes depends on
+  the buffer size and entry lengths, which are backend and kernel facts, like the RPC count of
+  a read.
+- **The fingerprint hashes the effective offset and the requested length.** A sequential read
+  therefore hashes the same as the positioned read at the same place (plus the `lseek` op
+  itself), and a short tail read hashes by what was asked, with the expected count reported
+  separately for byte totals. Actor id and the index vector are in the hash (`NAPKIN_MATH.md`
+  §8.D), so the sum is sensitive to which position issued what.
+
+Two observations from running the nine. Three of them (checkpoint write, restore, model
+load) have no draw at all: their fingerprints are identical for every seed, which is the
+right answer and a useful sanity check. And the per-op cost of the dry run is 150–350 ns,
+dominated by formatting the path from the pattern on every op; `vdb_build_diskann` at its
+defaults (203M ops) takes 33 s on one core. Caching a bound handle's resolved path is the
+obvious fix and is not done.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -542,8 +598,10 @@ offline verifier, whose input the manifest now is.
 - 2026-09-30: constructs accepted, Option D chosen, AST schema v0.1 drafted (§3.18). ~~Next in
   order: the builder package with the eight abstracts as its first tests, the hermetic build
   harness and build-twice CI, then the VM against the schema.~~ Builder, abstracts, harness,
-  and CI done the same day (§3.19). Next: the VM with `--dry-run` and the fingerprint against
-  the nine committed ASTs, then the format-class reader protocols and the parameter-file split.
+  and CI done the same day (§3.19). ~~Next: the VM with `--dry-run` and the fingerprint against
+  the nine committed ASTs,~~ Done the same day (§3.22, `runner/`). Next: the `sync` backend
+  and `aeiou run` against ext4 and loopback NFS, then the format-class reader protocols and
+  the parameter-file split.
 
 ## 5. Things reviewed and left as-is
 

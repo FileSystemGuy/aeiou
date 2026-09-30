@@ -171,7 +171,14 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    that rebuilds every abstract hermetically twice and fails on drift from the committed ASTs.
    Still to do here: the format-class reader protocols (item 15) and the parameter-file split.
 3. Build the VM with `--dry-run` and the fingerprint; test against ext4 and a loopback NFS mount
-   on WSL2 (see §7). Golden-test the fingerprint in CI.
+   on WSL2 (see §7). Golden-test the fingerprint in CI. **`aeiou dry-run` done 2026-09-30**
+   (`runner/`, `DESIGN_REVIEW.md` §3.22): the loader, the canonical hash, the validator (CI
+   diffs it against `check.py`), the positional VM over all nine committed ASTs, and the
+   fingerprint, with golden tests. The definitions the schema left to the runner (key, words,
+   permutation, `consume` position, `x @ i`, `until_eof`, fingerprint) are in
+   `runner/README.md` §2. Still to do: the I/O backends (`aeiou run`) and the ext4 / loopback
+   NFS test, `--metrics` (item 14), `stream` access, and the per-op cost (150–350 ns; caching
+   a bound handle's path is the first fix).
 4. **Spike 1:** blocking thread pool first, then io_uring; buffered vs. O_DIRECT, for
    `open → read → close` against the real NFS target, measuring `iou-wrk` count separately for
    open-heavy and read-heavy phases. It decides the I/O backend and the cache strategy.
@@ -263,8 +270,9 @@ dgen-py is a generic payload generator that happens to come from the same commun
 types or imports:
 
 - The Rust runner is the binary `aeiou`, with subcommands for its modes: `aeiou run`,
-  `aeiou dry-run` (`--metrics`), `aeiou datagen`, and the coordinator/launch helper when it
-  exists. This is the command a submitter, or anyone else, runs.
+  `aeiou dry-run` (`--metrics`), `aeiou datagen`, `aeiou check`, and the coordinator/launch
+  helper when it exists. This is the command a submitter, or anyone else, runs. (`check` and
+  `dry-run` exist since 2026-09-30; `runner/README.md`.)
 - The Python authoring tools are dash-suffixed helpers in the same family, one per job:
   `aeiou-build` (the builder; renamed from `abstract-build`), and later `aeiou-verify` (the
   offline content verifier) and `aeiou-fit` (trace fitting). Dash-suffixed because they live in

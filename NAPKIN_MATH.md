@@ -286,7 +286,9 @@ of the previous one.
    required for scale as well as for reclaim.
 2. **Feistel permutation**: correctness (a bijection over [0, N) for N = 50M/100M, checked
    with a bitmap), throughput (target <50 ns/draw), and a quick check that there's no locality
-   (distribution of |Δ| between consecutive draws).
+   (distribution of |Δ| between consecutive draws). Correctness half done 2026-09-30: the
+   runner's `Perm` (`runner/aeiou/src/rng.rs`) is bitmap-checked at N = 50M in its tests;
+   throughput and the |Δ| distribution are still to measure.
 3. **Client cache behavior at scale**: `stat`/`open` 50M files from one host, watching slab
    growth (`slabtop`) and the NFS op mix (`nfsstat -c`, `mountstats`).
 4. **Paper abstracts** for the target workloads (R4), derived from `strace` of the real
@@ -301,6 +303,8 @@ of the previous one.
 
 Order of work after the abstracts: build the VM with `--dry-run` and the fingerprint against
 ext4 and loopback NFS (R12), then Spike 1 on the real target with the thread-pool backend first.
+(`aeiou dry-run` and the fingerprint exist since 2026-09-30, `DESIGN_REVIEW.md` §3.22; the
+ext4 / loopback NFS half waits for the `sync` backend.)
 
 ---
 
