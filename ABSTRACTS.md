@@ -3,8 +3,9 @@
 Status: first drafts, 2026-09-29. This is open item 1 of `PROJECT_BRIEF.md` §6 and Spike 4 of
 `NAPKIN_MATH.md` §6: write the target abstracts by hand, on paper, before any parser or VM
 exists, to find out whether the semantic model of `GRAMMAR_OPTIONS.md` §2 and §5.2 can express
-them (risk R4). The constructs the exercise surfaced are collected in §9; they are proposals,
-not decisions.
+them (risk R4). The constructs the exercise surfaced are collected in §9; ~~they are proposals,
+not decisions~~ **all nine were accepted on 2026-09-30** (two with qualifications, §9.6 and
+§9.7) and are carried by the AST schema in `schema/abstract-ast.schema.json`.
 
 **Provenance of the skeletons.** No `strace` of a real application has been captured for this
 project yet. The syscall skeletons below are derived from how the applications are built
@@ -779,6 +780,12 @@ Each item is a proposed addition or refinement to the semantic model of `GRAMMAR
 `(seed, actor, site, loop indices)`, producers stay finite, and the op multiset is fixed before
 the run.
 
+**Decided 2026-09-30.** All nine are accepted: §9.1–§9.5, §9.8, and §9.9 as written; §9.6
+with the naive slot layout and no slot-group refinement; §9.7 with the constraint stated there
+on `as_written`. §9.5 replaces `recent(site, d)` in `GRAMMAR_OPTIONS.md` §5.2. Each has a node
+or an expression form in the AST schema (`schema/README.md` maps them). Reasoning in
+`DESIGN_REVIEW.md` §3.18.
+
 ### 9.1 Conditionals on the actor id
 
 `when (gpu == 0)` (§3), `gpu div dp` and `gpu mod tp` in names and offsets (§4). The guardrail
@@ -840,6 +847,7 @@ the index space exists.
 **Proposal:** replace `recent(site, d)` in §5.2 with `x @ i` plus the rule that a binding may
 refer to itself at a strictly smaller index. The validator checks that every self-reference
 decreases the index (syntactically: the index expression is `i − e` with `e ≥ 1`).
+**Decided 2026-09-30**; `recent` is gone from the model. AST form: `{at: {ref: x, index: e}}`.
 
 ### 9.6 `regions`: a dataset of fixed-slot regions inside one file
 
@@ -853,6 +861,16 @@ unwritten (sparse) or padded. The read sizes and popularity match the real syste
 address spacing differs, which matters for scans and not for random probes. When `size` is
 constant (sectors, rows), `slot = size` and the layout is exact.
 
+**Decided 2026-09-30, with the naive layout kept deliberately.** The tail of each slot is left
+unwritten and the filesystem is assumed to handle unwritten ranges the ordinary way (delayed
+allocation lays the written regions out contiguously; extents break at holes of a block or
+more, a bounded metadata cost rather than a per-read one). A slot-group layout (K regions per
+group, prefix sums computed on the fly) was considered on 2026-09-29 to shrink the slack and the
+size cap, and declined: real HDF5 and NetCDF files with alignment already contain unwritten
+ranges, and the simpler layout is easier to reason about. The one thing to watch: capping
+`size(c)` at `slot` truncates the request-size distribution, which is an acceptance metric
+(`PROJECT_BRIEF.md` §6 item 14); revisit if a trace shows the tail matters.
+
 ### 9.7 `namespace`: workload-created objects without a count
 
 Checkpoints and KV blocks are created by the run, named positionally, with no fixed count and
@@ -863,6 +881,23 @@ content for these objects is generated positionally from the workload's namespac
 hash of the path, with the same dedupe/compression controls as `datagen` (`PROJECT_BRIEF.md`
 §5; no block headers, revised 2026-09-29). Op-count computability holds because every loop over
 a namespace is bounded by a drawn or parameterized count.
+
+**Decided 2026-09-30, with one constraint: object sizes are never observed, only computed.**
+`size = as_written` read literally would mean the runner records how many bytes each object
+received, which is per-object state and a dependence on history; it would also make a read of
+the object depend on which writer ran first. The accepted meaning is narrower. Every `write` to
+a namespace object has a length that is a positional expression (a constant, a parameter, a
+parameter-array element, a drawn value, or arithmetic over these and loop indices), so the
+object's size is the sum of those lengths in the sequence that created it, and is computable
+at the creator's position without I/O. A reader at the *same* position (the read-back of §3,
+same handle binding) may use `until_eof`, which the runner resolves from that sum. A reader at
+a *different* position (a KV block written by request `r − d`, read by `r`) states its length
+from the same expression the writer used, reached through `@` if it involves drawn values, or
+declares the namespace with a `size` expression instead of `as_written`. `fstat` on a
+namespace object is issued when the application issues it, and its result is checked
+structurally when the size is computable and ignored otherwise; it is never consumed by the
+abstract. The validator rule: `until_eof` on an `as_written` object requires the read to use
+the handle binding that the creating writes used.
 
 A related small addition for *datasets*: `chunk = c` on a `files` dataset realizes each file of
 the size distribution as `ceil(size / c)` block objects named by the pattern's `{k}`, so a

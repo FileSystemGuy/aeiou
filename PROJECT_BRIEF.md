@@ -7,6 +7,7 @@ are in:
 - `GRAMMAR_OPTIONS.md`: options for extending the abstract language, with a recommendation
 - `DESIGN_REVIEW.md`: the 2026-09-25 review, with the reasoning behind the fixes applied here
 - `ABSTRACTS.md`: paper abstracts for the eight target workloads (2026-09-29) and the constructs they surfaced
+- `schema/`: the AST contract (JSON Schema v0.1, 2026-09-30), its canonical form and validator rules, and example ASTs
 
 ## 1. Core idea
 
@@ -135,7 +136,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Deployment | Bare Linux on the client nodes, **no containers**. |
 | I/O crate | `io-uring` (Rust). |
 | A/B testing | Agreed. Backend × cache mode × io_uring features × NFS mount options (`NAPKIN_MATH.md` §8.5). The key metric is client CPU per op. |
-| Grammar | Three layers: authoring language, the AST contract, the Rust VM. The AST (serde YAML/JSON) is the contract and the only thing the runner executes; the WG publishes ASTs and their hashes, submitters run those. Leading candidate for authoring (2026-09-28): **Option D**, a Python builder package that emits the AST, with source→AST reproducibility enforced by CI (build twice, compare) and by the runner's validator. Python stays on the authoring station, never on client nodes. **User has not yet chosen.** |
+| Grammar | Three layers: authoring language, the AST contract, the Rust VM. The AST (serde YAML/JSON) is the contract and the only thing the runner executes; the WG publishes ASTs and their hashes, submitters run those. Leading candidate for authoring (2026-09-28): **Option D**, a Python builder package that emits the AST, with source→AST reproducibility enforced by CI (build twice, compare) and by the runner's validator. Python stays on the authoring station, never on client nodes. ~~**User has not yet chosen.**~~ **Decided 2026-09-30: Option D.** The AST JSON Schema is `schema/abstract-ast.schema.json` (v0.1, draft 2020-12), with the canonical form and the validator's semantic rules in `schema/README.md` and the first abstracts in AST form under `schema/examples/`. The nine constructs of `ABSTRACTS.md` §9 were accepted the same day and are in the schema. Next: the builder package, `abstract-build --hermetic`, and the build-twice CI check. |
 
 ## 6. Open items / next steps
 
@@ -148,11 +149,17 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    `[measure]`, with a capture plan in its §11. The exercise surfaced nine construct proposals
    (`ABSTRACTS.md` §9: actor-id conditionals, `until_eof` semantics, `expect` errnos, offset
    expressions, `x @ i` and chains replacing `recent`, `regions`, `namespace`, `phase`/`readdir`,
-   distribution-selecting `when`); they need a decision before the AST schema (item 2) is
-   written. Remaining: capture the traces and fill the slots.
-2. **User to choose an authoring option** (A/B/C/D in `GRAMMAR_OPTIONS.md`; D is the leading
-   candidate). Then: publish the AST JSON Schema, write the builder package and the
-   `abstract-build --hermetic` harness, and add the build-twice check to CI.
+   distribution-selecting `when`); ~~they need a decision before the AST schema (item 2) is
+   written~~ **all accepted 2026-09-30** (`ABSTRACTS.md` §9; §9.6 with the naive slot layout,
+   §9.7 with the rule that object sizes are computed from the writes, never observed; reasoning
+   in `DESIGN_REVIEW.md` §3.18). Remaining: capture the traces and fill the slots.
+2. ~~**User to choose an authoring option** (A/B/C/D in `GRAMMAR_OPTIONS.md`; D is the leading
+   candidate).~~ **Option D chosen 2026-09-30.** ~~Then: publish the AST JSON Schema,~~ Schema
+   v0.1 drafted the same day (`schema/`), with the small-file training, checkpoint-write, and KV-cache
+   abstracts as the first examples and a `check.py` that validates them against the schema and
+   the semantic rules. Still to do: the remaining five abstracts in AST form (they will come out of the
+   builder), the builder package, the `abstract-build --hermetic` harness, and the build-twice
+   check in CI.
 3. Build the VM with `--dry-run` and the fingerprint; test against ext4 and a loopback NFS mount
    on WSL2 (see §7). Golden-test the fingerprint in CI.
 4. **Spike 1:** blocking thread pool first, then io_uring; buffered vs. O_DIRECT, for
@@ -185,8 +192,8 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `fill_block(seed, block_index, ratios)` or `seek(offset)`.
 13. **Data-dependent workloads (2026-09-28).** Add to the semantic model: distributions over ids
     and offsets (`zipf`, `hotset`, random `offset` in `read`), recency references
-    (`recent(site, d)`, positional, no stored history), and positional names for
-    write-then-read. Cross-actor read-after-write is limited to barrier-separated phases or a
+    (~~`recent(site, d)`~~ `x @ i` since 2026-09-30, positional, no stored history), and
+    positional names for write-then-read. Cross-actor read-after-write is limited to barrier-separated phases or a
     statistical hit model; state this limit in each such workload's documentation.
     `GRAMMAR_OPTIONS.md` §5.
 14. **Locality-metrics check and replay mode (2026-09-28).** `--dry-run --metrics` computes

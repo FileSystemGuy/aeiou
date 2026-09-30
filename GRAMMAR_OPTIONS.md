@@ -1,6 +1,7 @@
 # Abstract Grammar — Options for the Missing Constructs
 
-Status: design options (2026-09-24). Companion to `NAPKIN_MATH.md` §4.4.
+Status: design options (2026-09-24). Companion to `NAPKIN_MATH.md` §4.4. **Authoring decided
+2026-09-30: Option D** (§4); the AST contract is `schema/abstract-ast.schema.json`.
 
 ## 1. The problem
 
@@ -468,7 +469,13 @@ contract, and differs from C in kind: C puts an interpreter in layer 3; D puts o
 executes. For the authoring language the leading candidate is now **Option D**: a Python builder
 package that emits the AST, with the reproducibility techniques above enforced by CI and by the
 runner's validator. Option A is dropped from the recommendation rather than kept as a third
-representation. The choice is still the user's.
+representation. ~~The choice is still the user's.~~ **Decided 2026-09-30: Option D.** The AST
+JSON Schema (draft 2020-12) is `schema/abstract-ast.schema.json`, version `0.1`; the canonical
+form, the node vocabulary, and the semantic rules the validator adds on top of the schema are in
+`schema/README.md`, and `schema/examples/` holds the first abstracts in AST form. What the
+builder desugars rather than the AST carrying it: `every`, integer `repeat`, parameter tables,
+and the format-class helpers (`member_off`, the Parquet footer protocol) all become plain loops,
+conditionals, and arithmetic before serialization, so the Rust VM sees a small node set.
 
 The earlier recommendation (Option A for the language people write, Option B as the canonical
 serialization, `--dump-ast` to emit it) is retained here for the record; its reasoning about a
@@ -531,13 +538,13 @@ function of `(seed, actor, site, loop indices)`.
    - `read(f, offset = draw(dist), len)`: random offsets within a file. Today's model only has
      uniform consumers and sequential offsets; this is the main gap.
 2. **Recency references** (the stack-distance model of temporal locality).
-   `recent(site, d)` refers to the object drawn at `site` `d` iterations ago, with `d` drawn from
-   a reuse-distance distribution. Because every draw is positional, the draw at step `s − d` is
-   recomputable, so this needs **no stored history**. It is what makes KV-cache workloads
-   expressible. *Refinement proposed 2026-09-29 (`ABSTRACTS.md` §9.5): the primitive should be
-   `x @ i`, a binding evaluated at another index of its loop, with self-reference at a strictly
-   smaller index allowed, so that a conversation's identity chains back to its origin; `recent`
-   becomes sugar. Not yet decided.*
+   ~~`recent(site, d)` refers to the object drawn at `site` `d` iterations ago, with `d` drawn from
+   a reuse-distance distribution.~~ **Superseded 2026-09-30 by `x @ i`** (`ABSTRACTS.md` §9.5):
+   a binding evaluated at another index of its enclosing loop, with self-reference allowed at a
+   strictly smaller index, so that a conversation's identity chains back to its origin.
+   `recent(x, d)` is `x @ (i − d)` and is not a separate construct. Because every draw is
+   positional, the value at index `i − d` is recomputable, so this needs **no stored history**;
+   a chain costs one hash per link. It is what makes KV-cache workloads expressible.
 3. **Positional names for write-then-read.** A writer names its object from its position
    (`file("kv/{prefix_id:016x}/blk_{k:04}")` with `prefix_id` drawn positionally); a later reader
    recomputes the same name. Within one actor this is exact.
@@ -577,6 +584,7 @@ but it is a stated fidelity loss and belongs in the workload's documentation.
 ### 5.5 Sketches
 
 Superseded in detail by the full drafts in `ABSTRACTS.md` (2026-09-29); kept as the short form.
+`recent(...)` in the KV-cache sketch below reads as `prefix @ (r − d)` since 2026-09-30.
 
 **DiskANN-style search** (per query): hop count `H ~ dist`, beam width `beam`; the first hops from
 a small hot set, later hops at random 4 KiB offsets in the index file.

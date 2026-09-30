@@ -218,7 +218,8 @@ stored history, but `--dry-run` becomes O(chain length) per request rather than 
 index space needs a warm prefix so early requests have something to reach back to. The
 derived hit length (blocks the earlier request actually wrote) replaces a fitted `hit_len`
 distribution, which is a fidelity gain: the reads land on blocks that exist. The proposal is
-to make `x @ i` the primitive and `recent` sugar (`ABSTRACTS.md` §9.5).
+to make `x @ i` the primitive and `recent` sugar (`ABSTRACTS.md` §9.5). Accepted 2026-09-30
+(§3.18).
 
 Two things the abstracts made concrete for policy rather than grammar: the ImageFolder
 directory walk at startup (G full walks of the tree) is real application I/O that no current
@@ -323,6 +324,68 @@ half zeros, as read.
 the workaround. The author (Russ Fellows) and the user are both on the MLPerf Storage
 leadership team; the request will be made once this code shows it is what the WG needs.
 
+### 3.18 The nine constructs accepted, Option D chosen, and what the AST schema fixes (added 2026-09-30)
+
+The user accepted the nine construct proposals of `ABSTRACTS.md` §9 on the recommendation given
+at the end of the 2026-09-29 session, chose Option D for authoring, and asked for the AST schema
+to be started. Three of the decisions carry reasoning worth recording.
+
+**§9.7 `namespace`: sizes are computed, never observed.** The proposal said the sizes of
+workload-created objects are "known only from the writes", and `size = as_written` invited the
+reading that the runner learns an object's size by remembering what it wrote or by `fstat`.
+Either is state: a per-object record that must survive across positions and actors, and a value
+that depends on which writer ran first. Neither is needed. Every write length in the model is
+already a positional expression (the schema has no other kind), so the size of an object is the
+sum of the write lengths in the sequence that created it, computable at the creator's position
+with no I/O and no record. A reader at another position can reach the same expression through
+`@` when it involves drawn values (the KV-cache `total @ (r − d)`), and otherwise states the
+length outright. `as_written` therefore stays as a label meaning "the sum of the creating
+writes", with one validator rule: `until_eof` on such an object is allowed only through the
+handle binding the writes used, which is the same position by construction. `fstat` on a
+namespace object is issued when the application issues it, checked structurally when the size
+is computable, and never consumed. This keeps the "never materialize per-file structures"
+invariant intact for objects the run itself creates.
+
+**§9.6 `regions`: the naive layout, on purpose.** The alternative (slot groups with prefix sums
+computed on the fly) was raised and declined on 2026-09-29; the user prefers a simple
+assumption about how the filesystem treats unwritten ranges, and the assumption is sound: with
+delayed allocation the written regions land contiguously and holes cost bounded metadata, and
+real scientific formats with alignment already contain such holes. The residual cost is the cap
+of `size(c)` at `slot`, which truncates the request-size distribution; it is an acceptance
+metric, so a trace will show if it matters.
+
+**§9.5 `x @ i` replaces `recent`.** No counter-argument survived: `recent(x, d)` is exactly
+`x @ (i − d)`, so keeping both would be two spellings of one node, and the chain recurrence the
+KV-cache shape needs is expressible only with the general form. The syntactic rule (a
+self-reference's index is `i − e` with `e ≥ 1`) is what makes termination checkable without
+evaluation.
+
+**Option D, and what the schema commits to.** Option D was chosen as recommended; the
+arguments in `GRAMMAR_OPTIONS.md` Option D stand and nothing new was raised. Writing the schema
+forced the choices that the prose had left open, listed here so they are visible:
+
+- *Externally tagged nodes.* Every node, expression, distribution, and handle is an object
+  with a single key naming its kind (`{read: {…}}`, `{add: […]}`, `{zipf: {…}}`), which is
+  serde's default enum encoding, diffs well, and reads as the Option B sketch did.
+- *Canonical units.* Sizes are byte integers and durations are nanosecond integers; `1MiB`,
+  `105ms`, and `40us` are builder-side spellings. Floats appear only where the value is a
+  probability, an exponent, or a distribution parameter, and the builder formats them with
+  `repr`. No site ids: a draw's site is its structural path in the tree, so two builds of the
+  same source cannot disagree about it.
+- *Small node set, sugar in the builder.* `every`, integer `repeat`, parameter tables,
+  `recent`, `file("literal pattern")`, and the format-class protocols are all builder
+  constructs that serialize as loops, conditionals, arithmetic, and namespace objects. The VM
+  sees thirteen control statements and seventeen ops. `until_eof` and `until_end` are the two data-dependent repeats
+  and stay in the AST because the runner resolves them from the layout.
+- *`read` with an `offset` is positioned I/O; without one it is sequential from the current
+  file position.* The abstracts mixed the two spellings; the builder emits `lseek` + `read`
+  when the trace shows that pair and `read{offset}` when the reader library used `pread`.
+- *Every actor template has a `count` expression* defaulting to the reserved parameter `gpus`,
+  which the CLI sets; a single-builder workload (`ABSTRACTS.md` §7) sets `count: 1`.
+- *Deferred, marked as such in the schema:* the `replay` node's trace format, the container
+  layout fields the format classes will need beyond `samples_per_file`, and the `stream`
+  loader knob for records per batch. Each is a version bump, not a redesign.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -331,6 +394,9 @@ leadership team; the request will be made once this code shows it is what the WG
 - Then: fix the determinism items in the docs (done), build the VM with `--dry-run` and the
   fingerprint against ext4 and loopback NFS, then Spike 1 on the real target with the thread-pool
   backend first.
+- 2026-09-30: constructs accepted, Option D chosen, AST schema v0.1 drafted (§3.18). Next in
+  order: the builder package with the eight abstracts as its first tests, the hermetic build
+  harness and build-twice CI, then the VM against the schema.
 
 ## 5. Things reviewed and left as-is
 
