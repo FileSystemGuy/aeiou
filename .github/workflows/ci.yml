@@ -20,4 +20,4 @@ jobs:
         run: .venv/bin/pytest -q
       - name: Hermetic build-twice of every abstract, compared with the committed ASTs
         working-directory: builder
-        run: .venv/bin/abstract-build --hermetic --twice --check -o ../schema/examples abstracts/*.py
+        run: .venv/bin/aeiou-build --hermetic --twice --check -o ../schema/examples abstracts/*.py

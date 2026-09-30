@@ -1,6 +1,6 @@
-"""`abstract-build`: run an authoring script and write its workloads as AST YAML.
+"""`aeiou-build`: run an authoring script and write its workloads as AST YAML.
 
-    abstract-build script.py [script.py ...] [-o DIR] [--hermetic] [--twice] [--check]
+    aeiou-build script.py [script.py ...] [-o DIR] [--hermetic] [--twice] [--check]
 
 Default: run each script in this process and write `<name>.ast.yaml` per Workload into DIR
 (default: the script's directory) with a provenance block.
@@ -76,7 +76,7 @@ def _spawn_child(script: pathlib.Path, hermetic: bool, hashseed: int) -> dict:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="abstract-build", description=__doc__,
+    ap = argparse.ArgumentParser(prog="aeiou-build", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scripts", nargs="+", type=pathlib.Path)
     ap.add_argument("-o", "--out", type=pathlib.Path, help="output directory (default: the script's)")
@@ -84,7 +84,7 @@ def main(argv=None) -> int:
     ap.add_argument("--twice", action="store_true")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--no-provenance", action="store_true")
-    ap.add_argument("--version", action="version", version=f"abstract-build {__version__}")
+    ap.add_argument("--version", action="version", version=f"aeiou-build {__version__}")
     a = ap.parse_args(argv)
 
     from . import emit

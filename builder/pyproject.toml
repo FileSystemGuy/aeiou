@@ -14,7 +14,7 @@ dependencies = [
 test = ["pytest>=8"]
 
 [project.scripts]
-abstract-build = "aeiou.cli:main"
+aeiou-build = "aeiou.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -141,7 +141,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Deployment | Bare Linux on the client nodes, **no containers**. |
 | I/O crate | `io-uring` (Rust). |
 | A/B testing | Agreed. Backend × cache mode × io_uring features × NFS mount options (`NAPKIN_MATH.md` §8.5). The key metric is client CPU per op. |
-| Grammar | Three layers: authoring language, the AST contract, the Rust VM. The AST (serde YAML/JSON) is the contract and the only thing the runner executes; the WG publishes ASTs and their hashes, submitters run those (WG process; §8). Leading candidate for authoring (2026-09-28): **Option D**, a Python builder package that emits the AST, with source→AST reproducibility enforced by CI (build twice, compare) and by the runner's validator. Python stays on the authoring station, never on client nodes. ~~**User has not yet chosen.**~~ **Decided 2026-09-30: Option D.** The AST JSON Schema is `schema/abstract-ast.schema.json` (v0.1, draft 2020-12), with the canonical form and the validator's semantic rules in `schema/README.md` and the first abstracts in AST form under `schema/examples/`. The nine constructs of `ABSTRACTS.md` §9 were accepted the same day and are in the schema. Next: the builder package, `abstract-build --hermetic`, and the build-twice CI check. |
+| Grammar | Three layers: authoring language, the AST contract, the Rust VM. The AST (serde YAML/JSON) is the contract and the only thing the runner executes; the WG publishes ASTs and their hashes, submitters run those (WG process; §8). Leading candidate for authoring (2026-09-28): **Option D**, a Python builder package that emits the AST, with source→AST reproducibility enforced by CI (build twice, compare) and by the runner's validator. Python stays on the authoring station, never on client nodes. ~~**User has not yet chosen.**~~ **Decided 2026-09-30: Option D.** The AST JSON Schema is `schema/abstract-ast.schema.json` (v0.1, draft 2020-12), with the canonical form and the validator's semantic rules in `schema/README.md` and the first abstracts in AST form under `schema/examples/`. The nine constructs of `ABSTRACTS.md` §9 were accepted the same day and are in the schema. Next: the builder package, `aeiou-build --hermetic`, and the build-twice CI check. |
 
 ## 6. Open items / next steps
 
@@ -163,11 +163,11 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    v0.1 drafted the same day (`schema/`), with the small-file training, checkpoint-write, and KV-cache
    abstracts as the first examples and a `check.py` that validates them against the schema and
    the semantic rules. ~~Still to do: the remaining five abstracts in AST form (they will come out of the
-   builder), the builder package, the `abstract-build --hermetic` harness, and the build-twice
+   builder), the builder package, the `aeiou-build --hermetic` harness, and the build-twice
    check in CI.~~ **Done 2026-09-30** (`builder/`, `DESIGN_REVIEW.md` §3.19): the `aeiou`
    package, all of `ABSTRACTS.md` §1–§8 as authoring scripts (`builder/abstracts/`, nine
    workloads since §4 is two), the generated ASTs in `schema/examples/` (the three hand-written
-   ones regenerate hash-identical), `abstract-build --hermetic --twice --check`, and a CI job
+   ones regenerate hash-identical), `aeiou-build --hermetic --twice --check`, and a CI job
    that rebuilds every abstract hermetically twice and fails on drift from the committed ASTs.
    Still to do here: the format-class reader protocols (item 15) and the parameter-file split.
 3. Build the VM with `--dry-run` and the fingerprint; test against ext4 and a loopback NFS mount
@@ -255,6 +255,16 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Workload selection | The builder can express any POSIX-shaped skeleton. | The ninth and tenth abstracts follow the MLPerf Storage ResNet50/CosmoFlow and Parquet→Arrow shapes because those are what the WG submits. | §6 item 15; `GRAMMAR_OPTIONS.md` §6.5 |
 | Upstream requests | dgen-py's API is what it is. | The `fill_block`/`seek` request goes through the WG leadership channel. | `DESIGN_REVIEW.md` §3.17 |
 
-**Naming.** The repository and the Python package are `aeiou`; the CLI is `abstract-build`;
-the runner will be named for the mechanism, not the WG. Renamed from `mlps_abstract` on
-2026-09-30 for this reason.
+**Naming convention (decided 2026-09-30).** One name family, `aeiou`, for everything a user
+types or imports:
+
+- The Rust runner is the binary `aeiou`, with subcommands for its modes: `aeiou run`,
+  `aeiou dry-run` (`--metrics`), `aeiou datagen`, and the coordinator/launch helper when it
+  exists. This is the command a submitter, or anyone else, runs.
+- The Python authoring tools are dash-suffixed helpers in the same family, one per job:
+  `aeiou-build` (the builder; renamed from `abstract-build`), and later `aeiou-verify` (the
+  offline content verifier) and `aeiou-fit` (trace fitting). Dash-suffixed because they live in
+  a separate install from the runner and must not fight it for one `aeiou` command.
+- The Python package is `aeiou`; Rust crates are `aeiou` and `aeiou-<part>`.
+- Nothing is named after MLPerf; the package was renamed from `mlps_abstract` on 2026-09-30
+  for this reason.

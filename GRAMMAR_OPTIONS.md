@@ -438,7 +438,7 @@ Start with the builder; add the decorator only if authors find the `with` blocks
    `PYTHONHASHSEED` values, ideally on two machines, and fail if the hashes differ. This catches
    set-iteration order, hash-dependent ordering, timestamps, and unpinned dependency drift without
    anticipating them (the Debian/Nix reproducible-builds test).
-6. **Hermetic generation environment.** `abstract-build --hermetic script.py` runs the script with
+6. **Hermetic generation environment.** `aeiou-build --hermetic script.py` runs the script with
    a pinned interpreter and hash-locked dependencies (`uv run --locked`), in isolated mode
    (`python -I -E -s`) so user site-packages and environment variables cannot leak in, with no
    network. PEP 578 audit hooks deny socket connections, subprocesses, and file opens outside the

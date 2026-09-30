@@ -33,7 +33,7 @@ def test_abstract_builds_and_matches_committed(script):
         validate(ast, name)                                   # schema + semantic rules
         assert op_counts(ast)
         committed = EXAMPLES / f"{name}.ast.yaml"
-        assert committed.exists(), f"{committed} missing: run `abstract-build -o schema/examples {script}`"
+        assert committed.exists(), f"{committed} missing: run `aeiou-build -o schema/examples {script}`"
         assert emit.sha256(yaml.safe_load(committed.read_text())) == emit.sha256(ast), \
             f"{name}: committed AST differs from the builder's output; regenerate and review the diff"
 

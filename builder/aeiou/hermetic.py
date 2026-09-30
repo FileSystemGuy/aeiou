@@ -1,4 +1,4 @@
-"""Hermetic generation: what `abstract-build --hermetic` installs in the child process before
+"""Hermetic generation: what `aeiou-build --hermetic` installs in the child process before
 it runs the author's script (GRAMMAR_OPTIONS.md Option D, technique 6).
 
 - PEP 578 audit hooks deny sockets, subprocesses, and file opens outside the interpreter, the

@@ -2,7 +2,7 @@
 
 Abstract-driven I/O benchmark runner (Rust + `io-uring` crate + a pure-Rust TCP coordinator for multi-host; no MPI). Pre-implementation stage.
 
-Built for the MLPerf Storage WG, meant to be general: name packages, modules, env vars, CLIs, files, and config keys for the mechanism or the repo (`aeiou`), never for MLPerf; anything that is WG process (divisions, published hashes, reference parameters) is listed in `PROJECT_BRIEF.md` §8 and says so where it appears. Adding something WG-specific is a conscious, documented decision.
+Built for the MLPerf Storage WG, meant to be general: name packages, modules, env vars, CLIs, files, and config keys for the mechanism or the repo (`aeiou`), never for MLPerf (convention in `PROJECT_BRIEF.md` §8: runner binary `aeiou` with subcommands, Python helpers `aeiou-build`, `aeiou-verify`, `aeiou-fit`); anything that is WG process (divisions, published hashes, reference parameters) is listed in `PROJECT_BRIEF.md` §8 and says so where it appears. Adding something WG-specific is a conscious, documented decision.
 
 Read these before any design or coding work:
 - `PROJECT_BRIEF.md`: original requirements, decisions made so far, open items

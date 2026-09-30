@@ -12,14 +12,14 @@ builder/
   aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli
   abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts)
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds
-  pyproject.toml     deps: pyyaml, jsonschema; `abstract-build` entry point
+  pyproject.toml     deps: pyyaml, jsonschema; `aeiou-build` entry point
 ```
 
 ```
 cd builder && uv sync --extra test              # or: pip install -e '.[test]'
-uv run abstract-build --hermetic --twice -o ../schema/examples abstracts/*.py
+uv run aeiou-build --hermetic --twice -o ../schema/examples abstracts/*.py
 uv run pytest
-uv run abstract-build --check -o ../schema/examples abstracts/*.py     # drift check (CI)
+uv run aeiou-build --check -o ../schema/examples abstracts/*.py     # drift check (CI)
 ```
 
 ## 1. Writing an abstract
@@ -128,7 +128,7 @@ dict. The Rust validator must reject everything they reject.
 
 ## 4. Reproducible builds
 
-`abstract-build` implements techniques 4–6 of `GRAMMAR_OPTIONS.md` Option D:
+`aeiou-build` implements techniques 4–6 of `GRAMMAR_OPTIONS.md` Option D:
 
 - **Canonical hash.** `sha256` of the canonical JSON (sorted keys, no whitespace, floats in
   `repr`, `provenance` removed); the same function as `schema/check.py`. The YAML header and
