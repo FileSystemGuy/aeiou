@@ -394,7 +394,7 @@
       "script": "ckpt_write_dcp.py",
       "sha256": "354e43ff03aa6ddd8f3b3de14f12601ed5970f8e19a6be698fb063bc41dbdfc9",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "b94d1840ceb2"
     },
     "python": "3.12.13",
     "lock": {

@@ -21,10 +21,13 @@ w.param("xfer", 1 * MiB, unit="bytes", doc="[verify] member read chunk (numpy 25
 w.param("members", 2, unit="count", doc="[verify] \"x\" and \"y\" in the npz")
 w.param("cd_len", 200, unit="bytes", doc="[verify] central directory bytes")
 w.param("lh_len", 40, unit="bytes", doc="[verify] local header + name bytes")
+w.param("files", 50_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
+w.param("sample_mean", 140 * MiB, unit="bytes", doc="[measure]")
+w.param("sample_sd", 4 * MiB, unit="bytes", doc="[measure]")
 EOCD = 22   # end-of-central-directory record
 
 train = w.dataset("train", pattern="train/{id div 10000:05}/sample_{id:09}.npz",
-                  count=50_000, size=normal(140 * MiB, 4 * MiB, min=1 * MiB),   # [measure]
+                  count=P.files, size=normal(P.sample_mean, P.sample_sd, min=1 * MiB),
                   seed=0x5eed_da7b, access="map")
 
 

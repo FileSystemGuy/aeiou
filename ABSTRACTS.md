@@ -726,6 +726,7 @@ workload kv_cache_serving {
           for k in hit           { let b = file("kv/{conv:016x}/blk_{k:04}"),
                                    open(b, RDONLY), read(b, $chunk_bytes), close(b) }
           compute($prefill_per_token * (total - hit) * $chunk_tokens)
+          when (hit < total)     { mkdir("kv/{conv:016x}", expect = [EEXIST]) }   # the conversation directory
           for k in hit .. total  { let b = file("kv/{conv:016x}/blk_{k:04}"),
                                    open(b, WRONLY|CREAT|TRUNC), write(b, $chunk_bytes), close(b) }
           compute($decode_per_token * out)

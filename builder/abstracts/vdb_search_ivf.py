@@ -12,8 +12,9 @@ w.param("queries", 100_000, unit="count")
 w.param("nprobe", 64, unit="count")
 w.param("list_pop", zipf(s=0.8), doc="list popularity [measure]")
 w.param("distance", 400 * us, unit="ns", doc="[measure]")
+w.param("lists", 1_000_000, unit="count", doc="[config] inverted lists")
 
-lists = w.regions("lists", file="ivf/invlists.bin", count=1_000_000,
+lists = w.regions("lists", file="ivf/invlists.bin", count=P.lists,
                   slot=256 * KiB,                                        # ≥ p99 list size
                   size=lognormal(median=40 * KiB, sigma=0.9),            # codes+ids [measure]
                   seed=0x5eed_da7e)

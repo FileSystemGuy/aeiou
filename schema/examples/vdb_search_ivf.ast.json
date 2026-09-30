@@ -27,13 +27,20 @@
       "default": 400000,
       "unit": "ns",
       "doc": "[measure]"
+    },
+    "lists": {
+      "default": 1000000,
+      "unit": "count",
+      "doc": "[config] inverted lists"
     }
   },
   "datasets": {
     "lists": {
       "regions": {
         "file": "ivf/invlists.bin",
-        "count": 1000000,
+        "count": {
+          "param": "lists"
+        },
         "slot": 262144,
         "size": {
           "lognormal": {
@@ -149,9 +156,9 @@
   "provenance": {
     "generator": {
       "script": "vdb_search_ivf.py",
-      "sha256": "e3b48e062570b785019a318c16c0d0968f26d246344cdf764936d27fdc168ace",
+      "sha256": "e484d3d6730775c0ae4048c5f45c7d3450bb948d5b811f205447c706a65f0724",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "b94d1840ceb2-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -159,6 +166,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "228287de7e56394b6417d1b306a54c6fbfe80a05e65d4dac54fccf84d46a8b58"
+    "ast_sha256": "eeb984a9185749a61e2685b5d66a7a0b5f99617fe0ea35e0c1090a20df6ba222"
   }
 }

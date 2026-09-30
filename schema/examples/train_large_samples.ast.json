@@ -52,17 +52,38 @@
       "default": 40,
       "unit": "bytes",
       "doc": "[verify] local header + name bytes"
+    },
+    "files": {
+      "default": 50000,
+      "unit": "count",
+      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+    },
+    "sample_mean": {
+      "default": 146800640,
+      "unit": "bytes",
+      "doc": "[measure]"
+    },
+    "sample_sd": {
+      "default": 4194304,
+      "unit": "bytes",
+      "doc": "[measure]"
     }
   },
   "datasets": {
     "train": {
       "files": {
         "pattern": "train/{id div 10000:05}/sample_{id:09}.npz",
-        "count": 50000,
+        "count": {
+          "param": "files"
+        },
         "size": {
           "normal": {
-            "mean": 146800640,
-            "sd": 4194304,
+            "mean": {
+              "param": "sample_mean"
+            },
+            "sd": {
+              "param": "sample_sd"
+            },
             "min": 1048576
           }
         },
@@ -465,9 +486,9 @@
   "provenance": {
     "generator": {
       "script": "train_large_samples.py",
-      "sha256": "99690bb2b30d0a944b00b7885268615d448c7c8f55a696eaf39a6a5a71b16b37",
+      "sha256": "d1638d5247a17ca58bb44a35652b23697e4d511a6448f295e3f5fa640abba801",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "b94d1840ceb2-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -475,6 +496,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "543692bdebdab02029ac0a4bd4cff9696dcbf6fd41ba2caebbe4fbaa1ee98692"
+    "ast_sha256": "780c751d077f20b513df6fcd1429ca9d295ae3a572896aa4fc7a960748dc9ae1"
   }
 }

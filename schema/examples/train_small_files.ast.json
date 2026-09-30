@@ -37,13 +37,20 @@
     "enumerate": {
       "default": false,
       "doc": "include the startup directory walk (ABSTRACTS.md §9.8)"
+    },
+    "files": {
+      "default": 50000000,
+      "unit": "count",
+      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
     }
   },
   "datasets": {
     "train": {
       "files": {
         "pattern": "train/{id div 1300:05}/img_{id:09}.jpg",
-        "count": 50000000,
+        "count": {
+          "param": "files"
+        },
         "size": {
           "lognormal": {
             "median": 112640,
@@ -276,9 +283,9 @@
   "provenance": {
     "generator": {
       "script": "train_small_files.py",
-      "sha256": "e531d5014dc24bc500f483ab836201d6bbe8dc7dfe8742a43f4b998d1ea13d3d",
+      "sha256": "b7e3c34db437a527de8937d88efe2e3e0e94688c68fc5c2aec668696f6c3bb50",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "b94d1840ceb2-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -286,6 +293,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "95858e8490572732f79fc33fab8dbef471473804a9b9a1349557ca2ce0364252"
+    "ast_sha256": "c6cf657c946dbbeeddf8d77e6fd7ed6fc5c7c9eb0d6c3481b73c6d29cea76fca"
   }
 }

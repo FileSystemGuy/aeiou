@@ -58,7 +58,7 @@
   "datasets": {
     "base": {
       "regions": {
-        "file": "base.fbin",
+        "file": "base/base.fbin",
         "count": {
           "param": "n"
         },
@@ -575,9 +575,9 @@
   "provenance": {
     "generator": {
       "script": "vdb_build_diskann.py",
-      "sha256": "8fddbdf6cb6d1fb0941e685c0176ab09e52a6804349cccda88524a5b802c146a",
+      "sha256": "e5f3ead99fcb4ab5b61419f43de5fafb0a32fcfbdd0ff621b506d119cad67650",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "b94d1840ceb2-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -585,6 +585,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "297b1bae5e4674456160af86df0f0665ff40db3ed224998c3bd79a28fb2d129c"
+    "ast_sha256": "735adae78cad5736d946741a71e4ef6c7158cb92c8a5393a8b16ee97b489e5fe"
   }
 }

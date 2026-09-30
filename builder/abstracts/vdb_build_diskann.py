@@ -18,7 +18,7 @@ w.param("index_bytes", 480 * GiB, unit="bytes", doc="[config]")
 w.param("sectors", 200_000_000, unit="count", doc="[config]")
 w.param("sector", 4 * KiB, unit="bytes")
 
-base = w.regions("base", file="base.fbin", count=P.n, slot=P.dim * 4, size=const(P.dim * 4), seed=0x5eed_da7f)
+base = w.regions("base", file="base/base.fbin", count=P.n, slot=P.dim * 4, size=const(P.dim * 4), seed=0x5eed_da7f)
 shard_ns = w.namespace("shard", pattern="diskann/shard_{k:03}.index", fields={"k": int}, size="as_written",
                        seed=0x5eed_da83)
 out = w.namespace("out", pattern="diskann/{name}", fields={"name": str}, size="as_written", seed=0x5eed_da83)

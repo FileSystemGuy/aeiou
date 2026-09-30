@@ -18,8 +18,9 @@ w.param("hops", empirical([3, 4, 5, 6, 7, 8], [5, 20, 35, 25, 10, 5]), unit="cou
 w.param("hot", hotset(fraction=0.01, weight=0.30), doc="hub nodes [measure from trace]")
 w.param("rerank", 120 * us, unit="ns", doc="[measure]")
 w.param("sector", 4 * KiB, unit="bytes")
+w.param("nodes", 200_000_000, unit="count", doc="[config] graph nodes, one sector each")
 
-index = w.regions("index", file="diskann/index.bin", count=200_000_000, slot=P.sector,
+index = w.regions("index", file="diskann/index.bin", count=P.nodes, slot=P.sector,
                   size=const(P.sector), seed=0x5eed_da7d)
 
 with w.actor("gpu") as gpu:

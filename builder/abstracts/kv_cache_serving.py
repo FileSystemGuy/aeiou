@@ -14,6 +14,7 @@ w.param("requests", 20000, unit="count")
 w.param("chunk_tokens", 256, unit="tokens")
 w.param("chunk_bytes", 32 * MiB, unit="bytes", doc="128 KiB/token × 256 [config]")
 w.param("sys_prompts", 50, unit="count")
+w.param("sys_tokens", 1500, unit="tokens", doc="median system prompt length [measure]")
 w.param("sys_pop", zipf(s=1.1), doc="[measure]")
 w.param("reuse", mixture((0.55, none), (0.45, lognormal(median=40, sigma=1.2, min=1))),
         doc="requests ago, or none for a new conversation [measure]")
@@ -24,11 +25,12 @@ w.param("prefill_per_token", 40 * us, unit="ns")
 w.param("decode_per_token", 12 * ms, unit="ns")
 
 sysp = w.dataset("sysp", pattern="kv/sys/{id:04}/blk_{k:04}", count=P.sys_prompts,
-                 size=lognormal(median=1500 * 128 * KiB, sigma=0.3),   # sys_len (median 1500 tokens) × 128 KiB
+                 size=lognormal(median=P.sys_tokens * 128 * KiB, sigma=0.3),   # 128 KiB per token
                  chunk=P.chunk_bytes,                                  # realized as ceil(size / chunk) block objects {k}
                  seed=0x5eed_da80)
 kv = w.namespace("kv", pattern="kv/{conv:016x}/blk_{k:04}", fields={"conv": int, "k": int},
                  size=P.chunk_bytes, seed=0x5eed_da81)
+kv_dir = w.namespace("kv_dir", pattern="kv/{conv:016x}", fields={"conv": int}, size=0, seed=0x5eed_da81)
 
 with w.actor("gpu") as gpu:
     with gpu.parallel("slot", P.concurrency) as slot:
@@ -61,6 +63,8 @@ with w.actor("gpu") as gpu:
                     slot.read(b, P.chunk_bytes)
                     slot.close(b)
                 slot.compute(P.prefill_per_token * ((total - hit) * P.chunk_tokens))
+                with slot.when(hit < total):                          # the conversation directory
+                    slot.mkdir(kv_dir.object(conv=conv), expect=["EEXIST"])
                 with slot.loop("k", total, start=hit) as k:           # write the new blocks
                     b = slot.let("b", kv.object(conv=conv, k=k))
                     slot.open(b, "WRONLY|CREAT|TRUNC")

@@ -29,6 +29,11 @@
       "default": 50,
       "unit": "count"
     },
+    "sys_tokens": {
+      "default": 1500,
+      "unit": "tokens",
+      "doc": "median system prompt length [measure]"
+    },
     "sys_pop": {
       "default": {
         "zipf": {
@@ -99,7 +104,19 @@
         },
         "size": {
           "lognormal": {
-            "median": 196608000,
+            "median": {
+              "mul": [
+                {
+                  "mul": [
+                    {
+                      "param": "sys_tokens"
+                    },
+                    128
+                  ]
+                },
+                1024
+              ]
+            },
             "sigma": 0.3
           }
         },
@@ -120,6 +137,14 @@
       "size": {
         "param": "chunk_bytes"
       },
+      "seed": 1592646273
+    },
+    "kv_dir": {
+      "pattern": "kv/{conv:016x}",
+      "fields": {
+        "conv": "int"
+      },
+      "size": 0,
       "seed": 1592646273
     }
   },
@@ -577,6 +602,39 @@
                             }
                           },
                           {
+                            "cond": {
+                              "if": {
+                                "lt": [
+                                  {
+                                    "ref": "hit"
+                                  },
+                                  {
+                                    "ref": "total"
+                                  }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "mkdir": {
+                                    "dir": {
+                                      "object": {
+                                        "namespace": "kv_dir",
+                                        "fields": {
+                                          "conv": {
+                                            "ref": "conv"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "expect": [
+                                      "EEXIST"
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
                             "loop": {
                               "index": "k",
                               "from": {
@@ -665,9 +723,9 @@
   "provenance": {
     "generator": {
       "script": "kv_cache_serving.py",
-      "sha256": "9c286cae38731c6078e13ce4bd77d81f2f83271d4e0a0dfbc19c346e6b9869ea",
+      "sha256": "61392db6acad4a711d6306cd2d1ca9172099e8dba73b0312ce7c1291d5c2bff1",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "b94d1840ceb2-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -675,6 +733,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "cf1a1359c7769f5ab9ee4c23bf76f5f77c59162261f9d3528d815bcd0d3bbe09"
+    "ast_sha256": "f51d92850a0ecc8b84e6e55b10d08635771f6cb58417bb59135a2ea0329c48e8"
   }
 }

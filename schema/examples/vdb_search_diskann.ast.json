@@ -63,13 +63,20 @@
     "sector": {
       "default": 4096,
       "unit": "bytes"
+    },
+    "nodes": {
+      "default": 200000000,
+      "unit": "count",
+      "doc": "[config] graph nodes, one sector each"
     }
   },
   "datasets": {
     "index": {
       "regions": {
         "file": "diskann/index.bin",
-        "count": 200000000,
+        "count": {
+          "param": "nodes"
+        },
         "slot": {
           "param": "sector"
         },
@@ -217,9 +224,9 @@
   "provenance": {
     "generator": {
       "script": "vdb_search_diskann.py",
-      "sha256": "5e359932a16fb1ef8c122048481636c63c080e07f536140433ce024ce62504bd",
+      "sha256": "907839daa7563dc68bfd7ad3a79017a2f57aeca86a22696f58204670260205c4",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "b94d1840ceb2-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -227,6 +234,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "067244bc87a20af46f054bdbe6e37a1ddc314ba62b899e2ab609a76f306deeb0"
+    "ast_sha256": "6701fefb49ae832ff37f75b35e654fa9371f4ec7205b6e82d90ec1367cbd1c43"
   }
 }
