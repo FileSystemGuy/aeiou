@@ -13,7 +13,7 @@ import sys
 from typing import Any
 
 from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle, Dist, Draw,
-                    Expr, FileHandle, Handle, Index, Node, ObjectHandle, Op, Param, Pick, Ref,
+                    Expr, FileHandle, FileOf, Handle, Index, Node, ObjectHandle, Op, Param, Pick, Ref,
                     ast_of, check_ident, distref, lift, lower_bound_of, walk)
 
 OPEN_FLAGS = ("RDONLY", "WRONLY", "RDWR", "CREAT", "TRUNC", "EXCL", "APPEND", "CLOEXEC",
@@ -21,6 +21,8 @@ OPEN_FLAGS = ("RDONLY", "WRONLY", "RDWR", "CREAT", "TRUNC", "EXCL", "APPEND", "C
 IOCTLS = ("TCGETS", "FIONREAD", "BLKGETSIZE64")
 WHENCE = ("SET", "CUR", "END")
 ERRNO = re.compile(r"^E[A-Z0-9]{1,15}$")
+RESERVED_PREFIX = ".aeiou"      # V13: the dataset manifest `.aeiou-dataset.json` and future sidecars
+WRITE_FLAGS = {"WRONLY", "RDWR", "CREAT", "TRUNC", "APPEND"}
 FIELD = re.compile(r"\{([a-z_][a-z0-9_]*)(?:\s+(?:div|mod)\s+\d+)?(?::[^}]*)?\}")
 
 gpu_id = Actor("id")        # this actor's global id
@@ -60,6 +62,17 @@ def _handle(h, what="file") -> Handle:
         raise BuildError(f"{what}: expected a handle (a binding, dataset file/dir, or namespace "
                          f"object), got {h!r}")
     return h
+
+
+def _reserved(pattern: str, what: str):
+    for comp in pattern.split("/"):
+        if comp.startswith(RESERVED_PREFIX):
+            raise BuildError(f"{what}: path component {comp!r} begins with {RESERVED_PREFIX!r}, which is "
+                             f"reserved for the dataset manifest (schema/README.md V13)")
+
+
+def _root(pattern: str) -> str:
+    return pattern.split("{", 1)[0].rpartition("/")[0]
 
 
 def _strip_none(d: dict) -> dict:
@@ -161,6 +174,7 @@ class Workload:
         self._datasets: dict[str, Dataset] = {}
         self._namespaces: dict[str, Namespace] = {}
         self._actors: dict[str, dict] = {}
+        self._roots: dict[str, str] = {}
         self.P = Params(self)
         frame = sys._getframe(1)
         self.source = frame.f_code.co_filename
@@ -203,6 +217,8 @@ class Workload:
             raise BuildError(f"dataset {name}: access must be map or stream")
         if format is not None and "class" not in format:
             raise BuildError(f"dataset {name}: format needs a `class`")
+        _reserved(pattern, f"dataset {name}")
+        self._claim_root(_root(pattern), name)
         spec = {"pattern": pattern, "count": lift(count, "count"), "size": distref(size),
                 "seed": _seed(seed, name), "access": access,
                 "samples_per_file": None if samples_per_file is None else lift(samples_per_file),
@@ -214,6 +230,8 @@ class Workload:
                 doc: str | None = None) -> Dataset:
         """A `regions` dataset: `count` fixed-slot regions inside one file."""
         self._declare(name, "dataset")
+        _reserved(file, f"dataset {name}")
+        self._claim_root(file.rpartition("/")[0], name)
         spec = {"file": file, "count": lift(count, "count"), "slot": lift(slot, "slot"),
                 "size": distref(size), "seed": _seed(seed, name), "doc": doc}
         self._datasets[name] = ds = Dataset(name, "regions", spec)
@@ -234,6 +252,12 @@ class Workload:
         pat = set(FIELD.findall(pattern))
         if pat != set(fields):
             raise BuildError(f"namespace {name}: pattern fields {sorted(pat)} != declared {sorted(fields)}")
+        _reserved(pattern, f"namespace {name}")
+        nroot = _root(pattern)
+        for root, dname in self._roots.items():
+            if root and (nroot == root or nroot.startswith(root + "/")):
+                raise BuildError(f"namespace {name}: root {nroot!r}/ lies inside dataset {dname}'s root "
+                                 f"{root!r}/ (schema/README.md V13)")
         if not (isinstance(size, str) and size == "as_written"):
             size = lift(size, "namespace size")
             for n in walk(size):
@@ -256,6 +280,12 @@ class Workload:
         self._actors[name] = _strip_none({"count": None if count is None else lift(count, "count"),
                                           "body": body, "doc": doc})
         yield Cursor(self, body)
+
+    def _claim_root(self, root: str, name: str):
+        if root in self._roots:
+            raise BuildError(f"dataset {name}: shares root {root!r}/ with dataset {self._roots[root]}; "
+                             f"one manifest per root (schema/README.md V13)")
+        self._roots[root] = name
 
     def _declare(self, name, what):
         check_ident(name, what)
@@ -639,8 +669,27 @@ class Cursor:
             with self.loop(name, repeat):
                 self._emit(node)
 
+    def _dataset_of(self, h):
+        """Dataset name if the handle is (a binding to) a dataset file, dir, sample, region, or chunk."""
+        if isinstance(h, Ref):
+            return self._dataset_of(self._lookup(h.name))
+        if isinstance(h, (FileHandle, DirHandle, Consume, Pick)):
+            return h.dataset
+        if isinstance(h, FileOf):
+            return self._dataset_of(h.of)
+        return None
+
+    def _read_only(self, h, what):
+        ds = self._dataset_of(h)
+        if ds:
+            raise BuildError(f"{what} on dataset {ds}: datasets are read-only, writes go to namespaces "
+                             f"(schema/README.md V12)")
+
     def open(self, file, flags, *, mode: int | None = None, expect=None):
-        self._op("open", {"file": _handle(file).ast(), "flags": _flags(flags), "mode": mode,
+        flags = _flags(flags)
+        if set(flags) & WRITE_FLAGS:
+            self._read_only(file, "open for writing")
+        self._op("open", {"file": _handle(file).ast(), "flags": flags, "mode": mode,
                           "expect": _expect(expect)})
 
     def _fileop(self, kind, file, expect):
@@ -651,7 +700,9 @@ class Cursor:
     def stat(self, file, *, expect=None): self._fileop("stat", file, expect)
     def fsync(self, file, *, expect=None): self._fileop("fsync", file, expect)
     def fdatasync(self, file, *, expect=None): self._fileop("fdatasync", file, expect)
-    def unlink(self, file, *, expect=None): self._fileop("unlink", file, expect)
+    def unlink(self, file, *, expect=None):
+        self._read_only(file, "unlink")
+        self._fileop("unlink", file, expect)
 
     def read(self, file, len, *, offset=None, repeat=None, expect=None):
         """`read(f, len)` sequential from the current position; with `offset`, positioned
@@ -672,6 +723,7 @@ class Cursor:
 
     def write(self, file, len, *, offset=None, repeat=None, expect=None):
         h = _handle(file)
+        self._read_only(h, "write")
         if isinstance(repeat, str):
             raise BuildError("write has no until_eof; give a count")
         args = {"file": h.ast(), "len": ast_of(lift(len, "write len")),
@@ -706,10 +758,12 @@ class Cursor:
         self._op("ioctl", {"file": _handle(file).ast(), "request": request, "expect": _expect(expect)})
 
     def ftruncate(self, file, len, *, expect=None):
+        self._read_only(file, "ftruncate")
         self._op("ftruncate", {"file": _handle(file).ast(), "len": ast_of(lift(len, "len")),
                                "expect": _expect(expect)})
 
     def fallocate(self, file, len, *, offset=None, expect=None):
+        self._read_only(file, "fallocate")
         self._op("fallocate", {"file": _handle(file).ast(),
                                "offset": None if offset is None else ast_of(lift(offset, "offset")),
                                "len": ast_of(lift(len, "len")), "expect": _expect(expect)})
@@ -721,6 +775,8 @@ class Cursor:
         self._op("rmdir", {"dir": _handle(dir, "dir").ast(), "expect": _expect(expect)})
 
     def rename(self, src, dst, *, expect=None):
+        self._read_only(src, "rename")
+        self._read_only(dst, "rename")
         self._op("rename", {"from": _handle(src, "from").ast(), "to": _handle(dst, "to").ast(),
                             "expect": _expect(expect)})
 

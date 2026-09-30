@@ -21,6 +21,18 @@ SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text())
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "choose", "phase", "replay"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
+MUTATING_OPS = {"write", "ftruncate", "fallocate", "unlink"}          # V12, plus rename and open flags
+WRITE_FLAGS = {"WRONLY", "RDWR", "CREAT", "TRUNC", "APPEND"}
+RESERVED_PREFIX = ".aeiou"                                            # V13: the manifest and sidecars
+
+
+def dataset_root(d: dict) -> str:
+    """Constant directory prefix of a files pattern, or the directory of a regions file."""
+    kind, body = next(iter(d.items()))
+    if kind == "regions":
+        return body["file"].rpartition("/")[0]
+    prefix = body["pattern"].split("{", 1)[0]
+    return prefix.rpartition("/")[0]
 
 
 def canonical(ast: dict) -> bytes:
@@ -49,19 +61,35 @@ class Check:
             self.err(["params"], "`gpus` is reserved and set by the runner")
         for pname, p in self.ast.get("params", {}).items():
             self.value(p["default"], ["params", pname])
+        roots = {}
         for dname, d in self.datasets.items():
             kind, body = next(iter(d.items()))
             self.exprlike(body["size"], ["datasets", dname, "size"], Scope(self), dist_ok=True)
             self.expr(body["count"], ["datasets", dname, "count"], Scope(self))
+            self.reserved(body.get("pattern") or body.get("file"), ["datasets", dname])
+            root = dataset_root(d)
+            if root in roots:
+                self.err(["datasets", dname], f"shares root `{root}/` with dataset `{roots[root]}` (V13)")
+            roots[root] = dname
         for nname, n in self.namespaces.items():
             if n["size"] != "as_written":
                 self.expr(n["size"], ["namespaces", nname, "size"], Scope(self, fields=set(n["fields"])))
+            self.reserved(n["pattern"], ["namespaces", nname])
+            nroot = n["pattern"].split("{", 1)[0].rpartition("/")[0]
+            for root, dname in roots.items():
+                if root and (nroot == root or nroot.startswith(root + "/")):
+                    self.err(["namespaces", nname], f"root `{nroot}/` lies inside dataset `{dname}`'s root `{root}/` (V13)")
         for aname, a in self.ast["actors"].items():
             scope = Scope(self)
             if "count" in a:
                 self.expr(a["count"], ["actors", aname, "count"], scope)
             self.body(a["body"], ["actors", aname, "body"], scope)
         return self.errors
+
+    def reserved(self, pattern, path):
+        for comp in pattern.split("/"):
+            if comp.startswith(RESERVED_PREFIX):
+                self.err(path, f"path component `{comp}` begins with `{RESERVED_PREFIX}`, reserved for the manifest (V13)")
 
     def value(self, v, path):
         if isinstance(v, list):
@@ -153,6 +181,31 @@ class Check:
             self.note_write(a["file"], scope)
         if kind == "read" and rep == "until_eof":
             self.check_until_eof(a["file"], p, scope)
+        # V12: datasets are read-only
+        if kind in MUTATING_OPS or kind == "rename":
+            for key in ("file", "from", "to"):
+                if key in a and self.dataset_of(a[key], scope):
+                    self.err(p + [key], f"{kind} on dataset `{self.dataset_of(a[key], scope)}`: datasets are read-only (V12)")
+        if kind == "open" and set(a["flags"]) & WRITE_FLAGS and self.dataset_of(a["file"], scope):
+            self.err(p + ["flags"], f"open for writing on dataset `{self.dataset_of(a['file'], scope)}`: datasets are read-only (V12)")
+
+    def dataset_of(self, h, scope):
+        """Dataset name if the handle is (a binding to) a dataset file, dir, sample, region, or chunk."""
+        if not isinstance(h, dict) or len(h) != 1:
+            return None
+        k, a = next(iter(h.items()))
+        if k == "ref":
+            v = scope.lookup(a)
+            return self.dataset_of(v, scope) if isinstance(v, dict) else None
+        if k == "file":
+            return a["dataset"] if "dataset" in a else self.dataset_of(a["of"], scope)
+        if k in ("dir",):
+            return a["dataset"]
+        if k == "consume":
+            return a
+        if k == "pick":
+            return a["dataset"]
+        return None
 
     # ---- the as_written rule (ABSTRACTS.md §9.7) ----
     def object_namespace(self, h, scope):

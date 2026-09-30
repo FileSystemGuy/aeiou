@@ -156,8 +156,19 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   refused by the builder; the runner checks the dataset against the manifest at startup.
 - **V10 Continuous draws round** to the nearest integer wherever an integer is consumed
   (sizes, counts, indices, nanoseconds).
+- **V12 Datasets are read-only** (added 2026-09-30). No `write`, `ftruncate`, `fallocate`,
+  `unlink`, or `rename` may target a dataset file, directory, sample, region, or chunk (through
+  a binding or directly), and `open` on one may not carry `WRONLY`, `RDWR`, `CREAT`, `TRUNC`,
+  or `APPEND`. Writes go to namespaces. This is what makes the manifest (§7) true for the run.
+- **V13 Reserved names** (added 2026-09-30). No path component of a dataset or namespace
+  pattern may begin with `.aeiou`; that prefix belongs to the manifest and any future
+  sidecar. Two `files` datasets may not share a root (the constant directory prefix of the
+  pattern), and a `regions` dataset's file may not sit at another dataset's root.
 - **V11 Scope.** A `let` is visible to later siblings and to child bodies, not to sibling
   bodies (bind a handle above two phases that share it).
+
+(V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
+added on 2026-09-30.)
 
 ## 5. Positional semantics, stated once
 
@@ -171,7 +182,46 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   the coordinator across actors; `phase`, `expect`, and results are excluded; issue order is
   never hashed. Its exact definition belongs to the runner and is not fixed by this schema.
 
-## 6. Deferred (each is a version bump)
+## 6. Dataset manifest (decided 2026-09-30)
+
+`aeiou datagen` writes one manifest per dataset root, named **`.aeiou-dataset.json`**, and
+`aeiou run` refuses to start unless every dataset the abstract declares matches its manifest.
+Reasoning in `DESIGN_REVIEW.md` §3.21.
+
+- **Root.** For a `files` dataset, the constant directory prefix of the pattern (`train/` for
+  `train/{id div 1300:05}/img_{id:09}.jpg`); for a `regions` dataset, the directory holding
+  its file. The manifest lives directly in that directory.
+- **Name.** The leading `.` and the `.aeiou` prefix keep it out of the data: rule V13 means no
+  pattern can generate a colliding or look-alike name, naive globs and ImageFolder-style walkers
+  skip dotfiles, and the runner's structural check on `readdir` ignores `.aeiou*` entries (the
+  real `getdents64` still returns them, as it would any dotfile). The verifier and datagen
+  treat `.aeiou*` as metadata, never as data to generate or check.
+- **Normative content**, compared by `aeiou run` for exact equality with what it resolves from
+  its own abstract and the parameters in effect: `dataset` (the `files` or `regions` entry
+  with every `param` reference substituted by the value used, in canonical form: sorted keys,
+  provenance removed), `payload` (generator name and version, dedupe ratio, compression ratio,
+  block size, the positional wrapper's version), `format` (format class, writer library and
+  version, layout fields) when the dataset has a format class, and `manifest_version`.
+- **Provenance**, recorded and printed but never compared: the abstract's `name` and
+  `ast_sha256`, the full parameter values at datagen time, the datagen version, host, start
+  and end time, and the count of files or regions actually written.
+- **Identity.** The SHA-256 of the canonical form of the normative content is the dataset id.
+  `aeiou run` prints it with every result, next to the AST hash and the parameters in effect;
+  a result is those three things.
+- **Atomicity.** Written last, to a temporary name and renamed, so a datagen that did not
+  finish leaves no manifest and a run refuses.
+- **Exact match, no relaxation.** A larger dataset is not accepted for a smaller declared
+  count: `dirs` and `readdir` would see extra entries, and `zipf`/`hotset` rank orders are
+  permutations over the declared count. Any mismatch is a refusal with a field-by-field diff.
+- **Namespaces are the mirror image.** They have no manifest, but stale contents change the
+  workload (`stat` with `expect: [ENOENT]`, `CREAT|TRUNC` semantics, the KV-cache hit model),
+  so `aeiou run` refuses a non-empty namespace directory unless `--clean-namespaces` is given,
+  and a namespace root may not lie inside a dataset root.
+- **Not a security boundary.** The manifest sits on the system under test; under the
+  interposition test a shim could serve a fake one. That is the fraud domain: rules, the
+  published dataset id, and the offline verifier, which takes the manifest as its input.
+
+## 7. Deferred (each is a version bump)
 
 - The `replay` trace file format.
 - Runner-facing container layout fields beyond `samples_per_file` (per-unit headers and

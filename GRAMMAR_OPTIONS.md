@@ -73,7 +73,9 @@ syntax differs.
   file_id))`, independent of `--seed`, so changing the run seed never changes what the dataset is
   expected to look like. `datagen` writes a manifest at the corpus root (pattern, count, size
   distribution, dataset seed, generator version); the runner validates the abstract's dataset
-  declaration against it before starting.
+  declaration against it before starting. Since 2026-09-30 the manifest is `.aeiou-dataset.json`
+  per dataset root and the comparison is on the resolved dataset definition (`schema/README.md`
+  §6, `DESIGN_REVIEW.md` §3.21).
 - **The implementation compiles the tree to bytecode** that runs on a per-actor VM, in the style
   of a regex VM: a stack of `(pc, loop index, loop bound)` frames plus a few registers for
   bindings. Because there is no hidden state, the VM is a pure step function

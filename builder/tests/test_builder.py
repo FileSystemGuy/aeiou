@@ -188,6 +188,48 @@ def test_validator_catches_what_construction_cannot():
         w.build()
 
 
+def test_datasets_are_read_only_and_names_are_reserved():
+    w, P, ds = _wl()
+    with w.actor("a") as a:
+        f = a.let("f", ds.file(0))
+        a.open(f, "RDONLY")
+        with pytest.raises(BuildError, match="read-only"):
+            a.open(f, "WRONLY|CREAT")
+        with pytest.raises(BuildError, match="read-only"):
+            a.write(f, 1)
+        with pytest.raises(BuildError, match="read-only"):
+            a.unlink(ds.pick())
+        with pytest.raises(BuildError, match="read-only"):
+            a.rename(ds.file(1), ds.file(2))
+    with pytest.raises(BuildError, match="reserved"):
+        w.dataset("m", pattern="m/.aeiou-{id}", count=1, size=const(1), seed=1)
+    with pytest.raises(BuildError, match="reserved"):
+        w.namespace("n", pattern="x/.aeiou-dataset.json/{k}", fields={"k": int}, size=0, seed=1)
+    with pytest.raises(BuildError, match="shares root"):
+        w.dataset("d2", pattern="d/other_{id:06}", count=1, size=const(1), seed=1)
+    with pytest.raises(BuildError, match="inside dataset"):
+        w.namespace("n2", pattern="d/out/{k}", fields={"k": int}, size=0, seed=1)
+    w.namespace("ok", pattern="dd/{k}", fields={"k": int}, size=0, seed=1)      # `dd/` is not under `d/`
+
+
+def test_check_py_enforces_v12_v13_on_a_hand_written_ast():
+    """The reference checker, not only the builder, refuses these."""
+    import copy
+    from aeiou.validate import _load
+    _, check = _load()
+    base = emit.load(EXAMPLES / "vdb_search_ivf.ast.json")
+    ast = copy.deepcopy(base)
+    ast["actors"]["gpu"]["body"][0]["parallel"]["body"][1]["open"]["flags"] = ["RDWR"]
+    assert any("V12" in e for e in check.Check(ast, "x").run())
+    ast = copy.deepcopy(base)
+    ast["datasets"]["lists"]["regions"]["file"] = "ivf/.aeiou-lists.bin"
+    assert any("V13" in e for e in check.Check(ast, "x").run())
+    ast = copy.deepcopy(base)
+    ast["datasets"]["lists2"] = copy.deepcopy(ast["datasets"]["lists"])
+    assert any("shares root" in e for e in check.Check(ast, "x").run())
+    assert not check.Check(copy.deepcopy(base), "x").run()
+
+
 # ---- the harness ----
 
 def _run_cli(args, cwd=BUILDER):

@@ -71,7 +71,8 @@ the run seed silently changes the expected file sizes and the dataset no longer 
 
 **Fix.** The dataset definition carries its own fixed seed. `datagen` writes a manifest at the
 corpus root (pattern, count, size distribution, dataset seed, generator version). The runner
-validates the abstract's dataset declaration against the manifest before starting.
+validates the abstract's dataset declaration against the manifest before starting. Extended on
+2026-09-30 to the resolved dataset definition and a dataset id (§3.21).
 
 ## 3. Architecture improvements (applied)
 
@@ -476,6 +477,59 @@ keys. PyYAML leaves the builder's dependencies, `check.py` needs only `jsonschem
 runner will need only `serde_json`. The nine ASTs were regenerated; their hashes did not
 change, which is the point of separating the identity from the on-disk form. Files are
 roughly twice the line count of the YAML, accepted.
+
+### 3.21 The dataset manifest: what it compares, what it records, and where it hides (added 2026-09-30)
+
+The user raised that an abstract has many parameters, some overridable on the CLI, and that a
+hash mismatch between the abstract used for `aeiou datagen` and the one used for `aeiou run`
+says only that they differ, not what parameters built the data. The proposal: the dataset must
+be self-describing at its root, datagen writes a sentinel file with at least the parameters,
+and `aeiou run` validates against it. Accepted, with three refinements that came out of asking
+what exactly should be compared.
+
+**Compare the resolved dataset definition, not the parameters and not the abstract.** A
+dataset is a function of a small closure: its `datasets` entry plus whichever parameters those
+expressions reference (`sys_prompts` and `chunk_bytes` shape the KV-cache dataset; `batch` and
+`steps` do not). Comparing the whole parameter set would make every legitimate
+`--param steps=1000` a mismatch; comparing the abstract hash would stop one corpus serving
+several abstracts, which it must (checkpoint write and restore share a namespace, an evaluation
+abstract will read the training corpus). So the normative content of the manifest is each
+dataset's definition with parameters substituted, in canonical JSON, plus what the abstract
+cannot know: the payload generator and its settings and the format-class writer version. The
+abstract's hash and name and the full parameter values go in as provenance, the same split the
+AST's own `provenance` block makes, so they are there for audit and never invite the wrong
+comparison. The canonical hash of the normative content is the dataset id, and a result is the
+triple (AST hash, parameters in effect, dataset ids). One counter-argument was considered and
+rejected: "the dataset seed already identifies the data". It fixes the bytes given a
+definition, not the definition; two abstracts with the same seed and different size
+distributions produce different corpora.
+
+**Not a reversal of "reproducible, not self-describing".** That decision (§3.16) was about
+per-block headers, which force a dedupe ratio of one. One file at the dataset root has no such
+cost, and it is metadata about the data, not data. The distinction is now stated in the docs
+so the two decisions do not read as contradicting each other.
+
+**The manifest must stay out of the data.** The user asked that the manifest be protected from
+being taken for a dataset file, suggesting a leading `.`. Adopted, and made a rule rather than
+a convention: the name is `.aeiou-dataset.json`, and validator rule V13 forbids any dataset or
+namespace pattern component beginning with `.aeiou`, so no generated name can collide with it
+or look like it; the runner's structural check on `readdir` ignores `.aeiou*` entries (the real
+`getdents64` returns them, as it returns any dotfile, and ImageFolder-style walkers skip them);
+datagen and the verifier treat the prefix as metadata. The leading dot also keeps it out of
+naive globs and `ls`. Two datasets may not share a root, so "the manifest at the root" is
+unambiguous.
+
+Two rules the proposal implied and did not name, both now in `schema/README.md` §4 and §6.
+Datasets are read-only (V12): nothing stopped an abstract from opening a dataset file for
+writing, and the manifest can only describe the data if the run cannot change it. Namespaces
+are the mirror image: they have no manifest, but stale contents change the workload (the
+KV-cache `stat` with `expect: [ENOENT]`, `CREAT|TRUNC` semantics, the hit model), so
+`aeiou run` refuses a non-empty namespace directory unless told to clean it. Also decided:
+the manifest is written last and atomically, so a crashed datagen leaves none; exact match with
+no relaxation for larger datasets, since `dirs`, `readdir`, and the `zipf`/`hotset` rank orders
+all depend on the declared count; and the manifest is not a security boundary, since it sits on
+the system under test, which is the fraud domain of rules, the published dataset id, and the
+offline verifier, whose input the manifest now is.
 
 ## 4. Plan changes
 

@@ -121,6 +121,7 @@ those belong in one place.
 | `until_eof` on an `as_written` object through a different binding (V4) | AST size |
 | index shadowing; `every` outside a loop; channel not declared; namespace fields vs pattern | |
 | three identical sibling statements (lint) | |
+| a write, truncate, unlink, rename, or write-mode `open` on a dataset handle (V12); a pattern component beginning with `.aeiou`, two datasets sharing a root, a namespace inside a dataset root (V13) | the same rules, on the emitted AST |
 
 The builder keeps no second copy of the rules: `validate()` loads `schema/abstract-ast.schema.json`
 and `schema/check.py` from the repository (or `$AEIOU_SCHEMA_DIR`) and runs them on the emitted
