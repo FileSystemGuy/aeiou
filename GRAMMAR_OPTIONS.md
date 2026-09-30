@@ -223,6 +223,11 @@ end
 
 ### Option D — Full Python as the authoring language, building Option B's AST (added 2026-09-28)
 
+**Implemented 2026-09-30** as `builder/mlps_abstract` (`builder/README.md`); the sketches below are
+the design, and where they differ from the package the package is current (`let` takes the binding's
+name; `parallel`/`loader` yield a sub-cursor; `every` and integer `repeat` are sugar; see
+`DESIGN_REVIEW.md` §3.19).
+
 **Three layers, and what this option changes.** The language does three jobs: (1) *authoring*,
 how a human or a converter writes a workload; (2) *the contract*, the artifact that is
 fingerprinted, archived with results, and validated for CLOSED; (3) *execution*, what runs inside

@@ -386,6 +386,66 @@ forced the choices that the prose had left open, listed here so they are visible
   layout fields the format classes will need beyond `samples_per_file`, and the `stream`
   loader knob for records per batch. Each is a version bump, not a redesign.
 
+### 3.19 The builder package, and what building the eight abstracts changed (added 2026-09-30)
+
+`builder/mlps_abstract` implements Option D (`builder/README.md`). Every `ABSTRACTS.md`
+workload is now an authoring script, and the three ASTs hand-written against the schema
+regenerate hash-identical from their scripts, which is the test that the builder emits exactly
+the contract and nothing else. Decisions taken while writing it, each small, listed so they are
+visible:
+
+- **No pydantic, no second copy of the rules.** The sketch said "typed constructors validated
+  with pydantic against the same schema the runner uses". A pydantic model of the AST would be
+  a second schema to keep in step with the JSON Schema. Instead the builder's nodes are plain
+  slotted classes with construction-time checks for what only the builder can see (Python
+  control flow over a symbolic value, a callable in a node, an `x @ e` on the binding being
+  defined with a non-decreasing index, `until_eof` through the wrong binding, index shadowing,
+  a hand-unrolled loop), and `build()` runs the published `schema/abstract-ast.schema.json`
+  and `schema/check.py` on the emitted dict. The reference checker is the one enforcement
+  point for the semantic rules, as technique 2 of Option D intended. Dependencies: PyYAML and
+  jsonschema only, locked with `uv.lock`.
+- **Bindings are named at the `let`.** `f = worker.let("f", train.consume())`, not
+  `f = worker.consume(train)`: the builder cannot see the Python variable name, and the AST
+  needs a name the validator and the runner's error messages can use. `draw(name, dist)` is the
+  same for draws, and `ref(name)` names a binding defined later in the loop body for the `x @
+  i` chains of §9.5. The construction-time V3 check reads the parameter defaults to prove
+  `d ≥ 1`, so the KV-cache chain fails at the `let` if `reuse` loses its `min: 1`.
+- **Integer repeats are loops, always.** `read(f, xfer, repeat=n)` emits a `loop` with a
+  generated index `rep`; the schema's numeric `repeat` field stays for hand-written or
+  converted ASTs but the builder never emits it. The loop gives each repetition its own RNG
+  position, so a drawn length is re-drawn per repetition, and it keeps one spelling for the
+  runner to optimize.
+- **Sequential runs are `lseek` + sequential reads.** The §7 paper form read a shard as
+  `read(b, offset = k·bytes, xfer)[n]`, which taken literally re-reads one offset `n` times.
+  The script issues `lseek(SET)` then `n` sequential reads, which is what `ifstream` does. The
+  same choice fixes the §2 member reads (positioned header read, `lseek`, sequential chunks).
+- **`file("literal/pattern")` is not offered.** A namespace needs a seed and a size rule; the
+  scripts declare namespaces explicitly and build objects with `ns.object(...)`. §4a therefore
+  declares the `ckpt` namespace with the same seed §3 wrote it with, and computes its size from
+  the item table, which is the rule of §3.18 applied from the reader's side.
+- **A `regions` dataset's one file is `file {dataset, id: 0}`.** The schema had no spelling
+  for it; `ds.file()` with no id emits this and `schema/README.md` records it.
+- **Provenance is informational; the hash is the identity.** `git` is the short HEAD with
+  `-dirty` when the script has uncommitted changes, so it is always one commit behind the
+  commit that lands both script and AST. The script's `sha256` and the `ast_sha256` are exact,
+  and CI compares hashes, not YAML bytes, so provenance never causes drift failures.
+- **The hermetic harness is a child process, not a mode of the library.** `--hermetic` runs
+  the script under `python -s -B` with a three-variable environment, audit hooks, and stubbed
+  clocks and entropy, and returns the AST on stdout; the parent validates again and writes. The
+  tests poison a script nine ways (unseeded `random`, `time.time`, `os.urandom`, `uuid4`,
+  `datetime.now`, a socket, a subprocess, a read outside the allowed roots, a write) and check
+  that each is refused under `--hermetic` and builds without it, so the harness is what
+  refused it. `--twice` is checked with a script that iterates a set of phase names: it builds,
+  validates, and fails the build-twice comparison, which is the failure mode technique 5 exists
+  for.
+
+Two things the exercise showed about the abstracts themselves: §4b's tensor table is four
+parallel parameter arrays with a `when` on `split[t]`, which reads fine at four tensors and
+will not at four hundred (the parameter-file split of Option D, "three sources", is the fix and
+is still to do); and §5's `hops` needed a concrete `empirical` to build at all, so the
+`[measure]` slots now hold placeholder distributions that a trace must replace before any
+number from these ASTs is quoted.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -394,9 +454,11 @@ forced the choices that the prose had left open, listed here so they are visible
 - Then: fix the determinism items in the docs (done), build the VM with `--dry-run` and the
   fingerprint against ext4 and loopback NFS, then Spike 1 on the real target with the thread-pool
   backend first.
-- 2026-09-30: constructs accepted, Option D chosen, AST schema v0.1 drafted (§3.18). Next in
+- 2026-09-30: constructs accepted, Option D chosen, AST schema v0.1 drafted (§3.18). ~~Next in
   order: the builder package with the eight abstracts as its first tests, the hermetic build
-  harness and build-twice CI, then the VM against the schema.
+  harness and build-twice CI, then the VM against the schema.~~ Builder, abstracts, harness,
+  and CI done the same day (§3.19). Next: the VM with `--dry-run` and the fingerprint against
+  the nine committed ASTs, then the format-class reader protocols and the parameter-file split.
 
 ## 5. Things reviewed and left as-is
 

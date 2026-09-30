@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  abstracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install (locked)
+        working-directory: builder
+        run: uv sync --locked --extra test
+      - name: Reference checker over the committed ASTs
+        run: builder/.venv/bin/python schema/check.py
+      - name: Builder tests
+        working-directory: builder
+        run: .venv/bin/pytest -q
+      - name: Hermetic build-twice of every abstract, compared with the committed ASTs
+        working-directory: builder
+        run: .venv/bin/abstract-build --hermetic --twice --check -o ../schema/examples abstracts/*.py

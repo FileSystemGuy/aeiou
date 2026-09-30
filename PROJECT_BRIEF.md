@@ -157,9 +157,14 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    candidate).~~ **Option D chosen 2026-09-30.** ~~Then: publish the AST JSON Schema,~~ Schema
    v0.1 drafted the same day (`schema/`), with the small-file training, checkpoint-write, and KV-cache
    abstracts as the first examples and a `check.py` that validates them against the schema and
-   the semantic rules. Still to do: the remaining five abstracts in AST form (they will come out of the
+   the semantic rules. ~~Still to do: the remaining five abstracts in AST form (they will come out of the
    builder), the builder package, the `abstract-build --hermetic` harness, and the build-twice
-   check in CI.
+   check in CI.~~ **Done 2026-09-30** (`builder/`, `DESIGN_REVIEW.md` §3.19): the `mlps_abstract`
+   package, all of `ABSTRACTS.md` §1–§8 as authoring scripts (`builder/abstracts/`, nine
+   workloads since §4 is two), the generated ASTs in `schema/examples/` (the three hand-written
+   ones regenerate hash-identical), `abstract-build --hermetic --twice --check`, and a CI job
+   that rebuilds every abstract hermetically twice and fails on drift from the committed ASTs.
+   Still to do here: the format-class reader protocols (item 15) and the parameter-file split.
 3. Build the VM with `--dry-run` and the fingerprint; test against ext4 and a loopback NFS mount
    on WSL2 (see §7). Golden-test the fingerprint in CI.
 4. **Spike 1:** blocking thread pool first, then io_uring; buffered vs. O_DIRECT, for
