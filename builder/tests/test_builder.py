@@ -7,7 +7,6 @@ import subprocess
 import sys
 
 import pytest
-import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
@@ -32,9 +31,9 @@ def test_abstract_builds_and_matches_committed(script):
     for name, ast in asts.items():
         validate(ast, name)                                   # schema + semantic rules
         assert op_counts(ast)
-        committed = EXAMPLES / f"{name}.ast.yaml"
+        committed = EXAMPLES / f"{name}.ast.json"
         assert committed.exists(), f"{committed} missing: run `aeiou-build -o schema/examples {script}`"
-        assert emit.sha256(yaml.safe_load(committed.read_text())) == emit.sha256(ast), \
+        assert emit.sha256(emit.load(committed)) == emit.sha256(ast), \
             f"{name}: committed AST differs from the builder's output; regenerate and review the diff"
 
 
@@ -44,15 +43,17 @@ def test_canonical_form_matches_check_py():
     spec = importlib.util.spec_from_file_location("chk", ROOT / "schema" / "check.py")
     chk = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(chk)
-    ast = yaml.safe_load((EXAMPLES / "train_small_files.ast.yaml").read_text())
+    ast = emit.load(EXAMPLES / "train_small_files.ast.json")
     assert chk.canonical(ast) == emit.canonical(ast)
 
 
-def test_yaml_round_trips():
+def test_on_disk_form_round_trips():
     for script in ABSTRACTS:
         for name, ast in build_script(script).items():
-            text = emit.render(ast, None, "x")
-            assert emit.sha256(yaml.safe_load(text)) == emit.sha256(ast), name
+            text = emit.render(ast, {"ast_sha256": emit.sha256(ast)})
+            back = json.loads(text)
+            assert emit.sha256(back) == emit.sha256(ast), name
+            assert list(back)[-1] == "provenance" and list(back)[:2] == ["ast", "name"], name
 
 
 # ---- construction-time discipline ----
@@ -199,7 +200,7 @@ def test_hermetic_build_twice(tmp_path):
     script = BUILDER / "abstracts" / "kv_cache_serving.py"
     r = _run_cli(["--hermetic", "--twice", "-o", tmp_path, script])
     assert r.returncode == 0, r.stderr
-    out = yaml.safe_load((tmp_path / "kv_cache_serving.ast.yaml").read_text())
+    out = emit.load(tmp_path / "kv_cache_serving.ast.json")
     assert out["provenance"]["built_twice_identical"] is True
     assert out["provenance"]["ast_sha256"] == emit.sha256(out)
     assert out["provenance"]["generator"]["script"] == "kv_cache_serving.py"
@@ -227,7 +228,7 @@ def test_hermetic_denies(tmp_path, poison, needle):
     r = _run_cli(["--hermetic", "-o", tmp_path, script])
     assert r.returncode == 1
     assert needle in r.stderr, r.stderr
-    assert not (tmp_path / "p.ast.yaml").exists()
+    assert not (tmp_path / "p.ast.json").exists()
     # the same script builds without --hermetic (the poison is inert), so the harness is what refused it
     r = _run_cli(["-o", tmp_path, script])
     assert r.returncode == 0, r.stderr
@@ -255,7 +256,9 @@ def test_check_mode_reports_drift(tmp_path):
     assert r.returncode == 0, r.stderr
     r = _run_cli(["--check", "-o", tmp_path, script])
     assert r.returncode == 0 and "ok" in r.stdout
-    p = tmp_path / "vdb_search_ivf.ast.yaml"
-    p.write_text(p.read_text().replace("nprobe: {default: 64", "nprobe: {default: 65"))
+    p = tmp_path / "vdb_search_ivf.ast.json"
+    doc = emit.load(p)
+    doc["params"]["nprobe"]["default"] = 65
+    p.write_text(emit.render(doc))
     r = _run_cli(["--check", "-o", tmp_path, script])
     assert r.returncode == 1 and "DRIFT" in r.stdout

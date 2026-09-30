@@ -12,7 +12,7 @@ builder/
   aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli
   abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts)
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds
-  pyproject.toml     deps: pyyaml, jsonschema; `aeiou-build` entry point
+  pyproject.toml     dep: jsonschema; `aeiou-build` entry point
 ```
 
 ```
@@ -56,7 +56,7 @@ with w.actor("gpu") as gpu:                              # count defaults to the
             …
 
 if __name__ == "__main__":
-    w.write()                                            # <name>.ast.yaml, validated, with provenance
+    w.write()                                            # <name>.ast.json, validated, with provenance
 ```
 
 **Declarations** on the `Workload`: `param(name, default, unit=, doc=, cli=)` or
@@ -131,8 +131,9 @@ dict. The Rust validator must reject everything they reject.
 `aeiou-build` implements techniques 4–6 of `GRAMMAR_OPTIONS.md` Option D:
 
 - **Canonical hash.** `sha256` of the canonical JSON (sorted keys, no whitespace, floats in
-  `repr`, `provenance` removed); the same function as `schema/check.py`. The YAML header and
-  the `provenance` block carry it.
+  `repr`, `provenance` removed); the same function as `schema/check.py`. The on-disk file is
+  the same JSON pretty-printed, and its `provenance` block carries the hash. JSON is the only
+  format on the contract (`schema/README.md` §1).
 - **Provenance.** `generator: {script, sha256, git, builder_version}`, `python`, `lock`
   (`uv.lock` and its hash, when present), `built_twice_identical`, `ast_sha256`. `git` is the
   short HEAD with `-dirty` when the script has uncommitted changes; the script's own `sha256`
@@ -148,7 +149,7 @@ dict. The Rust validator must reject everything they reject.
   This catches set-iteration order and `id()`-based ordering without anticipating them
   (`tests/test_builder.py::test_build_twice_detects_hash_order_dependence`).
 - **`--check`.** Rebuild and compare with the committed file's hash; CI runs it on every push
-  so `schema/examples/*.ast.yaml` cannot drift from `abstracts/*.py`.
+  so `schema/examples/*.ast.json` cannot drift from `abstracts/*.py`.
 
 Three don'ts for authors: iterate sets or dicts keyed by nodes, use `id()`/`hash()` for
 ordering, read the environment or the clock. The harness turns each into an immediate error.

@@ -1,0 +1,590 @@
+{
+  "ast": "0.1",
+  "name": "vdb_build_diskann",
+  "doc": "Single builder: PQ sample, per-shard build, merge, disk layout write.",
+  "params": {
+    "dim": {
+      "default": 128,
+      "unit": "count"
+    },
+    "n": {
+      "default": 1000000000,
+      "unit": "count"
+    },
+    "shards": {
+      "default": 40,
+      "unit": "count"
+    },
+    "sample": {
+      "default": 256000,
+      "unit": "count",
+      "doc": "PQ training rows [config]"
+    },
+    "build_time": {
+      "default": {
+        "normal": {
+          "mean": 1800000000000,
+          "sd": 60000000000,
+          "min": 1000000000
+        }
+      },
+      "unit": "ns",
+      "doc": "per shard [measure]; scaled by --time-scale"
+    },
+    "xfer": {
+      "default": 1048576,
+      "unit": "bytes"
+    },
+    "shard_index_bytes": {
+      "default": 12884901888,
+      "unit": "bytes",
+      "doc": "[config]"
+    },
+    "index_bytes": {
+      "default": 515396075520,
+      "unit": "bytes",
+      "doc": "[config]"
+    },
+    "sectors": {
+      "default": 200000000,
+      "unit": "count",
+      "doc": "[config]"
+    },
+    "sector": {
+      "default": 4096,
+      "unit": "bytes"
+    }
+  },
+  "datasets": {
+    "base": {
+      "regions": {
+        "file": "base.fbin",
+        "count": {
+          "param": "n"
+        },
+        "slot": {
+          "mul": [
+            {
+              "param": "dim"
+            },
+            4
+          ]
+        },
+        "size": {
+          "const": {
+            "mul": [
+              {
+                "param": "dim"
+              },
+              4
+            ]
+          }
+        },
+        "seed": 1592646271
+      }
+    }
+  },
+  "namespaces": {
+    "shard": {
+      "pattern": "diskann/shard_{k:03}.index",
+      "fields": {
+        "k": "int"
+      },
+      "size": "as_written",
+      "seed": 1592646275
+    },
+    "out": {
+      "pattern": "diskann/{name}",
+      "fields": {
+        "name": "str"
+      },
+      "size": "as_written",
+      "seed": 1592646275
+    }
+  },
+  "actors": {
+    "gpu": {
+      "count": 1,
+      "body": [
+        {
+          "let": {
+            "name": "base_f",
+            "value": {
+              "file": {
+                "dataset": "base",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "base_f"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "pq_sample",
+            "body": [
+              {
+                "loop": {
+                  "index": "i",
+                  "to": {
+                    "param": "sample"
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "r",
+                        "value": {
+                          "pick": {
+                            "dataset": "base"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "size": {
+                            "ref": "r"
+                          }
+                        },
+                        "offset": {
+                          "offset": {
+                            "ref": "r"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "shard_build",
+            "body": [
+              {
+                "loop": {
+                  "index": "k",
+                  "to": {
+                    "param": "shards"
+                  },
+                  "body": [
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "offset": {
+                          "mul": [
+                            {
+                              "index": "k"
+                            },
+                            {
+                              "mul": [
+                                {
+                                  "mul": [
+                                    {
+                                      "div": [
+                                        {
+                                          "param": "n"
+                                        },
+                                        {
+                                          "param": "shards"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "param": "dim"
+                                    }
+                                  ]
+                                },
+                                4
+                              ]
+                            }
+                          ]
+                        },
+                        "whence": "SET"
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "mul": [
+                                {
+                                  "mul": [
+                                    {
+                                      "div": [
+                                        {
+                                          "param": "n"
+                                        },
+                                        {
+                                          "param": "shards"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "param": "dim"
+                                    }
+                                  ]
+                                },
+                                4
+                              ]
+                            },
+                            {
+                              "param": "xfer"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "len": {
+                                "param": "xfer"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "compute": {
+                        "ns": {
+                          "draw": {
+                            "param": "build_time"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "sh",
+                        "value": {
+                          "object": {
+                            "namespace": "shard",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "sh"
+                        },
+                        "flags": [
+                          "WRONLY",
+                          "CREAT",
+                          "TRUNC"
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "param": "shard_index_bytes"
+                            },
+                            {
+                              "param": "xfer"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "write": {
+                              "file": {
+                                "ref": "sh"
+                              },
+                              "len": {
+                                "param": "xfer"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "sh"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "merge",
+            "body": [
+              {
+                "loop": {
+                  "index": "k",
+                  "to": {
+                    "param": "shards"
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "sh",
+                        "value": {
+                          "object": {
+                            "namespace": "shard",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "sh"
+                        },
+                        "flags": [
+                          "RDONLY"
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "param": "shard_index_bytes"
+                            },
+                            {
+                              "param": "xfer"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "sh"
+                              },
+                              "len": {
+                                "param": "xfer"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "sh"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "let": {
+                  "name": "g",
+                  "value": {
+                    "object": {
+                      "namespace": "out",
+                      "fields": {
+                        "name": "merged.index"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "g"
+                  },
+                  "flags": [
+                    "WRONLY",
+                    "CREAT",
+                    "TRUNC"
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "param": "index_bytes"
+                      },
+                      {
+                        "param": "xfer"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "g"
+                        },
+                        "len": {
+                          "param": "xfer"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "g"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "layout",
+            "body": [
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "SET"
+                }
+              },
+              {
+                "read": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "len": {
+                    "param": "xfer"
+                  },
+                  "repeat": "until_eof"
+                }
+              },
+              {
+                "let": {
+                  "name": "d",
+                  "value": {
+                    "object": {
+                      "namespace": "out",
+                      "fields": {
+                        "name": "index.bin"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "d"
+                  },
+                  "flags": [
+                    "WRONLY",
+                    "CREAT",
+                    "TRUNC"
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "param": "sectors"
+                  },
+                  "body": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "d"
+                        },
+                        "len": {
+                          "param": "sector"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "fsync": {
+                  "file": {
+                    "ref": "d"
+                  }
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "d"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "base_f"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "vdb_build_diskann.py",
+      "sha256": "8fddbdf6cb6d1fb0941e685c0176ab09e52a6804349cccda88524a5b802c146a",
+      "builder_version": "0.1.0",
+      "git": "b77a29eb053b"
+    },
+    "python": "3.12.13",
+    "lock": {
+      "file": "uv.lock",
+      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+    },
+    "built_twice_identical": true,
+    "ast_sha256": "297b1bae5e4674456160af86df0f0665ff40db3ed224998c3bd79a28fb2d129c"
+  }
+}

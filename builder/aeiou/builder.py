@@ -296,7 +296,8 @@ class Workload:
         return sha256(self.build())
 
     def write(self, path=None, *, provenance: bool = True):
-        """Validate, then write YAML to `path` (default `<name>.ast.yaml`). Returns the path."""
+        """Validate, then write the AST as JSON to `path` (default `<name>.ast.json`), with a
+        provenance block. Returns the path."""
         from .emit import write
         return write(self, path, provenance=provenance)
 

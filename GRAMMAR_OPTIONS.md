@@ -281,7 +281,7 @@ with w.actor("gpu") as gpu:
         with gpu.every(P.sync_every):               # tests `step`
             gpu.barrier("global")
 
-w.write("unet3d_train.ast.yaml")   # canonical form + provenance block; prints the AST hash
+w.write("unet3d_train.ast.json")   # canonical form + provenance block; prints the AST hash
 ```
 
 Checkpoint fragment, showing symbolic arithmetic and loop-index references:
@@ -337,7 +337,7 @@ Mechanically:
   `step % P.sync_every == 0` does not evaluate to a boolean; it returns an `Expr` node holding
   the formula, and `gpu.when(...)` / `gpu.every(...)` wrap it in a `Cond` node.
 - `w.write()` walks the finished tree, validates it against the schema, and emits canonical
-  YAML. Nothing is extracted from Python source; Python's own syntax tree is never parsed.
+  JSON. Nothing is extracted from Python source; Python's own syntax tree is never parsed.
   About 500 lines of Python with pydantic.
 
 The unet3d step loop becomes:
@@ -408,7 +408,7 @@ Start with the builder; add the decorator only if authors find the `with` blocks
 
 #### Techniques that make source→AST reproducible, in leverage order
 
-1. **Serialization is the firewall.** The builder emits YAML/JSON and the runner reads only that.
+1. **Serialization is the firewall.** The builder emits JSON (YAML dropped 2026-09-30, `DESIGN_REVIEW.md` §3.20) and the runner reads only that.
    A lambda, a callback, an open file, or an array of already-drawn values cannot be serialized
    and therefore cannot reach layer 2. Structural, not a lint.
 2. **Runner-side validation is the enforcement point.** On load the runner checks the AST against
@@ -462,7 +462,7 @@ the script and provenance are attached for audit.
 - **Cons:** a Python toolchain and lockfile discipline on the authoring side; reproducibility of
   *authoring* is CI-enforced rather than by construction (Starlark would give it by construction
   but loses numpy and familiarity); two representations to keep readable (Python source and
-  YAML AST), though only the AST is normative.
+  JSON AST), though only the AST is normative.
 
 **Relation to the other options.** D subsumes A (a Python builder is a better front end than a
 bespoke parser, and A's syntax would become a third representation to maintain), keeps B as the

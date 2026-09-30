@@ -1,0 +1,325 @@
+{
+  "ast": "0.1",
+  "name": "ckpt_restore",
+  "doc": "DCP load: every rank reads .metadata, then the items of its shard file (fan-in dp).",
+  "params": {
+    "items": {
+      "default": 4,
+      "unit": "count",
+      "doc": "read items per rank [config]; 900 for an 8B model"
+    },
+    "item_bytes": {
+      "default": [
+        16777216,
+        33554432,
+        16777216,
+        8388608
+      ],
+      "unit": "bytes",
+      "doc": "[config]"
+    },
+    "item_off": {
+      "default": [
+        0,
+        16842752,
+        50462720,
+        67305472
+      ],
+      "unit": "bytes",
+      "doc": "[config] prefix sums of item_bytes + tail, as §3 wrote them"
+    },
+    "dp": {
+      "default": 1,
+      "unit": "count",
+      "doc": "replicas sharing a shard file"
+    },
+    "meta_bytes": {
+      "default": 2097152,
+      "unit": "bytes",
+      "doc": "[measure]"
+    },
+    "hdr_read": {
+      "default": 1048576,
+      "unit": "bytes",
+      "doc": "[verify] st_blksize"
+    },
+    "lh_len": {
+      "default": 40,
+      "unit": "bytes",
+      "doc": "[verify] zip local header of a torch.save item"
+    },
+    "restore_step": {
+      "default": 100,
+      "unit": "count"
+    }
+  },
+  "namespaces": {
+    "ckpt": {
+      "pattern": "ckpt/step_{step:06}/__{rank}_0.distcp",
+      "fields": {
+        "step": "int",
+        "rank": "int"
+      },
+      "size": {
+        "add": [
+          {
+            "add": [
+              {
+                "elem": {
+                  "array": "item_off",
+                  "index": {
+                    "sub": [
+                      {
+                        "param": "items"
+                      },
+                      1
+                    ]
+                  }
+                }
+              },
+              {
+                "param": "lh_len"
+              }
+            ]
+          },
+          {
+            "elem": {
+              "array": "item_bytes",
+              "index": {
+                "sub": [
+                  {
+                    "param": "items"
+                  },
+                  1
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "seed": 1592646274
+    },
+    "ckpt_meta": {
+      "pattern": "ckpt/step_{step:06}/{name}",
+      "fields": {
+        "step": "int",
+        "name": "str"
+      },
+      "size": {
+        "param": "meta_bytes"
+      },
+      "seed": 1592646274
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "phase": {
+            "name": "restore",
+            "body": [
+              {
+                "let": {
+                  "name": "m",
+                  "value": {
+                    "object": {
+                      "namespace": "ckpt_meta",
+                      "fields": {
+                        "step": {
+                          "param": "restore_step"
+                        },
+                        "name": ".metadata"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "m"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "fstat": {
+                  "file": {
+                    "ref": "m"
+                  }
+                }
+              },
+              {
+                "read": {
+                  "file": {
+                    "ref": "m"
+                  },
+                  "len": {
+                    "param": "hdr_read"
+                  },
+                  "repeat": "until_eof"
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "m"
+                  }
+                }
+              },
+              {
+                "let": {
+                  "name": "c",
+                  "value": {
+                    "object": {
+                      "namespace": "ckpt",
+                      "fields": {
+                        "step": {
+                          "param": "restore_step"
+                        },
+                        "rank": {
+                          "div": [
+                            {
+                              "actor": "id"
+                            },
+                            {
+                              "param": "dp"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "c"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "fstat": {
+                  "file": {
+                    "ref": "c"
+                  }
+                }
+              },
+              {
+                "ioctl": {
+                  "file": {
+                    "ref": "c"
+                  },
+                  "request": "TCGETS",
+                  "expect": [
+                    "ENOTTY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "c"
+                  },
+                  "offset": 0,
+                  "whence": "CUR"
+                }
+              },
+              {
+                "loop": {
+                  "index": "t",
+                  "to": {
+                    "param": "items"
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "c"
+                        },
+                        "len": {
+                          "param": "hdr_read"
+                        },
+                        "offset": {
+                          "elem": {
+                            "array": "item_off",
+                            "index": {
+                              "index": "t"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "c"
+                        },
+                        "len": {
+                          "elem": {
+                            "array": "item_bytes",
+                            "index": {
+                              "index": "t"
+                            }
+                          }
+                        },
+                        "offset": {
+                          "add": [
+                            {
+                              "elem": {
+                                "array": "item_off",
+                                "index": {
+                                  "index": "t"
+                                }
+                              }
+                            },
+                            {
+                              "param": "lh_len"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "c"
+                  }
+                }
+              },
+              {
+                "barrier": {
+                  "scope": "global"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "ckpt_restore.py",
+      "sha256": "7934f0338580b7bc13c5953acb0401cb0ff95c1ed242b01732310398fc1446fc",
+      "builder_version": "0.1.0",
+      "git": "b77a29eb053b"
+    },
+    "python": "3.12.13",
+    "lock": {
+      "file": "uv.lock",
+      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+    },
+    "built_twice_identical": true,
+    "ast_sha256": "24e8978d7167891d37944443c2e7d7df7f9c84f26f7e4c90e182e02721d45a64"
+  }
+}

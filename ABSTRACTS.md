@@ -969,7 +969,7 @@ with w.actor("gpu") as gpu:
         with gpu.every(P.sync_every):
             gpu.barrier("global")
 
-w.write("train_small_files.ast.yaml")
+w.write("train_small_files.ast.json")
 ```
 
 The KV-cache chain (§9.5) in builder form, to check that a self-referencing binding is

@@ -2,10 +2,10 @@
 """Validate abstract ASTs against schema/abstract-ast.schema.json and the semantic rules of
 schema/README.md, print each AST's canonical hash and op-kind counts.
 
-Usage: python3 schema/check.py [file.ast.yaml ...]   (default: schema/examples/*.ast.yaml)
+Usage: python3 schema/check.py [file.ast.json ...]   (default: schema/examples/*.ast.json)
 
 This is the reference for the rules until the Rust validator exists; the Rust validator must
-reject everything this rejects. It needs only PyYAML and jsonschema.
+reject everything this rejects. It needs only jsonschema.
 """
 import hashlib
 import json
@@ -14,7 +14,6 @@ import sys
 from collections import Counter
 
 import jsonschema
-import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
 SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text())
@@ -25,8 +24,9 @@ INDEX_BINDERS = {"loop", "parallel", "loader"}
 
 
 def canonical(ast: dict) -> bytes:
-    """Canonical form: JSON, sorted keys, no whitespace, ASCII only, provenance removed.
-    Floats serialize with Python's repr (shortest round-trip), which is what the builder emits."""
+    """Canonical form: sorted keys, no whitespace, ASCII escapes, provenance removed. Floats
+    serialize with Python's repr (shortest round-trip), which is what the builder emits. The
+    on-disk file is the same JSON pretty-printed; only these bytes are hashed."""
     stripped = {k: v for k, v in ast.items() if k != "provenance"}
     return json.dumps(stripped, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
                       allow_nan=False).encode()
@@ -364,11 +364,11 @@ class Scope:
 
 
 def main(argv):
-    files = [pathlib.Path(a) for a in argv] or sorted((HERE / "examples").glob("*.ast.yaml"))
+    files = [pathlib.Path(a) for a in argv] or sorted((HERE / "examples").glob("*.ast.json"))
     validator = jsonschema.Draft202012Validator(SCHEMA)
     failed = 0
     for f in files:
-        ast = yaml.safe_load(f.read_text())
+        ast = json.loads(f.read_text())
         schema_errors = sorted(validator.iter_errors(ast), key=lambda e: list(e.absolute_path))
         errors = [f"{f.name}: {'/'.join(map(str, e.absolute_path))}: {e.message[:200]}" for e in schema_errors]
         if not errors:

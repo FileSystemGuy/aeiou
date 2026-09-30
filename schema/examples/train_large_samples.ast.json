@@ -1,0 +1,480 @@
+{
+  "ast": "0.1",
+  "name": "train_large_samples",
+  "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; tail read, central directory, then members.",
+  "params": {
+    "batch": {
+      "default": 7,
+      "unit": "count"
+    },
+    "workers": {
+      "default": 4,
+      "unit": "count"
+    },
+    "prefetch": {
+      "default": 2,
+      "unit": "count"
+    },
+    "steps": {
+      "default": 500,
+      "unit": "count"
+    },
+    "sync_every": {
+      "default": 500,
+      "unit": "count"
+    },
+    "step_time": {
+      "default": 323000000,
+      "unit": "ns",
+      "doc": "[measure]"
+    },
+    "hdr_read": {
+      "default": 1048576,
+      "unit": "bytes",
+      "doc": "[verify] st_blksize"
+    },
+    "xfer": {
+      "default": 1048576,
+      "unit": "bytes",
+      "doc": "[verify] member read chunk (numpy 256 KiB, BufferedReader max(256 KiB, st_blksize))"
+    },
+    "members": {
+      "default": 2,
+      "unit": "count",
+      "doc": "[verify] \"x\" and \"y\" in the npz"
+    },
+    "cd_len": {
+      "default": 200,
+      "unit": "bytes",
+      "doc": "[verify] central directory bytes"
+    },
+    "lh_len": {
+      "default": 40,
+      "unit": "bytes",
+      "doc": "[verify] local header + name bytes"
+    }
+  },
+  "datasets": {
+    "train": {
+      "files": {
+        "pattern": "train/{id div 10000:05}/sample_{id:09}.npz",
+        "count": 50000,
+        "size": {
+          "normal": {
+            "mean": 146800640,
+            "sd": 4194304,
+            "min": 1048576
+          }
+        },
+        "seed": 1592646267,
+        "access": "map"
+      }
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "loader": {
+            "name": "batches",
+            "index": "b",
+            "workers": {
+              "param": "workers"
+            },
+            "prefetch": {
+              "param": "prefetch"
+            },
+            "batches": {
+              "param": "steps"
+            },
+            "ordered": true,
+            "body": [
+              {
+                "loop": {
+                  "index": "j",
+                  "to": {
+                    "param": "batch"
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "f",
+                        "value": {
+                          "consume": "train"
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "flags": [
+                          "RDONLY",
+                          "CLOEXEC"
+                        ]
+                      }
+                    },
+                    {
+                      "fstat": {
+                        "file": {
+                          "ref": "f"
+                        }
+                      }
+                    },
+                    {
+                      "ioctl": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "request": "TCGETS",
+                        "expect": [
+                          "ENOTTY"
+                        ]
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": {
+                          "param": "hdr_read"
+                        },
+                        "offset": {
+                          "sub": [
+                            {
+                              "size": {
+                                "ref": "f"
+                              }
+                            },
+                            22
+                          ]
+                        },
+                        "repeat": "until_eof"
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": {
+                          "param": "hdr_read"
+                        },
+                        "offset": {
+                          "sub": [
+                            {
+                              "sub": [
+                                {
+                                  "size": {
+                                    "ref": "f"
+                                  }
+                                },
+                                {
+                                  "param": "cd_len"
+                                }
+                              ]
+                            },
+                            22
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "m",
+                        "to": {
+                          "param": "members"
+                        },
+                        "body": [
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "f"
+                              },
+                              "len": {
+                                "param": "hdr_read"
+                              },
+                              "offset": {
+                                "mul": [
+                                  {
+                                    "index": "m"
+                                  },
+                                  {
+                                    "add": [
+                                      {
+                                        "param": "lh_len"
+                                      },
+                                      {
+                                        "div": [
+                                          {
+                                            "sub": [
+                                              {
+                                                "sub": [
+                                                  {
+                                                    "sub": [
+                                                      {
+                                                        "size": {
+                                                          "ref": "f"
+                                                        }
+                                                      },
+                                                      22
+                                                    ]
+                                                  },
+                                                  {
+                                                    "param": "cd_len"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "mul": [
+                                                  {
+                                                    "param": "members"
+                                                  },
+                                                  {
+                                                    "param": "lh_len"
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "param": "members"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "f"
+                              },
+                              "offset": {
+                                "add": [
+                                  {
+                                    "mul": [
+                                      {
+                                        "index": "m"
+                                      },
+                                      {
+                                        "add": [
+                                          {
+                                            "param": "lh_len"
+                                          },
+                                          {
+                                            "div": [
+                                              {
+                                                "sub": [
+                                                  {
+                                                    "sub": [
+                                                      {
+                                                        "sub": [
+                                                          {
+                                                            "size": {
+                                                              "ref": "f"
+                                                            }
+                                                          },
+                                                          22
+                                                        ]
+                                                      },
+                                                      {
+                                                        "param": "cd_len"
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "mul": [
+                                                      {
+                                                        "param": "members"
+                                                      },
+                                                      {
+                                                        "param": "lh_len"
+                                                      }
+                                                    ]
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "param": "members"
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "param": "lh_len"
+                                  }
+                                ]
+                              },
+                              "whence": "SET"
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "rep",
+                              "to": {
+                                "ceil_div": [
+                                  {
+                                    "div": [
+                                      {
+                                        "sub": [
+                                          {
+                                            "sub": [
+                                              {
+                                                "sub": [
+                                                  {
+                                                    "size": {
+                                                      "ref": "f"
+                                                    }
+                                                  },
+                                                  22
+                                                ]
+                                              },
+                                              {
+                                                "param": "cd_len"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "mul": [
+                                              {
+                                                "param": "members"
+                                              },
+                                              {
+                                                "param": "lh_len"
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "param": "members"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "param": "xfer"
+                                  }
+                                ]
+                              },
+                              "body": [
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "xfer"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "f"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "train",
+            "body": [
+              {
+                "loop": {
+                  "index": "step",
+                  "to": {
+                    "param": "steps"
+                  },
+                  "body": [
+                    {
+                      "take": {
+                        "channel": "batches"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "ns": {
+                          "param": "step_time"
+                        }
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "eq": [
+                            {
+                              "mod": [
+                                {
+                                  "index": "step"
+                                },
+                                {
+                                  "param": "sync_every"
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "barrier": {
+                              "scope": "global"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "train_large_samples.py",
+      "sha256": "99690bb2b30d0a944b00b7885268615d448c7c8f55a696eaf39a6a5a71b16b37",
+      "builder_version": "0.1.0",
+      "git": "b77a29eb053b"
+    },
+    "python": "3.12.13",
+    "lock": {
+      "file": "uv.lock",
+      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+    },
+    "built_twice_identical": true,
+    "ast_sha256": "543692bdebdab02029ac0a4bd4cff9696dcbf6fd41ba2caebbe4fbaa1ee98692"
+  }
+}

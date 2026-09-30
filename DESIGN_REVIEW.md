@@ -402,8 +402,8 @@ visible:
   defined with a non-decreasing index, `until_eof` through the wrong binding, index shadowing,
   a hand-unrolled loop), and `build()` runs the published `schema/abstract-ast.schema.json`
   and `schema/check.py` on the emitted dict. The reference checker is the one enforcement
-  point for the semantic rules, as technique 2 of Option D intended. Dependencies: PyYAML and
-  jsonschema only, locked with `uv.lock`.
+  point for the semantic rules, as technique 2 of Option D intended. Dependencies: ~~PyYAML and~~
+  jsonschema only (§3.20), locked with `uv.lock`.
 - **Bindings are named at the `let`.** `f = worker.let("f", train.consume())`, not
   `f = worker.consume(train)`: the builder cannot see the Python variable name, and the AST
   needs a name the validator and the runner's error messages can use. `draw(name, dist)` is the
@@ -431,7 +431,7 @@ visible:
 - **Provenance is informational; the hash is the identity.** `git` is the short HEAD with
   `-dirty` when the script has uncommitted changes, so it is always one commit behind the
   commit that lands both script and AST. The script's `sha256` and the `ast_sha256` are exact,
-  and CI compares hashes, not YAML bytes, so provenance never causes drift failures.
+  and CI compares hashes, not file bytes, so provenance never causes drift failures.
 - **The hermetic harness is a child process, not a mode of the library.** `--hermetic` runs
   the script under `python -s -B` with a three-variable environment, audit hooks, and stubbed
   clocks and entropy, and returns the AST on stdout; the parent validates again and writes. The
@@ -448,6 +448,34 @@ will not at four hundred (the parameter-file split of Option D, "three sources",
 is still to do); and §5's `hops` needed a concrete `empirical` to build at all, so the
 `[measure]` slots now hold placeholder distributions that a trace must replace before any
 number from these ASTs is quoted.
+
+### 3.20 One format on the contract: JSON, and why YAML went (added 2026-09-30)
+
+The user asked why the builder used both JSON and YAML. The answer was that the hash had
+always been computed over canonical JSON bytes (sorted keys, no whitespace, fixed float
+formatting, which YAML has no agreed equivalent of), the schema is JSON Schema, and YAML was
+on disk only for readability of generated files. On inspection that readability was buying
+less than it cost:
+
+- **Two grammars, two parsers, on the contract.** PyYAML implements YAML 1.1; the Rust YAML
+  crates implement 1.2. They disagree on `yes`/`no`/`on`/`off` as booleans, on `1_000`, on
+  `0777`, and on `1:30`. The emitter quoted defensively (`ast: '0.1'`), but a contract whose two
+  implementations can parse the same bytes into different values is a determinism hazard of
+  exactly the kind this project exists to exclude.
+- **The Rust side is weaker for YAML.** `serde_yaml` was archived by its author in 2024; the
+  forks are less trusted than `serde_json`. The runner would carry a second parser for a format
+  nobody hand-writes.
+- **Nobody hand-writes ASTs.** The builder emits them; review and diffs are of generated files.
+  Pretty-printed JSON with the builder's key order reads well enough and diffs more cleanly
+  than YAML flow style. The one thing lost is the header comment with the hash, which the
+  `provenance` block already carries.
+
+Decision: JSON only. `<name>.ast.json` on disk, pretty-printed with two-space indentation and
+insertion order; the canonical form for the hash is the same document minified with sorted
+keys. PyYAML leaves the builder's dependencies, `check.py` needs only `jsonschema`, and the
+runner will need only `serde_json`. The nine ASTs were regenerated; their hashes did not
+change, which is the point of separating the identity from the on-disk form. Files are
+roughly twice the line count of the YAML, accepted.
 
 ## 4. Plan changes
 
