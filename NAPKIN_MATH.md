@@ -303,8 +303,9 @@ of the previous one.
 
 Order of work after the abstracts: build the VM with `--dry-run` and the fingerprint against
 ext4 and loopback NFS (R12), then Spike 1 on the real target with the thread-pool backend first.
-(`aeiou dry-run` and the fingerprint exist since 2026-09-30, `DESIGN_REVIEW.md` §3.22; the
-ext4 / loopback NFS half waits for the `sync` backend.)
+(`aeiou dry-run` and the fingerprint exist since 2026-09-30, `DESIGN_REVIEW.md` §3.22;
+`aeiou run` with the `sync` and `sync-direct` backends since the same day, §3.23, run against
+ext4; the loopback NFS run and Spike 1 on the real target are next.)
 
 ---
 

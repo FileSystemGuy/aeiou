@@ -587,6 +587,84 @@ dominated by formatting the path from the pattern on every op; `vdb_build_diskan
 defaults (203M ops) takes 33 s on one core. Caching a bound handle's resolved path is the
 obvious fix and is not done.
 
+### 3.23 The runner's second half: `aeiou run` with the `sync` backends, `aeiou datagen`, and the payload wrapper (added 2026-09-30)
+
+`runner/README.md` §4–§5 state what exists; this is why it is shaped that way.
+
+- **A thread per actor and sub-actor, the VM's tree walk on it.** The alternative was to
+  make the VM resumable (a state machine an event loop can park at every blocking call) and
+  build the thread-pool backend on top of that. The brief's own ordering argues against it:
+  the blocking pool is the *fidelity reference*, "literally what PyTorch does", and a PyTorch
+  worker is a process that blocks in `read`. Running the walk on the thread makes the
+  backend trivially faithful and small (`run.rs` is the `Sink`; `backend.rs` is a table of
+  syscalls). The resumable VM is still needed for `io_uring`, and it will be built for that
+  step, with this implementation as its oracle: same abstract, same fingerprint, same
+  per-step stalls within noise.
+- **The fork protocol keeps the dry run inline.** `Sink::fork` receives the fork kind and a
+  closure that yields a `Snapshot` of the parent (frames with the fork frame last, visible
+  bindings, phases, open files, as-written sums, the sub-actor body). The dry run declines
+  and the VM walks the sub-actors in index order as before; the run sink takes the snapshot,
+  resumes one VM per thread from it, and calls `run_sub(k)`. The closure is there so the
+  dry run never pays for a snapshot (a `parallel` per hop in the search abstracts would
+  otherwise clone bindings tens of millions of times).
+- **Loader semantics: bound the batches started, not the batches delivered.** PyTorch's
+  `_MultiProcessingDataLoaderIter` sends `prefetch_factor × num_workers` batch indices ahead
+  and one more per batch returned; a worker cannot begin a batch it has not been sent. So
+  worker `w` may start batch `b` only while fewer than `W × prefetch` batches are started
+  and untaken, and delivery is in batch order. A `take` past `batches` and an actor ending
+  with batches untaken are both errors rather than a hang or a silent truncation: the
+  producer is finite and the consumer's count must match it (`NAPKIN_MATH.md` §4.1), and a
+  mismatch is an authoring bug the run should name.
+- **Barrier participants are counted statically**, as the instances of every template whose
+  body contains the scope outside a `parallel` or `loader`. A dynamic count would be racy at
+  startup. An instance that finishes leaves the barrier, and a generation completed by
+  departures is released *and reported*, because a barrier some instances skip (one inside a
+  `when (gpu == 0)`, say) is a workload that does not mean what its author thinks. Barriers
+  inside sub-actors are refused for now; none of the nine abstracts needs one.
+- **`sync-direct` rounds reads and refuses writes.** The `until_eof` idiom ends with a read
+  that starts at EOF, which is unaligned for almost every file; a real application under an
+  `O_DIRECT` shim (the interposition test, `PROJECT_BRIEF.md` §5) gets exactly this problem
+  and the shim must round the read out and copy the requested part. The runner does that, so
+  the op stream and the fingerprint are unchanged and only the bytes moved differ (audit
+  data). An unaligned write would need read-modify-write, which is a different workload; it
+  is refused with the position.
+- **The payload wrapper: a 1 MiB dgen generator per block.** §3.17 established that dgen's
+  content is positional by seed arithmetic and that dedupe is scoped to one generator's
+  stream. Instead of reproducing dgen's stream layout, every block is its own 1 MiB generator
+  seeded `labeled_key(seed, "payload", [unit, block])`; the prefix of a block does not depend
+  on how it is read out (checked in `payload::tests`), so a verifier regenerates any piece
+  through dgen-py's public API with no seek. Dedupe is then a property of which units share a
+  seed: `unit = id mod ceil(files / D)` for a files dataset, a block modulus for the single
+  file of a regions dataset. Namespace writes get the same treatment keyed by
+  `(namespace seed, xxh3(path))`, which is what `schema/README.md` §5 promised
+  ("namespace content is a function of (namespace seed, hash(path), offset)").
+- **What the manifest compares.** The resolved definition (parameters substituted, `doc`
+  stripped since documentation must not invalidate a corpus) is compared field by field; the
+  payload block cannot be derived from the abstract, so it is recorded, folded into the id,
+  and pinned by `--expect-dataset-id` where a WG publishes ids. This made the corpus sizes
+  parameters: five abstracts had literal counts (`train_small_files` 50M, `train_large_samples`
+  50k, the two search indexes, the KV-cache system prompts' length), which was fine for the
+  fingerprint but wrong for the dataset rule, under which the count is chosen per submission,
+  and impossible for a test that needs a 600-file corpus. The counts are now `files`, `nodes`,
+  `lists`, `sys_tokens`, `sample_mean`/`sample_sd`; the defaults are the previous literals, so
+  the golden fingerprints did not move.
+- **Two abstracts changed on contact with a filesystem.** The KV-cache abstract wrote
+  `kv/{conv}/blk_{k}` into a directory nobody created; LMCache and vLLM's file backends create
+  it, so the abstract now does a `mkdir` with `expect: [EEXIST]` before a conversation's first
+  write (fingerprint re-recorded). The DiskANN build kept its base vectors at the run root,
+  where the manifest would have shared a directory with the namespaces; the file moved to
+  `base/base.fbin`.
+- **Open: the restore abstract's inputs.** `ckpt_restore` reads namespace objects that no
+  actor wrote. Either the checkpoint being restored is a dataset (then datagen writes it, but
+  a `files` pattern has only `id` and `k` fields and the shard files are named by rank inside a
+  step directory), or a run must be able to keep a namespace another run wrote (a
+  `--keep-namespaces` that the KV-cache hit model must never see). Not decided; the abstract
+  is the one committed workload `aeiou run` cannot execute today.
+- **Not done here**, deliberately: the TCP coordinator (the trait exists), the io_uring
+  half of Spike 1, `mountstats` and per-backend counters, a per-actor pool for `parallel`
+  sub-actors (the search abstracts spawn a thread per beam per hop), `RLIMIT_NOFILE` checks,
+  and the loopback NFS run of `PROJECT_BRIEF.md` §7, which needs root on the development box.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -599,9 +677,12 @@ obvious fix and is not done.
   order: the builder package with the eight abstracts as its first tests, the hermetic build
   harness and build-twice CI, then the VM against the schema.~~ Builder, abstracts, harness,
   and CI done the same day (§3.19). ~~Next: the VM with `--dry-run` and the fingerprint against
-  the nine committed ASTs,~~ Done the same day (§3.22, `runner/`). Next: the `sync` backend
-  and `aeiou run` against ext4 and loopback NFS, then the format-class reader protocols and
-  the parameter-file split.
+  the nine committed ASTs,~~ Done the same day (§3.22, `runner/`). ~~Next: the `sync` backend
+  and `aeiou run` against ext4 and loopback NFS,~~ `aeiou run` with `sync` and `sync-direct`,
+  `aeiou datagen`, and the manifest check done the same day and run against ext4 (§3.23);
+  loopback NFS still to run. Next: the loopback NFS run, the TCP coordinator, then the
+  format-class reader protocols and the parameter-file split, then the resumable VM and
+  `io_uring`.
 
 ## 5. Things reviewed and left as-is
 

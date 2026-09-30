@@ -13,6 +13,9 @@ cargo test --release
 ./target/release/aeiou dry-run ../schema/examples/train_small_files.ast.json --gpus 8 --seed 1
 ./target/release/aeiou dry-run ../schema/examples/kv_cache_serving.ast.json --gpus 1 \
     --param concurrency=2 --param requests=20 --gpu 0 --steps 1..2 --limit 50
+./target/release/aeiou datagen ../schema/examples/train_small_files.ast.json --root /mnt/sut --param files=4000
+./target/release/aeiou run ../schema/examples/train_small_files.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+    --param files=4000 --param steps=50 --io-backend sync
 ```
 
 ## 1. What exists (2026-09-30)
@@ -21,10 +24,14 @@ cargo test --release
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. |
+| `aeiou datagen AST --root DIR [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--param k=v]… [--io-backend sync\|sync-direct] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]…` | Executes the abstract against `DIR` on one host (§4): checks every dataset against its manifest, requires empty namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls, checks every result structurally, and prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint. |
 
-Not yet: `aeiou run` (the I/O backends), `aeiou datagen`, the coordinator, `--metrics`
-(`PROJECT_BRIEF.md` §6 item 14), `stream` access, the `replay` node, and container layouts
-beyond `samples_per_file` (which is implemented but untested against a format class).
+Not yet: the TCP coordinator (several hosts), the asynchronous backends (`io_uring`,
+`libaio`, `mmap`, …) and their counters, `mountstats`, `RLIMIT` startup checks, a JSON
+report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), `stream` access, the `replay` node,
+container layouts beyond `samples_per_file`, and datagen for format classes (that is the
+Python side, `PROJECT_BRIEF.md` §6 item 8).
 
 ```
 aeiou/src/
@@ -35,10 +42,17 @@ aeiou/src/
   pattern.rs   path patterns: {id div 1300:05}, {conv:016x}, {name}
   rng.rs       positional keys, SplitMix64 words, the 4-round Feistel permutation
   eval.rs      the resolved model: parameters, datasets (sizes, layouts, names), namespaces, distributions
-  vm.rs        expression evaluation and the tree walk that emits ops to a Sink
+  vm.rs        expression evaluation and the tree walk that emits ops and control to a Sink;
+               the fork protocol a Sink uses to run `parallel` and `loader` sub-actors itself
   dryrun.rs    the dry-run Sink, parallel over actor instances, and the report
+  backend.rs   the Backend trait (blocking form) and `sync` / `sync-direct`
+  run.rs       the run Sink: threads, channels, barriers, buffers, structural checks, report
+  coord.rs     the Coordinator trait and the in-process implementation
+  payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
+  datagen.rs   `aeiou datagen`
   main.rs      the CLI
 aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests
+aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refusals, loader order
 ```
 
 ## 2. Definitions the runner fixes
@@ -100,3 +114,92 @@ ops in 28 s; `vdb_build_diskann` 203M ops in 33 s. Memory is a few MB: no per-fi
 structure exists, and an actor's state is its frames, bindings, open files, and the as-written
 sums of the objects it created. The obvious speed-up, caching a bound handle's resolved path
 instead of re-formatting the pattern on every op, is not done yet.
+
+## 4. `aeiou run` (2026-09-30)
+
+What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md` §3.23.
+
+- **Threads.** One OS thread per actor instance. A `loader` spawns `workers` threads that
+  live until the actor ends; a `parallel` spawns `width` threads and joins them before the
+  node returns; either may nest. Every sub-actor starts from a snapshot of its parent's
+  position and bindings (`vm::Snapshot`) and sees the files the parent had open at the fork;
+  what it opens itself is its own. The VM's tree walk runs on the thread, so blocking calls
+  are simply blocking: this is the `sync` fidelity reference of `PROJECT_BRIEF.md` §5, and
+  the asynchronous backends will need a resumable VM instead.
+- **Loader.** An ordered channel named after the loader with `workers × prefetch` slots
+  bounds batches *started*: worker `w` builds batches `w, w + W, …` and may start batch `b`
+  only once fewer than `workers × prefetch` batches are started-but-untaken, which is
+  PyTorch's index dispatch. `take` blocks until the next batch in order is complete. A `take`
+  after the last batch, or an actor that ends with batches untaken, is an error: producers
+  are finite and the multiset is fixed (`NAPKIN_MATH.md` §4.1).
+- **`channel` / `put` / `take`** are the general form: `put` blocks while `capacity` items are
+  delivered and untaken; `take` returns the next in `seq` order, or any item if unordered.
+- **Barrier.** The participants of `barrier {scope}` are the instances of every template
+  whose body contains it outside any `parallel` or `loader` (a barrier inside a sub-actor is
+  refused). An instance that finishes leaves its barriers; a generation completed by
+  departures is released and reported as a warning, since it means the instances did not all
+  hit the barrier the same number of times. Single host only: `coord::Local` behind the
+  `Coordinator` trait; the TCP implementation of `NAPKIN_MATH.md` §8.A is next.
+- **`compute`** sleeps for `ns × --time-scale` and is recorded unscaled. `--time-scale 0`
+  runs the I/O back to back.
+- **Buffers.** Each thread has a 4 KiB-aligned read ring and a write ring of `--buffer-mib`
+  (default 8), allocated on first use and grown to the largest op, so successive copies land
+  in successive slices and the aggregate across threads exceeds L3 (`NAPKIN_MATH.md` §2.2).
+- **Writes** carry the positional content of §5 for the object at that offset
+  (`--write-compress` sets the ratio; no dedupe control on writes yet).
+- **`sync-direct`** adds `O_DIRECT` to every regular-file open. An unaligned read (the
+  `until_eof` idiom's last read starts at EOF, which is rarely aligned) is rounded out to
+  4 KiB and the requested part is counted, as an `O_DIRECT` shim under a buffered application
+  has to do; an unaligned write is refused.
+- **Structural checks, every op.** A read must return the computed count; a write its
+  length; `readdir` the computed entry count for a one-sample-per-file, unchunked dataset
+  directory (`.aeiou*` entries not counted); a failing op's errno must be in the statement's
+  `expect` list. Anything else aborts the run with the actor, position, and op. The runner
+  never looks at the bytes (`PROJECT_BRIEF.md` §5, *Data verification*).
+- **Startup.** Every dataset's manifest must match the resolved definition (§5); the ids are
+  printed and may be pinned with `--expect-dataset-id`. Namespace roots are created and must
+  be empty; `--clean-namespaces` empties them, leaving a dataset root that lies inside one
+  alone.
+- **Measurement.** Per-op latency histograms by kind (four buckets per octave; mean, p50,
+  p99, max), per-phase ops, bytes, and I/O time, barrier count and wait, and per `take` the
+  stall (time blocked) and the compute issued before the next take, kept per instance in
+  take order and reported in ten step buckets with the busy fraction
+  `compute / (compute + stall)`, so steady state is selected after the run. The fingerprint is
+  summed over the ops actually issued; `--expect-fingerprint` (from `dry-run`) makes a
+  mismatch an error.
+
+Observed on the WSL2 ext4 disk (2026-09-30, `runner/aeiou/tests/run.rs` and the smoke runs):
+every committed abstract with inputs (all but `ckpt_restore`, which reads namespace objects
+nobody wrote; open item in `DESIGN_REVIEW.md` §3.23) runs to the dry-run fingerprint under
+`sync`, and `train_small_files` also under `sync-direct`; a page-cache read of 1 MiB costs
+10 µs, an `O_DIRECT` one 258 µs; `vdb_search_diskann` spawns a thread per beam per hop
+(923 threads for 924 reads), the cost of forking `parallel` afresh each time, and a per-actor
+sub-actor pool is the planned fix. The loopback NFS mount of `PROJECT_BRIEF.md` §7 has not
+been run yet (it needs root on the development box).
+
+## 5. `aeiou datagen`, the payload, and the manifest
+
+- **Payload** (`payload.rs`). Content is cut into 1 MiB blocks; block `b` of unit `u` under
+  seed `s` is the prefix of a 1 MiB `dgen-data` 0.3.0 stream seeded
+  `labeled_key(s, "payload", [u, b])`, with dgen's compression layout (the last `(C−1)/C` of
+  each block zero-filled for ratio `C`) and no dgen dedupe. The prefix of a block is
+  independent of how it is read out, so the verifier can regenerate any 4 KiB piece with
+  dgen-py's public API (`DESIGN_REVIEW.md` §3.17). Dedupe is the wrapper's, by seed reuse
+  (`aeiou-positional/1`): a `files` dataset uses `u = id mod ceil(files / D)` and `b` the
+  block of the logical offset (a chunked file is the logical file cut at `chunk`), so file
+  `id` and file `id + files/D` carry the same bytes; a `regions` dataset (one file) uses
+  `u = 0` and `b mod ceil(blocks / D)`; a namespace object written by `run` uses
+  `s = labeled_key(namespace seed, "object", [xxh3(path)])`, `u = 0`.
+- **Manifest** (`schema/README.md` §6). `dataset` is the abstract's `datasets` entry with
+  every `{"param": x}` replaced by the value in effect (`gpus` included) and `doc` removed,
+  in canonical key order; `payload` is the block above (generator, version, wrapper, block
+  size, dedupe, compress); `manifest_version` is 1; `provenance` records the abstract's name
+  and hash, all parameter values, the datagen version, host, start and end times, and the
+  files and bytes written. The id is the SHA-256 of the canonical normative part. `run`
+  compares `dataset` field by field against what it resolves and prints the id; the payload
+  block is recorded and printed, not derivable from the abstract, so a published id is what
+  pins it (`--expect-dataset-id`).
+- Because the corpus is sized per submission (`PROJECT_BRIEF.md` §5, dataset sizing rule),
+  the count of every committed corpus is a parameter (`files`, `nodes`, `lists`,
+  `sys_prompts`, `shards`, `n`), and so are the size parameters a small test corpus needs
+  (`sample_mean`, `sample_sd`, `sys_tokens`); the resolved definition carries the values.
