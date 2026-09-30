@@ -1,0 +1,431 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/FileSystemGuy/aeiou/schema/abstract-ast.schema.json",
+  "title": "Abstract AST",
+  "description": "Contract between the authoring layer (the Python builder) and the Rust runner. Version 0.1, 2026-09-30. Every node, expression, distribution, and handle is an object with exactly one key naming its kind (externally tagged). Sizes are byte integers, durations are nanosecond integers. Semantic rules the schema cannot express are listed in schema/README.md and enforced by the validator.",
+  "type": "object",
+  "required": ["ast", "name", "actors"],
+  "additionalProperties": false,
+  "properties": {
+    "ast": { "const": "0.1", "description": "Schema version this document conforms to." },
+    "name": { "$ref": "#/$defs/ident" },
+    "doc": { "type": "string" },
+    "params": {
+      "type": "object",
+      "description": "Named parameters, overridable from the CLI. `gpus` is reserved: the runner sets it from --gpus.",
+      "propertyNames": { "$ref": "#/$defs/ident" },
+      "additionalProperties": { "$ref": "#/$defs/param" }
+    },
+    "datasets": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/ident" },
+      "additionalProperties": { "$ref": "#/$defs/dataset" }
+    },
+    "namespaces": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/ident" },
+      "additionalProperties": { "$ref": "#/$defs/namespace" }
+    },
+    "actors": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/ident" },
+      "additionalProperties": { "$ref": "#/$defs/actor" }
+    },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+
+  "$defs": {
+    "ident": { "type": "string", "pattern": "^[a-z_][a-z0-9_]*$", "maxLength": 64 },
+    "uint": { "type": "integer", "minimum": 0 },
+    "seed": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "errno": { "type": "string", "pattern": "^E[A-Z0-9]{1,15}$" },
+    "expect": {
+      "type": "array",
+      "description": "Errnos the op may return; counted per site, not fatal. Any other error is a run failure. Not part of the fingerprint.",
+      "items": { "$ref": "#/$defs/errno" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+
+    "literal": {
+      "description": "A JSON scalar. null is the `none` outcome of a mixture.",
+      "type": ["number", "boolean", "string", "null"]
+    },
+
+    "param": {
+      "type": "object",
+      "required": ["default"],
+      "additionalProperties": false,
+      "properties": {
+        "default": { "$ref": "#/$defs/value" },
+        "doc": { "type": "string" },
+        "cli": { "type": "boolean", "default": true, "description": "May be overridden with --param name=value." },
+        "unit": { "type": "string", "enum": ["bytes", "ns", "count", "ratio", "tokens", "none"], "description": "Documentation only; values are already in canonical units." }
+      }
+    },
+    "value": {
+      "description": "A parameter value: a scalar, a distribution, or an array of these (a parameter array, indexed by a loop index).",
+      "anyOf": [
+        { "$ref": "#/$defs/literal" },
+        { "$ref": "#/$defs/dist" },
+        { "type": "array", "items": { "$ref": "#/$defs/value" } }
+      ]
+    },
+
+    "dist": {
+      "description": "A distribution literal. Draws are positional: hash(seed, actor, site, loop indices).",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "const":     { "$ref": "#/$defs/expr" },
+        "uniform":   { "type": "object", "required": ["lo", "hi"], "additionalProperties": false,
+                       "properties": { "lo": { "$ref": "#/$defs/expr" }, "hi": { "$ref": "#/$defs/expr" } },
+                       "description": "Integer in [lo, hi)." },
+        "uniform64": { "type": "object", "additionalProperties": false, "properties": {},
+                       "description": "A 64-bit identifier; used for fresh conversation ids and the like." },
+        "normal":    { "type": "object", "required": ["mean", "sd"], "additionalProperties": false,
+                       "properties": { "mean": { "$ref": "#/$defs/expr" }, "sd": { "$ref": "#/$defs/expr" },
+                                       "min": { "$ref": "#/$defs/expr" }, "max": { "$ref": "#/$defs/expr" } } },
+        "lognormal": { "type": "object", "required": ["median", "sigma"], "additionalProperties": false,
+                       "properties": { "median": { "$ref": "#/$defs/expr" }, "sigma": { "type": "number", "exclusiveMinimum": 0 },
+                                       "min": { "$ref": "#/$defs/expr" }, "max": { "$ref": "#/$defs/expr" } } },
+        "empirical": { "type": "object", "required": ["values", "weights"], "additionalProperties": false,
+                       "properties": { "values": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/literal" } },
+                                       "weights": { "type": "array", "minItems": 1, "items": { "type": "number", "minimum": 0 } } },
+                       "description": "Values with relative weights; lengths must match." },
+        "zipf":      { "type": "object", "required": ["s"], "additionalProperties": false,
+                       "properties": { "s": { "type": "number", "exclusiveMinimum": 0 } },
+                       "description": "Over the ids of the dataset it is applied to, rank order fixed by the dataset seed." },
+        "hotset":    { "type": "object", "required": ["fraction", "weight"], "additionalProperties": false,
+                       "properties": { "fraction": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+                                       "weight": { "type": "number", "minimum": 0, "maximum": 1 } },
+                       "description": "With probability `weight`, uniform over the first `fraction` of ids (by the dataset seed's rank order); otherwise uniform over the rest." },
+        "mixture":   { "type": "array", "minItems": 1,
+                       "items": { "type": "object", "required": ["weight", "dist"], "additionalProperties": false,
+                                  "properties": { "weight": { "type": "number", "minimum": 0 },
+                                                  "dist": { "anyOf": [ { "$ref": "#/$defs/distref" }, { "type": "null" } ] } } },
+                       "description": "Pick an arm by weight, then draw from it; a null arm yields none." }
+      }
+    },
+    "distref": {
+      "description": "A distribution, or an expression that evaluates to one (a parameter, or a cond selecting between distributions).",
+      "anyOf": [ { "$ref": "#/$defs/dist" }, { "$ref": "#/$defs/expr" } ]
+    },
+
+    "expr": {
+      "description": "A scalar-valued expression, evaluated positionally. Integer arithmetic; div is floor division.",
+      "anyOf": [
+        { "$ref": "#/$defs/literal" },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "param":  { "$ref": "#/$defs/ident" },
+            "index":  { "$ref": "#/$defs/ident", "description": "The value of an enclosing loop or parallel index." },
+            "ref":    { "$ref": "#/$defs/ident", "description": "The value of a let binding in scope." },
+            "at":     { "type": "object", "required": ["ref", "index"], "additionalProperties": false,
+                        "properties": { "ref": { "$ref": "#/$defs/ident" }, "index": { "$ref": "#/$defs/expr" } },
+                        "description": "The value binding `ref` takes at another index of its enclosing loop. A self-reference must use an index of the form {sub: [{index: i}, e]} with e >= 1." },
+            "actor":  { "type": "string", "enum": ["id", "count"], "description": "This actor's global id, or the number of instances of its template." },
+            "draw":   { "$ref": "#/$defs/distref", "description": "A positional draw; its site is the node's structural path." },
+            "elem":   { "type": "object", "required": ["array", "index"], "additionalProperties": false,
+                        "properties": { "array": { "$ref": "#/$defs/ident" }, "index": { "$ref": "#/$defs/expr" } },
+                        "description": "Element of a parameter array." },
+            "len":    { "$ref": "#/$defs/ident", "description": "Length of a parameter array." },
+            "sum":    { "$ref": "#/$defs/ident", "description": "Sum of a numeric parameter array." },
+            "size":   { "$ref": "#/$defs/handle", "description": "Bytes of a file, sample, region, chunk, or namespace object, from its definition." },
+            "offset": { "$ref": "#/$defs/handle", "description": "Byte offset of a sample or region inside its file." },
+            "unit":   { "$ref": "#/$defs/handle", "description": "Index of the container unit (row group, chunk, shard) holding a sample." },
+            "chunks": { "$ref": "#/$defs/handle", "description": "Number of chunk objects a `chunk`-realized file has." },
+            "count":  { "$ref": "#/$defs/ident", "description": "Sample count of a dataset." },
+            "dirs":   { "$ref": "#/$defs/ident", "description": "Number of directories a dataset's pattern generates." },
+            "add": { "$ref": "#/$defs/args2" }, "sub": { "$ref": "#/$defs/args2" },
+            "mul": { "$ref": "#/$defs/args2" }, "div": { "$ref": "#/$defs/args2" },
+            "mod": { "$ref": "#/$defs/args2" }, "ceil_div": { "$ref": "#/$defs/args2" },
+            "min": { "$ref": "#/$defs/args2" }, "max": { "$ref": "#/$defs/args2" },
+            "neg": { "$ref": "#/$defs/expr" },
+            "eq": { "$ref": "#/$defs/args2" }, "ne": { "$ref": "#/$defs/args2" },
+            "lt": { "$ref": "#/$defs/args2" }, "le": { "$ref": "#/$defs/args2" },
+            "gt": { "$ref": "#/$defs/args2" }, "ge": { "$ref": "#/$defs/args2" },
+            "and": { "$ref": "#/$defs/argsN" }, "or": { "$ref": "#/$defs/argsN" },
+            "not": { "$ref": "#/$defs/expr" },
+            "cond": { "type": "object", "required": ["if", "then", "else"], "additionalProperties": false,
+                      "properties": { "if": { "$ref": "#/$defs/expr" },
+                                      "then": { "$ref": "#/$defs/exprlike" },
+                                      "else": { "$ref": "#/$defs/exprlike" } },
+                      "description": "Expression-level conditional; arms may be expressions, distributions, or handles." }
+          }
+        }
+      ]
+    },
+    "exprlike": { "anyOf": [ { "$ref": "#/$defs/expr" }, { "$ref": "#/$defs/dist" }, { "$ref": "#/$defs/handle" } ] },
+    "args2": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/expr" } },
+    "argsN": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/expr" } },
+
+    "handle": {
+      "description": "A reference to a file, directory, sample, region, or workload-created object. Names are computed, never stored.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "$ref": "#/$defs/ident", "description": "A let binding holding a handle." },
+        "file": {
+          "type": "object", "additionalProperties": false,
+          "description": "A dataset file by id, or the file (or chunk object) that holds a sample handle.",
+          "properties": {
+            "dataset": { "$ref": "#/$defs/ident" },
+            "id": { "$ref": "#/$defs/expr" },
+            "of": { "$ref": "#/$defs/handle" },
+            "chunk": { "$ref": "#/$defs/expr" }
+          },
+          "oneOf": [ { "required": ["dataset", "id"] }, { "required": ["of"] } ]
+        },
+        "dir": {
+          "type": "object", "required": ["dataset", "id"], "additionalProperties": false,
+          "properties": { "dataset": { "$ref": "#/$defs/ident" }, "id": { "$ref": "#/$defs/expr" } },
+          "description": "The id-th directory of a dataset's pattern."
+        },
+        "object": {
+          "type": "object", "required": ["namespace", "fields"], "additionalProperties": false,
+          "properties": {
+            "namespace": { "$ref": "#/$defs/ident" },
+            "fields": { "type": "object", "propertyNames": { "$ref": "#/$defs/ident" }, "additionalProperties": { "$ref": "#/$defs/expr" } }
+          },
+          "description": "A workload-created object, named by filling the namespace pattern's fields."
+        },
+        "consume": { "$ref": "#/$defs/ident", "description": "Next sample of a dataset without replacement: perm(position), position = actor + count * (b * B + j) over the enclosing loader and loop." },
+        "pick": {
+          "type": "object", "required": ["dataset"], "additionalProperties": false,
+          "properties": { "dataset": { "$ref": "#/$defs/ident" }, "dist": { "$ref": "#/$defs/distref" } },
+          "description": "A sample of a dataset with replacement, uniform unless a distribution over ids is given."
+        }
+      }
+    },
+
+    "pattern": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A path pattern with {field[:format]} fields. Datasets use `id` (and `k` for chunks); namespaces declare their fields."
+    },
+
+    "dataset": {
+      "type": "object",
+      "minProperties": 1, "maxProperties": 1, "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "object",
+          "required": ["pattern", "count", "size", "seed"],
+          "additionalProperties": false,
+          "properties": {
+            "pattern": { "$ref": "#/$defs/pattern" },
+            "count": { "$ref": "#/$defs/expr", "description": "Number of samples." },
+            "size": { "$ref": "#/$defs/distref", "description": "Bytes per sample, drawn from the dataset seed." },
+            "seed": { "$ref": "#/$defs/seed" },
+            "access": { "type": "string", "enum": ["map", "stream"], "default": "map" },
+            "samples_per_file": { "$ref": "#/$defs/expr", "default": 1 },
+            "chunk": { "$ref": "#/$defs/expr", "description": "Realize each file as ceil(size / chunk) block objects named by the pattern's {k}." },
+            "format": {
+              "type": "object", "required": ["class"], "additionalProperties": false,
+              "properties": { "class": { "$ref": "#/$defs/ident" }, "reader": { "type": "string" }, "version": { "type": "string" },
+                              "layout": { "type": "object", "description": "Format-class layout parameters for datagen and the manifest; opaque to the runner. Deferred: the runner-facing locate fields beyond samples_per_file." } },
+              "description": "Which format class wrote the container. Informational for the runner; matched against the manifest."
+            },
+            "doc": { "type": "string" }
+          }
+        },
+        "regions": {
+          "type": "object",
+          "required": ["file", "count", "slot", "size", "seed"],
+          "additionalProperties": false,
+          "properties": {
+            "file": { "type": "string", "minLength": 1 },
+            "count": { "$ref": "#/$defs/expr" },
+            "slot": { "$ref": "#/$defs/expr", "description": "Region c starts at c * slot." },
+            "size": { "$ref": "#/$defs/distref", "description": "Bytes of region c, capped at slot; the slot's tail is unwritten." },
+            "seed": { "$ref": "#/$defs/seed" },
+            "doc": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "namespace": {
+      "type": "object",
+      "required": ["pattern", "fields", "size", "seed"],
+      "additionalProperties": false,
+      "description": "Workload-created objects: no count, no manifest entry; the directory must exist and be writable.",
+      "properties": {
+        "pattern": { "$ref": "#/$defs/pattern" },
+        "fields": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/ident" },
+          "additionalProperties": { "type": "string", "enum": ["int", "str"] }
+        },
+        "size": {
+          "description": "Bytes per object as an expression over the pattern's fields and parameters, or \"as_written\": the sum of the write lengths in the sequence that creates the object, computable at the creator's position. Never observed with fstat.",
+          "anyOf": [ { "const": "as_written" }, { "$ref": "#/$defs/expr" } ]
+        },
+        "seed": { "$ref": "#/$defs/seed", "description": "Content of an object is a function of (seed, hash(path), offset)." },
+        "doc": { "type": "string" }
+      }
+    },
+
+    "actor": {
+      "type": "object",
+      "required": ["body"],
+      "additionalProperties": false,
+      "properties": {
+        "count": { "$ref": "#/$defs/expr", "default": { "param": "gpus" }, "description": "Instances of this template, with global ids 0..count." },
+        "body": { "$ref": "#/$defs/body" },
+        "doc": { "type": "string" }
+      }
+    },
+
+    "body": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+
+    "node": {
+      "description": "One statement. Ops are POSIX-shaped and identical for every backend.",
+      "type": "object",
+      "minProperties": 1, "maxProperties": 1, "additionalProperties": false,
+      "properties": {
+        "let": {
+          "type": "object", "required": ["name", "value"], "additionalProperties": false,
+          "properties": { "name": { "$ref": "#/$defs/ident" }, "value": { "$ref": "#/$defs/exprlike" } },
+          "description": "Bind a name to a positional value or a handle; visible for the rest of the enclosing body and in child bodies."
+        },
+        "loop": {
+          "type": "object", "required": ["index", "to", "body"], "additionalProperties": false,
+          "properties": { "index": { "$ref": "#/$defs/ident" }, "from": { "$ref": "#/$defs/expr", "default": 0 },
+                          "to": { "$ref": "#/$defs/expr" }, "step": { "$ref": "#/$defs/expr", "default": 1 },
+                          "body": { "$ref": "#/$defs/body" } },
+          "description": "for index in [from, to) step `step`. The index is part of every RNG key inside."
+        },
+        "parallel": {
+          "type": "object", "required": ["index", "width", "body"], "additionalProperties": false,
+          "properties": { "index": { "$ref": "#/$defs/ident" }, "width": { "$ref": "#/$defs/expr" }, "body": { "$ref": "#/$defs/body" } },
+          "description": "`width` concurrent sub-actors, index 0..width, joined at the end."
+        },
+        "channel": {
+          "type": "object", "required": ["name", "capacity"], "additionalProperties": false,
+          "properties": { "name": { "$ref": "#/$defs/ident" }, "capacity": { "$ref": "#/$defs/expr" }, "ordered": { "type": "boolean", "default": true } },
+          "description": "Declare a bounded channel in the enclosing actor."
+        },
+        "put":  { "type": "object", "required": ["channel", "seq"], "additionalProperties": false,
+                  "properties": { "channel": { "$ref": "#/$defs/ident" }, "seq": { "$ref": "#/$defs/expr" } },
+                  "description": "Deliver item `seq`; blocks while the channel is full." },
+        "take": { "type": "object", "required": ["channel"], "additionalProperties": false,
+                  "properties": { "channel": { "$ref": "#/$defs/ident" } },
+                  "description": "Wait for the next item (in sequence order on an ordered channel)." },
+        "loader": {
+          "type": "object", "required": ["name", "index", "workers", "prefetch", "batches", "body"], "additionalProperties": false,
+          "properties": { "name": { "$ref": "#/$defs/ident" }, "index": { "$ref": "#/$defs/ident", "description": "The batch index bound in the body." },
+                          "workers": { "$ref": "#/$defs/expr" }, "prefetch": { "$ref": "#/$defs/expr" },
+                          "batches": { "$ref": "#/$defs/expr" }, "ordered": { "type": "boolean", "default": true },
+                          "body": { "$ref": "#/$defs/body" } },
+          "description": "PyTorch-style sugar the runner keeps: `workers` sub-actors, worker w builds batches w, w+W, ...; an ordered channel of workers*prefetch slots named `name`; exactly `batches` batches. Deferred: records-per-batch for stream access."
+        },
+        "barrier": { "type": "object", "required": ["scope"], "additionalProperties": false,
+                     "properties": { "scope": { "anyOf": [ { "type": "string", "enum": ["global", "host"] }, { "$ref": "#/$defs/ident" } ] } } },
+        "compute": { "type": "object", "required": ["ns"], "additionalProperties": false,
+                     "properties": { "ns": { "$ref": "#/$defs/expr", "description": "Nanoseconds; scaled by --time-scale." } } },
+        "cond": {
+          "type": "object", "required": ["if", "then"], "additionalProperties": false,
+          "properties": { "if": { "$ref": "#/$defs/expr" }, "then": { "$ref": "#/$defs/body" }, "else": { "$ref": "#/$defs/body" } },
+          "description": "Statement conditional; the test may use only loop indices, parameters, bindings, and the actor id."
+        },
+        "choose": {
+          "type": "object", "required": ["arms"], "additionalProperties": false,
+          "properties": { "arms": { "type": "array", "minItems": 1,
+                                    "items": { "type": "object", "required": ["weight", "body"], "additionalProperties": false,
+                                               "properties": { "weight": { "type": "number", "minimum": 0 }, "body": { "$ref": "#/$defs/body" } } } } },
+          "description": "Run one arm, chosen positionally by weight (the selection construct)."
+        },
+        "phase": {
+          "type": "object", "required": ["name", "body"], "additionalProperties": false,
+          "properties": { "name": { "$ref": "#/$defs/expr" }, "body": { "$ref": "#/$defs/body" } },
+          "description": "Statistics label for every op inside; no effect on execution or the fingerprint."
+        },
+        "replay": {
+          "type": "object", "required": ["trace", "sha256"], "additionalProperties": false,
+          "properties": { "trace": { "type": "string" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+          "description": "A literal captured sequence for small-scale calibration; never CLOSED. Deferred: the trace file format."
+        },
+
+        "open": {
+          "type": "object", "required": ["file", "flags"], "additionalProperties": false,
+          "properties": { "file": { "$ref": "#/$defs/handle" },
+                          "flags": { "type": "array", "minItems": 1, "uniqueItems": true,
+                                     "items": { "type": "string", "enum": ["RDONLY", "WRONLY", "RDWR", "CREAT", "TRUNC", "EXCL", "APPEND", "CLOEXEC", "DIRECTORY", "DIRECT", "SYNC", "DSYNC", "NOATIME", "NOFOLLOW"] } },
+                          "mode": { "type": "integer", "minimum": 0, "maximum": 4095 },
+                          "expect": { "$ref": "#/$defs/expect" } }
+        },
+        "close": { "$ref": "#/$defs/fileop" },
+        "read": {
+          "type": "object", "required": ["file", "len"], "additionalProperties": false,
+          "properties": { "file": { "$ref": "#/$defs/handle" }, "len": { "$ref": "#/$defs/expr" },
+                          "offset": { "$ref": "#/$defs/expr", "description": "Positioned read (pread); absent means sequential from the current file position." },
+                          "repeat": { "anyOf": [ { "const": "until_eof" }, { "$ref": "#/$defs/expr" } ],
+                                      "description": "until_eof: reads of `len` until the known size is exhausted, including the terminating short or zero-length read; each returned count is checked against the computed size." },
+                          "expect": { "$ref": "#/$defs/expect" } }
+        },
+        "write": {
+          "type": "object", "required": ["file", "len"], "additionalProperties": false,
+          "properties": { "file": { "$ref": "#/$defs/handle" }, "len": { "$ref": "#/$defs/expr" },
+                          "offset": { "$ref": "#/$defs/expr" }, "repeat": { "$ref": "#/$defs/expr" },
+                          "expect": { "$ref": "#/$defs/expect" } }
+        },
+        "lseek": {
+          "type": "object", "required": ["file", "offset", "whence"], "additionalProperties": false,
+          "properties": { "file": { "$ref": "#/$defs/handle" }, "offset": { "$ref": "#/$defs/expr" },
+                          "whence": { "type": "string", "enum": ["SET", "CUR", "END"] } }
+        },
+        "ioctl": {
+          "type": "object", "required": ["file", "request"], "additionalProperties": false,
+          "properties": { "file": { "$ref": "#/$defs/handle" }, "request": { "type": "string", "enum": ["TCGETS", "FIONREAD", "BLKGETSIZE64"] },
+                          "expect": { "$ref": "#/$defs/expect" } }
+        },
+        "fstat":     { "$ref": "#/$defs/fileop" },
+        "stat":      { "$ref": "#/$defs/fileop" },
+        "fsync":     { "$ref": "#/$defs/fileop" },
+        "fdatasync": { "$ref": "#/$defs/fileop" },
+        "unlink":    { "$ref": "#/$defs/fileop" },
+        "ftruncate": { "type": "object", "required": ["file", "len"], "additionalProperties": false,
+                       "properties": { "file": { "$ref": "#/$defs/handle" }, "len": { "$ref": "#/$defs/expr" }, "expect": { "$ref": "#/$defs/expect" } } },
+        "fallocate": { "type": "object", "required": ["file", "len"], "additionalProperties": false,
+                       "properties": { "file": { "$ref": "#/$defs/handle" }, "offset": { "$ref": "#/$defs/expr", "default": 0 }, "len": { "$ref": "#/$defs/expr" }, "expect": { "$ref": "#/$defs/expect" } } },
+        "mkdir":  { "type": "object", "required": ["dir"], "additionalProperties": false,
+                    "properties": { "dir": { "$ref": "#/$defs/handle" }, "mode": { "type": "integer", "minimum": 0, "maximum": 4095 }, "expect": { "$ref": "#/$defs/expect" } } },
+        "rmdir":  { "type": "object", "required": ["dir"], "additionalProperties": false,
+                    "properties": { "dir": { "$ref": "#/$defs/handle" }, "expect": { "$ref": "#/$defs/expect" } } },
+        "rename": { "type": "object", "required": ["from", "to"], "additionalProperties": false,
+                    "properties": { "from": { "$ref": "#/$defs/handle" }, "to": { "$ref": "#/$defs/handle" }, "expect": { "$ref": "#/$defs/expect" } } },
+        "readdir": { "type": "object", "required": ["dir", "repeat"], "additionalProperties": false,
+                     "properties": { "dir": { "$ref": "#/$defs/handle" }, "repeat": { "const": "until_end" }, "expect": { "$ref": "#/$defs/expect" } },
+                     "description": "getdents64 until exhausted, on a handle opened with DIRECTORY." }
+      }
+    },
+    "fileop": {
+      "type": "object", "required": ["file"], "additionalProperties": false,
+      "properties": { "file": { "$ref": "#/$defs/handle" }, "expect": { "$ref": "#/$defs/expect" } }
+    },
+
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "generator": { "type": "object", "additionalProperties": false,
+                       "properties": { "script": { "type": "string" }, "sha256": { "type": "string" }, "git": { "type": "string" }, "builder_version": { "type": "string" } } },
+        "python": { "type": "string" },
+        "lock": { "type": "object", "additionalProperties": false, "properties": { "file": { "type": "string" }, "sha256": { "type": "string" } } },
+        "built_twice_identical": { "type": "boolean" },
+        "ast_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Hash of the canonical form with this block removed." }
+      }
+    }
+  }
+}

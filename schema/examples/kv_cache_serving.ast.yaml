@@ -1,0 +1,130 @@
+# ABSTRACTS.md §8, KV-cache serving (prefix cache offloaded to storage), in AST form.
+# Exercises: `at` chains (§9.5), a mixture with a none arm, expression-selected phase names,
+# a chunk-realized dataset, a namespace with a size expression, stat with expect.
+# Hand-written against schema v0.1 on 2026-09-30; the builder will regenerate it.
+ast: "0.1"
+name: kv_cache_serving
+doc: One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one.
+
+params:
+  concurrency:       { default: 64,       unit: count }
+  warm:              { default: 2000,     unit: count, doc: "requests per slot before measurement (§9.5)" }
+  requests:          { default: 20000,    unit: count }
+  chunk_tokens:      { default: 256,      unit: tokens }
+  chunk_bytes:       { default: 33554432, unit: bytes, doc: "128 KiB/token × 256 [config]" }
+  sys_prompts:       { default: 50,       unit: count }
+  sys_pop:           { default: { zipf: { s: 1.1 } }, doc: "[measure]" }
+  reuse:
+    doc: "requests ago, or none for a new conversation [measure]"
+    default:
+      mixture:
+        - { weight: 0.55, dist: null }
+        - { weight: 0.45, dist: { lognormal: { median: 40, sigma: 1.2, min: 1 } } }
+  retain:            { default: 5000,     unit: count, doc: "older chunks are evicted [config: capacity]" }
+  turn_in:           { default: { lognormal: { median: 300, sigma: 0.8 } }, unit: tokens }
+  turn_out:          { default: { lognormal: { median: 250, sigma: 0.6 } }, unit: tokens }
+  prefill_per_token: { default: 40000,    unit: ns }
+  decode_per_token:  { default: 12000000, unit: ns }
+
+datasets:
+  sysp:
+    files:
+      pattern: "kv/sys/{id:04}/blk_{k:04}"
+      count: { param: sys_prompts }
+      size: { lognormal: { median: 196608000, sigma: 0.3 } }   # sys_len (median 1500 tokens) × 128 KiB, folded by the builder
+      chunk: { param: chunk_bytes }                              # realized as ceil(size / chunk) block objects {k}
+      seed: 1592646272
+
+namespaces:
+  kv:
+    pattern: "kv/{conv:016x}/blk_{k:04}"
+    fields: { conv: int, k: int }
+    size: { param: chunk_bytes }
+    seed: 1592646273
+
+actors:
+  gpu:
+    body:
+      - parallel:
+          index: slot
+          width: { param: concurrency }
+          body:
+            - loop:
+                index: r
+                to: { add: [ { param: warm }, { param: requests } ] }   # one index space (§9.5)
+                body:
+                  - let: { name: d,    value: { draw: { param: reuse } } }
+                  - let: { name: cont, value: { and: [ { ne: [ { ref: d }, null ] }, { le: [ { ref: d }, { index: r } ] } ] } }
+                  - let:
+                      name: conv                                      # the chain: conv @ r = conv @ (r − d) or fresh
+                      value:
+                        cond:
+                          if: { ref: cont }
+                          then: { at: { ref: conv, index: { sub: [ { index: r }, { ref: d } ] } } }
+                          else: { draw: { uniform64: {} } }
+                  - let:
+                      name: sp
+                      value:
+                        cond:
+                          if: { ref: cont }
+                          then: { at: { ref: sp, index: { sub: [ { index: r }, { ref: d } ] } } }
+                          else: { pick: { dataset: sysp, dist: { param: sys_pop } } }
+                  - let:
+                      name: prev                                      # blocks the conversation had
+                      value:
+                        cond:
+                          if: { ref: cont }
+                          then: { at: { ref: total, index: { sub: [ { index: r }, { ref: d } ] } } }
+                          else: 0
+                  - let:
+                      name: hit
+                      value:
+                        cond:
+                          if: { and: [ { ref: cont }, { le: [ { ref: d }, { param: retain } ] } ] }
+                          then: { ref: prev }
+                          else: 0
+                  - let: { name: inn,    value: { draw: { param: turn_in } } }
+                  - let: { name: out,    value: { draw: { param: turn_out } } }
+                  - let: { name: total,  value: { add: [ { ref: prev }, { ceil_div: [ { add: [ { ref: inn }, { ref: out } ] }, { param: chunk_tokens } ] } ] } }
+                  - let: { name: sysblk, value: { chunks: { ref: sp } } }
+
+                  - phase:
+                      name: { cond: { if: { lt: [ { index: r }, { param: warm } ] }, then: warm, else: serve } }
+                      body:
+                        - loop:                                         # lookups: system prompt blocks
+                            index: k
+                            to: { ref: sysblk }
+                            body:
+                              - stat: { file: { file: { of: { ref: sp }, chunk: { index: k } } } }
+                        - loop:                                         # lookups: conversation blocks
+                            index: k
+                            to: { ref: total }
+                            body:
+                              - stat: { file: { object: { namespace: kv, fields: { conv: { ref: conv }, k: { index: k } } } }, expect: [ENOENT] }
+                        - loop:                                         # read the system prompt
+                            index: k
+                            to: { ref: sysblk }
+                            body:
+                              - let: { name: b, value: { file: { of: { ref: sp }, chunk: { index: k } } } }
+                              - open: { file: { ref: b }, flags: [RDONLY] }
+                              - read: { file: { ref: b }, len: { param: chunk_bytes } }
+                              - close: { file: { ref: b } }
+                        - loop:                                         # read the cached prefix
+                            index: k
+                            to: { ref: hit }
+                            body:
+                              - let: { name: b, value: { object: { namespace: kv, fields: { conv: { ref: conv }, k: { index: k } } } } }
+                              - open: { file: { ref: b }, flags: [RDONLY] }
+                              - read: { file: { ref: b }, len: { param: chunk_bytes } }
+                              - close: { file: { ref: b } }
+                        - compute: { ns: { mul: [ { param: prefill_per_token }, { mul: [ { sub: [ { ref: total }, { ref: hit } ] }, { param: chunk_tokens } ] } ] } }
+                        - loop:                                         # write the new blocks
+                            index: k
+                            from: { ref: hit }
+                            to: { ref: total }
+                            body:
+                              - let: { name: b, value: { object: { namespace: kv, fields: { conv: { ref: conv }, k: { index: k } } } } }
+                              - open: { file: { ref: b }, flags: [WRONLY, CREAT, TRUNC] }
+                              - write: { file: { ref: b }, len: { param: chunk_bytes } }
+                              - close: { file: { ref: b } }
+                        - compute: { ns: { mul: [ { param: decode_per_token }, { ref: out } ] } }
