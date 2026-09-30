@@ -1,0 +1,19 @@
+[package]
+name = "aeiou"
+description = "Abstract-driven I/O workload runner: loads, validates, and executes the AST contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aeiou"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+anyhow = "1"

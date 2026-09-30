@@ -21,3 +21,21 @@ jobs:
       - name: Hermetic build-twice of every abstract, compared with the committed ASTs
         working-directory: builder
         run: .venv/bin/aeiou-build --hermetic --twice --check -o ../schema/examples abstracts/*.py
+
+  runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runner
+      - name: Build and test
+        working-directory: runner
+        run: cargo test --release
+      - name: Rust checker agrees with the reference checker on every committed AST
+        run: |
+          pip install jsonschema
+          python3 schema/check.py > /tmp/check.py.out
+          runner/target/release/aeiou check schema/examples/*.ast.json > /tmp/check.rs.out
+          diff /tmp/check.py.out /tmp/check.rs.out
