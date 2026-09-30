@@ -1,6 +1,7 @@
 //! `aeiou`: the runner binary. Subcommands: `check` (validate ASTs and print their hashes,
-//! as `schema/check.py` does) and `dry-run` (the op streams and the fingerprint, no I/O).
-//! `run` and `datagen` come with the I/O backends.
+//! as `schema/check.py` does), `dry-run` (the op streams and the fingerprint, no I/O),
+//! `datagen` (write the corpus and its manifests), and `run` (execute against a directory
+//! with a blocking backend).
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -8,8 +9,11 @@ use std::path::PathBuf;
 use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 
+use aeiou::backend::BackendKind;
+use aeiou::datagen::{self, DatagenOpts};
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, Params};
+use aeiou::run::{self, RunOpts};
 
 #[derive(Parser)]
 #[command(name = "aeiou", version, about = "Abstract-driven I/O workload runner")]
@@ -27,6 +31,67 @@ enum Cmd {
     },
     /// Compute every actor's op stream and the workload fingerprint without doing any I/O.
     DryRun(DryRunArgs),
+    /// Write the datasets an abstract declares under --root, with a manifest per dataset root.
+    Datagen(DatagenArgs),
+    /// Execute the abstract against --root with a blocking I/O backend.
+    Run(RunCmd),
+}
+
+#[derive(Args)]
+struct DatagenArgs {
+    /// The abstract (`.ast.json`).
+    abstract_path: PathBuf,
+    /// Directory the abstract's paths are relative to.
+    #[arg(long)]
+    root: PathBuf,
+    /// Instance count, for dataset definitions that reference `gpus`.
+    #[arg(long, default_value_t = 1)]
+    gpus: i64,
+    /// Override a parameter: `--param name=value` (only those the datasets reference matter).
+    #[arg(long = "param", value_name = "NAME=VALUE")]
+    params: Vec<String>,
+    /// Writer threads (default: all cores).
+    #[arg(long)]
+    threads: Option<usize>,
+    /// Dedupe ratio: every `dedupe` files (or 1 MiB blocks of a regions file) share content.
+    #[arg(long, default_value_t = 1)]
+    dedupe: u64,
+    /// Compression ratio: the last (C−1)/C of every 1 MiB block is zeros.
+    #[arg(long, default_value_t = 1)]
+    compress: u64,
+    /// Only these datasets (default: all).
+    #[arg(long = "dataset", value_name = "NAME")]
+    datasets: Vec<String>,
+}
+
+#[derive(Args)]
+struct RunCmd {
+    #[command(flatten)]
+    run: RunArgs,
+    /// Directory the abstract's paths are relative to (datasets and namespaces live under it).
+    #[arg(long)]
+    root: PathBuf,
+    /// `sync` (buffered POSIX on one thread per actor) or `sync-direct` (the same with O_DIRECT).
+    #[arg(long = "io-backend", default_value = "sync")]
+    backend: String,
+    /// Per-thread read and write buffer ring, MiB.
+    #[arg(long, default_value_t = 8)]
+    buffer_mib: usize,
+    /// Compression ratio of the bytes written to namespaces.
+    #[arg(long, default_value_t = 1)]
+    write_compress: u64,
+    /// Multiply every `compute` sleep (0 runs the I/O back to back).
+    #[arg(long, default_value_t = 1.0)]
+    time_scale: f64,
+    /// Empty the namespace roots before starting instead of refusing.
+    #[arg(long)]
+    clean_namespaces: bool,
+    /// Fail unless the run's fingerprint is this (hex, from `aeiou dry-run`).
+    #[arg(long, value_name = "HEX")]
+    expect_fingerprint: Option<String>,
+    /// Fail unless every dataset id is among these.
+    #[arg(long = "expect-dataset-id", value_name = "SHA256")]
+    expect_dataset_ids: Vec<String>,
 }
 
 #[derive(Args)]
@@ -77,7 +142,99 @@ fn real_main() -> Result<()> {
     match cli.cmd {
         Cmd::Check { files } => check(files),
         Cmd::DryRun(a) => dry_run(a),
+        Cmd::Datagen(a) => datagen_cmd(a),
+        Cmd::Run(a) => run_cmd(a),
     }
+}
+
+fn datagen_cmd(a: DatagenArgs) -> Result<()> {
+    let cfg = parse_config(&RunArgs { abstract_path: a.abstract_path.clone(), gpus: a.gpus, seed: 0, params: a.params.clone() })?;
+    let loaded = aeiou::load(&a.abstract_path)?;
+    let params = Params::new(&loaded.ast, &cfg)?;
+    let model = build_model(&loaded.ast, &cfg, &params)?;
+    let threads = a.threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+    let opts = DatagenOpts { root: a.root.clone(), threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone() };
+    let mut out = std::io::stdout();
+    writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+    let results = datagen::datagen(&loaded, &cfg, &params, &model, &opts, &mut out)?;
+    for r in &results {
+        writeln!(
+            out,
+            "dataset {}: {} file(s), {} in {:.2?} at {}  id {}",
+            r.name,
+            r.files,
+            dryrun::human_bytes(r.bytes),
+            r.elapsed,
+            r.root.display(),
+            r.id
+        )?;
+    }
+    Ok(())
+}
+
+fn run_cmd(a: RunCmd) -> Result<()> {
+    let cfg = parse_config(&a.run)?;
+    let backend = BackendKind::parse(&a.backend).ok_or_else(|| anyhow::anyhow!("--io-backend {}: not one of sync, sync-direct", a.backend))?;
+    let expect_fingerprint = match &a.expect_fingerprint {
+        None => None,
+        Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| anyhow::anyhow!("--expect-fingerprint {h}: not hex"))?),
+    };
+    // the run is the process: the abstract and the model live for the threads' lifetime
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.abstract_path)?));
+    let cfg: &'static Config = Box::leak(Box::new(cfg));
+    let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
+    let model = Box::leak(Box::new(build_model(&loaded.ast, cfg, params)?));
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+    let overrides: Vec<String> = cfg.overrides.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, if overrides.is_empty() { "defaults".to_string() } else { overrides.join(" ") })?;
+    writeln!(out, "backend {}  root {}", backend.name(), a.root.display())?;
+
+    let checks = run::check_datasets(loaded, cfg, &a.root)?;
+    for c in &checks {
+        if !a.expect_dataset_ids.is_empty() && !a.expect_dataset_ids.iter().any(|x| *x == c.id) {
+            bail!("dataset `{}` id {} is not among --expect-dataset-id", c.name, c.id);
+        }
+        writeln!(
+            out,
+            "dataset {} at {}/: id {}  payload {} {} dedupe {} compress {}{}",
+            c.name,
+            c.root,
+            c.id,
+            c.payload.generator,
+            c.payload.version,
+            c.payload.dedupe,
+            c.payload.compress,
+            c.files.map(|n| format!("  ({n} files)")).unwrap_or_default()
+        )?;
+    }
+    let cleaned = run::prepare_namespaces(&loaded.ast, &a.root, a.clean_namespaces)?;
+    for c in &cleaned {
+        writeln!(out, "namespace root {c}/ emptied")?;
+    }
+    out.flush()?;
+
+    let opts = RunOpts {
+        root: a.root.clone(),
+        backend,
+        buffer_bytes: a.buffer_mib.max(1) << 20,
+        write_compress: a.write_compress,
+        time_scale: a.time_scale.max(0.0),
+        clean_namespaces: a.clean_namespaces,
+        expect_fingerprint,
+        expect_dataset_ids: a.expect_dataset_ids.clone(),
+    };
+    let report = run::run(model, opts)?;
+    run::write_report(&mut out, &report)?;
+    if let Some(fp) = expect_fingerprint {
+        if report.stats.fingerprint != fp {
+            bail!("fingerprint {:016x} does not match the expected {:016x}", report.stats.fingerprint, fp);
+        }
+        writeln!(out, "fingerprint matches")?;
+    }
+    Ok(())
 }
 
 fn check(files: Vec<PathBuf>) -> Result<()> {

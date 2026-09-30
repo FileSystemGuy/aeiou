@@ -38,7 +38,7 @@ impl Stats {
             OpKind::Write => self.bytes_written += op.bytes as u64,
             _ => {}
         }
-        if op.expect {
+        if !op.expect.is_empty() {
             self.expect_ops += 1;
         }
     }
@@ -111,8 +111,8 @@ impl DryRun {
     }
 }
 
-impl Sink for DryRun {
-    fn op(&mut self, op: &Op, ctx: &OpCtx) {
+impl<'m, 'a> Sink<'m, 'a> for DryRun {
+    fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()> {
         self.total.add(op);
         if let Some(p) = ctx.phase {
             self.phases.entry(p.to_string()).or_default().add(op);
@@ -136,21 +136,23 @@ impl Sink for DryRun {
                 OpKind::Rename => line.push_str(&format!(" -> {}", op.path2.unwrap_or("?"))),
                 _ => {}
             }
-            if op.expect {
-                line.push_str(" (expect)");
+            if !op.expect.is_empty() {
+                line.push_str(&format!(" (expect {})", op.expect.join("|")));
             }
             self.lines.push(line);
         }
+        Ok(())
     }
 
-    fn control(&mut self, c: Control, _ctx: &OpCtx) {
+    fn control(&mut self, c: Control<'a>, _ctx: &OpCtx) -> Result<()> {
         match c {
             Control::Compute { ns } => self.compute_ns += ns as i128,
-            Control::Barrier => self.barriers += 1,
-            Control::Take => self.takes += 1,
-            Control::Put => self.puts += 1,
-            Control::Loader { .. } | Control::Channel { .. } => {}
+            Control::Barrier { .. } => self.barriers += 1,
+            Control::Take { .. } => self.takes += 1,
+            Control::Put { .. } => self.puts += 1,
+            Control::Channel { .. } => {}
         }
+        Ok(())
     }
 }
 

@@ -17,3 +17,5 @@ clap = { version = "4", features = ["derive"] }
 sha2 = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 anyhow = "1"
+libc = "0.2"
+dgen-data = { version = "=0.3.0", default-features = false }

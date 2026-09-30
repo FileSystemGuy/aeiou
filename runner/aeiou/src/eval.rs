@@ -480,6 +480,21 @@ impl<'a> DsMeta<'a> {
         }
     }
 
+    /// Entries a `readdir` of directory `d` should return, when the layout makes it computable
+    /// (one sample per file, no chunks).
+    pub fn dir_entries(&self, d: i64) -> Option<i64> {
+        match self {
+            DsMeta::Files { count, spf, chunk, dirs, .. } if *spf == 1 && chunk.is_none() => match dirs {
+                DirScheme::Div(n) => Some((count - d * n).clamp(0, *n)),
+                DirScheme::Plain => Some(1),
+                DirScheme::Constant => Some(*count),
+                DirScheme::Mod(m) => Some(if d < *count { (count - d + m - 1) / m } else { 0 }),
+                DirScheme::NoDir | DirScheme::Unsupported => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The permutation of sample positions for `epoch` (`consume`).
     pub fn consume_perm(&self, epoch: i64) -> Result<Perm> {
         match self {

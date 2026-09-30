@@ -27,17 +27,17 @@ fn dry(text: &str, cfg: &Config, threads: usize) -> dryrun::Report {
 
 #[test]
 fn hashes_match_check_py() {
-    // From `python3 schema/check.py` on 2026-09-30.
+    // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day).
     let want = [
         ("ckpt_restore", "24e8978d7167891d37944443c2e7d7df7f9c84f26f7e4c90e182e02721d45a64"),
         ("ckpt_write_dcp", "48ac6b01b9ac2819ded2939cdf2de1d4462c772537fe41740cdc24649b592d45"),
-        ("kv_cache_serving", "cf1a1359c7769f5ab9ee4c23bf76f5f77c59162261f9d3528d815bcd0d3bbe09"),
+        ("kv_cache_serving", "f51d92850a0ecc8b84e6e55b10d08635771f6cb58417bb59135a2ea0329c48e8"),
         ("model_load", "d03bfddabc0562b3ad5caa88a3897933e3c9a179eedb0b6aa896b01880691b6c"),
-        ("train_large_samples", "543692bdebdab02029ac0a4bd4cff9696dcbf6fd41ba2caebbe4fbaa1ee98692"),
-        ("train_small_files", "95858e8490572732f79fc33fab8dbef471473804a9b9a1349557ca2ce0364252"),
-        ("vdb_build_diskann", "297b1bae5e4674456160af86df0f0665ff40db3ed224998c3bd79a28fb2d129c"),
-        ("vdb_search_diskann", "067244bc87a20af46f054bdbe6e37a1ddc314ba62b899e2ab609a76f306deeb0"),
-        ("vdb_search_ivf", "228287de7e56394b6417d1b306a54c6fbfe80a05e65d4dac54fccf84d46a8b58"),
+        ("train_large_samples", "780c751d077f20b513df6fcd1429ca9d295ae3a572896aa4fc7a960748dc9ae1"),
+        ("train_small_files", "c6cf657c946dbbeeddf8d77e6fd7ed6fc5c7c9eb0d6c3481b73c6d29cea76fca"),
+        ("vdb_build_diskann", "735adae78cad5736d946741a71e4ef6c7158cb92c8a5393a8b16ee97b489e5fe"),
+        ("vdb_search_diskann", "6701fefb49ae832ff37f75b35e654fa9371f4ec7205b6e82d90ec1367cbd1c43"),
+        ("vdb_search_ivf", "eeb984a9185749a61e2685b5d66a7a0b5f99617fe0ea35e0c1090a20df6ba222"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -50,7 +50,9 @@ fn hashes_match_check_py() {
 
 #[test]
 fn golden_fingerprints() {
-    // (abstract, gpus, params, fingerprint, ops) at --seed 1, recorded 2026-09-30.
+    // (abstract, gpus, params, fingerprint, ops) at --seed 1, recorded 2026-09-30 (kv_cache_serving
+    // re-recorded the same day after the conversation-directory `mkdir` was added to the abstract;
+    // vdb_build_diskann likewise when its base file moved to `base/base.fbin`).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x72d8d8a5d654740f, 4480),
         ("train_large_samples", 2, &[("steps", "5")], 0x13b5a9aaa823405b, 10728),
@@ -63,10 +65,10 @@ fn golden_fingerprints() {
             "vdb_build_diskann",
             1,
             &[("sectors", "1000"), ("sample", "100"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608")],
-            0xa5257b15904fd2a2,
+            0x2fe7d1243d7fa7d9,
             2122,
         ),
-        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xdbcb8f4d077cf80c, 9112),
+        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc546a6b9840b58ff, 9312),
     ];
     for (name, gpus, params, fp, ops) in cases {
         let text = std::fs::read_to_string(examples().join(format!("{name}.ast.json"))).unwrap();
@@ -101,9 +103,10 @@ struct Collect {
     ops: Vec<(i64, Vec<i64>, OpKind, String, i64, i64, i64)>,
 }
 
-impl Sink for Collect {
-    fn op(&mut self, op: &Op, ctx: &OpCtx) {
+impl<'m, 'a> Sink<'m, 'a> for Collect {
+    fn op(&mut self, op: &Op, ctx: &OpCtx) -> anyhow::Result<()> {
         self.ops.push((ctx.actor, ctx.indices.to_vec(), op.kind, op.path.to_string(), op.offset, op.len, op.bytes));
+        Ok(())
     }
 }
 
