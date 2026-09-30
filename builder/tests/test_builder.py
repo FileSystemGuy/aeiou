@@ -271,8 +271,9 @@ def test_hermetic_denies(tmp_path, poison, needle):
     assert r.returncode == 1
     assert needle in r.stderr, r.stderr
     assert not (tmp_path / "p.ast.json").exists()
-    # the same script builds without --hermetic (the poison is inert), so the harness is what refused it
-    r = _run_cli(["-o", tmp_path, script])
+    # the same script builds without --hermetic (the poison is inert), so the harness is what refused it;
+    # run it from tmp_path so the write poison's relative path lands there, not in the repo
+    r = _run_cli(["-o", tmp_path, script], cwd=tmp_path)
     assert r.returncode == 0, r.stderr
 
 
