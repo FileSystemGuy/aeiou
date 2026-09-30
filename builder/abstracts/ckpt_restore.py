@@ -4,7 +4,7 @@ Every rank reads the same small .metadata, then its own shard file; with `dp` da
 replicas of a shard, `dp` ranks read the same file (fan-in dp). Item offsets are a parameter
 table: prefix sums of §3's item sizes plus the per-item header.
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("ckpt_restore",
              doc="DCP load: every rank reads .metadata, then the items of its shard file (fan-in dp).")

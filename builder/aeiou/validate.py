@@ -1,7 +1,7 @@
 """Validation against the published schema and the semantic rules of schema/README.md.
 
 The schema and the reference checker live in `schema/` at the repository root; the builder
-loads them from there (or from $MLPS_SCHEMA_DIR). They are the runner's contract and the
+loads them from there (or from $AEIOU_SCHEMA_DIR). They are the runner's contract and the
 builder does not keep a second copy.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from .nodes import BuildError
 
 
 def schema_dir() -> pathlib.Path:
-    env = os.environ.get("MLPS_SCHEMA_DIR")
+    env = os.environ.get("AEIOU_SCHEMA_DIR")
     if env:
         return pathlib.Path(env)
     here = pathlib.Path(__file__).resolve()
@@ -24,14 +24,14 @@ def schema_dir() -> pathlib.Path:
         cand = parent / "schema" / "abstract-ast.schema.json"
         if cand.exists():
             return cand.parent
-    raise BuildError("cannot find schema/abstract-ast.schema.json; set MLPS_SCHEMA_DIR")
+    raise BuildError("cannot find schema/abstract-ast.schema.json; set AEIOU_SCHEMA_DIR")
 
 
 @functools.lru_cache(maxsize=1)
 def _load():
     d = schema_dir()
     schema = json.loads((d / "abstract-ast.schema.json").read_text())
-    spec = importlib.util.spec_from_file_location("mlps_schema_check", d / "check.py")
+    spec = importlib.util.spec_from_file_location("aeiou_schema_check", d / "check.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return schema, mod

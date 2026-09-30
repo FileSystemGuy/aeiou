@@ -3,7 +3,8 @@
 Version `0.1`, drafted 2026-09-30. This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
-the only artifact the WG publishes with a hash. Nothing here depends on Python at run time.
+the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
+published reference ASTs; `PROJECT_BRIEF.md` §8). Nothing here depends on Python at run time.
 
 | File | What it is |
 |---|---|

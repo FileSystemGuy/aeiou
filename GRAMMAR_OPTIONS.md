@@ -223,7 +223,7 @@ end
 
 ### Option D — Full Python as the authoring language, building Option B's AST (added 2026-09-28)
 
-**Implemented 2026-09-30** as `builder/mlps_abstract` (`builder/README.md`); the sketches below are
+**Implemented 2026-09-30** as `builder/aeiou` (`builder/README.md`); the sketches below are
 the design, and where they differ from the package the package is current (`let` takes the binding's
 name; `parallel`/`loader` yield a sub-cursor; `every` and integer `repeat` are sugar; see
 `DESIGN_REVIEW.md` §3.19).
@@ -235,7 +235,7 @@ each actor state machine. Option D changes layer 1 only. Layer 2 stays the serde
 and layer 3 stays the Rust VM. Every guarantee in §2 and §4 lives in layers 2 and 3, so Python at
 layer 1 cannot weaken execution determinism or performance.
 
-**Roles.** The MLPerf Storage WG authors workloads in Python and publishes the resulting AST and
+**Roles** (WG process; `PROJECT_BRIEF.md` §8). The MLPerf Storage WG authors workloads in Python and publishes the resulting AST and
 its hash. Submitters run layers 2 and 3 only, with the published AST. Other users of the tool
 author their own ASTs the same way; the runner treats every AST identically and none is
 "official" except by the WG's published hash.
@@ -249,7 +249,7 @@ reproducible-builds toolkit.
 #### Builder sketch
 
 ```python
-from mlps_abstract import Workload, const, normal, MiB, ms
+from aeiou import Workload, const, normal, MiB, ms
 
 w = Workload("unet3d_train")
 

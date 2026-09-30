@@ -4,7 +4,7 @@ training loop, with the read-back phase.
 Exercises: a namespace with size as_written and the same-handle until_eof rule (§9.7),
 parameter arrays, mkdir/rename/fsync, expect on mkdir, a conditional on the actor id (§9.1).
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("ckpt_write_dcp",
              doc="Every rank writes its shard file per checkpoint step; rank 0 writes .metadata through a temp file and rename.")

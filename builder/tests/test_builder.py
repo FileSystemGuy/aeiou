@@ -16,9 +16,9 @@ ABSTRACTS = sorted((BUILDER / "abstracts").glob("*.py"))
 EXAMPLES = ROOT / "schema" / "examples"
 sys.path.insert(0, str(BUILDER))
 
-from mlps_abstract import *  # noqa: E402
-from mlps_abstract import emit, cli  # noqa: E402
-from mlps_abstract.validate import validate, op_counts  # noqa: E402
+from aeiou import *  # noqa: E402
+from aeiou import emit, cli  # noqa: E402
+from aeiou.validate import validate, op_counts  # noqa: E402
 
 
 def build_script(path):
@@ -191,7 +191,7 @@ def test_validator_catches_what_construction_cannot():
 
 def _run_cli(args, cwd=BUILDER):
     env = {**os.environ, "PYTHONPATH": str(BUILDER)}
-    return subprocess.run([sys.executable, "-m", "mlps_abstract.cli", *map(str, args)],
+    return subprocess.run([sys.executable, "-m", "aeiou.cli", *map(str, args)],
                           capture_output=True, text=True, cwd=str(cwd), env=env)
 
 
@@ -218,7 +218,7 @@ def test_hermetic_build_twice(tmp_path):
 ])
 def test_hermetic_denies(tmp_path, poison, needle):
     script = tmp_path / "poisoned.py"
-    script.write_text("from mlps_abstract import *\n" + poison + "\n"
+    script.write_text("from aeiou import *\n" + poison + "\n"
                       "w = Workload('p')\nP = w.params(n=3)\n"
                       "ds = w.dataset('d', pattern='d/{id}', count=10, size=const(1), seed=1)\n"
                       "with w.actor('a') as a:\n"
@@ -235,7 +235,7 @@ def test_hermetic_denies(tmp_path, poison, needle):
 
 def test_build_twice_detects_hash_order_dependence(tmp_path):
     script = tmp_path / "unstable.py"
-    script.write_text("from mlps_abstract import *\n"
+    script.write_text("from aeiou import *\n"
                       "w = Workload('u')\nP = w.params(n=3)\n"
                       "ds = w.dataset('d', pattern='d/{id}', count=10, size=const(1), seed=1)\n"
                       "names = {'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta'}\n"

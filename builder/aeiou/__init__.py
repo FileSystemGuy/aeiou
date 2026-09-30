@@ -1,8 +1,8 @@
-"""mlps_abstract: the Python builder for abstract-driven I/O benchmark workloads (layer 1 of
+"""aeiou: the Python builder for abstract-driven I/O benchmark workloads (layer 1 of
 GRAMMAR_OPTIONS.md Option D). It constructs the AST of schema/abstract-ast.schema.json; it
 never runs a workload.
 
-    from mlps_abstract import *
+    from aeiou import *
     w = Workload("train_small_files")
     P = w.params(batch=32, steps=500, step_time=105 * ms)
     train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg",

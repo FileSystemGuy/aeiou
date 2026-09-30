@@ -160,7 +160,7 @@ workload train_small_files {
   client pays dentry/inode slab and the file list G times; the runner reproduces the former by
   issuing real `getdents64` per actor and does not reproduce the list's RAM. A pipeline that
   lists on rank 0 and broadcasts is modeled by wrapping the phase in `when (gpu == 0)` (§9.1).
-  Whether the walk is part of the CLOSED measurement is a WG policy question; here it is a
+  Whether the walk is part of the CLOSED measurement is a WG policy question (`PROJECT_BRIEF.md` §8); here it is a
   separately reported phase, off by default.
 
 **What it stresses.** Metadata: LOOKUP/OPEN/CLOSE per 110 KiB, client dentry/inode slab growth
@@ -938,7 +938,7 @@ The small-file abstract of §1 in the Python builder of `GRAMMAR_OPTIONS.md` Opt
 confirm the builder covers what the paper form uses.
 
 ```python
-from mlps_abstract import Workload, lognormal, KiB, MiB, ms
+from aeiou import Workload, lognormal, KiB, MiB, ms
 
 w = Workload("train_small_files")
 P = w.params(batch=32, workers=8, prefetch=2, steps=500, sync_every=500,

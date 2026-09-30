@@ -388,7 +388,7 @@ forced the choices that the prose had left open, listed here so they are visible
 
 ### 3.19 The builder package, and what building the eight abstracts changed (added 2026-09-30)
 
-`builder/mlps_abstract` implements Option D (`builder/README.md`). Every `ABSTRACTS.md`
+`builder/aeiou` implements Option D (`builder/README.md`). Every `ABSTRACTS.md`
 workload is now an authoring script, and the three ASTs hand-written against the schema
 regenerate hash-identical from their scripts, which is the test that the builder emits exactly
 the contract and nothing else. Decisions taken while writing it, each small, listed so they are
@@ -425,6 +425,9 @@ visible:
   the item table, which is the rule of §3.18 applied from the reader's side.
 - **A `regions` dataset's one file is `file {dataset, id: 0}`.** The schema had no spelling
   for it; `ds.file()` with no id emits this and `schema/README.md` records it.
+- **Named for the repository, not the WG.** First written as `mlps_abstract`, renamed `aeiou`
+  the same day at the user's request: nothing in the builder is MLPerf-specific, and names are
+  the hardest thing to change later. `PROJECT_BRIEF.md` §8 now lists what is WG process.
 - **Provenance is informational; the hash is the identity.** `git` is the short HEAD with
   `-dirty` when the script has uncommitted changes, so it is always one commit behind the
   commit that lands both script and AST. The script's `sha256` and the `ast_sha256` are exact,

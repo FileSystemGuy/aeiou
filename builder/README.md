@@ -1,13 +1,15 @@
-# `mlps_abstract`: the Python builder
+# `aeiou`: the Python builder
 
-Layer 1 of `GRAMMAR_OPTIONS.md` Option D (chosen 2026-09-30). An authoring script constructs
+Layer 1 of `GRAMMAR_OPTIONS.md` Option D (chosen 2026-09-30). The package is named for the
+repository, not for MLPerf Storage: nothing in it is specific to the working group's process
+(`PROJECT_BRIEF.md` §8). An authoring script constructs
 the AST of `schema/abstract-ast.schema.json` by running once; the calls that look like I/O are
-declarations. The AST is the only thing the Rust runner executes and the only thing the
-working group publishes with a hash. Nothing here runs on a client node.
+declarations. The AST is the only thing the Rust runner executes and the only thing an author
+publishes with a hash. Nothing here runs on a client node.
 
 ```
 builder/
-  mlps_abstract/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli
+  aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli
   abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts)
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds
   pyproject.toml     deps: pyyaml, jsonschema; `abstract-build` entry point
@@ -23,7 +25,7 @@ uv run abstract-build --check -o ../schema/examples abstracts/*.py     # drift c
 ## 1. Writing an abstract
 
 ```python
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("train_small_files", doc="…")
 P = w.P
@@ -121,7 +123,7 @@ those belong in one place.
 | three identical sibling statements (lint) | |
 
 The builder keeps no second copy of the rules: `validate()` loads `schema/abstract-ast.schema.json`
-and `schema/check.py` from the repository (or `$MLPS_SCHEMA_DIR`) and runs them on the emitted
+and `schema/check.py` from the repository (or `$AEIOU_SCHEMA_DIR`) and runs them on the emitted
 dict. The Rust validator must reject everything they reject.
 
 ## 4. Reproducible builds

@@ -4,7 +4,7 @@ Per query, `hops` dependent rounds of `beam` concurrent 4 KiB reads at sector of
 first storage round is biased to hub nodes (§9.9). `--io-backend libaio` is the fidelity
 reference; `io_uring` and `sync-direct` are the comparison rows.
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("vdb_search_diskann",
              doc="Beam search over a sector-packed graph index: `hops` dependent rounds of `beam` concurrent 4 KiB reads per query.")

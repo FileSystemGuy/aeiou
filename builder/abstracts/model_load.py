@@ -6,7 +6,7 @@ column-parallel weights, one piece per row for row-parallel ones (a page-fault s
 `--io-backend mmap`). The tensor table is a set of parallel parameter arrays indexed by t;
 `tensors_in(s)` of the paper form is a loop over all tensors guarded by `shard[t] == s`.
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("model_load",
              doc="Every process reads every safetensors shard, touching its tensor-parallel slice of each tensor (fan-in G).")

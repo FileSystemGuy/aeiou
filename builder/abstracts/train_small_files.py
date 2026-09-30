@@ -3,7 +3,7 @@
 PyTorch DataLoader over an ImageFolder-style corpus; W workers, B files per batch, in-order
 delivery; an optional startup directory walk (§9.8).
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("train_small_files",
              doc="PyTorch DataLoader over an ImageFolder-style corpus; W workers, B files per batch, in-order delivery.")

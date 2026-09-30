@@ -2,7 +2,7 @@
 OnDiskInvertedLists shape). A query reads `nprobe` lists, each one contiguous region, with
 Zipf popularity; no dependency between the reads. `--io-backend mmap` is FAISS's real path.
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("vdb_search_ivf",
              doc="Per query, nprobe concurrent reads of whole inverted lists chosen by Zipf popularity.")

@@ -2,6 +2,8 @@
 
 Abstract-driven I/O benchmark runner (Rust + `io-uring` crate + a pure-Rust TCP coordinator for multi-host; no MPI). Pre-implementation stage.
 
+Built for the MLPerf Storage WG, meant to be general: name packages, modules, env vars, CLIs, files, and config keys for the mechanism or the repo (`aeiou`), never for MLPerf; anything that is WG process (divisions, published hashes, reference parameters) is listed in `PROJECT_BRIEF.md` §8 and says so where it appears. Adding something WG-specific is a conscious, documented decision.
+
 Read these before any design or coding work:
 - `PROJECT_BRIEF.md`: original requirements, decisions made so far, open items
 - `NAPKIN_MATH.md`: DRAM/IOPS estimates, risk register, spikes, round-2 decisions (§8)
@@ -9,7 +11,7 @@ Read these before any design or coding work:
 - `DESIGN_REVIEW.md`: the 2026-09-25 review and the reasoning behind the determinism rules below
 - `ABSTRACTS.md`: paper abstracts for the eight target workloads, and the constructs they surfaced (§9, all accepted 2026-09-30)
 - `schema/README.md` and `schema/abstract-ast.schema.json`: the AST contract (v0.1), canonical form, and validator rules
-- `builder/README.md`: the Python builder (`mlps_abstract`), its API, the build-time discipline, and the hermetic harness; `builder/abstracts/*.py` are the eight workloads as authoring scripts and `schema/examples/*.ast.yaml` their generated ASTs (never edit the YAML by hand)
+- `builder/README.md`: the Python builder (`aeiou`), its API, the build-time discipline, and the hermetic harness; `builder/abstracts/*.py` are the eight workloads as authoring scripts and `schema/examples/*.ast.yaml` their generated ASTs (never edit the YAML by hand)
 
 Invariants that must not be broken:
 - Exact per-GPU reproducibility. Randomness is positional: keyed on (seed, gpu_id, site, enclosing loop indices). No per-actor draw counters, no shared stateful RNGs, no work distributed based on timing.

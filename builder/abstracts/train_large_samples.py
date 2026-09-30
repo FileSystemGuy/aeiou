@@ -5,7 +5,7 @@ directory, then each member's local header and its data in fixed chunks. The arc
 fixed by the generator, so member offsets are formulas over size(f) (§9.4); `member_off` and
 `member_len` below are the builder-side helpers the paper form names.
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("train_large_samples",
              doc="np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; tail read, central directory, then members.")

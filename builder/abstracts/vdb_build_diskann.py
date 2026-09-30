@@ -2,7 +2,7 @@
 (small random reads), per-shard sequential read + long compute + sequential write, merge, and
 the sector-by-sector disk layout write. `--time-scale` shrinks the compute.
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("vdb_build_diskann",
              doc="Single builder: PQ sample, per-shard build, merge, disk layout write.")

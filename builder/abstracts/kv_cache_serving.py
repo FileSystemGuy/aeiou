@@ -3,7 +3,7 @@
 Exercises: `at` chains (§9.5), a mixture with a none arm, expression-selected phase names, a
 chunk-realized dataset, a namespace with a size expression, stat with expect.
 """
-from mlps_abstract import *
+from aeiou import *
 
 w = Workload("kv_cache_serving",
              doc="One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one.")
