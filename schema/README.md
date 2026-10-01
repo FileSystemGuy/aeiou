@@ -167,6 +167,14 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
 - **V11 Scope.** A `let` is visible to later siblings and to child bodies, not to sibling
   bodies (bind a handle above two phases that share it).
 
+- **V14 Input namespaces are read-only** (added 2026-09-30). A namespace declared
+  `input: true` holds objects a previous run wrote; the run that declares it reads them and
+  may not `write`, `ftruncate`, `fallocate`, `unlink`, `rename`, `mkdir`, or `rmdir` an
+  object of it, nor `open` one with a write-mode flag. Namespaces that share a root share its
+  manifest (§6), so they must agree on `input`. The runner requires the writer's
+  `.aeiou-namespace.json` at the root and never empties an input root. Reasoning in
+  `DESIGN_REVIEW.md` §3.24.
+
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
 
@@ -223,6 +231,20 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
 - **Not a security boundary.** The manifest sits on the system under test; under the
   interposition test a shim could serve a fake one. That is the fraud domain: rules, the
   published dataset id, and the offline verifier, which takes the manifest as its input.
+
+**Namespace manifest (added 2026-09-30).** A run that creates objects leaves
+`.aeiou-namespace.json` at every namespace root it wrote (one per root, so namespaces sharing
+a root share it), written last and atomically. It carries the resolved definition of each
+namespace at the root (`pattern`, `fields`, `seed` with parameters substituted; `size` is
+each abstract's own model, `as_written` for a writer and an expression for a reader, and is
+not compared), the abstract's name and hash, seed, `gpus`, the parameters, each rank's host
+and GPU id range, start and finish times, the count of objects created, and the list of
+objects with the GPU id that created each (omitted above 100 000 objects). A run that
+declares a namespace `input` (V14) requires the manifest at its root, refuses on a differing
+definition, reports the write-to-read gap (`--max-gap` makes a long one an error), and counts
+the input objects it opens on the host that wrote them (`--require-cold` makes any such read
+an error; `--rank-rotate` is how a read run on the same hosts avoids them). This is the
+checkpoint write-then-restore handoff of `PROJECT_BRIEF.md` §8.
 
 ## 7. Deferred (each is a version bump)
 

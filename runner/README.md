@@ -25,7 +25,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. |
 | `aeiou datagen AST --root DIR [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--param k=v]… [--io-backend sync\|sync-direct] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]…` | Executes the abstract against `DIR` on one host (§4): checks every dataset against its manifest, requires empty namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls, checks every result structurally, and prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--param k=v]… [--io-backend sync\|sync-direct] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--rank r --ranks R --rank-rotate k] [--max-gap SECS] [--require-cold]` | Executes the abstract against `DIR` on one host (§4): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls, checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
 
 Not yet: the TCP coordinator (several hosts), the asynchronous backends (`io_uring`,
 `libaio`, `mmap`, …) and their counters, `mountstats`, `RLIMIT` startup checks, a JSON
@@ -160,6 +160,19 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   printed and may be pinned with `--expect-dataset-id`. Namespace roots are created and must
   be empty; `--clean-namespaces` empties them, leaving a dataset root that lies inside one
   alone.
+- **Ranks.** `--rank r --ranks R` give this host its GPU id range, contiguous blocks of
+  `ceil(G / R)`; `--rank-rotate k` makes it run rank `(r + k) mod R`'s range instead. Nothing
+  in the op stream depends on the host, so rotating a read run against the write run's host
+  list makes every host read what another host wrote (`DESIGN_REVIEW.md` §3.24). `--ranks`
+  above 1 is refused until the coordinator exists; the arithmetic and the manifest records
+  are in place.
+- **Input namespaces** (`input: true`, V14). The run requires `.aeiou-namespace.json` at the
+  root (`schema/README.md` §6), refuses a differing definition, never empties the root,
+  prints who wrote it and how long ago (`--max-gap` makes a longer gap an error), and counts
+  the opens of recorded input objects that hit the host that wrote them; one or more is a
+  warning, or an error under `--require-cold`. At the end of a successful run the manifest
+  is written for every root this run created objects in (open with `CREAT`, `mkdir`, the
+  destination of a `rename`; unlinked paths and rename sources dropped).
 - **Measurement.** Per-op latency histograms by kind (four buckets per octave; mean, p50,
   p99, max), per-phase ops, bytes, and I/O time, barrier count and wait, and per `take` the
   stall (time blocked) and the compute issued before the next take, kept per instance in
@@ -169,9 +182,9 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   mismatch an error.
 
 Observed on the WSL2 ext4 disk (2026-09-30, `runner/aeiou/tests/run.rs` and the smoke runs):
-every committed abstract with inputs (all but `ckpt_restore`, which reads namespace objects
-nobody wrote; open item in `DESIGN_REVIEW.md` §3.23) runs to the dry-run fingerprint under
-`sync`, and `train_small_files` also under `sync-direct`; a page-cache read of 1 MiB costs
+every committed abstract runs to the dry-run fingerprint under `sync` (`ckpt_restore`
+against the namespace a `ckpt_write_dcp` run left, through its manifest), and
+`train_small_files` also under `sync-direct`; a page-cache read of 1 MiB costs
 10 µs, an `O_DIRECT` one 258 µs; `vdb_search_diskann` spawns a thread per beam per hop
 (923 threads for 924 reads), the cost of forking `parallel` afresh each time, and a per-actor
 sub-actor pool is the planned fix. The loopback NFS mount of `PROJECT_BRIEF.md` §7 has not

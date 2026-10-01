@@ -62,7 +62,7 @@ if __name__ == "__main__":
 **Declarations** on the `Workload`: `param(name, default, unit=, doc=, cli=)` or
 `params(**defaults)`; `dataset(name, pattern=, count=, size=, seed=, access=, samples_per_file=,
 chunk=, format=)`; `regions(name, file=, count=, slot=, size=, seed=)`; `namespace(name,
-pattern=, fields=, size=, seed=)`; `actor(name, count=)`. `w.P.x` is the parameter reference;
+pattern=, fields=, size=, seed=, input=)`; `actor(name, count=)`. `w.P.x` is the parameter reference;
 `P.xs[t]`, `P.xs.len`, `P.xs.sum` index and reduce a parameter array (a table is several
 parallel arrays).
 

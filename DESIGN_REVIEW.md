@@ -665,6 +665,65 @@ obvious fix and is not done.
   sub-actors (the search abstracts spawn a thread per beam per hop), `RLIMIT_NOFILE` checks,
   and the loopback NFS run of `PROJECT_BRIEF.md` §7, which needs root on the development box.
 
+### 3.24 Checkpoint restore reads what the write wrote: input namespaces, the namespace manifest, rank rotation (added 2026-09-30)
+
+§3.23 left `ckpt_restore` as the one abstract the runner could not execute, because it reads
+namespace objects no actor in it writes. The user's framing settled it: the benchmark's
+restore is the real event of a job restarting on other nodes and loading the checkpoint it
+just wrote, so the restore's inputs *are* the previous run's output, the gap between the two
+is part of what is measured (the WG caps it at 30 s), and the read must not touch the
+namespace it reads. Decisions and reasoning:
+
+- **A namespace can be an input.** `input: true` on a namespace (schema, builder `input=`,
+  rule V14 in `check.py` and `validate.rs`) means a previous run wrote it; every write-mode
+  op on it is rejected at validation, the runner never empties its root, and it requires the
+  writer's manifest there. Datasets were the wrong vehicle: a `files` pattern has only `id`
+  and `k`, the shards are named by rank inside a step directory, and `datagen` would be
+  inventing a checkpoint instead of the benchmark producing one. A `--keep-namespaces`
+  escape would have put the decision in the launcher and silently legitimised the KV-cache
+  hit model reading a stale namespace; `input` puts it in the abstract where the validator
+  sees it.
+- **One manifest per namespace root**, `.aeiou-namespace.json`, mirroring the dataset
+  manifest: written last and atomically by the run that created objects there, read by the
+  run that declares the namespaces `input`. Namespaces sharing a root share the manifest, so
+  V14 also requires them to agree on `input`. The compared part is `pattern`, `fields`, and
+  `seed`, the things that fix names and content. `size` is deliberately not compared: the
+  writer declares `as_written`, the reader must state an expression (V4), and they are two
+  models of the same bytes. A disagreement between them surfaces as a short read, which the
+  structural check reports with the position; the first test run did exactly that when the
+  test's item offsets were wrong by one tail.
+- **Rotation is free because sharding is by GPU id.** Rank is only the host index that
+  selects a GPU id range (`NAPKIN_MATH.md` §8.A), so `--rank-rotate k` changes which host
+  runs which ids and nothing else: same ops, same names, same fingerprint. With the same host
+  list as the write run and `k ≠ 0`, every host reads shards another host wrote. The manifest
+  records each rank's host and range, and the reading run checks its own range against them
+  (`--require-cold` turns the overlap into a refusal). The exact count comes from the
+  per-object writer record: every object created is listed with its creating GPU id (capped
+  at 100 000 objects, beyond which only the count is kept; a checkpoint namespace is G files
+  per step, the KV cache is the case the cap is for), so the reader knows at each `open`
+  whether the file was written on this host and reports the warm reads. With `--ranks 1`
+  today every restore read is warm and the report says so; the TCP coordinator is what makes
+  `--ranks` above 1 runnable.
+- **Fan-in is a parameter, not an assumption.** `dp` in the restore abstract meant "ranks
+  reading the same shard", not the job's data-parallel degree, and the conversation showed
+  how easily the two are conflated; it is now `replicas`, 1 for fully sharded state (the
+  MLPS case: every rank writes and reads its own shard), the replica count when DCP
+  deduplicated replicated state. With `replicas = 1` a single reader per shard makes any
+  non-zero rotation exact; with more, readers of one shard spread over hosts and the warm
+  count is the honest answer.
+- **The write's read-back is off by default.** `ckpt_write_dcp` kept its `ckpt_readback`
+  phase from §3.15, reading each shard on the node that wrote it right after `fsync`. Once the
+  restore is a separate run on other nodes, that phase measures the page cache; it stays
+  behind `readback = false` for correctness runs and never appears in a scored write. The
+  golden fingerprint moved accordingly.
+- **Fidelity beyond the MLPS configuration.** The general structure (per-rank size tables,
+  `replicas`, the intra-file protocol slots) is kept and the benchmark configures the fully
+  sharded point of it. The gain from tensor and pipeline parallelism alone is small for
+  storage (file names, uneven sizes); the real gaps are replicated state saved once and
+  restored fan-in, the write protocol inside a shard, and asynchronous checkpointing that
+  turns the burst into a background stream. Those are parameter and trace questions, not
+  structural ones, which is why the structure stays general.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -680,7 +739,9 @@ obvious fix and is not done.
   the nine committed ASTs,~~ Done the same day (§3.22, `runner/`). ~~Next: the `sync` backend
   and `aeiou run` against ext4 and loopback NFS,~~ `aeiou run` with `sync` and `sync-direct`,
   `aeiou datagen`, and the manifest check done the same day and run against ext4 (§3.23);
-  loopback NFS still to run. Next: the loopback NFS run, the TCP coordinator, then the
+  loopback NFS still to run. Input namespaces, the namespace manifest, and rank rotation
+  done the same day (§3.24), so every committed abstract now runs. Next: the loopback NFS
+  run, the TCP coordinator (which makes `--ranks` and `--rank-rotate` real), then the
   format-class reader protocols and the parameter-file split, then the resumable VM and
   `io_uring`.
 

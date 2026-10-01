@@ -141,6 +141,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Deployment | Bare Linux on the client nodes, **no containers**. |
 | I/O crate | `io-uring` (Rust). |
 | A/B testing | Agreed. Backend × cache mode × io_uring features × NFS mount options (`NAPKIN_MATH.md` §8.5). The key metric is client CPU per op. |
+| Checkpoint restore inputs | **Decided 2026-09-30** (`DESIGN_REVIEW.md` §3.24). The restore reads the files a previous checkpoint-write run created, not a dataset: `ckpt_restore` declares its namespaces `input` (`schema/README.md` V14), the write run leaves `.aeiou-namespace.json` at the namespace root, and the restore run requires it, may not modify the namespace, reports the write-to-read gap, and counts reads served from the host that wrote them. `--rank-rotate k` runs the read on a rotated rank-to-host mapping so every host reads what another wrote; the per-object writer record in the manifest makes the warm-read count exact. The read-back phase of `ckpt_write_dcp` is off by default (`readback`). |
 | Grammar | Three layers: authoring language, the AST contract, the Rust VM. The AST (JSON; ~~serde YAML/JSON~~ YAML dropped 2026-09-30, `DESIGN_REVIEW.md` §3.20) is the contract and the only thing the runner executes; the WG publishes ASTs and their hashes, submitters run those (WG process; §8). Leading candidate for authoring (2026-09-28): **Option D**, a Python builder package that emits the AST, with source→AST reproducibility enforced by CI (build twice, compare) and by the runner's validator. Python stays on the authoring station, never on client nodes. ~~**User has not yet chosen.**~~ **Decided 2026-09-30: Option D.** The AST JSON Schema is `schema/abstract-ast.schema.json` (v0.1, draft 2020-12), with the canonical form and the validator's semantic rules in `schema/README.md` and the first abstracts in AST form under `schema/examples/`. The nine constructs of `ABSTRACTS.md` §9 were accepted the same day and are in the schema. Next: the builder package, `aeiou-build --hermetic`, and the build-twice CI check. |
 
 ## 6. Open items / next steps
@@ -179,7 +180,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    `runner/README.md` §2. ~~Still to do: the I/O backends (`aeiou run`) and the ext4 / loopback
    NFS test,~~ **`aeiou run` with `sync` / `sync-direct` done 2026-09-30** (`runner/README.md`
    §4, `DESIGN_REVIEW.md` §3.23) and run against ext4: every committed abstract with inputs
-   reproduces its dry-run fingerprint; `runner/aeiou/tests/run.rs` covers the round trips.
+   reproduces its dry-run fingerprint; `runner/aeiou/tests/run.rs` covers the round trips,
+   including the checkpoint write-then-restore handoff through the namespace manifest
+   (`DESIGN_REVIEW.md` §3.24).
    Still to do: the loopback NFS run (needs root on the development box), `--metrics`
    (item 14), `stream` access, and the per-op cost (150–350 ns; caching a bound handle's
    path is the first fix).
@@ -275,6 +278,7 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Reference parameters | Every workload has parameter slots filled from configuration, measurement, and traces. | Which values are the reference set (batch sizes, step times, dataset scale relative to client DRAM, the 500-step bound) is a WG decision recorded in the published parameter files. | §5 decisions; `ABSTRACTS.md` `[measure]` slots |
 | Workload selection | The builder can express any POSIX-shaped skeleton. | The ninth and tenth abstracts follow the MLPerf Storage ResNet50/CosmoFlow and Parquet→Arrow shapes because those are what the WG submits. | §6 item 15; `GRAMMAR_OPTIONS.md` §6.5 |
 | Upstream requests | dgen-py's API is what it is. | The `fill_block`/`seek` request goes through the WG leadership channel. | `DESIGN_REVIEW.md` §3.17 |
+| Checkpoint write and restore | A write run leaves a namespace manifest; a restore run declares the namespace `input`, reads it, and reports the gap and the warm reads (§5, *Checkpoint restore inputs*). | The benchmark runs them as two invocations of the same host list, the restore with `--rank-rotate 1` so no host reads its own shards; the gap between the end of the write and the start of the restore is capped at 30 s (`--max-gap 30`); a failed DP=N job restarts as DP=N (no resharding, `replicas` stays 1 for fully sharded state); `readback` stays off in a scored write. | `DESIGN_REVIEW.md` §3.24; `ABSTRACTS.md` §3–§4 |
 
 **Naming convention (decided 2026-09-30).** One name family, `aeiou`, for everything a user
 types or imports:
