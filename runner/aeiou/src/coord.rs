@@ -18,6 +18,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -31,6 +32,14 @@ use crate::run::{unix_now, Report};
 pub trait Coordinator: Send + Sync {
     /// Wait until every participant of `scope` has arrived. Returns the time spent waiting.
     fn barrier(&self, scope: &str, aborted: &AtomicBool) -> Result<Duration>;
+    /// The non-blocking half for an event loop: arrive, and get the generation this arrival
+    /// belongs to; `released` says when it has completed. Every release and every abort
+    /// writes to each eventfd given to `subscribe`, so a loop waiting in `io_uring_enter`
+    /// with a read posted on its eventfd wakes up (`NAPKIN_MATH.md` §8.A).
+    fn arrive(&self, scope: &str) -> Result<u64>;
+    fn released(&self, scope: &str, generation: u64) -> bool;
+    fn subscribe(&self, eventfd: RawFd);
+    fn unsubscribe(&self, eventfd: RawFd);
     /// This participant will never arrive at `scope` again.
     fn leave(&self, scope: &str);
     /// Releases by departure so far, per scope.
@@ -55,6 +64,27 @@ struct Bar {
 pub struct Local {
     bars: Mutex<HashMap<String, Bar>>,
     cv: Condvar,
+    efds: Eventfds,
+}
+
+/// The eventfds of the event loops waiting on this coordinator (`Coordinator::subscribe`).
+#[derive(Default)]
+pub(crate) struct Eventfds(Mutex<Vec<RawFd>>);
+
+impl Eventfds {
+    pub(crate) fn add(&self, fd: RawFd) {
+        self.0.lock().unwrap().push(fd);
+    }
+    pub(crate) fn remove(&self, fd: RawFd) {
+        self.0.lock().unwrap().retain(|f| *f != fd);
+    }
+    /// Wake every subscribed loop.
+    pub(crate) fn kick(&self) {
+        let one: u64 = 1;
+        for fd in self.0.lock().unwrap().iter() {
+            unsafe { libc::write(*fd, &one as *const u64 as *const libc::c_void, 8) };
+        }
+    }
 }
 
 impl Local {
@@ -63,23 +93,15 @@ impl Local {
             .iter()
             .map(|(s, n)| (s.clone(), Bar { expected: *n, arrived: 0, generation: 0, departure_releases: 0 }))
             .collect();
-        Local { bars: Mutex::new(bars), cv: Condvar::new() }
+        Local { bars: Mutex::new(bars), cv: Condvar::new(), efds: Eventfds::default() }
     }
 }
 
 impl Coordinator for Local {
     fn barrier(&self, scope: &str, aborted: &AtomicBool) -> Result<Duration> {
         let t = Instant::now();
+        let my_gen = self.arrive(scope)?;
         let mut bars = self.bars.lock().unwrap();
-        let Some(bar) = bars.get_mut(scope) else { bail!("barrier `{scope}`: no participants registered") };
-        bar.arrived += 1;
-        if bar.arrived >= bar.expected {
-            bar.arrived = 0;
-            bar.generation += 1;
-            self.cv.notify_all();
-            return Ok(t.elapsed());
-        }
-        let my_gen = bar.generation;
         loop {
             let (guard, _) = self.cv.wait_timeout(bars, Duration::from_millis(50)).unwrap();
             bars = guard;
@@ -92,6 +114,32 @@ impl Coordinator for Local {
         }
     }
 
+    fn arrive(&self, scope: &str) -> Result<u64> {
+        let mut bars = self.bars.lock().unwrap();
+        let Some(bar) = bars.get_mut(scope) else { bail!("barrier `{scope}`: no participants registered") };
+        let my_gen = bar.generation;
+        bar.arrived += 1;
+        if bar.arrived >= bar.expected {
+            bar.arrived = 0;
+            bar.generation += 1;
+            self.cv.notify_all();
+            self.efds.kick();
+        }
+        Ok(my_gen)
+    }
+
+    fn released(&self, scope: &str, generation: u64) -> bool {
+        self.bars.lock().unwrap().get(scope).map_or(true, |b| b.generation != generation)
+    }
+
+    fn subscribe(&self, eventfd: RawFd) {
+        self.efds.add(eventfd);
+    }
+
+    fn unsubscribe(&self, eventfd: RawFd) {
+        self.efds.remove(eventfd);
+    }
+
     fn leave(&self, scope: &str) {
         let mut bars = self.bars.lock().unwrap();
         if let Some(bar) = bars.get_mut(scope) {
@@ -101,6 +149,7 @@ impl Coordinator for Local {
                 bar.generation += 1;
                 bar.departure_releases += 1;
                 self.cv.notify_all();
+                self.efds.kick();
             }
         }
     }
@@ -231,6 +280,7 @@ struct ClientState {
     writer: Arc<Mutex<TcpStream>>,
     aborted: Arc<AtomicBool>,
     reason: Mutex<Option<String>>,
+    efds: Eventfds,
 }
 
 impl ClientState {
@@ -242,6 +292,7 @@ impl ClientState {
         self.aborted.store(true, Ordering::Relaxed);
         self.cv.notify_all();
         self.ecv.notify_all();
+        self.efds.kick();
     }
 
     fn failure(&self) -> Option<String> {
@@ -303,6 +354,7 @@ impl Tcp {
             writer: writer.clone(),
             aborted,
             reason: Mutex::new(None),
+            efds: Eventfds::default(),
         });
         send(&writer, &Msg::Hello { rank, ranks, host: host.to_string(), config: config.to_string(), participants: participants.to_vec() })?;
         let reader = {
@@ -361,6 +413,7 @@ fn client_loop(st: &ClientState, stream: &mut TcpStream, live: &mut Liveness) ->
                     b.generation = generation;
                 }
                 st.cv.notify_all();
+                st.efds.kick();
             }
             Msg::Result { ok, fingerprint, error } => {
                 st.events.lock().unwrap().result = Some((ok, fingerprint, error));
@@ -377,14 +430,8 @@ fn client_loop(st: &ClientState, stream: &mut TcpStream, live: &mut Liveness) ->
 impl Coordinator for Tcp {
     fn barrier(&self, scope: &str, aborted: &AtomicBool) -> Result<Duration> {
         let t = Instant::now();
+        let my_gen = self.arrive(scope)?;
         let mut bars = self.st.bars.lock().unwrap();
-        let Some(bar) = bars.get_mut(scope) else { bail!("barrier `{scope}`: no participants registered on this host") };
-        let my_gen = bar.generation;
-        bar.arrived += 1;
-        if bar.arrived >= bar.expected {
-            bar.arrived = 0;
-            send(&self.st.writer, &Msg::Arrive { scope: scope.to_string() }).with_context(|| format!("barrier `{scope}`"))?;
-        }
         loop {
             if bars.get(scope).map_or(true, |b| b.generation > my_gen) {
                 return Ok(t.elapsed());
@@ -394,6 +441,30 @@ impl Coordinator for Tcp {
             }
             bars = self.st.cv.wait_timeout(bars, Duration::from_millis(50)).unwrap().0;
         }
+    }
+
+    fn arrive(&self, scope: &str) -> Result<u64> {
+        let mut bars = self.st.bars.lock().unwrap();
+        let Some(bar) = bars.get_mut(scope) else { bail!("barrier `{scope}`: no participants registered on this host") };
+        let my_gen = bar.generation;
+        bar.arrived += 1;
+        if bar.arrived >= bar.expected {
+            bar.arrived = 0;
+            send(&self.st.writer, &Msg::Arrive { scope: scope.to_string() }).with_context(|| format!("barrier `{scope}`"))?;
+        }
+        Ok(my_gen)
+    }
+
+    fn released(&self, scope: &str, generation: u64) -> bool {
+        self.st.bars.lock().unwrap().get(scope).map_or(true, |b| b.generation > generation)
+    }
+
+    fn subscribe(&self, eventfd: RawFd) {
+        self.st.efds.add(eventfd);
+    }
+
+    fn unsubscribe(&self, eventfd: RawFd) {
+        self.st.efds.remove(eventfd);
     }
 
     fn leave(&self, scope: &str) {

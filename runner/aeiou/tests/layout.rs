@@ -236,6 +236,7 @@ fn fadvise_runs_and_is_fingerprinted() {
             root: root.clone(),
             backend: BackendKind::Sync,
             buffer_bytes: 1 << 20,
+        threads: 0,
             write_compress: 1,
             time_scale: 0.0,
             clean_namespaces: false,

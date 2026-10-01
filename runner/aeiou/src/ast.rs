@@ -441,9 +441,30 @@ pub enum Whence {
     SET, CUR, END,
 }
 
+impl Whence {
+    /// Back from an op's `aux` (`*whence as u64`).
+    pub fn from_code(code: u64) -> Whence {
+        match code {
+            1 => Whence::CUR,
+            2 => Whence::END,
+            _ => Whence::SET,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum IoctlRequest {
     TCGETS, FIONREAD, BLKGETSIZE64,
+}
+
+impl IoctlRequest {
+    pub fn from_code(code: u64) -> IoctlRequest {
+        match code {
+            1 => IoctlRequest::FIONREAD,
+            2 => IoctlRequest::BLKGETSIZE64,
+            _ => IoctlRequest::TCGETS,
+        }
+    }
 }
 
 /// `posix_fadvise(2)` advice, numbered as Linux numbers them.

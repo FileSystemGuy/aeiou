@@ -202,12 +202,14 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
     dry = subprocess.run([RUNNER, "dry-run", ast_path, "--gpus", "2", "--seed", "3", *flags], capture_output=True, text=True)
     assert dry.returncode == 0, dry.stderr
     fp = [l.split()[1] for l in dry.stdout.splitlines() if l.startswith("fingerprint ")][0]
-    run = subprocess.run([RUNNER, "run", ast_path, "--root", root, "--gpus", "2", "--seed", "3", "--time-scale", "0",
-                          "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
-    assert run.returncode == 0, run.stdout + run.stderr
-    assert "fingerprint matches" in run.stdout
-    if name == "train_stream_parquet":
-        assert "fadvise" in run.stdout
+    # the thread-per-actor backend and the event loop issue the same ops over the same corpus
+    for backend in ("sync", "io_uring"):
+        run = subprocess.run([RUNNER, "run", ast_path, "--root", root, "--gpus", "2", "--seed", "3", "--time-scale", "0",
+                              "--io-backend", backend, "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
+        assert run.returncode == 0, backend + ": " + run.stdout + run.stderr
+        assert "fingerprint matches" in run.stdout
+        if name == "train_stream_parquet":
+            assert "fadvise" in run.stdout
     # the Rust writer refuses a dataset that has a format class
     r = subprocess.run([RUNNER, "datagen", ast_path, "--root", tmp_path / "other", *flags], capture_output=True, text=True)
     assert r.returncode != 0 and "format class" in r.stderr

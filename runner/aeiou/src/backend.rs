@@ -19,13 +19,21 @@ use crate::ast::{Advice, IoctlRequest, OpenFlag, Whence};
 pub enum BackendKind {
     Sync,
     SyncDirect,
+    /// `io_uring` through the `io-uring` crate: an event loop per thread multiplexing many
+    /// actors over one ring (`uring.rs`).
+    Uring,
+    UringDirect,
 }
+
+pub const NAMES: &str = "sync, sync-direct, io_uring, io_uring-direct";
 
 impl BackendKind {
     pub fn parse(s: &str) -> Option<BackendKind> {
         match s {
             "sync" => Some(BackendKind::Sync),
             "sync-direct" => Some(BackendKind::SyncDirect),
+            "io_uring" | "io-uring" => Some(BackendKind::Uring),
+            "io_uring-direct" | "io-uring-direct" => Some(BackendKind::UringDirect),
             _ => None,
         }
     }
@@ -34,13 +42,23 @@ impl BackendKind {
         match self {
             BackendKind::Sync => "sync",
             BackendKind::SyncDirect => "sync-direct",
+            BackendKind::Uring => "io_uring",
+            BackendKind::UringDirect => "io_uring-direct",
         }
     }
 
+    /// `O_DIRECT` on every regular-file open.
     pub fn direct(self) -> bool {
-        self == BackendKind::SyncDirect
+        matches!(self, BackendKind::SyncDirect | BackendKind::UringDirect)
     }
 
+    /// Runs on the event loop (`uring.rs`) rather than one thread per actor.
+    pub fn uring(self) -> bool {
+        matches!(self, BackendKind::Uring | BackendKind::UringDirect)
+    }
+
+    /// The blocking form: the backend itself for `sync`, and what the event loop uses inline
+    /// for the ops `io_uring` has no opcode for.
     pub fn make(self) -> Box<dyn Backend> {
         Box::new(Sync { direct: self.direct() })
     }

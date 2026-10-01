@@ -966,7 +966,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
         ns_index: HashMap::new(),
         param_dists: HashMap::new(),
     };
-    let mut vm = crate::vm::Vm::new(&stub, crate::vm::NullSink, "static", 0, cfg.gpus.max(1));
+    let mut vm = crate::vm::Vm::new(&stub, "static", 0, cfg.gpus.max(1));
 
     let mut param_dists = HashMap::new();
     for (name, v) in &params.values {

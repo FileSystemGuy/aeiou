@@ -135,7 +135,8 @@ pub enum ForkKind<'a> {
     Loader { name: &'a str, index: &'a str, workers: i64, prefetch: i64, batches: i64, ordered: bool },
 }
 
-/// Where the VM delivers what it walks. `dry-run` counts; `run` does the I/O.
+/// Where `drive` delivers what the VM walks. `dry-run` counts; `run` does the I/O. A driver
+/// that multiplexes actors (the `io_uring` event loop) consumes `Vm::next` directly instead.
 pub trait Sink<'m, 'a>: Sized {
     fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()>;
     fn control(&mut self, _c: Control<'a>, _ctx: &OpCtx) -> Result<()> {
@@ -143,20 +144,13 @@ pub trait Sink<'m, 'a>: Sized {
     }
     /// A `parallel` or `loader`. Return `Ok(false)` to have the VM walk the sub-actors inline,
     /// in index order (the dry run). A sink that runs them itself takes a `Snapshot` from the
-    /// closure, resumes one `Vm` per sub-actor from it, and calls `run_sub` per index; a
-    /// `parallel` is joined before returning, a `loader` at `finish`.
+    /// closure, resumes one `Vm` per sub-actor from it, and calls `start_sub` per index and
+    /// drives it to the end; a `parallel` is joined before returning, a `loader` at `finish`.
     fn fork(&mut self, _kind: &ForkKind<'a>, _snapshot: &dyn Fn() -> Snapshot<'m, 'a>) -> Result<bool> {
         Ok(false)
     }
     /// The actor instance (or sub-actor) has walked its whole body.
     fn finish(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-pub struct NullSink;
-impl<'m, 'a> Sink<'m, 'a> for NullSink {
-    fn op(&mut self, _op: &Op, _ctx: &OpCtx) -> Result<()> {
         Ok(())
     }
 }
@@ -291,9 +285,82 @@ fn other<T>(msg: impl Into<String>) -> ER<T> {
     Err(EvalError::Other(anyhow!(msg.into())))
 }
 
-pub struct Vm<'m, 'a, S: Sink<'m, 'a>> {
+/// What the walk hands its driver next. An `Op` or a `Control` comes with the position it was
+/// issued from; a `Fork` must be answered before the next call: `snapshot` and `accept_fork`
+/// to run the sub-actors elsewhere, or `inline_fork` to walk them here in index order.
+pub enum Event<'e, 'a> {
+    Op(Op<'e>, OpCtx<'e>),
+    Control(Control<'a>, OpCtx<'e>),
+    Fork(ForkKind<'a>),
+}
+
+/// `Event` before the borrows are taken: what `step` found.
+enum Next<'a> {
+    Op,
+    Control(Control<'a>),
+    Fork(ForkKind<'a>),
+}
+
+/// The op the last `Next::Op` describes; `next` lends it out as an `Op`. A `path` of `None`
+/// means the op belongs to the `IoSeq` on top of the stack and names its file.
+struct Pending<'a> {
+    kind: OpKind,
+    path: Option<Arc<str>>,
+    path2: Option<Arc<str>>,
+    offset: i64,
+    len: i64,
+    bytes: i64,
+    aux: u64,
+    expect: &'a [String],
+    positioned: bool,
+    seed: u64,
+}
+
+/// How many ops a `read`/`write` statement still has to issue.
+enum Left {
+    Count(i64),
+    UntilEof { size: i64, tail_done: bool },
+}
+
+/// A `read` or `write` statement in progress: one op per `step` until `left` is exhausted,
+/// then the file position is updated (a positioned read or write leaves it alone).
+struct IoSeq<'a> {
+    kind: OpKind,
+    path: Arc<str>,
+    seed: u64,
+    off: i64,
+    len: i64,
+    /// The size the statement started with (reads: computes the expected count).
+    size: Option<i64>,
+    positioned: bool,
+    expect: &'a [String],
+    as_written: bool,
+    left: Left,
+}
+
+/// The walk's explicit stack: what the recursive walk kept on the thread's stack, so the walk
+/// can stop between any two events and continue later (`NAPKIN_MATH.md` §4.2: an event loop
+/// parks an actor at every blocking call).
+enum Cont<'a> {
+    /// A body being walked (its `ScopeLevel` is pushed with it and popped when it ends).
+    Body { nodes: &'a [Node], i: usize },
+    /// A loop whose frame is the last of `frames`: iteration `k` of `iters` is next.
+    Loop { body: &'a [Node], from: i64, step: i64, iters: i64, k: i64 },
+    /// Pop the phase label when the phase body ends.
+    PhaseEnd,
+    Io(IoSeq<'a>),
+}
+
+/// A `parallel` or `loader` the driver has not answered yet.
+struct PendingFork<'a> {
+    index: &'a str,
+    width: i64,
+    loader: bool,
+    body: &'a [Node],
+}
+
+pub struct Vm<'m, 'a> {
     pub model: &'m Model<'a>,
-    pub sink: S,
     template: &'a str,
     actor: i64,
     actor_count: i64,
@@ -312,13 +379,15 @@ pub struct Vm<'m, 'a, S: Sink<'m, 'a>> {
     /// Unit lengths of recently addressed container files (`GRAMMAR_OPTIONS.md` §6.3: the
     /// layout is computed once per open file and held). Bounded; never shared.
     unit_lens: HashMap<(usize, i64), Arc<Vec<i64>>>,
+    stack: Vec<Cont<'a>>,
+    pending: Pending<'a>,
+    pending_fork: Option<PendingFork<'a>>,
 }
 
-impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
-    pub fn new(model: &'m Model<'a>, sink: S, template: &'a str, actor: i64, actor_count: i64) -> Self {
+impl<'m, 'a: 'm> Vm<'m, 'a> {
+    pub fn new(model: &'m Model<'a>, template: &'a str, actor: i64, actor_count: i64) -> Self {
         Vm {
             model,
-            sink,
             template,
             actor,
             actor_count,
@@ -333,19 +402,17 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
             indices_buf: Vec::new(),
             unit_lens: HashMap::new(),
             sub_body: None,
+            stack: Vec::new(),
+            pending: Pending::empty(),
+            pending_fork: None,
         }
     }
 
-    pub fn into_sink(self) -> S {
-        self.sink
-    }
-
-    /// A sub-actor VM: the parent's state at the fork, with its own sink.
-    pub fn resume(sink: S, snap: Snapshot<'m, 'a>) -> Self {
+    /// A sub-actor VM: the parent's state at the fork. `start_sub` begins one sub-actor.
+    pub fn resume(snap: Snapshot<'m, 'a>) -> Self {
         let depth = snap.frames.len();
         Vm {
             model: snap.model,
-            sink,
             template: snap.template,
             actor: snap.actor,
             actor_count: snap.actor_count,
@@ -360,11 +427,14 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
             indices_buf: Vec::new(),
             unit_lens: HashMap::new(),
             sub_body: Some(snap.body),
+            stack: Vec::new(),
+            pending: Pending::empty(),
+            pending_fork: None,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn snapshot(model: &'m Model<'a>, template: &'a str, actor: i64, actor_count: i64, frames: &[Frame<'a>], scopes: &[ScopeLevel<'a>], phases: &[Arc<str>], open: &HashMap<Arc<str>, FileState>, written: &HashMap<Arc<str>, i64>, body: &'a [Node]) -> Snapshot<'m, 'a> {
+    fn snapshot_of(model: &'m Model<'a>, template: &'a str, actor: i64, actor_count: i64, frames: &[Frame<'a>], scopes: &[ScopeLevel<'a>], phases: &[Arc<str>], open: &HashMap<Arc<str>, FileState>, written: &HashMap<Arc<str>, i64>, body: &'a [Node]) -> Snapshot<'m, 'a> {
         Snapshot {
             model,
             template,
@@ -379,21 +449,88 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
         }
     }
 
-    /// Run one actor instance to completion.
-    pub fn run(&mut self, body: &'a [Node]) -> Result<()> {
-        self.body(body).map_err(|e| self.wrap(e))?;
-        self.sink.finish()
+    /// Begin walking an actor instance's body; `next` then yields its events.
+    pub fn start(&mut self, body: &'a [Node]) {
+        self.push_body(body);
     }
 
-    /// On a resumed VM: walk the sub-actor body once at index `k` of the fork (ordinal, so the
-    /// frame's index is `from + k·step`).
-    pub fn run_sub(&mut self, k: i64) -> Result<()> {
-        let body = self.sub_body.expect("run_sub on a VM that was not resumed from a snapshot");
+    /// On a resumed VM: begin the sub-actor body at index `k` of the fork (ordinal, so the
+    /// frame's index is `from + k·step`). Call once the previous sub-actor's walk has ended.
+    pub fn start_sub(&mut self, k: i64) {
+        let body = self.sub_body.expect("start_sub on a VM that was not resumed from a snapshot");
         let f = self.frames.last_mut().expect("a resumed VM has the fork frame");
         f.idx = f.from + k * f.step;
-        self.body(body).map_err(|e| self.wrap(e))
+        self.push_body(body);
     }
 
+    /// The next event, or `None` when the body started by `start` / `start_sub` has ended.
+    /// Between two calls the VM holds no borrowed state, so a driver may hold the walk at any
+    /// event for as long as it likes (an outstanding I/O, a channel, a barrier, a timer).
+    pub fn next(&mut self) -> Result<Option<Event<'_, 'a>>> {
+        let n = match self.step() {
+            Ok(n) => n,
+            Err(e) => return Err(self.wrap(e)),
+        };
+        Ok(match n {
+            None => None,
+            Some(Next::Op) => {
+                let (op, ctx) = self.current();
+                Some(Event::Op(op, ctx))
+            }
+            Some(Next::Control(c)) => Some(Event::Control(c, self.ctx())),
+            Some(Next::Fork(k)) => Some(Event::Fork(k)),
+        })
+    }
+
+    /// The op of the last `Event::Op`, again: for a driver that parked the walk at it and now
+    /// has its result.
+    pub fn current(&self) -> (Op<'_>, OpCtx<'_>) {
+        let p = &self.pending;
+        let path: &str = match &p.path {
+            Some(path) => path,
+            None => match self.stack.last() {
+                Some(Cont::Io(io)) => &io.path,
+                _ => "",
+            },
+        };
+        (Op { kind: p.kind, path, path2: p.path2.as_deref(), offset: p.offset, len: p.len, bytes: p.bytes, aux: p.aux, expect: p.expect, positioned: p.positioned, seed: p.seed }, self.ctx())
+    }
+
+    fn ctx(&self) -> OpCtx<'_> {
+        OpCtx { template: self.template, actor: self.actor, indices: &self.indices_buf, phase: self.phases.last().map(|p| &**p) }
+    }
+
+    /// After an `Event::Fork`: the parent's position for the sub-actors (frames with the fork's
+    /// frame last, visible bindings, phases, open files, as-written sums, the sub-actor body).
+    pub fn snapshot(&self) -> Snapshot<'m, 'a> {
+        let pf = self.pending_fork.as_ref().expect("snapshot without a pending fork");
+        let mut fr = self.frames.clone();
+        fr.push(Frame { name: pf.index, idx: 0, from: 0, step: 1, iters: pf.width, loader: pf.loader });
+        Self::snapshot_of(self.model, self.template, self.actor, self.actor_count, &fr, &self.scopes, &self.phases, &self.open, &self.written, pf.body)
+    }
+
+    /// After an `Event::Fork`: the driver runs the sub-actors itself; the walk continues after
+    /// the node.
+    pub fn accept_fork(&mut self) {
+        self.pending_fork.take().expect("accept_fork without a pending fork");
+    }
+
+    /// After an `Event::Fork`: walk the sub-actors here, in index order (the dry run).
+    pub fn inline_fork(&mut self) {
+        let pf = self.pending_fork.take().expect("inline_fork without a pending fork");
+        self.push_loop(pf.index, 0, 1, pf.width, pf.loader, pf.body);
+    }
+
+    fn push_body(&mut self, nodes: &'a [Node]) {
+        self.scopes.push(ScopeLevel { bindings: HashMap::new(), body: nodes, depth: self.frames.len() });
+        self.stack.push(Cont::Body { nodes, i: 0 });
+    }
+
+    fn push_loop(&mut self, index: &'a str, from: i64, step: i64, iters: i64, loader: bool, body: &'a [Node]) {
+        self.frames.push(Frame { name: index, idx: from, from, step, iters, loader });
+        self.depth = self.frames.len();
+        self.stack.push(Cont::Loop { body, from, step, iters, k: 0 });
+    }
     fn wrap(&self, e: EvalError) -> anyhow::Error {
         let e = match e {
             EvalError::BelowFrom => anyhow!("`at` below the loop's start with no alternative arm"),
@@ -1041,168 +1178,214 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
 
     // ---- statements ----
 
-    fn body(&mut self, nodes: &'a [Node]) -> ER<()> {
-        self.scopes.push(ScopeLevel { bindings: HashMap::new(), body: nodes, depth: self.frames.len() });
-        let r = self.body_inner(nodes);
-        self.scopes.pop();
-        r
-    }
-
-    fn body_inner(&mut self, nodes: &'a [Node]) -> ER<()> {
-        for node in nodes {
-            match node {
-                Node::Let { name, value } => {
-                    let v = self.exprlike(value)?;
-                    let depth = self.frames.len();
-                    let level = self.scopes.last_mut().unwrap();
-                    level.bindings.insert(name.as_str(), Binding { value: v, depth, body: level.body });
-                }
-                Node::Loop { index, from, to, step, body } => {
-                    let from = match from {
-                        Some(e) => self.expr(e)?.as_int()?,
-                        None => 0,
-                    };
-                    let to = self.expr(to)?.as_int()?;
-                    let step = match step {
-                        Some(e) => self.expr(e)?.as_int()?,
-                        None => 1,
-                    };
-                    if step <= 0 {
-                        return other(format!("loop `{index}`: step {step} must be positive"));
+    /// Advance the walk to the next event.
+    fn step(&mut self) -> ER<Option<Next<'a>>> {
+        if self.pending_fork.is_some() {
+            return other("the fork was not answered: call accept_fork or inline_fork before the next event");
+        }
+        loop {
+            let Some(top) = self.stack.last_mut() else { return Ok(None) };
+            match top {
+                Cont::Body { nodes, i } => {
+                    let nodes: &'a [Node] = nodes;
+                    let at = *i;
+                    if at >= nodes.len() {
+                        self.stack.pop();
+                        self.scopes.pop();
+                        continue;
                     }
-                    let iters = if to > from { (to - from + step - 1) / step } else { 0 };
-                    self.iterate(index, from, step, iters, false, body)?;
-                }
-                Node::Parallel { index, width, body } => {
-                    let width = self.expr(width)?.as_int()?;
-                    if width < 0 {
-                        return other(format!("parallel `{index}`: width {width}"));
-                    }
-                    self.fork(ForkKind::Parallel { index, width }, index, width, false, body)?;
-                }
-                Node::Loader { name, index, workers, prefetch, batches, ordered, body } => {
-                    let workers = self.expr(workers)?.as_int()?;
-                    let prefetch = self.expr(prefetch)?.as_int()?;
-                    let batches = self.expr(batches)?.as_int()?;
-                    if workers < 1 || prefetch < 0 || batches < 0 {
-                        return other(format!("loader: workers {workers}, prefetch {prefetch}, batches {batches}"));
-                    }
-                    let kind = ForkKind::Loader { name, index, workers, prefetch, batches, ordered: ordered.unwrap_or(true) };
-                    self.fork(kind, index, batches, true, body)?;
-                }
-                Node::Channel { name, capacity, ordered } => {
-                    let capacity = self.expr(capacity)?.as_int()?;
-                    self.ctl(Control::Channel { name, capacity, ordered: ordered.unwrap_or(true) })?;
-                }
-                Node::Put { channel, seq } => {
-                    let seq = self.expr(seq)?.as_int()?;
-                    self.ctl(Control::Put { channel, seq })?;
-                }
-                Node::Take { channel } => {
-                    self.ctl(Control::Take { channel })?;
-                }
-                Node::Barrier { scope } => {
-                    self.ctl(Control::Barrier { scope })?;
-                }
-                Node::Compute { ns } => {
-                    let ns = self.expr(ns)?.as_int()?;
-                    self.ctl(Control::Compute { ns })?;
-                }
-                Node::Cond { test, then, otherwise } => {
-                    if self.expr(test)?.as_bool()? {
-                        self.body(then)?;
-                    } else if let Some(b) = otherwise {
-                        self.body(b)?;
+                    *i += 1;
+                    if let Some(n) = self.statement(&nodes[at])? {
+                        return Ok(Some(n));
                     }
                 }
-                Node::Choose { arms, site } => {
-                    let total: f64 = arms.iter().map(|a| a.weight).sum();
-                    if total <= 0.0 {
-                        return other("choose: total weight is zero");
+                Cont::Loop { body, from, step, iters, k } => {
+                    if *k < *iters {
+                        let (body, idx) = (*body, *from + *k * *step);
+                        *k += 1;
+                        self.frames.last_mut().unwrap().idx = idx;
+                        self.push_body(body);
+                    } else {
+                        self.stack.pop();
+                        self.frames.pop();
+                        self.depth = self.frames.len();
                     }
-                    let u = Words::new(self.draw_key(site.get())).next_f64() * total;
-                    let mut acc = 0.0;
-                    let mut chosen = arms.len() - 1;
-                    for (i, arm) in arms.iter().enumerate() {
-                        acc += arm.weight;
-                        if u < acc {
-                            chosen = i;
-                            break;
-                        }
-                    }
-                    self.body(&arms[chosen].body)?;
                 }
-                Node::Phase { name, body } => {
-                    let label: Arc<str> = match self.expr(name)? {
-                        Value::Str(s) => s,
-                        Value::Int(n) => Arc::from(n.to_string()),
-                        v => return other(format!("phase name is {}", v.kind())),
-                    };
-                    self.phases.push(label);
-                    let r = self.body(body);
+                Cont::PhaseEnd => {
+                    self.stack.pop();
                     self.phases.pop();
-                    r?;
                 }
-                Node::Replay { trace, .. } => return other(format!("replay `{trace}`: the trace format is deferred (schema §7)")),
-                _ => self.op(node)?,
+                Cont::Io(_) => {
+                    if let Some(n) = self.io_step()? {
+                        return Ok(Some(n));
+                    }
+                }
             }
         }
-        Ok(())
     }
 
-    /// A `parallel` or `loader`: offer the sub-actors to the sink; walk them inline if it declines.
-    fn fork(&mut self, kind: ForkKind<'a>, index: &'a str, width: i64, loader: bool, body: &'a [Node]) -> ER<()> {
-        let frame = Frame { name: index, idx: 0, from: 0, step: 1, iters: width, loader };
-        let forked = {
-            let (model, template, actor, actor_count) = (self.model, self.template, self.actor, self.actor_count);
-            let (frames, scopes, phases, open, written) = (&self.frames, &self.scopes, &self.phases, &self.open, &self.written);
-            let snapshot = || {
-                let mut fr = frames.clone();
-                fr.push(frame);
-                Self::snapshot(model, template, actor, actor_count, &fr, scopes, phases, open, written, body)
-            };
-            self.sink.fork(&kind, &snapshot).map_err(EvalError::Other)?
+    fn statement(&mut self, node: &'a Node) -> ER<Option<Next<'a>>> {
+        match node {
+            Node::Let { name, value } => {
+                let v = self.exprlike(value)?;
+                let depth = self.frames.len();
+                let level = self.scopes.last_mut().unwrap();
+                level.bindings.insert(name.as_str(), Binding { value: v, depth, body: level.body });
+                Ok(None)
+            }
+            Node::Loop { index, from, to, step, body } => {
+                let from = match from {
+                    Some(e) => self.expr(e)?.as_int()?,
+                    None => 0,
+                };
+                let to = self.expr(to)?.as_int()?;
+                let step = match step {
+                    Some(e) => self.expr(e)?.as_int()?,
+                    None => 1,
+                };
+                if step <= 0 {
+                    return other(format!("loop `{index}`: step {step} must be positive"));
+                }
+                let iters = if to > from { (to - from + step - 1) / step } else { 0 };
+                self.push_loop(index, from, step, iters, false, body);
+                Ok(None)
+            }
+            Node::Parallel { index, width, body } => {
+                let width = self.expr(width)?.as_int()?;
+                if width < 0 {
+                    return other(format!("parallel `{index}`: width {width}"));
+                }
+                self.pending_fork = Some(PendingFork { index, width, loader: false, body });
+                Ok(Some(Next::Fork(ForkKind::Parallel { index, width })))
+            }
+            Node::Loader { name, index, workers, prefetch, batches, ordered, body } => {
+                let workers = self.expr(workers)?.as_int()?;
+                let prefetch = self.expr(prefetch)?.as_int()?;
+                let batches = self.expr(batches)?.as_int()?;
+                if workers < 1 || prefetch < 0 || batches < 0 {
+                    return other(format!("loader: workers {workers}, prefetch {prefetch}, batches {batches}"));
+                }
+                self.pending_fork = Some(PendingFork { index, width: batches, loader: true, body });
+                Ok(Some(Next::Fork(ForkKind::Loader { name, index, workers, prefetch, batches, ordered: ordered.unwrap_or(true) })))
+            }
+            Node::Channel { name, capacity, ordered } => {
+                let capacity = self.expr(capacity)?.as_int()?;
+                self.ctl(Control::Channel { name, capacity, ordered: ordered.unwrap_or(true) })
+            }
+            Node::Put { channel, seq } => {
+                let seq = self.expr(seq)?.as_int()?;
+                self.ctl(Control::Put { channel, seq })
+            }
+            Node::Take { channel } => self.ctl(Control::Take { channel }),
+            Node::Barrier { scope } => self.ctl(Control::Barrier { scope }),
+            Node::Compute { ns } => {
+                let ns = self.expr(ns)?.as_int()?;
+                self.ctl(Control::Compute { ns })
+            }
+            Node::Cond { test, then, otherwise } => {
+                if self.expr(test)?.as_bool()? {
+                    self.push_body(then);
+                } else if let Some(b) = otherwise {
+                    self.push_body(b);
+                }
+                Ok(None)
+            }
+            Node::Choose { arms, site } => {
+                let total: f64 = arms.iter().map(|a| a.weight).sum();
+                if total <= 0.0 {
+                    return other("choose: total weight is zero");
+                }
+                let u = Words::new(self.draw_key(site.get())).next_f64() * total;
+                let mut acc = 0.0;
+                let mut chosen = arms.len() - 1;
+                for (i, arm) in arms.iter().enumerate() {
+                    acc += arm.weight;
+                    if u < acc {
+                        chosen = i;
+                        break;
+                    }
+                }
+                self.push_body(&arms[chosen].body);
+                Ok(None)
+            }
+            Node::Phase { name, body } => {
+                let label: Arc<str> = match self.expr(name)? {
+                    Value::Str(s) => s,
+                    Value::Int(n) => Arc::from(n.to_string()),
+                    v => return other(format!("phase name is {}", v.kind())),
+                };
+                self.phases.push(label);
+                self.stack.push(Cont::PhaseEnd);
+                self.push_body(body);
+                Ok(None)
+            }
+            Node::Replay { trace, .. } => other(format!("replay `{trace}`: the trace format is deferred (schema §7)")),
+            _ => self.op(node),
+        }
+    }
+
+    /// One op of the `read`/`write` statement on top of the stack, or finish it.
+    fn io_step(&mut self) -> ER<Option<Next<'a>>> {
+        let Some(Cont::Io(io)) = self.stack.last_mut() else { unreachable!("io_step without an Io on the stack") };
+        let (kind, len) = (io.kind, io.len);
+        let next = match &mut io.left {
+            Left::Count(n) if *n > 0 => {
+                *n -= 1;
+                let bytes = if kind == OpKind::Read { expected(io.size, io.off, len) } else { len };
+                let off = io.off;
+                io.off += bytes;
+                Some((off, bytes))
+            }
+            Left::Count(_) => None,
+            Left::UntilEof { size, tail_done } => {
+                if *tail_done {
+                    None
+                } else if io.off < *size {
+                    let bytes = (*size - io.off).min(len);
+                    let off = io.off;
+                    io.off += bytes;
+                    Some((off, bytes))
+                } else {
+                    *tail_done = true;
+                    Some((io.off, 0))
+                }
+            }
         };
-        if !forked {
-            self.iterate(index, 0, 1, width, loader, body)?;
-        }
-        Ok(())
-    }
-
-    fn iterate(&mut self, index: &'a str, from: i64, step: i64, iters: i64, loader: bool, body: &'a [Node]) -> ER<()> {
-        self.frames.push(Frame { name: index, idx: from, from, step, iters, loader });
-        self.depth = self.frames.len();
-        let mut r = Ok(());
-        for k in 0..iters {
-            self.frames.last_mut().unwrap().idx = from + k * step;
-            r = self.body(body);
-            if r.is_err() {
-                break;
+        let Some((off, bytes)) = next else {
+            let Some(Cont::Io(io)) = self.stack.pop() else { unreachable!() };
+            if !io.positioned {
+                self.open.get_mut(&io.path).unwrap().pos = io.off;
             }
+            return Ok(None);
+        };
+        let (seed, expect, positioned, as_written) = (io.seed, io.expect, io.positioned, io.as_written);
+        if kind == OpKind::Write && as_written {
+            let path = io.path.clone();
+            *self.written.entry(path).or_insert(0) += len;
         }
-        self.frames.pop();
-        self.depth = self.frames.len();
-        r
+        self.set_pending(Pending { kind, path: None, path2: None, offset: off, len, bytes, aux: 0, expect, positioned, seed });
+        Ok(Some(Next::Op))
     }
 
-    fn ctl(&mut self, c: Control<'a>) -> ER<()> {
+    fn fill_indices(&mut self) {
         self.indices_buf.clear();
-        for f in 0..self.frames.len() {
-            self.indices_buf.push(self.frames[f].idx);
-        }
-        let ctx = OpCtx { template: self.template, actor: self.actor, indices: &self.indices_buf, phase: self.phases.last().map(|p| &**p) };
-        self.sink.control(c, &ctx).map_err(EvalError::Other)
+        self.indices_buf.extend(self.frames.iter().map(|f| f.idx));
+    }
+
+    fn ctl(&mut self, c: Control<'a>) -> ER<Option<Next<'a>>> {
+        self.fill_indices();
+        Ok(Some(Next::Control(c)))
+    }
+
+    fn set_pending(&mut self, p: Pending<'a>) {
+        self.fill_indices();
+        self.pending = p;
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn emit(&mut self, kind: OpKind, t: &Target, path2: Option<&Arc<str>>, offset: i64, len: i64, bytes: i64, aux: u64, expect: &Expect, positioned: bool) -> ER<()> {
-        self.indices_buf.clear();
-        for f in 0..self.frames.len() {
-            self.indices_buf.push(self.frames[f].idx);
-        }
-        let ctx = OpCtx { template: self.template, actor: self.actor, indices: &self.indices_buf, phase: self.phases.last().map(|p| &**p) };
-        let op = Op { kind, path: &t.path, path2: path2.map(|p| &**p), offset, len, bytes, aux, expect: expect.as_deref().unwrap_or(&[]), positioned, seed: t.seed };
-        self.sink.op(&op, &ctx).map_err(EvalError::Other)
+    fn emit(&mut self, kind: OpKind, t: Target, path2: Option<Arc<str>>, offset: i64, len: i64, bytes: i64, aux: u64, expect: &'a Expect, positioned: bool) -> ER<Option<Next<'a>>> {
+        self.set_pending(Pending { kind, path: Some(t.path), path2, offset, len, bytes, aux, expect: expect.as_deref().unwrap_or(&[]), positioned, seed: t.seed });
+        Ok(Some(Next::Op))
     }
 
     fn opened(&self, path: &Arc<str>, what: &str) -> ER<FileState> {
@@ -1212,7 +1395,7 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
         }
     }
 
-    fn op(&mut self, node: &'a Node) -> ER<()> {
+    fn op(&mut self, node: &'a Node) -> ER<Option<Next<'a>>> {
         match node {
             Node::Open { file, flags, mode, expect } => {
                 let t = self.target(file)?;
@@ -1225,13 +1408,13 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                 let pos = if append { size.unwrap_or(0) } else { 0 };
                 self.open.insert(t.path.clone(), FileState { pos, size, as_written: t.as_written });
                 let aux = flag_bits(flags) | ((mode.unwrap_or(0) as u64) << 32);
-                self.emit(OpKind::Open, &t, None, 0, 0, 0, aux, expect, false)?;
+                self.emit(OpKind::Open, t, None, 0, 0, 0, aux, expect, false)
             }
             Node::Close(f) => {
                 let t = self.target(&f.file)?;
                 self.opened(&t.path, "close")?;
                 self.open.remove(&t.path);
-                self.emit(OpKind::Close, &t, None, 0, 0, 0, 0, &f.expect, false)?;
+                self.emit(OpKind::Close, t, None, 0, 0, 0, 0, &f.expect, false)
             }
             Node::Read { file, len, offset, repeat, expect } => {
                 let t = self.target(file)?;
@@ -1245,21 +1428,18 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                     Some(e) => Some(self.expr(e)?.as_int()?),
                     None => None,
                 };
-                let mut off = positioned.unwrap_or(st.pos);
-                match repeat {
-                    None => {
-                        let bytes = expected(size, off, len);
-                        self.emit(OpKind::Read, &t, None, off, len, bytes, 0, expect, positioned.is_some())?;
-                        off += bytes;
+                let off = positioned.unwrap_or(st.pos);
+                if repeat.is_none() {
+                    // the common case, without the sequence machinery
+                    let bytes = expected(size, off, len);
+                    if positioned.is_none() {
+                        self.open.get_mut(&t.path).unwrap().pos = off + bytes;
                     }
-                    Some(Repeat::Count(n)) => {
-                        let n = self.expr(n)?.as_int()?;
-                        for _ in 0..n {
-                            let bytes = expected(size, off, len);
-                            self.emit(OpKind::Read, &t, None, off, len, bytes, 0, expect, positioned.is_some())?;
-                            off += bytes;
-                        }
-                    }
+                    return self.emit(OpKind::Read, t, None, off, len, bytes, 0, expect, positioned.is_some());
+                }
+                let left = match repeat {
+                    None => Left::Count(1),
+                    Some(Repeat::Count(n)) => Left::Count(self.expr(n)?.as_int()?),
                     Some(Repeat::UntilEof(_)) => {
                         let Some(size) = size else {
                             return other(format!("until_eof on `{}`: size unknown (an as_written object needs the creating writes at this position)", t.path));
@@ -1267,17 +1447,11 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                         if len == 0 {
                             return other("until_eof with a zero-length read");
                         }
-                        while off < size {
-                            let bytes = (size - off).min(len);
-                            self.emit(OpKind::Read, &t, None, off, len, bytes, 0, expect, positioned.is_some())?;
-                            off += bytes;
-                        }
-                        self.emit(OpKind::Read, &t, None, off, len, 0, 0, expect, positioned.is_some())?;
+                        Left::UntilEof { size, tail_done: false }
                     }
-                }
-                if positioned.is_none() {
-                    self.open.get_mut(&t.path).unwrap().pos = off;
-                }
+                };
+                self.stack.push(Cont::Io(IoSeq { kind: OpKind::Read, path: t.path, seed: t.seed, off, len, size, positioned: positioned.is_some(), expect: expect.as_deref().unwrap_or(&[]), as_written: st.as_written, left }));
+                Ok(None)
             }
             Node::Write { file, len, offset, repeat, expect } => {
                 let t = self.target(file)?;
@@ -1294,17 +1468,18 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                     Some(e) => self.expr(e)?.as_int()?,
                     None => 1,
                 };
-                let mut off = positioned.unwrap_or(st.pos);
-                for _ in 0..n {
-                    self.emit(OpKind::Write, &t, None, off, len, len, 0, expect, positioned.is_some())?;
-                    off += len;
+                let off = positioned.unwrap_or(st.pos);
+                if n == 1 {
                     if st.as_written {
                         *self.written.entry(t.path.clone()).or_insert(0) += len;
                     }
+                    if positioned.is_none() {
+                        self.open.get_mut(&t.path).unwrap().pos = off + len;
+                    }
+                    return self.emit(OpKind::Write, t, None, off, len, len, 0, expect, positioned.is_some());
                 }
-                if positioned.is_none() {
-                    self.open.get_mut(&t.path).unwrap().pos = off;
-                }
+                self.stack.push(Cont::Io(IoSeq { kind: OpKind::Write, path: t.path, seed: t.seed, off, len, size: None, positioned: positioned.is_some(), expect: expect.as_deref().unwrap_or(&[]), as_written: st.as_written, left: Left::Count(n) }));
+                Ok(None)
             }
             Node::Lseek { file, offset, whence } => {
                 let t = self.target(file)?;
@@ -1323,12 +1498,12 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                     return other(format!("lseek to {pos} on `{}`", t.path));
                 }
                 self.open.get_mut(&t.path).unwrap().pos = pos;
-                self.emit(OpKind::Lseek, &t, None, off, 0, 0, *whence as u64, &None, false)?;
+                self.emit(OpKind::Lseek, t, None, off, 0, 0, *whence as u64, &None, false)
             }
             Node::Ioctl { file, request, expect } => {
                 let t = self.target(file)?;
                 self.opened(&t.path, "ioctl")?;
-                self.emit(OpKind::Ioctl, &t, None, 0, 0, 0, *request as u64, expect, false)?;
+                self.emit(OpKind::Ioctl, t, None, 0, 0, 0, *request as u64, expect, false)
             }
             Node::Fadvise { file, advice, offset, len, expect } => {
                 let t = self.target(file)?;
@@ -1344,7 +1519,7 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                     return other(format!("fadvise: offset {off}, len {len}"));
                 }
                 self.opened(&t.path, "fadvise")?;
-                self.emit(OpKind::Fadvise, &t, None, off, len, 0, *advice as u64, expect, false)?;
+                self.emit(OpKind::Fadvise, t, None, off, len, 0, *advice as u64, expect, false)
             }
             Node::Fstat(f) | Node::Fsync(f) | Node::Fdatasync(f) => {
                 let t = self.target(&f.file)?;
@@ -1354,22 +1529,22 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                     _ => OpKind::Fdatasync,
                 };
                 self.opened(&t.path, kind.name())?;
-                self.emit(kind, &t, None, 0, 0, 0, 0, &f.expect, false)?;
+                self.emit(kind, t, None, 0, 0, 0, 0, &f.expect, false)
             }
             Node::Stat(f) => {
                 let t = self.target(&f.file)?;
-                self.emit(OpKind::Stat, &t, None, 0, 0, 0, 0, &f.expect, false)?;
+                self.emit(OpKind::Stat, t, None, 0, 0, 0, 0, &f.expect, false)
             }
             Node::Unlink(f) => {
                 let t = self.target(&f.file)?;
                 self.written.remove(&t.path);
-                self.emit(OpKind::Unlink, &t, None, 0, 0, 0, 0, &f.expect, false)?;
+                self.emit(OpKind::Unlink, t, None, 0, 0, 0, 0, &f.expect, false)
             }
             Node::Ftruncate { file, len, expect } => {
                 let t = self.target(file)?;
                 let len = self.expr(len)?.as_int()?;
                 self.opened(&t.path, "ftruncate")?;
-                self.emit(OpKind::Ftruncate, &t, None, 0, len, 0, 0, expect, false)?;
+                self.emit(OpKind::Ftruncate, t, None, 0, len, 0, 0, expect, false)
             }
             Node::Fallocate { file, offset, len, expect } => {
                 let t = self.target(file)?;
@@ -1379,15 +1554,15 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                 };
                 let len = self.expr(len)?.as_int()?;
                 self.opened(&t.path, "fallocate")?;
-                self.emit(OpKind::Fallocate, &t, None, off, len, 0, 0, expect, false)?;
+                self.emit(OpKind::Fallocate, t, None, off, len, 0, 0, expect, false)
             }
             Node::Mkdir { dir, mode, expect } => {
                 let t = self.target(dir)?;
-                self.emit(OpKind::Mkdir, &t, None, 0, 0, 0, mode.unwrap_or(0o777) as u64, expect, false)?;
+                self.emit(OpKind::Mkdir, t, None, 0, 0, 0, mode.unwrap_or(0o777) as u64, expect, false)
             }
             Node::Rmdir { dir, expect } => {
                 let t = self.target(dir)?;
-                self.emit(OpKind::Rmdir, &t, None, 0, 0, 0, 0, expect, false)?;
+                self.emit(OpKind::Rmdir, t, None, 0, 0, 0, 0, expect, false)
             }
             Node::Rename { from, to, expect } => {
                 let a = self.target(from)?;
@@ -1395,17 +1570,22 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                 if let Some(n) = self.written.remove(&a.path) {
                     self.written.insert(b.path.clone(), n);
                 }
-                self.emit(OpKind::Rename, &a, Some(&b.path), 0, 0, 0, 0, expect, false)?;
+                self.emit(OpKind::Rename, a, Some(b.path), 0, 0, 0, 0, expect, false)
             }
             Node::Readdir { dir, expect, .. } => {
                 let t = self.target(dir)?;
                 self.opened(&t.path, "readdir")?;
                 let entries = t.entries.unwrap_or(-1);
-                self.emit(OpKind::Readdir, &t, None, 0, 0, entries, 0, expect, false)?;
+                self.emit(OpKind::Readdir, t, None, 0, 0, entries, 0, expect, false)
             }
             _ => unreachable!("control node in op()"),
         }
-        Ok(())
+    }
+}
+
+impl Pending<'_> {
+    fn empty() -> Self {
+        Pending { kind: OpKind::Open, path: None, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: &[], positioned: false, seed: 0 }
     }
 }
 
@@ -1417,12 +1597,36 @@ fn expected(size: Option<i64>, off: i64, len: i64) -> i64 {
     }
 }
 
-/// Run every instance of every actor template through `make_sink`, in one thread.
-pub fn run_actor<'m, 'a: 'm, S: Sink<'m, 'a>>(model: &'m Model<'a>, template: &'a str, actor: i64, count: i64, sink: S) -> Result<S> {
+/// Feed a VM's events to a `Sink` until the walk it has started ends. A `Fork` the sink
+/// declines is walked inline. The sink's `finish` is the caller's to call.
+pub fn drive<'m, 'a: 'm, S: Sink<'m, 'a>>(vm: &mut Vm<'m, 'a>, sink: &mut S) -> Result<()> {
+    loop {
+        match vm.next()? {
+            None => return Ok(()),
+            Some(Event::Op(op, ctx)) => sink.op(&op, &ctx)?,
+            Some(Event::Control(c, ctx)) => sink.control(c, &ctx)?,
+            Some(Event::Fork(kind)) => {
+                let forked = {
+                    let snap = || vm.snapshot();
+                    sink.fork(&kind, &snap)?
+                };
+                if forked {
+                    vm.accept_fork();
+                } else {
+                    vm.inline_fork();
+                }
+            }
+        }
+    }
+}
+
+/// Run one actor instance of `template` to completion through `sink`, `finish` included.
+pub fn run_actor<'m, 'a: 'm, S: Sink<'m, 'a>>(model: &'m Model<'a>, template: &'a str, actor: i64, count: i64, mut sink: S) -> Result<S> {
     let a = model.ast.actors.get(template).ok_or_else(|| anyhow!("no actor `{template}`"))?;
-    let mut vm = Vm::new(model, sink, template, actor, count);
-    vm.run(&a.body).with_context(|| format!("actor `{template}` instance {actor}"))?;
-    Ok(vm.into_sink())
+    let mut vm = Vm::new(model, template, actor, count);
+    vm.start(&a.body);
+    drive(&mut vm, &mut sink).and_then(|_| sink.finish()).with_context(|| format!("actor `{template}` instance {actor}"))?;
+    Ok(sink)
 }
 
 /// Instance counts of every actor template (`count` defaults to `gpus`).
@@ -1432,7 +1636,7 @@ pub fn actor_counts<'a>(model: &'a Model<'a>) -> Result<Vec<(&'a str, i64)>> {
         let count = match &a.count {
             None => model.cfg.gpus,
             Some(e) => {
-                let mut vm = Vm::new(model, NullSink, name, 0, model.cfg.gpus.max(1));
+                let mut vm = Vm::new(model, name, 0, model.cfg.gpus.max(1));
                 vm.eval_int(e).with_context(|| format!("actor `{name}` count"))?
             }
         };

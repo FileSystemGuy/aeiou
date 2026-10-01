@@ -32,7 +32,7 @@ use crate::coord::{Coordinator, Local};
 use crate::dryrun::{human_bytes, human_ns};
 use crate::eval::{Config, Model, Params};
 use crate::payload::{self, Filler, Manifest, NamespaceManifest, RankRecord};
-use crate::vm::{actor_counts, op_hash, Control, ForkKind, Op, OpCtx, OpKind, Sink, Snapshot, Vm};
+use crate::vm::{actor_counts, drive, op_hash, Control, ForkKind, Op, OpCtx, OpKind, Sink, Snapshot, Vm};
 
 // ---------------------------------------------------------------- options
 
@@ -43,6 +43,9 @@ pub struct RunOpts {
     pub backend: BackendKind,
     /// Per-thread read and write buffer ring, bytes.
     pub buffer_bytes: usize,
+    /// Event-loop threads for the `io_uring` backends (0: one per core, at most one per actor
+    /// instance). The `sync` backends run one thread per actor and ignore it.
+    pub threads: usize,
     /// Compression ratio of written content.
     pub write_compress: u64,
     /// Multiplier on `compute` sleeps.
@@ -375,21 +378,21 @@ impl Channel {
 
 // ---------------------------------------------------------------- shared state
 
-struct Shared {
-    opts: RunOpts,
-    coord: Arc<dyn Coordinator>,
-    aborted: Arc<AtomicBool>,
-    stats: Mutex<Stats>,
-    actors: Mutex<Vec<ActorRecord>>,
+pub(crate) struct Shared {
+    pub(crate) opts: RunOpts,
+    pub(crate) coord: Arc<dyn Coordinator>,
+    pub(crate) aborted: Arc<AtomicBool>,
+    pub(crate) stats: Mutex<Stats>,
+    pub(crate) actors: Mutex<Vec<ActorRecord>>,
     /// Barrier scopes each template participates in.
-    scopes: HashMap<String, Vec<String>>,
-    host: String,
+    pub(crate) scopes: HashMap<String, Vec<String>>,
+    pub(crate) host: String,
     /// Objects of input namespaces: path → the host that wrote it (when recorded).
-    input_objects: HashMap<String, Option<String>>,
+    pub(crate) input_objects: HashMap<String, Option<String>>,
     /// Objects this run created (path, creating GPU id), for the namespace manifests, and
     /// paths it removed (unlink, the source of a rename).
-    created: Mutex<Vec<(String, i64)>>,
-    removed: Mutex<Vec<String>>,
+    pub(crate) created: Mutex<Vec<(String, i64)>>,
+    pub(crate) removed: Mutex<Vec<String>>,
 }
 
 /// Per actor instance: its channels and its loader threads.
@@ -400,15 +403,15 @@ struct Instance {
 
 type Fds = HashMap<Arc<str>, Arc<OwnedFd>>;
 
-/// Files opened by this thread, plus what the parent had open at the fork.
-struct FdTable {
-    own: Fds,
+/// Files opened by this actor, plus what the parent had open at the fork.
+pub(crate) struct FdTable {
+    pub(crate) own: Fds,
     inherited: Option<Arc<FdTable>>,
     closed: HashSet<Arc<str>>,
 }
 
 impl FdTable {
-    fn get(&self, path: &str) -> Option<Arc<OwnedFd>> {
+    pub(crate) fn get(&self, path: &str) -> Option<Arc<OwnedFd>> {
         if let Some(fd) = self.own.get(path) {
             return Some(fd.clone());
         }
@@ -425,8 +428,8 @@ impl FdTable {
 
 /// A page-aligned buffer ring: successive I/Os land in successive slices so copies are not
 /// cache-hot (`NAPKIN_MATH.md` §2.2). Allocated on first use, grown to fit the largest op.
-struct Ring {
-    ptr: *mut u8,
+pub(crate) struct Ring {
+    pub(crate) ptr: *mut u8,
     cap: usize,
     pos: usize,
     target: usize,
@@ -435,7 +438,7 @@ struct Ring {
 unsafe impl Send for Ring {}
 
 impl Ring {
-    fn new(target: usize) -> Self {
+    pub(crate) fn new(target: usize) -> Self {
         Ring { ptr: std::ptr::null_mut(), cap: 0, pos: 0, target: target.max(ALIGN) }
     }
 
@@ -480,41 +483,34 @@ impl Drop for Ring {
     }
 }
 
-// ---------------------------------------------------------------- the sink
+// ---------------------------------------------------------------- per-actor state
 
-pub struct Runner {
-    sh: Arc<Shared>,
-    inst: Arc<Instance>,
-    be: Box<dyn Backend>,
-    fds: FdTable,
-    rbuf: Ring,
-    wbuf: Ring,
-    filler: Filler,
-    st: Stats,
-    takes: Vec<TakeRec>,
-    created: Vec<(String, i64)>,
-    removed: Vec<String>,
-    /// The actor instance's main thread (not a sub-actor).
-    main: bool,
-    template: &'static str,
-    actor: i64,
-    started: Instant,
+/// What every actor instance or sub-actor carries whichever driver runs it: its files, its
+/// payload filler, its statistics, and the bookkeeping the namespace manifests need. The
+/// thread-per-actor `Runner` (the `sync` backends) and the `io_uring` event loop
+/// (`uring.rs`) both build on it, so an op is checked and recorded the same way under every
+/// backend.
+pub(crate) struct ActorState {
+    pub(crate) fds: FdTable,
+    pub(crate) filler: Filler,
+    pub(crate) st: Stats,
+    pub(crate) takes: Vec<TakeRec>,
+    pub(crate) created: Vec<(String, i64)>,
+    pub(crate) removed: Vec<String>,
+    /// The actor instance's main line (not a sub-actor).
+    pub(crate) main: bool,
+    pub(crate) template: &'static str,
+    pub(crate) actor: i64,
+    pub(crate) started: Instant,
 }
 
-impl Runner {
-    fn new(sh: Arc<Shared>, inst: Arc<Instance>, template: &'static str, actor: i64, main: bool, inherited: Option<Arc<FdTable>>) -> Self {
-        let be = sh.opts.backend.make();
-        let buf = sh.opts.buffer_bytes;
-        let compress = sh.opts.write_compress;
-        Runner {
-            sh,
-            inst,
-            be,
+impl ActorState {
+    /// `threads` is what this actor adds to the report's OS thread count (1 when it is one).
+    pub(crate) fn new(sh: &Shared, template: &'static str, actor: i64, main: bool, inherited: Option<Arc<FdTable>>, threads: u64) -> Self {
+        ActorState {
             fds: FdTable { own: HashMap::new(), inherited, closed: HashSet::new() },
-            rbuf: Ring::new(buf),
-            wbuf: Ring::new(buf),
-            filler: Filler::new(compress),
-            st: Stats { threads: 1, ..Default::default() },
+            filler: Filler::new(sh.opts.write_compress),
+            st: Stats { threads, ..Default::default() },
             takes: Vec::new(),
             created: Vec::new(),
             removed: Vec::new(),
@@ -525,151 +521,57 @@ impl Runner {
         }
     }
 
-    fn child(&self) -> Runner {
-        Runner::new(self.sh.clone(), self.inst.clone(), self.template, self.actor, false, Some(self.fds.freeze()))
+    /// A sub-actor's state: sees the files this one has open at the fork.
+    pub(crate) fn child(&self, sh: &Shared, threads: u64) -> ActorState {
+        ActorState::new(sh, self.template, self.actor, false, Some(self.fds.freeze()), threads)
     }
 
-    fn full(&self, rel: &str) -> PathBuf {
-        self.sh.opts.root.join(rel)
-    }
-
-    /// `sync-direct`: an unaligned write cannot be issued (it would need read-modify-write);
-    /// an unaligned read is rounded out to alignment and the requested part counted (what an
-    /// `O_DIRECT` shim under a buffered application has to do).
-    fn check_align(&self, op: &Op) -> Result<()> {
-        if op.kind == OpKind::Write && self.sh.opts.backend.direct() && (op.offset % ALIGN as i64 != 0 || op.len % ALIGN as i64 != 0) {
+    /// An `O_DIRECT` backend: an unaligned write cannot be issued (it would need
+    /// read-modify-write); an unaligned read is rounded out to alignment by the driver and
+    /// the requested part counted (what an `O_DIRECT` shim under a buffered application has
+    /// to do).
+    pub(crate) fn check_align(&self, sh: &Shared, op: &Op) -> Result<()> {
+        if op.kind == OpKind::Write && sh.opts.backend.direct() && (op.offset % ALIGN as i64 != 0 || op.len % ALIGN as i64 != 0) {
             bail!(
-                "write {} off={} len={}: `sync-direct` needs {ALIGN}-byte alignment for writes; use `sync`",
+                "write {} off={} len={}: `{}` needs {ALIGN}-byte alignment for writes; use a buffered backend",
                 op.path,
                 op.offset,
-                op.len
+                op.len,
+                sh.opts.backend.name()
             );
         }
         Ok(())
     }
 
-    /// Issue the op; `Ok(n)` is the count it returned (bytes, entries, or 0).
-    fn issue(&mut self, op: &Op) -> std::io::Result<i64> {
-        match op.kind {
-            OpKind::Open => {
-                let mode = (op.aux >> 32) as u32;
-                let mode = if mode == 0 { 0o644 } else { mode };
-                let fd = self.be.open(&self.full(op.path), op.aux & 0xffff_ffff, mode)?;
-                self.fds.own.insert(Arc::from(op.path), Arc::new(fd));
-                if op.aux & (1 << (crate::ast::OpenFlag::CREAT as u8)) != 0 {
-                    self.created.push((op.path.to_string(), self.actor));
-                }
-                if let Some(writer) = self.sh.input_objects.get(op.path) {
-                    self.st.input_opens += 1;
-                    if writer.as_deref() == Some(self.sh.host.as_str()) {
-                        self.st.warm_opens += 1;
-                    }
-                }
-                Ok(0)
-            }
-            OpKind::Close => {
-                let key: Arc<str> = Arc::from(op.path);
-                if self.fds.own.remove(&key).is_none() {
-                    if self.fds.get(op.path).is_none() {
-                        return Err(std::io::Error::from_raw_os_error(libc::EBADF));
-                    }
-                    self.fds.closed.insert(key);
-                }
-                Ok(0)
-            }
-            OpKind::Read => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                let a = ALIGN as i64;
-                if self.sh.opts.backend.direct() && (op.offset % a != 0 || op.len % a != 0) {
-                    // round out; O_DIRECT needs the offset, length, and buffer aligned
-                    let lo = op.offset - op.offset.rem_euclid(a);
-                    let hi = (op.offset + op.len + a - 1) / a * a;
-                    let buf = self.rbuf.slice((hi - lo) as usize);
-                    let n = self.be.read(fd.as_fd(), buf, Some(lo))? as i64;
-                    let got = (n - (op.offset - lo)).clamp(0, op.len);
-                    if !op.positioned {
-                        // keep the file position where a plain read would have left it
-                        self.be.lseek(fd.as_fd(), op.offset + got, crate::ast::Whence::SET)?;
-                    }
-                    return Ok(got);
-                }
-                let buf = self.rbuf.slice(op.len as usize);
-                let off = if op.positioned { Some(op.offset) } else { None };
-                self.be.read(fd.as_fd(), buf, off).map(|n| n as i64)
-            }
-            OpKind::Write => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                let buf = self.wbuf.slice(op.len as usize);
-                let seed = payload::object_seed(op.seed, op.path);
-                self.filler.fill_range(|b| payload::block_seed(seed, 0, b), op.offset as u64, buf);
-                let off = if op.positioned { Some(op.offset) } else { None };
-                self.be.write(fd.as_fd(), buf, off).map(|n| n as i64)
-            }
-            OpKind::Lseek => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                let whence = match op.aux {
-                    0 => crate::ast::Whence::SET,
-                    1 => crate::ast::Whence::CUR,
-                    _ => crate::ast::Whence::END,
-                };
-                self.be.lseek(fd.as_fd(), op.offset, whence)
-            }
-            OpKind::Ioctl => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                let req = match op.aux {
-                    0 => crate::ast::IoctlRequest::TCGETS,
-                    1 => crate::ast::IoctlRequest::FIONREAD,
-                    _ => crate::ast::IoctlRequest::BLKGETSIZE64,
-                };
-                self.be.ioctl(fd.as_fd(), req).map(|_| 0)
-            }
-            OpKind::Fadvise => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                self.be.fadvise(fd.as_fd(), op.offset, op.len, crate::ast::Advice::from_code(op.aux)).map(|_| 0)
-            }
-            OpKind::Fstat => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                self.be.fstat(fd.as_fd())
-            }
-            OpKind::Stat => self.be.stat(&self.full(op.path)),
-            OpKind::Fsync => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                self.be.fsync(fd.as_fd()).map(|_| 0)
-            }
-            OpKind::Fdatasync => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                self.be.fdatasync(fd.as_fd()).map(|_| 0)
-            }
-            OpKind::Unlink => {
-                self.be.unlink(&self.full(op.path))?;
-                self.removed.push(op.path.to_string());
-                Ok(0)
-            }
-            OpKind::Ftruncate => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                self.be.ftruncate(fd.as_fd(), op.len).map(|_| 0)
-            }
-            OpKind::Fallocate => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                self.be.fallocate(fd.as_fd(), op.offset, op.len).map(|_| 0)
-            }
-            OpKind::Mkdir => {
-                self.be.mkdir(&self.full(op.path), op.aux as u32)?;
-                self.created.push((op.path.to_string(), self.actor));
-                Ok(0)
-            }
-            OpKind::Rmdir => self.be.rmdir(&self.full(op.path)).map(|_| 0),
-            OpKind::Rename => {
-                self.be.rename(&self.full(op.path), &self.full(op.path2.unwrap_or("")))?;
-                self.removed.push(op.path.to_string());
-                self.created.push((op.path2.unwrap_or("").to_string(), self.actor));
-                Ok(0)
-            }
-            OpKind::Readdir => {
-                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
-                self.be.readdir(fd.as_fd()).map(|n| n as i64)
+    pub(crate) fn fd(&self, path: &str) -> std::io::Result<Arc<OwnedFd>> {
+        self.fds.get(path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))
+    }
+
+    /// After a successful open: own the descriptor, note a creation, count an input open.
+    pub(crate) fn opened(&mut self, sh: &Shared, path: &str, aux: u64, fd: OwnedFd) {
+        self.fds.own.insert(Arc::from(path), Arc::new(fd));
+        if aux & (1 << (crate::ast::OpenFlag::CREAT as u8)) != 0 {
+            self.created.push((path.to_string(), self.actor));
+        }
+        if let Some(writer) = sh.input_objects.get(path) {
+            self.st.input_opens += 1;
+            if writer.as_deref() == Some(sh.host.as_str()) {
+                self.st.warm_opens += 1;
             }
         }
+    }
+
+    /// `close`: drop this actor's reference (the descriptor closes with the last one); a file
+    /// inherited from the parent is marked closed here without closing it there.
+    pub(crate) fn close(&mut self, path: &str) -> std::io::Result<()> {
+        let key: Arc<str> = Arc::from(path);
+        if self.fds.own.remove(&key).is_none() {
+            if self.fds.get(path).is_none() {
+                return Err(std::io::Error::from_raw_os_error(libc::EBADF));
+            }
+            self.fds.closed.insert(key);
+        }
+        Ok(())
     }
 
     fn record(&mut self, op: &Op, ctx: &OpCtx, ns: u64, transferred: u64) {
@@ -695,35 +597,10 @@ impl Runner {
         }
     }
 
-    fn spawn_sub(&self, snap: Snapshot<'static, 'static>, label: String, work: impl FnOnce(&mut Vm<'static, 'static, Runner>) -> Result<()> + Send + 'static) -> JoinHandle<(Result<()>, Stats)> {
-        let child = self.child();
-        std::thread::Builder::new()
-            .name(label)
-            .spawn(move || {
-                let mut vm = Vm::resume(child, snap);
-                let r = work(&mut vm);
-                let mut sink = vm.into_sink();
-                let r = r.and_then(|_| sink.finish());
-                if r.is_err() {
-                    sink.sh.aborted.store(true, Ordering::Relaxed);
-                }
-                (r, std::mem::take(&mut sink.st))
-            })
-            .expect("spawn")
-    }
-}
-
-impl Sink<'static, 'static> for Runner {
-    fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()> {
-        if self.sh.aborted.load(Ordering::Relaxed) {
-            bail!("run aborted: {}", self.sh.coord.abort_reason().unwrap_or_else(|| "another actor failed".into()));
-        }
-        if matches!(op.kind, OpKind::Read | OpKind::Write) {
-            self.check_align(op)?;
-        }
-        let t = Instant::now();
-        let r = self.issue(op);
-        let ns = t.elapsed().as_nanos() as u64;
+    /// The structural check of an op's result and its recording: a read must return the
+    /// computed count, a write its length, `readdir` the computed entries; a failure must be
+    /// in the statement's `expect` list.
+    pub(crate) fn settle(&mut self, op: &Op, ctx: &OpCtx, r: std::io::Result<i64>, ns: u64) -> Result<()> {
         let where_ = || {
             let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
             format!("{}#{} [{}] {} {}", ctx.template, ctx.actor, idx.join(","), op.kind.name(), op.path)
@@ -756,15 +633,215 @@ impl Sink<'static, 'static> for Runner {
                     self.record(op, ctx, ns, 0);
                     Ok(())
                 } else {
-                    let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
                     let mut extra = String::new();
                     if matches!(op.kind, OpKind::Read | OpKind::Write) {
                         extra = format!(" off={} len={}", op.offset, op.len);
                     }
-                    Err(anyhow!("{}#{} [{}] {} {}{}: {} ({})", ctx.template, ctx.actor, idx.join(","), op.kind.name(), op.path, extra, e, name))
+                    Err(anyhow!("{}{}: {} ({})", where_(), extra, e, name))
                 }
             }
         }
+    }
+
+    /// `compute`: recorded unscaled, and against the last take.
+    pub(crate) fn computed(&mut self, ns: u64) {
+        self.st.compute_ns += ns;
+        if let Some(last) = self.takes.last_mut() {
+            last.compute_ns += ns;
+        }
+    }
+
+    pub(crate) fn took(&mut self, stall_ns: u64) {
+        self.st.takes += 1;
+        self.takes.push(TakeRec { stall_ns, compute_ns: 0 });
+    }
+
+    /// What every actor hands to the run when it ends: created and removed paths; for a main
+    /// line also its barrier departures, its take record, and its statistics (a sub-actor's
+    /// statistics go to its parent).
+    pub(crate) fn finish_shared(&mut self, sh: &Shared) {
+        if !self.created.is_empty() {
+            sh.created.lock().unwrap().append(&mut self.created);
+        }
+        if !self.removed.is_empty() {
+            sh.removed.lock().unwrap().append(&mut self.removed);
+        }
+        if self.main {
+            if let Some(scopes) = sh.scopes.get(self.template) {
+                for s in scopes {
+                    sh.coord.leave(s);
+                }
+            }
+            sh.actors.lock().unwrap().push(ActorRecord {
+                template: self.template.to_string(),
+                actor: self.actor,
+                takes: std::mem::take(&mut self.takes),
+                elapsed: self.started.elapsed(),
+            });
+            sh.stats.lock().unwrap().merge(&std::mem::take(&mut self.st));
+        }
+    }
+}
+
+/// Issue the op through a blocking backend; `Ok(n)` is the count it returned (bytes, entries,
+/// or 0). The `sync` sink's whole backend, and what the `io_uring` loop runs inline for the
+/// ops the ring has no opcode for (`lseek`, `ioctl`, `readdir`) or the kernel lacks.
+pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorState, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> std::io::Result<i64> {
+    let full = |rel: &str| sh.opts.root.join(rel);
+    match op.kind {
+        OpKind::Open => {
+            let mode = (op.aux >> 32) as u32;
+            let mode = if mode == 0 { 0o644 } else { mode };
+            let fd = be.open(&full(op.path), op.aux & 0xffff_ffff, mode)?;
+            a.opened(sh, op.path, op.aux, fd);
+            Ok(0)
+        }
+        OpKind::Close => a.close(op.path).map(|_| 0),
+        OpKind::Read => {
+            let fd = a.fd(op.path)?;
+            let al = ALIGN as i64;
+            if sh.opts.backend.direct() && (op.offset % al != 0 || op.len % al != 0) {
+                // round out; O_DIRECT needs the offset, length, and buffer aligned
+                let (lo, hi) = round_out(op.offset, op.len);
+                let buf = rbuf.slice((hi - lo) as usize);
+                let n = be.read(fd.as_fd(), buf, Some(lo))? as i64;
+                let got = (n - (op.offset - lo)).clamp(0, op.len);
+                if !op.positioned {
+                    // keep the file position where a plain read would have left it
+                    be.lseek(fd.as_fd(), op.offset + got, crate::ast::Whence::SET)?;
+                }
+                return Ok(got);
+            }
+            let buf = rbuf.slice(op.len as usize);
+            let off = if op.positioned { Some(op.offset) } else { None };
+            be.read(fd.as_fd(), buf, off).map(|n| n as i64)
+        }
+        OpKind::Write => {
+            let fd = a.fd(op.path)?;
+            let buf = wbuf.slice(op.len as usize);
+            fill(a, op, buf);
+            let off = if op.positioned { Some(op.offset) } else { None };
+            be.write(fd.as_fd(), buf, off).map(|n| n as i64)
+        }
+        OpKind::Lseek => {
+            let fd = a.fd(op.path)?;
+            be.lseek(fd.as_fd(), op.offset, crate::ast::Whence::from_code(op.aux))
+        }
+        OpKind::Ioctl => {
+            let fd = a.fd(op.path)?;
+            be.ioctl(fd.as_fd(), crate::ast::IoctlRequest::from_code(op.aux)).map(|_| 0)
+        }
+        OpKind::Fadvise => {
+            let fd = a.fd(op.path)?;
+            be.fadvise(fd.as_fd(), op.offset, op.len, crate::ast::Advice::from_code(op.aux)).map(|_| 0)
+        }
+        OpKind::Fstat => {
+            let fd = a.fd(op.path)?;
+            be.fstat(fd.as_fd())
+        }
+        OpKind::Stat => be.stat(&full(op.path)),
+        OpKind::Fsync => {
+            let fd = a.fd(op.path)?;
+            be.fsync(fd.as_fd()).map(|_| 0)
+        }
+        OpKind::Fdatasync => {
+            let fd = a.fd(op.path)?;
+            be.fdatasync(fd.as_fd()).map(|_| 0)
+        }
+        OpKind::Unlink => {
+            be.unlink(&full(op.path))?;
+            a.removed.push(op.path.to_string());
+            Ok(0)
+        }
+        OpKind::Ftruncate => {
+            let fd = a.fd(op.path)?;
+            be.ftruncate(fd.as_fd(), op.len).map(|_| 0)
+        }
+        OpKind::Fallocate => {
+            let fd = a.fd(op.path)?;
+            be.fallocate(fd.as_fd(), op.offset, op.len).map(|_| 0)
+        }
+        OpKind::Mkdir => {
+            be.mkdir(&full(op.path), op.aux as u32)?;
+            a.created.push((op.path.to_string(), a.actor));
+            Ok(0)
+        }
+        OpKind::Rmdir => be.rmdir(&full(op.path)).map(|_| 0),
+        OpKind::Rename => {
+            be.rename(&full(op.path), &full(op.path2.unwrap_or("")))?;
+            a.removed.push(op.path.to_string());
+            a.created.push((op.path2.unwrap_or("").to_string(), a.actor));
+            Ok(0)
+        }
+        OpKind::Readdir => {
+            let fd = a.fd(op.path)?;
+            be.readdir(fd.as_fd()).map(|n| n as i64)
+        }
+    }
+}
+
+/// The `O_DIRECT` rounding of an unaligned `[offset, offset + len)`: aligned `[lo, hi)`.
+pub(crate) fn round_out(offset: i64, len: i64) -> (i64, i64) {
+    let al = ALIGN as i64;
+    (offset - offset.rem_euclid(al), (offset + len + al - 1) / al * al)
+}
+
+/// A write's content: the positional payload of the object at the op's offset (§5).
+pub(crate) fn fill(a: &mut ActorState, op: &Op, buf: &mut [u8]) {
+    let seed = payload::object_seed(op.seed, op.path);
+    a.filler.fill_range(|b| payload::block_seed(seed, 0, b), op.offset as u64, buf);
+}
+
+// ---------------------------------------------------------------- the sink
+
+pub struct Runner {
+    sh: Arc<Shared>,
+    inst: Arc<Instance>,
+    be: Box<dyn Backend>,
+    rbuf: Ring,
+    wbuf: Ring,
+    a: ActorState,
+}
+
+impl Runner {
+    fn new(sh: Arc<Shared>, inst: Arc<Instance>, template: &'static str, actor: i64, main: bool, inherited: Option<Arc<FdTable>>) -> Self {
+        let be = sh.opts.backend.make();
+        let buf = sh.opts.buffer_bytes;
+        let a = ActorState::new(&sh, template, actor, main, inherited, 1);
+        Runner { sh, inst, be, rbuf: Ring::new(buf), wbuf: Ring::new(buf), a }
+    }
+
+    fn child(&self) -> Runner {
+        Runner::new(self.sh.clone(), self.inst.clone(), self.a.template, self.a.actor, false, Some(self.a.fds.freeze()))
+    }
+
+    fn spawn_sub(&self, snap: Snapshot<'static, 'static>, label: String, work: impl FnOnce(&mut Vm<'static, 'static>, &mut Runner) -> Result<()> + Send + 'static) -> JoinHandle<(Result<()>, Stats)> {
+        let mut sink = self.child();
+        std::thread::Builder::new()
+            .name(label)
+            .spawn(move || {
+                let mut vm = Vm::resume(snap);
+                let r = work(&mut vm, &mut sink);
+                let r = r.and_then(|_| sink.finish());
+                if r.is_err() {
+                    sink.sh.aborted.store(true, Ordering::Relaxed);
+                }
+                (r, std::mem::take(&mut sink.a.st))
+            })
+            .expect("spawn")
+    }
+}
+
+impl Sink<'static, 'static> for Runner {
+    fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()> {
+        if self.sh.aborted.load(Ordering::Relaxed) {
+            bail!("run aborted: {}", self.sh.coord.abort_reason().unwrap_or_else(|| "another actor failed".into()));
+        }
+        self.a.check_align(&self.sh, op)?;
+        let t = Instant::now();
+        let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, op);
+        let ns = t.elapsed().as_nanos() as u64;
+        self.a.settle(op, ctx, r, ns)
     }
 
     fn control(&mut self, c: Control<'static>, ctx: &OpCtx) -> Result<()> {
@@ -775,18 +852,15 @@ impl Sink<'static, 'static> for Runner {
                 if scaled > 0 {
                     std::thread::sleep(Duration::from_nanos(scaled));
                 }
-                self.st.compute_ns += ns;
-                if let Some(last) = self.takes.last_mut() {
-                    last.compute_ns += ns;
-                }
+                self.a.computed(ns);
             }
             Control::Barrier { scope } => {
-                if !self.main {
+                if !self.a.main {
                     bail!("barrier `{scope}` inside a sub-actor is not supported");
                 }
                 let waited = self.sh.coord.barrier(scope, &self.sh.aborted)?;
-                self.st.barriers += 1;
-                self.st.barrier_wait_ns += waited.as_nanos() as u64;
+                self.a.st.barriers += 1;
+                self.a.st.barrier_wait_ns += waited.as_nanos() as u64;
             }
             Control::Channel { name, capacity, ordered } => {
                 let mut ch = self.inst.channels.lock().unwrap();
@@ -798,7 +872,7 @@ impl Sink<'static, 'static> for Runner {
             Control::Put { channel, seq } => {
                 let ch = self.inst.channels.lock().unwrap().get(channel).cloned().ok_or_else(|| anyhow!("put on undeclared channel `{channel}`"))?;
                 ch.put(seq, &self.sh.aborted)?;
-                self.st.puts += 1;
+                self.a.st.puts += 1;
             }
             Control::Take { channel } => {
                 let ch = self.inst.channels.lock().unwrap().get(channel).cloned().ok_or_else(|| anyhow!("take on undeclared channel `{channel}` (a loader declares one under its name)"))?;
@@ -807,9 +881,7 @@ impl Sink<'static, 'static> for Runner {
                     let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
                     format!("{}#{} [{}] take `{channel}`", ctx.template, ctx.actor, idx.join(","))
                 })?;
-                let stall = t.elapsed().as_nanos() as u64;
-                self.st.takes += 1;
-                self.takes.push(TakeRec { stall_ns: stall, compute_ns: 0 });
+                self.a.took(t.elapsed().as_nanos() as u64);
             }
         }
         Ok(())
@@ -821,13 +893,16 @@ impl Sink<'static, 'static> for Runner {
             ForkKind::Parallel { index, width } => {
                 let mut handles = Vec::with_capacity(width as usize);
                 for k in 0..width {
-                    let label = format!("{}#{} {index}={k}", self.template, self.actor);
-                    handles.push(self.spawn_sub(snap.clone(), label, move |vm| vm.run_sub(k)));
+                    let label = format!("{}#{} {index}={k}", self.a.template, self.a.actor);
+                    handles.push(self.spawn_sub(snap.clone(), label, move |vm, sink| {
+                        vm.start_sub(k);
+                        drive(vm, sink)
+                    }));
                 }
                 let mut first_err = None;
                 for h in handles {
                     let (r, st) = h.join().map_err(|_| anyhow!("a `{index}` sub-actor panicked"))?;
-                    self.st.merge(&st);
+                    self.a.st.merge(&st);
                     if let Err(e) = r {
                         if first_err.is_none() {
                             first_err = Some(e);
@@ -851,9 +926,9 @@ impl Sink<'static, 'static> for Runner {
                 let mut handles = Vec::with_capacity(workers as usize);
                 for w in 0..workers {
                     let chan = chan.clone();
-                    let label = format!("{}#{} {index} worker {w}", self.template, self.actor);
-                    let h = self.spawn_sub(snap.clone(), label, move |vm| {
-                        let aborted = &vm.sink.sh.clone().aborted;
+                    let label = format!("{}#{} {index} worker {w}", self.a.template, self.a.actor);
+                    let h = self.spawn_sub(snap.clone(), label, move |vm, sink| {
+                        let aborted = &sink.sh.clone().aborted;
                         let mut b = w;
                         while b < batches {
                             if let Err(e) = chan.begin(b, aborted) {
@@ -863,7 +938,8 @@ impl Sink<'static, 'static> for Runner {
                                 }
                                 return Ok(());
                             }
-                            if let Err(e) = vm.run_sub(b) {
+                            vm.start_sub(b);
+                            if let Err(e) = drive(vm, sink) {
                                 chan.fail(format!("{e:#}"));
                                 return Err(e);
                             }
@@ -882,13 +958,7 @@ impl Sink<'static, 'static> for Runner {
 
     fn finish(&mut self) -> Result<()> {
         let mut result = Ok(());
-        if !self.created.is_empty() {
-            self.sh.created.lock().unwrap().append(&mut self.created);
-        }
-        if !self.removed.is_empty() {
-            self.sh.removed.lock().unwrap().append(&mut self.removed);
-        }
-        if self.main {
+        if self.a.main {
             // loaders: close their channels so a worker blocked on a slot exits, then join
             let channels: Vec<(String, Arc<Channel>)> = self.inst.channels.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             for (_, ch) in &channels {
@@ -898,7 +968,7 @@ impl Sink<'static, 'static> for Runner {
             for (name, h) in loaders {
                 match h.join() {
                     Ok((r, st)) => {
-                        self.st.merge(&st);
+                        self.a.st.merge(&st);
                         if let Err(e) = r {
                             if result.is_ok() {
                                 result = Err(e.context(format!("loader `{name}` worker")));
@@ -916,28 +986,22 @@ impl Sink<'static, 'static> for Runner {
                 if let Some(total) = ch.total {
                     let taken = ch.taken();
                     if taken < total && result.is_ok() {
-                        result = Err(anyhow!("loader `{name}`: {taken} of {total} batches were taken; the consumer must take exactly `batches` items (`NAPKIN_MATH.md` §4.1, finite producers)"));
+                        result = Err(untaken(name, taken, total));
                     }
                 }
             }
-            if let Some(scopes) = self.sh.scopes.get(self.template) {
-                for s in scopes {
-                    self.sh.coord.leave(s);
-                }
-            }
-            self.sh.actors.lock().unwrap().push(ActorRecord {
-                template: self.template.to_string(),
-                actor: self.actor,
-                takes: std::mem::take(&mut self.takes),
-                elapsed: self.started.elapsed(),
-            });
-            self.sh.stats.lock().unwrap().merge(&std::mem::take(&mut self.st));
         }
+        self.a.finish_shared(&self.sh);
         if result.is_err() {
             self.sh.aborted.store(true, Ordering::Relaxed);
         }
         result
     }
+}
+
+/// A loader whose consumer did not take every batch (`NAPKIN_MATH.md` §4.1, finite producers).
+pub(crate) fn untaken(name: &str, taken: i64, total: i64) -> anyhow::Error {
+    anyhow!("loader `{name}`: {taken} of {total} batches were taken; the consumer must take exactly `batches` items (`NAPKIN_MATH.md` §4.1, finite producers)")
 }
 
 // ---------------------------------------------------------------- startup checks
@@ -1294,6 +1358,20 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
     });
 
     let t0 = Instant::now();
+    if sh.opts.backend.uring() {
+        let loops = crate::uring::run(model, &sh, &counts, &ranges);
+        let elapsed = t0.elapsed();
+        return match loops {
+            Ok(threads) => {
+                sh.stats.lock().unwrap().threads += threads as u64;
+                assemble(sh, counts, rank_record, elapsed)
+            }
+            Err(e) => {
+                sh.coord.stop(&format!("{e:#}"));
+                Err(e)
+            }
+        };
+    }
     let mut handles = Vec::new();
     for (&(template, count), &(lo, hi)) in counts.iter().zip(&ranges) {
         for actor in lo..hi {
@@ -1302,10 +1380,11 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
             let h = std::thread::Builder::new()
                 .name(format!("{template}#{actor}"))
                 .spawn(move || {
-                    let sink = Runner::new(sh.clone(), inst, template, actor, true, None);
+                    let mut sink = Runner::new(sh.clone(), inst, template, actor, true, None);
                     let body = &model.ast.actors[template].body;
-                    let mut vm = Vm::new(model, sink, template, actor, count);
-                    let r = vm.run(body);
+                    let mut vm = Vm::new(model, template, actor, count);
+                    vm.start(body);
+                    let r = drive(&mut vm, &mut sink).and_then(|_| sink.finish());
                     if r.is_err() {
                         sh.aborted.store(true, Ordering::Relaxed);
                     }
@@ -1336,6 +1415,11 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
         sh.coord.stop(&format!("{e:#}"));
         return Err(e);
     }
+    assemble(sh, counts, rank_record, elapsed)
+}
+
+/// The host's report once every actor has ended.
+fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: RankRecord, elapsed: Duration) -> Result<Report> {
     if sh.aborted.load(Ordering::Relaxed) {
         bail!("run aborted: {}", sh.coord.abort_reason().unwrap_or_else(|| "an actor failed".into()));
     }

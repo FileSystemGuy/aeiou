@@ -78,9 +78,14 @@ struct RunCmd {
     /// Directory the abstract's paths are relative to (datasets and namespaces live under it).
     #[arg(long)]
     root: PathBuf,
-    /// `sync` (buffered POSIX on one thread per actor) or `sync-direct` (the same with O_DIRECT).
+    /// `sync` (buffered POSIX on one thread per actor), `sync-direct` (the same with O_DIRECT),
+    /// `io_uring` (an event loop per thread multiplexing the actors over one ring), `io_uring-direct`.
     #[arg(long = "io-backend", default_value = "sync")]
     backend: String,
+    /// Event-loop threads for the io_uring backends (default: one per core, at most one per actor
+    /// instance). The sync backends run one thread per actor and ignore it.
+    #[arg(long)]
+    threads: Option<usize>,
     /// Per-thread read and write buffer ring, MiB.
     #[arg(long, default_value_t = 8)]
     buffer_mib: usize,
@@ -203,7 +208,7 @@ fn datagen_cmd(a: DatagenArgs) -> Result<()> {
 
 fn run_cmd(a: RunCmd) -> Result<()> {
     let cfg = parse_config(&a.run)?;
-    let backend = BackendKind::parse(&a.backend).ok_or_else(|| anyhow::anyhow!("--io-backend {}: not one of sync, sync-direct", a.backend))?;
+    let backend = BackendKind::parse(&a.backend).ok_or_else(|| anyhow::anyhow!("--io-backend {}: not one of {}", a.backend, aeiou::backend::NAMES))?;
     let expect_fingerprint = match &a.expect_fingerprint {
         None => None,
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| anyhow::anyhow!("--expect-fingerprint {h}: not hex"))?),
@@ -249,6 +254,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         root: a.root.clone(),
         backend,
         buffer_bytes: a.buffer_mib.max(1) << 20,
+        threads: a.threads.unwrap_or(0),
         write_compress: a.write_compress,
         time_scale: a.time_scale.max(0.0),
         clean_namespaces: a.clean_namespaces,

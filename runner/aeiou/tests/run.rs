@@ -2,7 +2,8 @@
 //! the corpus a dataset definition describes is written and read back exactly (every read
 //! returns the computed count), the run's fingerprint equals the dry run's, the manifest
 //! check refuses a changed definition, namespaces must be empty, and a loader delivers its
-//! batches in order under real concurrency.
+//! batches in order under real concurrency. The `io_uring` backends run the same abstracts
+//! on the event loop and must produce the same fingerprint, counts, and bytes.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -51,6 +52,7 @@ fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
         root: root.clone(),
         backend,
         buffer_bytes: 1 << 20,
+        threads: 0,
         write_compress: 1,
         time_scale: 0.0,
         clean_namespaces: false,
@@ -84,7 +86,7 @@ fn small_files_training_round_trip() {
     assert_eq!(checks[0].files, Some(600));
     run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
     let (fp, ops, bytes) = dry_fingerprint(model);
-    for backend in [BackendKind::Sync, BackendKind::SyncDirect] {
+    for backend in [BackendKind::Sync, BackendKind::SyncDirect, BackendKind::Uring, BackendKind::UringDirect] {
         let r = go(model, opts(&root, backend));
         assert_eq!(r.stats.fingerprint, fp, "{:?}: fingerprint", backend);
         assert_eq!(r.stats.ops, ops);
@@ -290,4 +292,80 @@ fn gpu_ranges_rotate_by_host() {
         all.sort();
         assert_eq!(all, (0..10).collect::<Vec<_>>());
     }
+}
+
+#[test]
+fn io_uring_reproduces_the_sync_runs() {
+    // The event loop multiplexes every actor and sub-actor of these abstracts (loaders with
+    // ordered channels, `parallel` slots, nested `parallel`, barriers, namespace writes and
+    // read-back) over one ring per thread; the fingerprint, op count, and bytes must equal the
+    // dry run's exactly, on one loop and on several.
+    for threads in [1usize, 3] {
+        let root = tmpdir("uring-kv");
+        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8")];
+        let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(2, 5, &params));
+        gen(loaded, cfg, model, &root);
+        run::check_datasets(loaded, cfg, &root).unwrap();
+        run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
+        let (fp, ops, bytes) = dry_fingerprint(model);
+        let mut o = opts(&root, BackendKind::Uring);
+        o.threads = threads;
+        let r = go(model, o);
+        assert_eq!(r.stats.fingerprint, fp, "kv_cache_serving on {threads} loop(s)");
+        assert_eq!(r.stats.ops, ops);
+        assert_eq!(r.stats.bytes_read, bytes);
+        assert_eq!(r.stats.threads as usize, threads.min(2), "loop threads, not actors");
+        assert!(r.stats.expected_errors > 0);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    {
+        let root = tmpdir("uring-diskann");
+        let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
+        let (loaded, cfg, model) = leaked_model("vdb_search_diskann", config(2, 9, &params));
+        gen(loaded, cfg, model, &root);
+        let (fp, ops, bytes) = dry_fingerprint(model);
+        for backend in [BackendKind::Uring, BackendKind::UringDirect] {
+            let r = go(model, opts(&root, backend));
+            assert_eq!(r.stats.fingerprint, fp, "{backend:?}");
+            assert_eq!(r.stats.ops, ops);
+            assert_eq!(r.stats.bytes_read, bytes);
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    {
+        let root = tmpdir("uring-ckpt");
+        let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true")];
+        let (loaded, _cfg, model) = leaked_model("ckpt_write_dcp", config(2, 3, &params));
+        let (fp, ops, _) = dry_fingerprint(model);
+        for backend in [BackendKind::Uring, BackendKind::UringDirect] {
+            run::prepare_namespaces(&loaded.ast, &root, true).unwrap();
+            let r = go(model, opts(&root, backend));
+            assert_eq!(r.stats.fingerprint, fp, "{backend:?}");
+            assert_eq!(r.stats.ops, ops);
+            assert_eq!(r.stats.barriers, 2 * 2 * 4, "barriers between loops go through the coordinator's eventfd");
+            assert_eq!(r.stats.bytes_read, r.stats.bytes_written - 2 * 65536);
+            assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * 65536);
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+#[test]
+fn io_uring_loader_delivers_in_order_and_bounds_prefetch() {
+    let root = tmpdir("uring-loader");
+    let params = [("files", "200"), ("batch", "2"), ("workers", "3"), ("prefetch", "1"), ("steps", "30"), ("step_time", "2000000")];
+    let (loaded, cfg, model) = leaked_model("train_small_files", config(1, 11, &params));
+    gen(loaded, cfg, model, &root);
+    let (fp, _, _) = dry_fingerprint(model);
+    let mut o = opts(&root, BackendKind::Uring);
+    o.time_scale = 1.0;
+    let r = go(model, o);
+    assert_eq!(r.stats.fingerprint, fp, "the same ops whatever the interleaving");
+    let takes = &r.actors[0].takes;
+    assert_eq!(takes.len(), 30);
+    assert!(takes.iter().all(|t| t.compute_ns == 2_000_000), "compute is recorded unscaled against the take");
+    assert_eq!(r.stats.compute_ns, 30 * 2_000_000);
+    assert_eq!(r.stats.threads, 1, "one loop for one instance");
+    assert!(r.elapsed >= std::time::Duration::from_millis(60), "the timers slept: {:?}", r.elapsed);
+    std::fs::remove_dir_all(&root).unwrap();
 }

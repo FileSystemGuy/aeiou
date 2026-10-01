@@ -18,6 +18,7 @@ pub mod payload;
 pub mod rng;
 pub mod run;
 pub mod sites;
+pub mod uring;
 pub mod validate;
 pub mod vm;
 
