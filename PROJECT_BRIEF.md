@@ -99,10 +99,10 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   |---|---|---|
   | `sync` | blocking `pread`/`pwrite` on a thread pool, buffered | fidelity reference: what PyTorch does |
   | `sync-direct` | same, `O_DIRECT` | |
-  | `posix-aio` | glibc `aio_read`/`lio_listio` | user-space thread pool inside glibc; included for completeness, expect it to track `sync` |
-  | `libaio` | `io_submit`/`io_getevents` | the kernel AIO path; truly async only with `O_DIRECT`; what fio and vendors mean by "AIO" |
+  | `posix-aio` | glibc `aio_read`/`lio_listio` | user-space thread pool inside glibc; included for completeness, expect it to track `sync`. **Built 2026-10-01** (`runner/README.md` §9, also `posix-aio-direct`): it tracks `sync` in RPCs and costs 2.5 to 3 times the CPU on the loopback |
+  | `libaio` | `io_submit`/`io_getevents` | the kernel AIO path; truly async only with `O_DIRECT`; what fio and vendors mean by "AIO". **Built 2026-10-01** as `libaio` and `libaio-direct` on the event loop (the system calls directly, `--aio-depth`; `DESIGN_REVIEW.md` §3.35); the report gives the time inside `io_submit` |
   | `io_uring` | `io-uring` crate | feature knobs (SQPOLL, fixed files/buffers, linking) are options, not backends; **built 2026-10-01** (`runner/README.md` §8); ~~the knobs not yet~~ the ring and io-wq knobs the same day (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`, `--defer-taskrun`, `--coop-taskrun`; `DESIGN_REVIEW.md` §3.34), fixed files/buffers and linking not |
-  | `mmap` | `mmap` + page touch, or `MADV_POPULATE_READ` / `MADV_WILLNEED` as prefetch variants | how safetensors, Arrow/HF datasets, and llama.cpp load; runs on the thread pool. The abstract's `read(f, off, len)` maps to populating that range |
+  | `mmap` | `mmap` + page touch, or `MADV_POPULATE_READ` / `MADV_WILLNEED` as prefetch variants | how safetensors, Arrow/HF datasets, and llama.cpp load; runs on the thread pool. The abstract's `read(f, off, len)` maps to populating that range. **Built 2026-10-01**: the file is mapped on first read and unmapped at `close`, ~~a read is a copy out of the mapping,~~ a read touches one byte of every page of its range (`--mmap-consume touch`, the default since later the same day; `copy` is the option), and `--mmap-mode fault\|populate\|willneed` picks the prefetch before it. The map, unmap, flush, and fault costs are counted against the backend (`DESIGN_REVIEW.md` §3.35, Revised) |
   | `gds` | cuFile: `cuFileRead` (sync), batch API, stream-ordered | needs a CUDA device on the client. **Must detect and report compat mode** (POSIX bounce buffer fallback), which is the common case on NFS |
   | `nixl-posix` | NIXL with its POSIX plugin (`nixl-sys` Rust bindings) | needs a CUDA device; per-transfer descriptor setup will dominate small reads, which is a valid result |
   | `libnfs` | user-space NFS client | no kernel page/dentry/attribute cache; every LOOKUP goes over the wire; a floor for "client CPU with no kernel in the path" |
@@ -196,7 +196,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    (contract 0.2, 2026-09-30), and the per-op cost (150–350 ns; caching a bound handle's
    path is the first fix). **The resumable VM and the `io_uring` backends done 2026-10-01**
    (`runner/README.md` §8, `DESIGN_REVIEW.md` §3.29): every committed abstract reproduces its
-   fingerprint on the event loop, on ext4 and on the loopback mount.
+   fingerprint on the event loop, on ext4 and on the loopback mount. **`posix-aio`,
+   `libaio`, and `mmap` done the same day** (`runner/README.md` §9, `DESIGN_REVIEW.md`
+   §3.35); of the brief's list `gds`, `nixl-posix`, and `libnfs` remain.
 4. **Spike 1:** blocking thread pool first, then io_uring; buffered vs. O_DIRECT, for
    `open → read → close` against the real NFS target, measuring `iou-wrk` count separately for
    open-heavy and read-heavy phases. It decides the I/O backend and the cache strategy. The
@@ -287,7 +289,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     write-then-read case is two runs already (`ckpt_write_dcp` then `ckpt_restore` through
     the namespace manifest). Root is required; the runner refuses to start when the write
     fails on any host. The report records the drop, its duration (outside `elapsed` by
-    construction), and before/after `Cached`, `dentry-state`, `inode-nr`; a residency check
+    construction), and before/after `Cached` (printed less `Shmem` since 2026-10-01), `dentry-state`, `inode-nr`; a residency check
     (`mincore` over a few hundred dataset files chosen by formula, no root) reports the
     fraction of sampled dataset pages resident at the start, ~~with or without the flag,~~ only
     with `--drop-caches` or `--require-cold` (revised the same day: a plain run does not pay

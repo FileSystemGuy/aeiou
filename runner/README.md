@@ -27,10 +27,11 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. |
 | `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct] [--threads N] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
-Not yet: the other asynchronous backends (`libaio`, `posix-aio`, `mmap`, …; ~~`io_uring`~~
+Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
+2026-10-01**, §9; `gds`, `nixl-posix`, `libnfs` not; ~~`io_uring`~~
 **built 2026-10-01**, §8), ~~the per-backend counters, `mountstats`~~ (the host counters,
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
 backend-specific counters beyond those come with each backend), `--drop-caches` at the
@@ -60,6 +61,7 @@ aeiou/src/
                recording, namespace bookkeeping), the thread-per-actor Sink, startup checks, report
   uring.rs     the `io_uring` backends: one event loop per thread, a parked VM per task, the buffer
                pool, loop-local channels, barriers through the coordinator's eventfd (§8)
+  aio.rs       the `libaio` backends: the kernel AIO context as a second engine of that loop (§9)
   coord.rs     the Coordinator trait, the in-process implementation, the TCP client and the server for several hosts
   cold.rs      the cold start before the gate: `--drop-caches`, the kernel's cache sizes around it, the
                `mincore` residency sample of every dataset, the `--require-cold` refusal
@@ -71,7 +73,8 @@ aeiou/src/
 aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests, parameter files
 aeiou/tests/layout.rs   contract 0.2: framed layouts by hand, unit/column handles, stream consume, fadvise
 aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refusals, loader order;
-                        the `io_uring` backends over the same abstracts, on one loop and on several
+                        the `io_uring` backends over the same abstracts, on one loop and on several;
+                        `posix-aio`, `libaio`, and `mmap` over the same (§9)
 aeiou/tests/uring_knobs.rs  the ring and io-wq knobs (§8): same fingerprint, the io-wq cap holds, the SQPOLL threads are counted
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
 aeiou-launch            the ssh loop: one rank per host
@@ -225,8 +228,9 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   - with `--drop-caches`: `sync`, then `3` into `/proc/sys/vm/drop_caches`. The file is
     opened before the `sync`, so a host without root (or `CAP_SYS_ADMIN`) refuses at once,
     and through the coordinator that stops every host before the gate. The report gives
-    the two durations and `Cached`, the dentry count, and the inode count before and
-    after. The flag is part of the configuration the coordinator compares: a run is cold on
+    the two durations and ~~`Cached`~~ the file cache (`Cached − Shmem` of `/proc/meminfo`
+    since 2026-10-01: `Cached` counts tmpfs, which a drop cannot free), the dentry count,
+    and the inode count before and after. The flag is part of the configuration the coordinator compares: a run is cold on
     every host or on none. Never inside a run.
   - with `--drop-caches` or `--require-cold` (~~always~~; opt-in since later the same day,
     `DESIGN_REVIEW.md` §3.31: a plain run does not pay the sample's opens), the residency
@@ -249,7 +253,7 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   change, counts the `iou-wrk-*` threads in `/proc/self/task` for the io-wq worker peak
   (and the `iou-sqp-*` threads, printed as `sqpoll threads peak` when there are any)
   (workers linger idle for seconds, so the peak is not missed); `getrusage` before and after
-  gives user and system CPU and the peak RSS; `/proc/self/mountstats` before and after gives
+  gives user and system CPU, the peak RSS, and (since later on 2026-10-01, §9) the minor and major page faults; `/proc/self/mountstats` before and after gives
   the mount `--root` is on (longest mount point that is a prefix of the canonical root: its
   device and type on any filesystem, and its options as a `mount opts` line: the `opts:`
   line of `mountstats` on NFS, with `vers`, `rsize`, `acregmin`…, and `lookupcache` and
@@ -262,7 +266,7 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   Output:
 
   ```
-  host: tasks peak 26  io-wq workers peak 20  cpu user 0.039 s sys 0.509 s  maxrss 15.67 MiB
+  host: tasks peak 26  io-wq workers peak 20  cpu user 0.039 s sys 0.509 s  maxrss 15.67 MiB  faults minor 2589 major 0
   mount /mnt/aeiou-nfs (nfs4, localhost:/srv/aeiou-export): server read 191.40 MiB wrote 0 B; buffered read 191.40 MiB wrote 0 B; O_DIRECT requested read 0 B wrote 0 B
   rpcs 3242: READ=1600 (399µs rtt)  OPEN=1222 (385µs rtt)  OPEN_NOATTR=378 (349µs rtt)  GETATTR=15 (67µs rtt)  READDIR=14 (500µs rtt)  ACCESS=8 (0ns rtt)  LOOKUP=5 (200µs rtt)
     (the mount's counters over the run, every process on this host included)
@@ -593,3 +597,205 @@ shared poll thread halves the rate, since it serializes four rings' submissions 
 punts; (4) `DEFER_TASKRUN` with `COOP_TASKRUN` is neutral. None of this is a number for a
 real target. It says which rows Spike 1 should run there: the cap at 1, 2, and default,
 separately for open-heavy and read-heavy phases, buffered and direct.
+
+## 9. The `posix-aio`, `libaio`, and `mmap` backends (2026-10-01)
+
+Five more values of `--io-backend`, same abstract, same op stream, same fingerprint. Two
+are blocking backends on the thread per actor of `sync`, and one is a second engine for
+the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.md` §3.35.
+
+- **`posix-aio`, `posix-aio-direct`** (`backend.rs`). Every read, write, `fsync`, and
+  `fdatasync` is glibc's `aio_read`/`aio_write`/`aio_fsync` followed by `aio_suspend` until
+  it is done; the other ops are the `sync` calls. glibc serves requests from a user-space
+  pool (20 threads by default, and requests on one descriptor one at a time), so an op is
+  a hand-off to another thread around the same `pread`. An actor has one op in flight, so
+  there is no list for `lio_listio`. Its counter block is the host line's task peak (the
+  pool's threads appear there).
+- **`libaio`, `libaio-direct`** (`aio.rs`). The kernel AIO system calls (`io_setup`,
+  `io_submit`, `io_getevents`, issued directly: the libaio library is a thin wrapper and is
+  not linked) as the engine of the §8 loop: `--threads N` loops, one AIO context per loop,
+  one op in flight per task. The loop of `uring.rs` is generic over an `Engine` (issue,
+  complete, wait, and a wake-up on the coordinator's eventfd); the ring is one engine and
+  the AIO context the other, so tasks, channels, timers, and barriers are one
+  implementation. The interface carries `pread`, `pwrite`, `fsync`, `fdatasync`, and a
+  poll (`IOCB_CMD_POLL` on the eventfd, Linux 4.18: how a barrier release wakes the
+  loop). **Every other op is issued inline and blocks the loop**: `open`, `close`, `stat`
+  have no AIO form, which is what an AIO application lives with. Requests queue while the
+  loop advances its tasks and go to the kernel in one `io_submit` per turn. Reads and writes
+  go at their effective offset, as under `io_uring`. `--aio-depth N` is `io_setup`'s
+  `nr_events` per loop (default 256; the host's total is bounded by `fs.aio-max-nr`); a
+  full context returns `EAGAIN`, and the loop then reaps a completion and submits again.
+  The interface is asynchronous only with `O_DIRECT`: a buffered read is carried out
+  inside `io_submit`. The report's `libaio:` line says how long the loops spent there.
+- **`mmap`** (`backend.rs`). The first read of a descriptor maps the whole file
+  (`PROT_READ`, `MAP_SHARED`, the size from an `fstat` the backend issues itself), a read
+  makes its range of the mapping resident, and `close` unmaps: the shape of a safetensors
+  or Arrow load. A read at or past the end returns what `pread` would; a read past the
+  mapped length asks `fstat` again and remaps if the file has grown. Writes and every
+  other op are the `sync` calls. Two options, both part of the configuration the
+  coordinator compares (`--aio-depth`, like `--threads`, is a host's tuning and is not):
+  - `--mmap-consume touch` (default) reads one byte of every page of the range and copies
+    nothing; `copy` copies the range into the actor's buffer (a loader that copies out of
+    the mapping). Either way the read returns only when every page has arrived, because a
+    fault does not return before its page is read. The default charges `mmap` what the API
+    costs and no more: under `read(2)` the kernel's copy out of the page cache is part of
+    the call, under `O_DIRECT` and `mmap` there is none, and what the application then
+    does with the bytes (the copy to the GPU) is charged to no backend
+    (`DESIGN_REVIEW.md` §3.35, revised).
+  - `--mmap-mode` is the prefetch before that: `fault` (default: none, the touch faults the
+    pages in), `populate` (`MADV_POPULATE_READ` over the range, Linux 5.14; nothing is
+    touched afterwards, the call returns when the range is resident and mapped),
+    `willneed` (`MADV_WILLNEED` starts readahead and the touch waits for it).
+
+  A fault blocks the faulting thread only, and the backend runs one thread per actor, so
+  a page being read stalls the one actor that asked for it, as a blocking `pread` does.
+  Four things to know when reading its numbers: an I/O error or a truncation under
+  `fault` and `willneed` is a `SIGBUS`, as for the applications it models; the map, the
+  unmap, the translation flush each unmap causes, and the faults are what the technique
+  costs and are counted against it (decided 2026-10-01); because every actor thread maps
+  into the runner's one address space, those costs also couple the actors (one
+  `mmap_lock`, flushes to every core running an actor) more than they couple PyTorch
+  workers, which are processes; and the NFS client's `buffered read` byte counter counts
+  `read(2)` only, so it stays at zero and `server read` is the figure.
+- **Report.** `libaio: loops … context depth … in-flight peak … io_submit N calls, M
+  requests, T inside  io_getevents … context full …` and `mmap: mode … consume … mappings N
+  (bytes)  madvise calls …  pages touched …  copied out …` (`Report::aio`, `Report::mmap`, summed over hosts). The
+  host line gained `faults minor … major …` (`getrusage`) under every backend; under
+  `mmap` the major faults are the reads that reached storage.
+- **Refusals.** `--aio-depth` without a `libaio` backend and `--mmap-mode` or
+  `--mmap-consume` without `mmap` are refused, like the ring knobs under `sync`. There is no `mmap-direct`.
+- **Tests** (`tests/run.rs`). `train_small_files` under all nine backends; the
+  `kv_cache_serving`, `vdb_search_diskann`, and `ckpt_write_dcp` runs of the `io_uring` test
+  under the five new ones (`libaio` on one loop and on three, barriers through the poll,
+  write-then-read-back through a mapping made after the write), and the three `mmap`
+  modes under `touch` and under `copy` with their counters (pages touched equals bytes
+  over 4 KiB, none under `populate`, bytes copied only under `copy`); `builder/tests/test_formats.py` runs the three container
+  abstracts under `posix-aio`, `libaio`, and `mmap` as well. Not tested: a context that fills (the kernel rounds
+  `nr_events` up to a few per CPU, so a small test never gets `EAGAIN`).
+
+**Observed (2026-10-01, loopback NFS of §7, `--time-scale 0`).** `train_small_files` with
+4 GPUs (36 actors), 1,600 files, `steps=12`: 10,752 ops, of which 3,072 reads and 1,536
+opens, 179 MiB. Each row on its own freshly generated directory, cold; all rows reproduce
+the fingerprint.
+
+| backend | elapsed | tasks peak | cpu user + sys | read mean | RPCs, cold | backend's own line |
+|---|---|---|---|---|---|---|
+| `sync` | 0.16 s | 38 | 0.27 s | 0.52 ms | 4,618: READ 1,536, OPEN 1,536, CLOSE 1,536 | |
+| `posix-aio` | 0.23 s | 58 | 0.68 s | 1.2 ms | 4,616: the same | 20 pool threads in the task peak |
+| `posix-aio-direct` | 0.31 s | 58 | 0.77 s | 1.6 ms | 7,688: READ 4,608 | |
+| `io_uring --threads 4` | 0.24 s | 41 | 0.48 s | 0.77 ms | 4,632 | io-wq peak 35 |
+| `io_uring-direct --threads 4` | 0.34 s | 38 | 0.54 s | 1.4 ms | 7,693: READ 4,608 | io-wq peak 32 |
+| `libaio --threads 4` | 0.28 s | 6 | 0.17 s | 1.3 ms | 4,614: as `sync` | 512 `io_submit` calls, 0.36 s inside |
+| `libaio-direct --threads 4` | 0.37 s | 6 | 0.28 s | 1.7 ms | 7,686: READ 4,608 | 1,192 calls, 0.17 s inside |
+| `mmap` (touch) | 0.29 s | 38 | 0.48 s | 1.3 ms | 6,756: READ 2,137, GETATTR 1,536, OPEN, CLOSE | major faults 1,536; 46,651 pages touched |
+| `mmap --mmap-mode populate` | 0.24 s | 38 | 0.46 s | 1.1 ms | 6,755: READ 2,137, GETATTR 1,536 | major faults 3,087; nothing touched |
+| `mmap --mmap-mode willneed` | 0.24 s | 38 | 0.45 s | 1.0 ms | 6,148: READ 1,536, GETATTR 1,536 | major faults 0 |
+| `mmap --mmap-consume copy`, the three modes | 0.25, 0.25, 0.22 s | 38 | 0.50, 0.50, 0.46 s | 1.2, 1.2, 1.0 ms | as the rows above | RSS 33 MiB against 8 MiB |
+
+A second pass on the same directory sends 3,072 RPCs under every buffered backend
+(`OPEN_NOATTR` and `CLOSE`, no READ) and the cold count again under the direct ones.
+
+Then the 8-GPU run of §8's knob table (72 actors, 16,000 files, 896,000 ops of which
+256,000 reads and 128,000 opens), data from the client's page cache, the server handing
+out read delegations (176k RPCs: `OPEN_NOATTR` and `DELEGRETURN`) in every buffered row:
+
+| row | elapsed | tasks peak | cpu user + sys | read mean | backend's own line |
+|---|---|---|---|---|---|
+| `sync` (72 threads) | 5.5 s, 6.1 s | 74 | 10.3 s, 11.1 s | 13 µs, 18 µs | |
+| `io_uring --threads 4` | 7.7 s | 43 | 10.8 s | 0.72 ms | io-wq peak 37 |
+| `posix-aio` | 10.0 s | 94 | 31.1 s | 2.3 ms | |
+| `libaio --threads 4` | 7.9 s | 6 | 8.8 s | 0.99 ms | in-flight peak 16; 16,128 `io_submit` calls, 2.4 s inside |
+| `libaio` (8 loops) | 6.8 s | 10 | 10.8 s | 0.78 ms | in-flight peak 8; 3.0 s inside |
+| `libaio-direct --threads 4` | 23.8 s | 6 | 22.1 s | 4.2 ms | 595k RPCs (READ 384k); 12.9 s inside |
+| `libaio-direct` (8 loops) | 22.2 s | 10 | 26.4 s | 3.8 ms | 600k RPCs; 14.7 s inside |
+| `mmap` (touch) | 6.3 s | 74 | 15.1 s | 29 µs | 128,000 mappings; 3.9M pages touched; 330k minor faults; RSS 11 MiB |
+| `mmap --mmap-consume copy` | 7.2 s | 74 | 18.7 s | 39 µs | 393k minor faults; RSS 122 MiB |
+| `mmap --mmap-mode populate --mmap-consume copy` | 7.2 s | 74 | 21.9 s | 0.26 ms | 128,000 `madvise` calls |
+| `mmap --mmap-mode willneed --mmap-consume copy` | 7.2 s, 7.5 s | 74 | 23.1 s, 23.4 s | 0.48 ms | 128,000 `madvise` calls |
+| `sync-direct` (72 threads) | 20.8 s | 74 | 32.3 s | 2.9 ms | 595k RPCs (READ 384k), 15 GiB from the server |
+
+The same run in the other regime the server was in for part of the series (no
+delegations: 256k RPCs, an `OPEN_NOATTR` and a `CLOSE` per open), where the three prefetch
+modes under `touch` were measured:
+
+| row | elapsed | cpu user + sys | read mean |
+|---|---|---|---|
+| `sync` | 8.4 s | 13.4 s | 13 µs |
+| `mmap` (touch) | 8.6 s | 16.2 s | 13 µs |
+| `mmap --mmap-mode populate` (nothing touched) | 8.9 s | 17.9 s | 43 µs |
+| `mmap --mmap-mode willneed` | 9.1 s | 18.8 s | 61 µs |
+| `mmap --mmap-consume copy` | 9.2 s | 19.9 s | 23 µs |
+
+What the rows say, with the loopback's caveat that the server shares the client's cores
+and that none of this is a number for a real target:
+
+1. **`posix-aio` tracks `sync` on the wire and not in CPU.** The RPCs are identical; the
+   hand-off to glibc's pool and back costs 2.5 to 3 times the CPU and turns a 13 µs
+   page-cache read into 2.3 ms, because 72 actors queue for 20 pool threads. The brief's
+   "expect it to track `sync`" holds for what reaches the server only.
+2. **`libaio` buffered is a small synchronous thread pool, and here a cheap one.** Four
+   loops carry what 72 threads carry with the least CPU of any row and 6 tasks, because
+   nothing is handed to another thread: opens, closes, and (inside `io_submit`) the reads
+   all run on the loop. The price is that each loop does one thing at a time, which a
+   server with real latency would expose and this one does not.
+3. **`libaio-direct` is asynchronous for the reads only.** Its RPCs are those of the other
+   direct backends (one READ per megabyte asked, 3 per file here). A seventh of the loops'
+   time in the 16,000-file run was still spent inside `io_submit` (12.9 s of 4 × 23.8 s: what
+   the NFS client does to set a direct read going), and every open and close blocks the
+   loop besides. Buffered and cold, in the first table, it was a third (0.36 s of 4 × 0.28 s).
+4. **`mmap` puts different RPCs on the wire for the same reads.** Cold, the fault path
+   sent 2,137 READs where `read(2)` sent 1,536 (readahead for faults uses its own window),
+   plus one GETATTR per mapping that `read(2)` does not send; `MADV_WILLNEED` brought it
+   back to one READ per file with no major fault, and `MADV_POPULATE_READ` changed nothing
+   on the wire. `touch` and `copy` send the same RPCs.
+5. **Warm, `mmap` with `touch` costs 20 to 35 % more CPU than `sync`, and the copy another
+   quarter on top.** 16.2 s against 13.4 s without delegations, 15.1 s against 11.2 s with
+   them: that difference is the map, the unmap with its flush, and about three minor
+   faults per file, on one address space, with no copy at all against `sync`'s copy of
+   every byte. It is the price of the technique and stays in the row. The copy adds
+   3.6 s for 14.8 GiB (user time 3.8 s to 6.1 s) and 110 MiB of resident buffers; it was
+   the default for a few hours and overstated `mmap` by that much. A touched read takes
+   as long as a `read(2)` from the page cache (13 µs mean). The two advising modes cost
+   more than plain faulting when the pages are already cached: an `madvise` per read for
+   nothing. Against `sync-direct`, which fetched all 15 GiB again, any page-cache row
+   wins on this warm run; the comparison that matters is a cold one on a real target.
+6. **The first `sync` passes of the series ran without delegations** (256k RPCs, a `CLOSE`
+   per open, 8.6 s and 9.6 s) and the later ones with them (176k, 5.5 s). The server
+   decides that, not the backend; rows are comparable only within one regime, which the RPC
+   line shows. It changed back and forth during the `touch` series as well, which is why
+   that series is given in both regimes.
+
+**Observed on large files (2026-10-01, same mount).** `train_large_samples` with 4 GPUs
+(20 actors), `files=28`, `steps=2`: 28 files of about 140 MiB, 8,220 reads of 1 MiB,
+7.83 GiB read, every file read twice (3.85 GiB from the server on a cold pass). This is
+the shape `mmap` loaders are used for. Cold rows each on a freshly generated directory:
+
+| row | elapsed | cpu user + sys | READ RPCs (mean size) | faults |
+|---|---|---|---|---|
+| `sync`, cold | 1.17 s | 4.8 s | 6,087 (about 660 KiB) | |
+| `mmap` (touch), cold | 1.93 s | 3.6 s | 36,981 (about 109 KiB) | 3,573 major |
+| `mmap --mmap-mode populate`, cold | 2.25 s | 5.0 s | 38,255 | 47,244 major |
+| `mmap --mmap-mode willneed`, cold | 1.74 s | 4.7 s | 18,503 (about 218 KiB) | 4,031 major |
+| `sync-direct`, cold | 1.58 s | 0.55 s | 16,384, 7.86 GiB from the server | |
+| `sync`, warm | 0.46 to 0.50 s | 3.1 to 3.4 s | 0 | |
+| `mmap` (touch), warm | 0.12 to 0.14 s | 0.32 to 0.40 s | 0 | 75k minor |
+| `mmap --mmap-mode populate`, warm | 0.14 s | 0.24 s | 0 | |
+| `mmap --mmap-mode willneed`, warm | 0.13 s | 0.32 s | 0 | |
+| `mmap --mmap-consume copy`, warm | 0.47 s | 3.1 s (2.5 s of it user) | 0 | |
+
+1. **Warm, on large files, `mmap` with `touch` uses a tenth of the CPU of `sync`** and
+   finishes in under a third of the time: 56 mappings carry 7.8 GiB, so the fixed cost
+   per mapping that dominated the small-file run is spread over 140 MiB each, and there
+   is no copy. With `copy` the row is `sync`'s again, the copy moved from system to user
+   time. This is the advantage the default now lets `mmap` show.
+2. **Cold, the fault path sends six times as many READs, a sixth the size.** About
+   109 KiB per READ against about 660 KiB under `read(2)`, on a mount with `rsize` 1 MiB.
+   That is consistent with the mount's `read_ahead_kb` of 128 bounding the readahead
+   window of a fault where a 1 MiB `read(2)` asks for its whole length; it has not been
+   confirmed by changing the setting (root). `MADV_WILLNEED` halves the count, and
+   `MADV_POPULATE_READ` does not help. On this loopback `mmap` was the slowest way to
+   read cold and nearly the cheapest in CPU after `sync-direct`; what small READs cost
+   on a real server is the question for the real target, and `read_ahead_kb` is a
+   solution-side setting the report does not yet record.
+3. **RSS under `mmap` counts the mapped file pages** (about 1 GiB here against 70 MiB):
+   they are page cache, shared and reclaimable, not buffers the runner allocated.

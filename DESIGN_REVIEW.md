@@ -1048,8 +1048,8 @@ implemented (`read_all(columns=[…])`) and traced but no committed abstract use
   The ring and io-wq knobs built the same day (§3.34); fixed files and buffers not.
 - **Open.** ~~The per-backend counters (io-wq workers sampled from `/proc`, `mountstats`
   deltas) are shell scripts around the runner, not report fields;~~ (report fields the same
-  day, §3.30) `libaio`, `posix-aio`, and `mmap` now have the VM they need and are the next
-  backends in the brief's order.
+  day, §3.30) ~~`libaio`, `posix-aio`, and `mmap` now have the VM they need and are the next
+  backends in the brief's order.~~ Built the same day (§3.35).
 
 ### 3.30 Host counters in the report (added 2026-10-01)
 
@@ -1170,7 +1170,8 @@ these points settled in the building:
   in both. And `Cached` fell only from 2.24 to 2.10 GiB, because `Cached` in
   `/proc/meminfo` includes shmem and the loopback export is a 1.9 GiB tmpfs; on a host
   with a large tmpfs the before/after pair understates the drop, and `Cached − Shmem`
-  would be the better figure (not changed yet). Still untried: a real NFS client against a
+  would be the better figure ~~(not changed yet)~~ (the report prints that difference as
+  `file cache` since later the same day, with `Shmem` beside it). Still untried: a real NFS client against a
   real server, and the drop's duration after an enumerate of tens of millions of files.
 - `aeiou-launch --remount` is not built.
 
@@ -1281,6 +1282,157 @@ asynchronously, some milliseconds after the run returns. Runs in one process (th
 must wait for them before counting the next run's; the CLI is one run per process and is
 unaffected. The knob test lives in its own file, hence its own process, for the same reason.
 
+### 3.35 `posix-aio`, `libaio`, and `mmap` as built (added 2026-10-01)
+
+**What was open.** The brief's §4 lists nine backends; four existed. §3.29 left the three
+that need nothing but the VM as the next step. Built: `posix-aio`, `posix-aio-direct`,
+`libaio`, `libaio-direct`, `mmap` (`runner/README.md` §9, `backend.rs`, `aio.rs`,
+`tests/run.rs`). None changes the op stream; all reproduce the dry-run fingerprint.
+
+**Choices made while building, and why.** None of these was discussed first; each is
+open to revision.
+
+- **Where each one runs.** `NAPKIN_MATH.md` §4.2 sorted the APIs: blocking calls on the
+  thread per actor, submit-and-poll on the event loop. `posix-aio` and `mmap` are blocking
+  backends beside `sync` (`aio_suspend` and a page fault both block the caller). `libaio`
+  is a second engine under the loop of `uring.rs`, which became generic over an `Engine`
+  trait (issue, complete, wait, wake) rather than being copied: tasks, channels, timers,
+  barriers, and the deadlock report are one implementation, and the `io_uring` tests still
+  pass unchanged. §4.2 planned a poller thread per loop feeding an eventfd; none is needed,
+  since `io_getevents` takes a timeout and `IOCB_CMD_POLL` puts the barrier eventfd in the
+  same context (Linux 4.18).
+- **`libaio` is the kernel ABI, called directly.** The libaio library is a wrapper over
+  five system calls; linking it would add a build dependency for nothing. The name stays
+  `libaio` because that is what fio and vendors call the path. Counter-argument: a user
+  comparing with fio's `libaio` engine may assume the library's user-space ring fast path
+  for `io_getevents`; this backend always enters the kernel. On NFS the difference is
+  nanoseconds against RPCs.
+- **What has no AIO form runs inline and blocks the loop.** That is the interface, not a
+  shortcut: an AIO application calls `open` and `close` itself. It makes `libaio` a poor
+  fit for small files and the measurement says so honestly. The alternative (a helper
+  pool for opens) would be modelling a specific application design, which belongs to a
+  backend of its own if anyone needs it.
+- **`libaio` (buffered) is offered although it is synchronous**, because people run it and
+  the report shows what it is: time inside `io_submit`. Counter-argument: a row labelled
+  `libaio` invites the reading "asynchronous"; the `libaio:` line and README §9 are the
+  guard.
+- **`mmap` maps the whole file on first read and unmaps at `close`**, with its own
+  `fstat` for the size, because that is what safetensors, Arrow, and `np.load(mmap_mode)`
+  do. The alternative, a map and unmap around every read, would measure `mmap(2)` itself.
+  The mapping is per actor thread and per descriptor; a sub-actor reading an inherited
+  descriptor makes its own mapping.
+- ~~**A read is a copy out of the mapping into the actor's buffer**, under all three modes,
+  so that every backend delivers the bytes to pageable host memory and CPU per op is
+  comparable. Counter-argument: a zero-copy consumer (a tensor that stays a view of the
+  mapping) touches pages later and elsewhere, or never; that is a different workload, not
+  a different backend, and the abstract would have to say when the touch happens.~~
+  Superseded the same day by **Revised** below: a read touches one byte per page, and the
+  copy is an option.
+- **The three prefetch variants are a mode (`--mmap-mode`), not three backends**, per the
+  brief's rule that feature knobs are options. The mode is in the coordinator's
+  configuration hash (it changes what the hosts ask of the kernel, like `--drop-caches`);
+  `--aio-depth` is not (a host's tuning, like `--threads` and the ring knobs).
+- **Writes under `mmap` are `pwrite`.** No loader writes through a mapping, and a
+  `MAP_SHARED` write path would need `msync` semantics the abstract does not have.
+- **One address space.** Actors are threads, so their mappings share one `mmap_lock`;
+  PyTorch workers are processes. ~~The `mmap` rows therefore overstate client CPU for a
+  process-per-worker loader. The fix is the per-actor sub-actor pool as processes, which
+  nothing else needs; recorded as a caveat instead.~~ See **Revised** below: the costs are
+  counted against `mmap`; what the one address space adds is how far they spread.
+- **`SIGBUS`.** `fault` and `willneed` take the signal on an I/O error, as the applications
+  do. The runner does not install a handler: a structural check that turned a `SIGBUS` into
+  an op error would need `sigsetjmp` around every copy. `populate` returns an errno and is
+  the mode to use where errors are expected.
+- **Both glibc and kernel AIO issue at the effective offset**, as `io_uring` does (§3.29):
+  the APIs have no file position. `Backend::positional` says so to the blocking driver.
+- **Page faults joined the host counters** for every backend (`getrusage`), rather than
+  living in the `mmap` block: they are a process-wide figure and say something under
+  `sync` too (the buffer rings).
+
+**What the loopback showed** (`runner/README.md` §9 has the tables): `posix-aio` sends the
+RPCs of `sync` for 2.5 to 3 times the CPU; buffered `libaio` on four loops was the cheapest
+row in CPU and tasks because nothing is handed off, and would be the first to suffer from
+real latency; `libaio-direct` spent a seventh of its loop time inside `io_submit` and
+blocks on every open and close besides; `mmap` under
+`fault` sent 39 % more READs cold than `read(2)` and one GETATTR per mapping, `willneed`
+restored one READ per file, and `populate` changed nothing on the wire. R14's sentence,
+that fault-around and readahead and not the abstract decide the RPC sizes, is now a
+measurement.
+
+**Revised 2026-10-01 (user): a read touches, it does not copy; and the coupling counts.**
+
+The user asked how arrival is ensured under `mmap`, and whether copying out of the mapping
+is fair to it. Three points came out of the exchange.
+
+- *Arrival.* A read of a byte in a page that is not resident faults, and the fault
+  returns when the page has been read. So reading the range, by copy or by one byte per
+  page, cannot finish before the data has arrived; `MADV_POPULATE_READ` gives the same
+  guarantee before it returns, and `MADV_WILLNEED` gives none (it starts readahead), so it
+  needs the touch. The byte count the backend returns is computed from the file size,
+  not handed back by the kernel as with `read(2)`; a short file is still caught, since
+  the size is the `fstat`'s.
+- *What each API is charged.* The first answer here defended the copy as "the same one
+  copy a buffered read makes". That was the wrong frame. The rule the brief's
+  application/solution boundary implies is: charge a backend what its API needs to make
+  the bytes addressable by the application, and nothing the application does afterwards.
+  For `read(2)` that includes the kernel's copy out of the page cache, which the call
+  cannot avoid. For `O_DIRECT` and for `mmap` there is no such copy: the data is
+  addressable where it landed. The copy to the GPU follows under every backend and is
+  charged to none (it is `compute`). Copying out of the mapping charged `mmap` alone for
+  the application's copy, and took away the one advantage the technique has (user). The
+  brief's row said "`mmap` + page touch" from the start; the copy was a deviation made
+  while building.
+- *Memory traffic.* A copy reads every byte and writes it again; a touch of one byte per
+  4 KiB page pulls one cache line in 64. Nobody has characterized what the copy's memory
+  bandwidth costs the other actors, so a default that spends it would put an unmeasured
+  cost in every `mmap` row (user).
+
+**Decided:** `--mmap-consume touch` is the default: one byte of every page of the range,
+read volatile so it is not elided, and nothing at all under `populate`, which has already
+made the range resident. `--mmap-consume copy` remains for a loader that does copy out of
+the mapping into host memory, and is in the configuration hash like the mode.
+Counter-arguments kept on record: (1) a touch leaves the data cache-cold, where the
+kernel's copy under `read(2)` leaves part of it in the cache for the consumer; that is a
+benefit to the application's next step, outside what is measured, in either direction;
+(2) fault-around maps up to 16 cached pages per fault, so most touches of a warm file take
+no fault, which is the real behaviour and not an artifact; (3) with `touch` the actor's
+buffer is never written, so RSS and the "buffers larger than L3" rule of
+`NAPKIN_MATH.md` §2.2 do not apply to this backend: there is no destination to keep cold.
+
+**Decided (user): the cross-thread costs of `mmap` are counted against it.** The map, the
+unmap, the translation flush an unmap forces on other cores, and the faults are
+consequences of the technique, disadvantages against `O_DIRECT` that belong in its row.
+The earlier wording here called the `mmap` rows an overstatement and filed that as a
+caveat; it is withdrawn. What remains true, as a statement about magnitude and not about
+whether to count: the runner's actors are threads of one process, so an unmap's flush
+goes to every core running any actor and all of them share one `mmap_lock`, where a
+loader made of worker processes confines both to one worker. On a real loader of that
+shape the same costs exist and spread less. Blocking is not part of the coupling: a
+fault stalls only the faulting thread, the fault path gives up the lock before it sleeps
+on I/O, and `mmap` runs on one thread per actor, not on an event loop (where a fault
+would stall every actor on the loop, which is why it was never put there).
+
+**What the loopback showed after the change** (`runner/README.md` §9): warm, `mmap` with
+`touch` costs 20 to 35 % more CPU than `sync` (16.2 s against 13.4 s, and 15.1 s against
+11.2 s in the delegation regime) with no copy at all against `sync`'s copy of every byte,
+so the map, unmap, flush, and fault overhead is larger than the copy `read(2)` makes on
+this 116 KiB-per-file mix; the copy added 3.6 s for 14.8 GiB on top. The RPCs are the
+same under `touch` and `copy`. On 140 MiB files (`train_large_samples`, 7.8 GiB in 1 MiB
+reads) the balance reverses, since the per-mapping cost is fixed and the copy is per byte:
+warm, `mmap` with `touch` used a tenth of the CPU of `sync` (0.32 to 0.40 s against 3.1
+to 3.4 s) in under a third of the time, and with `copy` it matched `sync`. So the
+advantage the user argued `mmap` should be credited with is large where `mmap` is actually
+used, and the copy default would have hidden all of it. Cold, the same run showed the
+other side: the fault path sent 36,981 READs of about 109 KiB where `read(2)` sent 6,087
+of about 660 KiB, and took 1.9 s against 1.2 s; consistent with the mount's
+`read_ahead_kb` (128) bounding fault readahead, not confirmed by changing it.
+
+**Open.** The real target. `read_ahead_kb` of the mount in the host counters, and a run
+with it raised, to confirm what sets the size of a fault's READ. `aio_init` (glibc's pool size) as a knob if anyone runs
+`posix-aio` in earnest. `RWF_NOWAIT`/`preadv2` flags on the AIO requests. A filled
+context under test. The `--cache` and `--buffer` axes of the brief's validity table are
+still only the `-direct` suffix.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -1312,7 +1464,9 @@ unaffected. The knob test lives in its own file, hence its own process, for the 
   `io_uring` knobs,~~ The ring and io-wq knobs done the same day (§3.34). ~~Next:
   `--drop-caches` with the residency check and the mount options in the
   counters,~~ `--drop-caches`, the residency check, and the mount options done the same day
-  (§3.31, Built). Next: `libaio`/`posix-aio`/`mmap`, the per-actor sub-actor pool, `--metrics`; the
+  (§3.31, Built). ~~Next: `libaio`/`posix-aio`/`mmap`,~~ `posix-aio`, `libaio`, and `mmap`
+  done the same day (§3.35). Next: the per-actor sub-actor pool, `--metrics`, the `RLIMIT`
+  checks, the JSON report; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 
