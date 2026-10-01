@@ -1713,7 +1713,11 @@ fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()>
     )?;
     let Some(m) = &c.mount else { return Ok(()) };
     write!(out, "mount {} ({}, {})", m.mount_point, m.fstype, m.device)?;
-    let opts = m.opts.as_ref().map(|o| format!("mount opts {o}\n")).unwrap_or_default();
+    let mut opts = m.opts.as_ref().map(|o| format!("mount opts {o}\n")).unwrap_or_default();
+    if !m.read_ahead_kb.is_empty() {
+        let v: Vec<String> = m.read_ahead_kb.iter().map(|k| k.to_string()).collect();
+        opts.push_str(&format!("mount read_ahead_kb {}\n", v.join(",")));
+    }
     let Some(n) = &m.nfs else { return write!(out, "\n{opts}") };
     // the client counts buffered bytes as returned and O_DIRECT bytes as requested
     writeln!(

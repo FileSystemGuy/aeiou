@@ -64,7 +64,30 @@ pub struct MountCounters {
     /// options field of `/proc/self/mounts` elsewhere. Distinct hosts' joined with ` | `.
     #[serde(default)]
     pub opts: Option<String>,
+    /// `read_ahead_kb` of the mount's backing device info (`/sys/class/bdi/MAJOR:MINOR`): the
+    /// readahead window, which bounds what one page fault reads under the `mmap` backend
+    /// and shapes buffered sequential reads. A setting of the solution, recorded, never
+    /// set. Empty where the filesystem has none (tmpfs); the distinct values once hosts merge.
+    #[serde(default)]
+    pub read_ahead_kb: Vec<u64>,
     pub nfs: Option<NfsCounters>,
+}
+
+/// `read_ahead_kb` of the backing device info of the filesystem `path` is on. `st_dev` names
+/// it directly for NFS and other anonymous devices and for a whole disk; a partition's is
+/// its disk's, reached through `/sys/dev/block`.
+pub fn read_ahead_kb(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    let dev = std::fs::metadata(path).ok()?.dev();
+    read_ahead_kb_at(Path::new("/sys"), libc::major(dev), libc::minor(dev))
+}
+
+pub fn read_ahead_kb_at(sys: &Path, major: u32, minor: u32) -> Option<u64> {
+    let id = format!("{major}:{minor}");
+    [sys.join("class/bdi").join(&id), sys.join("dev/block").join(&id).join("bdi"), sys.join("dev/block").join(&id).join("../bdi")]
+        .iter()
+        .find_map(|d| std::fs::read_to_string(d.join("read_ahead_kb")).ok())
+        .and_then(|v| v.trim().parse().ok())
 }
 
 /// Deltas of the NFS client's `bytes:` line and per-op RPC statistics.
@@ -141,6 +164,12 @@ impl MountCounters {
             (None, Some(b)) => self.opts = Some(b.clone()),
             _ => {}
         }
+        for v in &o.read_ahead_kb {
+            if !self.read_ahead_kb.contains(v) {
+                self.read_ahead_kb.push(*v);
+            }
+        }
+        self.read_ahead_kb.sort();
         match (&mut self.nfs, &o.nfs) {
             (Some(m), Some(n)) => m.merge(n),
             (None, Some(n)) => self.nfs = Some(n.clone()),
@@ -330,12 +359,14 @@ impl Sampler {
             .and_then(|h| h.join().ok())
             .unwrap_or((0, 0, 0));
         let ru1 = rusage();
+        let read_ahead_kb: Vec<u64> = read_ahead_kb(&self.root).into_iter().collect();
         let mount = match (self.mount0.take(), MountSnapshot::for_path(&self.root)) {
             (Some(a), Some(b)) if a.mount_point == b.mount_point => Some(MountCounters {
                 mount_point: b.mount_point,
                 device: b.device,
                 fstype: b.fstype,
                 opts: b.opts,
+                read_ahead_kb,
                 nfs: match (&a.nfs, &b.nfs) {
                     (Some(x), Some(y)) => Some(y.delta(x)),
                     _ => None,
@@ -346,6 +377,7 @@ impl Sampler {
                 device: b.device,
                 fstype: b.fstype,
                 opts: b.opts,
+                read_ahead_kb,
                 nfs: None,
             }),
             _ => None,
@@ -583,6 +615,7 @@ device /dev/sde mounted on /mnt/aeiou-nfs/deeper\\040dir with fstype ext4
                 device: "d".into(),
                 fstype: "nfs4".into(),
                 opts: Some("rw,vers=4.2".into()),
+                read_ahead_kb: vec![128],
                 nfs: Some(NfsCounters::default()),
             }),
             ..Default::default()
@@ -602,6 +635,7 @@ device /dev/sde mounted on /mnt/aeiou-nfs/deeper\\040dir with fstype ext4
                 device: "d".into(),
                 fstype: "nfs4".into(),
                 opts: Some("rw,vers=4.1,nconnect=4".into()),
+                read_ahead_kb: vec![15360],
                 nfs: Some(nfs),
             }),
             ..Default::default()
@@ -612,7 +646,32 @@ device /dev/sde mounted on /mnt/aeiou-nfs/deeper\\040dir with fstype ext4
         let m = x.mount.unwrap();
         assert_eq!((m.mount_point.as_str(), m.device.as_str()), ("/a,/b", "d"));
         assert_eq!(m.opts.as_deref(), Some("rw,vers=4.2 | rw,vers=4.1,nconnect=4"), "distinct option sets once each");
+        assert_eq!(m.read_ahead_kb, vec![128, 15360], "distinct readahead windows once each");
         assert_eq!(m.nfs.unwrap().ops["READ"].ops, 4);
+    }
+
+    #[test]
+    fn read_ahead_kb_is_found_through_the_bdi_or_the_partition_s_disk() {
+        let sys = std::env::temp_dir().join(format!("aeiou-sys-{}", std::process::id()));
+        let put = |rel: &str, v: &str| {
+            let d = sys.join(rel);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("read_ahead_kb"), v).unwrap();
+        };
+        // an NFS mount's anonymous device, a whole disk, and a partition under its disk
+        put("class/bdi/0:78", "128\n");
+        put("dev/block/8:48/bdi", "8192\n");
+        // as in sysfs: the partition's entry is a link into its disk's directory
+        put("devices/nvme0n1/bdi", "256\n");
+        std::fs::create_dir_all(sys.join("devices/nvme0n1/nvme0n1p1")).unwrap();
+        std::os::unix::fs::symlink("../../devices/nvme0n1/nvme0n1p1", sys.join("dev/block/259:1")).unwrap();
+        assert_eq!(read_ahead_kb_at(&sys, 0, 78), Some(128));
+        assert_eq!(read_ahead_kb_at(&sys, 8, 48), Some(8192));
+        assert_eq!(read_ahead_kb_at(&sys, 259, 1), Some(256), "a partition's is its disk's");
+        assert_eq!(read_ahead_kb_at(&sys, 0, 75), None, "tmpfs has no backing device info");
+        std::fs::remove_dir_all(&sys).unwrap();
+        // the live tree answers without panicking, whatever this filesystem is
+        let _ = read_ahead_kb(Path::new("/"));
     }
 
     #[test]
