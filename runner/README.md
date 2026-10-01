@@ -31,7 +31,9 @@ cargo test --release
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (`libaio`, `posix-aio`, `mmap`, …; ~~`io_uring`~~
-**built 2026-10-01**, §8) and the per-backend counters, `mountstats`, `RLIMIT` startup
+**built 2026-10-01**, §8), ~~the per-backend counters, `mountstats`~~ (the host counters,
+**built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
+backend-specific counters beyond those come with each backend), `RLIMIT` startup
 checks, a JSON report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), and the `replay` node. ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
@@ -58,6 +60,8 @@ aeiou/src/
   uring.rs     the `io_uring` backends: one event loop per thread, a parked VM per task, the buffer
                pool, loop-local channels, barriers through the coordinator's eventfd (§8)
   coord.rs     the Coordinator trait, the in-process implementation, the TCP client and the server for several hosts
+  counters.rs  the host counters around a run: task and io-wq worker peaks sampled from `/proc`,
+               `getrusage`, and the `mountstats` delta of the mount `--root` is on (§4)
   payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
   datagen.rs   `aeiou datagen`
   main.rs      the CLI
@@ -210,6 +214,28 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   `compute / (compute + stall)`, so steady state is selected after the run. The fingerprint is
   summed over the ops actually issued; `--expect-fingerprint` (from `dry-run`) makes a
   mismatch an error.
+- **Host counters** (`counters.rs`, added 2026-10-01): what the client did meanwhile, as
+  distinct from what the abstract did, printed after the totals and carried in the report
+  (`Report::counters`, summed over hosts by the coordinator). A sampler thread reads
+  `/proc/self/status` every 10 ms for the peak task count of the process and, at every
+  change, counts the `iou-wrk-*` threads in `/proc/self/task` for the io-wq worker peak
+  (workers linger idle for seconds, so the peak is not missed); `getrusage` before and after
+  gives user and system CPU and the peak RSS; `/proc/self/mountstats` before and after gives
+  the mount `--root` is on (longest mount point that is a prefix of the canonical root: its
+  device and type on any filesystem) and, on NFS, the deltas of the client's byte counters
+  and of the per-procedure RPC statistics, printed as counts with the mean round trip, and
+  transmissions, timeouts, and errors when they differ from the count. Two caveats on the
+  line itself: `mountstats` is per mount, not per process, so every process on the host
+  using that mount is in the delta; and the NFS client counts buffered bytes as returned but
+  `O_DIRECT` bytes as requested (an aligned 1 MiB read of a 120 KiB file counts 1 MiB).
+  Output:
+
+  ```
+  host: tasks peak 26  io-wq workers peak 20  cpu user 0.039 s sys 0.509 s  maxrss 15.67 MiB
+  mount /mnt/aeiou-nfs (nfs4, localhost:/srv/aeiou-export): server read 191.40 MiB wrote 0 B; buffered read 191.40 MiB wrote 0 B; O_DIRECT requested read 0 B wrote 0 B
+  rpcs 3242: READ=1600 (399µs rtt)  OPEN=1222 (385µs rtt)  OPEN_NOATTR=378 (349µs rtt)  GETATTR=15 (67µs rtt)  READDIR=14 (500µs rtt)  ACCESS=8 (0ns rtt)  LOOKUP=5 (200µs rtt)
+    (the mount's counters over the run, every process on this host included)
+  ```
 
 Observed on the WSL2 ext4 disk (2026-09-30, `runner/aeiou/tests/run.rs` and the smoke runs):
 every committed abstract runs to the dry-run fingerprint under `sync` (`ckpt_restore`
@@ -433,8 +459,9 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   in the SQ included, as the application sees it), a `take` from park to wake.
 - **Not done**, deliberately, as the A/B knobs of `NAPKIN_MATH.md` §8.5: fixed files and
   buffers, `SQPOLL`, `SINGLE_ISSUER`/`DEFER_TASKRUN`, `IORING_SETUP_ATTACH_WQ`,
-  `IORING_REGISTER_IOWQ_MAX_WORKERS`, op linking; and the per-backend counters (io-wq
-  workers, `mountstats` deltas), which are still shell scripts around the runner.
+  `IORING_REGISTER_IOWQ_MAX_WORKERS`, op linking. ~~And the per-backend counters (io-wq
+  workers, `mountstats` deltas), which are still shell scripts around the runner.~~ Report
+  fields since 2026-10-01 (§4, host counters).
 
 **Observed (2026-10-01, WSL2).** Every committed abstract reproduces its dry-run fingerprint
 under `io_uring` (`tests/run.rs`: five abstracts with nested `parallel`, loaders, barriers
@@ -462,3 +489,25 @@ every `openat` punts whatever the reads do. Spike 1's question (does `O_DIRECT` 
 worker count bounded on a real NFS client) needs open-heavy and read-heavy phases measured
 separately on the real target with `IORING_REGISTER_IOWQ_MAX_WORKERS` in hand; the backend
 exists to ask it.
+
+**Observed again with the host counters in the report (2026-10-01, later).** The same
+`train_small_files` with 4 GPUs on the loopback mount, `--time-scale 0`, each backend on its
+own freshly generated directory, cold then warm, as the report now prints them:
+
+| backend, pass | tasks peak | io-wq peak | cpu user + sys | server read | RPCs |
+|---|---|---|---|---|---|
+| `sync`, cold | 22 (20 actors, main, sampler) | 0 | 0.34 s | 191.4 MiB | 3,241: READ 1,600, OPEN 1,225, OPEN_NOATTR 375, GETATTR 15, READDIR 14 |
+| `sync`, warm | 22 | 0 | 0.28 s | 0 | 1,620: GETATTR 1,620 |
+| `io_uring`, cold | 26 (4 loops + 20 workers) | 20 | 0.53 s | 191.4 MiB | 3,242: READ 1,600, OPEN 1,223, OPEN_NOATTR 377, … |
+| `io_uring`, warm | 18 | 12 | 0.20 s | 0 | 20: GETATTR 20 |
+| `io_uring-direct`, cold | 25 | 19 | 0.51 s | 194.5 MiB | 8,042: READ 4,800, CLOSE 1,600, OPEN 1,223, OPEN_NOATTR 377, … |
+| `io_uring-direct`, warm | 20 | 14 | 0.38 s | 194.5 MiB | 8,020: READ 4,800, CLOSE 1,600, OPEN_NOATTR 1,600, GETATTR 20 |
+
+The warm `GETATTR` difference (1,620 under `sync`, 20 under `io_uring`) is not the backend:
+run each backend warm on the other's directory and both send 20, and `sync` sends 1,620
+only on a directory it has not touched for a few seconds. It is the attribute cache
+(`acregmin=3`): the first open of each file after the timeout revalidates with a `GETATTR`,
+and the next run within the (now longer) timeout does not. So warm comparisons across
+backends need the same gap since the last touch, which the counters now make visible. The
+`O_DIRECT requested read` figure is 3.13 GiB for 194.5 MiB from the server: 3,200 reads of
+a 1 MiB aligned buffer each, counted as requested.

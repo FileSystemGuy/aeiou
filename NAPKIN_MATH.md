@@ -548,7 +548,8 @@ Things that would break this, and are treated as run failures rather than silent
 Measured for each run:
 - ops/s and bytes/s;
 - **client CPU per op** (the number that decides how many client hosts are needed);
-- peak `iou-wrk` thread count and open-file high-water mark;
+- peak `iou-wrk` thread count (in the report since 2026-10-01, with the task peak, CPU, RSS,
+  and the `mountstats` deltas: `runner/README.md` §4) and open-file high-water mark;
 - backend-specific counters: libaio context depth, cuFile compat-mode flag and `cufile_stats`,
   NIXL plugin selected, `mmap` fault and populate counts;
 - accelerator utilization (AU%), overall and per step bucket;

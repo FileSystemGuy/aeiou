@@ -117,7 +117,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   Every backend must report, per run, its own counters (io-wq workers, libaio context depth,
   cuFile compat-mode flag and `cufile_stats`, NIXL backend selected) alongside the common
   `mountstats` RPC counts. fio's engine list is the cross-check for this set, and fio itself is
-  used to validate each backend's raw numbers before ours are trusted.
+  used to validate each backend's raw numbers before ours are trusted. (The common set is in
+  the report since 2026-10-01: task and io-wq worker peaks, CPU, RSS, the mount's NFS byte
+  and RPC deltas; `runner/README.md` §4, `DESIGN_REVIEW.md` §3.30.)
 
 ## 5. Decisions so far
 

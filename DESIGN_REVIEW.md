@@ -1044,9 +1044,52 @@ implemented (`read_all(columns=[…])`) and traced but no committed abstract use
   whatever the reads do. Spike 1's hypothesis (R1) is neither confirmed nor refuted here: it
   needs the real target and phases that separate opens from reads. The knobs it will need
   (`IORING_REGISTER_IOWQ_MAX_WORKERS`, `ATTACH_WQ`, fixed files) are listed and not built.
-- **Open.** The per-backend counters (io-wq workers sampled from `/proc`, `mountstats`
-  deltas) are shell scripts around the runner, not report fields; `libaio`, `posix-aio`, and
-  `mmap` now have the VM they need and are the next backends in the brief's order.
+- **Open.** ~~The per-backend counters (io-wq workers sampled from `/proc`, `mountstats`
+  deltas) are shell scripts around the runner, not report fields;~~ (report fields the same
+  day, §3.30) `libaio`, `posix-aio`, and `mmap` now have the VM they need and are the next
+  backends in the brief's order.
+
+### 3.30 Host counters in the report (added 2026-10-01)
+
+**Issue.** The brief (§4) wants every backend to report its own counters next to the
+common `mountstats` RPC counts, and R2 wants client CPU and RPC statistics with every run;
+through §3.29 those were shell scripts around the runner (`grep` of `/proc/self/task`,
+`mountstats` before and after), which is how the io-wq peak of 20 and the RPC tables of
+§3.26 and §3.29 were produced. Numbers that live outside the report are not reproduced by
+the next person and cannot be merged across hosts.
+
+**Decision.** A `counters` module with one `HostCounters` per host in `Report`, summed by
+`merge_all` like the rest (each host is its own process, so peaks add), printed after the
+totals (`runner/README.md` §4). Three sources, each optional where the kernel lacks it: a
+10 ms sampler of the process's task count that scans thread names for `iou-wrk-*` whenever
+the count changes (io-wq workers linger idle for seconds, so the peak survives the sampling
+rate; a 100 Hz scan of `/proc/self/task` only on change costs nothing under `sync`, where the
+count never changes); `getrusage` deltas for user and system CPU and the peak RSS;
+`/proc/self/mountstats` deltas for the mount `--root` is on, parsed once before and once
+after. The NFS block gives the bytes line and every procedure's count, transmissions,
+timeouts, bytes, queue, RTT, and execute totals; the report prints counts with mean RTT and
+the retransmission and error figures only when they are non-zero. Nothing here touches the
+op stream or the fingerprint; the counters are a measurement of the solution and are never
+compared by `--expect-fingerprint` or the namespace manifest.
+
+**Two things the counters are not.** `mountstats` is the mount's view, so every process on
+the host using the mount is in the delta (the line says so); a benchmark host runs nothing
+else on the mount, a developer's laptop might. And the NFS client counts `O_DIRECT` bytes as
+requested, buffered bytes as returned, so the direct figure for a small-file read with 1 MiB
+aligned buffers is the buffer size times the reads; the report labels it `requested`, and
+the server-side bytes are the comparable number.
+
+**What the first run of the fields showed.** The RPC counts and the io-wq peak equal the
+hand-measured ones (§3.29); the only surprise was a warm `GETATTR` per open under `sync`
+and not under `io_uring`, which cross-running the backends on each other's directories
+showed to be the attribute-cache timeout and the gap between runs, not the backend
+(`runner/README.md` §8). That is the kind of finding the fields exist for: without them the
+difference would have been read as a backend property.
+
+**Backend-specific counters beyond these** (libaio context depth, `cufile_stats`, NIXL plugin,
+`mmap` fault counts, NAPKIN_MATH §8.5) come with each backend as an optional block in the
+same structure; the open-file high-water mark is one `RLIMIT` check away and goes in with
+the startup checks.
 
 ## 4. Plan changes
 
@@ -1072,9 +1115,12 @@ implemented (`read_all(columns=[…])`) and traced but no committed abstract use
   format-class reader protocols and the parameter-file split,~~ The parameter-file split done
   the same day (§3.27, `schema/README.md` §8, `aeiou-params`). ~~Next: the format-class reader
   protocols,~~ Four format classes, contract 0.2, `aeiou-datagen`, and three container
-  abstracts done the same day (§3.28). Next: the resumable VM and `io_uring`, the per-actor
-  sub-actor pool, `mountstats` and `--metrics`; the remaining classes (Arrow IPC, MDS,
-  Megatron) and the tenth abstract when their readers can be traced.
+  abstracts done the same day (§3.28). ~~Next: the resumable VM and `io_uring`, the per-actor
+  sub-actor pool, `mountstats` and `--metrics`;~~ The resumable VM and the `io_uring` backends
+  done 2026-10-01 (§3.29), the host counters the same day (§3.30). Next: the `io_uring`
+  knobs, `libaio`/`posix-aio`/`mmap`, the per-actor sub-actor pool, `--metrics`; the
+  remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
+  can be traced.
 
 ## 5. Things reviewed and left as-is
 
