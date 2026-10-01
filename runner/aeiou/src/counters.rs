@@ -35,6 +35,9 @@ pub struct HostCounters {
     pub tasks_peak: u64,
     /// Peak count of io-wq worker threads (`iou-wrk-*`), sampled; 0 under the `sync` backends.
     pub iowq_workers_peak: u64,
+    /// Peak count of `SQPOLL` submission threads (`iou-sqp-*`), sampled; 0 without `--sqpoll`.
+    #[serde(default)]
+    pub sqpoll_threads_peak: u64,
     /// CPU time of the process over the run.
     pub cpu_user_ns: u64,
     pub cpu_sys_ns: u64,
@@ -93,6 +96,7 @@ impl HostCounters {
     pub fn merge(&mut self, o: &HostCounters) {
         self.tasks_peak += o.tasks_peak;
         self.iowq_workers_peak += o.iowq_workers_peak;
+        self.sqpoll_threads_peak += o.sqpoll_threads_peak;
         self.cpu_user_ns += o.cpu_user_ns;
         self.cpu_sys_ns += o.cpu_sys_ns;
         self.maxrss_bytes += o.maxrss_bytes;
@@ -227,25 +231,29 @@ fn task_count() -> Option<u64> {
         .and_then(|v| v.trim().parse().ok())
 }
 
-/// The io-wq workers among the process's tasks, by thread name.
-fn iowq_workers() -> u64 {
+/// The io-wq workers (`iou-wrk-*`) and `SQPOLL` threads (`iou-sqp-*`) among the process's
+/// tasks, by thread name.
+fn io_threads() -> (u64, u64) {
     let Ok(rd) = std::fs::read_dir("/proc/self/task") else {
-        return 0;
+        return (0, 0);
     };
-    rd.filter_map(|e| e.ok())
-        .filter(|e| {
-            std::fs::read_to_string(e.path().join("comm"))
-                .map(|c| c.starts_with("iou-wrk"))
-                .unwrap_or(false)
-        })
-        .count() as u64
+    let (mut wrk, mut sqp) = (0, 0);
+    for e in rd.filter_map(|e| e.ok()) {
+        let Ok(c) = std::fs::read_to_string(e.path().join("comm")) else { continue };
+        if c.starts_with("iou-wrk") {
+            wrk += 1;
+        } else if c.starts_with("iou-sqp") {
+            sqp += 1;
+        }
+    }
+    (wrk, sqp)
 }
 
 /// Counters open around a run: `Sampler::start` before the actors are spawned, `finish`
 /// after they are joined.
 pub struct Sampler {
     stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<(u64, u64)>>,
+    handle: Option<JoinHandle<(u64, u64, u64)>>,
     ru0: Rusage,
     mount0: Option<MountSnapshot>,
     root: std::path::PathBuf,
@@ -260,22 +268,24 @@ impl Sampler {
             .spawn(move || {
                 let mut tasks_peak = task_count().unwrap_or(0);
                 let mut last = tasks_peak;
-                let mut iowq_peak = iowq_workers();
+                let (mut iowq_peak, mut sqp_peak) = io_threads();
                 while !s.load(Ordering::Relaxed) {
                     std::thread::sleep(SAMPLE);
                     let Some(n) = task_count() else { continue };
                     tasks_peak = tasks_peak.max(n);
                     if n != last {
                         last = n;
-                        iowq_peak = iowq_peak.max(iowq_workers());
+                        let (w, q) = io_threads();
+                        iowq_peak = iowq_peak.max(w);
+                        sqp_peak = sqp_peak.max(q);
                     }
                 }
                 // one last look, so a run shorter than the period is still seen
                 if let Some(n) = task_count() {
                     tasks_peak = tasks_peak.max(n);
                 }
-                iowq_peak = iowq_peak.max(iowq_workers());
-                (tasks_peak, iowq_peak)
+                let (w, q) = io_threads();
+                (tasks_peak, iowq_peak.max(w), sqp_peak.max(q))
             })
             .ok();
         Sampler {
@@ -289,11 +299,11 @@ impl Sampler {
 
     pub fn finish(mut self) -> HostCounters {
         self.stop.store(true, Ordering::Relaxed);
-        let (tasks_peak, iowq_workers_peak) = self
+        let (tasks_peak, iowq_workers_peak, sqpoll_threads_peak) = self
             .handle
             .take()
             .and_then(|h| h.join().ok())
-            .unwrap_or((0, 0));
+            .unwrap_or((0, 0, 0));
         let ru1 = rusage();
         let mount = match (self.mount0.take(), MountSnapshot::for_path(&self.root)) {
             (Some(a), Some(b)) if a.mount_point == b.mount_point => Some(MountCounters {
@@ -316,6 +326,7 @@ impl Sampler {
         HostCounters {
             tasks_peak,
             iowq_workers_peak,
+            sqpoll_threads_peak,
             cpu_user_ns: ru1.user_ns.saturating_sub(self.ru0.user_ns),
             cpu_sys_ns: ru1.sys_ns.saturating_sub(self.ru0.sys_ns),
             maxrss_bytes: ru1.maxrss_bytes,

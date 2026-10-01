@@ -32,9 +32,9 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, VecDeque};
 use std::ffi::CString;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -42,7 +42,7 @@ use io_uring::{opcode, squeue, types, IoUring, Probe};
 
 use crate::backend::{open_flags, Backend, ALIGN};
 use crate::eval::Model;
-use crate::run::{fill, issue_blocking, round_out, untaken, ActorState, Ring, Shared};
+use crate::run::{fill, issue_blocking, round_out, untaken, ActorState, Ring, Shared, UringReport};
 use crate::vm::{Control, Event, ForkKind, Op, OpKind, Vm};
 
 /// `user_data` of the read posted on the loop's eventfd.
@@ -50,8 +50,14 @@ const EFD: u64 = u64::MAX;
 /// How long a loop sleeps with nothing to wake it, so the abort flag is seen.
 const IDLE: Duration = Duration::from_millis(50);
 
-/// Run this host's instances over the event loops; returns how many loop threads ran.
-pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<usize> {
+/// The first loop's ring descriptor, for the other loops to attach to under
+/// `sqpoll_shared`; the error when that ring could not be built, so nobody waits for it.
+type Gate = (Mutex<Option<std::result::Result<RawFd, String>>>, Condvar);
+
+/// Run this host's instances over the event loops; returns how many loop threads ran and
+/// what the rings were set up with.
+pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<UringReport> {
+    sh.opts.uring.check()?;
     let mut instances: Vec<(&'static str, i64, i64)> = Vec::new();
     for ((template, count), (lo, hi)) in counts.iter().zip(ranges) {
         for actor in *lo..*hi {
@@ -59,7 +65,7 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
         }
     }
     if instances.is_empty() {
-        return Ok(0);
+        return Ok(UringReport { loops: 0, opts: sh.opts.uring.clone(), iowq_defaults: None });
     }
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
     let threads = if sh.opts.threads == 0 { cores } else { sh.opts.threads }.clamp(1, instances.len());
@@ -68,16 +74,44 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
     for (i, inst) in instances.into_iter().enumerate() {
         per[i % threads].push(inst);
     }
+    let shared = sh.opts.uring.sqpoll_shared;
+    let gate: Arc<Gate> = Arc::new((Mutex::new(None), Condvar::new()));
     std::thread::scope(|s| {
         let handles: Vec<_> = per
             .into_iter()
             .enumerate()
             .map(|(i, insts)| {
                 let sh = sh.clone();
+                let gate = gate.clone();
                 std::thread::Builder::new()
                     .name(format!("io_uring loop {i}"))
                     .spawn_scoped(s, move || {
-                        let r = Loop::new(sh.clone(), i).and_then(|mut l| l.run(model, insts));
+                        // the rings are built on their own threads (SINGLE_ISSUER binds a
+                        // ring to the task that built it); under `sqpoll_shared` loops 1.. wait
+                        // for loop 0's ring and attach to it
+                        let attach = if shared && i > 0 {
+                            let (m, cv) = &*gate;
+                            let mut g = m.lock().unwrap();
+                            while g.is_none() {
+                                g = cv.wait(g).unwrap();
+                            }
+                            match g.as_ref().unwrap() {
+                                Ok(fd) => Some(*fd),
+                                Err(e) => {
+                                    sh.aborted.store(true, Ordering::Relaxed);
+                                    return Err(anyhow!("io_uring loop 0: {e}"));
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        let built = Loop::new(sh.clone(), i, attach);
+                        if shared && i == 0 {
+                            let (m, cv) = &*gate;
+                            *m.lock().unwrap() = Some(built.as_ref().map(|(l, _)| l.io.ring.as_raw_fd()).map_err(|e| format!("{e:#}")));
+                            cv.notify_all();
+                        }
+                        let r = built.and_then(|(mut l, defaults)| l.run(model, insts).map(|_| defaults));
                         if r.is_err() {
                             sh.aborted.store(true, Ordering::Relaxed);
                         }
@@ -87,9 +121,14 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
             })
             .collect();
         let mut first: Option<anyhow::Error> = None;
-        for h in handles {
+        let mut defaults = None;
+        for (i, h) in handles.into_iter().enumerate() {
             match h.join() {
-                Ok(Ok(())) => {}
+                Ok(Ok(d)) => {
+                    if i == 0 {
+                        defaults = d;
+                    }
+                }
                 Ok(Err(e)) => {
                     first.get_or_insert(e);
                 }
@@ -100,7 +139,7 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
         }
         match first {
             Some(e) => Err(e),
-            None => Ok(threads),
+            None => Ok(UringReport { loops: threads as u64, opts: sh.opts.uring.clone(), iowq_defaults: defaults }),
         }
     })
 }
@@ -545,8 +584,34 @@ struct Loop {
 }
 
 impl Loop {
-    fn new(sh: Arc<Shared>, index: usize) -> Result<Self> {
-        let ring = IoUring::builder().setup_cqsize(4096).build(1024).context("io_uring_setup (is `kernel.io_uring_disabled` set?)")?;
+    /// Build the loop's ring with the knobs of `RunOpts::uring` (`attach`: the ring whose
+    /// `SQPOLL` thread to share) and cap its io-wq; returns the caps the kernel had before.
+    fn new(sh: Arc<Shared>, index: usize, attach: Option<RawFd>) -> Result<(Self, Option<[u32; 2]>)> {
+        let k = &sh.opts.uring;
+        let mut b = IoUring::builder();
+        b.setup_cqsize(4096);
+        if let Some(idle) = k.sqpoll_idle_ms {
+            b.setup_sqpoll(idle);
+        }
+        if let Some(fd) = attach {
+            b.setup_attach_wq(fd);
+        }
+        if k.defer_taskrun {
+            b.setup_single_issuer().setup_defer_taskrun();
+        }
+        if k.coop_taskrun {
+            b.setup_coop_taskrun();
+        }
+        let ring = b.build(1024).with_context(|| format!("io_uring_setup with {} (is `kernel.io_uring_disabled` set? SQPOLL needs 5.13 unprivileged, DEFER_TASKRUN 6.1)", k.describe()))?;
+        // one call reads the kernel's io-wq caps and sets ours: a 0 leaves that cap alone,
+        // and the previous values come back in the array. Under SQPOLL the caps go to the
+        // poll thread's io-wq, the one that runs this ring's punted ops.
+        let mut caps = [k.iowq_max_workers, 0];
+        let defaults = match ring.submitter().register_iowq_max_workers(&mut caps) {
+            Ok(()) => Some(caps),
+            Err(_) if k.iowq_max_workers == 0 => None,
+            Err(e) => return Err(e).context("IORING_REGISTER_IOWQ_MAX_WORKERS (needs Linux 5.15)"),
+        };
         let mut probe = Probe::new();
         ring.submitter().register_probe(&mut probe).context("io_uring probe")?;
         let supported: Vec<bool> = (0..=255u8).map(|c| probe.is_supported(c)).collect();
@@ -557,7 +622,7 @@ impl Loop {
         let efd = unsafe { OwnedFd::from_raw_fd(efd) };
         sh.coord.subscribe(efd.as_raw_fd());
         let buf = sh.opts.buffer_bytes;
-        Ok(Loop {
+        let l = Loop {
             io: LoopIo { ring, inline: sh.opts.backend.make(), rbuf: Ring::new(buf), wbuf: Ring::new(buf), pool: Pool::new(buf), supported, in_flight: 0 },
             sh,
             index,
@@ -571,7 +636,8 @@ impl Loop {
             efd_buf: Box::new(0),
             efd_posted: false,
             live: 0,
-        })
+        };
+        Ok((l, defaults))
     }
 
     fn add_task(&mut self, vm: Vm<'static, 'static>, a: ActorState, inst: Option<usize>, role: Role, active: bool) -> usize {

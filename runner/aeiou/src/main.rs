@@ -17,7 +17,7 @@ use aeiou::datagen::{self, DatagenOpts};
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, ParamSet, Params};
 use aeiou::payload;
-use aeiou::run::{self, Report, RunOpts};
+use aeiou::run::{self, Report, RunOpts, UringOpts};
 
 #[derive(Parser)]
 #[command(name = "aeiou", version, about = "Abstract-driven I/O workload runner")]
@@ -95,6 +95,24 @@ struct RunCmd {
     /// Multiply every `compute` sleep (0 runs the I/O back to back).
     #[arg(long, default_value_t = 1.0)]
     time_scale: f64,
+    /// io_uring: cap each loop's bounded io-wq workers (IORING_REGISTER_IOWQ_MAX_WORKERS); the
+    /// report shows the kernel's default either way.
+    #[arg(long, value_name = "N")]
+    iowq_max_workers: Option<u32>,
+    /// io_uring: a kernel submission thread per loop (IORING_SETUP_SQPOLL) that sleeps after
+    /// this many idle milliseconds.
+    #[arg(long, value_name = "IDLE_MS")]
+    sqpoll: Option<u32>,
+    /// io_uring: one submission thread, and one io-wq, shared by every loop
+    /// (IORING_SETUP_ATTACH_WQ) instead of one per loop.
+    #[arg(long, requires = "sqpoll")]
+    sqpoll_shared: bool,
+    /// io_uring: IORING_SETUP_SINGLE_ISSUER with IORING_SETUP_DEFER_TASKRUN (not with --sqpoll).
+    #[arg(long, conflicts_with = "sqpoll")]
+    defer_taskrun: bool,
+    /// io_uring: IORING_SETUP_COOP_TASKRUN.
+    #[arg(long)]
+    coop_taskrun: bool,
     /// Empty the namespace roots before starting instead of refusing.
     #[arg(long)]
     clean_namespaces: bool,
@@ -219,6 +237,11 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     if a.ranks > 1 && a.coordinator.is_none() {
         bail!("--ranks {}: several hosts need --coordinator HOST:PORT (rank 0 listens there, every rank connects to it)", a.ranks);
     }
+    let uring = UringOpts { iowq_max_workers: a.iowq_max_workers.unwrap_or(0), sqpoll_idle_ms: a.sqpoll, sqpoll_shared: a.sqpoll_shared, defer_taskrun: a.defer_taskrun, coop_taskrun: a.coop_taskrun };
+    if uring.any() && !backend.uring() {
+        bail!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-backend {} has no ring", backend.name());
+    }
+    uring.check()?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.abstract_path)?));
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
@@ -230,7 +253,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     let mut out = stdout.lock();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
-    writeln!(out, "backend {}  root {}", backend.name(), a.root.display())?;
+    writeln!(out, "backend {}  root {}{}", backend.name(), a.root.display(), if uring.any() { format!("  io_uring knobs: {}", uring.describe()) } else { String::new() })?;
 
     let checks = run::check_datasets(loaded, cfg, &a.root)?;
     for c in &checks {
@@ -257,6 +280,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         threads: a.threads.unwrap_or(0),
         write_compress: a.write_compress,
         time_scale: a.time_scale.max(0.0),
+        uring,
         clean_namespaces: a.clean_namespaces,
         expect_fingerprint,
         expect_dataset_ids: a.expect_dataset_ids.clone(),

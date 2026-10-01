@@ -37,6 +37,86 @@ use crate::vm::{actor_counts, drive, op_hash, Control, ForkKind, Op, OpCtx, OpKi
 
 // ---------------------------------------------------------------- options
 
+/// The `io_uring` knobs of the A/B matrix (`NAPKIN_MATH.md` §8.5), applied to every event
+/// loop's ring. None of them changes the op stream or the fingerprint.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UringOpts {
+    /// Cap on the bounded io-wq workers (`IORING_REGISTER_IOWQ_MAX_WORKERS`) of each loop's
+    /// io-wq (of the one shared io-wq under `sqpoll_shared`); 0 keeps the kernel's default,
+    /// which the report shows either way.
+    pub iowq_max_workers: u32,
+    /// `IORING_SETUP_SQPOLL`: a kernel submission thread that sleeps after this many idle ms.
+    pub sqpoll_idle_ms: Option<u32>,
+    /// One submission thread (and one io-wq) shared by every loop, `IORING_SETUP_ATTACH_WQ`
+    /// to the first loop's ring, instead of one per loop.
+    pub sqpoll_shared: bool,
+    /// `IORING_SETUP_SINGLE_ISSUER` with `IORING_SETUP_DEFER_TASKRUN`: completions are
+    /// processed only in the loop's own `io_uring_enter`.
+    pub defer_taskrun: bool,
+    /// `IORING_SETUP_COOP_TASKRUN`: no interrupt of the loop thread to run completions.
+    pub coop_taskrun: bool,
+}
+
+impl UringOpts {
+    pub fn any(&self) -> bool {
+        *self != UringOpts::default()
+    }
+
+    /// The combinations the kernel refuses, said before a ring is built.
+    pub fn check(&self) -> Result<()> {
+        if self.sqpoll_shared && self.sqpoll_idle_ms.is_none() {
+            bail!("sqpoll_shared needs sqpoll");
+        }
+        if self.defer_taskrun && self.sqpoll_idle_ms.is_some() {
+            bail!("defer_taskrun and sqpoll exclude each other (IORING_SETUP_DEFER_TASKRUN is not allowed with IORING_SETUP_SQPOLL)");
+        }
+        Ok(())
+    }
+
+    /// The knobs as words, for the run header and the report.
+    pub fn describe(&self) -> String {
+        let mut v = Vec::new();
+        if self.iowq_max_workers > 0 {
+            v.push(format!("io-wq max workers {}", self.iowq_max_workers));
+        }
+        if let Some(ms) = self.sqpoll_idle_ms {
+            v.push(format!("sqpoll idle {ms} ms{}", if self.sqpoll_shared { " shared" } else { " per loop" }));
+        }
+        if self.defer_taskrun {
+            v.push("single-issuer defer-taskrun".into());
+        }
+        if self.coop_taskrun {
+            v.push("coop-taskrun".into());
+        }
+        if v.is_empty() {
+            "defaults".into()
+        } else {
+            v.join(", ")
+        }
+    }
+}
+
+/// What the `io_uring` backends report about their rings (`Report::uring`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UringReport {
+    pub loops: u64,
+    pub opts: UringOpts,
+    /// The io-wq caps `[bounded, unbounded]` the kernel had before the run set anything, as
+    /// `IORING_REGISTER_IOWQ_MAX_WORKERS` returned them to the first loop; `None` when the
+    /// kernel lacks the call (before 5.15) and nothing was asked.
+    pub iowq_defaults: Option<[u32; 2]>,
+}
+
+impl UringReport {
+    pub fn describe(&self) -> String {
+        let caps = match self.iowq_defaults {
+            Some([b, u]) => format!("kernel io-wq caps bounded {b} unbounded {u}{}", if self.opts.sqpoll_shared { " (one io-wq for all loops)" } else { " per loop" }),
+            None => "io-wq caps unknown (no IORING_REGISTER_IOWQ_MAX_WORKERS)".into(),
+        };
+        format!("loops {}  {}  knobs: {}", self.loops, caps, self.opts.describe())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RunOpts {
     /// The directory the abstract's paths are relative to.
@@ -51,6 +131,8 @@ pub struct RunOpts {
     pub write_compress: u64,
     /// Multiplier on `compute` sleeps.
     pub time_scale: f64,
+    /// The ring and io-wq knobs of the `io_uring` backends; the `sync` backends refuse them.
+    pub uring: UringOpts,
     pub clean_namespaces: bool,
     pub expect_fingerprint: Option<u64>,
     /// Refuse to start unless every dataset id is in this list (when given).
@@ -1270,6 +1352,8 @@ pub struct Report {
     pub threads_peak: u64,
     /// What the host did meanwhile (`counters`): tasks, io-wq workers, CPU, the mount's RPCs.
     pub counters: HostCounters,
+    /// The rings' setup under the `io_uring` backends (rank 0's once merged); `None` under `sync`.
+    pub uring: Option<UringReport>,
     /// Objects created (path, creating GPU id) net of this host's removals, and the paths
     /// removed, so a merge can drop what another host created and this one removed.
     pub created: Vec<(String, i64)>,
@@ -1285,7 +1369,7 @@ impl Report {
     pub fn merge_all(reports: Vec<Report>) -> Report {
         let mut it = reports.into_iter();
         let Some(mut m) = it.next() else {
-            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), created: vec![], removed: vec![], host: String::new() };
+            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, created: vec![], removed: vec![], host: String::new() };
         };
         let mut hosts = vec![m.host.clone()];
         let mut departures: BTreeMap<String, u64> = m.departure_releases.drain(..).collect();
@@ -1335,6 +1419,9 @@ pub fn participants(model: &Model<'_>, opts: &RunOpts) -> Result<Vec<(String, us
 /// the threads, hence `'static` (the caller leaks the loaded abstract and model for the life
 /// of the process; a run is the process).
 pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>) -> Result<Report> {
+    if opts.uring.any() && !opts.backend.uring() {
+        bail!("io_uring knobs ({}) with the `{}` backend, which has no ring", opts.uring.describe(), opts.backend.name());
+    }
     let p = participants(model, &opts)?;
     run_with(model, opts, input_objects, Arc::new(Local::new(&p)), Arc::new(AtomicBool::new(false)))
 }
@@ -1368,9 +1455,9 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
         let elapsed = t0.elapsed();
         let counters = sampler.finish();
         return match loops {
-            Ok(threads) => {
-                sh.stats.lock().unwrap().threads += threads as u64;
-                assemble(sh, counts, rank_record, elapsed, counters)
+            Ok(info) => {
+                sh.stats.lock().unwrap().threads += info.loops;
+                assemble(sh, counts, rank_record, elapsed, counters, Some(info))
             }
             Err(e) => {
                 sh.coord.stop(&format!("{e:#}"));
@@ -1422,11 +1509,11 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
         sh.coord.stop(&format!("{e:#}"));
         return Err(e);
     }
-    assemble(sh, counts, rank_record, elapsed, counters)
+    assemble(sh, counts, rank_record, elapsed, counters, None)
 }
 
 /// The host's report once every actor has ended.
-fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: RankRecord, elapsed: Duration, counters: HostCounters) -> Result<Report> {
+fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: RankRecord, elapsed: Duration, counters: HostCounters, uring: Option<UringReport>) -> Result<Report> {
     if sh.aborted.load(Ordering::Relaxed) {
         bail!("run aborted: {}", sh.coord.abort_reason().unwrap_or_else(|| "an actor failed".into()));
     }
@@ -1448,6 +1535,7 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
         actors,
         departure_releases: sh.coord.departure_releases(),
         counters,
+        uring,
         created,
         removed,
         host: sh.host.clone(),
@@ -1461,9 +1549,10 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
 fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()> {
     writeln!(
         out,
-        "host: tasks peak {}  io-wq workers peak {}  cpu user {} sys {}  maxrss {}",
+        "host: tasks peak {}  io-wq workers peak {}{}  cpu user {} sys {}  maxrss {}",
         c.tasks_peak,
         c.iowq_workers_peak,
+        if c.sqpoll_threads_peak > 0 { format!("  sqpoll threads peak {}", c.sqpoll_threads_peak) } else { String::new() },
         human_ns(c.cpu_user_ns as i128),
         human_ns(c.cpu_sys_ns as i128),
         human_bytes(c.maxrss_bytes)
@@ -1519,6 +1608,9 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
     let s = &r.stats;
     let secs = r.elapsed.as_secs_f64().max(1e-9);
     writeln!(out, "elapsed {:.3} s  threads {}", secs, s.threads)?;
+    if let Some(u) = &r.uring {
+        writeln!(out, "io_uring: {}", u.describe())?;
+    }
     writeln!(
         out,
         "ops {}  read {}  written {}  ({:.0} ops/s, {}/s read, {}/s written)",

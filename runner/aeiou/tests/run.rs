@@ -55,6 +55,7 @@ fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
         threads: 0,
         write_compress: 1,
         time_scale: 0.0,
+        uring: Default::default(),
         clean_namespaces: false,
         expect_fingerprint: None,
         expect_dataset_ids: vec![],
