@@ -1137,6 +1137,30 @@ GETATTR finding showed the counters often make a drop unnecessary. The full rese
 (`fscache`, delegations, session) is unmount and mount, which belongs in `aeiou-launch` as
 `--remount` before `aeiou run`; the runner never unmounts the storage under test.
 
+**Built 2026-10-01** (`runner/aeiou/src/cold.rs`, `runner/README.md` §4), as decided, with
+these points settled in the building:
+
+- The drop file is opened before the `sync`, so the refusal costs nothing, and the error
+  travels the coordinator's existing stop path: no host passes the gate.
+- `drop_caches` joined the configuration hash the coordinator compares. Unlike `--threads`
+  or the ring knobs it changes what the run measures, and a run cold on some hosts only is
+  not a run anyone wants by accident.
+- The residency sample is 256 files per dataset at ids `⌊k·files/256⌋`; a file over
+  256 MiB is sampled in 64 windows of 4 MiB, so a 100 GiB `regions` file costs 64 small
+  `mincore` calls, not one over 26M pages.
+- `--require-cold` refuses on any resident sampled page. A tolerance would need a number,
+  and nothing yet says what number.
+- The sample's own opens warm the metadata of the files it samples. Accepted and stated:
+  256 of 50M is nothing, and sampling without opening is not possible.
+- Seen on the loopback mount: a first run reported 0 of 7,959 sampled pages resident, and
+  a `--require-cold` run straight after it was refused with 280 resident, the files the
+  first run had read. The mount options line showed `acregmin=3,acregmax=60`, the cause of
+  §3.30's GETATTR finding, without anyone looking for it.
+- **Not verified here:** the drop itself as root. The development box has no passwordless
+  `sudo`; the write, the refusal without privilege, the parsing of the three `/proc` files,
+  and the report lines are tested, the effect of a real drop on a real NFS client is not.
+- `aeiou-launch --remount` is not built.
+
 ### 3.32 Object backends through `s3dlio`: a preliminary opinion (added 2026-10-01)
 
 **Question (user).** The repository that hosts `dgen-py` also hosts `s3dlio`, a Rust crate
@@ -1262,9 +1286,10 @@ unaffected. The knob test lives in its own file, hence its own process, for the 
   sub-actor pool, `mountstats` and `--metrics`;~~ The resumable VM and the `io_uring` backends
   done 2026-10-01 (§3.29), the host counters the same day (§3.30); `--drop-caches` decided
   and the object-backend opinion recorded (§3.31, §3.32, brief §6 items 16–17). ~~Next: the
-  `io_uring` knobs,~~ The ring and io-wq knobs done the same day (§3.34). Next:
+  `io_uring` knobs,~~ The ring and io-wq knobs done the same day (§3.34). ~~Next:
   `--drop-caches` with the residency check and the mount options in the
-  counters, `libaio`/`posix-aio`/`mmap`, the per-actor sub-actor pool, `--metrics`; the
+  counters,~~ `--drop-caches`, the residency check, and the mount options done the same day
+  (§3.31, Built). Next: `libaio`/`posix-aio`/`mmap`, the per-actor sub-actor pool, `--metrics`; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 

@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. |
 | `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct] [--threads N] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct] [--threads N] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (`libaio`, `posix-aio`, `mmap`, …; ~~`io_uring`~~
@@ -61,6 +61,8 @@ aeiou/src/
   uring.rs     the `io_uring` backends: one event loop per thread, a parked VM per task, the buffer
                pool, loop-local channels, barriers through the coordinator's eventfd (§8)
   coord.rs     the Coordinator trait, the in-process implementation, the TCP client and the server for several hosts
+  cold.rs      the cold start before the gate: `--drop-caches`, the kernel's cache sizes around it, the
+               `mincore` residency sample of every dataset, the `--require-cold` refusal
   counters.rs  the host counters around a run: task and io-wq worker peaks sampled from `/proc`,
                `getrusage`, and the `mountstats` delta of the mount `--root` is on (§4)
   payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
@@ -216,6 +218,28 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   `compute / (compute + stall)`, so steady state is selected after the run. The fingerprint is
   summed over the ops actually issued; `--expect-fingerprint` (from `dry-run`) makes a
   mismatch an error.
+- **Cold start** (`cold.rs`, added 2026-10-01, `DESIGN_REVIEW.md` §3.31). Between the
+  startup checks (and rank 0's namespace preparation) and the start gate, every host does
+  two things, both outside `elapsed` by construction and both in the report
+  (`Report::cold`, one entry per host):
+  - with `--drop-caches`: `sync`, then `3` into `/proc/sys/vm/drop_caches`. The file is
+    opened before the `sync`, so a host without root (or `CAP_SYS_ADMIN`) refuses at once,
+    and through the coordinator that stops every host before the gate. The report gives
+    the two durations and `Cached`, the dentry count, and the inode count before and
+    after. The flag is part of the configuration the coordinator compares: a run is cold on
+    every host or on none. Never inside a run.
+  - always, the residency sample: for every dataset, at most 256 files at evenly spaced
+    file ids (`⌊k·files/256⌋`, the same on every host; chunk `id mod chunks` of a chunked
+    file), each mapped and passed to `mincore`: whole up to 256 MiB, 64 evenly spaced
+    4 MiB windows beyond. No data is read and no root is needed. The line is
+    `256 of 16000 files sampled, 280 of 7959 pages resident (3.5 %)`, with a warning when
+    any page is resident; `--require-cold` turns the warning into a refusal, as it already
+    did for input namespaces written on the reading host. The sample is a floor, not a
+    proof: it sees data pages of the sampled files only, and its own opens leave those few
+    hundred files' dentries and attributes (on NFSv4 possibly delegations) on the client.
+  A tmpfs is its own page cache: nothing drops and every page is resident, which the check
+  reports truthfully. What a drop cannot reach (`fscache`, the NFSv4 client state) needs a
+  remount, which is the launcher's job, not the runner's.
 - **Host counters** (`counters.rs`, added 2026-10-01): what the client did meanwhile, as
   distinct from what the abstract did, printed after the totals and carried in the report
   (`Report::counters`, summed over hosts by the coordinator). A sampler thread reads
@@ -225,7 +249,9 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   (workers linger idle for seconds, so the peak is not missed); `getrusage` before and after
   gives user and system CPU and the peak RSS; `/proc/self/mountstats` before and after gives
   the mount `--root` is on (longest mount point that is a prefix of the canonical root: its
-  device and type on any filesystem) and, on NFS, the deltas of the client's byte counters
+  device and type on any filesystem, and its options as a `mount opts` line: the `opts:`
+  line of `mountstats` on NFS, with `vers`, `rsize`, `acregmin`…, and `lookupcache` and
+  `nconnect` when set, the options field of `/proc/self/mounts` elsewhere) and, on NFS, the deltas of the client's byte counters
   and of the per-procedure RPC statistics, printed as counts with the mean round trip, and
   transmissions, timeouts, and errors when they differ from the count. Two caveats on the
   line itself: `mountstats` is per mount, not per process, so every process on the host

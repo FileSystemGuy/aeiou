@@ -118,7 +118,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   cuFile compat-mode flag and `cufile_stats`, NIXL backend selected) alongside the common
   `mountstats` RPC counts. fio's engine list is the cross-check for this set, and fio itself is
   used to validate each backend's raw numbers before ours are trusted. (The common set is in
-  the report since 2026-10-01: task, io-wq worker, and `SQPOLL` thread peaks, CPU, RSS, the mount's NFS byte
+  the report since 2026-10-01: task, io-wq worker, and `SQPOLL` thread peaks, CPU, RSS, the mount's options and NFS byte
   and RPC deltas; `runner/README.md` §4, `DESIGN_REVIEW.md` §3.30.)
 
 ## 5. Decisions so far
@@ -277,7 +277,8 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `train_stream_shards.py` (two workloads, TFRecord and Parquet) plus `train_map_hdf5.py`;
     the loader needs no new knob (under `stream` its unit of work is the shard). Still to do:
     Arrow IPC, MDS, and Megatron classes, and the tenth abstract.
-16. **Cold start: `--drop-caches` (decided 2026-10-01, `DESIGN_REVIEW.md` §3.31).** One run
+16. **Cold start: `--drop-caches` (decided and built 2026-10-01, `DESIGN_REVIEW.md` §3.31,
+    `runner/README.md` §4; the drop itself not yet run as root, `--remount` not built).** One run
     option, applied on every host after the dataset and namespace checks and immediately
     before the host arrives at the start gate: `sync`, then `3` into `/proc/sys/vm/drop_caches`
     (page cache, dentries, inodes; evicting an NFS inode drops its attribute and access
