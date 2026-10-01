@@ -33,9 +33,7 @@ use crate::counters::{HostCounters, Sampler};
 use crate::dryrun::{human_bytes, human_ns};
 use crate::eval::{Config, Model, Params};
 use crate::payload::{self, Filler, Manifest, NamespaceManifest, RankRecord};
-use crate::vm::{
-    actor_counts, drive, op_hash, Control, ForkKind, Op, OpCtx, OpKind, Sink, Snapshot, Vm,
-};
+use crate::vm::{actor_counts, drive, op_hash, Control, ForkKind, Op, OpCtx, OpKind, Sink, Snapshot, Vm};
 
 // ---------------------------------------------------------------- options
 
@@ -92,16 +90,11 @@ pub fn hostname() -> String {
             return s.to_string();
         }
     }
-    std::fs::read_to_string("/etc/hostname")
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| "?".into())
+    std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_else(|_| "?".into())
 }
 
 pub fn unix_now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
 // ---------------------------------------------------------------- statistics
@@ -117,12 +110,7 @@ pub struct LatHist {
 
 impl Default for LatHist {
     fn default() -> Self {
-        LatHist {
-            buckets: vec![0; 256],
-            count: 0,
-            sum: 0,
-            max: 0,
-        }
+        LatHist { buckets: vec![0; 256], count: 0, sum: 0, max: 0 }
     }
 }
 
@@ -132,11 +120,7 @@ impl LatHist {
             return 0;
         }
         let l = 63 - ns.leading_zeros() as usize;
-        let frac = if l >= 2 {
-            ((ns >> (l - 2)) & 3) as usize
-        } else {
-            0
-        };
+        let frac = if l >= 2 { ((ns >> (l - 2)) & 3) as usize } else { 0 };
         (l * 4 + frac).min(255)
     }
 
@@ -182,11 +166,7 @@ impl LatHist {
     }
 
     pub fn mean(&self) -> u64 {
-        if self.count == 0 {
-            0
-        } else {
-            self.sum / self.count
-        }
+        if self.count == 0 { 0 } else { self.sum / self.count }
     }
 }
 
@@ -293,12 +273,7 @@ const POLL: Duration = Duration::from_millis(50);
 impl Channel {
     fn new(capacity: i64, ordered: bool, total: Option<i64>) -> Self {
         Channel {
-            m: Mutex::new(ChanState {
-                next_take: 0,
-                done: BTreeSet::new(),
-                closed: false,
-                failed: None,
-            }),
+            m: Mutex::new(ChanState { next_take: 0, done: BTreeSet::new(), closed: false, failed: None }),
             cv: Condvar::new(),
             capacity: capacity.max(1),
             ordered,
@@ -362,11 +337,7 @@ impl Channel {
             }
             let got = if self.ordered {
                 let want = st.next_take;
-                if st.done.remove(&want) {
-                    Some(want)
-                } else {
-                    None
-                }
+                if st.done.remove(&want) { Some(want) } else { None }
             } else {
                 st.done.iter().next().copied().map(|x| {
                     st.done.remove(&x);
@@ -452,11 +423,7 @@ impl FdTable {
     }
 
     fn freeze(&self) -> Arc<FdTable> {
-        Arc::new(FdTable {
-            own: self.own.clone(),
-            inherited: self.inherited.clone(),
-            closed: self.closed.clone(),
-        })
+        Arc::new(FdTable { own: self.own.clone(), inherited: self.inherited.clone(), closed: self.closed.clone() })
     }
 }
 
@@ -473,20 +440,11 @@ unsafe impl Send for Ring {}
 
 impl Ring {
     pub(crate) fn new(target: usize) -> Self {
-        Ring {
-            ptr: std::ptr::null_mut(),
-            cap: 0,
-            pos: 0,
-            target: target.max(ALIGN),
-        }
+        Ring { ptr: std::ptr::null_mut(), cap: 0, pos: 0, target: target.max(ALIGN) }
     }
 
     fn ensure(&mut self, len: usize) {
-        let want = if self.cap == 0 {
-            self.target.max(len)
-        } else {
-            len
-        };
+        let want = if self.cap == 0 { self.target.max(len) } else { len };
         if want > self.cap {
             let cap = ((want + ALIGN - 1) / ALIGN) * ALIGN;
             let layout = std::alloc::Layout::from_size_align(cap, ALIGN).unwrap();
@@ -549,25 +507,11 @@ pub(crate) struct ActorState {
 
 impl ActorState {
     /// `threads` is what this actor adds to the report's OS thread count (1 when it is one).
-    pub(crate) fn new(
-        sh: &Shared,
-        template: &'static str,
-        actor: i64,
-        main: bool,
-        inherited: Option<Arc<FdTable>>,
-        threads: u64,
-    ) -> Self {
+    pub(crate) fn new(sh: &Shared, template: &'static str, actor: i64, main: bool, inherited: Option<Arc<FdTable>>, threads: u64) -> Self {
         ActorState {
-            fds: FdTable {
-                own: HashMap::new(),
-                inherited,
-                closed: HashSet::new(),
-            },
+            fds: FdTable { own: HashMap::new(), inherited, closed: HashSet::new() },
             filler: Filler::new(sh.opts.write_compress),
-            st: Stats {
-                threads,
-                ..Default::default()
-            },
+            st: Stats { threads, ..Default::default() },
             takes: Vec::new(),
             created: Vec::new(),
             removed: Vec::new(),
@@ -580,14 +524,7 @@ impl ActorState {
 
     /// A sub-actor's state: sees the files this one has open at the fork.
     pub(crate) fn child(&self, sh: &Shared, threads: u64) -> ActorState {
-        ActorState::new(
-            sh,
-            self.template,
-            self.actor,
-            false,
-            Some(self.fds.freeze()),
-            threads,
-        )
+        ActorState::new(sh, self.template, self.actor, false, Some(self.fds.freeze()), threads)
     }
 
     /// An `O_DIRECT` backend: an unaligned write cannot be issued (it would need
@@ -595,10 +532,7 @@ impl ActorState {
     /// the requested part counted (what an `O_DIRECT` shim under a buffered application has
     /// to do).
     pub(crate) fn check_align(&self, sh: &Shared, op: &Op) -> Result<()> {
-        if op.kind == OpKind::Write
-            && sh.opts.backend.direct()
-            && (op.offset % ALIGN as i64 != 0 || op.len % ALIGN as i64 != 0)
-        {
+        if op.kind == OpKind::Write && sh.opts.backend.direct() && (op.offset % ALIGN as i64 != 0 || op.len % ALIGN as i64 != 0) {
             bail!(
                 "write {} off={} len={}: `{}` needs {ALIGN}-byte alignment for writes; use a buffered backend",
                 op.path,
@@ -611,9 +545,7 @@ impl ActorState {
     }
 
     pub(crate) fn fd(&self, path: &str) -> std::io::Result<Arc<OwnedFd>> {
-        self.fds
-            .get(path)
-            .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))
+        self.fds.get(path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))
     }
 
     /// After a successful open: own the descriptor, note a creation, count an input open.
@@ -669,23 +601,10 @@ impl ActorState {
     /// The structural check of an op's result and its recording: a read must return the
     /// computed count, a write its length, `readdir` the computed entries; a failure must be
     /// in the statement's `expect` list.
-    pub(crate) fn settle(
-        &mut self,
-        op: &Op,
-        ctx: &OpCtx,
-        r: std::io::Result<i64>,
-        ns: u64,
-    ) -> Result<()> {
+    pub(crate) fn settle(&mut self, op: &Op, ctx: &OpCtx, r: std::io::Result<i64>, ns: u64) -> Result<()> {
         let where_ = || {
             let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
-            format!(
-                "{}#{} [{}] {} {}",
-                ctx.template,
-                ctx.actor,
-                idx.join(","),
-                op.kind.name(),
-                op.path
-            )
+            format!("{}#{} [{}] {} {}", ctx.template, ctx.actor, idx.join(","), op.kind.name(), op.path)
         };
         match r {
             Ok(n) => {
@@ -735,10 +654,7 @@ impl ActorState {
 
     pub(crate) fn took(&mut self, stall_ns: u64) {
         self.st.takes += 1;
-        self.takes.push(TakeRec {
-            stall_ns,
-            compute_ns: 0,
-        });
+        self.takes.push(TakeRec { stall_ns, compute_ns: 0 });
     }
 
     /// What every actor hands to the run when it ends: created and removed paths; for a main
@@ -763,10 +679,7 @@ impl ActorState {
                 takes: std::mem::take(&mut self.takes),
                 elapsed: self.started.elapsed(),
             });
-            sh.stats
-                .lock()
-                .unwrap()
-                .merge(&std::mem::take(&mut self.st));
+            sh.stats.lock().unwrap().merge(&std::mem::take(&mut self.st));
         }
     }
 }
@@ -774,14 +687,7 @@ impl ActorState {
 /// Issue the op through a blocking backend; `Ok(n)` is the count it returned (bytes, entries,
 /// or 0). The `sync` sink's whole backend, and what the `io_uring` loop runs inline for the
 /// ops the ring has no opcode for (`lseek`, `ioctl`, `readdir`) or the kernel lacks.
-pub(crate) fn issue_blocking(
-    be: &mut dyn Backend,
-    sh: &Shared,
-    a: &mut ActorState,
-    rbuf: &mut Ring,
-    wbuf: &mut Ring,
-    op: &Op,
-) -> std::io::Result<i64> {
+pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorState, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> std::io::Result<i64> {
     let full = |rel: &str| sh.opts.root.join(rel);
     match op.kind {
         OpKind::Open => {
@@ -824,18 +730,11 @@ pub(crate) fn issue_blocking(
         }
         OpKind::Ioctl => {
             let fd = a.fd(op.path)?;
-            be.ioctl(fd.as_fd(), crate::ast::IoctlRequest::from_code(op.aux))
-                .map(|_| 0)
+            be.ioctl(fd.as_fd(), crate::ast::IoctlRequest::from_code(op.aux)).map(|_| 0)
         }
         OpKind::Fadvise => {
             let fd = a.fd(op.path)?;
-            be.fadvise(
-                fd.as_fd(),
-                op.offset,
-                op.len,
-                crate::ast::Advice::from_code(op.aux),
-            )
-            .map(|_| 0)
+            be.fadvise(fd.as_fd(), op.offset, op.len, crate::ast::Advice::from_code(op.aux)).map(|_| 0)
         }
         OpKind::Fstat => {
             let fd = a.fd(op.path)?;
@@ -872,8 +771,7 @@ pub(crate) fn issue_blocking(
         OpKind::Rename => {
             be.rename(&full(op.path), &full(op.path2.unwrap_or("")))?;
             a.removed.push(op.path.to_string());
-            a.created
-                .push((op.path2.unwrap_or("").to_string(), a.actor));
+            a.created.push((op.path2.unwrap_or("").to_string(), a.actor));
             Ok(0)
         }
         OpKind::Readdir => {
@@ -886,17 +784,13 @@ pub(crate) fn issue_blocking(
 /// The `O_DIRECT` rounding of an unaligned `[offset, offset + len)`: aligned `[lo, hi)`.
 pub(crate) fn round_out(offset: i64, len: i64) -> (i64, i64) {
     let al = ALIGN as i64;
-    (
-        offset - offset.rem_euclid(al),
-        (offset + len + al - 1) / al * al,
-    )
+    (offset - offset.rem_euclid(al), (offset + len + al - 1) / al * al)
 }
 
 /// A write's content: the positional payload of the object at the op's offset (§5).
 pub(crate) fn fill(a: &mut ActorState, op: &Op, buf: &mut [u8]) {
     let seed = payload::object_seed(op.seed, op.path);
-    a.filler
-        .fill_range(|b| payload::block_seed(seed, 0, b), op.offset as u64, buf);
+    a.filler.fill_range(|b| payload::block_seed(seed, 0, b), op.offset as u64, buf);
 }
 
 // ---------------------------------------------------------------- the sink
@@ -911,44 +805,18 @@ pub struct Runner {
 }
 
 impl Runner {
-    fn new(
-        sh: Arc<Shared>,
-        inst: Arc<Instance>,
-        template: &'static str,
-        actor: i64,
-        main: bool,
-        inherited: Option<Arc<FdTable>>,
-    ) -> Self {
+    fn new(sh: Arc<Shared>, inst: Arc<Instance>, template: &'static str, actor: i64, main: bool, inherited: Option<Arc<FdTable>>) -> Self {
         let be = sh.opts.backend.make();
         let buf = sh.opts.buffer_bytes;
         let a = ActorState::new(&sh, template, actor, main, inherited, 1);
-        Runner {
-            sh,
-            inst,
-            be,
-            rbuf: Ring::new(buf),
-            wbuf: Ring::new(buf),
-            a,
-        }
+        Runner { sh, inst, be, rbuf: Ring::new(buf), wbuf: Ring::new(buf), a }
     }
 
     fn child(&self) -> Runner {
-        Runner::new(
-            self.sh.clone(),
-            self.inst.clone(),
-            self.a.template,
-            self.a.actor,
-            false,
-            Some(self.a.fds.freeze()),
-        )
+        Runner::new(self.sh.clone(), self.inst.clone(), self.a.template, self.a.actor, false, Some(self.a.fds.freeze()))
     }
 
-    fn spawn_sub(
-        &self,
-        snap: Snapshot<'static, 'static>,
-        label: String,
-        work: impl FnOnce(&mut Vm<'static, 'static>, &mut Runner) -> Result<()> + Send + 'static,
-    ) -> JoinHandle<(Result<()>, Stats)> {
+    fn spawn_sub(&self, snap: Snapshot<'static, 'static>, label: String, work: impl FnOnce(&mut Vm<'static, 'static>, &mut Runner) -> Result<()> + Send + 'static) -> JoinHandle<(Result<()>, Stats)> {
         let mut sink = self.child();
         std::thread::Builder::new()
             .name(label)
@@ -968,24 +836,11 @@ impl Runner {
 impl Sink<'static, 'static> for Runner {
     fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()> {
         if self.sh.aborted.load(Ordering::Relaxed) {
-            bail!(
-                "run aborted: {}",
-                self.sh
-                    .coord
-                    .abort_reason()
-                    .unwrap_or_else(|| "another actor failed".into())
-            );
+            bail!("run aborted: {}", self.sh.coord.abort_reason().unwrap_or_else(|| "another actor failed".into()));
         }
         self.a.check_align(&self.sh, op)?;
         let t = Instant::now();
-        let r = issue_blocking(
-            &mut *self.be,
-            &self.sh,
-            &mut self.a,
-            &mut self.rbuf,
-            &mut self.wbuf,
-            op,
-        );
+        let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, op);
         let ns = t.elapsed().as_nanos() as u64;
         self.a.settle(op, ctx, r, ns)
     }
@@ -1008,29 +863,15 @@ impl Sink<'static, 'static> for Runner {
                 self.a.st.barriers += 1;
                 self.a.st.barrier_wait_ns += waited.as_nanos() as u64;
             }
-            Control::Channel {
-                name,
-                capacity,
-                ordered,
-            } => {
+            Control::Channel { name, capacity, ordered } => {
                 let mut ch = self.inst.channels.lock().unwrap();
                 if ch.contains_key(name) {
                     bail!("channel `{name}` declared twice");
                 }
-                ch.insert(
-                    name.to_string(),
-                    Arc::new(Channel::new(capacity, ordered, None)),
-                );
+                ch.insert(name.to_string(), Arc::new(Channel::new(capacity, ordered, None)));
             }
             Control::Put { channel, seq } => {
-                let ch = self
-                    .inst
-                    .channels
-                    .lock()
-                    .unwrap()
-                    .get(channel)
-                    .cloned()
-                    .ok_or_else(|| anyhow!("put on undeclared channel `{channel}`"))?;
+                let ch = self.inst.channels.lock().unwrap().get(channel).cloned().ok_or_else(|| anyhow!("put on undeclared channel `{channel}`"))?;
                 ch.put(seq, &self.sh.aborted)?;
                 self.a.st.puts += 1;
             }
@@ -1039,12 +880,7 @@ impl Sink<'static, 'static> for Runner {
                 let t = Instant::now();
                 ch.take(&self.sh.aborted).with_context(|| {
                     let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
-                    format!(
-                        "{}#{} [{}] take `{channel}`",
-                        ctx.template,
-                        ctx.actor,
-                        idx.join(",")
-                    )
+                    format!("{}#{} [{}] take `{channel}`", ctx.template, ctx.actor, idx.join(","))
                 })?;
                 self.a.took(t.elapsed().as_nanos() as u64);
             }
@@ -1052,11 +888,7 @@ impl Sink<'static, 'static> for Runner {
         Ok(())
     }
 
-    fn fork(
-        &mut self,
-        kind: &ForkKind<'static>,
-        snapshot: &dyn Fn() -> Snapshot<'static, 'static>,
-    ) -> Result<bool> {
+    fn fork(&mut self, kind: &ForkKind<'static>, snapshot: &dyn Fn() -> Snapshot<'static, 'static>) -> Result<bool> {
         let snap = snapshot();
         match *kind {
             ForkKind::Parallel { index, width } => {
@@ -1070,9 +902,7 @@ impl Sink<'static, 'static> for Runner {
                 }
                 let mut first_err = None;
                 for h in handles {
-                    let (r, st) = h
-                        .join()
-                        .map_err(|_| anyhow!("a `{index}` sub-actor panicked"))?;
+                    let (r, st) = h.join().map_err(|_| anyhow!("a `{index}` sub-actor panicked"))?;
                     self.a.st.merge(&st);
                     if let Err(e) = r {
                         if first_err.is_none() {
@@ -1085,14 +915,7 @@ impl Sink<'static, 'static> for Runner {
                     None => Ok(true),
                 }
             }
-            ForkKind::Loader {
-                name,
-                index,
-                workers,
-                prefetch,
-                batches,
-                ordered,
-            } => {
+            ForkKind::Loader { name, index, workers, prefetch, batches, ordered } => {
                 let chan = Arc::new(Channel::new(workers * prefetch, ordered, Some(batches)));
                 {
                     let mut ch = self.inst.channels.lock().unwrap();
@@ -1138,14 +961,7 @@ impl Sink<'static, 'static> for Runner {
         let mut result = Ok(());
         if self.a.main {
             // loaders: close their channels so a worker blocked on a slot exits, then join
-            let channels: Vec<(String, Arc<Channel>)> = self
-                .inst
-                .channels
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
+            let channels: Vec<(String, Arc<Channel>)> = self.inst.channels.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             for (_, ch) in &channels {
                 ch.close();
             }
@@ -1201,21 +1017,12 @@ pub struct DatasetCheck {
 }
 
 /// Compare every dataset against its manifest; returns the dataset ids.
-pub fn check_datasets(
-    loaded: &crate::Loaded,
-    cfg: &Config,
-    root: &Path,
-) -> Result<Vec<DatasetCheck>> {
+pub fn check_datasets(loaded: &crate::Loaded, cfg: &Config, root: &Path) -> Result<Vec<DatasetCheck>> {
     let mut out = Vec::new();
     for name in loaded.ast.datasets.keys() {
         let rel = payload::dataset_root(&loaded.ast, name)?;
         let dir = root.join(&rel);
-        let m = Manifest::read(&dir).with_context(|| {
-            format!(
-                "dataset `{name}` at {}: run `aeiou datagen` first",
-                dir.display()
-            )
-        })?;
+        let m = Manifest::read(&dir).with_context(|| format!("dataset `{name}` at {}: run `aeiou datagen` first", dir.display()))?;
         let want = payload::resolved_dataset(&loaded.doc, name, cfg)?;
         if m.dataset != want {
             let mut lines = Vec::new();
@@ -1226,17 +1033,9 @@ pub fn check_datasets(
                 lines.join("\n  ")
             );
         }
-        m.payload
-            .check()
-            .with_context(|| format!("dataset `{name}` at {}", dir.display()))?;
+        m.payload.check().with_context(|| format!("dataset `{name}` at {}", dir.display()))?;
         let files = m.provenance.get("files_written").and_then(|v| v.as_u64());
-        out.push(DatasetCheck {
-            name: name.clone(),
-            root: rel,
-            id: m.id(),
-            payload: m.payload.clone(),
-            files,
-        });
+        out.push(DatasetCheck { name: name.clone(), root: rel, id: m.id(), payload: m.payload.clone(), files });
     }
     Ok(out)
 }
@@ -1259,20 +1058,12 @@ pub struct NamespaceCheck {
 /// Every namespace declared `input` must have a manifest at its root whose resolved
 /// definitions match this abstract's; reports the write-to-read gap and the host overlap.
 /// Returns the checks and the writer map of every input object.
-pub fn check_input_namespaces(
-    loaded: &crate::Loaded,
-    cfg: &Config,
-    root: &Path,
-    opts: &RunOpts,
-) -> Result<(Vec<NamespaceCheck>, HashMap<String, Option<String>>)> {
+pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &Path, opts: &RunOpts) -> Result<(Vec<NamespaceCheck>, HashMap<String, Option<String>>)> {
     let ast = &loaded.ast;
     let mut by_root: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (name, n) in &ast.namespaces {
         if n.input.unwrap_or(false) {
-            by_root
-                .entry(payload::namespace_root(ast, name)?)
-                .or_default()
-                .push(name.clone());
+            by_root.entry(payload::namespace_root(ast, name)?).or_default().push(name.clone());
         }
     }
     let host = hostname();
@@ -1281,13 +1072,7 @@ pub fn check_input_namespaces(
     let mut objects: HashMap<String, Option<String>> = HashMap::new();
     for (rel, names) in by_root {
         let dir = root.join(&rel);
-        let m = NamespaceManifest::read(&dir).with_context(|| {
-            format!(
-                "input namespace(s) {} at {}: no run has written this root",
-                names.join(", "),
-                dir.display()
-            )
-        })?;
+        let m = NamespaceManifest::read(&dir).with_context(|| format!("input namespace(s) {} at {}: no run has written this root", names.join(", "), dir.display()))?;
         for name in &names {
             let want = payload::resolved_namespace(&loaded.doc, name, cfg)?;
             let Some(have) = m.namespaces.get(name) else {
@@ -1302,16 +1087,10 @@ pub fn check_input_namespaces(
         let gap = unix_now() - m.finished;
         if let Some(max) = opts.max_gap {
             if gap > max {
-                bail!(
-                    "input namespace root {}: written {gap:.1} s ago, more than --max-gap {max}",
-                    dir.display()
-                );
+                bail!("input namespace root {}: written {gap:.1} s ago, more than --max-gap {max}", dir.display());
             }
         }
-        let same_host = m
-            .ranks
-            .iter()
-            .any(|r| r.host == host && r.gpus[0] < hi && lo < r.gpus[1]);
+        let same_host = m.ranks.iter().any(|r| r.host == host && r.gpus[0] < hi && lo < r.gpus[1]);
         if same_host && opts.require_cold {
             bail!("input namespace root {}: this host ({host}) wrote part of GPU range [{lo}, {hi}) it is about to run; use --rank-rotate or other hosts (--require-cold)", dir.display());
         }
@@ -1340,32 +1119,17 @@ pub fn check_input_namespaces(
 /// After a run: `.aeiou-namespace.json` at every output namespace root (one not declared
 /// `input`), written last and atomically, with the objects created there and the rank
 /// records of `report` (every host's, when it is the coordinator's merged report).
-pub fn write_namespace_manifests(
-    loaded: &crate::Loaded,
-    cfg: &Config,
-    root: &Path,
-    _opts: &RunOpts,
-    report: &Report,
-    started: f64,
-    finished: f64,
-) -> Result<Vec<PathBuf>> {
+pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Path, _opts: &RunOpts, report: &Report, started: f64, finished: f64) -> Result<Vec<PathBuf>> {
     let ast = &loaded.ast;
     let mut by_root: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (name, n) in &ast.namespaces {
         if !n.input.unwrap_or(false) {
-            by_root
-                .entry(payload::namespace_root(ast, name)?)
-                .or_default()
-                .push(name.clone());
+            by_root.entry(payload::namespace_root(ast, name)?).or_default().push(name.clone());
         }
     }
     let mut written = Vec::new();
     for (rel, names) in by_root {
-        let prefix = if rel.is_empty() {
-            String::new()
-        } else {
-            format!("{rel}/")
-        };
+        let prefix = if rel.is_empty() { String::new() } else { format!("{rel}/") };
         let mut seen = HashSet::new();
         let mut objects: Vec<(String, i64)> = Vec::new();
         for (path, gpu) in &report.created {
@@ -1377,10 +1141,7 @@ pub fn write_namespace_manifests(
         let count = objects.len() as u64;
         let mut namespaces = BTreeMap::new();
         for name in &names {
-            namespaces.insert(
-                name.clone(),
-                payload::resolved_namespace(&loaded.doc, name, cfg)?,
-            );
+            namespaces.insert(name.clone(), payload::resolved_namespace(&loaded.doc, name, cfg)?);
         }
         let m = NamespaceManifest {
             manifest_version: payload::NAMESPACE_MANIFEST_VERSION,
@@ -1395,11 +1156,7 @@ pub fn write_namespace_manifests(
             finished,
             objects_created: count,
             bytes_written: report.stats.bytes_written,
-            objects: if objects.len() <= payload::NAMESPACE_OBJECT_LIMIT {
-                Some(objects)
-            } else {
-                None
-            },
+            objects: if objects.len() <= payload::NAMESPACE_OBJECT_LIMIT { Some(objects) } else { None },
         };
         written.push(m.write(&root.join(&rel))?);
     }
@@ -1426,16 +1183,12 @@ pub fn prepare_namespaces(ast: &Ast, root: &Path, clean: bool) -> Result<Vec<Str
             continue;
         }
         let dir = root.join(&rel);
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("creating namespace root {}", dir.display()))?;
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating namespace root {}", dir.display()))?;
         let mut stale = Vec::new();
         for entry in std::fs::read_dir(&dir)? {
             let entry = entry?;
             let p = entry.path();
-            if dataset_roots
-                .iter()
-                .any(|d| d.starts_with(&p) || p.starts_with(d))
-            {
+            if dataset_roots.iter().any(|d| d.starts_with(&p) || p.starts_with(d)) {
                 continue;
             }
             stale.push(p);
@@ -1475,9 +1228,7 @@ fn barrier_scopes(ast: &Ast) -> Result<HashMap<String, Vec<String>>> {
                 }
                 Node::Loop { body, .. } | Node::Phase { body, .. } => walk(body, nested, out)?,
                 Node::Parallel { body, .. } | Node::Loader { body, .. } => walk(body, true, out)?,
-                Node::Cond {
-                    then, otherwise, ..
-                } => {
+                Node::Cond { then, otherwise, .. } => {
                     walk(then, nested, out)?;
                     if let Some(b) = otherwise {
                         walk(b, nested, out)?;
@@ -1534,19 +1285,7 @@ impl Report {
     pub fn merge_all(reports: Vec<Report>) -> Report {
         let mut it = reports.into_iter();
         let Some(mut m) = it.next() else {
-            return Report {
-                elapsed: Duration::ZERO,
-                stats: Stats::default(),
-                templates: vec![],
-                ranks: vec![],
-                actors: vec![],
-                departure_releases: vec![],
-                threads_peak: 0,
-                counters: HostCounters::default(),
-                created: vec![],
-                removed: vec![],
-                host: String::new(),
-            };
+            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), created: vec![], removed: vec![], host: String::new() };
         };
         let mut hosts = vec![m.host.clone()];
         let mut departures: BTreeMap<String, u64> = m.departure_releases.drain(..).collect();
@@ -1569,8 +1308,7 @@ impl Report {
         m.created.sort();
         m.created.dedup();
         m.ranks.sort_by_key(|r| r.rank);
-        m.actors
-            .sort_by(|a, b| a.template.cmp(&b.template).then(a.actor.cmp(&b.actor)));
+        m.actors.sort_by(|a, b| a.template.cmp(&b.template).then(a.actor.cmp(&b.actor)));
         m.departure_releases = departures.into_iter().collect();
         hosts.dedup();
         m.host = hosts.join(",");
@@ -1596,43 +1334,20 @@ pub fn participants(model: &Model<'_>, opts: &RunOpts) -> Result<Vec<(String, us
 /// Execute the abstract on one host with the in-process coordinator. `model` must outlive
 /// the threads, hence `'static` (the caller leaks the loaded abstract and model for the life
 /// of the process; a run is the process).
-pub fn run(
-    model: &'static Model<'static>,
-    opts: RunOpts,
-    input_objects: HashMap<String, Option<String>>,
-) -> Result<Report> {
+pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>) -> Result<Report> {
     let p = participants(model, &opts)?;
-    run_with(
-        model,
-        opts,
-        input_objects,
-        Arc::new(Local::new(&p)),
-        Arc::new(AtomicBool::new(false)),
-    )
+    run_with(model, opts, input_objects, Arc::new(Local::new(&p)), Arc::new(AtomicBool::new(false)))
 }
 
 /// Execute the abstract with the given coordinator (`coord::Tcp` for several hosts) and
 /// abort flag (which the coordinator sets when another host fails). On failure here the
 /// coordinator is told to stop the other hosts.
-pub fn run_with(
-    model: &'static Model<'static>,
-    opts: RunOpts,
-    input_objects: HashMap<String, Option<String>>,
-    coord: Arc<dyn Coordinator>,
-    aborted: Arc<AtomicBool>,
-) -> Result<Report> {
+pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>, coord: Arc<dyn Coordinator>, aborted: Arc<AtomicBool>) -> Result<Report> {
     let counts: Vec<(&'static str, i64)> = actor_counts(model)?;
-    let ranges: Vec<(i64, i64)> = counts
-        .iter()
-        .map(|(_, c)| gpu_range(*c, opts.ranks, opts.rank, opts.rank_rotate))
-        .collect();
+    let ranges: Vec<(i64, i64)> = counts.iter().map(|(_, c)| gpu_range(*c, opts.ranks, opts.rank, opts.rank_rotate)).collect();
     let scopes = barrier_scopes(model.ast)?;
     let (glo, ghi) = gpu_range(model.cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
-    let rank_record = RankRecord {
-        rank: opts.rank,
-        host: hostname(),
-        gpus: [glo, ghi],
-    };
+    let rank_record = RankRecord { rank: opts.rank, host: hostname(), gpus: [glo, ghi] };
     let sh = Arc::new(Shared {
         opts,
         coord,
@@ -1667,10 +1382,7 @@ pub fn run_with(
     for (&(template, count), &(lo, hi)) in counts.iter().zip(&ranges) {
         for actor in lo..hi {
             let sh = sh.clone();
-            let inst = Arc::new(Instance {
-                channels: Mutex::new(HashMap::new()),
-                loaders: Mutex::new(Vec::new()),
-            });
+            let inst = Arc::new(Instance { channels: Mutex::new(HashMap::new()), loaders: Mutex::new(Vec::new()) });
             let h = std::thread::Builder::new()
                 .name(format!("{template}#{actor}"))
                 .spawn(move || {
@@ -1714,20 +1426,9 @@ pub fn run_with(
 }
 
 /// The host's report once every actor has ended.
-fn assemble(
-    sh: Arc<Shared>,
-    counts: Vec<(&'static str, i64)>,
-    rank_record: RankRecord,
-    elapsed: Duration,
-    counters: HostCounters,
-) -> Result<Report> {
+fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: RankRecord, elapsed: Duration, counters: HostCounters) -> Result<Report> {
     if sh.aborted.load(Ordering::Relaxed) {
-        bail!(
-            "run aborted: {}",
-            sh.coord
-                .abort_reason()
-                .unwrap_or_else(|| "an actor failed".into())
-        );
+        bail!("run aborted: {}", sh.coord.abort_reason().unwrap_or_else(|| "an actor failed".into()));
     }
     let stats = std::mem::take(&mut *sh.stats.lock().unwrap());
     let mut actors = std::mem::take(&mut *sh.actors.lock().unwrap());
@@ -1736,10 +1437,7 @@ fn assemble(
     removed.sort();
     removed.dedup();
     let removed_set: HashSet<&String> = removed.iter().collect();
-    let mut created: Vec<(String, i64)> = std::mem::take(&mut *sh.created.lock().unwrap())
-        .into_iter()
-        .filter(|(p, _)| !removed_set.contains(p))
-        .collect();
+    let mut created: Vec<(String, i64)> = std::mem::take(&mut *sh.created.lock().unwrap()).into_iter().filter(|(p, _)| !removed_set.contains(p)).collect();
     created.sort();
     Ok(Report {
         elapsed,
@@ -1772,9 +1470,7 @@ fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()>
     )?;
     let Some(m) = &c.mount else { return Ok(()) };
     write!(out, "mount {} ({}, {})", m.mount_point, m.fstype, m.device)?;
-    let Some(n) = &m.nfs else {
-        return writeln!(out);
-    };
+    let Some(n) = &m.nfs else { return writeln!(out) };
     // the client counts buffered bytes as returned and O_DIRECT bytes as requested
     writeln!(
         out,
@@ -1796,10 +1492,7 @@ fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()>
             if o.ops > 0 {
                 cell.push_str(&format!(" ({} rtt", us(o.rtt_ms * 1_000_000 / o.ops)));
                 if o.timeouts > 0 || o.errors > 0 || o.transmissions != o.ops {
-                    cell.push_str(&format!(
-                        ", {} sent, {} timeouts, {} errors",
-                        o.transmissions, o.timeouts, o.errors
-                    ));
+                    cell.push_str(&format!(", {} sent, {} timeouts, {} errors", o.transmissions, o.timeouts, o.errors));
                 }
                 cell.push(')');
             }
@@ -1807,10 +1500,7 @@ fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()>
         })
         .collect();
     writeln!(out, "rpcs {total}: {}", cells.join("  "))?;
-    writeln!(
-        out,
-        "  (the mount's counters over the run, every process on this host included)"
-    )
+    writeln!(out, "  (the mount's counters over the run, every process on this host included)")
 }
 
 fn us(ns: u64) -> String {
@@ -1839,38 +1529,18 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
         human_bytes((s.bytes_read as f64 / secs) as u64),
         human_bytes((s.bytes_written as f64 / secs) as u64)
     )?;
-    let counts: Vec<String> = OpKind::ALL
-        .iter()
-        .filter_map(|k| s.counts.get(k).map(|n| format!("{}={}", k.name(), n)))
-        .collect();
+    let counts: Vec<String> = OpKind::ALL.iter().filter_map(|k| s.counts.get(k).map(|n| format!("{}={}", k.name(), n))).collect();
     writeln!(out, "by kind: {}", counts.join(" "))?;
     writeln!(out, "latency (mean/p50/p99/max):")?;
     for k in OpKind::ALL {
         if let Some(h) = s.lat.get(&k) {
-            writeln!(
-                out,
-                "  {:<10} {:>9} {:>9} {:>9} {:>9}   n={}",
-                k.name(),
-                us(h.mean()),
-                us(h.quantile(0.5)),
-                us(h.quantile(0.99)),
-                us(h.max),
-                h.count
-            )?;
+            writeln!(out, "  {:<10} {:>9} {:>9} {:>9} {:>9}   n={}", k.name(), us(h.mean()), us(h.quantile(0.5)), us(h.quantile(0.99)), us(h.max), h.count)?;
         }
     }
     let mut phases: Vec<_> = s.phases.iter().collect();
     phases.sort_by(|a, b| b.1.ops.cmp(&a.1.ops).then(a.0.cmp(b.0)));
     for (name, p) in phases {
-        writeln!(
-            out,
-            "phase {:<16} ops={:<10} read={:<12} written={:<12} io-time={}",
-            name,
-            p.ops,
-            human_bytes(p.bytes_read),
-            human_bytes(p.bytes_written),
-            human_ns(p.io_ns as i128)
-        )?;
+        writeln!(out, "phase {:<16} ops={:<10} read={:<12} written={:<12} io-time={}", name, p.ops, human_bytes(p.bytes_read), human_bytes(p.bytes_written), human_ns(p.io_ns as i128))?;
     }
     writeln!(
         out,
@@ -1885,11 +1555,7 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
     )?;
     write_counters(out, &r.counters)?;
     if s.input_opens > 0 {
-        writeln!(
-            out,
-            "input objects opened {}  of which written on the opening host ({}) {}",
-            s.input_opens, r.host, s.warm_opens
-        )?;
+        writeln!(out, "input objects opened {}  of which written on the opening host ({}) {}", s.input_opens, r.host, s.warm_opens)?;
         if s.warm_opens > 0 {
             writeln!(out, "WARNING: {} read(s) of input objects hit the host that wrote them (page cache, not storage); run the reader on other hosts or with --rank-rotate", s.warm_opens)?;
         }
@@ -1903,14 +1569,8 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
         let n = with_takes.iter().map(|a| a.takes.len()).max().unwrap_or(0);
         let buckets = n.min(10).max(1);
         let per = (n + buckets - 1) / buckets;
-        let total_stall: u64 = with_takes
-            .iter()
-            .flat_map(|a| a.takes.iter().map(|t| t.stall_ns))
-            .sum();
-        let total_compute: u64 = with_takes
-            .iter()
-            .flat_map(|a| a.takes.iter().map(|t| t.compute_ns))
-            .sum();
+        let total_stall: u64 = with_takes.iter().flat_map(|a| a.takes.iter().map(|t| t.stall_ns)).sum();
+        let total_compute: u64 = with_takes.iter().flat_map(|a| a.takes.iter().map(|t| t.compute_ns)).sum();
         let total_takes: u64 = with_takes.iter().map(|a| a.takes.len() as u64).sum();
         writeln!(
             out,
@@ -1920,11 +1580,7 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
             us(if total_takes > 0 { total_stall / total_takes } else { 0 }),
             if total_compute + total_stall > 0 { total_compute as f64 / (total_compute + total_stall) as f64 } else { 0.0 }
         )?;
-        writeln!(
-            out,
-            "  {:<12} {:>10} {:>10} {:>10} {:>8}",
-            "steps", "stall/take", "p99", "max", "busy"
-        )?;
+        writeln!(out, "  {:<12} {:>10} {:>10} {:>10} {:>8}", "steps", "stall/take", "p99", "max", "busy")?;
         for b in 0..buckets {
             let lo = b * per;
             let hi = ((b + 1) * per).min(n);
@@ -1939,20 +1595,8 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
                     compute += t.compute_ns;
                 }
             }
-            let busy = if compute + h.sum > 0 {
-                compute as f64 / (compute + h.sum) as f64
-            } else {
-                0.0
-            };
-            writeln!(
-                out,
-                "  {:<12} {:>10} {:>10} {:>10} {:>8.3}",
-                format!("{lo}..{hi}"),
-                us(h.mean()),
-                us(h.quantile(0.99)),
-                us(h.max),
-                busy
-            )?;
+            let busy = if compute + h.sum > 0 { compute as f64 / (compute + h.sum) as f64 } else { 0.0 };
+            writeln!(out, "  {:<12} {:>10} {:>10} {:>10} {:>8.3}", format!("{lo}..{hi}"), us(h.mean()), us(h.quantile(0.99)), us(h.max), busy)?;
         }
     }
     writeln!(out, "fingerprint {:016x}", s.fingerprint)?;
