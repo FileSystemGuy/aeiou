@@ -210,8 +210,12 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    generator); containers mean thousands of files, so a Python `datagen` for them is acceptable.
    **Done 2026-09-30 for `files` and `regions` datasets** as `aeiou datagen` in Rust
    (`runner/README.md` §5): the positional wrapper over `dgen-data` 0.3.0, corpus-wide dedupe
-   by seed reuse, the manifest with the resolved definition and the id, parallel by id. The
-   format-class writers and the Python `aeiou-verify` tool are still to come.
+   by seed reuse, the manifest with the resolved definition and the id, parallel by id. **The
+   format-class writers done the same day** as `aeiou-datagen` in Python (`builder/README.md`
+   §6, `DESIGN_REVIEW.md` §3.28): real Parquet, TFRecord, HDF5, and tar files with the same
+   payload (the `dgen-py` wheel reproduces the Rust crate's bytes), sizes, names, and manifest;
+   `aeiou datagen` refuses datasets with a format class. The Python `aeiou-verify` tool is
+   still to come.
 9. Startup checks: `kernel.io_uring_disabled`, `RLIMIT_MEMLOCK`, and `RLIMIT_NOFILE` computed
    from G, W, and the abstract.
 10. ~~Coordinator protocol and launch script (`pdsh`/ssh loop); test it on WSL2 with several
@@ -253,8 +257,14 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     reader library; add a ninth abstract for streaming training over TFRecord or Parquet (the
     MLPerf Storage ResNet50/CosmoFlow shape) and a tenth for the Parquet→Arrow conversion pass
     plus training from a memory-mapped Arrow cache, with cache placement (local vs. SUT) as a
-    parameter. Extend the `loader` sugar so items per batch are decoupled from reads per item.
-    `GRAMMAR_OPTIONS.md` §6.
+    parameter. ~~Extend the `loader` sugar so items per batch are decoupled from reads per item.~~
+    `GRAMMAR_OPTIONS.md` §6. **Done 2026-09-30 for Parquet, TFRecord, HDF5, and WebDataset
+    tar** (`DESIGN_REVIEW.md` §3.28, contract 0.2 in `schema/README.md` §9,
+    `builder/aeiou/formats.py`, `aeiou-datagen`): pyarrow, h5py, and `tarfile` traced on the
+    loopback mount, TFRecord from source [verify]; the ninth abstract is
+    `train_stream_shards.py` (two workloads, TFRecord and Parquet) plus `train_map_hdf5.py`;
+    the loader needs no new knob (under `stream` its unit of work is the shard). Still to do:
+    Arrow IPC, MDS, and Megatron classes, and the tenth abstract.
 
 ## 7. Environment
 
@@ -289,7 +299,7 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Divisions | The backend is part of the application; the interposition test (§5) draws the line between application and solution. | **CLOSED** scores only the backend the real framework uses (`sync` for PyTorch); other backends are speed-of-light rows; `replay` and wall-clock-bounded phases are never CLOSED. Whether a startup phase (the ImageFolder walk) is inside the measured window. | §4 backends, §5 comparison policy; `DESIGN_REVIEW.md` §3.12–3.13, §3.15; `ABSTRACTS.md` §1, §9.8; `NAPKIN_MATH.md` §8 |
 | Data verification and seed privacy | Data is reproducible from (dataset seed, id, offset); the run seed and file order are private to the run. | Motivated by submission fraud under the interposition test; the offline verifier is an audit tool for the WG's review process. | §5; `DESIGN_REVIEW.md` §3.13, §3.16 |
 | Reference parameters | Every workload has parameter slots filled from configuration, measurement, and traces; a parameter file (`schema/README.md` §8) is the published form of one set. | Which values are the reference set (batch sizes, step times, dataset scale relative to client DRAM, the 500-step bound) is a WG decision recorded in the published parameter files. | §5 decisions; `ABSTRACTS.md` `[measure]` slots; `schema/examples/params/` |
-| Workload selection | The builder can express any POSIX-shaped skeleton. | The ninth and tenth abstracts follow the MLPerf Storage ResNet50/CosmoFlow and Parquet→Arrow shapes because those are what the WG submits. | §6 item 15; `GRAMMAR_OPTIONS.md` §6.5 |
+| Workload selection | The builder can express any POSIX-shaped skeleton. | The ninth and tenth abstracts follow the MLPerf Storage ResNet50/CosmoFlow and Parquet→Arrow shapes because those are what the WG submits (`train_stream_tfrecord` / `train_stream_parquet` done 2026-09-30; the tenth pending). | §6 item 15; `GRAMMAR_OPTIONS.md` §6.5 |
 | Upstream requests | dgen-py's API is what it is. | The `fill_block`/`seek` request goes through the WG leadership channel. | `DESIGN_REVIEW.md` §3.17 |
 | Checkpoint write and restore | A write run leaves a namespace manifest; a restore run declares the namespace `input`, reads it, and reports the gap and the warm reads (§5, *Checkpoint restore inputs*). | The benchmark runs them as two invocations of the same host list, the restore with `--rank-rotate 1` so no host reads its own shards; the gap between the end of the write and the start of the restore is capped at 30 s (`--max-gap 30`); a failed DP=N job restarts as DP=N (no resharding, `replicas` stays 1 for fully sharded state); `readback` stays off in a scored write. | `DESIGN_REVIEW.md` §3.24; `ABSTRACTS.md` §3–§4 |
 

@@ -1006,6 +1006,30 @@ the workload.
 
 ---
 
+## 12. Container workloads (added 2026-09-30)
+
+Three workloads over container datasets, written straight in builder form (no paper form;
+the shapes are the loaders' and the format classes carry the readers' protocols,
+`GRAMMAR_OPTIONS.md` §6, `DESIGN_REVIEW.md` §3.28):
+
+- **`train_stream_tfrecord`, `train_stream_parquet`** (`builder/abstracts/train_stream_shards.py`,
+  `PROJECT_BRIEF.md` §6 item 15): the tf.data shape, and HF `streaming=True`, Ray Data, DALI
+  over shards. The input pipeline shuffles the shard list and interleaves `cycle` shards; each
+  is streamed whole by its reader library; the training loop takes a shard every
+  `per_shard / batch` steps. `consume` over a `stream` dataset draws shard ids. Cuts: decode
+  CPU is one `compute` per shard; the shuffle buffer and in-shard batch boundaries are
+  application memory. What it stresses: large sequential reads (TFRecord: positioned 256 KiB
+  reads; Parquet: `fadvise(WILLNEED)` readahead then multi-MiB `pread`s), few opens.
+- **`train_map_hdf5`** (`builder/abstracts/train_map_hdf5.py`): a DataLoader whose
+  `__getitem__` opens the container holding sample `i`, reads row `i` through libhdf5's
+  sieve, and closes it. Cut: an open-file cache (the per-item open is the fork-safe shape).
+  What it stresses: an open, eight small metadata reads, and one 192 KiB positioned read per
+  sample across many 96 MiB files.
+
+Capture for these: `tf.data` and `pyarrow` pipelines on an NFS mount of the target class
+(`strace -f -e trace=%file,%desc`), compare the per-shard syscall sequence with the class's
+protocol, and fit `xfer`, `cycle`, `decode`, and `per_shard`.
+
 ## 11. Trace capture plan (to replace [verify] and fill [measure])
 
 One small run per workload on an NFS mount of the target class, one process, a few hundred

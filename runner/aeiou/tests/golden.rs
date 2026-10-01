@@ -38,6 +38,9 @@ fn hashes_match_check_py() {
         ("train_small_files", "11ccbefefb3efa9a3c2e139c6be0bfa79befdb4c6775872df7beed14b36e0fbe"),
         ("vdb_build_diskann", "237e014e17604b76223301929178b40d037fe17906e641078cd15e9f9dd0efee"),
         ("vdb_search_diskann", "8f57b52ae06867c77676cf9a8388d9c1bbb87249f1927db03c6d6447c0938cde"),
+        ("train_stream_tfrecord", "e5430c583b3454fe9f3125725272de9905476c93470a141458bcacac79b76013"),
+        ("train_stream_parquet", "f200e0ddcfce9ea4dd5f1354732b6a43e5e11a60d2c6879fd722ee262884d622"),
+        ("train_map_hdf5", "279887ce72ff01c20ab2eb5697ff4f114418c6b13e80783c62579ab0e1278988"),
         ("vdb_search_ivf", "07449f43afaa49f835a3f1ee14c911bb7d1aedcb7b7280b972ba3e0eeac29510"),
     ];
     for (name, sha) in want {
@@ -71,6 +74,10 @@ fn golden_fingerprints() {
             2122,
         ),
         ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc546a6b9840b58ff, 9312),
+        // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations
+        ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
+        ("train_stream_parquet", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),
+        ("train_map_hdf5", 2, &[("samples", "64"), ("per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")], 0x3dd38374803bff38, 384),
     ];
     for (name, gpus, params, fp, ops) in cases {
         let text = std::fs::read_to_string(examples().join(format!("{name}.ast.json"))).unwrap();

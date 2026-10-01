@@ -33,6 +33,8 @@ _DENIED_EVENTS = ("subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", 
                   "socket.getnameinfo", "socket.__new__")
 
 _WRITE_MODES = set("wax+")
+_ALLOWED_ENV = {"OPENBLAS_MAIN_FREE", "GOTOBLAS_MAIN_FREE"}
+_PREIMPORT = ("numpy.random", "pyarrow", "pyarrow.parquet", "h5py", "crc32c")
 
 
 def _deny(what):
@@ -57,6 +59,21 @@ def install(script: os.PathLike | str, extra_read_roots=()):
     roots.update(pathlib.Path(p) for p in ("/usr/lib", "/usr/share/zoneinfo", "/proc/self"))
 
     def hook(event, args):
+        if event in ("os.putenv", "os.unsetenv") and args:
+            # numpy's import guards its BLAS with these two; they cannot reach an AST
+            key = os.fsdecode(args[0]) if isinstance(args[0], bytes) else str(args[0])
+            if key in _ALLOWED_ENV:
+                return
+        if event == "ctypes.dlopen" and args:
+            # numpy, pyarrow, and h5py load their own shared objects (and the interpreter,
+            # `PyDLL(None)`) at import; a library named without a path comes from the loader's
+            # search path, one named with a path must be under the read roots
+            name = args[0]
+            if name is None:
+                return
+            name = os.fsdecode(name) if isinstance(name, bytes) else str(name)
+            if "/" not in name or _under(pathlib.Path(name).resolve(), roots):
+                return
         if event.startswith("socket.") or event in _DENIED_EVENTS:
             raise HermeticViolation(f"{event} is denied under --hermetic")
         if event == "open":
@@ -77,6 +94,15 @@ def install(script: os.PathLike | str, extra_read_roots=()):
                 raise HermeticViolation(f"read of {path} is denied under --hermetic (not the "
                                         f"interpreter, its packages, or the script's directory)")
 
+    # The format classes' libraries do things at import that an abstract may not do (numpy
+    # seeds its global RandomState from /dev/urandom, h5py asks `uname` through `platform`,
+    # pyarrow loads shared objects); none of it can reach an AST, and their module-level
+    # draws are denied below, so they are imported before the hooks go in.
+    for mod in _PREIMPORT:
+        try:
+            __import__(mod)
+        except ImportError:
+            pass
     sys.addaudithook(hook)
     _stub_entropy_and_clocks()
 
@@ -86,6 +112,11 @@ def _stub_entropy_and_clocks():
     import random
     import time
     import uuid
+
+    try:
+        import numpy.random as npr          # already imported by install(), before the hooks
+    except ImportError:
+        npr = None
 
     for name in ("time", "time_ns", "monotonic", "monotonic_ns", "perf_counter", "perf_counter_ns",
                  "process_time", "process_time_ns", "thread_time", "thread_time_ns", "localtime",
@@ -113,7 +144,11 @@ def _stub_entropy_and_clocks():
                  "weibullvariate", "randbytes", "binomialvariate"):
         if hasattr(random, name):
             setattr(random, name, _deny(f"random.{name} (module-level, unseeded)"))
-    random.SystemRandom.__init__ = _deny("random.SystemRandom")
+    # `secrets` (imported by numpy.random) constructs a SystemRandom at import: let it exist,
+    # deny every draw
+    random.SystemRandom.__init__ = lambda self, x=None: None
+    for name in ("random", "getrandbits", "randbytes"):
+        setattr(random.SystemRandom, name, _deny(f"random.SystemRandom.{name}"))
     orig_init = random.Random.__init__
 
     def seeded_init(self, x=None):
@@ -122,9 +157,7 @@ def _stub_entropy_and_clocks():
         orig_init(self, x)
     random.Random.__init__ = seeded_init
 
-    try:
-        import numpy.random as npr
-    except ImportError:
+    if npr is None:
         return
     for name in ("seed", "random", "rand", "randn", "randint", "choice", "shuffle", "permutation",
                  "uniform", "normal", "random_sample", "bytes", "lognormal", "zipf"):

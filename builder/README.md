@@ -10,15 +10,19 @@ publishes with a hash. Nothing here runs on a client node.
 ```
 builder/
   aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli,
-             params (parameter files, `aeiou-params`)
-  abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts)
+             params (parameter files, `aeiou-params`), formats (the format classes), datagen
+             (`aeiou-datagen`), and the ports of the runner's definitions it needs: rng, pattern, layout
+  abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts), and the
+                     container workloads train_stream_shards.py (TFRecord and Parquet) and train_map_hdf5.py
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds;
-                     the parameter files fit their abstracts
-  pyproject.toml     dep: jsonschema; `aeiou-build` and `aeiou-params` entry points
+                     the parameter files fit their abstracts; the format classes write files the
+                     libraries read back and the runner executes to the dry-run fingerprint
+  pyproject.toml     dep: jsonschema; extras `test` and `formats` (pyarrow, h5py, numpy, crc32c, dgen-py,
+                     xxhash); `aeiou-build`, `aeiou-params`, `aeiou-datagen` entry points
 ```
 
 ```
-cd builder && uv sync --extra test              # or: pip install -e '.[test]'
+cd builder && uv sync --extra test --extra formats     # or: pip install -e '.[test,formats]'
 uv run aeiou-build --hermetic --twice -o ../schema/examples abstracts/*.py
 uv run pytest
 uv run aeiou-build --check -o ../schema/examples abstracts/*.py     # drift check (CI)
@@ -179,11 +183,59 @@ Llama-shaped defaults) and marking the rest replicated. The runner takes the fil
 `aeiou run --params FILE` (repeatable; `--param` still wins). `python -m aeiou.params` is the
 same program.
 
-## 6. Not yet
+## 6. Format classes and `aeiou-datagen` (2026-09-30)
+
+A dataset stored in a container format declares its class (`aeiou.formats`, `GRAMMAR_OPTIONS.md`
+§6.4, `DESIGN_REVIEW.md` §3.28), and the class supplies the three things the two-contract
+split assigns to the format: the **layout** (`schema/README.md` §2 *Container layout*; the
+runner computes every offset from it and stays format-ignorant), the reader library's fixed
+**protocol** as ordinary ops emitted on a cursor, and the **writer** that `aeiou-datagen`
+uses. The loader's choices (access mode, how many shards a worker streams, projection, batch
+composition) stay in the abstract.
+
+```python
+from aeiou.formats import tfrecord, parquet, hdf5, webdataset
+
+shards = w.dataset("shards", pattern="train/shard-{id:05}.parquet", count=P.samples,
+                   samples_per_file=P.per_shard, size=lognormal(median=P.sample_median, sigma=0.45),
+                   seed=0x5eed_da90, access="stream",
+                   format=parquet(rows_per_group=64, columns=(("image", "binary"), ("label", "int64"))))
+with gpu.loader("shards", workers=P.cycle, prefetch=1, batches=ceil_div(P.steps * P.batch, P.per_shard)) as worker:
+    s = worker.let("s", shards.consume())       # under `stream`, consume draws a shard
+    shards.format.open_reads(worker, s)         # two fstats, the 64 KiB footer read (and the rest if larger)
+    shards.format.read_all(worker, s)           # WILLNEED + one pread per coalesced run of row groups
+    shards.format.close(worker, s)
+```
+
+| Class | Reader, access | Protocol (traced 2026-09-30 unless marked) | Layout constants |
+|---|---|---|---|
+| `tfrecord(xfer=256 KiB)` | `tf.data.TFRecordDataset`, `stream` | `stream(cur, f)`: open, positioned reads of `xfer` to EOF [verify: from source] | 12-byte row header, 4-byte row footer |
+| `parquet(rows_per_group, columns)` | `pyarrow.parquet.ParquetFile`, `stream` | `open_reads`, `read_all(columns=None)`, `close`: fstat ×2, 64 KiB footer read, `fadvise(WILLNEED)` then one `pread` per range; adjacent row groups coalesce to ≤ 32 MiB; a projection reads each run of adjacent projected chunks per group | 4-byte magic; page header 16 + 3 varints (probed); footer declared with a margin and padded exactly; one binary column carries the sample |
+| `hdf5(dataset, shape, dtype)` | h5py `f[name][i]`, `map` | `open_reads`, `read_sample`, `close`: fstat, eight metadata reads, one `pread` per row through the 64 KiB sieve | data offset probed with the `core` driver; samples are fixed-size rows (`size` must be `const`) |
+| `webdataset(members, xfer)` | CPython `tarfile` streaming, `stream` | `stream(cur, f)`: open, fstat, `ioctl`, `lseek`, `read(xfer)` to EOF | 512-byte member headers and alignment, 1024 footer, 10240 file alignment |
+
+`spec(access, size, params)` is what `w.dataset(format=…)` calls; it refuses an access mode
+the class does not support (V9) and records `class`, `reader`, `version` (the installed
+library's, when a constant was probed from it), and `layout` with `writer` settings. The
+probes write a one-row file in memory with the library; the libraries are the `formats`
+extra and are pre-imported by the hermetic child. Arrow IPC, MDS, and Megatron are not
+written yet (`DESIGN_REVIEW.md` §3.28 says why).
+
+**`aeiou-datagen AST --root DIR [--params FILE]… [--param k=v]… [--gpus G] [--dedupe D]
+[--compress C] [--threads N] [--dataset NAME]…** writes every dataset that has a format class:
+names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
+bytes from `dgen-py` 0.3.0 under the `aeiou-positional/1` wrapper (bit-identical to the Rust
+writer's), each file checked against the geometry its layout predicts (`layout.py`), then the
+manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names the writer
+library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
+ones with a class. `tests/test_formats.py` reads the files back with pyarrow and h5py and,
+when the runner is built, runs the three container abstracts over them.
+
+## 7. Not yet
 
 - The `replay` trace format (schema §6); `cursor.replay` emits the node only.
-- Format classes (`GRAMMAR_OPTIONS.md` §6.4): the reader protocols that emit POSIX nodes for
-  Parquet, TFRecord, HDF5, Arrow, WebDataset, MDS, Megatron. `dataset(format={...})` records
-  the class for the manifest; nothing is generated from it yet.
+- Format classes for Arrow IPC, MDS, and Megatron `.bin`/`.idx`; the Parquet→Arrow conversion
+  abstract (`GRAMMAR_OPTIONS.md` §6.5).
 - The `strace` → parameter fitting tool (`aeiou-fit`, `ABSTRACTS.md` §11), which will write
-  parameter files.
+  parameter files; the offline content verifier (`aeiou-verify`), which `rng.py` and
+  `layout.py` now make a short tool.

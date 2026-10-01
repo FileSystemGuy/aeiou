@@ -12,7 +12,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install (locked)
         working-directory: builder
-        run: uv sync --locked --extra test
+        run: uv sync --locked --extra test --extra formats
       - name: Reference checker over the committed ASTs
         run: builder/.venv/bin/python schema/check.py
       - name: Builder tests
@@ -40,9 +40,15 @@ jobs:
       - name: Build and test
         working-directory: runner
         run: cargo test --release
+      - uses: astral-sh/setup-uv@v5
+      - name: Builder with the format classes' libraries
+        working-directory: builder
+        run: uv sync --locked --extra test --extra formats
       - name: Rust checker agrees with the reference checker on every committed AST
         run: |
-          pip install jsonschema
-          python3 schema/check.py > /tmp/check.py.out
+          builder/.venv/bin/python schema/check.py > /tmp/check.py.out
           runner/target/release/aeiou check schema/examples/*.ast.json > /tmp/check.rs.out
           diff /tmp/check.py.out /tmp/check.rs.out
+      - name: Container datasets written by aeiou-datagen run to the dry-run fingerprint
+        working-directory: builder
+        run: AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q tests/test_formats.py

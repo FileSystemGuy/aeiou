@@ -1,0 +1,317 @@
+{
+  "ast": "0.2",
+  "name": "train_map_hdf5",
+  "doc": "DataLoader over HDF5 containers of fixed-size rows: open, metadata reads, one positioned row read, close per sample.",
+  "params": {
+    "batch": {
+      "default": 32,
+      "unit": "count"
+    },
+    "workers": {
+      "default": 8,
+      "unit": "count"
+    },
+    "prefetch": {
+      "default": 2,
+      "unit": "count"
+    },
+    "steps": {
+      "default": 500,
+      "unit": "count"
+    },
+    "sync_every": {
+      "default": 500,
+      "unit": "count",
+      "doc": "1 for DDP; 500 keeps the brief's reference workload"
+    },
+    "step_time": {
+      "default": 105000000,
+      "unit": "ns",
+      "doc": "[measure] GPU step time on the target accelerator"
+    },
+    "per_file": {
+      "default": 512,
+      "unit": "count",
+      "doc": "[config] samples per container (96 MiB each)"
+    },
+    "samples": {
+      "default": 1000000,
+      "unit": "count",
+      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+    }
+  },
+  "datasets": {
+    "train": {
+      "files": {
+        "pattern": "train/samples-{id:05}.h5",
+        "count": {
+          "param": "samples"
+        },
+        "size": {
+          "const": 196608
+        },
+        "seed": 1592646289,
+        "access": "map",
+        "samples_per_file": {
+          "param": "per_file"
+        },
+        "format": {
+          "class": "hdf5",
+          "reader": "h5py",
+          "version": "h5py 3.16.0, hdf5 2.0.0",
+          "layout": {
+            "file_header": 2048,
+            "writer": {
+              "dataset": "records",
+              "shape": [
+                256,
+                256,
+                3
+              ],
+              "dtype": "u1",
+              "sieve": 65536
+            }
+          }
+        }
+      }
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "loader": {
+            "name": "batches",
+            "index": "b",
+            "workers": {
+              "param": "workers"
+            },
+            "prefetch": {
+              "param": "prefetch"
+            },
+            "batches": {
+              "param": "steps"
+            },
+            "ordered": true,
+            "body": [
+              {
+                "loop": {
+                  "index": "j",
+                  "to": {
+                    "param": "batch"
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "s",
+                        "value": {
+                          "consume": "train"
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "f",
+                        "value": {
+                          "file": {
+                            "of": {
+                              "ref": "s"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "flags": [
+                          "RDONLY",
+                          "CLOEXEC"
+                        ]
+                      }
+                    },
+                    {
+                      "fstat": {
+                        "file": {
+                          "ref": "f"
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": 8,
+                        "offset": 0
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": 48,
+                        "offset": 0
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": 48,
+                        "offset": 48
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": 512,
+                        "offset": 96
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": 512,
+                        "offset": 680
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": 544,
+                        "offset": 136
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": 328,
+                        "offset": 1072
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": 512,
+                        "offset": 800
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": {
+                          "size": {
+                            "ref": "s"
+                          }
+                        },
+                        "offset": {
+                          "offset": {
+                            "ref": "s"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "f"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "train",
+            "body": [
+              {
+                "loop": {
+                  "index": "step",
+                  "to": {
+                    "param": "steps"
+                  },
+                  "body": [
+                    {
+                      "take": {
+                        "channel": "batches"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "ns": {
+                          "param": "step_time"
+                        }
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "eq": [
+                            {
+                              "mod": [
+                                {
+                                  "index": "step"
+                                },
+                                {
+                                  "param": "sync_every"
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "barrier": {
+                              "scope": "global"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "train_map_hdf5.py",
+      "sha256": "e7dd541cfb2794306c465b1abce486c0b894047f1d58afda8f4596ab25a75a94",
+      "builder_version": "0.1.0",
+      "git": "0d93cea0ef60-dirty"
+    },
+    "python": "3.12.13",
+    "lock": {
+      "file": "uv.lock",
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
+    },
+    "built_twice_identical": true,
+    "ast_sha256": "279887ce72ff01c20ab2eb5697ff4f114418c6b13e80783c62579ab0e1278988"
+  }
+}

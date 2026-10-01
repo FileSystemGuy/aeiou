@@ -712,6 +712,16 @@ Consequences:
 - An author writes `dataset train = parquet(pattern, count, rows_per_group = …, columns = …,
   seed = …)` plus a loader shape; the class supplies the rest.
 
+**Status (2026-09-30).** Built as contract 0.2 (`schema/README.md` §2 *Container layout*,
+§9) and `builder/aeiou/formats.py`: `tfrecord`, `parquet` (pyarrow), `hdf5` (h5py),
+`webdataset` (tar), with traced protocols, build-time probes for the library constants, and
+`aeiou-datagen` as the writer. The author's line is `w.dataset(…, access="stream",
+format=parquet(rows_per_group=64, columns=…))` and the protocol is
+`ds.format.open_reads(cur, f)`, `ds.format.read_all(cur, f, columns=…)`, `ds.format.close(cur,
+f)` (Parquet), `ds.format.stream(cur, f)` (TFRecord, tar), or `open_reads` / `read_sample` /
+`close` (HDF5). Reasoning and what the traces showed: `DESIGN_REVIEW.md` §3.28. Arrow IPC,
+MDS, and Megatron are still to come.
+
 ### 6.5 Derived workloads to add
 
 - Streaming training over TFRecord or Parquet shards (the MLPerf Storage ResNet50 and CosmoFlow

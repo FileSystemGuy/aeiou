@@ -1,0 +1,278 @@
+{
+  "ast": "0.2",
+  "name": "train_stream_tfrecord",
+  "doc": "tf.data over TFRecord shards: cycle shards streamed concurrently, positioned reads of the buffer size to EOF.",
+  "params": {
+    "batch": {
+      "default": 256,
+      "unit": "count",
+      "doc": "[config] samples per step"
+    },
+    "per_shard": {
+      "default": 1024,
+      "unit": "count",
+      "doc": "[config] samples per shard; a multiple of batch"
+    },
+    "cycle": {
+      "default": 4,
+      "unit": "count",
+      "doc": "[config] interleave cycle_length: shards one GPU's pipeline streams concurrently"
+    },
+    "prefetch": {
+      "default": 1,
+      "unit": "count",
+      "doc": "[config] shards finished ahead of the training loop, per cycle slot"
+    },
+    "steps": {
+      "default": 500,
+      "unit": "count"
+    },
+    "sync_every": {
+      "default": 500,
+      "unit": "count",
+      "doc": "1 for DDP; 500 keeps the brief's reference workload"
+    },
+    "step_time": {
+      "default": 105000000,
+      "unit": "ns",
+      "doc": "[measure] GPU step time on the target accelerator"
+    },
+    "decode": {
+      "default": 0,
+      "unit": "ns",
+      "doc": "[measure] decode compute per shard in the input pipeline; 0 = I/O bound"
+    },
+    "xfer": {
+      "default": 262144,
+      "unit": "bytes",
+      "doc": "[verify] the reader library's read buffer (TFRecord)"
+    },
+    "samples": {
+      "default": 1281167,
+      "unit": "count",
+      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+    },
+    "sample_median": {
+      "default": 112640,
+      "unit": "bytes",
+      "doc": "[measure] corpus"
+    }
+  },
+  "datasets": {
+    "shards": {
+      "files": {
+        "pattern": "train/shard-{id:05}.tfrecord",
+        "count": {
+          "param": "samples"
+        },
+        "size": {
+          "lognormal": {
+            "median": {
+              "param": "sample_median"
+            },
+            "sigma": 0.45
+          }
+        },
+        "seed": 1592646288,
+        "access": "stream",
+        "samples_per_file": {
+          "param": "per_shard"
+        },
+        "format": {
+          "class": "tfrecord",
+          "reader": "tf.data.TFRecordDataset",
+          "layout": {
+            "columns": [
+              {
+                "row_header": 12,
+                "row_footer": 4,
+                "weight": 1.0
+              }
+            ],
+            "writer": {}
+          }
+        }
+      }
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "loader": {
+            "name": "shards",
+            "index": "b",
+            "workers": {
+              "param": "cycle"
+            },
+            "prefetch": {
+              "param": "prefetch"
+            },
+            "batches": {
+              "ceil_div": [
+                {
+                  "mul": [
+                    {
+                      "param": "steps"
+                    },
+                    {
+                      "param": "batch"
+                    }
+                  ]
+                },
+                {
+                  "param": "per_shard"
+                }
+              ]
+            },
+            "ordered": true,
+            "body": [
+              {
+                "let": {
+                  "name": "s",
+                  "value": {
+                    "consume": "shards"
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "s"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "read": {
+                  "file": {
+                    "ref": "s"
+                  },
+                  "len": {
+                    "param": "xfer"
+                  },
+                  "offset": 0,
+                  "repeat": "until_eof"
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "s"
+                  }
+                }
+              },
+              {
+                "compute": {
+                  "ns": {
+                    "param": "decode"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "train",
+            "body": [
+              {
+                "loop": {
+                  "index": "step",
+                  "to": {
+                    "param": "steps"
+                  },
+                  "body": [
+                    {
+                      "cond": {
+                        "if": {
+                          "eq": [
+                            {
+                              "mod": [
+                                {
+                                  "index": "step"
+                                },
+                                {
+                                  "div": [
+                                    {
+                                      "param": "per_shard"
+                                    },
+                                    {
+                                      "param": "batch"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "take": {
+                              "channel": "shards"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "compute": {
+                        "ns": {
+                          "param": "step_time"
+                        }
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "eq": [
+                            {
+                              "mod": [
+                                {
+                                  "index": "step"
+                                },
+                                {
+                                  "param": "sync_every"
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "barrier": {
+                              "scope": "global"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "train_stream_shards.py",
+      "sha256": "cd091d66f4c3fcf5e7b7e78767aaca769aa0e1934825362154f45397eea1f441",
+      "builder_version": "0.1.0",
+      "git": "0d93cea0ef60-dirty"
+    },
+    "python": "3.12.13",
+    "lock": {
+      "file": "uv.lock",
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
+    },
+    "built_twice_identical": true,
+    "ast_sha256": "e5430c583b3454fe9f3125725272de9905476c93470a141458bcacac79b76013"
+  }
+}

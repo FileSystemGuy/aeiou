@@ -232,6 +232,11 @@ sub-actor pool is the planned fix. The same runs on the loopback NFS mount are �
   compares `dataset` field by field against what it resolves and prints the id; the payload
   block is recorded and printed, not derivable from the abstract, so a published id is what
   pins it (`--expect-dataset-id`).
+- **Containers** are written by the Python side: `aeiou-datagen` (`builder/README.md` §6)
+  writes every dataset that has a format class, with the same names, sizes, payload, and
+  manifest form (its `format` block records the class and writer library); `aeiou datagen`
+  refuses such a dataset. A corpus with both kinds is written by both tools, each dataset by
+  one of them.
 - Because the corpus is sized per submission (`PROJECT_BRIEF.md` §5, dataset sizing rule),
   the count of every committed corpus is a parameter (`files`, `nodes`, `lists`,
   `sys_prompts`, `shards`, `n`), and so are the size parameters a small test corpus needs

@@ -1,0 +1,805 @@
+{
+  "ast": "0.2",
+  "name": "train_stream_parquet",
+  "doc": "pyarrow over Parquet shards: footer read, then WILLNEED and one pread per coalesced run of row groups.",
+  "params": {
+    "batch": {
+      "default": 256,
+      "unit": "count",
+      "doc": "[config] samples per step"
+    },
+    "per_shard": {
+      "default": 1024,
+      "unit": "count",
+      "doc": "[config] samples per shard; a multiple of batch"
+    },
+    "cycle": {
+      "default": 4,
+      "unit": "count",
+      "doc": "[config] interleave cycle_length: shards one GPU's pipeline streams concurrently"
+    },
+    "prefetch": {
+      "default": 1,
+      "unit": "count",
+      "doc": "[config] shards finished ahead of the training loop, per cycle slot"
+    },
+    "steps": {
+      "default": 500,
+      "unit": "count"
+    },
+    "sync_every": {
+      "default": 500,
+      "unit": "count",
+      "doc": "1 for DDP; 500 keeps the brief's reference workload"
+    },
+    "step_time": {
+      "default": 105000000,
+      "unit": "ns",
+      "doc": "[measure] GPU step time on the target accelerator"
+    },
+    "decode": {
+      "default": 0,
+      "unit": "ns",
+      "doc": "[measure] decode compute per shard in the input pipeline; 0 = I/O bound"
+    },
+    "xfer": {
+      "default": 262144,
+      "unit": "bytes",
+      "doc": "[verify] the reader library's read buffer (TFRecord)"
+    },
+    "samples": {
+      "default": 1281167,
+      "unit": "count",
+      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+    },
+    "sample_median": {
+      "default": 112640,
+      "unit": "bytes",
+      "doc": "[measure] corpus"
+    }
+  },
+  "datasets": {
+    "shards": {
+      "files": {
+        "pattern": "train/shard-{id:05}.parquet",
+        "count": {
+          "param": "samples"
+        },
+        "size": {
+          "lognormal": {
+            "median": {
+              "param": "sample_median"
+            },
+            "sigma": 0.45
+          }
+        },
+        "seed": 1592646288,
+        "access": "stream",
+        "samples_per_file": {
+          "param": "per_shard"
+        },
+        "format": {
+          "class": "parquet",
+          "reader": "pyarrow.parquet.ParquetFile",
+          "version": "pyarrow 25.0.1",
+          "layout": {
+            "unit": 64,
+            "file_header": 4,
+            "file_footer": 200,
+            "file_footer_per_unit": 160,
+            "columns": [
+              {
+                "header": 26,
+                "fixed": 4,
+                "weight": 1.0
+              },
+              {
+                "header": 22,
+                "fixed": 8,
+                "weight": 0.0
+              }
+            ],
+            "writer": {
+              "rows_per_group": 64,
+              "columns": [
+                [
+                  "image",
+                  "binary"
+                ],
+                [
+                  "label",
+                  "int64"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "loader": {
+            "name": "shards",
+            "index": "b",
+            "workers": {
+              "param": "cycle"
+            },
+            "prefetch": {
+              "param": "prefetch"
+            },
+            "batches": {
+              "ceil_div": [
+                {
+                  "mul": [
+                    {
+                      "param": "steps"
+                    },
+                    {
+                      "param": "batch"
+                    }
+                  ]
+                },
+                {
+                  "param": "per_shard"
+                }
+              ]
+            },
+            "ordered": true,
+            "body": [
+              {
+                "let": {
+                  "name": "s",
+                  "value": {
+                    "consume": "shards"
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "s"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "fstat": {
+                  "file": {
+                    "ref": "s"
+                  }
+                }
+              },
+              {
+                "fstat": {
+                  "file": {
+                    "ref": "s"
+                  }
+                }
+              },
+              {
+                "read": {
+                  "file": {
+                    "ref": "s"
+                  },
+                  "len": {
+                    "min": [
+                      65536,
+                      {
+                        "size": {
+                          "ref": "s"
+                        }
+                      }
+                    ]
+                  },
+                  "offset": {
+                    "sub": [
+                      {
+                        "size": {
+                          "ref": "s"
+                        }
+                      },
+                      {
+                        "min": [
+                          65536,
+                          {
+                            "size": {
+                              "ref": "s"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "cond": {
+                  "if": {
+                    "gt": [
+                      {
+                        "add": [
+                          {
+                            "add": [
+                              192,
+                              {
+                                "mul": [
+                                  160,
+                                  {
+                                    "units": {
+                                      "ref": "s"
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      65536
+                    ]
+                  },
+                  "then": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "s"
+                        },
+                        "len": {
+                          "sub": [
+                            {
+                              "add": [
+                                {
+                                  "add": [
+                                    192,
+                                    {
+                                      "mul": [
+                                        160,
+                                        {
+                                          "units": {
+                                            "ref": "s"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                8
+                              ]
+                            },
+                            65536
+                          ]
+                        },
+                        "offset": {
+                          "sub": [
+                            {
+                              "size": {
+                                "ref": "s"
+                              }
+                            },
+                            {
+                              "add": [
+                                {
+                                  "add": [
+                                    192,
+                                    {
+                                      "mul": [
+                                        160,
+                                        {
+                                          "units": {
+                                            "ref": "s"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                8
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "piece",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "units": {
+                          "ref": "s"
+                        }
+                      },
+                      {
+                        "max": [
+                          1,
+                          {
+                            "div": [
+                              33554432,
+                              {
+                                "size": {
+                                  "unit": {
+                                    "of": {
+                                      "ref": "s"
+                                    },
+                                    "index": 0
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "u0",
+                        "value": {
+                          "unit": {
+                            "of": {
+                              "ref": "s"
+                            },
+                            "index": {
+                              "mul": [
+                                {
+                                  "index": "piece"
+                                },
+                                {
+                                  "max": [
+                                    1,
+                                    {
+                                      "div": [
+                                        33554432,
+                                        {
+                                          "size": {
+                                            "unit": {
+                                              "of": {
+                                                "ref": "s"
+                                              },
+                                              "index": 0
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "u1",
+                        "value": {
+                          "unit": {
+                            "of": {
+                              "ref": "s"
+                            },
+                            "index": {
+                              "sub": [
+                                {
+                                  "min": [
+                                    {
+                                      "add": [
+                                        {
+                                          "mul": [
+                                            {
+                                              "index": "piece"
+                                            },
+                                            {
+                                              "max": [
+                                                1,
+                                                {
+                                                  "div": [
+                                                    33554432,
+                                                    {
+                                                      "size": {
+                                                        "unit": {
+                                                          "of": {
+                                                            "ref": "s"
+                                                          },
+                                                          "index": 0
+                                                        }
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "max": [
+                                            1,
+                                            {
+                                              "div": [
+                                                33554432,
+                                                {
+                                                  "size": {
+                                                    "unit": {
+                                                      "of": {
+                                                        "ref": "s"
+                                                      },
+                                                      "index": 0
+                                                    }
+                                                  }
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "units": {
+                                        "ref": "s"
+                                      }
+                                    }
+                                  ]
+                                },
+                                1
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "fadvise": {
+                        "file": {
+                          "ref": "s"
+                        },
+                        "advice": "WILLNEED",
+                        "offset": {
+                          "offset": {
+                            "ref": "u0"
+                          }
+                        },
+                        "len": {
+                          "sub": [
+                            {
+                              "add": [
+                                {
+                                  "offset": {
+                                    "ref": "u1"
+                                  }
+                                },
+                                {
+                                  "size": {
+                                    "ref": "u1"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "offset": {
+                                "ref": "u0"
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "piece",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "units": {
+                          "ref": "s"
+                        }
+                      },
+                      {
+                        "max": [
+                          1,
+                          {
+                            "div": [
+                              33554432,
+                              {
+                                "size": {
+                                  "unit": {
+                                    "of": {
+                                      "ref": "s"
+                                    },
+                                    "index": 0
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "u0",
+                        "value": {
+                          "unit": {
+                            "of": {
+                              "ref": "s"
+                            },
+                            "index": {
+                              "mul": [
+                                {
+                                  "index": "piece"
+                                },
+                                {
+                                  "max": [
+                                    1,
+                                    {
+                                      "div": [
+                                        33554432,
+                                        {
+                                          "size": {
+                                            "unit": {
+                                              "of": {
+                                                "ref": "s"
+                                              },
+                                              "index": 0
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "u1",
+                        "value": {
+                          "unit": {
+                            "of": {
+                              "ref": "s"
+                            },
+                            "index": {
+                              "sub": [
+                                {
+                                  "min": [
+                                    {
+                                      "add": [
+                                        {
+                                          "mul": [
+                                            {
+                                              "index": "piece"
+                                            },
+                                            {
+                                              "max": [
+                                                1,
+                                                {
+                                                  "div": [
+                                                    33554432,
+                                                    {
+                                                      "size": {
+                                                        "unit": {
+                                                          "of": {
+                                                            "ref": "s"
+                                                          },
+                                                          "index": 0
+                                                        }
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "max": [
+                                            1,
+                                            {
+                                              "div": [
+                                                33554432,
+                                                {
+                                                  "size": {
+                                                    "unit": {
+                                                      "of": {
+                                                        "ref": "s"
+                                                      },
+                                                      "index": 0
+                                                    }
+                                                  }
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "units": {
+                                        "ref": "s"
+                                      }
+                                    }
+                                  ]
+                                },
+                                1
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "s"
+                        },
+                        "len": {
+                          "sub": [
+                            {
+                              "add": [
+                                {
+                                  "offset": {
+                                    "ref": "u1"
+                                  }
+                                },
+                                {
+                                  "size": {
+                                    "ref": "u1"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "offset": {
+                                "ref": "u0"
+                              }
+                            }
+                          ]
+                        },
+                        "offset": {
+                          "offset": {
+                            "ref": "u0"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "s"
+                  }
+                }
+              },
+              {
+                "compute": {
+                  "ns": {
+                    "param": "decode"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "train",
+            "body": [
+              {
+                "loop": {
+                  "index": "step",
+                  "to": {
+                    "param": "steps"
+                  },
+                  "body": [
+                    {
+                      "cond": {
+                        "if": {
+                          "eq": [
+                            {
+                              "mod": [
+                                {
+                                  "index": "step"
+                                },
+                                {
+                                  "div": [
+                                    {
+                                      "param": "per_shard"
+                                    },
+                                    {
+                                      "param": "batch"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "take": {
+                              "channel": "shards"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "compute": {
+                        "ns": {
+                          "param": "step_time"
+                        }
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "eq": [
+                            {
+                              "mod": [
+                                {
+                                  "index": "step"
+                                },
+                                {
+                                  "param": "sync_every"
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "barrier": {
+                              "scope": "global"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "train_stream_shards.py",
+      "sha256": "cd091d66f4c3fcf5e7b7e78767aaca769aa0e1934825362154f45397eea1f441",
+      "builder_version": "0.1.0",
+      "git": "0d93cea0ef60-dirty"
+    },
+    "python": "3.12.13",
+    "lock": {
+      "file": "uv.lock",
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
+    },
+    "built_twice_identical": true,
+    "ast_sha256": "f200e0ddcfce9ea4dd5f1354732b6a43e5e11a60d2c6879fd722ee262884d622"
+  }
+}

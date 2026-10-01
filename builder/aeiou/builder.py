@@ -110,6 +110,9 @@ class Params:
 class Dataset:
     def __init__(self, name: str, kind: str, spec: dict):
         self.name, self.kind, self.spec = name, kind, spec
+        #: the format class instance the dataset was declared with (`aeiou.formats`), for its
+        #: reader protocol: `ds.format.stream(cursor, shard)`; None without one
+        self.format = None
 
     def ast(self):
         return {self.kind: _strip_none(self.spec)}
@@ -220,8 +223,9 @@ class Workload:
             raise BuildError(f"dataset {name}: `chunk` and a `{{k}}` field go together")
         if access is not None and access not in ("map", "stream"):
             raise BuildError(f"dataset {name}: access must be map or stream")
+        fmt_obj = format if hasattr(format, "spec") else None
         if format is not None:
-            format = _format_spec(name, format, access or "map")
+            format = _format_spec(name, format, access or "map", size, {k: v["default"] for k, v in self._param_specs.items()})
         _reserved(pattern, f"dataset {name}")
         self._claim_root(_root(pattern), name)
         spec = {"pattern": pattern, "count": lift(count, "count"), "size": distref(size),
@@ -229,6 +233,7 @@ class Workload:
                 "samples_per_file": None if samples_per_file is None else lift(samples_per_file),
                 "chunk": None if chunk is None else lift(chunk, "chunk"), "format": format, "doc": doc}
         self._datasets[name] = ds = Dataset(name, "files", spec)
+        ds.format = fmt_obj
         return ds
 
     def regions(self, name: str, *, file: str, count, slot, size, seed: int,
@@ -344,10 +349,10 @@ class Workload:
         return write(self, path, provenance=provenance)
 
 
-def _format_spec(name: str, format, access: str) -> dict:
+def _format_spec(name: str, format, access: str, size=None, params: dict | None = None) -> dict:
     """The `format` entry of a dataset: a dict `{class, reader?, version?, layout?}` (a format
-    class object of `aeiou.formats` renders to one through `.spec(access)`)."""
-    spec = format.spec(access) if hasattr(format, "spec") else format
+    class object of `aeiou.formats` renders to one through `.spec(access, size, params)`)."""
+    spec = format.spec(access, size, params) if hasattr(format, "spec") else format
     if not isinstance(spec, dict) or "class" not in spec:
         raise BuildError(f"dataset {name}: format needs a `class`")
     check_ident(spec["class"], "format class")

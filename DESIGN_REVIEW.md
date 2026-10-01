@@ -880,6 +880,98 @@ first real set will come from a real model's shards with the same command.
 
 Not done here: `aeiou-fit` (`ABSTRACTS.md` §11), which will write the same form from a trace.
 
+### 3.28 Format classes as built: the layout in the contract, traced protocols, a Python writer (added 2026-09-30)
+
+§3.16 decided that a container format is a library with two halves and that the Rust runner
+stays format-ignorant. Building it fixed where each piece lives and settled four things the
+decision had left open. Contract 0.2 (`schema/README.md` §9) carries the result; the classes
+are `builder/aeiou/formats.py`; the writer is `aeiou-datagen`; the shapes are
+`train_stream_tfrecord`, `train_stream_parquet`, and `train_map_hdf5`.
+
+**The layout is a generic framing formula in the AST, not a format name.** The runner has to
+compute `offset(s)`, the extent of a row group, and a file's size without knowing Parquet,
+so `format.layout` says, in format-free terms, how a file frames its samples: file, unit, and
+column headers and footers, per-row framing, alignment, and column weights that split each
+sample's bytes (`schema/README.md` §2 *Container layout*). Every real format tried fits it:
+TFRecord is a 12-byte row header and a 4-byte row footer; a tar member is a 512-byte header
+and a 512-byte row alignment, with the archive's two zero blocks and 10240-byte alignment as
+file footer and file alignment; HDF5 is a file header at the data offset; Parquet is a 4-byte
+magic, row groups of column chunks with a page header each, a footer that grows per row
+group, and the 8-byte tail. The invariants hold unchanged: offsets are formulas, nothing
+per-file is stored (the unit lengths of a file are recomputed from the size draws and held in
+a bounded per-actor cache while the file is in use, `GRAMMAR_OPTIONS.md` §6.3), and the
+runner never interprets a byte.
+
+**Constants come from the installed library at build time and are pinned by its version.**
+A page header is 16 bytes plus three thrift varints; an HDF5 file's data offset depends on
+the library's metadata layout; an Arrow record batch's framing depends on the schema. Rather
+than hand-maintain tables, a class derives its constants by writing a one-row file *in
+memory* with the library (pyarrow's `BufferOutputStream`, HDF5's `core` driver without a
+backing store) and records the library version in `format.version`, so the AST says which
+pyarrow it is for and `--twice` proves the probe is deterministic. The writer then checks
+every file it produces against the geometry the layout predicts (file size, and for Parquet
+every column chunk's offset and length from the real metadata), so a library that lays files
+out differently fails at datagen with a named mismatch, never at run time with a short read.
+Two format quirks needed a decision: Parquet's footer varies with varint widths, so the class
+declares a footer size with a margin and the writer pads it exactly through a key-value
+entry (one counting pass through a sink to measure the natural footer, then the real write);
+and a page header's varint band depends on the chunk's bytes, so the class places the header
+for the band the expected chunk size falls in and the writer refuses a corpus whose chunks
+cross a band. Parquet row counts must divide: `samples_per_file` by `rows_per_group` and the
+dataset's count by `samples_per_file`, or a short last group changes a varint.
+
+**`stream` is the shuffle over shards; the loader needs no records-per-batch knob.** The
+reader library streams a shard; the input pipeline interleaves `cycle` of them; records are
+batched from the interleaved stream and the shuffle buffer produces no I/O. So the loader's
+unit of work under `stream` is a shard (`consume` returns file handles, epochs are counted in
+files, the same position formula), the worker runs the format class's whole-shard protocol,
+and the training loop takes a shard every `per_shard / batch` steps. The op multiset is
+exact; what the model gives up is the timing of reads inside a shard relative to steps,
+which the reader's own buffering hides from the application anyway.
+
+**`fadvise` is the eighteenth op.** pyarrow issues `posix_fadvise(WILLNEED)` on every range
+before it reads it (pre-buffering), and on an NFS client that advice starts readahead, so the
+wire pattern of a Parquet read is readahead followed by a `pread` that hits the cache. An op
+vocabulary without it would model the right bytes with the wrong RPC timing. The advice is
+hashed like any other argument.
+
+**What the traces showed** (loopback NFS, 2026-09-30; the scratch scripts were run through
+the mount after writing behind the server, as `runner/README.md` §7 prescribes):
+
+| Library | Protocol as traced |
+|---|---|
+| pyarrow 25.0.1, `ParquetFile` | `open`, two `fstat`, `pread` 64 KiB at EOF − 64 KiB (the speculative footer read; a second read if the footer is larger); `iter_batches`: `fadvise(WILLNEED)` for every range, then one `pread` per range, where adjacent row groups coalesce into pieces of at most 32 MiB; a column projection reads one range per run of adjacent projected chunks per group; `read_table` opens, reads the footer, closes, and reopens |
+| h5py 3.16 / HDF5 2.0, `f['records'][i]` | `open`, `fstat`, eight small metadata `pread`s (superblock, root object header, heap, B-tree, symbol node, dataset header), then one `pread` per row through the 64 KiB sieve buffer: `min(64 KiB, EOF − offset)` for a row smaller than the sieve, the row itself otherwise; a chunked dataset adds B-tree node reads per row |
+| pyarrow 25.0.1, Arrow IPC file | memory-mapped: one `mmap` and no visible reads (the `mmap` backend's case); `OSFile`: `pread` 10 at EOF − 10, the footer, one `pread` per record batch |
+| CPython 3.12 `tarfile` streaming | `open(O_RDONLY\|O_CLOEXEC)`, `fstat`, `ioctl(TCGETS)`, `lseek(0, CUR)`, `read(st_blksize)` to the short read and the zero read: the `until_eof` idiom of §1 |
+| TensorFlow `TFRecordDataset` | not traced (TensorFlow is not installed): positioned reads of the buffer size from the source, tagged [verify] |
+
+**The hermetic harness learned what a library does at import.** numpy seeds its global
+`RandomState` from `/dev/urandom` and sets a BLAS guard in the environment, h5py asks
+`uname` through `platform`, pyarrow loads its shared objects. None of it can reach an AST
+(the module-level draws stay denied, the probes are pure), so the child imports the format
+libraries before the hooks go in, allows those two environment names and library loads from
+the package roots, and lets `SystemRandom` be constructed while denying its draws. The
+build-twice check is still the proof; the hooks still make an actual leak immediate.
+
+**The Python writer owns containers.** `aeiou-datagen` writes real files with the libraries
+(a Parquet file pyarrow reads back, an HDF5 file h5py reads back, a tar `tarfile` lists), the
+runner's payload bit for bit (the `dgen-py` 0.3.0 wheel was checked against the Rust crate's
+output for the same block seeds, including the compression layout), the runner's size draws
+(`rng.py` ports keys, SplitMix64, and the sampler; a Rust-written corpus is compared in the
+tests), and the manifest `aeiou run` compares. `aeiou datagen` refuses a dataset with a
+format class, so every dataset has one writer. One caveat is recorded rather than solved:
+drawn sizes go through libm (`exp`, `log`, `cos`), so a corpus written on one host class and
+run on another could in principle differ at a rounding boundary; constant sizes do not.
+
+**Not built, and why.** Arrow IPC's record-batch read starts 16 bytes into the block and
+ends 24 bytes short of it in the trace, which the probes did not pin to a formula in the time
+spent; MDS and Megatron have no installable reader here to trace; the tenth abstract
+(Parquet-to-Arrow conversion, then map-style training from the memory-mapped cache) needs a
+namespace with a format class, which namespaces do not have yet. h5py's sieve hits between
+neighbouring rows and tf.data's exact batch timing are stated cuts. Column projection is
+implemented (`read_all(columns=[…])`) and traced but no committed abstract uses it.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -902,8 +994,11 @@ Not done here: `aeiou-fit` (`ABSTRACTS.md` §11), which will write the same form
   NFS still to run.~~ The loopback NFS run done the same day (§3.26): every abstract and the
   two-rank tests on the mount, with the NFS client's RPC counts per backend. ~~Next: the
   format-class reader protocols and the parameter-file split,~~ The parameter-file split done
-  the same day (§3.27, `schema/README.md` §8, `aeiou-params`). Next: the format-class reader
-  protocols, then the resumable VM and `io_uring`.
+  the same day (§3.27, `schema/README.md` §8, `aeiou-params`). ~~Next: the format-class reader
+  protocols,~~ Four format classes, contract 0.2, `aeiou-datagen`, and three container
+  abstracts done the same day (§3.28). Next: the resumable VM and `io_uring`, the per-actor
+  sub-actor pool, `mountstats` and `--metrics`; the remaining classes (Arrow IPC, MDS,
+  Megatron) and the tenth abstract when their readers can be traced.
 
 ## 5. Things reviewed and left as-is
 
