@@ -1156,9 +1156,21 @@ these points settled in the building:
   a `--require-cold` run straight after it was refused with 280 resident, the files the
   first run had read. The mount options line showed `acregmin=3,acregmax=60`, the cause of
   §3.30's GETATTR finding, without anyone looking for it.
-- **Not verified here:** the drop itself as root. The development box has no passwordless
+- ~~**Not verified here:** the drop itself as root. The development box has no passwordless
   `sudo`; the write, the refusal without privilege, the parsing of the three `/proc` files,
-  and the report lines are tested, the effect of a real drop on a real NFS client is not.
+  and the report lines are tested, the effect of a real drop on a real NFS client is not.~~
+  **Verified as root on the loopback mount the same day** (run by the user under `sudo`,
+  `--drop-caches --require-cold`, `train_small_files`, 8 GPUs, 4 steps): sync 4 ms, drop
+  81 ms; 0 of 7,959 sampled pages resident, so `--require-cold` passed; the run then read
+  every byte from the server (119.78 MiB server read for 119.78 MiB read, 1,024 `READ`)
+  and sent 1,014 `OPEN` for 1,024 opens where a warm run sends `OPEN_NOATTR` and
+  `DELEGRETURN`. Two things the numbers show. The ten opens without an `OPEN` are the
+  sample's own footprint: 256 sampled of 16,000 files, 1,024 files read, about 16 expected
+  in both. And `Cached` fell only from 2.24 to 2.10 GiB, because `Cached` in
+  `/proc/meminfo` includes shmem and the loopback export is a 1.9 GiB tmpfs; on a host
+  with a large tmpfs the before/after pair understates the drop, and `Cached − Shmem`
+  would be the better figure (not changed yet). Still untried: a real NFS client against a
+  real server, and the drop's duration after an enumerate of tens of millions of files.
 - `aeiou-launch --remount` is not built.
 
 ### 3.32 Object backends through `s3dlio`: a preliminary opinion (added 2026-10-01)

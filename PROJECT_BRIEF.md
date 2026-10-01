@@ -278,7 +278,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     the loader needs no new knob (under `stream` its unit of work is the shard). Still to do:
     Arrow IPC, MDS, and Megatron classes, and the tenth abstract.
 16. **Cold start: `--drop-caches` (decided and built 2026-10-01, `DESIGN_REVIEW.md` §3.31,
-    `runner/README.md` §4; the drop itself not yet run as root, `--remount` not built).** One run
+    `runner/README.md` §4; the drop verified as root on the loopback mount the same day, `--remount` not built).** One run
     option, applied on every host after the dataset and namespace checks and immediately
     before the host arrives at the start gate: `sync`, then `3` into `/proc/sys/vm/drop_caches`
     (page cache, dentries, inodes; evicting an NFS inode drops its attribute and access
