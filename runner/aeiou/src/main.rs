@@ -136,12 +136,13 @@ struct RunCmd {
     /// Fail if an input namespace was finished more than this many seconds ago.
     #[arg(long, value_name = "SECS")]
     max_gap: Option<f64>,
-    /// Fail if this host would read input objects it wrote itself, or if sampled dataset
-    /// pages are in its page cache at the start.
+    /// Fail if this host would read input objects it wrote itself, or if dataset pages are
+    /// in its page cache at the start (mincore over 256 sampled files per dataset).
     #[arg(long)]
     require_cold: bool,
     /// On every host, before the start gate: sync, then drop the page cache, dentries, and
-    /// inodes (3 into /proc/sys/vm/drop_caches). Needs root; the run refuses when it fails.
+    /// inodes (3 into /proc/sys/vm/drop_caches), then sample the datasets' residency. Needs
+    /// root; the run refuses when it fails.
     #[arg(long)]
     drop_caches: bool,
 }

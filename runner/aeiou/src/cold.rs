@@ -7,7 +7,9 @@
 //!   and returns its delegation). Root only; a failed write refuses the run. Recorded with
 //!   its duration and `Cached`, `dentry-state`, `inode-nr` before and after. Once, before
 //!   the gate; never inside a run.
-//! - The residency check, with or without the flag: [`SAMPLE_FILES`] files of every dataset,
+//! - The residency check, only with `--drop-caches` or `--require-cold` (it is the proof of
+//!   the one and the gate of the other; a plain run does not pay its opens, and on NFS the
+//!   report's server-read bytes already tell a warm run): [`SAMPLE_FILES`] files of every dataset,
 //!   evenly spaced over the file ids (a formula, no per-file structure, no root), mapped and
 //!   asked through `mincore` what fraction of their pages is in the page cache. `mincore`
 //!   reads no data, but the open is an open: on NFS it leaves the sampled files' dentries,
@@ -182,10 +184,10 @@ pub fn residency(model: &Model<'_>, root: &Path) -> Result<Vec<Residency>> {
 }
 
 /// The host's cold start, between the startup checks and the start gate: the drop when
-/// asked, the residency sample, and the `--require-cold` refusal.
+/// asked, the residency sample when either flag is given, and the `--require-cold` refusal.
 pub fn start(model: &Model<'_>, opts: &RunOpts) -> Result<ColdStart> {
     let dropped = if opts.drop_caches { Some(drop_caches()?) } else { None };
-    let residency = residency(model, &opts.root)?;
+    let residency = if opts.drop_caches || opts.require_cold { residency(model, &opts.root)? } else { Vec::new() };
     if opts.require_cold {
         if let Some(r) = residency.iter().find(|r| r.resident > 0) {
             bail!(
@@ -217,7 +219,7 @@ pub fn write(out: &mut impl std::io::Write, c: &ColdStart) -> std::io::Result<()
             d.before.inodes,
             d.after.inodes
         )?,
-        None => writeln!(out, "cold start {}: caches not dropped", c.host)?,
+        None => writeln!(out, "cold start {}: caches not dropped{}", c.host, if c.residency.is_empty() { ", dataset residency not sampled (--require-cold or --drop-caches samples it)" } else { "" })?,
     }
     for r in &c.residency {
         writeln!(
@@ -233,7 +235,7 @@ pub fn write(out: &mut impl std::io::Write, c: &ColdStart) -> std::io::Result<()
         )?;
     }
     if c.residency.iter().any(|r| r.resident > 0) {
-        writeln!(out, "WARNING: dataset pages were in {}'s page cache at the start; reads of them are not reads of the storage (--drop-caches, a remount, or --require-cold to refuse)", c.host)?;
+        writeln!(out, "WARNING: dataset pages were in {}'s page cache after the drop; reads of them are not reads of the storage (--require-cold refuses)", c.host)?;
     }
     Ok(())
 }

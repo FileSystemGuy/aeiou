@@ -399,7 +399,8 @@ fn evict(dir: &std::path::Path) {
 fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     // The cold start (`cold.rs`): a formula picks at most 256 files per dataset and `mincore`
     // counts their resident pages. Just generated, every page is resident and
-    // `--require-cold` refuses; once evicted, none is and the start passes. A tmpfs is its
+    // `--require-cold` refuses; once evicted, none is and the start passes. A plain run
+    // (neither flag) does not sample at all. A tmpfs is its
     // own page cache, so there the pages stay.
     use aeiou::cold;
     let root = tmpdir("cold");
@@ -411,7 +412,11 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     assert!(r[0].pages > 256, "{r:?}");
     assert_eq!(r[0].resident, r[0].pages, "just written: {r:?}");
     let mut o = opts(&root, BackendKind::Sync);
-    assert_eq!(cold::start(model, &o).unwrap().residency, r, "without --require-cold the sample is only reported");
+    let plain = cold::start(model, &o).unwrap();
+    assert!(plain.residency.is_empty() && plain.dropped.is_none(), "neither flag: no drop, no sample, no opens");
+    let mut text = Vec::new();
+    cold::write(&mut text, &plain).unwrap();
+    assert!(String::from_utf8(text).unwrap().contains("not sampled"));
     o.require_cold = true;
     let e = format!("{:#}", cold::start(model, &o).unwrap_err());
     assert!(e.contains("--require-cold") && e.contains("--drop-caches"), "{e}");
@@ -428,7 +433,7 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
         let mut text = Vec::new();
         cold::write(&mut text, &c).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(text.contains("caches not dropped") && text.contains("0 of") && !text.contains("WARNING"), "{text}");
+        assert!(text.contains("caches not dropped") && !text.contains("not sampled") && text.contains("0 of") && !text.contains("WARNING"), "{text}");
     }
     // the mount's options are in the counters on any filesystem
     let m = aeiou::counters::MountSnapshot::for_path(&root).unwrap();

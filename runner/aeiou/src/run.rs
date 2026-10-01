@@ -1357,7 +1357,8 @@ pub struct Report {
     pub counters: HostCounters,
     /// The rings' setup under the `io_uring` backends (rank 0's once merged); `None` under `sync`.
     pub uring: Option<UringReport>,
-    /// Each host's cold start (`cold`): the drop when asked, the dataset residency sample.
+    /// Each host's cold start (`cold`): the drop when asked, and with `--drop-caches` or
+    /// `--require-cold` the dataset residency sample.
     /// Filled by the caller that ran `cold::start` before the gate; empty otherwise.
     #[serde(default)]
     pub cold: Vec<crate::cold::ColdStart>,
