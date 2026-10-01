@@ -724,6 +724,60 @@ namespace it reads. Decisions and reasoning:
   turns the burst into a background stream. Those are parameter and trace questions, not
   structural ones, which is why the structure stays general.
 
+### 3.25 The TCP coordinator: several hosts, one run (added 2026-09-30)
+
+`NAPKIN_MATH.md` §8.A fixed the design on 2026-09-28 (§3.7); building it
+(`runner/aeiou/src/coord.rs`, `runner/README.md` §6) changed four details and settled four
+questions the design had not asked.
+
+- **JSON frames, not `postcard`.** The coordinator exchanges a few dozen messages per run
+  plus one report per host at the end; `serde_json` was already a dependency of the
+  contract, and a readable wire costs nothing at this rate. The report is a few hundred KB
+  per host at 500 steps (the per-take records dominate). A binary codec is a one-line change
+  behind `send`/`recv` if a reduction ever grows.
+- **A reader thread per socket, not one event loop.** The design said one coordinator
+  thread; with blocking `std::net` the simplest correct shape is one reader thread per
+  connection on the server and one on each client, with writes serialised through a mutex.
+  Rank 0 runs the server in-process and connects to it as an ordinary client, so there is one
+  code path for every rank and the server never special-cases itself.
+- **The release wakes a condvar, not an eventfd.** The eventfd belongs to the `io_uring`
+  backend, where a release must surface as a completion; the `sync` backends block on a
+  condvar as the in-process barrier does. The two-level barrier (in-host arrivals, then
+  `Arrive`/`Release` between hosts) keeps the host count out of the per-barrier cost: a
+  1,000-GPU run on 20 hosts is 20 messages per generation.
+- **Departures across hosts.** §3.23's departure rule (an instance that finishes leaves its
+  barriers; a generation its departure completes is released and reported) needed a
+  host-level counterpart: a host whose participants have all left sends `Leave`, and a
+  generation that a host's leaving completes is a host-level departure release, merged into
+  the same report line. The server tracks arrivals as a set of ranks, so a host that arrived
+  and then left is never counted twice.
+- **What the configuration hash covers.** `Hello`'s hash is over everything that shapes what
+  the storage sees: the abstract's canonical hash, seed, G, the resolved parameters, the
+  dataset ids from the manifests, the backend, the rotation, the time scale, and the write
+  compression. It deliberately excludes `--root` (hosts may mount the same storage at
+  different paths), `--buffer-mib`, `--max-gap`, `--require-cold`, and `--clean-namespaces`
+  (rank 0's business). The dataset ids being in it means a host with a stale copy of a
+  dataset is refused before the start gate, which replaces the protection `mpirun`'s single
+  command line gave and goes further.
+- **Only rank 0 touches the output namespace roots.** `--root` is the storage under test,
+  shared by every host, so emptying it is one host's job, done before the start gate; the
+  other hosts never empty anything and start their actors only after `Start`. The namespace
+  manifests are likewise rank 0's, written from the merged report, so they record every
+  rank's host and GPU range and the objects every host created net of what any host removed.
+  A per-host root (a local cache) would need a flag; none is added until a workload needs it.
+- **The verdict is one message.** Rank 0 merges, prints, writes the manifests, applies
+  `--expect-fingerprint` to the merged fingerprint, and sends `Result` to every host; each
+  host exits with it, so `pdsh` or `aeiou-launch` sees the same status on every host. Each
+  host prints its own partial fingerprint too, labelled as such, since the sum is the
+  fingerprint and a partial is not.
+- **Faults.** Any actor failing, a refused host, a dropped socket, or 30 s of silence
+  (heartbeats every 5 s while idle) sends `Stop` to every host, and actors now check the
+  abort flag before every op as well as in every wait, so a failure elsewhere ends a host's
+  I/O within one op. A host that fails its startup checks before connecting leaves the
+  others to the 120 s connect window; connecting earlier would put the dataset ids, which
+  the checks produce, outside the hash. Rank 0 waits up to 5 s after `Result` for the others
+  to close, so its exit cannot reset a connection with the verdict still unread.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -740,10 +794,11 @@ namespace it reads. Decisions and reasoning:
   and `aeiou run` against ext4 and loopback NFS,~~ `aeiou run` with `sync` and `sync-direct`,
   `aeiou datagen`, and the manifest check done the same day and run against ext4 (§3.23);
   loopback NFS still to run. Input namespaces, the namespace manifest, and rank rotation
-  done the same day (§3.24), so every committed abstract now runs. Next: the loopback NFS
-  run, the TCP coordinator (which makes `--ranks` and `--rank-rotate` real), then the
-  format-class reader protocols and the parameter-file split, then the resumable VM and
-  `io_uring`.
+  done the same day (§3.24), so every committed abstract now runs. ~~Next: the loopback NFS
+  run, the TCP coordinator (which makes `--ranks` and `--rank-rotate` real),~~ The
+  coordinator done the same day (§3.25) and run as two processes on `localhost`; loopback
+  NFS still to run. Next: the format-class reader protocols and the parameter-file split,
+  then the resumable VM and `io_uring`.
 
 ## 5. Things reviewed and left as-is
 

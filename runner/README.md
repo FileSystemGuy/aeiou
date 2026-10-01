@@ -25,9 +25,10 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. |
 | `aeiou datagen AST --root DIR [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--param k=v]… [--io-backend sync\|sync-direct] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--rank r --ranks R --rank-rotate k] [--max-gap SECS] [--require-cold]` | Executes the abstract against `DIR` on one host (§4): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls, checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--param k=v]… [--io-backend sync\|sync-direct] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls, checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
+| `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
-Not yet: the TCP coordinator (several hosts), the asynchronous backends (`io_uring`,
+Not yet: the asynchronous backends (`io_uring`,
 `libaio`, `mmap`, …) and their counters, `mountstats`, `RLIMIT` startup checks, a JSON
 report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), `stream` access, the `replay` node,
 container layouts beyond `samples_per_file`, and datagen for format classes (that is the
@@ -47,12 +48,14 @@ aeiou/src/
   dryrun.rs    the dry-run Sink, parallel over actor instances, and the report
   backend.rs   the Backend trait (blocking form) and `sync` / `sync-direct`
   run.rs       the run Sink: threads, channels, barriers, buffers, structural checks, report
-  coord.rs     the Coordinator trait and the in-process implementation
+  coord.rs     the Coordinator trait, the in-process implementation, the TCP client and the server for several hosts
   payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
   datagen.rs   `aeiou datagen`
   main.rs      the CLI
 aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests
 aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refusals, loader order
+aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
+aeiou-launch            the ssh loop: one rank per host
 ```
 
 ## 2. Definitions the runner fixes
@@ -138,8 +141,8 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   whose body contains it outside any `parallel` or `loader` (a barrier inside a sub-actor is
   refused). An instance that finishes leaves its barriers; a generation completed by
   departures is released and reported as a warning, since it means the instances did not all
-  hit the barrier the same number of times. Single host only: `coord::Local` behind the
-  `Coordinator` trait; the TCP implementation of `NAPKIN_MATH.md` §8.A is next.
+  hit the barrier the same number of times. Across hosts the barrier is two-level (§6),
+  behind the same `Coordinator` trait.
 - **`compute`** sleeps for `ns × --time-scale` and is recorded unscaled. `--time-scale 0`
   runs the I/O back to back.
 - **Buffers.** Each thread has a 4 KiB-aligned read ring and a write ring of `--buffer-mib`
@@ -164,8 +167,7 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   `ceil(G / R)`; `--rank-rotate k` makes it run rank `(r + k) mod R`'s range instead. Nothing
   in the op stream depends on the host, so rotating a read run against the write run's host
   list makes every host read what another host wrote (`DESIGN_REVIEW.md` §3.24). `--ranks`
-  above 1 is refused until the coordinator exists; the arithmetic and the manifest records
-  are in place.
+  above 1 needs `--coordinator` (§6).
 - **Input namespaces** (`input: true`, V14). The run requires `.aeiou-namespace.json` at the
   root (`schema/README.md` §6), refuses a differing definition, never empties the root,
   prints who wrote it and how long ago (`--max-gap` makes a longer gap an error), and counts
@@ -216,3 +218,53 @@ been run yet (it needs root on the development box).
   the count of every committed corpus is a parameter (`files`, `nodes`, `lists`,
   `sys_prompts`, `shards`, `n`), and so are the size parameters a small test corpus needs
   (`sample_mean`, `sample_sd`, `sys_tokens`); the resolved definition carries the values.
+
+## 6. Several hosts: the coordinator (2026-09-30)
+
+`aeiou run … --ranks R --rank r --coordinator HOST:PORT` on each of R hosts, rank 0 first
+(`aeiou-launch` does it over ssh). The design is `NAPKIN_MATH.md` §8.A; what changed in
+building it is `DESIGN_REVIEW.md` §3.25.
+
+- **Topology and wire.** Rank 0 runs the coordinator in-process (`coord::Server`) and
+  connects to it like every other host (`coord::Tcp`). Blocking `std::net`, one reader
+  thread per socket, frames of a big-endian `u32` length and a JSON body. Hosts may take up
+  to 120 s to connect; a peer silent for 30 s is dead (heartbeats every 5 s while idle) and
+  the run aborts on every host.
+- **Configuration check.** `Hello` carries a SHA-256 over the abstract's hash, seed, G, the
+  resolved parameters, the dataset ids, the backend, the rotation, the time scale, and the
+  write compression, plus this host's barrier scopes with their instance counts. A host whose
+  hash differs from the first host's is refused with the reason, and the run stops on every
+  host before any I/O.
+- **Startup order.** Each host checks its datasets, connects, and checks its input
+  namespaces; rank 0 alone prepares the output namespace roots (`--root` is the storage under
+  test, shared by every host, so only one host may empty anything); every host then sends
+  `Ready`, and the server answers `Start` with a common `t0` once all have. A host that fails
+  a startup check after connecting tells the others; one that fails before connecting leaves
+  them to the connect window.
+- **Barriers** are two-level: a host's instances arrive in-process as on one host; the last
+  arrival sends `Arrive`; the server sends `Release` with the generation once every host
+  with participants in the scope has arrived. A host whose participants have all left sends
+  `Leave`; a generation completed by a host leaving is a host-level departure release,
+  reported with the in-host ones.
+- **Reduction.** Each host sends its report (stats, histograms, per-take records, created
+  and removed objects, its rank record) and prints its own; the server merges them
+  (`Report::merge_all`: fingerprint modulo 2^64, histograms bucket-wise, created objects net
+  of every host's removals, elapsed the longest host's). Rank 0 prints the merged report,
+  writes the namespace manifests with every rank's host and GPU range, applies
+  `--expect-fingerprint` to the merged fingerprint, and sends the verdict (`Result`) to every
+  host, which exits with it. A host's own fingerprint line is its partial sum; the "all
+  hosts" line is the fingerprint.
+- **Faults.** An actor failing on any host, a refused configuration, a dropped socket, or a
+  missed heartbeat sends `Stop` to every host; actors see it at their next op or wait, and
+  the run fails on every host naming the originating rank and reason.
+- **`aeiou-launch`** (`runner/aeiou-launch`, POSIX sh): `aeiou-launch [-p PORT] HOST… --
+  aeiou run ARGS…` starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and
+  `--coordinator HOST0:PORT` (port 7311 by default) appended, prefixes each host's output
+  with its rank and host, and exits non-zero if any rank did. `AEIOU_RSH` replaces `ssh`.
+
+Observed on WSL2 (2026-09-30, `runner/aeiou/tests/coord.rs` and `aeiou-launch` with a local
+shim for ssh): two processes on `localhost` run `train_small_files` to the dry-run
+fingerprint; `ckpt_write_dcp` on two ranks leaves a manifest with both rank records, and
+`ckpt_restore` on two ranks with `--rank-rotate 1` reads it, each rank running the other's
+GPU range; a differing seed on one rank is refused on both before any I/O; a failing
+`--expect-fingerprint` fails both ranks and the launcher. Real hosts have not been tried.

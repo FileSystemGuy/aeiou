@@ -391,6 +391,15 @@ matching) from every client node. The result is one static binary copied with `s
 `reduce`, `stop`). A single-host run uses an in-process implementation and opens no sockets, which
 keeps WSL2 development and CI simple. There is no MPI build dependency in any configuration.
 
+**Built 2026-09-30** (`runner/aeiou/src/coord.rs`, `runner/README.md` §6, `DESIGN_REVIEW.md`
+§3.25), as above with four changes: JSON frames instead of `postcard`; a reader thread per
+socket instead of one event loop, with rank 0 serving in-process and connecting as a client;
+the release wakes a condvar, the eventfd waits for the `io_uring` backend; and `Leave` beside
+`Arrive`, so a host whose instances have all finished stops being expected. The trait is
+`barrier`/`leave`/`stop`; the start gate (`ready`) and the reduction (`report`/`result`) are
+the client's own methods, which `aeiou run` calls around the run. `runner/aeiou-launch` is
+the ssh loop.
+
 ### 8.B Does O_DIRECT keep the NFS client out of the page cache? Yes, for data.
 
 With O_DIRECT, Linux NFS reads and writes skip the page cache. User pages are pinned and the RPC
