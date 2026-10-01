@@ -21,7 +21,7 @@ SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text())
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "choose", "phase", "replay"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
-MUTATING_OPS = {"write", "ftruncate", "fallocate", "unlink"}          # V12, plus rename and open flags
+MUTATING_OPS = {"write", "ftruncate", "fallocate", "unlink"}          # V12 and V14, plus rename and open flags
 WRITE_FLAGS = {"WRONLY", "RDWR", "CREAT", "TRUNC", "APPEND"}
 RESERVED_PREFIX = ".aeiou"                                            # V13: the manifest and sidecars
 
@@ -71,6 +71,7 @@ class Check:
             if root in roots:
                 self.err(["datasets", dname], f"shares root `{root}/` with dataset `{roots[root]}` (V13)")
             roots[root] = dname
+        nroots = {}
         for nname, n in self.namespaces.items():
             if n["size"] != "as_written":
                 self.expr(n["size"], ["namespaces", nname, "size"], Scope(self, fields=set(n["fields"])))
@@ -79,6 +80,11 @@ class Check:
             for root, dname in roots.items():
                 if root and (nroot == root or nroot.startswith(root + "/")):
                     self.err(["namespaces", nname], f"root `{nroot}/` lies inside dataset `{dname}`'s root `{root}/` (V13)")
+            # V14: namespaces sharing a root share its manifest, so they agree on `input`
+            inp = bool(n.get("input", False))
+            if nroot in nroots and nroots[nroot][1] != inp:
+                self.err(["namespaces", nname], f"shares root `{nroot}/` with namespace `{nroots[nroot][0]}` but `input` differs (V14)")
+            nroots.setdefault(nroot, (nname, inp))
         for aname, a in self.ast["actors"].items():
             scope = Scope(self)
             if "count" in a:
@@ -188,6 +194,27 @@ class Check:
                     self.err(p + [key], f"{kind} on dataset `{self.dataset_of(a[key], scope)}`: datasets are read-only (V12)")
         if kind == "open" and set(a["flags"]) & WRITE_FLAGS and self.dataset_of(a["file"], scope):
             self.err(p + ["flags"], f"open for writing on dataset `{self.dataset_of(a['file'], scope)}`: datasets are read-only (V12)")
+        # V14: input namespaces are read-only
+        if kind in MUTATING_OPS or kind in ("rename", "mkdir", "rmdir"):
+            for key in ("file", "dir", "from", "to"):
+                if key in a:
+                    ns = self.input_namespace_of(a[key], scope)
+                    if ns:
+                        self.err(p + [key], f"{kind} on input namespace `{ns}`: input namespaces are read-only (V14)")
+        if kind == "open" and set(a["flags"]) & WRITE_FLAGS and self.input_namespace_of(a["file"], scope):
+            self.err(p + ["flags"], f"open for writing on input namespace `{self.input_namespace_of(a['file'], scope)}`: input namespaces are read-only (V14)")
+
+    def input_namespace_of(self, h, scope):
+        """Namespace name if the handle is (a binding to) an object of an `input` namespace."""
+        if not isinstance(h, dict) or len(h) != 1:
+            return None
+        k, a = next(iter(h.items()))
+        if k == "ref":
+            v = scope.lookup(a)
+            return self.input_namespace_of(v, scope) if isinstance(v, dict) else None
+        if k == "object" and self.namespaces.get(a["namespace"], {}).get("input"):
+            return a["namespace"]
+        return None
 
     def dataset_of(self, h, scope):
         """Dataset name if the handle is (a binding to) a dataset file, dir, sample, region, or chunk."""

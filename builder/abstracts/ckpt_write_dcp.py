@@ -1,7 +1,8 @@
 """ABSTRACTS.md §3: checkpoint write (torch.distributed.checkpoint shape) inside a minimal
 training loop, with the read-back phase.
 
-Exercises: a namespace with size as_written and the same-handle until_eof rule (§9.7),
+Exercises: a namespace with size as_written and the same-handle until_eof rule (§9.7, the
+optional readback),
 parameter arrays, mkdir/rename/fsync, expect on mkdir, a conditional on the actor id (§9.1).
 """
 from aeiou import *
@@ -19,6 +20,8 @@ w.param("item_bytes", [16 * MiB, 32 * MiB, 16 * MiB, 8 * MiB], unit="bytes",
 w.param("tail", 64 * KiB, unit="bytes", doc="[verify] coalesced small records per item")
 w.param("meta_bytes", 2 * MiB, unit="bytes", doc="[measure] .metadata size")
 w.param("xfer", 1 * MiB, unit="bytes")
+w.param("readback", False, doc="read each shard back on the writing node after the final barrier; off by default, "
+                                "the restore is the separate ckpt_restore run on other nodes (PROJECT_BRIEF.md §8)")
 
 SEED = 0x5eed_da82
 ckpt_dir = w.namespace("ckpt_dir", pattern="ckpt/step_{step:06}", fields={"step": int}, size=0, seed=SEED)
@@ -53,7 +56,7 @@ with w.actor("gpu") as gpu:
                     gpu.close(m)
                     gpu.rename(m, ckpt_meta.object(step=step, name=".metadata"))
                 gpu.barrier("global")
-            with gpu.phase("ckpt_readback"):                        # the restore shape, same position, same handle
+            with gpu.when(P.readback), gpu.phase("ckpt_readback"):  # same position, same handle; a correctness run only
                 gpu.open(c, "RDONLY")
                 gpu.read(c, P.xfer, repeat="until_eof")
                 gpu.close(c)

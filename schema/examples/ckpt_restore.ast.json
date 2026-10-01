@@ -1,7 +1,7 @@
 {
   "ast": "0.1",
   "name": "ckpt_restore",
-  "doc": "DCP load: every rank reads .metadata, then the items of its shard file (fan-in dp).",
+  "doc": "DCP load: every rank reads .metadata, then the items of its shard file (fan-in `replicas`).",
   "params": {
     "items": {
       "default": 4,
@@ -28,10 +28,10 @@
       "unit": "bytes",
       "doc": "[config] prefix sums of item_bytes + tail, as §3 wrote them"
     },
-    "dp": {
+    "replicas": {
       "default": 1,
       "unit": "count",
-      "doc": "replicas sharing a shard file"
+      "doc": "ranks that read the same shard file (replicated state saved once); 1 when fully sharded"
     },
     "meta_bytes": {
       "default": 2097152,
@@ -97,7 +97,8 @@
           }
         ]
       },
-      "seed": 1592646274
+      "seed": 1592646274,
+      "input": true
     },
     "ckpt_meta": {
       "pattern": "ckpt/step_{step:06}/{name}",
@@ -108,7 +109,8 @@
       "size": {
         "param": "meta_bytes"
       },
-      "seed": 1592646274
+      "seed": 1592646274,
+      "input": true
     }
   },
   "actors": {
@@ -185,7 +187,7 @@
                               "actor": "id"
                             },
                             {
-                              "param": "dp"
+                              "param": "replicas"
                             }
                           ]
                         }
@@ -310,9 +312,9 @@
   "provenance": {
     "generator": {
       "script": "ckpt_restore.py",
-      "sha256": "7934f0338580b7bc13c5953acb0401cb0ff95c1ed242b01732310398fc1446fc",
+      "sha256": "0b9d66e178185a5df53dea0c812555dd4026a682491250eb0260a735438bf795",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "9d4661f0eb2b-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -320,6 +322,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "24e8978d7167891d37944443c2e7d7df7f9c84f26f7e4c90e182e02721d45a64"
+    "ast_sha256": "d9724b93648e579a3c9d20a8b912f48f78e4a742f63ab1c0ce7bea16fe31c3a3"
   }
 }

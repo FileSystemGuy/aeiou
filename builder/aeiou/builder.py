@@ -144,8 +144,8 @@ class Dataset:
 
 
 class Namespace:
-    def __init__(self, name: str, spec: dict, fields: dict):
-        self.name, self.spec, self.fields = name, spec, fields
+    def __init__(self, name: str, spec: dict, fields: dict, input: bool = False):
+        self.name, self.spec, self.fields, self.input = name, spec, fields, input
 
     def ast(self):
         return _strip_none(self.spec)
@@ -239,9 +239,11 @@ class Workload:
 
     # ---- namespaces ----
     def namespace(self, name: str, *, pattern: str, fields: dict, size, seed: int,
-                  doc: str | None = None) -> Namespace:
+                  input: bool = False, doc: str | None = None) -> Namespace:
         """Workload-created objects. `size` is an expression over the fields and params, or
-        "as_written" (the sum of the writes that create the object; schema/README.md V4)."""
+        "as_written" (the sum of the writes that create the object; schema/README.md V4).
+        `input=True`: a previous run wrote the objects and this abstract only reads them; the
+        runner requires that run's `.aeiou-namespace.json` (schema/README.md V14)."""
         self._declare(name, "namespace")
         fields = {k: ("int" if v in (int, "int") else "str" if v in (str, "str") else v)
                   for k, v in fields.items()}
@@ -263,8 +265,13 @@ class Workload:
             for n in walk(size):
                 if isinstance(n, Ref) and n.name not in fields:
                     raise BuildError(f"namespace {name}: size may reference only its fields and params")
-        spec = {"pattern": pattern, "fields": fields, "size": size, "seed": _seed(seed, name), "doc": doc}
-        self._namespaces[name] = ns = Namespace(name, spec, fields)
+        for other in self._namespaces.values():
+            if _root(other.spec["pattern"]) == nroot and other.input != bool(input):
+                raise BuildError(f"namespace {name}: shares root {nroot!r}/ with namespace {other.name} but "
+                                 f"`input` differs; a root has one manifest (schema/README.md V14)")
+        spec = {"pattern": pattern, "fields": fields, "size": size, "seed": _seed(seed, name),
+                "input": True if input else None, "doc": doc}
+        self._namespaces[name] = ns = Namespace(name, spec, fields, input=bool(input))
         return ns
 
     def field(self, name: str) -> Ref:
@@ -684,6 +691,17 @@ class Cursor:
         if ds:
             raise BuildError(f"{what} on dataset {ds}: datasets are read-only, writes go to namespaces "
                              f"(schema/README.md V12)")
+        ns = self._input_namespace_of(h)
+        if ns:
+            raise BuildError(f"{what} on input namespace {ns}: input namespaces are read-only "
+                             f"(schema/README.md V14)")
+
+    def _input_namespace_of(self, h):
+        if isinstance(h, Ref):
+            return self._input_namespace_of(self._lookup(h.name))
+        if isinstance(h, ObjectHandle) and self.wl._namespaces[h.namespace].input:
+            return h.namespace
+        return None
 
     def open(self, file, flags, *, mode: int | None = None, expect=None):
         flags = _flags(flags)
@@ -769,9 +787,11 @@ class Cursor:
                                "len": ast_of(lift(len, "len")), "expect": _expect(expect)})
 
     def mkdir(self, dir, *, mode: int | None = None, expect=None):
+        self._read_only(dir, "mkdir")
         self._op("mkdir", {"dir": _handle(dir, "dir").ast(), "mode": mode, "expect": _expect(expect)})
 
     def rmdir(self, dir, *, expect=None):
+        self._read_only(dir, "rmdir")
         self._op("rmdir", {"dir": _handle(dir, "dir").ast(), "expect": _expect(expect)})
 
     def rename(self, src, dst, *, expect=None):

@@ -339,10 +339,13 @@ Variants, each a small edit:
   `every $ckpt_every` (a `channel(capacity = 1)` between the trainer and a writer sub-actor).
   The loader keeps running in both variants; only the trainer's `compute` overlaps differently.
 - **Multiple files per rank** (`thread_count > 1`): `parallel($threads) { … __{gpu}_{i}.distcp }`.
-- **Read-back** (revised 2026-09-29): after the final barrier, each rank reads its own file
-  back with `read(c, 1MiB)[until_eof]`. It is the restore shape run immediately, and a
-  durability check in the sense that the bytes come back; it is not a content check (content
-  verification is the separate tool, `PROJECT_BRIEF.md` §5). Reported as its own phase.
+- **Read-back** (revised 2026-09-29; off by default since 2026-09-30): after the final
+  barrier, each rank reads its own file back with `read(c, 1MiB)[until_eof]`, under
+  `param readback = false`. It is a durability check in the sense that the bytes come back,
+  not a content check (content verification is the separate tool, `PROJECT_BRIEF.md` §5), and
+  on the writing node it measures the page cache, so a benchmark run leaves it off: the
+  restore is the separate §4 run on other nodes (`DESIGN_REVIEW.md` §3.24). Reported as its
+  own phase when on.
 
 **Cuts.** The collective (NCCL/Gloo) that gathers the write plan is network, not storage, and
 becomes a `barrier`. `O_DIRECT` checkpoint writers (some vendor plugins) are a backend choice,
@@ -365,8 +368,11 @@ Two read shapes, distinguished by how many ranks read the same bytes.
 
 **4a. Restore into the same topology** (DCP `load`, or `torch.load` per rank). Each rank reads
 `.metadata` (everyone reads the same small file), then its own shard file. With data-parallel
-replication (FSDP + `dp` replicas, or HSDP), the `dp` replicas of a shard all read the same file,
-so each file has fan-in `dp`.
+replication whose state is saved once (DDP, HSDP with DCP's deduplication), the `replicas`
+ranks that share a shard all read the same file, so each file has fan-in `replicas`; fully
+sharded training (FSDP, ZeRO-3) has `replicas = 1`. The files are the ones a `ckpt_write_dcp`
+run wrote: the namespaces are declared `input` and the run that reads them may not modify them
+(`schema/README.md` V14, `DESIGN_REVIEW.md` §3.24).
 
 **Syscall skeleton, DCP `FileSystemReader`** **[verify]**:
 
@@ -385,7 +391,7 @@ close(fd)
 ```
 workload ckpt_restore {
   param items = 900, item_bytes = [ … ], item_off = [ … ]      # [config], prefix sums of §3
-  param dp = 1                                                # replicas sharing a shard file
+  param replicas = 1                                          # ranks reading the same shard file
   param meta_bytes = 2MiB, hdr_read = 1MiB, lh_len = 40
   param restore_step = 100
 
@@ -393,7 +399,7 @@ workload ckpt_restore {
     phase("restore") {
       let m = file("ckpt/step_{restore_step:06}/.metadata"),
       open(m, RDONLY), fstat(m), read(m, $hdr_read)[until_eof], close(m),
-      let c = file("ckpt/step_{restore_step:06}/__{gpu div $dp}_0.distcp"),   # fan-in dp
+      let c = file("ckpt/step_{restore_step:06}/__{gpu div $replicas}_0.distcp"),   # fan-in
       open(c, RDONLY), fstat(c), ioctl(c, TCGETS, expect = [ENOTTY]), lseek(c, 0, CUR),
       for t in $items {
         read(c, offset = $item_off[t], $hdr_read),                         # zip tail of the item

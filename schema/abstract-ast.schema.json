@@ -272,6 +272,7 @@
           "anyOf": [ { "const": "as_written" }, { "$ref": "#/$defs/expr" } ]
         },
         "seed": { "$ref": "#/$defs/seed", "description": "Content of an object is a function of (seed, hash(path), offset)." },
+        "input": { "type": "boolean", "description": "The objects were written by a previous run (its `.aeiou-namespace.json` is required at the root) and this abstract only reads them: no write-mode op may target the namespace, and namespaces sharing its root must also be inputs (V14)." },
         "doc": { "type": "string" }
       }
     },

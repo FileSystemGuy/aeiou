@@ -43,6 +43,10 @@
     "xfer": {
       "default": 1048576,
       "unit": "bytes"
+    },
+    "readback": {
+      "default": false,
+      "doc": "read each shard back on the writing node after the final barrier; off by default, the restore is the separate ckpt_restore run on other nodes (PROJECT_BRIEF.md §8)"
     }
   },
   "namespaces": {
@@ -341,40 +345,49 @@
                       }
                     },
                     {
-                      "phase": {
-                        "name": "ckpt_readback",
-                        "body": [
+                      "cond": {
+                        "if": {
+                          "param": "readback"
+                        },
+                        "then": [
                           {
-                            "open": {
-                              "file": {
-                                "ref": "c"
-                              },
-                              "flags": [
-                                "RDONLY"
+                            "phase": {
+                              "name": "ckpt_readback",
+                              "body": [
+                                {
+                                  "open": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "flags": [
+                                      "RDONLY"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "len": {
+                                      "param": "xfer"
+                                    },
+                                    "repeat": "until_eof"
+                                  }
+                                },
+                                {
+                                  "close": {
+                                    "file": {
+                                      "ref": "c"
+                                    }
+                                  }
+                                },
+                                {
+                                  "barrier": {
+                                    "scope": "global"
+                                  }
+                                }
                               ]
-                            }
-                          },
-                          {
-                            "read": {
-                              "file": {
-                                "ref": "c"
-                              },
-                              "len": {
-                                "param": "xfer"
-                              },
-                              "repeat": "until_eof"
-                            }
-                          },
-                          {
-                            "close": {
-                              "file": {
-                                "ref": "c"
-                              }
-                            }
-                          },
-                          {
-                            "barrier": {
-                              "scope": "global"
                             }
                           }
                         ]
@@ -392,9 +405,9 @@
   "provenance": {
     "generator": {
       "script": "ckpt_write_dcp.py",
-      "sha256": "354e43ff03aa6ddd8f3b3de14f12601ed5970f8e19a6be698fb063bc41dbdfc9",
+      "sha256": "e1b563afcd15841ec886ce392a7c4f371ac5205cafeba54f3a98f438d5fc0dd6",
       "builder_version": "0.1.0",
-      "git": "b94d1840ceb2"
+      "git": "9d4661f0eb2b-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -402,6 +415,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "48ac6b01b9ac2819ded2939cdf2de1d4462c772537fe41740cdc24649b592d45"
+    "ast_sha256": "c8c7bf78006b49fec46d22f5c806d9056dc9a0412c14edc4c487ec2f3ab89f6f"
   }
 }
