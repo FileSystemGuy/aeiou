@@ -64,6 +64,7 @@ fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
         rank_rotate: 0,
         max_gap: None,
         require_cold: false,
+        drop_caches: false,
     }
 }
 
@@ -375,5 +376,62 @@ fn io_uring_loader_delivers_in_order_and_bounds_prefetch() {
     assert_eq!(r.stats.compute_ns, 30 * 2_000_000);
     assert_eq!(r.stats.threads, 1, "one loop for one instance");
     assert!(r.elapsed >= std::time::Duration::from_millis(60), "the timers slept: {:?}", r.elapsed);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// `fsync` and `POSIX_FADV_DONTNEED` every file under `dir`: what a test can do about the
+/// page cache without root.
+fn evict(dir: &std::path::Path) {
+    use std::os::fd::AsRawFd;
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            evict(&p);
+        } else {
+            let f = std::fs::File::open(&p).unwrap();
+            f.sync_all().unwrap();
+            assert_eq!(unsafe { libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) }, 0);
+        }
+    }
+}
+
+#[test]
+fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
+    // The cold start (`cold.rs`): a formula picks at most 256 files per dataset and `mincore`
+    // counts their resident pages. Just generated, every page is resident and
+    // `--require-cold` refuses; once evicted, none is and the start passes. A tmpfs is its
+    // own page cache, so there the pages stay.
+    use aeiou::cold;
+    let root = tmpdir("cold");
+    let (loaded, cfg, model) = leaked_model("train_small_files", config(1, 3, &[("files", "300")]));
+    gen(loaded, cfg, model, &root);
+    let r = cold::residency(model, &root).unwrap();
+    assert_eq!(r.len(), 1);
+    assert_eq!((r[0].dataset.as_str(), r[0].files, r[0].of), ("train", 256, 300));
+    assert!(r[0].pages > 256, "{r:?}");
+    assert_eq!(r[0].resident, r[0].pages, "just written: {r:?}");
+    let mut o = opts(&root, BackendKind::Sync);
+    assert_eq!(cold::start(model, &o).unwrap().residency, r, "without --require-cold the sample is only reported");
+    o.require_cold = true;
+    let e = format!("{:#}", cold::start(model, &o).unwrap_err());
+    assert!(e.contains("--require-cold") && e.contains("--drop-caches"), "{e}");
+
+    evict(&root);
+    let r2 = cold::residency(model, &root).unwrap();
+    let fstype = aeiou::counters::MountSnapshot::for_path(&root).map(|m| m.fstype).unwrap_or_default();
+    if fstype == "tmpfs" {
+        assert_eq!(r2[0].resident, r2[0].pages);
+    } else {
+        assert_eq!(r2[0].resident, 0, "evicted on {fstype}: {r2:?}");
+        let c = cold::start(model, &o).unwrap();
+        assert!(c.dropped.is_none());
+        let mut text = Vec::new();
+        cold::write(&mut text, &c).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(text.contains("caches not dropped") && text.contains("0 of") && !text.contains("WARNING"), "{text}");
+    }
+    // the mount's options are in the counters on any filesystem
+    let m = aeiou::counters::MountSnapshot::for_path(&root).unwrap();
+    assert!(m.opts.as_deref().map(|o| o.starts_with("rw") || o.starts_with("ro")).unwrap_or(false), "{m:?}");
     std::fs::remove_dir_all(&root).unwrap();
 }

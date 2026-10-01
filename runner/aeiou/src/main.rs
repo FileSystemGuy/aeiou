@@ -136,9 +136,14 @@ struct RunCmd {
     /// Fail if an input namespace was finished more than this many seconds ago.
     #[arg(long, value_name = "SECS")]
     max_gap: Option<f64>,
-    /// Fail if this host would read input objects it wrote itself.
+    /// Fail if this host would read input objects it wrote itself, or if sampled dataset
+    /// pages are in its page cache at the start.
     #[arg(long)]
     require_cold: bool,
+    /// On every host, before the start gate: sync, then drop the page cache, dentries, and
+    /// inodes (3 into /proc/sys/vm/drop_caches). Needs root; the run refuses when it fails.
+    #[arg(long)]
+    drop_caches: bool,
 }
 
 #[derive(Args)]
@@ -289,6 +294,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         rank_rotate: a.rank_rotate,
         max_gap: a.max_gap,
         require_cold: a.require_cold,
+        drop_caches: a.drop_caches,
     };
     let (lo, hi) = run::gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
     writeln!(out, "host {}  rank {} of {}  rotate {}  gpu ids [{lo}, {hi})", run::hostname(), opts.rank, opts.ranks, opts.rank_rotate)?;
@@ -319,6 +325,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
                 "rank_rotate": a.rank_rotate,
                 "time_scale": opts.time_scale,
                 "write_compress": a.write_compress,
+                "drop_caches": a.drop_caches,
             });
             let config = aeiou::canon::sha256_hex(&config);
             let t = Arc::new(Tcp::connect(addr, a.rank, a.ranks, &run::hostname(), &config, &participants, aborted.clone())?);
@@ -373,6 +380,11 @@ fn run_connected(
     }
     out.flush()?;
 
+    // the cold start: after the checks and the namespace preparation, before the gate, so
+    // every host has dropped before any op is issued and the drop is outside `elapsed`
+    // (printed with the report, this host's and the merged one)
+    let cold = aeiou::cold::start(model, &opts)?;
+
     let mut started = run::unix_now();
     if let Some(t) = tcp {
         let (t0, hosts) = t.ready().map_err(|e| anyhow!("start gate: {e:#}"))?;
@@ -380,7 +392,8 @@ fn run_connected(
         writeln!(out, "start gate: {} host(s) ready: {}", hosts.len(), hosts.join(", "))?;
         out.flush()?;
     }
-    let report = run::run_with(model, opts.clone(), input_objects, coord, aborted)?;
+    let mut report = run::run_with(model, opts.clone(), input_objects, coord, aborted)?;
+    report.cold = vec![cold];
     let finished = run::unix_now();
     if tcp.is_some() {
         writeln!(out, "--- this host ({}), rank {} of {}", report.host, a.rank, a.ranks)?;

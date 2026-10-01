@@ -9,6 +9,7 @@
 pub mod ast;
 pub mod backend;
 pub mod canon;
+pub mod cold;
 pub mod coord;
 pub mod counters;
 pub mod datagen;

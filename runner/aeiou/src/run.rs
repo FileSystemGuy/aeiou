@@ -147,8 +147,11 @@ pub struct RunOpts {
     pub rank_rotate: i64,
     /// Refuse when an input namespace was finished more than this many seconds ago.
     pub max_gap: Option<f64>,
-    /// Refuse when this host would read an input object it wrote itself.
+    /// Refuse when this host would read an input object it wrote itself, or when the
+    /// residency check finds dataset pages in its page cache (`cold`).
     pub require_cold: bool,
+    /// `sync` and drop the page cache, dentries, and inodes before the start gate (`cold`).
+    pub drop_caches: bool,
 }
 
 /// The `[lo, hi)` of instance ids host `rank` of `ranks` runs for a template of `count`
@@ -1354,6 +1357,10 @@ pub struct Report {
     pub counters: HostCounters,
     /// The rings' setup under the `io_uring` backends (rank 0's once merged); `None` under `sync`.
     pub uring: Option<UringReport>,
+    /// Each host's cold start (`cold`): the drop when asked, the dataset residency sample.
+    /// Filled by the caller that ran `cold::start` before the gate; empty otherwise.
+    #[serde(default)]
+    pub cold: Vec<crate::cold::ColdStart>,
     /// Objects created (path, creating GPU id) net of this host's removals, and the paths
     /// removed, so a merge can drop what another host created and this one removed.
     pub created: Vec<(String, i64)>,
@@ -1369,7 +1376,7 @@ impl Report {
     pub fn merge_all(reports: Vec<Report>) -> Report {
         let mut it = reports.into_iter();
         let Some(mut m) = it.next() else {
-            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, created: vec![], removed: vec![], host: String::new() };
+            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, cold: vec![], created: vec![], removed: vec![], host: String::new() };
         };
         let mut hosts = vec![m.host.clone()];
         let mut departures: BTreeMap<String, u64> = m.departure_releases.drain(..).collect();
@@ -1383,6 +1390,7 @@ impl Report {
             }
             m.threads_peak += r.threads_peak;
             m.counters.merge(&r.counters);
+            m.cold.extend(r.cold);
             m.created.extend(r.created);
             m.removed.extend(r.removed);
             hosts.push(r.host);
@@ -1536,6 +1544,7 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
         departure_releases: sh.coord.departure_releases(),
         counters,
         uring,
+        cold: Vec::new(),
         created,
         removed,
         host: sh.host.clone(),
@@ -1559,7 +1568,8 @@ fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()>
     )?;
     let Some(m) = &c.mount else { return Ok(()) };
     write!(out, "mount {} ({}, {})", m.mount_point, m.fstype, m.device)?;
-    let Some(n) = &m.nfs else { return writeln!(out) };
+    let opts = m.opts.as_ref().map(|o| format!("mount opts {o}\n")).unwrap_or_default();
+    let Some(n) = &m.nfs else { return write!(out, "\n{opts}") };
     // the client counts buffered bytes as returned and O_DIRECT bytes as requested
     writeln!(
         out,
@@ -1571,6 +1581,7 @@ fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()>
         human_bytes(n.direct_read_bytes),
         human_bytes(n.direct_write_bytes)
     )?;
+    write!(out, "{opts}")?;
     let mut ops: Vec<_> = n.ops.iter().collect();
     ops.sort_by(|a, b| b.1.ops.cmp(&a.1.ops).then(a.0.cmp(b.0)));
     let total: u64 = ops.iter().map(|(_, o)| o.ops).sum();
@@ -1610,6 +1621,9 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
     writeln!(out, "elapsed {:.3} s  threads {}", secs, s.threads)?;
     if let Some(u) = &r.uring {
         writeln!(out, "io_uring: {}", u.describe())?;
+    }
+    for c in &r.cold {
+        crate::cold::write(out, c)?;
     }
     writeln!(
         out,

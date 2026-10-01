@@ -59,6 +59,7 @@ fn opts(root: &PathBuf, rank: i64, ranks: i64) -> RunOpts {
         rank_rotate: 0,
         max_gap: None,
         require_cold: false,
+        drop_caches: false,
     }
 }
 

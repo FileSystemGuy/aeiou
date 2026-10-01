@@ -248,6 +248,7 @@ fn fadvise_runs_and_is_fingerprinted() {
             rank_rotate: 0,
             max_gap: None,
             require_cold: false,
+            drop_caches: false,
         },
         std::collections::HashMap::new(),
     )

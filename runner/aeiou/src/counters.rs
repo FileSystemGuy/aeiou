@@ -53,6 +53,11 @@ pub struct MountCounters {
     pub mount_point: String,
     pub device: String,
     pub fstype: String,
+    /// The mount's options: the `opts:` line of `mountstats` on NFS (`vers`, `rsize`,
+    /// `acregmin`…, `lookupcache`, `nconnect`: what decides the client's caching), the
+    /// options field of `/proc/self/mounts` elsewhere. Distinct hosts' joined with ` | `.
+    #[serde(default)]
+    pub opts: Option<String>,
     pub nfs: Option<NfsCounters>,
 }
 
@@ -120,6 +125,14 @@ impl MountCounters {
         join_distinct(&mut self.mount_point, &o.mount_point);
         join_distinct(&mut self.device, &o.device);
         join_distinct(&mut self.fstype, &o.fstype);
+        match (&mut self.opts, &o.opts) {
+            (Some(a), Some(b)) if !a.split(" | ").any(|x| x == b) => {
+                a.push_str(" | ");
+                a.push_str(b);
+            }
+            (None, Some(b)) => self.opts = Some(b.clone()),
+            _ => {}
+        }
         match (&mut self.nfs, &o.nfs) {
             (Some(m), Some(n)) => m.merge(n),
             (None, Some(n)) => self.nfs = Some(n.clone()),
@@ -310,6 +323,7 @@ impl Sampler {
                 mount_point: b.mount_point,
                 device: b.device,
                 fstype: b.fstype,
+                opts: b.opts,
                 nfs: match (&a.nfs, &b.nfs) {
                     (Some(x), Some(y)) => Some(y.delta(x)),
                     _ => None,
@@ -319,6 +333,7 @@ impl Sampler {
                 mount_point: b.mount_point,
                 device: b.device,
                 fstype: b.fstype,
+                opts: b.opts,
                 nfs: None,
             }),
             _ => None,
@@ -343,6 +358,7 @@ pub struct MountSnapshot {
     pub mount_point: String,
     pub device: String,
     pub fstype: String,
+    pub opts: Option<String>,
     pub nfs: Option<NfsCounters>,
 }
 
@@ -352,7 +368,17 @@ impl MountSnapshot {
     pub fn for_path(path: &Path) -> Option<MountSnapshot> {
         let canon = std::fs::canonicalize(path).ok()?;
         let text = std::fs::read_to_string("/proc/self/mountstats").ok()?;
-        Self::find(&text, &canon)
+        let mut m = Self::find(&text, &canon)?;
+        if m.opts.is_none() {
+            // only NFS prints `opts:` in mountstats; the others' are in /proc/self/mounts
+            // (the last entry for the mount point is the one on top)
+            let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+            m.opts = mounts.lines().rev().find_map(|l| {
+                let f: Vec<&str> = l.split(' ').collect();
+                (f.len() >= 4 && unescape(f[1]) == m.mount_point).then(|| f[3].to_string())
+            });
+        }
+        Some(m)
     }
 
     pub fn find(text: &str, canon: &Path) -> Option<MountSnapshot> {
@@ -416,15 +442,20 @@ pub fn parse(text: &str) -> Vec<MountSnapshot> {
                 mount_point: mount_point.to_string(),
                 device: device.to_string(),
                 fstype,
+                opts: None,
                 nfs,
             });
             continue;
         }
         let Some(cur) = out.last_mut() else { continue };
+        let t = line.trim();
+        if let Some(v) = t.strip_prefix("opts:") {
+            cur.opts = Some(v.trim().to_string());
+            continue;
+        }
         let Some(nfs) = cur.nfs.as_mut() else {
             continue;
         };
-        let t = line.trim();
         if let Some(v) = t.strip_prefix("bytes:") {
             let f: Vec<u64> = v
                 .split_whitespace()
@@ -495,6 +526,8 @@ device /dev/sde mounted on /mnt/aeiou-nfs/deeper\\040dir with fstype ext4
         assert_eq!(all.len(), 4);
         let nfs = &all[2];
         assert_eq!(nfs.fstype, "nfs4");
+        assert_eq!(nfs.opts.as_deref(), Some("rw,vers=4.2"));
+        assert_eq!(all[0].opts, None, "only NFS prints its options in mountstats");
         let c = nfs.nfs.as_ref().unwrap();
         assert_eq!((c.normal_read_bytes, c.server_write_bytes), (100, 600));
         assert_eq!(c.ops["READ"].ops, 10);
@@ -535,6 +568,7 @@ device /dev/sde mounted on /mnt/aeiou-nfs/deeper\\040dir with fstype ext4
                 mount_point: "/a".into(),
                 device: "d".into(),
                 fstype: "nfs4".into(),
+                opts: Some("rw,vers=4.2".into()),
                 nfs: Some(NfsCounters::default()),
             }),
             ..Default::default()
@@ -553,6 +587,7 @@ device /dev/sde mounted on /mnt/aeiou-nfs/deeper\\040dir with fstype ext4
                 mount_point: "/b".into(),
                 device: "d".into(),
                 fstype: "nfs4".into(),
+                opts: Some("rw,vers=4.1,nconnect=4".into()),
                 nfs: Some(nfs),
             }),
             ..Default::default()
@@ -562,6 +597,7 @@ device /dev/sde mounted on /mnt/aeiou-nfs/deeper\\040dir with fstype ext4
         assert_eq!(x.tasks_peak, 11);
         let m = x.mount.unwrap();
         assert_eq!((m.mount_point.as_str(), m.device.as_str()), ("/a,/b", "d"));
+        assert_eq!(m.opts.as_deref(), Some("rw,vers=4.2 | rw,vers=4.1,nconnect=4"), "distinct option sets once each");
         assert_eq!(m.nfs.unwrap().ops["READ"].ops, 4);
     }
 

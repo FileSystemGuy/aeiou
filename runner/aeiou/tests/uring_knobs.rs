@@ -62,6 +62,7 @@ fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
         rank_rotate: 0,
         max_gap: None,
         require_cold: false,
+        drop_caches: false,
     }
 }
 
