@@ -257,7 +257,10 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   the mount `--root` is on (longest mount point that is a prefix of the canonical root: its
   device and type on any filesystem, and its options as a `mount opts` line: the `opts:`
   line of `mountstats` on NFS, with `vers`, `rsize`, `acregmin`…, and `lookupcache` and
-  `nconnect` when set, the options field of `/proc/self/mounts` elsewhere) and, on NFS, the deltas of the client's byte counters
+  `nconnect` when set, the options field of `/proc/self/mounts` elsewhere; and, since
+  2026-10-01 (§9), a `mount read_ahead_kb` line: the readahead window of the mount's
+  backing device info, `/sys/class/bdi/MAJOR:MINOR/read_ahead_kb` for the device `--root`
+  is on, a partition's being its disk's; absent on tmpfs, which has none) and, on NFS, the deltas of the client's byte counters
   and of the per-procedure RPC statistics, printed as counts with the mean round trip, and
   transmissions, timeouts, and errors when they differ from the count. Two caveats on the
   line itself: `mountstats` is per mount, not per process, so every process on the host
@@ -796,6 +799,8 @@ the shape `mmap` loaders are used for. Cold rows each on a freshly generated dir
    `MADV_POPULATE_READ` does not help. On this loopback `mmap` was the slowest way to
    read cold and nearly the cheapest in CPU after `sync-direct`; what small READs cost
    on a real server is the question for the real target, and `read_ahead_kb` is a
-   solution-side setting the report does not yet record.
+   solution-side setting ~~the report does not yet record~~ the host counters record
+   since later the same day (`mount read_ahead_kb 128` here, 8192 on this box's ext4),
+   recorded and never set by the runner.
 3. **RSS under `mmap` counts the mapped file pages** (about 1 GiB here against 70 MiB):
    they are page cache, shared and reclaimable, not buffers the runner allocated.

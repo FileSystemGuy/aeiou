@@ -1427,8 +1427,13 @@ other side: the fault path sent 36,981 READs of about 109 KiB where `read(2)` se
 of about 660 KiB, and took 1.9 s against 1.2 s; consistent with the mount's
 `read_ahead_kb` (128) bounding fault readahead, not confirmed by changing it.
 
-**Open.** The real target. `read_ahead_kb` of the mount in the host counters, and a run
-with it raised, to confirm what sets the size of a fault's READ. `aio_init` (glibc's pool size) as a knob if anyone runs
+**Open.** The real target. ~~`read_ahead_kb` of the mount in the host counters, and~~ A run
+with `read_ahead_kb` raised, to confirm what sets the size of a fault's READ (the value
+is in the host counters since later the same day, user: a `mount read_ahead_kb` line from
+`/sys/class/bdi` for the device `--root` is on; like the mount options it is the
+solution's setting, reported and never changed by the runner, and it is not in the
+configuration the coordinator compares, since hosts may legitimately differ and the
+merged report lists the distinct values). `aio_init` (glibc's pool size) as a knob if anyone runs
 `posix-aio` in earnest. `RWF_NOWAIT`/`preadv2` flags on the AIO requests. A filled
 context under test. The `--cache` and `--buffer` axes of the brief's validity table are
 still only the `-direct` suffix.

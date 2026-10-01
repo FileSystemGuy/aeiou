@@ -594,7 +594,8 @@ Measured for each run:
   and the `mountstats` deltas: `runner/README.md` §4) and open-file high-water mark;
 - backend-specific counters: libaio context depth, cuFile compat-mode flag and `cufile_stats`,
   NIXL plugin selected, `mmap` fault and populate counts (the `libaio:` and `mmap:` lines
-  and the host line's fault counts since 2026-10-01, `runner/README.md` §9);
+  and the host line's fault counts since 2026-10-01, `runner/README.md` §9; the mount's
+  `read_ahead_kb` beside its options the same day);
 - accelerator utilization (AU%), overall and per step bucket;
 - **per-step stall time per GPU** (end of `compute` to next `take` returning);
 - per-op latency histograms, bucketed by step range;
