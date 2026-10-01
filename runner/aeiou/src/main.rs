@@ -92,6 +92,20 @@ struct RunCmd {
     /// Fail unless every dataset id is among these.
     #[arg(long = "expect-dataset-id", value_name = "SHA256")]
     expect_dataset_ids: Vec<String>,
+    /// This host's index among --ranks hosts (the multi-host coordinator is not built yet: --ranks 1 only).
+    #[arg(long, default_value_t = 0)]
+    rank: i64,
+    #[arg(long, default_value_t = 1)]
+    ranks: i64,
+    /// Run the GPU range of rank (rank + k) mod ranks, so each host reads what another wrote.
+    #[arg(long, default_value_t = 0, value_name = "K")]
+    rank_rotate: i64,
+    /// Fail if an input namespace was finished more than this many seconds ago.
+    #[arg(long, value_name = "SECS")]
+    max_gap: Option<f64>,
+    /// Fail if this host would read input objects it wrote itself.
+    #[arg(long)]
+    require_cold: bool,
 }
 
 #[derive(Args)]
@@ -210,12 +224,12 @@ fn run_cmd(a: RunCmd) -> Result<()> {
             c.files.map(|n| format!("  ({n} files)")).unwrap_or_default()
         )?;
     }
-    let cleaned = run::prepare_namespaces(&loaded.ast, &a.root, a.clean_namespaces)?;
-    for c in &cleaned {
-        writeln!(out, "namespace root {c}/ emptied")?;
+    if a.ranks < 1 || a.rank < 0 || a.rank >= a.ranks {
+        bail!("--rank {} of --ranks {}: rank must be in [0, ranks)", a.rank, a.ranks);
     }
-    out.flush()?;
-
+    if a.ranks > 1 {
+        bail!("--ranks {}: several hosts need the coordinator, which is not built yet (NAPKIN_MATH.md §8.A)", a.ranks);
+    }
     let opts = RunOpts {
         root: a.root.clone(),
         backend,
@@ -225,9 +239,42 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         clean_namespaces: a.clean_namespaces,
         expect_fingerprint,
         expect_dataset_ids: a.expect_dataset_ids.clone(),
+        rank: a.rank,
+        ranks: a.ranks,
+        rank_rotate: a.rank_rotate,
+        max_gap: a.max_gap,
+        require_cold: a.require_cold,
     };
-    let report = run::run(model, opts)?;
+    let (lo, hi) = run::gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
+    writeln!(out, "host {}  rank {} of {}  rotate {}  gpu ids [{lo}, {hi})", run::hostname(), opts.rank, opts.ranks, opts.rank_rotate)?;
+    let (ns_checks, input_objects) = run::check_input_namespaces(loaded, cfg, &a.root, &opts)?;
+    for c in &ns_checks {
+        writeln!(
+            out,
+            "input namespace(s) {} at {}/: written by `{}` ({}…) on {}, finished {:.1} s ago{}{}",
+            c.names.join(", "),
+            c.root,
+            c.writer_abstract,
+            &c.writer_sha256[..16],
+            c.writer_hosts.join(","),
+            c.gap,
+            c.objects.map(|n| format!(", {n} objects recorded")).unwrap_or_default(),
+            if c.same_host { "; WARNING: this host wrote part of the range it will run" } else { "" }
+        )?;
+    }
+    let cleaned = run::prepare_namespaces(&loaded.ast, &a.root, a.clean_namespaces)?;
+    for c in &cleaned {
+        writeln!(out, "namespace root {c}/ emptied")?;
+    }
+    out.flush()?;
+
+    let started = run::unix_now();
+    let report = run::run(model, opts.clone(), input_objects)?;
+    let finished = run::unix_now();
     run::write_report(&mut out, &report)?;
+    for p in run::write_namespace_manifests(loaded, cfg, &a.root, &opts, &report, started, finished)? {
+        writeln!(out, "namespace manifest {}", p.display())?;
+    }
     if let Some(fp) = expect_fingerprint {
         if report.stats.fingerprint != fp {
             bail!("fingerprint {:016x} does not match the expected {:016x}", report.stats.fingerprint, fp);

@@ -515,6 +515,7 @@ pub struct NsMeta<'a> {
     pub fields: &'a BTreeMap<String, FieldType>,
     pub size: Option<&'a Expr>, // None = as_written
     pub seed: u64,
+    pub input: bool,
 }
 
 /// Everything the VM reads: the AST, the parameters in effect, and the resolved datasets.
@@ -663,7 +664,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
             NsSize::Expr(e) => Some(e),
         };
         ns_index.insert(name.as_str(), namespaces.len());
-        namespaces.push(NsMeta { name, pattern, fields: &n.fields, size, seed: n.seed });
+        namespaces.push(NsMeta { name, pattern, fields: &n.fields, size, seed: n.seed, input: n.input.unwrap_or(false) });
     }
     drop(vm);
 

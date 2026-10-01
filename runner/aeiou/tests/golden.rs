@@ -29,8 +29,8 @@ fn dry(text: &str, cfg: &Config, threads: usize) -> dryrun::Report {
 fn hashes_match_check_py() {
     // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day).
     let want = [
-        ("ckpt_restore", "24e8978d7167891d37944443c2e7d7df7f9c84f26f7e4c90e182e02721d45a64"),
-        ("ckpt_write_dcp", "48ac6b01b9ac2819ded2939cdf2de1d4462c772537fe41740cdc24649b592d45"),
+        ("ckpt_restore", "d9724b93648e579a3c9d20a8b912f48f78e4a742f63ab1c0ce7bea16fe31c3a3"),
+        ("ckpt_write_dcp", "c8c7bf78006b49fec46d22f5c806d9056dc9a0412c14edc4c487ec2f3ab89f6f"),
         ("kv_cache_serving", "f51d92850a0ecc8b84e6e55b10d08635771f6cb58417bb59135a2ea0329c48e8"),
         ("model_load", "d03bfddabc0562b3ad5caa88a3897933e3c9a179eedb0b6aa896b01880691b6c"),
         ("train_large_samples", "780c751d077f20b513df6fcd1429ca9d295ae3a572896aa4fc7a960748dc9ae1"),
@@ -52,11 +52,12 @@ fn hashes_match_check_py() {
 fn golden_fingerprints() {
     // (abstract, gpus, params, fingerprint, ops) at --seed 1, recorded 2026-09-30 (kv_cache_serving
     // re-recorded the same day after the conversation-directory `mkdir` was added to the abstract;
-    // vdb_build_diskann likewise when its base file moved to `base/base.fbin`).
+    // vdb_build_diskann likewise when its base file moved to `base/base.fbin`; ckpt_write_dcp when its
+    // readback phase went behind `readback = false`).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x72d8d8a5d654740f, 4480),
         ("train_large_samples", 2, &[("steps", "5")], 0x13b5a9aaa823405b, 10728),
-        ("ckpt_write_dcp", 2, &[("steps", "200")], 0x6b4c4db5b3e80bb5, 374),
+        ("ckpt_write_dcp", 2, &[("steps", "200")], 0xc7efab55c3d4e8ee, 70),
         ("ckpt_restore", 2, &[], 0xf370a3cd3570d0ae, 38),
         ("model_load", 2, &[], 0x0f06cdc81fdbc84a, 24600),
         ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")], 0xc4e18e18bc9bf279, 4232),
@@ -274,6 +275,18 @@ fn validator_rejects_what_check_py_rejects() {
         ),
         "shares root",
     );
+    // input namespaces are read-only and agree per root (V14)
+    let ns = |input_a: &str, input_b: &str| {
+        format!(
+            r#""namespaces": {{"a": {{"pattern": "n/x{{i}}", "fields": {{"i": "int"}}, "size": 1, "seed": 1{input_a}}},
+                           "b": {{"pattern": "n/y{{i}}", "fields": {{"i": "int"}}, "size": 1, "seed": 1{input_b}}}}},"#
+        )
+    };
+    let with_ns = |ns: &str, body: &str| base(ds, body).replace(r#""actors""#, &format!("{ns} \"actors\""));
+    rejects(&with_ns(&ns(r#", "input": true"#, ""), ""), "`input` differs (V14)");
+    rejects(&with_ns(&ns(r#", "input": true"#, r#", "input": true"#), r#"{"open": {"file": {"object": {"namespace": "a", "fields": {"i": 1}}}, "flags": ["WRONLY", "CREAT"]}}"#), "read-only (V14)");
+    rejects(&with_ns(&ns(r#", "input": true"#, r#", "input": true"#), r#"{"unlink": {"file": {"object": {"namespace": "a", "fields": {"i": 1}}}}}"#), "read-only (V14)");
+    rejects(&with_ns(&ns(r#", "input": true"#, r#", "input": true"#), r#"{"mkdir": {"dir": {"object": {"namespace": "b", "fields": {"i": 1}}}}}"#), "read-only (V14)");
     // structural: an unknown node kind, an unknown field
     rejects(&base(ds, r#"{"frobnicate": {}}"#), "unknown variant");
     rejects(&base(ds, r#"{"compute": {"ns": 1, "bogus": 2}}"#), "unknown field");

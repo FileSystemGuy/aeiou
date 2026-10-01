@@ -36,6 +36,10 @@ pub const GENERATOR: &str = "dgen-data";
 pub const GENERATOR_VERSION: &str = "0.3.0";
 pub const MANIFEST_NAME: &str = ".aeiou-dataset.json";
 pub const MANIFEST_VERSION: u64 = 1;
+pub const NAMESPACE_MANIFEST_NAME: &str = ".aeiou-namespace.json";
+pub const NAMESPACE_MANIFEST_VERSION: u64 = 1;
+/// Above this many objects a namespace manifest records the count only.
+pub const NAMESPACE_OBJECT_LIMIT: usize = 100_000;
 
 /// The payload settings recorded in a manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -209,6 +213,86 @@ pub fn dataset_root(ast: &Ast, name: &str) -> Result<String> {
             None => String::new(),
         }),
     }
+}
+
+/// One rank of the run that wrote a namespace: where it ran and which GPU ids it owned.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RankRecord {
+    pub rank: i64,
+    pub host: String,
+    /// `[lo, hi)` of global GPU ids.
+    pub gpus: [i64; 2],
+}
+
+/// `.aeiou-namespace.json` at a namespace root, written by the run that created the
+/// objects there, read by a run that declares those namespaces `input` (V14).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceManifest {
+    pub manifest_version: u64,
+    /// The resolved definition of every namespace at this root (`pattern`, `fields`, `seed`
+    /// with parameters substituted, canonical key order), by name.
+    pub namespaces: BTreeMap<String, Value>,
+    pub abstract_name: String,
+    pub ast_sha256: String,
+    pub seed: u64,
+    pub gpus: i64,
+    pub params: Value,
+    pub ranks: Vec<RankRecord>,
+    /// Unix seconds, fractional.
+    pub started: f64,
+    pub finished: f64,
+    pub objects_created: u64,
+    pub bytes_written: u64,
+    /// Every object created at this root with the GPU id that created it, when there are at
+    /// most `NAMESPACE_OBJECT_LIMIT`; otherwise absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objects: Option<Vec<(String, i64)>>,
+}
+
+impl NamespaceManifest {
+    pub fn read(dir: &Path) -> Result<NamespaceManifest> {
+        let path = dir.join(NAMESPACE_MANIFEST_NAME);
+        let text = std::fs::read_to_string(&path).with_context(|| format!("no namespace manifest at {}", path.display()))?;
+        let m: NamespaceManifest = serde_json::from_str(&text).with_context(|| format!("{}: not a namespace manifest", path.display()))?;
+        if m.manifest_version != NAMESPACE_MANIFEST_VERSION {
+            bail!("{}: manifest_version {} (this runner writes {})", path.display(), m.manifest_version, NAMESPACE_MANIFEST_VERSION);
+        }
+        Ok(m)
+    }
+
+    pub fn write(&self, dir: &Path) -> Result<PathBuf> {
+        let path = dir.join(NAMESPACE_MANIFEST_NAME);
+        let tmp = dir.join(format!("{NAMESPACE_MANIFEST_NAME}.tmp.{}", std::process::id()));
+        std::fs::write(&tmp, serde_json::to_string_pretty(self)?).with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+        Ok(path)
+    }
+
+    /// The host that wrote GPU id `gpu`, if recorded.
+    pub fn host_of_gpu(&self, gpu: i64) -> Option<&str> {
+        self.ranks.iter().find(|r| gpu >= r.gpus[0] && gpu < r.gpus[1]).map(|r| r.host.as_str())
+    }
+}
+
+/// The resolved definition of namespace `name` for the manifest: `pattern`, `fields`, and
+/// `seed`, which fix the names and the content. `size` is each abstract's own model of the
+/// objects (`as_written` for the writer, an expression for a reader, V4) and is not
+/// compared; `doc` and `input` are not either (the writer declares the namespace without
+/// `input`, the reader with it).
+pub fn resolved_namespace(doc: &Value, name: &str, cfg: &Config) -> Result<Value> {
+    let entry = doc
+        .get("namespaces")
+        .and_then(|d| d.get(name))
+        .ok_or_else(|| anyhow!("no namespace `{name}` in the abstract"))?;
+    let values = param_values(doc, cfg)?;
+    let mut v = substitute(entry, &values)?;
+    if let Some(o) = v.as_object_mut() {
+        o.remove("doc");
+        o.remove("input");
+        o.remove("size");
+    }
+    let bytes = canon::canonical(&v);
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 /// A namespace's root directory relative to the run root.

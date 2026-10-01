@@ -1,4 +1,4 @@
-//! The semantic rules of `schema/README.md` §4 (V1–V13), ported from `schema/check.py`. The
+//! The semantic rules of `schema/README.md` §4 (V1–V14), ported from `schema/check.py`. The
 //! runner must reject everything the reference checker rejects; the structural rules the
 //! JSON Schema states and serde cannot (identifier syntax, errno syntax, ranges, uniqueness)
 //! are checked here too. Messages carry the `/`-joined path of the offending node, as
@@ -182,6 +182,7 @@ impl<'a> Checker<'a> {
             }
             roots.insert(root, dname);
         }
+        let mut nroots: HashMap<String, (&str, bool)> = HashMap::new();
         for (nname, n) in &ast.namespaces {
             let path = vec!["namespaces".into(), nname.clone()];
             if !is_ident(nname) {
@@ -209,6 +210,15 @@ impl<'a> Checker<'a> {
                 if !root.is_empty() && (&nroot == root || nroot.starts_with(&format!("{root}/"))) {
                     self.err(&path, format!("root `{nroot}/` lies inside dataset `{dname}`'s root `{root}/` (V13)"));
                 }
+            }
+            // V14: namespaces sharing a root share its manifest, so they agree on `input`
+            let inp = n.input.unwrap_or(false);
+            if let Some((other, oinp)) = nroots.get(&nroot) {
+                if *oinp != inp {
+                    self.err(&path, format!("shares root `{nroot}/` with namespace `{other}` but `input` differs (V14)"));
+                }
+            } else {
+                nroots.insert(nroot, (nname.as_str(), inp));
             }
         }
         for (aname, a) in &ast.actors {
@@ -502,8 +512,25 @@ impl<'a> Checker<'a> {
                 if let Some(ds) = self.dataset_of(file, scope) {
                     self.err(&p(pp, &["flags"]), format!("open for writing on dataset `{ds}`: datasets are read-only (V12)"));
                 }
+                if let Some(ns) = self.input_namespace_of(file, scope) {
+                    self.err(&p(pp, &["flags"]), format!("open for writing on input namespace `{ns}`: input namespaces are read-only (V14)"));
+                }
             }
         }
+        // V14: input namespaces are read-only
+        if matches!(node, Node::Write { .. } | Node::Ftruncate { .. } | Node::Fallocate { .. } | Node::Unlink(_) | Node::Rename { .. } | Node::Mkdir { .. } | Node::Rmdir { .. }) {
+            for (key, h) in &handles {
+                if let Some(ns) = self.input_namespace_of(h, scope) {
+                    self.err(&p(pp, &[key]), format!("{kind} on input namespace `{ns}`: input namespaces are read-only (V14)"));
+                }
+            }
+        }
+    }
+
+    /// Namespace name if the handle is (a binding to) an object of an `input` namespace.
+    fn input_namespace_of(&self, h: &'a Handle, scope: &Scope<'a>) -> Option<&'a str> {
+        let ns = self.object_namespace(h, scope)?;
+        if self.ast.namespaces.get(ns).and_then(|n| n.input).unwrap_or(false) { Some(ns) } else { None }
     }
 
     /// Dataset name if the handle is (a binding to) a dataset file, dir, sample, region, or chunk.

@@ -29,8 +29,8 @@ use crate::ast::{Ast, Node};
 use crate::backend::{errno_name, Backend, BackendKind, ALIGN};
 use crate::coord::{Coordinator, Local};
 use crate::dryrun::{human_bytes, human_ns};
-use crate::eval::{Config, Model};
-use crate::payload::{self, Filler, Manifest};
+use crate::eval::{Config, Model, Params};
+use crate::payload::{self, Filler, Manifest, NamespaceManifest, RankRecord};
 use crate::vm::{actor_counts, op_hash, Control, ForkKind, Op, OpCtx, OpKind, Sink, Snapshot, Vm};
 
 // ---------------------------------------------------------------- options
@@ -50,6 +50,46 @@ pub struct RunOpts {
     pub expect_fingerprint: Option<u64>,
     /// Refuse to start unless every dataset id is in this list (when given).
     pub expect_dataset_ids: Vec<String>,
+    /// This host's index and the host count; the GPU ids this host runs are
+    /// `gpu_range(gpus, ranks, rank, rank_rotate)`.
+    pub rank: i64,
+    pub ranks: i64,
+    /// Run the GPU range of rank `(rank + rank_rotate) mod ranks`: with the same host list
+    /// as the run that wrote an input namespace, a non-zero rotation makes every host read
+    /// what another host wrote.
+    pub rank_rotate: i64,
+    /// Refuse when an input namespace was finished more than this many seconds ago.
+    pub max_gap: Option<f64>,
+    /// Refuse when this host would read an input object it wrote itself.
+    pub require_cold: bool,
+}
+
+/// The `[lo, hi)` of instance ids host `rank` of `ranks` runs for a template of `count`
+/// instances: contiguous ranges of `ceil(count / ranks)`, rotated by `rotate` hosts
+/// (`NAPKIN_MATH.md` §8.A: rank is only the host index that selects a GPU id range).
+pub fn gpu_range(count: i64, ranks: i64, rank: i64, rotate: i64) -> (i64, i64) {
+    let ranks = ranks.max(1);
+    let r = (rank + rotate).rem_euclid(ranks);
+    let per = (count + ranks - 1) / ranks;
+    let lo = (r * per).min(count);
+    let hi = ((r + 1) * per).min(count);
+    (lo, hi)
+}
+
+pub fn hostname() -> String {
+    let mut buf = [0u8; 256];
+    let r = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+    if r == 0 {
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        if let Ok(s) = std::str::from_utf8(&buf[..end]) {
+            return s.to_string();
+        }
+    }
+    std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_else(|_| "?".into())
+}
+
+pub fn unix_now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
 // ---------------------------------------------------------------- statistics
@@ -150,6 +190,9 @@ pub struct Stats {
     pub takes: u64,
     pub phases: BTreeMap<String, PhaseStats>,
     pub threads: u64,
+    /// Opens of objects of input namespaces, and of those the ones written on this host.
+    pub input_opens: u64,
+    pub warm_opens: u64,
 }
 
 impl Stats {
@@ -179,6 +222,8 @@ impl Stats {
             e.io_ns += p.io_ns;
         }
         self.threads += o.threads;
+        self.input_opens += o.input_opens;
+        self.warm_opens += o.warm_opens;
     }
 }
 
@@ -336,6 +381,13 @@ struct Shared {
     actors: Mutex<Vec<ActorRecord>>,
     /// Barrier scopes each template participates in.
     scopes: HashMap<String, Vec<String>>,
+    host: String,
+    /// Objects of input namespaces: path → the host that wrote it (when recorded).
+    input_objects: HashMap<String, Option<String>>,
+    /// Objects this run created (path, creating GPU id), for the namespace manifests, and
+    /// paths it removed (unlink, the source of a rename).
+    created: Mutex<Vec<(String, i64)>>,
+    removed: Mutex<Vec<String>>,
 }
 
 /// Per actor instance: its channels and its loader threads.
@@ -438,6 +490,8 @@ pub struct Runner {
     filler: Filler,
     st: Stats,
     takes: Vec<TakeRec>,
+    created: Vec<(String, i64)>,
+    removed: Vec<String>,
     /// The actor instance's main thread (not a sub-actor).
     main: bool,
     template: &'static str,
@@ -460,6 +514,8 @@ impl Runner {
             filler: Filler::new(compress),
             st: Stats { threads: 1, ..Default::default() },
             takes: Vec::new(),
+            created: Vec::new(),
+            removed: Vec::new(),
             main,
             template,
             actor,
@@ -498,6 +554,15 @@ impl Runner {
                 let mode = if mode == 0 { 0o644 } else { mode };
                 let fd = self.be.open(&self.full(op.path), op.aux & 0xffff_ffff, mode)?;
                 self.fds.own.insert(Arc::from(op.path), Arc::new(fd));
+                if op.aux & (1 << (crate::ast::OpenFlag::CREAT as u8)) != 0 {
+                    self.created.push((op.path.to_string(), self.actor));
+                }
+                if let Some(writer) = self.sh.input_objects.get(op.path) {
+                    self.st.input_opens += 1;
+                    if writer.as_deref() == Some(self.sh.host.as_str()) {
+                        self.st.warm_opens += 1;
+                    }
+                }
                 Ok(0)
             }
             OpKind::Close => {
@@ -569,7 +634,11 @@ impl Runner {
                 let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
                 self.be.fdatasync(fd.as_fd()).map(|_| 0)
             }
-            OpKind::Unlink => self.be.unlink(&self.full(op.path)).map(|_| 0),
+            OpKind::Unlink => {
+                self.be.unlink(&self.full(op.path))?;
+                self.removed.push(op.path.to_string());
+                Ok(0)
+            }
             OpKind::Ftruncate => {
                 let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
                 self.be.ftruncate(fd.as_fd(), op.len).map(|_| 0)
@@ -578,9 +647,18 @@ impl Runner {
                 let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
                 self.be.fallocate(fd.as_fd(), op.offset, op.len).map(|_| 0)
             }
-            OpKind::Mkdir => self.be.mkdir(&self.full(op.path), op.aux as u32).map(|_| 0),
+            OpKind::Mkdir => {
+                self.be.mkdir(&self.full(op.path), op.aux as u32)?;
+                self.created.push((op.path.to_string(), self.actor));
+                Ok(0)
+            }
             OpKind::Rmdir => self.be.rmdir(&self.full(op.path)).map(|_| 0),
-            OpKind::Rename => self.be.rename(&self.full(op.path), &self.full(op.path2.unwrap_or(""))).map(|_| 0),
+            OpKind::Rename => {
+                self.be.rename(&self.full(op.path), &self.full(op.path2.unwrap_or("")))?;
+                self.removed.push(op.path.to_string());
+                self.created.push((op.path2.unwrap_or("").to_string(), self.actor));
+                Ok(0)
+            }
             OpKind::Readdir => {
                 let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
                 self.be.readdir(fd.as_fd()).map(|n| n as i64)
@@ -795,6 +873,12 @@ impl Sink<'static, 'static> for Runner {
 
     fn finish(&mut self) -> Result<()> {
         let mut result = Ok(());
+        if !self.created.is_empty() {
+            self.sh.created.lock().unwrap().append(&mut self.created);
+        }
+        if !self.removed.is_empty() {
+            self.sh.removed.lock().unwrap().append(&mut self.removed);
+        }
         if self.main {
             // loaders: close their channels so a worker blocked on a slot exits, then join
             let channels: Vec<(String, Arc<Channel>)> = self.inst.channels.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -882,8 +966,132 @@ pub fn check_datasets(loaded: &crate::Loaded, cfg: &Config, root: &Path) -> Resu
     Ok(out)
 }
 
-/// Namespace roots must be empty (`--clean-namespaces` empties them); dataset roots inside a
-/// namespace root are left alone. Creates the roots.
+/// What a run learned about one input namespace root at startup.
+#[derive(Debug, Clone)]
+pub struct NamespaceCheck {
+    pub root: String,
+    pub names: Vec<String>,
+    pub writer_abstract: String,
+    pub writer_sha256: String,
+    pub writer_hosts: Vec<String>,
+    /// Seconds from the writer's finish to this check.
+    pub gap: f64,
+    pub objects: Option<usize>,
+    /// This host wrote part of the GPU range it is about to run.
+    pub same_host: bool,
+}
+
+/// Every namespace declared `input` must have a manifest at its root whose resolved
+/// definitions match this abstract's; reports the write-to-read gap and the host overlap.
+/// Returns the checks and the writer map of every input object.
+pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &Path, opts: &RunOpts) -> Result<(Vec<NamespaceCheck>, HashMap<String, Option<String>>)> {
+    let ast = &loaded.ast;
+    let mut by_root: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, n) in &ast.namespaces {
+        if n.input.unwrap_or(false) {
+            by_root.entry(payload::namespace_root(ast, name)?).or_default().push(name.clone());
+        }
+    }
+    let host = hostname();
+    let (lo, hi) = gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
+    let mut checks = Vec::new();
+    let mut objects: HashMap<String, Option<String>> = HashMap::new();
+    for (rel, names) in by_root {
+        let dir = root.join(&rel);
+        let m = NamespaceManifest::read(&dir).with_context(|| format!("input namespace(s) {} at {}: no run has written this root", names.join(", "), dir.display()))?;
+        for name in &names {
+            let want = payload::resolved_namespace(&loaded.doc, name, cfg)?;
+            let Some(have) = m.namespaces.get(name) else {
+                bail!("input namespace `{name}` at {}: the manifest (written by `{}`) has no namespace of that name; it has {}", dir.display(), m.abstract_name, m.namespaces.keys().cloned().collect::<Vec<_>>().join(", "));
+            };
+            if *have != want {
+                let mut lines = Vec::new();
+                payload::diff(&want, have, "", &mut lines);
+                bail!("input namespace `{name}` at {}: this abstract's definition differs from the writer's (`{}`): \n  {}", dir.display(), m.abstract_name, lines.join("\n  "));
+            }
+        }
+        let gap = unix_now() - m.finished;
+        if let Some(max) = opts.max_gap {
+            if gap > max {
+                bail!("input namespace root {}: written {gap:.1} s ago, more than --max-gap {max}", dir.display());
+            }
+        }
+        let same_host = m.ranks.iter().any(|r| r.host == host && r.gpus[0] < hi && lo < r.gpus[1]);
+        if same_host && opts.require_cold {
+            bail!("input namespace root {}: this host ({host}) wrote part of GPU range [{lo}, {hi}) it is about to run; use --rank-rotate or other hosts (--require-cold)", dir.display());
+        }
+        let mut hosts: Vec<String> = m.ranks.iter().map(|r| r.host.clone()).collect();
+        hosts.sort();
+        hosts.dedup();
+        if let Some(list) = &m.objects {
+            for (path, gpu) in list {
+                objects.insert(path.clone(), m.host_of_gpu(*gpu).map(|h| h.to_string()));
+            }
+        }
+        checks.push(NamespaceCheck {
+            root: rel,
+            names,
+            writer_abstract: m.abstract_name.clone(),
+            writer_sha256: m.ast_sha256.clone(),
+            writer_hosts: hosts,
+            gap,
+            objects: m.objects.as_ref().map(|o| o.len()),
+            same_host,
+        });
+    }
+    Ok((checks, objects))
+}
+
+/// After a run: `.aeiou-namespace.json` at every output namespace root (one not declared
+/// `input`), written last and atomically, with the objects created there.
+pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Path, opts: &RunOpts, report: &Report, started: f64, finished: f64) -> Result<Vec<PathBuf>> {
+    let ast = &loaded.ast;
+    let mut by_root: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, n) in &ast.namespaces {
+        if !n.input.unwrap_or(false) {
+            by_root.entry(payload::namespace_root(ast, name)?).or_default().push(name.clone());
+        }
+    }
+    let (lo, hi) = gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
+    let mut written = Vec::new();
+    for (rel, names) in by_root {
+        let prefix = if rel.is_empty() { String::new() } else { format!("{rel}/") };
+        let mut seen = HashSet::new();
+        let mut objects: Vec<(String, i64)> = Vec::new();
+        for (path, gpu) in &report.created {
+            if path.starts_with(&prefix) && seen.insert(path.clone()) {
+                objects.push((path.clone(), *gpu));
+            }
+        }
+        objects.sort();
+        let count = objects.len() as u64;
+        let mut namespaces = BTreeMap::new();
+        for name in &names {
+            namespaces.insert(name.clone(), payload::resolved_namespace(&loaded.doc, name, cfg)?);
+        }
+        let m = NamespaceManifest {
+            manifest_version: payload::NAMESPACE_MANIFEST_VERSION,
+            namespaces,
+            abstract_name: ast.name.clone(),
+            ast_sha256: loaded.sha256.clone(),
+            seed: cfg.seed,
+            gpus: cfg.gpus,
+            params: payload::params_json(&loaded.doc, cfg, &Params::new(ast, cfg)?)?,
+            ranks: vec![RankRecord { rank: opts.rank, host: hostname(), gpus: [lo, hi] }],
+            started,
+            finished,
+            objects_created: count,
+            bytes_written: report.stats.bytes_written,
+            objects: if objects.len() <= payload::NAMESPACE_OBJECT_LIMIT { Some(objects) } else { None },
+        };
+        written.push(m.write(&root.join(&rel))?);
+    }
+    Ok(written)
+}
+
+/// Output namespace roots must be empty (`--clean-namespaces` empties them); input roots
+/// are left as they are; dataset roots inside a namespace root are left alone. Creates the
+/// output roots.
 pub fn prepare_namespaces(ast: &Ast, root: &Path, clean: bool) -> Result<Vec<String>> {
     let mut dataset_roots: Vec<PathBuf> = Vec::new();
     for name in ast.datasets.keys() {
@@ -891,8 +1099,12 @@ pub fn prepare_namespaces(ast: &Ast, root: &Path, clean: bool) -> Result<Vec<Str
     }
     let mut cleaned = Vec::new();
     let mut seen = BTreeSet::new();
-    for name in ast.namespaces.keys() {
+    for (name, n) in &ast.namespaces {
         let rel = payload::namespace_root(ast, name)?;
+        if n.input.unwrap_or(false) {
+            seen.insert(rel);
+            continue;
+        }
         if !seen.insert(rel.clone()) {
             continue;
         }
@@ -972,21 +1184,25 @@ fn barrier_scopes(ast: &Ast) -> Result<HashMap<String, Vec<String>>> {
 pub struct Report {
     pub elapsed: Duration,
     pub stats: Stats,
-    pub templates: Vec<(String, i64)>,
+    /// (template, instance count, [lo, hi) run on this host)
+    pub templates: Vec<(String, i64, (i64, i64))>,
     pub actors: Vec<ActorRecord>,
     pub departure_releases: Vec<(String, u64)>,
     pub threads_peak: u64,
+    pub created: Vec<(String, i64)>,
+    pub host: String,
 }
 
 /// Execute the abstract. `model` must outlive the threads, hence `'static` (the caller leaks
 /// the loaded abstract and model for the life of the process; a run is the process).
-pub fn run(model: &'static Model<'static>, opts: RunOpts) -> Result<Report> {
+pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>) -> Result<Report> {
     let counts: Vec<(&'static str, i64)> = actor_counts(model)?;
+    let ranges: Vec<(i64, i64)> = counts.iter().map(|(_, c)| gpu_range(*c, opts.ranks, opts.rank, opts.rank_rotate)).collect();
     let scopes = barrier_scopes(model.ast)?;
     let mut participants: BTreeMap<String, usize> = BTreeMap::new();
-    for (name, count) in &counts {
+    for ((name, _), (lo, hi)) in counts.iter().zip(&ranges) {
         for s in scopes.get(*name).map(|v| v.as_slice()).unwrap_or(&[]) {
-            *participants.entry(s.clone()).or_insert(0) += *count as usize;
+            *participants.entry(s.clone()).or_insert(0) += (hi - lo) as usize;
         }
     }
     let participants: Vec<(String, usize)> = participants.into_iter().collect();
@@ -997,12 +1213,16 @@ pub fn run(model: &'static Model<'static>, opts: RunOpts) -> Result<Report> {
         stats: Mutex::new(Stats::default()),
         actors: Mutex::new(Vec::new()),
         scopes,
+        host: hostname(),
+        input_objects,
+        created: Mutex::new(Vec::new()),
+        removed: Mutex::new(Vec::new()),
     });
 
     let t0 = Instant::now();
     let mut handles = Vec::new();
-    for &(template, count) in &counts {
-        for actor in 0..count {
+    for (&(template, count), &(lo, hi)) in counts.iter().zip(&ranges) {
+        for actor in lo..hi {
             let sh = sh.clone();
             let inst = Arc::new(Instance { channels: Mutex::new(HashMap::new()), loaders: Mutex::new(Vec::new()) });
             let h = std::thread::Builder::new()
@@ -1044,13 +1264,18 @@ pub fn run(model: &'static Model<'static>, opts: RunOpts) -> Result<Report> {
     let stats = std::mem::take(&mut *sh.stats.lock().unwrap());
     let mut actors = std::mem::take(&mut *sh.actors.lock().unwrap());
     actors.sort_by(|a, b| a.template.cmp(&b.template).then(a.actor.cmp(&b.actor)));
+    let removed: HashSet<String> = std::mem::take(&mut *sh.removed.lock().unwrap()).into_iter().collect();
+    let mut created: Vec<(String, i64)> = std::mem::take(&mut *sh.created.lock().unwrap()).into_iter().filter(|(p, _)| !removed.contains(p)).collect();
+    created.sort();
     Ok(Report {
         elapsed,
         threads_peak: stats.threads,
         stats,
-        templates: counts.iter().map(|(n, c)| (n.to_string(), *c)).collect(),
+        templates: counts.iter().zip(&ranges).map(|((n, c), r)| (n.to_string(), *c, *r)).collect(),
         actors,
         departure_releases: sh.coord.departure_releases(),
+        created,
+        host: sh.host.clone(),
     })
 }
 
@@ -1106,6 +1331,12 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
         s.puts,
         s.expected_errors
     )?;
+    if s.input_opens > 0 {
+        writeln!(out, "input objects opened {}  of which written on this host ({}) {}", s.input_opens, r.host, s.warm_opens)?;
+        if s.warm_opens > 0 {
+            writeln!(out, "WARNING: {} read(s) of input objects hit the host that wrote them (page cache, not storage); run the reader on other hosts or with --rank-rotate", s.warm_opens)?;
+        }
+    }
     for (scope, n) in &r.departure_releases {
         writeln!(out, "WARNING: barrier `{scope}` was released {n} time(s) by instances finishing: not every instance hit it the same number of times")?;
     }

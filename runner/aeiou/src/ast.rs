@@ -324,6 +324,9 @@ pub struct Namespace {
     pub fields: BTreeMap<String, FieldType>,
     pub size: NsSize,
     pub seed: u64,
+    /// Written by a previous run; this abstract only reads it (V14).
+    #[serde(default)]
+    pub input: Option<bool>,
     #[serde(default)]
     pub doc: Option<String>,
 }
