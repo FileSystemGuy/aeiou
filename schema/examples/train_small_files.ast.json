@@ -1,5 +1,5 @@
 {
-  "ast": "0.1",
+  "ast": "0.2",
   "name": "train_small_files",
   "doc": "PyTorch DataLoader over an ImageFolder-style corpus; W workers, B files per batch, in-order delivery.",
   "params": {
@@ -285,7 +285,7 @@
       "script": "train_small_files.py",
       "sha256": "b7e3c34db437a527de8937d88efe2e3e0e94688c68fc5c2aec668696f6c3bb50",
       "builder_version": "0.1.0",
-      "git": "b94d1840ceb2-dirty"
+      "git": "0aec70405ce1"
     },
     "python": "3.12.13",
     "lock": {
@@ -293,6 +293,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "c6cf657c946dbbeeddf8d77e6fd7ed6fc5c7c9eb0d6c3481b73c6d29cea76fca"
+    "ast_sha256": "11ccbefefb3efa9a3c2e139c6be0bfa79befdb4c6775872df7beed14b36e0fbe"
   }
 }

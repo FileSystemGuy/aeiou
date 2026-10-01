@@ -86,6 +86,11 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, _params: &Params, model: &M
             continue;
         }
         let _ = i;
+        if let Some(crate::ast::Dataset::Files(f)) = loaded.ast.datasets.get(name) {
+            if let Some(fm) = &f.format {
+                bail!("dataset `{name}` is a `{}` container: its format class writes it (the Python writer, `aeiou-datagen`; builder/README.md), not `aeiou datagen`", fm.class);
+            }
+        }
         let rel = payload::dataset_root(&loaded.ast, name)?;
         let root = opts.root.join(&rel);
         if root.exists() {

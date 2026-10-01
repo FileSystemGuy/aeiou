@@ -13,7 +13,7 @@ use std::io;
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::path::Path;
 
-use crate::ast::{IoctlRequest, OpenFlag, Whence};
+use crate::ast::{Advice, IoctlRequest, OpenFlag, Whence};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendKind {
@@ -56,6 +56,8 @@ pub trait Backend: Send {
     fn write(&mut self, fd: BorrowedFd, buf: &[u8], offset: Option<i64>) -> io::Result<usize>;
     fn lseek(&mut self, fd: BorrowedFd, offset: i64, whence: Whence) -> io::Result<i64>;
     fn ioctl(&mut self, fd: BorrowedFd, request: IoctlRequest) -> io::Result<()>;
+    /// `posix_fadvise(2)` over `[offset, offset + len)` (`len` 0: to the end of the file).
+    fn fadvise(&mut self, fd: BorrowedFd, offset: i64, len: i64, advice: Advice) -> io::Result<()>;
     /// Returns `st_size`.
     fn fstat(&mut self, fd: BorrowedFd) -> io::Result<i64>;
     fn stat(&mut self, path: &Path) -> io::Result<i64>;
@@ -204,6 +206,20 @@ impl Backend for Sync {
             }
         };
         check_int(r)
+    }
+
+    fn fadvise(&mut self, fd: BorrowedFd, offset: i64, len: i64, advice: Advice) -> io::Result<()> {
+        let adv = match advice {
+            Advice::NORMAL => libc::POSIX_FADV_NORMAL,
+            Advice::RANDOM => libc::POSIX_FADV_RANDOM,
+            Advice::SEQUENTIAL => libc::POSIX_FADV_SEQUENTIAL,
+            Advice::WILLNEED => libc::POSIX_FADV_WILLNEED,
+            Advice::DONTNEED => libc::POSIX_FADV_DONTNEED,
+            Advice::NOREUSE => libc::POSIX_FADV_NOREUSE,
+        };
+        // returns the errno directly, not -1
+        let r = unsafe { libc::posix_fadvise(fd.as_raw_fd(), offset, len, adv) };
+        if r != 0 { Err(io::Error::from_raw_os_error(r)) } else { Ok(()) }
     }
 
     fn fstat(&mut self, fd: BorrowedFd) -> io::Result<i64> {

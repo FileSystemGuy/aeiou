@@ -19,6 +19,11 @@ from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle
 OPEN_FLAGS = ("RDONLY", "WRONLY", "RDWR", "CREAT", "TRUNC", "EXCL", "APPEND", "CLOEXEC",
               "DIRECTORY", "DIRECT", "SYNC", "DSYNC", "NOATIME", "NOFOLLOW")
 IOCTLS = ("TCGETS", "FIONREAD", "BLKGETSIZE64")
+ADVICE = ("NORMAL", "RANDOM", "SEQUENTIAL", "WILLNEED", "DONTNEED", "NOREUSE")
+LAYOUT_KEYS = ("unit", "file_header", "file_header_per_sample", "file_header_per_unit", "file_footer",
+               "file_footer_per_sample", "file_footer_per_unit", "file_align", "unit_header",
+               "unit_header_per_sample", "unit_footer", "unit_footer_per_sample", "unit_align", "columns", "writer")
+COLUMN_KEYS = ("header", "fixed", "weight", "row_header", "row_footer", "row_align", "align")
 WHENCE = ("SET", "CUR", "END")
 ERRNO = re.compile(r"^E[A-Z0-9]{1,15}$")
 RESERVED_PREFIX = ".aeiou"      # V13: the dataset manifest `.aeiou-dataset.json` and future sidecars
@@ -162,7 +167,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.1"
+    AST_VERSION = "0.2"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     def __init__(self, name: str, doc: str | None = None, *, lint: bool = True):
@@ -215,8 +220,8 @@ class Workload:
             raise BuildError(f"dataset {name}: `chunk` and a `{{k}}` field go together")
         if access is not None and access not in ("map", "stream"):
             raise BuildError(f"dataset {name}: access must be map or stream")
-        if format is not None and "class" not in format:
-            raise BuildError(f"dataset {name}: format needs a `class`")
+        if format is not None:
+            format = _format_spec(name, format, access or "map")
         _reserved(pattern, f"dataset {name}")
         self._claim_root(_root(pattern), name)
         spec = {"pattern": pattern, "count": lift(count, "count"), "size": distref(size),
@@ -337,6 +342,43 @@ class Workload:
         provenance block. Returns the path."""
         from .emit import write
         return write(self, path, provenance=provenance)
+
+
+def _format_spec(name: str, format, access: str) -> dict:
+    """The `format` entry of a dataset: a dict `{class, reader?, version?, layout?}` (a format
+    class object of `aeiou.formats` renders to one through `.spec(access)`)."""
+    spec = format.spec(access) if hasattr(format, "spec") else format
+    if not isinstance(spec, dict) or "class" not in spec:
+        raise BuildError(f"dataset {name}: format needs a `class`")
+    check_ident(spec["class"], "format class")
+    for k in spec:
+        if k not in ("class", "reader", "version", "layout"):
+            raise BuildError(f"dataset {name}: unknown format key {k!r}")
+    layout = spec.get("layout")
+    if layout is not None:
+        if not isinstance(layout, dict):
+            raise BuildError(f"dataset {name}: format layout must be a dict")
+        for k, v in layout.items():
+            if k not in LAYOUT_KEYS:
+                raise BuildError(f"dataset {name}: unknown layout key {k!r} (one of {LAYOUT_KEYS})")
+            if k == "columns":
+                if not isinstance(v, list) or not v:
+                    raise BuildError(f"dataset {name}: layout columns must be a non-empty list")
+                weights = []
+                for c in v:
+                    for ck in c:
+                        if ck not in COLUMN_KEYS:
+                            raise BuildError(f"dataset {name}: unknown column key {ck!r} (one of {COLUMN_KEYS})")
+                    w = c.get("weight", 0)
+                    if not isinstance(w, (int, float)) or w < 0:
+                        raise BuildError(f"dataset {name}: column weight must be a non-negative number")
+                    weights.append(w)
+                if abs(sum(weights) - 1) > 1e-9:
+                    raise BuildError(f"dataset {name}: column weights sum to {sum(weights)}, not 1")
+                layout["columns"] = [{ck: (float(cv) if ck == "weight" else lift(cv, f"column {ck}")) for ck, cv in c.items()} for c in v]
+            elif k != "writer":
+                layout[k] = lift(v, f"layout {k}")
+    return spec
 
 
 def _seed(seed, name):
@@ -774,6 +816,16 @@ class Cursor:
         if request not in IOCTLS:
             raise BuildError(f"ioctl request must be one of {IOCTLS}")
         self._op("ioctl", {"file": _handle(file).ast(), "request": request, "expect": _expect(expect)})
+
+    def fadvise(self, file, advice: str, *, offset=None, len=None, expect=None):
+        """`posix_fadvise(fd, offset, len, advice)` on an open file (`len` 0 or absent: to EOF).
+        WILLNEED starts readahead on NFS; pyarrow issues one before every coalesced read."""
+        if advice not in ADVICE:
+            raise BuildError(f"fadvise advice must be one of {ADVICE}")
+        self._op("fadvise", {"file": _handle(file).ast(), "advice": advice,
+                             "offset": None if offset is None else ast_of(lift(offset, "fadvise offset")),
+                             "len": None if len is None else ast_of(lift(len, "fadvise len")),
+                             "expect": _expect(expect)})
 
     def ftruncate(self, file, len, *, expect=None):
         self._read_only(file, "ftruncate")

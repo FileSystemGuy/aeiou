@@ -1,5 +1,5 @@
 {
-  "ast": "0.1",
+  "ast": "0.2",
   "name": "ckpt_write_dcp",
   "doc": "Every rank writes its shard file per checkpoint step; rank 0 writes .metadata through a temp file and rename.",
   "params": {
@@ -407,7 +407,7 @@
       "script": "ckpt_write_dcp.py",
       "sha256": "e1b563afcd15841ec886ce392a7c4f371ac5205cafeba54f3a98f438d5fc0dd6",
       "builder_version": "0.1.0",
-      "git": "9d4661f0eb2b-dirty"
+      "git": "0aec70405ce1"
     },
     "python": "3.12.13",
     "lock": {
@@ -415,6 +415,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "c8c7bf78006b49fec46d22f5c806d9056dc9a0412c14edc4c487ec2f3ab89f6f"
+    "ast_sha256": "d537f867988d9530e2511f3af34f35904099a793743cdfa748f59df6bba3ff13"
   }
 }

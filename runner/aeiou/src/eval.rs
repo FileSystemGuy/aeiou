@@ -203,6 +203,10 @@ pub enum HVal {
     Region { ds: usize, c: i64 },
     /// The single file of a regions dataset.
     RegionFile { ds: usize },
+    /// Unit `u` (row group, record batch, chunk) of file `file` of a files dataset.
+    Unit { ds: usize, file: i64, u: i64 },
+    /// Column chunk `c` of unit `u` of file `file`.
+    Column { ds: usize, file: i64, u: i64, c: i64 },
     /// Directory `d` of a files dataset's pattern.
     Dir { ds: usize, d: i64 },
     /// A namespace object with its formatted path and computed size (`None` = as_written).
@@ -414,6 +418,103 @@ pub enum DirScheme {
     Unsupported,
 }
 
+/// A container's layout, resolved from `format.layout` (`schema/README.md` §2): how a file's
+/// bytes are framed around its samples. A file is `file_header ‖ units ‖ file_footer`,
+/// aligned to `file_align`; a unit is `unit_header ‖ column chunks ‖ unit_footer`, aligned;
+/// a column chunk is `header ‖ rows`, aligned; a row is `row_header ‖ fixed ‖ its share of
+/// the sample ‖ row_footer`, aligned. Headers and footers may grow per sample or per unit.
+/// All zeros with one column of weight 1 is the packed layout: samples back to back, which
+/// is every dataset without a format class.
+#[derive(Debug, Clone)]
+pub struct Layout {
+    /// Samples per unit.
+    pub unit: i64,
+    pub file_header: i64,
+    pub file_header_per_sample: i64,
+    pub file_header_per_unit: i64,
+    pub file_footer: i64,
+    pub file_footer_per_sample: i64,
+    pub file_footer_per_unit: i64,
+    pub file_align: i64,
+    pub unit_header: i64,
+    pub unit_header_per_sample: i64,
+    pub unit_footer: i64,
+    pub unit_footer_per_sample: i64,
+    pub unit_align: i64,
+    pub columns: Vec<Column>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Column {
+    pub header: i64,
+    pub fixed: i64,
+    pub weight: f64,
+    pub row_header: i64,
+    pub row_footer: i64,
+    pub row_align: i64,
+    pub align: i64,
+    /// The last column with a positive weight: it takes the remainder of the sample's bytes.
+    pub last_weighted: bool,
+}
+
+pub fn align_up(x: i64, a: i64) -> i64 {
+    if a <= 1 {
+        x
+    } else {
+        (x + a - 1) / a * a
+    }
+}
+
+impl Layout {
+    /// Samples back to back: no headers, one column carrying each sample whole.
+    pub fn packed(unit: i64) -> Layout {
+        Layout {
+            unit: unit.max(1),
+            file_header: 0,
+            file_header_per_sample: 0,
+            file_header_per_unit: 0,
+            file_footer: 0,
+            file_footer_per_sample: 0,
+            file_footer_per_unit: 0,
+            file_align: 1,
+            unit_header: 0,
+            unit_header_per_sample: 0,
+            unit_footer: 0,
+            unit_footer_per_sample: 0,
+            unit_align: 1,
+            columns: vec![Column { header: 0, fixed: 0, weight: 1.0, row_header: 0, row_footer: 0, row_align: 1, align: 1, last_weighted: true }],
+        }
+    }
+
+    pub fn is_packed(&self) -> bool {
+        let c = &self.columns;
+        self.file_header == 0 && self.file_header_per_sample == 0 && self.file_header_per_unit == 0 && self.file_footer == 0
+            && self.file_footer_per_sample == 0 && self.file_footer_per_unit == 0 && self.file_align <= 1 && self.unit_header == 0
+            && self.unit_header_per_sample == 0 && self.unit_footer == 0 && self.unit_footer_per_sample == 0 && self.unit_align <= 1
+            && c.len() == 1 && c[0].header == 0 && c[0].fixed == 0 && c[0].row_header == 0 && c[0].row_footer == 0 && c[0].row_align <= 1 && c[0].align <= 1
+    }
+
+    /// The share of a `size`-byte sample that column `c` carries: `floor(size × weight)`,
+    /// the last weighted column taking the remainder so the shares sum to `size`.
+    pub fn part(&self, c: usize, size: i64) -> i64 {
+        let col = &self.columns[c];
+        if col.weight <= 0.0 {
+            return 0;
+        }
+        if col.last_weighted {
+            let others: i64 = self.columns.iter().enumerate().filter(|(i, k)| *i != c && k.weight > 0.0).map(|(_, k)| (size as f64 * k.weight).floor() as i64).sum();
+            return size - others;
+        }
+        (size as f64 * col.weight).floor() as i64
+    }
+
+    /// Bytes of column `c`'s row for a `size`-byte sample.
+    pub fn row_bytes(&self, c: usize, size: i64) -> i64 {
+        let col = &self.columns[c];
+        align_up(col.row_header + col.fixed + self.part(c, size) + col.row_footer, col.row_align)
+    }
+}
+
 pub enum DsMeta<'a> {
     Files {
         name: &'a str,
@@ -422,6 +523,7 @@ pub enum DsMeta<'a> {
         spf: i64,
         chunk: Option<i64>,
         access: Access,
+        layout: Layout,
         size: RDist<'a>,
         seed: u64,
         dirs: DirScheme,
@@ -461,12 +563,154 @@ impl<'a> DsMeta<'a> {
         }
     }
 
+    /// Files of a files dataset (its shards), one for a regions dataset.
+    pub fn files(&self) -> i64 {
+        match self {
+            DsMeta::Files { count, spf, .. } => (count + spf - 1) / spf,
+            DsMeta::Regions { .. } => 1,
+        }
+    }
+
+    pub fn access(&self) -> Access {
+        match self {
+            DsMeta::Files { access, .. } => *access,
+            DsMeta::Regions { .. } => Access::Map,
+        }
+    }
+
+    /// What `consume` and `pick` draw from: samples under `map`, files (shards) under `stream`.
+    pub fn draw_domain(&self) -> i64 {
+        if self.access() == Access::Stream {
+            self.files()
+        } else {
+            self.count()
+        }
+    }
+
     /// The rank order of ids for `zipf` and `hotset`, fixed by the dataset seed.
     pub fn rank_perm(&self) -> Perm {
         let key = match self {
             DsMeta::Files { rank_key, .. } | DsMeta::Regions { rank_key, .. } => *rank_key,
         };
-        Perm::new(self.count().max(1) as u64, key)
+        Perm::new(self.draw_domain().max(1) as u64, key)
+    }
+
+    pub fn layout(&self) -> Result<&Layout> {
+        match self {
+            DsMeta::Files { layout, .. } => Ok(layout),
+            DsMeta::Regions { .. } => bail!("`{}` is a regions dataset: no container layout", self.name()),
+        }
+    }
+
+    /// Units (row groups, record batches, chunks) in file `file`.
+    pub fn units_in_file(&self, file: i64) -> Result<i64> {
+        let n = self.samples_in_file(file)?;
+        let l = self.layout()?;
+        Ok((n + l.unit - 1) / l.unit)
+    }
+
+    /// The unit of sample `id`, within its file.
+    pub fn unit_of_sample(&self, id: i64) -> Result<i64> {
+        match self {
+            DsMeta::Files { spf, layout, .. } => {
+                let file = id / spf;
+                Ok((id - file * spf) / layout.unit)
+            }
+            DsMeta::Regions { .. } => Ok(0),
+        }
+    }
+
+    pub fn samples_in_unit(&self, file: i64, u: i64) -> Result<i64> {
+        let n = self.samples_in_file(file)?;
+        let l = self.layout()?;
+        if u < 0 || u * l.unit >= n {
+            bail!("unit {u} outside file {file} of `{}` ({} units)", self.name(), (n + l.unit - 1) / l.unit);
+        }
+        Ok((n - u * l.unit).min(l.unit))
+    }
+
+    /// Lengths of the column chunks of unit `u` of `file`, headers and alignment included.
+    pub fn col_lens(&self, file: i64, u: i64) -> Result<Vec<i64>> {
+        let l = self.layout()?;
+        let spf = match self {
+            DsMeta::Files { spf, .. } => *spf,
+            _ => 1,
+        };
+        let n = self.samples_in_unit(file, u)?;
+        let first = file * spf + u * l.unit;
+        let mut lens: Vec<i64> = l.columns.iter().map(|c| c.header).collect();
+        for i in 0..n {
+            let size = self.sample_size(first + i)?;
+            for (c, len) in lens.iter_mut().enumerate() {
+                *len += l.row_bytes(c, size);
+            }
+        }
+        for (c, len) in lens.iter_mut().enumerate() {
+            *len = align_up(*len, l.columns[c].align);
+        }
+        Ok(lens)
+    }
+
+    pub fn col_len(&self, file: i64, u: i64, c: i64) -> Result<i64> {
+        let lens = self.col_lens(file, u)?;
+        if c < 0 || c as usize >= lens.len() {
+            bail!("column {c} outside the {} columns of `{}`", lens.len(), self.name());
+        }
+        Ok(lens[c as usize])
+    }
+
+    /// Offset of column chunk `c` from the start of its unit.
+    pub fn col_offset_in_unit(&self, file: i64, u: i64, c: i64) -> Result<i64> {
+        let l = self.layout()?;
+        let lens = self.col_lens(file, u)?;
+        if c < 0 || c as usize >= lens.len() {
+            bail!("column {c} outside the {} columns of `{}`", lens.len(), self.name());
+        }
+        let n = self.samples_in_unit(file, u)?;
+        Ok(l.unit_header + l.unit_header_per_sample * n + lens[..c as usize].iter().sum::<i64>())
+    }
+
+    /// Bytes of unit `u` of `file`, framing and alignment included.
+    pub fn unit_len(&self, file: i64, u: i64) -> Result<i64> {
+        let l = self.layout()?;
+        let n = self.samples_in_unit(file, u)?;
+        let cols: i64 = self.col_lens(file, u)?.iter().sum();
+        Ok(align_up(l.unit_header + l.unit_header_per_sample * n + cols + l.unit_footer + l.unit_footer_per_sample * n, l.unit_align))
+    }
+
+    /// The lengths of every unit of `file`: O(samples in the file). The VM caches this per
+    /// open file (`GRAMMAR_OPTIONS.md` §6.3).
+    pub fn unit_lens(&self, file: i64) -> Result<Vec<i64>> {
+        (0..self.units_in_file(file)?).map(|u| self.unit_len(file, u)).collect()
+    }
+
+    /// Where the first unit starts: after the file header.
+    pub fn data_start(&self, file: i64) -> Result<i64> {
+        let l = self.layout()?;
+        let n = self.samples_in_file(file)?;
+        let units = self.units_in_file(file)?;
+        Ok(l.file_header + l.file_header_per_sample * n + l.file_header_per_unit * units)
+    }
+
+    /// Offset of unit `u` in `file` (O(u × unit) sample draws; the VM uses `unit_lens`).
+    pub fn unit_offset(&self, file: i64, u: i64) -> Result<i64> {
+        if u < 0 || u >= self.units_in_file(file)? {
+            bail!("unit {u} outside file {file} of `{}`", self.name());
+        }
+        let mut off = self.data_start(file)?;
+        for v in 0..u {
+            off += self.unit_len(file, v)?;
+        }
+        Ok(off)
+    }
+
+    /// Bytes of a file: the framed units, the footer, and the file alignment.
+    pub fn file_size_from_units(&self, file: i64, unit_lens: &[i64]) -> Result<i64> {
+        let l = self.layout()?;
+        let n = self.samples_in_file(file)?;
+        let units = unit_lens.len() as i64;
+        let data: i64 = unit_lens.iter().sum();
+        Ok(align_up(self.data_start(file)? + data + l.file_footer + l.file_footer_per_sample * n + l.file_footer_per_unit * units, l.file_align))
     }
 
     /// Bytes of sample `id` (files) or region `c` (regions, capped at the slot).
@@ -503,11 +747,16 @@ impl<'a> DsMeta<'a> {
         }
     }
 
-    /// Bytes of a container file: the sum of its samples' sizes.
+    /// Bytes of a container file: the sum of its samples' sizes under the packed layout, else
+    /// the framed layout of `format.layout`.
     pub fn file_size(&self, file: i64) -> Result<i64> {
         match self {
-            DsMeta::Files { spf, .. } => {
+            DsMeta::Files { spf, layout, .. } => {
                 let n = self.samples_in_file(file)?;
+                if !layout.is_packed() {
+                    let lens = self.unit_lens(file)?;
+                    return self.file_size_from_units(file, &lens);
+                }
                 if *spf == 1 {
                     return self.sample_size(file);
                 }
@@ -529,16 +778,31 @@ impl<'a> DsMeta<'a> {
         }
     }
 
-    /// Offset of sample `id` inside its container (prefix sum over the file's earlier samples).
+    /// Offset of sample `id`'s bytes inside its container: the prefix sum over the file's
+    /// earlier samples under the packed layout; under a framed layout, the start of its row's
+    /// payload in the one column (a sample split over several columns has no single offset:
+    /// address its unit or a column).
     pub fn sample_offset(&self, id: i64) -> Result<i64> {
         match self {
-            DsMeta::Files { spf, .. } => {
+            DsMeta::Files { spf, layout, .. } => {
                 let file = id / spf;
-                let mut off = 0i64;
-                for i in 0..(id - file * spf) {
-                    off += self.sample_size(file * spf + i)?;
+                if layout.is_packed() {
+                    let mut off = 0i64;
+                    for i in 0..(id - file * spf) {
+                        off += self.sample_size(file * spf + i)?;
+                    }
+                    return Ok(off);
                 }
-                Ok(off)
+                if layout.columns.len() != 1 {
+                    bail!("offset of a sample of `{}`: its bytes are split over {} columns; address the unit or a column", self.name(), layout.columns.len());
+                }
+                let u = self.unit_of_sample(id)?;
+                let first = file * spf + u * layout.unit;
+                let mut off = self.unit_offset(file, u)? + self.col_offset_in_unit(file, u, 0)? + layout.columns[0].header;
+                for s in first..id {
+                    off += layout.row_bytes(0, self.sample_size(s)?);
+                }
+                Ok(off + layout.columns[0].row_header)
             }
             DsMeta::Regions { slot, .. } => Ok(id * slot),
         }
@@ -624,14 +888,16 @@ impl<'a> DsMeta<'a> {
         }
     }
 
-    /// The permutation of sample positions for `epoch` (`consume`).
+    /// The permutation of positions for `epoch` (`consume`): over samples under `map`, over
+    /// files under `stream` (`GRAMMAR_OPTIONS.md` §6.2).
     pub fn consume_perm(&self, epoch: i64) -> Result<Perm> {
         match self {
-            DsMeta::Files { count, consume_base, .. } => {
-                if *count == 0 {
+            DsMeta::Files { consume_base, .. } => {
+                let n = self.draw_domain();
+                if n == 0 {
                     bail!("consume from empty dataset `{}`", self.name());
                 }
-                Ok(Perm::new(*count as u64, labeled_key(*consume_base, "epoch", &[epoch as u64])))
+                Ok(Perm::new(n as u64, labeled_key(*consume_base, "epoch", &[epoch as u64])))
             }
             DsMeta::Regions { .. } => bail!("`consume` on regions dataset `{}`: use `pick`", self.name()),
         }
@@ -737,9 +1003,60 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                 }
                 let size = vm.resolve_distref(&f.size).with_context(ctx)?;
                 let access = f.access.unwrap_or(Access::Map);
-                if access == Access::Stream {
-                    bail!("dataset `{name}`: `stream` access is not implemented yet (schema §7)");
-                }
+                let layout = match f.format.as_ref().and_then(|fm| fm.layout.as_ref()) {
+                    None => Layout::packed(spf),
+                    Some(l) => {
+                        let mut int = |e: &'a Option<Expr>, dflt: i64, what: &str| -> Result<i64> {
+                            let v = match e {
+                                Some(e) => vm.eval_int(e).with_context(|| format!("dataset `{name}`: layout {what}"))?,
+                                None => dflt,
+                            };
+                            if v < dflt.min(0) {
+                                bail!("dataset `{name}`: layout {what} is {v}");
+                            }
+                            Ok(v)
+                        };
+                        let unit = int(&l.unit, spf, "unit")?;
+                        if unit < 1 || unit > spf {
+                            bail!("dataset `{name}`: layout unit {unit} must be in [1, samples_per_file = {spf}]");
+                        }
+                        let mut columns = Vec::new();
+                        match &l.columns {
+                            None => columns.push(Column { header: 0, fixed: 0, weight: 1.0, row_header: 0, row_footer: 0, row_align: 1, align: 1, last_weighted: true }),
+                            Some(cols) => {
+                                let last = cols.iter().rposition(|c| c.weight > 0.0);
+                                for (i, c) in cols.iter().enumerate() {
+                                    columns.push(Column {
+                                        header: int(&c.header, 0, "column header")?,
+                                        fixed: int(&c.fixed, 0, "column fixed")?,
+                                        weight: c.weight,
+                                        row_header: int(&c.row_header, 0, "row_header")?,
+                                        row_footer: int(&c.row_footer, 0, "row_footer")?,
+                                        row_align: int(&c.row_align, 1, "row_align")?.max(1),
+                                        align: int(&c.align, 1, "column align")?.max(1),
+                                        last_weighted: last == Some(i),
+                                    });
+                                }
+                            }
+                        }
+                        Layout {
+                            unit,
+                            file_header: int(&l.file_header, 0, "file_header")?,
+                            file_header_per_sample: int(&l.file_header_per_sample, 0, "file_header_per_sample")?,
+                            file_header_per_unit: int(&l.file_header_per_unit, 0, "file_header_per_unit")?,
+                            file_footer: int(&l.file_footer, 0, "file_footer")?,
+                            file_footer_per_sample: int(&l.file_footer_per_sample, 0, "file_footer_per_sample")?,
+                            file_footer_per_unit: int(&l.file_footer_per_unit, 0, "file_footer_per_unit")?,
+                            file_align: int(&l.file_align, 1, "file_align")?.max(1),
+                            unit_header: int(&l.unit_header, 0, "unit_header")?,
+                            unit_header_per_sample: int(&l.unit_header_per_sample, 0, "unit_header_per_sample")?,
+                            unit_footer: int(&l.unit_footer, 0, "unit_footer")?,
+                            unit_footer_per_sample: int(&l.unit_footer_per_sample, 0, "unit_footer_per_sample")?,
+                            unit_align: int(&l.unit_align, 1, "unit_align")?.max(1),
+                            columns,
+                        }
+                    }
+                };
                 let (dirs, ndirs) = Model::dir_scheme(&pattern, count);
                 let name_hash = crate::rng::labeled_key(0, name, &[]);
                 DsMeta::Files {
@@ -749,6 +1066,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                     spf,
                     chunk,
                     access,
+                    layout,
                     size,
                     seed: f.seed,
                     dirs,

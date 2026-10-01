@@ -623,6 +623,10 @@ impl Runner {
                 };
                 self.be.ioctl(fd.as_fd(), req).map(|_| 0)
             }
+            OpKind::Fadvise => {
+                let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
+                self.be.fadvise(fd.as_fd(), op.offset, op.len, crate::ast::Advice::from_code(op.aux)).map(|_| 0)
+            }
             OpKind::Fstat => {
                 let fd = self.fds.get(op.path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))?;
                 self.be.fstat(fd.as_fd())

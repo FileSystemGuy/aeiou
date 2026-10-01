@@ -66,6 +66,25 @@ class Check:
             kind, body = next(iter(d.items()))
             self.exprlike(body["size"], ["datasets", dname, "size"], Scope(self), dist_ok=True)
             self.expr(body["count"], ["datasets", dname, "count"], Scope(self))
+            for k in ("samples_per_file", "chunk", "slot"):
+                if k in body:
+                    self.expr(body[k], ["datasets", dname, k], Scope(self))
+            layout = body.get("format", {}).get("layout")
+            if layout:
+                lp = ["datasets", dname, "format", "layout"]
+                for k, v in layout.items():
+                    if k == "columns":
+                        weights = [c.get("weight", 0) for c in v]
+                        if any(w < 0 for w in weights):
+                            self.err(lp + ["columns"], "negative weight")
+                        elif abs(sum(weights) - 1) > 1e-9:
+                            self.err(lp + ["columns"], f"weights sum to {sum(weights)}, not 1: the sample's bytes must land somewhere once")
+                        for i, c in enumerate(v):
+                            for ck, cv in c.items():
+                                if ck != "weight":
+                                    self.expr(cv, lp + ["columns", i, ck], Scope(self))
+                    elif k != "writer":
+                        self.expr(v, lp + [k], Scope(self))
             self.reserved(body.get("pattern") or body.get("file"), ["datasets", dname])
             root = dataset_root(d)
             if root in roots:
@@ -232,6 +251,8 @@ class Check:
             return a
         if k == "pick":
             return a["dataset"]
+        if k in ("unit", "column"):
+            return self.dataset_of(a["of"], scope)
         return None
 
     # ---- the as_written rule (ABSTRACTS.md §9.7) ----
@@ -310,7 +331,7 @@ class Check:
         elif k in ("len", "sum"):
             if a not in self.params:
                 self.err(p, f"unknown parameter array `{a}`")
-        elif k in ("size", "offset", "unit", "chunks"):
+        elif k in ("size", "offset", "unit_index", "units", "chunks"):
             self.handle(a, p, scope)
         elif k == "count":
             if a not in self.datasets:
@@ -412,6 +433,10 @@ class Check:
                 self.err(p, f"unknown dataset `{a['dataset']}`")
             if "dist" in a:
                 self.distref(a["dist"], p + ["dist"], scope)
+        elif k in ("unit", "column"):
+            self.handle(a["of"], p + ["of"], scope)
+            if "index" in a:
+                self.expr(a["index"], p + ["index"], scope)
 
 
 class Scope:

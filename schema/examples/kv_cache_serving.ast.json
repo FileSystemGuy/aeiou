@@ -1,5 +1,5 @@
 {
-  "ast": "0.1",
+  "ast": "0.2",
   "name": "kv_cache_serving",
   "doc": "One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one.",
   "params": {
@@ -725,7 +725,7 @@
       "script": "kv_cache_serving.py",
       "sha256": "61392db6acad4a711d6306cd2d1ca9172099e8dba73b0312ce7c1291d5c2bff1",
       "builder_version": "0.1.0",
-      "git": "b94d1840ceb2-dirty"
+      "git": "0aec70405ce1"
     },
     "python": "3.12.13",
     "lock": {
@@ -733,6 +733,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "f51d92850a0ecc8b84e6e55b10d08635771f6cb58417bb59135a2ea0329c48e8"
+    "ast_sha256": "5f7a6e6f00a25cce63a5f9259d43d4b4d394913cc47e113b976e9c147097c734"
   }
 }

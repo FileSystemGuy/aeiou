@@ -1,5 +1,5 @@
 {
-  "ast": "0.1",
+  "ast": "0.2",
   "name": "vdb_build_diskann",
   "doc": "Single builder: PQ sample, per-shard build, merge, disk layout write.",
   "params": {
@@ -577,7 +577,7 @@
       "script": "vdb_build_diskann.py",
       "sha256": "e5f3ead99fcb4ab5b61419f43de5fafb0a32fcfbdd0ff621b506d119cad67650",
       "builder_version": "0.1.0",
-      "git": "b94d1840ceb2-dirty"
+      "git": "0aec70405ce1"
     },
     "python": "3.12.13",
     "lock": {
@@ -585,6 +585,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "735adae78cad5736d946741a71e4ef6c7158cb92c8a5393a8b16ee97b489e5fe"
+    "ast_sha256": "237e014e17604b76223301929178b40d037fe17906e641078cd15e9f9dd0efee"
   }
 }

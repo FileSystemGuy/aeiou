@@ -1,4 +1,4 @@
-//! The AST contract (`schema/abstract-ast.schema.json`, v0.1) as Rust types.
+//! The AST contract (`schema/abstract-ast.schema.json`, v0.2) as Rust types.
 //!
 //! Every node, expression, distribution, and handle is externally tagged: a JSON object with
 //! exactly one key naming its kind. `deny_unknown_fields` on every struct and serde's enum
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.1";
+pub const AST_VERSION: &str = "0.2";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -124,7 +124,10 @@ pub enum ExprNode {
     Sum(String),
     Size(Handle),
     Offset(Handle),
-    Unit(Handle),
+    /// Index of the unit holding a sample, within its file.
+    UnitIndex(Handle),
+    /// Number of units in a file.
+    Units(Handle),
     Chunks(Handle),
     Count(String),
     Dirs(String),
@@ -213,6 +216,26 @@ pub enum Handle {
     Object { namespace: String, fields: BTreeMap<String, Expr> },
     Consume(String),
     Pick(Pick),
+    /// A container unit (row group, record batch, chunk) of a file: `index` of the file
+    /// `of` holds or is; without `index`, the unit holding the sample `of`.
+    Unit(UnitHandle),
+    /// Column chunk `index` of a unit.
+    Column(ColumnHandle),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnitHandle {
+    pub of: Box<Handle>,
+    #[serde(default)]
+    pub index: Option<Expr>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColumnHandle {
+    pub of: Box<Handle>,
+    pub index: Expr,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -282,7 +305,70 @@ pub struct Format {
     #[serde(default)]
     pub version: Option<String>,
     #[serde(default)]
-    pub layout: Option<serde_json::Value>,
+    pub layout: Option<LayoutSpec>,
+}
+
+/// The container layout a format class declares (`schema/README.md` §2, v0.2): how a file's
+/// bytes are framed around its samples. Every field is an expression over parameters; absent
+/// means 0 (alignments: 1). The resolved form and the formulas are `eval::Layout`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutSpec {
+    /// Samples per unit (default: `samples_per_file`, one unit per file).
+    #[serde(default)]
+    pub unit: Option<Expr>,
+    #[serde(default)]
+    pub file_header: Option<Expr>,
+    #[serde(default)]
+    pub file_header_per_sample: Option<Expr>,
+    #[serde(default)]
+    pub file_header_per_unit: Option<Expr>,
+    #[serde(default)]
+    pub file_footer: Option<Expr>,
+    #[serde(default)]
+    pub file_footer_per_sample: Option<Expr>,
+    #[serde(default)]
+    pub file_footer_per_unit: Option<Expr>,
+    #[serde(default)]
+    pub file_align: Option<Expr>,
+    #[serde(default)]
+    pub unit_header: Option<Expr>,
+    #[serde(default)]
+    pub unit_header_per_sample: Option<Expr>,
+    #[serde(default)]
+    pub unit_footer: Option<Expr>,
+    #[serde(default)]
+    pub unit_footer_per_sample: Option<Expr>,
+    #[serde(default)]
+    pub unit_align: Option<Expr>,
+    /// The column chunks of a unit (default: one column carrying every sample whole).
+    #[serde(default)]
+    pub columns: Option<Vec<ColumnSpec>>,
+    /// Class-specific writer settings: opaque to the runner, part of the resolved definition.
+    #[serde(default)]
+    pub writer: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColumnSpec {
+    #[serde(default)]
+    pub header: Option<Expr>,
+    /// Bytes per row that do not come from the sample (an int64 label, an offset entry).
+    #[serde(default)]
+    pub fixed: Option<Expr>,
+    /// Share of each sample's bytes this column carries; the last column with a positive
+    /// weight takes the remainder. Weights sum to 1.
+    #[serde(default)]
+    pub weight: f64,
+    #[serde(default)]
+    pub row_header: Option<Expr>,
+    #[serde(default)]
+    pub row_footer: Option<Expr>,
+    #[serde(default)]
+    pub row_align: Option<Expr>,
+    #[serde(default)]
+    pub align: Option<Expr>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -360,6 +446,30 @@ pub enum IoctlRequest {
     TCGETS, FIONREAD, BLKGETSIZE64,
 }
 
+/// `posix_fadvise(2)` advice, numbered as Linux numbers them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum Advice {
+    NORMAL = 0,
+    RANDOM = 1,
+    SEQUENTIAL = 2,
+    WILLNEED = 3,
+    DONTNEED = 4,
+    NOREUSE = 5,
+}
+
+impl Advice {
+    pub fn from_code(code: u64) -> Advice {
+        match code {
+            1 => Advice::RANDOM,
+            2 => Advice::SEQUENTIAL,
+            3 => Advice::WILLNEED,
+            4 => Advice::DONTNEED,
+            5 => Advice::NOREUSE,
+            _ => Advice::NORMAL,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum Repeat {
@@ -425,6 +535,7 @@ pub enum Node {
     Write { file: Handle, len: Expr, #[serde(default)] offset: Option<Expr>, #[serde(default)] repeat: Option<Expr>, #[serde(default)] expect: Expect },
     Lseek { file: Handle, offset: Expr, whence: Whence },
     Ioctl { file: Handle, request: IoctlRequest, #[serde(default)] expect: Expect },
+    Fadvise { file: Handle, advice: Advice, #[serde(default)] offset: Option<Expr>, #[serde(default)] len: Option<Expr>, #[serde(default)] expect: Expect },
     Fstat(FileOp),
     Stat(FileOp),
     Fsync(FileOp),
@@ -461,6 +572,7 @@ impl Node {
             Node::Write { .. } => "write",
             Node::Lseek { .. } => "lseek",
             Node::Ioctl { .. } => "ioctl",
+            Node::Fadvise { .. } => "fadvise",
             Node::Fstat(_) => "fstat",
             Node::Stat(_) => "stat",
             Node::Fsync(_) => "fsync",

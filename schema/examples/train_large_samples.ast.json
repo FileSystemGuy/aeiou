@@ -1,5 +1,5 @@
 {
-  "ast": "0.1",
+  "ast": "0.2",
   "name": "train_large_samples",
   "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; tail read, central directory, then members.",
   "params": {
@@ -488,7 +488,7 @@
       "script": "train_large_samples.py",
       "sha256": "d1638d5247a17ca58bb44a35652b23697e4d511a6448f295e3f5fa640abba801",
       "builder_version": "0.1.0",
-      "git": "b94d1840ceb2-dirty"
+      "git": "0aec70405ce1"
     },
     "python": "3.12.13",
     "lock": {
@@ -496,6 +496,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "780c751d077f20b513df6fcd1429ca9d295ae3a572896aa4fc7a960748dc9ae1"
+    "ast_sha256": "ee7689cba58eaa1541ed78bed3b5e058cc36a52a6bb62cd2be82e8538c53e9a4"
   }
 }

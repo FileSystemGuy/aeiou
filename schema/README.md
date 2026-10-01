@@ -1,6 +1,7 @@
 # The AST contract
 
-Version `0.1`, drafted 2026-09-30. This directory is layer 2 of the three-layer design in
+Version `0.2`, 2026-09-30 (`0.1` was drafted the same day; `0.2` adds the container layout,
+unit and column handles, `units` and `unit_index`, and the `fadvise` op, §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -48,7 +49,7 @@ python3 schema/check.py path/to/x.ast.json   # one file
 **Top level:** `ast` (version), `name`, `doc`, `params`, `datasets`, `namespaces`, `actors`,
 `provenance`.
 
-**Statements** (a `body` is an array of these). Thirteen control forms, seventeen ops.
+**Statements** (a `body` is an array of these). Thirteen control forms, eighteen ops.
 
 | Kind | Semantics |
 |---|---|
@@ -70,22 +71,28 @@ python3 schema/check.py path/to/x.ast.json   # one file
 | `write {file, len, offset, repeat, expect}` | As `read`, without `until_eof`. |
 | `lseek {file, offset, whence}` | `SET`, `CUR`, `END`. |
 | `ioctl {file, request, expect}` | `TCGETS` (Python's isatty check), `FIONREAD`, `BLKGETSIZE64`. |
+| `fadvise {file, advice, offset, len, expect}` | `posix_fadvise` on an open file: `NORMAL RANDOM SEQUENTIAL WILLNEED DONTNEED NOREUSE`; `len` 0 or absent means to EOF. `WILLNEED` starts readahead on NFS, and pyarrow issues one before every coalesced read (0.2). |
 | `ftruncate {file, len}`, `fallocate {file, offset, len}` | |
 | `mkdir {dir, mode, expect}`, `rmdir {dir}`, `rename {from, to}` | |
 | `readdir {dir, repeat: until_end}` | `getdents64` until exhausted. |
 
 **Expressions** (scalar, positional, integer arithmetic with floor `div`):
 literals (`null` is `none`); `param`, `index`, `ref`, `at {ref, index}`, `actor: id|count`,
-`draw dist`; `elem {array, index}`, `len`, `sum` over parameter arrays; `size`, `offset`, `unit`,
-`chunks` of a handle, `count` and `dirs` of a dataset; `add sub mul div mod ceil_div min max
+`draw dist`; `elem {array, index}`, `len`, `sum` over parameter arrays; `size`, `offset`,
+`unit_index`, `units`, `chunks` of a handle (`size` and `offset` of a unit or column handle are
+that extent's length and start, framing included), `count` and `dirs` of a dataset; `add sub mul div mod ceil_div min max
 neg`; `eq ne lt le gt ge and or not`; `cond {if, then, else}` whose arms may be expressions,
 distributions, or handles (this is how a distribution or a phase name is selected by index).
 
 **Handles:** `ref` (a binding); `file {dataset, id}` (a dataset file by id; a `regions` dataset's single file is `id: 0`) or
 `file {of, chunk}` (the container file, or chunk object `k`, of a sample handle); `dir {dataset,
 id}`; `object {namespace, fields}`; `consume dataset` (next sample without replacement);
-`pick {dataset, dist}` (a sample with replacement, uniform or by a distribution over ids). A
-sample handle used where a file is expected means its container file.
+`pick {dataset, dist}` (a sample with replacement, uniform or by a distribution over ids);
+`unit {of, index}` (unit `index` of the file `of` holds or is; without `index`, the unit
+holding the sample `of`); `column {of, index}` (column chunk `index` of a unit). A sample
+handle used where a file is expected means its container file. Under `stream` access,
+`consume` and `pick` return **file** handles (the shuffle runs over shards, `GRAMMAR_OPTIONS.md`
+§6.2) and the positions, epochs, and `drop_last` are counted in files.
 
 **Distributions:** `const`, `uniform {lo, hi}` (integer, `[lo, hi)`), `uniform64`, `normal
 {mean, sd, min, max}`, `lognormal {median, sigma, min, max}`, `empirical {values, weights}`,
@@ -97,6 +104,23 @@ says `distref`, a `param` or a `cond` that evaluates to a distribution is also a
 seed, never from `--seed`. Patterns use `{field[:format]}` with fields `id` (and `k` for chunk
 objects) and the forms `{id:09}`, `{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; a
 dataset's directories are the distinct prefixes up to the last `/`, enumerated in id order.
+
+**Container layout** (`format {class, reader, version, layout}`, 0.2). Without a format class
+the layout is *packed*: a file is its samples back to back, `offset(s)` the prefix sum. A
+format class declares `layout`, and every offset the runner computes follows from it, so the
+runner stays format-ignorant: a file is `file_header ‖ units ‖ file_footer`, aligned to
+`file_align`; a unit (row group, record batch, chunk; `unit` samples each, default
+`samples_per_file`) is `unit_header ‖ column chunks ‖ unit_footer`, aligned to `unit_align`; a
+column chunk is `header ‖ rows`, aligned to `align`; a row is `row_header ‖ fixed ‖ its share
+of the sample ‖ row_footer`, aligned to `row_align`. Headers and footers may grow
+`per_sample` and `per_unit`. A column's `weight` is the share of each sample's bytes it
+carries (`floor(size × weight)`, the last positive weight taking the remainder; weights sum
+to 1); `fixed` is bytes per row that are not sample bytes (an int64 label, an offset entry).
+Every field is an expression over parameters, so the layout is part of the resolved dataset
+definition the manifest compares; `writer` is opaque class-specific writer settings, likewise
+compared. `offset(s)` of a sample is the start of its payload in the one column; a sample
+split over several columns has no single offset (address its unit or a column). The
+geometry a format class declares is the geometry its writer produces, checked at datagen.
 
 **Namespaces:** `{pattern, fields, size, seed}` for objects the run creates. `size` is an
 expression or `as_written` (§4, rule V4).
@@ -287,8 +311,17 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
 ## 7. Deferred (each is a version bump)
 
 - The `replay` trace file format.
-- Runner-facing container layout fields beyond `samples_per_file` (per-unit headers and
-  footers, sample overhead), which the format classes will need for `map` access over HDF5,
-  Arrow, and MDS.
-- A records-per-batch knob on `loader` for `stream` access (`GRAMMAR_OPTIONS.md` §6.2).
+- ~~Runner-facing container layout fields beyond `samples_per_file`~~ (0.2, §2 *Container layout*).
+- ~~A records-per-batch knob on `loader` for `stream` access~~ (not needed: under `stream` the
+  loader's unit of work is the shard, and a step loop takes one every `records_per_shard /
+  batch` steps; 0.2).
 - Wall-clock-bounded phases (the opt-in that turns off the fingerprint guarantee).
+
+## 9. Version history
+
+- **0.1** (2026-09-30): the contract as drafted (§1–§7).
+- **0.2** (2026-09-30): `format.layout` (the container layout, §2); handles `unit {of, index}`
+  and `column {of, index}`; expressions `units` and `unit_index` (the latter renamed from
+  `unit`); the `fadvise` op; `stream` access implemented as the shuffle over files. Every
+  committed AST was regenerated; no fingerprint changed (the fingerprint hashes ops, not the
+  document). Reasoning in `DESIGN_REVIEW.md` §3.28.

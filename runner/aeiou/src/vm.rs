@@ -23,6 +23,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::ast::Access;
 use crate::ast::*;
 use crate::eval::*;
 use crate::pattern::FieldValue;
@@ -50,6 +51,7 @@ pub enum OpKind {
     Rmdir,
     Rename,
     Readdir,
+    Fadvise,
 }
 
 impl OpKind {
@@ -72,13 +74,14 @@ impl OpKind {
             OpKind::Rmdir => "rmdir",
             OpKind::Rename => "rename",
             OpKind::Readdir => "readdir",
+            OpKind::Fadvise => "fadvise",
         }
     }
 
-    pub const ALL: [OpKind; 17] = [
+    pub const ALL: [OpKind; 18] = [
         OpKind::Open, OpKind::Close, OpKind::Read, OpKind::Write, OpKind::Lseek, OpKind::Ioctl, OpKind::Fstat,
         OpKind::Stat, OpKind::Fsync, OpKind::Fdatasync, OpKind::Unlink, OpKind::Ftruncate, OpKind::Fallocate,
-        OpKind::Mkdir, OpKind::Rmdir, OpKind::Rename, OpKind::Readdir,
+        OpKind::Mkdir, OpKind::Rmdir, OpKind::Rename, OpKind::Readdir, OpKind::Fadvise,
     ];
 }
 
@@ -306,6 +309,9 @@ pub struct Vm<'m, 'a, S: Sink<'m, 'a>> {
     indices_buf: Vec<i64>,
     /// The sub-actor body of a resumed VM.
     sub_body: Option<&'a [Node]>,
+    /// Unit lengths of recently addressed container files (`GRAMMAR_OPTIONS.md` §6.3: the
+    /// layout is computed once per open file and held). Bounded; never shared.
+    unit_lens: HashMap<(usize, i64), Arc<Vec<i64>>>,
 }
 
 impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
@@ -325,6 +331,7 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
             written: HashMap::new(),
             phases: Vec::new(),
             indices_buf: Vec::new(),
+            unit_lens: HashMap::new(),
             sub_body: None,
         }
     }
@@ -351,6 +358,7 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
             written: snap.written,
             phases: snap.phases,
             indices_buf: Vec::new(),
+            unit_lens: HashMap::new(),
             sub_body: Some(snap.body),
         }
     }
@@ -499,15 +507,22 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                 let hv = self.handle(h)?;
                 Value::Int(self.offset_of(&hv)?)
             }
-            ExprNode::Unit(h) => {
+            ExprNode::UnitIndex(h) => {
                 let hv = self.handle(h)?;
                 match hv {
-                    HVal::Sample { ds, id } => match &self.model.datasets[ds] {
-                        DsMeta::Files { spf, .. } => Value::Int(id % spf),
-                        _ => return other("unit: not a files sample"),
-                    },
-                    _ => return other("unit: not a sample handle"),
+                    HVal::Sample { ds, id } => Value::Int(self.model.datasets[ds].unit_of_sample(id)?),
+                    HVal::Unit { u, .. } | HVal::Column { u, .. } => Value::Int(u),
+                    _ => return other("unit_index: not a sample, unit, or column handle"),
                 }
+            }
+            ExprNode::Units(h) => {
+                let hv = self.handle(h)?;
+                let (ds, file) = match hv {
+                    HVal::Sample { ds, id } => (ds, self.container_of(ds, id)),
+                    HVal::File { ds, file } | HVal::Unit { ds, file, .. } | HVal::Column { ds, file, .. } => (ds, file),
+                    _ => return other("units: not a file, sample, or unit handle"),
+                };
+                Value::Int(self.model.datasets[ds].units_in_file(file)?)
             }
             ExprNode::Chunks(h) => {
                 let hv = self.handle(h)?;
@@ -814,7 +829,7 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                         HVal::Sample { ds, id } => (ds, self.container_of(ds, id)),
                         HVal::File { ds, file } => (ds, file),
                         HVal::Region { ds, .. } | HVal::RegionFile { ds } => (ds, 0),
-                        HVal::Chunk { ds, file, .. } => (ds, file),
+                        HVal::Chunk { ds, file, .. } | HVal::Unit { ds, file, .. } | HVal::Column { ds, file, .. } => (ds, file),
                         other_h => return other(format!("file {{of}}: {other_h:?} has no container")),
                     };
                     match &f.chunk {
@@ -862,6 +877,29 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                 };
                 HVal::Object { ns, path: Arc::from(path), size }
             }
+            Handle::Unit(uh) => {
+                let inner = self.handle(&uh.of)?;
+                let index = match &uh.index {
+                    Some(e) => Some(self.expr(e)?.as_int()?),
+                    None => None,
+                };
+                match (inner, index) {
+                    (HVal::Sample { ds, id }, None) => HVal::Unit { ds, file: self.container_of(ds, id), u: self.model.datasets[ds].unit_of_sample(id)? },
+                    (HVal::Sample { ds, id }, Some(u)) => HVal::Unit { ds, file: self.container_of(ds, id), u },
+                    (HVal::File { ds, file }, Some(u)) => HVal::Unit { ds, file, u },
+                    (HVal::File { .. }, None) => return other("unit {of: file} needs an index"),
+                    (h, _) => return other(format!("unit {{of}}: {h:?} is not a sample or file handle")),
+                }
+            }
+            Handle::Column(ch) => {
+                let inner = self.handle(&ch.of)?;
+                let c = self.expr(&ch.index)?.as_int()?;
+                match inner {
+                    HVal::Unit { ds, file, u } => HVal::Column { ds, file, u, c },
+                    HVal::Sample { ds, id } => HVal::Column { ds, file: self.container_of(ds, id), u: self.model.datasets[ds].unit_of_sample(id)?, c },
+                    h => return other(format!("column {{of}}: {h:?} is not a unit or sample handle")),
+                }
+            }
             Handle::Consume(dataset) => {
                 let ds = self.model.dataset(dataset)?;
                 self.consume(ds)?
@@ -869,7 +907,7 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
             Handle::Pick(pick) => {
                 let ds = self.model.dataset(&pick.dataset)?;
                 let meta = &self.model.datasets[ds];
-                let n = meta.count();
+                let n = meta.draw_domain();
                 if n == 0 {
                     return other(format!("pick from empty dataset `{}`", pick.dataset));
                 }
@@ -886,6 +924,7 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                     return other(format!("pick: id {id} outside dataset `{}` of {n}", pick.dataset));
                 }
                 match meta {
+                    DsMeta::Files { access: Access::Stream, .. } => HVal::File { ds, file: id },
                     DsMeta::Files { .. } => HVal::Sample { ds, id },
                     DsMeta::Regions { .. } => HVal::Region { ds, c: id },
                 }
@@ -911,7 +950,7 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
             batch = batch.checked_mul(self.frames[f].iters).ok_or_else(|| anyhow!("batch size overflow"))?;
         }
         let meta = &self.model.datasets[ds];
-        let n = meta.count();
+        let n = meta.draw_domain();
         let g = self.actor_count;
         let per_epoch = g.checked_mul(batch).ok_or_else(|| anyhow!("gpus × batch overflow"))?;
         let epoch_len = n / per_epoch;
@@ -921,7 +960,21 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
         let epoch = b / epoch_len;
         let pos = self.actor + g * ((b % epoch_len) * batch + j);
         let perm = meta.consume_perm(epoch)?;
-        Ok(HVal::Sample { ds, id: perm.apply(pos as u64) as i64 })
+        let id = perm.apply(pos as u64) as i64;
+        Ok(if meta.access() == Access::Stream { HVal::File { ds, file: id } } else { HVal::Sample { ds, id } })
+    }
+
+    /// The unit lengths of a container file, computed once and held (bounded cache).
+    fn unit_lens(&mut self, ds: usize, file: i64) -> ER<Arc<Vec<i64>>> {
+        if let Some(v) = self.unit_lens.get(&(ds, file)) {
+            return Ok(v.clone());
+        }
+        let v = Arc::new(self.model.datasets[ds].unit_lens(file)?);
+        if self.unit_lens.len() >= 64 {
+            self.unit_lens.clear();
+        }
+        self.unit_lens.insert((ds, file), v.clone());
+        Ok(v)
     }
 
     fn size_of(&mut self, h: &HVal) -> ER<i64> {
@@ -932,6 +985,14 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
             HVal::Chunk { ds: d, file, k } => ds[*d].chunk_size(*file, *k)?,
             HVal::Region { ds: d, c } => ds[*d].sample_size(*c)?,
             HVal::RegionFile { ds: d } => ds[*d].file_size(0)?,
+            HVal::Unit { ds: d, file, u } => {
+                let lens = self.unit_lens(*d, *file)?;
+                match lens.get(*u as usize) {
+                    Some(n) if *u >= 0 => *n,
+                    _ => return other(format!("unit {u} outside file {file} ({} units)", lens.len())),
+                }
+            }
+            HVal::Column { ds: d, file, u, c } => ds[*d].col_len(*file, *u, *c)?,
             HVal::Dir { .. } => return other("size of a directory"),
             HVal::Object { size: Some(s), .. } => *s,
             HVal::Object { path, .. } => match self.written.get(path) {
@@ -946,8 +1007,18 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
             HVal::Sample { ds, id } => self.model.datasets[*ds].sample_offset(*id)?,
             HVal::Region { ds, c } => self.model.datasets[*ds].sample_offset(*c)?,
             HVal::Chunk { .. } | HVal::File { .. } | HVal::RegionFile { .. } => 0,
+            HVal::Unit { ds, file, u } => self.unit_offset(*ds, *file, *u)?,
+            HVal::Column { ds, file, u, c } => self.unit_offset(*ds, *file, *u)? + self.model.datasets[*ds].col_offset_in_unit(*file, *u, *c)?,
             _ => return other(format!("offset of {h:?}")),
         })
+    }
+
+    fn unit_offset(&mut self, ds: usize, file: i64, u: i64) -> ER<i64> {
+        let lens = self.unit_lens(ds, file)?;
+        if u < 0 || u as usize >= lens.len() {
+            return other(format!("unit {u} outside file {file} ({} units)", lens.len()));
+        }
+        Ok(self.model.datasets[ds].data_start(file)? + lens[..u as usize].iter().sum::<i64>())
     }
 
     fn target(&mut self, h: &'a Handle) -> ER<Target> {
@@ -958,7 +1029,9 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                 let file = self.container_of(*d, *id);
                 Target { path: ds[*d].file_path(file, None)?, size: Some(ds[*d].file_size(file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None }
             }
-            HVal::File { ds: d, file } => Target { path: ds[*d].file_path(*file, None)?, size: Some(ds[*d].file_size(*file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None },
+            HVal::File { ds: d, file } | HVal::Unit { ds: d, file, .. } | HVal::Column { ds: d, file, .. } => {
+                Target { path: ds[*d].file_path(*file, None)?, size: Some(ds[*d].file_size(*file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None }
+            }
             HVal::Chunk { ds: d, file, k } => Target { path: ds[*d].file_path(*file, Some(*k))?, size: Some(ds[*d].chunk_size(*file, *k)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None },
             HVal::Region { ds: d, .. } | HVal::RegionFile { ds: d } => Target { path: ds[*d].file_path(0, None)?, size: Some(ds[*d].file_size(0)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None },
             HVal::Dir { ds: d, d: dir } => Target { path: ds[*d].dir_path(*dir)?, size: None, as_written: false, seed: ds[*d].dataset_seed(), entries: ds[*d].dir_entries(*dir) },
@@ -1256,6 +1329,22 @@ impl<'m, 'a: 'm, S: Sink<'m, 'a>> Vm<'m, 'a, S> {
                 let t = self.target(file)?;
                 self.opened(&t.path, "ioctl")?;
                 self.emit(OpKind::Ioctl, &t, None, 0, 0, 0, *request as u64, expect, false)?;
+            }
+            Node::Fadvise { file, advice, offset, len, expect } => {
+                let t = self.target(file)?;
+                let off = match offset {
+                    Some(e) => self.expr(e)?.as_int()?,
+                    None => 0,
+                };
+                let len = match len {
+                    Some(e) => self.expr(e)?.as_int()?,
+                    None => 0,
+                };
+                if off < 0 || len < 0 {
+                    return other(format!("fadvise: offset {off}, len {len}"));
+                }
+                self.opened(&t.path, "fadvise")?;
+                self.emit(OpKind::Fadvise, &t, None, off, len, 0, *advice as u64, expect, false)?;
             }
             Node::Fstat(f) | Node::Fsync(f) | Node::Fdatasync(f) => {
                 let t = self.target(&f.file)?;

@@ -160,6 +160,47 @@ impl<'a> Checker<'a> {
                         if !is_ident(&fm.class) {
                             self.err(&p(&path, &["format", "class"]), "not an identifier");
                         }
+                        if let Some(l) = &fm.layout {
+                            let lp = p(&path, &["format", "layout"]);
+                            for (k, e) in [
+                                ("unit", &l.unit),
+                                ("file_header", &l.file_header),
+                                ("file_header_per_sample", &l.file_header_per_sample),
+                                ("file_header_per_unit", &l.file_header_per_unit),
+                                ("file_footer", &l.file_footer),
+                                ("file_footer_per_sample", &l.file_footer_per_sample),
+                                ("file_footer_per_unit", &l.file_footer_per_unit),
+                                ("file_align", &l.file_align),
+                                ("unit_header", &l.unit_header),
+                                ("unit_header_per_sample", &l.unit_header_per_sample),
+                                ("unit_footer", &l.unit_footer),
+                                ("unit_footer_per_sample", &l.unit_footer_per_sample),
+                                ("unit_align", &l.unit_align),
+                            ] {
+                                if let Some(e) = e {
+                                    self.expr(e, &p(&lp, &[k]), &scope, &mut st, None);
+                                }
+                            }
+                            if let Some(cols) = &l.columns {
+                                if cols.is_empty() {
+                                    self.err(&p(&lp, &["columns"]), "at least one column");
+                                }
+                                let total: f64 = cols.iter().map(|c| c.weight).sum();
+                                if cols.iter().any(|c| c.weight < 0.0) {
+                                    self.err(&p(&lp, &["columns"]), "negative weight");
+                                } else if !cols.is_empty() && (total - 1.0).abs() > 1e-9 {
+                                    self.err(&p(&lp, &["columns"]), format!("weights sum to {total}, not 1: the sample's bytes must land somewhere once"));
+                                }
+                                for (i, c) in cols.iter().enumerate() {
+                                    let cp = p(&lp, &["columns", &i.to_string()]);
+                                    for (k, e) in [("header", &c.header), ("fixed", &c.fixed), ("row_header", &c.row_header), ("row_footer", &c.row_footer), ("row_align", &c.row_align), ("align", &c.align)] {
+                                        if let Some(e) = e {
+                                            self.expr(e, &p(&cp, &[k]), &scope, &mut st, None);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     if f.pattern.is_empty() {
                         self.err(&p(&path, &["pattern"]), "empty pattern");
@@ -439,6 +480,16 @@ impl<'a> Checker<'a> {
                 handles.push(("file", file));
                 expect = Some(ex);
             }
+            Node::Fadvise { file, offset, len, expect: ex, .. } => {
+                handles.push(("file", file));
+                if let Some(e) = offset {
+                    exprs.push(("offset", e));
+                }
+                if let Some(e) = len {
+                    exprs.push(("len", e));
+                }
+                expect = Some(ex);
+            }
             Node::Ftruncate { file, len, expect: ex } => {
                 handles.push(("file", file));
                 exprs.push(("len", len));
@@ -548,6 +599,8 @@ impl<'a> Checker<'a> {
             Handle::Dir { dataset, .. } => Some(dataset.as_str()),
             Handle::Consume(ds) => Some(ds.as_str()),
             Handle::Pick(pk) => Some(pk.dataset.as_str()),
+            Handle::Unit(u) => self.dataset_of(&u.of, scope),
+            Handle::Column(c) => self.dataset_of(&c.of, scope),
             Handle::Object { .. } => None,
         }
     }
@@ -703,7 +756,7 @@ impl<'a> Checker<'a> {
                     self.err(path, format!("unknown parameter array `{name}`"));
                 }
             }
-            ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::Unit(h) | ExprNode::Chunks(h) => self.handle(h, path, scope, st),
+            ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => self.handle(h, path, scope, st),
             ExprNode::Count(name) => {
                 if !self.ast.datasets.contains_key(name) {
                     self.err(path, format!("unknown dataset `{name}`"));
@@ -864,6 +917,16 @@ impl<'a> Checker<'a> {
                 if let Some(d) = &pk.dist {
                     self.distref(d, &p(path, &["dist"]), scope, st);
                 }
+            }
+            Handle::Unit(u) => {
+                self.handle(&u.of, &p(path, &["of"]), scope, st);
+                if let Some(e) = &u.index {
+                    self.expr(e, &p(path, &["index"]), scope, st, None);
+                }
+            }
+            Handle::Column(c) => {
+                self.handle(&c.of, &p(path, &["of"]), scope, st);
+                self.expr(&c.index, &p(path, &["index"]), scope, st, None);
             }
         }
     }

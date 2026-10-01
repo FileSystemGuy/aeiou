@@ -1,5 +1,5 @@
 {
-  "ast": "0.1",
+  "ast": "0.2",
   "name": "vdb_search_ivf",
   "doc": "Per query, nprobe concurrent reads of whole inverted lists chosen by Zipf popularity.",
   "params": {
@@ -158,7 +158,7 @@
       "script": "vdb_search_ivf.py",
       "sha256": "e484d3d6730775c0ae4048c5f45c7d3450bb948d5b811f205447c706a65f0724",
       "builder_version": "0.1.0",
-      "git": "b94d1840ceb2-dirty"
+      "git": "0aec70405ce1"
     },
     "python": "3.12.13",
     "lock": {
@@ -166,6 +166,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "eeb984a9185749a61e2685b5d66a7a0b5f99617fe0ea35e0c1090a20df6ba222"
+    "ast_sha256": "07449f43afaa49f835a3f1ee14c911bb7d1aedcb7b7280b972ba3e0eeac29510"
   }
 }

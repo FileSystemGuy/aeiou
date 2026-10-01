@@ -185,8 +185,24 @@ class Handle(Node):
         return Meta("offset", self)
 
     @property
-    def unit(self) -> Expr:
-        return Meta("unit", self)
+    def unit_index(self) -> Expr:
+        """Index, within its file, of the unit (row group, record batch, chunk) holding this
+        sample; a unit handle's own index."""
+        return Meta("unit_index", self)
+
+    @property
+    def units(self) -> Expr:
+        """Number of units in this file (of a file, sample, or unit handle)."""
+        return Meta("units", self)
+
+    def unit(self, index=None) -> "Handle":
+        """Unit `index` of this file; with no index, the unit holding this sample. Its
+        `.offset` and `.size` are the unit's extent in the file, framing included."""
+        return UnitHandle(self, index)
+
+    def column(self, index) -> "Handle":
+        """Column chunk `index` of this unit (or of the unit holding this sample)."""
+        return ColumnHandle(self, index)
 
     @property
     def chunks(self) -> Expr:
@@ -321,7 +337,7 @@ class Reduce(Expr):
 
 
 class Meta(Expr):
-    """size / offset / unit / chunks of a handle."""
+    """size / offset / unit_index / units / chunks of a handle."""
     __slots__ = ("kind", "handle")
 
     def __init__(self, kind: str, handle: Handle):
@@ -392,6 +408,33 @@ class FileOf(Handle):
         if self.k is not None:
             a["chunk"] = ast_of(self.k)
         return {"file": a}
+
+
+class UnitHandle(Handle):
+    __slots__ = ("of", "index")
+
+    def __init__(self, of: Handle, index):
+        if not isinstance(of, Handle):
+            raise BuildError(f"unit() needs a handle, got {of!r}")
+        self.of, self.index = of, None if index is None else lift(index, "unit index")
+
+    def ast(self):
+        a = {"of": self.of.ast()}
+        if self.index is not None:
+            a["index"] = ast_of(self.index)
+        return {"unit": a}
+
+
+class ColumnHandle(Handle):
+    __slots__ = ("of", "index")
+
+    def __init__(self, of: Handle, index):
+        if not isinstance(of, Handle):
+            raise BuildError(f"column() needs a handle, got {of!r}")
+        self.of, self.index = of, lift(index, "column index")
+
+    def ast(self):
+        return {"column": {"of": self.of.ast(), "index": ast_of(self.index)}}
 
 
 class DirHandle(Handle):

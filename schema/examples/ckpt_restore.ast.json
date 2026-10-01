@@ -1,5 +1,5 @@
 {
-  "ast": "0.1",
+  "ast": "0.2",
   "name": "ckpt_restore",
   "doc": "DCP load: every rank reads .metadata, then the items of its shard file (fan-in `replicas`).",
   "params": {
@@ -314,7 +314,7 @@
       "script": "ckpt_restore.py",
       "sha256": "0b9d66e178185a5df53dea0c812555dd4026a682491250eb0260a735438bf795",
       "builder_version": "0.1.0",
-      "git": "9d4661f0eb2b-dirty"
+      "git": "0aec70405ce1"
     },
     "python": "3.12.13",
     "lock": {
@@ -322,6 +322,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "d9724b93648e579a3c9d20a8b912f48f78e4a742f63ab1c0ce7bea16fe31c3a3"
+    "ast_sha256": "7977f576a042df867623e6009b544040f538980f4e2b8f1779cdba8c9892e66f"
   }
 }

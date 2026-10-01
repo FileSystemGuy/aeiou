@@ -1,5 +1,5 @@
 {
-  "ast": "0.1",
+  "ast": "0.2",
   "name": "model_load",
   "doc": "Every process reads every safetensors shard, touching its tensor-parallel slice of each tensor (fan-in G).",
   "params": {
@@ -454,7 +454,7 @@
       "script": "model_load.py",
       "sha256": "b7a73d834984a3db80c348c497894f24c1c8d78e43e5693f8783e0efd38fd898",
       "builder_version": "0.1.0",
-      "git": "fb647fd5f803-dirty"
+      "git": "0aec70405ce1"
     },
     "python": "3.12.13",
     "lock": {
@@ -462,6 +462,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "5fa90c2b77e53c07b11c93b37dc29f3544cbe3e3974b063a25222c2b35fcaa5f"
+    "ast_sha256": "f62c2390df4ef53ca5f8e4fcf5ce185e941b6e394b626cf00c88b4292eb1f1b2"
   }
 }

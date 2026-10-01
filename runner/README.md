@@ -32,9 +32,12 @@ cargo test --release
 
 Not yet: the asynchronous backends (`io_uring`,
 `libaio`, `mmap`, …) and their counters, `mountstats`, `RLIMIT` startup checks, a JSON
-report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), `stream` access, the `replay` node,
-container layouts beyond `samples_per_file`, and datagen for format classes (that is the
-Python side, `PROJECT_BRIEF.md` §6 item 8).
+report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), and the `replay` node. ~~`stream`
+access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
+computes every offset of a framed container from `format.layout`, `consume` under `stream`
+shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
+classes is the Python side (`aeiou-datagen`, `builder/README.md`); `aeiou datagen` refuses a
+dataset that has a format class.
 
 ```
 aeiou/src/
@@ -54,7 +57,8 @@ aeiou/src/
   payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
   datagen.rs   `aeiou datagen`
   main.rs      the CLI
-aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests
+aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests, parameter files
+aeiou/tests/layout.rs   contract 0.2: framed layouts by hand, unit/column handles, stream consume, fadvise
 aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refusals, loader order
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
 aeiou-launch            the ssh loop: one rank per host
@@ -95,6 +99,13 @@ each is a recorded decision and the golden tests pin them.
   duration; draws inside use the shifted index in their key, so `conv @ (r − d)` is the value
   request `r − d` computed. Below the loop's `from`, the enclosing `cond` expression takes
   its other arm (the "fresh draw" of `ABSTRACTS.md` §9.5).
+- **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
+  `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
+  integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which
+  Python's writer computes identically. The unit lengths of a file are computed once per
+  file and held in a bounded per-actor cache (`GRAMMAR_OPTIONS.md` §6.3). Under `stream`,
+  `consume` and `pick` draw file ids from `Perm(files, …)` with the same position formula;
+  `offset(s)` of a sample in a one-column container is the start of its payload.
 - **File positions.** `open` sets the position to 0 (`APPEND`: the known size); a `read` or
   `write` without `offset` uses and advances it; `lseek` moves it. A read's expected count is
   `clamp(size − offset, 0, len)` when the size is known. `until_eof` issues reads of `len`

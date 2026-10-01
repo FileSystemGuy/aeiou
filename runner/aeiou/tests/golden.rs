@@ -27,17 +27,18 @@ fn dry(text: &str, cfg: &Config, threads: usize) -> dryrun::Report {
 
 #[test]
 fn hashes_match_check_py() {
-    // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day).
+    // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day; re-recorded for
+    // contract 0.2 and model_load's `full` split the same day).
     let want = [
-        ("ckpt_restore", "d9724b93648e579a3c9d20a8b912f48f78e4a742f63ab1c0ce7bea16fe31c3a3"),
-        ("ckpt_write_dcp", "c8c7bf78006b49fec46d22f5c806d9056dc9a0412c14edc4c487ec2f3ab89f6f"),
-        ("kv_cache_serving", "f51d92850a0ecc8b84e6e55b10d08635771f6cb58417bb59135a2ea0329c48e8"),
-        ("model_load", "5fa90c2b77e53c07b11c93b37dc29f3544cbe3e3974b063a25222c2b35fcaa5f"),
-        ("train_large_samples", "780c751d077f20b513df6fcd1429ca9d295ae3a572896aa4fc7a960748dc9ae1"),
-        ("train_small_files", "c6cf657c946dbbeeddf8d77e6fd7ed6fc5c7c9eb0d6c3481b73c6d29cea76fca"),
-        ("vdb_build_diskann", "735adae78cad5736d946741a71e4ef6c7158cb92c8a5393a8b16ee97b489e5fe"),
-        ("vdb_search_diskann", "6701fefb49ae832ff37f75b35e654fa9371f4ec7205b6e82d90ec1367cbd1c43"),
-        ("vdb_search_ivf", "eeb984a9185749a61e2685b5d66a7a0b5f99617fe0ea35e0c1090a20df6ba222"),
+        ("ckpt_restore", "7977f576a042df867623e6009b544040f538980f4e2b8f1779cdba8c9892e66f"),
+        ("ckpt_write_dcp", "d537f867988d9530e2511f3af34f35904099a793743cdfa748f59df6bba3ff13"),
+        ("kv_cache_serving", "5f7a6e6f00a25cce63a5f9259d43d4b4d394913cc47e113b976e9c147097c734"),
+        ("model_load", "f62c2390df4ef53ca5f8e4fcf5ce185e941b6e394b626cf00c88b4292eb1f1b2"),
+        ("train_large_samples", "ee7689cba58eaa1541ed78bed3b5e058cc36a52a6bb62cd2be82e8538c53e9a4"),
+        ("train_small_files", "11ccbefefb3efa9a3c2e139c6be0bfa79befdb4c6775872df7beed14b36e0fbe"),
+        ("vdb_build_diskann", "237e014e17604b76223301929178b40d037fe17906e641078cd15e9f9dd0efee"),
+        ("vdb_search_diskann", "8f57b52ae06867c77676cf9a8388d9c1bbb87249f1927db03c6d6447c0938cde"),
+        ("vdb_search_ivf", "07449f43afaa49f835a3f1ee14c911bb7d1aedcb7b7280b972ba3e0eeac29510"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -173,7 +174,7 @@ fn collect(text: &str, cfg: &Config, template: &str, count: i64) -> Vec<(i64, Ve
 }
 
 const CONSUME: &str = r#"{
-  "ast": "0.1", "name": "consume_test",
+  "ast": "0.2", "name": "consume_test",
   "params": {"batches": {"default": 24}, "batch": {"default": 4}},
   "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}}},
   "actors": {"gpu": {"body": [
@@ -212,7 +213,7 @@ fn consume_is_a_permutation_per_epoch_across_actors() {
 }
 
 const CHAIN: &str = r#"{
-  "ast": "0.1", "name": "chain_test",
+  "ast": "0.2", "name": "chain_test",
   "params": {"reuse": {"default": {"mixture": [{"weight": 0.4, "dist": null}, {"weight": 0.6, "dist": {"uniform": {"lo": 1, "hi": 5}}}]}}},
   "namespaces": {"kv": {"pattern": "kv/{conv:016x}/d{d}", "fields": {"conv": "int", "d": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
@@ -253,7 +254,7 @@ fn at_chains_reach_the_original_conversation() {
 }
 
 const UNTIL_EOF: &str = r#"{
-  "ast": "0.1", "name": "eof_test",
+  "ast": "0.2", "name": "eof_test",
   "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 1, "body": [
@@ -300,7 +301,7 @@ fn rejects(text: &str, needle: &str) {
 fn validator_rejects_what_check_py_rejects() {
     let base = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.1", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.2", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{{datasets}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )

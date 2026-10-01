@@ -155,7 +155,8 @@ fn expr(e: &Expr, p: &mut Path) {
         ExprNode::Elem { index, .. } => p.with(&["elem", "index"], |p| expr(index, p)),
         ExprNode::Size(h) => p.with(&["size"], |p| handle(h, p)),
         ExprNode::Offset(h) => p.with(&["offset"], |p| handle(h, p)),
-        ExprNode::Unit(h) => p.with(&["unit"], |p| handle(h, p)),
+        ExprNode::UnitIndex(h) => p.with(&["unit_index"], |p| handle(h, p)),
+        ExprNode::Units(h) => p.with(&["units"], |p| handle(h, p)),
         ExprNode::Chunks(h) => p.with(&["chunks"], |p| handle(h, p)),
         ExprNode::Add(a) => args(a, "add", p),
         ExprNode::Sub(a) => args(a, "sub", p),
@@ -214,6 +215,16 @@ fn handle(h: &Handle, p: &mut Path) {
             if let Some(d) = &pick.dist {
                 p.with(&["pick", "dist"], |p| distref(d, p));
             }
+        }
+        Handle::Unit(u) => {
+            p.with(&["unit", "of"], |p| handle(&u.of, p));
+            if let Some(e) = &u.index {
+                p.with(&["unit", "index"], |p| expr(e, p));
+            }
+        }
+        Handle::Column(c) => {
+            p.with(&["column", "of"], |p| handle(&c.of, p));
+            p.with(&["column", "index"], |p| expr(&c.index, p));
         }
     }
 }
@@ -298,6 +309,15 @@ fn node(n: &Node, p: &mut Path) {
             p.with(&[k, "offset"], |p| expr(offset, p));
         }
         Node::Ioctl { file, .. } => p.with(&[k, "file"], |p| handle(file, p)),
+        Node::Fadvise { file, offset, len, .. } => {
+            p.with(&[k, "file"], |p| handle(file, p));
+            if let Some(e) = offset {
+                p.with(&[k, "offset"], |p| expr(e, p));
+            }
+            if let Some(e) = len {
+                p.with(&[k, "len"], |p| expr(e, p));
+            }
+        }
         Node::Ftruncate { file, len, .. } => {
             p.with(&[k, "file"], |p| handle(file, p));
             p.with(&[k, "len"], |p| expr(len, p));
