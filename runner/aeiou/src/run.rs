@@ -24,6 +24,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::ast::{Ast, Node};
 use crate::backend::{errno_name, Backend, BackendKind, ALIGN};
@@ -95,7 +96,7 @@ pub fn unix_now() -> f64 {
 // ---------------------------------------------------------------- statistics
 
 /// Log-linear latency histogram: four buckets per octave of nanoseconds.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LatHist {
     pub buckets: Vec<u64>,
     pub count: u64,
@@ -165,7 +166,7 @@ impl LatHist {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PhaseStats {
     pub ops: u64,
     pub bytes_read: u64,
@@ -173,7 +174,7 @@ pub struct PhaseStats {
     pub io_ns: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stats {
     pub ops: u64,
     pub counts: BTreeMap<OpKind, u64>,
@@ -229,12 +230,13 @@ impl Stats {
 
 /// One `take` of an actor instance: how long it blocked, and the compute issued after it
 /// before the next take.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct TakeRec {
     pub stall_ns: u64,
     pub compute_ns: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActorRecord {
     pub template: String,
     pub actor: i64,
@@ -375,8 +377,8 @@ impl Channel {
 
 struct Shared {
     opts: RunOpts,
-    coord: Local,
-    aborted: AtomicBool,
+    coord: Arc<dyn Coordinator>,
+    aborted: Arc<AtomicBool>,
     stats: Mutex<Stats>,
     actors: Mutex<Vec<ActorRecord>>,
     /// Barrier scopes each template participates in.
@@ -709,6 +711,9 @@ impl Runner {
 
 impl Sink<'static, 'static> for Runner {
     fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()> {
+        if self.sh.aborted.load(Ordering::Relaxed) {
+            bail!("run aborted: {}", self.sh.coord.abort_reason().unwrap_or_else(|| "another actor failed".into()));
+        }
         if matches!(op.kind, OpKind::Read | OpKind::Write) {
             self.check_align(op)?;
         }
@@ -1043,8 +1048,9 @@ pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &Path,
 }
 
 /// After a run: `.aeiou-namespace.json` at every output namespace root (one not declared
-/// `input`), written last and atomically, with the objects created there.
-pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Path, opts: &RunOpts, report: &Report, started: f64, finished: f64) -> Result<Vec<PathBuf>> {
+/// `input`), written last and atomically, with the objects created there and the rank
+/// records of `report` (every host's, when it is the coordinator's merged report).
+pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Path, _opts: &RunOpts, report: &Report, started: f64, finished: f64) -> Result<Vec<PathBuf>> {
     let ast = &loaded.ast;
     let mut by_root: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (name, n) in &ast.namespaces {
@@ -1052,7 +1058,6 @@ pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Pa
             by_root.entry(payload::namespace_root(ast, name)?).or_default().push(name.clone());
         }
     }
-    let (lo, hi) = gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
     let mut written = Vec::new();
     for (rel, names) in by_root {
         let prefix = if rel.is_empty() { String::new() } else { format!("{rel}/") };
@@ -1077,7 +1082,7 @@ pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Pa
             seed: cfg.seed,
             gpus: cfg.gpus,
             params: payload::params_json(&loaded.doc, cfg, &Params::new(ast, cfg)?)?,
-            ranks: vec![RankRecord { rank: opts.rank, host: hostname(), gpus: [lo, hi] }],
+            ranks: report.ranks.clone(),
             started,
             finished,
             objects_created: count,
@@ -1181,35 +1186,100 @@ fn barrier_scopes(ast: &Ast) -> Result<HashMap<String, Vec<String>>> {
 
 // ---------------------------------------------------------------- the run
 
+/// What a run produced: one host's, or every host's after the coordinator merged them
+/// (`merge_all`). It is what a host sends to the coordinator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
     pub elapsed: Duration,
     pub stats: Stats,
-    /// (template, instance count, [lo, hi) run on this host)
-    pub templates: Vec<(String, i64, (i64, i64))>,
+    /// (template, instance count)
+    pub templates: Vec<(String, i64)>,
+    /// The hosts and the GPU id range each ran.
+    pub ranks: Vec<RankRecord>,
     pub actors: Vec<ActorRecord>,
     pub departure_releases: Vec<(String, u64)>,
     pub threads_peak: u64,
+    /// Objects created (path, creating GPU id) net of this host's removals, and the paths
+    /// removed, so a merge can drop what another host created and this one removed.
     pub created: Vec<(String, i64)>,
+    pub removed: Vec<String>,
+    /// The host, or the hosts joined with `,` once merged.
     pub host: String,
 }
 
-/// Execute the abstract. `model` must outlive the threads, hence `'static` (the caller leaks
-/// the loaded abstract and model for the life of the process; a run is the process).
-pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>) -> Result<Report> {
-    let counts: Vec<(&'static str, i64)> = actor_counts(model)?;
-    let ranges: Vec<(i64, i64)> = counts.iter().map(|(_, c)| gpu_range(*c, opts.ranks, opts.rank, opts.rank_rotate)).collect();
+impl Report {
+    /// Merge every host's report: stats summed (the fingerprint modulo 2^64, histograms
+    /// bucket-wise), instances concatenated, created objects net of every removal, elapsed
+    /// the longest host's.
+    pub fn merge_all(reports: Vec<Report>) -> Report {
+        let mut it = reports.into_iter();
+        let Some(mut m) = it.next() else {
+            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, created: vec![], removed: vec![], host: String::new() };
+        };
+        let mut hosts = vec![m.host.clone()];
+        let mut departures: BTreeMap<String, u64> = m.departure_releases.drain(..).collect();
+        for r in it {
+            m.elapsed = m.elapsed.max(r.elapsed);
+            m.stats.merge(&r.stats);
+            m.ranks.extend(r.ranks);
+            m.actors.extend(r.actors);
+            for (k, n) in r.departure_releases {
+                *departures.entry(k).or_insert(0) += n;
+            }
+            m.threads_peak += r.threads_peak;
+            m.created.extend(r.created);
+            m.removed.extend(r.removed);
+            hosts.push(r.host);
+        }
+        let removed: HashSet<&String> = m.removed.iter().collect();
+        m.created.retain(|(p, _)| !removed.contains(p));
+        m.created.sort();
+        m.created.dedup();
+        m.ranks.sort_by_key(|r| r.rank);
+        m.actors.sort_by(|a, b| a.template.cmp(&b.template).then(a.actor.cmp(&b.actor)));
+        m.departure_releases = departures.into_iter().collect();
+        hosts.dedup();
+        m.host = hosts.join(",");
+        m
+    }
+}
+
+/// The barrier scopes this host's instances participate in, with the instance count of each:
+/// what `coord::Local::new` and the coordinator's `Hello` take.
+pub fn participants(model: &Model<'_>, opts: &RunOpts) -> Result<Vec<(String, usize)>> {
+    let counts = actor_counts(model)?;
     let scopes = barrier_scopes(model.ast)?;
     let mut participants: BTreeMap<String, usize> = BTreeMap::new();
-    for ((name, _), (lo, hi)) in counts.iter().zip(&ranges) {
+    for (name, c) in &counts {
+        let (lo, hi) = gpu_range(*c, opts.ranks, opts.rank, opts.rank_rotate);
         for s in scopes.get(*name).map(|v| v.as_slice()).unwrap_or(&[]) {
             *participants.entry(s.clone()).or_insert(0) += (hi - lo) as usize;
         }
     }
-    let participants: Vec<(String, usize)> = participants.into_iter().collect();
+    Ok(participants.into_iter().collect())
+}
+
+/// Execute the abstract on one host with the in-process coordinator. `model` must outlive
+/// the threads, hence `'static` (the caller leaks the loaded abstract and model for the life
+/// of the process; a run is the process).
+pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>) -> Result<Report> {
+    let p = participants(model, &opts)?;
+    run_with(model, opts, input_objects, Arc::new(Local::new(&p)), Arc::new(AtomicBool::new(false)))
+}
+
+/// Execute the abstract with the given coordinator (`coord::Tcp` for several hosts) and
+/// abort flag (which the coordinator sets when another host fails). On failure here the
+/// coordinator is told to stop the other hosts.
+pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>, coord: Arc<dyn Coordinator>, aborted: Arc<AtomicBool>) -> Result<Report> {
+    let counts: Vec<(&'static str, i64)> = actor_counts(model)?;
+    let ranges: Vec<(i64, i64)> = counts.iter().map(|(_, c)| gpu_range(*c, opts.ranks, opts.rank, opts.rank_rotate)).collect();
+    let scopes = barrier_scopes(model.ast)?;
+    let (glo, ghi) = gpu_range(model.cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
+    let rank_record = RankRecord { rank: opts.rank, host: hostname(), gpus: [glo, ghi] };
     let sh = Arc::new(Shared {
         opts,
-        coord: Local::new(&participants),
-        aborted: AtomicBool::new(false),
+        coord,
+        aborted,
         stats: Mutex::new(Stats::default()),
         actors: Mutex::new(Vec::new()),
         scopes,
@@ -1259,22 +1329,31 @@ pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap
     }
     let elapsed = t0.elapsed();
     if let Some(e) = first_err {
+        sh.coord.stop(&format!("{e:#}"));
         return Err(e);
+    }
+    if sh.aborted.load(Ordering::Relaxed) {
+        bail!("run aborted: {}", sh.coord.abort_reason().unwrap_or_else(|| "an actor failed".into()));
     }
     let stats = std::mem::take(&mut *sh.stats.lock().unwrap());
     let mut actors = std::mem::take(&mut *sh.actors.lock().unwrap());
     actors.sort_by(|a, b| a.template.cmp(&b.template).then(a.actor.cmp(&b.actor)));
-    let removed: HashSet<String> = std::mem::take(&mut *sh.removed.lock().unwrap()).into_iter().collect();
-    let mut created: Vec<(String, i64)> = std::mem::take(&mut *sh.created.lock().unwrap()).into_iter().filter(|(p, _)| !removed.contains(p)).collect();
+    let mut removed: Vec<String> = std::mem::take(&mut *sh.removed.lock().unwrap());
+    removed.sort();
+    removed.dedup();
+    let removed_set: HashSet<&String> = removed.iter().collect();
+    let mut created: Vec<(String, i64)> = std::mem::take(&mut *sh.created.lock().unwrap()).into_iter().filter(|(p, _)| !removed_set.contains(p)).collect();
     created.sort();
     Ok(Report {
         elapsed,
         threads_peak: stats.threads,
         stats,
-        templates: counts.iter().zip(&ranges).map(|((n, c), r)| (n.to_string(), *c, *r)).collect(),
+        templates: counts.iter().map(|(n, c)| (n.to_string(), *c)).collect(),
+        ranks: vec![rank_record],
         actors,
         departure_releases: sh.coord.departure_releases(),
         created,
+        removed,
         host: sh.host.clone(),
     })
 }
@@ -1332,7 +1411,7 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
         s.expected_errors
     )?;
     if s.input_opens > 0 {
-        writeln!(out, "input objects opened {}  of which written on this host ({}) {}", s.input_opens, r.host, s.warm_opens)?;
+        writeln!(out, "input objects opened {}  of which written on the opening host ({}) {}", s.input_opens, r.host, s.warm_opens)?;
         if s.warm_opens > 0 {
             writeln!(out, "WARNING: {} read(s) of input objects hit the host that wrote them (page cache, not storage); run the reader on other hosts or with --rank-rotate", s.warm_opens)?;
         }

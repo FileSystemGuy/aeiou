@@ -1,19 +1,23 @@
 //! `aeiou`: the runner binary. Subcommands: `check` (validate ASTs and print their hashes,
 //! as `schema/check.py` does), `dry-run` (the op streams and the fingerprint, no I/O),
 //! `datagen` (write the corpus and its manifests), and `run` (execute against a directory
-//! with a blocking backend).
+//! with a blocking backend, on one host or on several through the TCP coordinator).
 
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::{Args, Parser, Subcommand};
 
 use aeiou::backend::BackendKind;
+use aeiou::coord::{Coordinator, Local, Server, Tcp};
 use aeiou::datagen::{self, DatagenOpts};
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, Params};
-use aeiou::run::{self, RunOpts};
+use aeiou::payload;
+use aeiou::run::{self, Report, RunOpts};
 
 #[derive(Parser)]
 #[command(name = "aeiou", version, about = "Abstract-driven I/O workload runner")]
@@ -33,7 +37,7 @@ enum Cmd {
     DryRun(DryRunArgs),
     /// Write the datasets an abstract declares under --root, with a manifest per dataset root.
     Datagen(DatagenArgs),
-    /// Execute the abstract against --root with a blocking I/O backend.
+    /// Execute the abstract against --root with a blocking I/O backend (several hosts: --ranks R --rank r --coordinator HOST:PORT on each).
     Run(RunCmd),
 }
 
@@ -92,11 +96,14 @@ struct RunCmd {
     /// Fail unless every dataset id is among these.
     #[arg(long = "expect-dataset-id", value_name = "SHA256")]
     expect_dataset_ids: Vec<String>,
-    /// This host's index among --ranks hosts (the multi-host coordinator is not built yet: --ranks 1 only).
+    /// This host's index among --ranks hosts.
     #[arg(long, default_value_t = 0)]
     rank: i64,
     #[arg(long, default_value_t = 1)]
     ranks: i64,
+    /// With --ranks above 1: the coordinator's address. Rank 0 listens on it (in-process); every rank connects to it.
+    #[arg(long, value_name = "HOST:PORT")]
+    coordinator: Option<String>,
     /// Run the GPU range of rank (rank + k) mod ranks, so each host reads what another wrote.
     #[arg(long, default_value_t = 0, value_name = "K")]
     rank_rotate: i64,
@@ -193,6 +200,12 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         None => None,
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| anyhow::anyhow!("--expect-fingerprint {h}: not hex"))?),
     };
+    if a.ranks < 1 || a.rank < 0 || a.rank >= a.ranks {
+        bail!("--rank {} of --ranks {}: rank must be in [0, ranks)", a.rank, a.ranks);
+    }
+    if a.ranks > 1 && a.coordinator.is_none() {
+        bail!("--ranks {}: several hosts need --coordinator HOST:PORT (rank 0 listens there, every rank connects to it)", a.ranks);
+    }
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.abstract_path)?));
     let cfg: &'static Config = Box::leak(Box::new(cfg));
@@ -224,12 +237,6 @@ fn run_cmd(a: RunCmd) -> Result<()> {
             c.files.map(|n| format!("  ({n} files)")).unwrap_or_default()
         )?;
     }
-    if a.ranks < 1 || a.rank < 0 || a.rank >= a.ranks {
-        bail!("--rank {} of --ranks {}: rank must be in [0, ranks)", a.rank, a.ranks);
-    }
-    if a.ranks > 1 {
-        bail!("--ranks {}: several hosts need the coordinator, which is not built yet (NAPKIN_MATH.md §8.A)", a.ranks);
-    }
     let opts = RunOpts {
         root: a.root.clone(),
         backend,
@@ -247,6 +254,62 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     };
     let (lo, hi) = run::gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
     writeln!(out, "host {}  rank {} of {}  rotate {}  gpu ids [{lo}, {hi})", run::hostname(), opts.rank, opts.ranks, opts.rank_rotate)?;
+
+    // several hosts: rank 0 listens, every rank connects and has its configuration checked
+    // before anything else happens; a host that fails later tells the others through it
+    let participants = run::participants(model, &opts)?;
+    let aborted = Arc::new(AtomicBool::new(false));
+    let server = match &a.coordinator {
+        Some(addr) if a.ranks > 1 && a.rank == 0 => {
+            let s = Server::start(addr, a.ranks)?;
+            writeln!(out, "coordinator listening on {}", s.addr)?;
+            out.flush()?;
+            Some(s)
+        }
+        _ => None,
+    };
+    let (coord, tcp): (Arc<dyn Coordinator>, Option<Arc<Tcp>>) = match &a.coordinator {
+        Some(addr) if a.ranks > 1 => {
+            let dataset_ids: Vec<&str> = checks.iter().map(|c| c.id.as_str()).collect();
+            let config = serde_json::json!({
+                "ast_sha256": loaded.sha256,
+                "seed": cfg.seed,
+                "gpus": cfg.gpus,
+                "params": payload::params_json(&loaded.doc, cfg, params)?,
+                "dataset_ids": dataset_ids,
+                "backend": backend.name(),
+                "rank_rotate": a.rank_rotate,
+                "time_scale": opts.time_scale,
+                "write_compress": a.write_compress,
+            });
+            let config = aeiou::canon::sha256_hex(&config);
+            let t = Arc::new(Tcp::connect(addr, a.rank, a.ranks, &run::hostname(), &config, &participants, aborted.clone())?);
+            writeln!(out, "coordinator {}: connected as rank {} of {}  config {}…", t.addr, a.rank, a.ranks, &config[..16])?;
+            (t.clone(), Some(t))
+        }
+        _ => (Arc::new(Local::new(&participants)), None),
+    };
+    let r = run_connected(&a, loaded, cfg, model, opts, coord, aborted, tcp.as_deref(), server.as_ref(), &mut out);
+    if let (Err(e), Some(t)) = (&r, &tcp) {
+        // the coordinator relays a failure here to every other host (a no-op after a Stop)
+        t.stop(&format!("{e:#}"));
+    }
+    r
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_connected(
+    a: &RunCmd,
+    loaded: &'static aeiou::Loaded,
+    cfg: &'static Config,
+    model: &'static aeiou::eval::Model<'static>,
+    opts: RunOpts,
+    coord: Arc<dyn Coordinator>,
+    aborted: Arc<AtomicBool>,
+    tcp: Option<&Tcp>,
+    server: Option<&Server>,
+    out: &mut impl Write,
+) -> Result<()> {
     let (ns_checks, input_objects) = run::check_input_namespaces(loaded, cfg, &a.root, &opts)?;
     for c in &ns_checks {
         writeln!(
@@ -262,26 +325,84 @@ fn run_cmd(a: RunCmd) -> Result<()> {
             if c.same_host { "; WARNING: this host wrote part of the range it will run" } else { "" }
         )?;
     }
-    let cleaned = run::prepare_namespaces(&loaded.ast, &a.root, a.clean_namespaces)?;
-    for c in &cleaned {
-        writeln!(out, "namespace root {c}/ emptied")?;
+    // --root is the storage under test, shared by every host: rank 0 prepares the output
+    // namespace roots before the start gate; the other hosts never empty anything
+    if a.rank == 0 {
+        let cleaned = run::prepare_namespaces(&loaded.ast, &a.root, a.clean_namespaces)?;
+        for c in &cleaned {
+            writeln!(out, "namespace root {c}/ emptied")?;
+        }
     }
     out.flush()?;
 
-    let started = run::unix_now();
-    let report = run::run(model, opts.clone(), input_objects)?;
+    let mut started = run::unix_now();
+    if let Some(t) = tcp {
+        let (t0, hosts) = t.ready().map_err(|e| anyhow!("start gate: {e:#}"))?;
+        started = t0;
+        writeln!(out, "start gate: {} host(s) ready: {}", hosts.len(), hosts.join(", "))?;
+        out.flush()?;
+    }
+    let report = run::run_with(model, opts.clone(), input_objects, coord, aborted)?;
     let finished = run::unix_now();
-    run::write_report(&mut out, &report)?;
-    for p in run::write_namespace_manifests(loaded, cfg, &a.root, &opts, &report, started, finished)? {
-        writeln!(out, "namespace manifest {}", p.display())?;
+    if tcp.is_some() {
+        writeln!(out, "--- this host ({}), rank {} of {}", report.host, a.rank, a.ranks)?;
     }
-    if let Some(fp) = expect_fingerprint {
-        if report.stats.fingerprint != fp {
-            bail!("fingerprint {:016x} does not match the expected {:016x}", report.stats.fingerprint, fp);
+    run::write_report(out, &report)?;
+
+    // the verdict: manifests for what was written and the fingerprint check, on the merged
+    // report when there are several hosts
+    let verdict = |out: &mut dyn Write, report: &Report| -> Result<()> {
+        for p in run::write_namespace_manifests(loaded, cfg, &a.root, &opts, report, started, finished)? {
+            writeln!(out, "namespace manifest {}", p.display())?;
         }
-        writeln!(out, "fingerprint matches")?;
+        if let Some(fp) = opts.expect_fingerprint {
+            if report.stats.fingerprint != fp {
+                bail!("fingerprint {:016x} does not match the expected {:016x}", report.stats.fingerprint, fp);
+            }
+            writeln!(out, "fingerprint matches")?;
+        }
+        Ok(())
+    };
+    match (tcp, server) {
+        (None, _) => verdict(out, &report),
+        (Some(t), None) => {
+            t.report(&report)?;
+            writeln!(out, "report sent to the coordinator; waiting for rank 0's verdict")?;
+            out.flush()?;
+            let (ok, fp, err) = t.result()?;
+            writeln!(out, "--- all {} hosts: fingerprint {fp:016x}", a.ranks)?;
+            if !ok {
+                bail!("rank 0: {}", err.unwrap_or_else(|| "failed".into()));
+            }
+            if let Some(exp) = opts.expect_fingerprint {
+                if fp != exp {
+                    bail!("fingerprint {fp:016x} does not match the expected {exp:016x}");
+                }
+                writeln!(out, "fingerprint matches")?;
+            }
+            Ok(())
+        }
+        (Some(t), Some(s)) => {
+            t.report(&report)?;
+            out.flush()?;
+            let merged = s.merged()?;
+            writeln!(out, "--- all {} hosts ({})", merged.ranks.len(), merged.host)?;
+            for r in &merged.ranks {
+                writeln!(out, "rank {} {}  gpu ids [{}, {})", r.rank, r.host, r.gpus[0], r.gpus[1])?;
+            }
+            run::write_report(out, &merged)?;
+            match verdict(out, &merged) {
+                Ok(()) => {
+                    s.finish(true, merged.stats.fingerprint, None);
+                    Ok(())
+                }
+                Err(e) => {
+                    s.finish(false, merged.stats.fingerprint, Some(format!("{e:#}")));
+                    Err(e)
+                }
+            }
+        }
     }
-    Ok(())
 }
 
 fn check(files: Vec<PathBuf>) -> Result<()> {

@@ -1,0 +1,65 @@
+#!/bin/sh
+# aeiou-launch: start one `aeiou run` rank per host over ssh (the `pdsh`/ssh loop of
+# `NAPKIN_MATH.md` §8.A), rank 0 first, with --ranks, --rank, and --coordinator appended.
+#
+#   aeiou-launch [-p PORT] HOST... -- aeiou run ABSTRACT --gpus G --root DIR [ARGS...]
+#
+# The i-th host is rank i; HOST0:PORT (default 7311) is the coordinator address rank 0
+# listens on and every rank connects to, so HOST0 must be reachable from the others under
+# that name. Each host's output is prefixed with its rank; the exit status is non-zero if
+# any rank's is. AEIOU_RSH replaces `ssh` (it is called as `$AEIOU_RSH HOST COMMAND`).
+set -u
+port=7311
+if [ "${1:-}" = "-p" ]; then
+    port=$2
+    shift 2
+fi
+hosts=
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    hosts="$hosts $1"
+    shift
+done
+if [ $# -lt 2 ] || [ -z "$hosts" ]; then
+    echo "usage: aeiou-launch [-p PORT] HOST... -- aeiou run ARGS..." >&2
+    exit 2
+fi
+shift
+# the remote command, every argument single-quoted for the remote shell
+cmd=
+for a in "$@"; do
+    q=$(printf '%s' "$a" | sed "s/'/'\\\\''/g")
+    cmd="$cmd '$q'"
+done
+set -- $hosts
+ranks=$#
+host0=$1
+rsh=${AEIOU_RSH:-ssh}
+rank=0
+pids=
+tmp=$(mktemp -d)
+for h in "$@"; do
+    (
+        $rsh "$h" "$cmd --ranks $ranks --rank $rank --coordinator $host0:$port" 2>&1
+        echo $? > "$tmp/$rank"
+    ) | sed "s/^/[$rank $h] /" &
+    pids="$pids $!"
+    if [ $rank -eq 0 ]; then
+        sleep 1
+    fi
+    rank=$((rank + 1))
+done
+for p in $pids; do
+    wait "$p"
+done
+status=0
+rank=0
+for h in "$@"; do
+    s=$(cat "$tmp/$rank" 2>/dev/null || echo 1)
+    if [ "$s" != 0 ]; then
+        echo "aeiou-launch: rank $rank ($h) exited with status $s" >&2
+        status=1
+    fi
+    rank=$((rank + 1))
+done
+rm -rf "$tmp"
+exit $status
