@@ -202,8 +202,8 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
     dry = subprocess.run([RUNNER, "dry-run", ast_path, "--gpus", "2", "--seed", "3", *flags], capture_output=True, text=True)
     assert dry.returncode == 0, dry.stderr
     fp = [l.split()[1] for l in dry.stdout.splitlines() if l.startswith("fingerprint ")][0]
-    # the thread-per-actor backend and the event loop issue the same ops over the same corpus
-    for backend in ("sync", "io_uring"):
+    # the thread-per-actor backends and both event-loop engines issue the same ops over the same corpus
+    for backend in ("sync", "io_uring", "posix-aio", "libaio", "mmap"):
         run = subprocess.run([RUNNER, "run", ast_path, "--root", root, "--gpus", "2", "--seed", "3", "--time-scale", "0",
                               "--io-backend", backend, "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
         assert run.returncode == 0, backend + ": " + run.stdout + run.stderr

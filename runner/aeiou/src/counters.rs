@@ -43,6 +43,12 @@ pub struct HostCounters {
     pub cpu_sys_ns: u64,
     /// Peak resident set of the process, bytes (`ru_maxrss`; a process-lifetime peak, not a delta).
     pub maxrss_bytes: u64,
+    /// Page faults of the process over the run (`getrusage`): minor (the page was in
+    /// memory) and major (it took I/O). Under the `mmap` backend these carry the reads.
+    #[serde(default)]
+    pub minor_faults: u64,
+    #[serde(default)]
+    pub major_faults: u64,
     /// The mount `--root` is on, when `/proc/self/mountstats` lists one.
     pub mount: Option<MountCounters>,
 }
@@ -105,6 +111,8 @@ impl HostCounters {
         self.cpu_user_ns += o.cpu_user_ns;
         self.cpu_sys_ns += o.cpu_sys_ns;
         self.maxrss_bytes += o.maxrss_bytes;
+        self.minor_faults += o.minor_faults;
+        self.major_faults += o.major_faults;
         match (&mut self.mount, &o.mount) {
             (Some(m), Some(n)) => m.merge(n),
             (None, Some(n)) => self.mount = Some(n.clone()),
@@ -222,6 +230,8 @@ struct Rusage {
     user_ns: u64,
     sys_ns: u64,
     maxrss_bytes: u64,
+    minflt: u64,
+    majflt: u64,
 }
 
 fn rusage() -> Rusage {
@@ -233,6 +243,8 @@ fn rusage() -> Rusage {
         user_ns: ns(ru.ru_utime),
         sys_ns: ns(ru.ru_stime),
         maxrss_bytes: (ru.ru_maxrss as u64) * 1024,
+        minflt: ru.ru_minflt as u64,
+        majflt: ru.ru_majflt as u64,
     }
 }
 
@@ -345,6 +357,8 @@ impl Sampler {
             cpu_user_ns: ru1.user_ns.saturating_sub(self.ru0.user_ns),
             cpu_sys_ns: ru1.sys_ns.saturating_sub(self.ru0.sys_ns),
             maxrss_bytes: ru1.maxrss_bytes,
+            minor_faults: ru1.minflt.saturating_sub(self.ru0.minflt),
+            major_faults: ru1.majflt.saturating_sub(self.ru0.majflt),
             mount,
         }
     }

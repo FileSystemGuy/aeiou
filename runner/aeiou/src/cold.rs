@@ -34,11 +34,14 @@ const WHOLE: u64 = 256 << 20;
 const WINDOW: u64 = 4 << 20;
 const WINDOWS: u64 = 64;
 
-/// The kernel's cache sizes: `Cached` of `/proc/meminfo`, and the first two fields of
+/// The kernel's cache sizes: `Cached` and `Shmem` of `/proc/meminfo` (`Cached` counts tmpfs
+/// and shared memory, which a drop cannot free; the file cache is the difference), and the first two fields of
 /// `/proc/sys/fs/dentry-state` and `/proc/sys/fs/inode-nr` (allocated, unused).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CacheSizes {
     pub cached_bytes: u64,
+    #[serde(default)]
+    pub shmem_bytes: u64,
     pub dentries: u64,
     pub dentries_unused: u64,
     pub inodes: u64,
@@ -52,14 +55,20 @@ impl CacheSizes {
     }
 
     pub fn parse(meminfo: &str, dentry_state: &str, inode_nr: &str) -> CacheSizes {
-        let cached_kb = meminfo.lines().find_map(|l| l.strip_prefix("Cached:")).and_then(|v| v.split_whitespace().next()).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        let kb = |key: &str| meminfo.lines().find_map(|l| l.strip_prefix(key)).and_then(|v| v.split_whitespace().next()).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        let (cached_kb, shmem_kb) = (kb("Cached:"), kb("Shmem:"));
         let two = |s: &str| {
             let f: Vec<u64> = s.split_whitespace().map(|x| x.parse().unwrap_or(0)).collect();
             (f.first().copied().unwrap_or(0), f.get(1).copied().unwrap_or(0))
         };
         let (dentries, dentries_unused) = two(dentry_state);
         let (inodes, inodes_unused) = two(inode_nr);
-        CacheSizes { cached_bytes: cached_kb << 10, dentries, dentries_unused, inodes, inodes_unused }
+        CacheSizes { cached_bytes: cached_kb << 10, shmem_bytes: shmem_kb << 10, dentries, dentries_unused, inodes, inodes_unused }
+    }
+
+    /// `Cached − Shmem`: the page cache of files a drop can free.
+    pub fn file_cache_bytes(&self) -> u64 {
+        self.cached_bytes.saturating_sub(self.shmem_bytes)
     }
 }
 
@@ -208,12 +217,13 @@ pub fn write(out: &mut impl std::io::Write, c: &ColdStart) -> std::io::Result<()
     match &c.dropped {
         Some(d) => writeln!(
             out,
-            "cold start {}: caches dropped (sync {:.3} s, drop {:.3} s, before the start gate): Cached {} -> {}  dentries {} -> {}  inodes {} -> {}",
+            "cold start {}: caches dropped (sync {:.3} s, drop {:.3} s, before the start gate): file cache {} -> {} (Cached less Shmem; Shmem {})  dentries {} -> {}  inodes {} -> {}",
             c.host,
             d.sync_ns as f64 / 1e9,
             d.drop_ns as f64 / 1e9,
-            human_bytes(d.before.cached_bytes),
-            human_bytes(d.after.cached_bytes),
+            human_bytes(d.before.file_cache_bytes()),
+            human_bytes(d.after.file_cache_bytes()),
+            human_bytes(d.after.shmem_bytes),
             d.before.dentries,
             d.after.dentries,
             d.before.inodes,
@@ -246,8 +256,9 @@ mod tests {
 
     #[test]
     fn cache_sizes_parse() {
-        let c = CacheSizes::parse("MemTotal: 100 kB\nCached:          2048 kB\nSwapCached: 0 kB\n", "1203 400 45 0 12 0\n", "5000\t1200\n");
-        assert_eq!(c, CacheSizes { cached_bytes: 2048 << 10, dentries: 1203, dentries_unused: 400, inodes: 5000, inodes_unused: 1200 });
+        let c = CacheSizes::parse("MemTotal: 100 kB\nCached:          2048 kB\nSwapCached: 0 kB\nShmem:   512 kB\n", "1203 400 45 0 12 0\n", "5000\t1200\n");
+        assert_eq!(c.file_cache_bytes(), 1536 << 10);
+        assert_eq!(c, CacheSizes { cached_bytes: 2048 << 10, shmem_bytes: 512 << 10, dentries: 1203, dentries_unused: 400, inodes: 5000, inodes_unused: 1200 });
         assert_eq!(CacheSizes::parse("", "", ""), CacheSizes::default());
         // the live files parse to something on Linux
         assert!(CacheSizes::now().dentries > 0);

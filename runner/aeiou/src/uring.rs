@@ -28,6 +28,10 @@
 //! Barriers go through the `Coordinator`'s non-blocking half: `arrive`, then a read posted on
 //! the loop's eventfd, which every release writes (`NAPKIN_MATH.md` §8.A). Kernel 5.11 or
 //! later: `IORING_ENTER_EXT_ARG` carries the wait timeout.
+//!
+//! The loop itself (tasks, channels, timers, barriers) is generic over an `Engine`, the part
+//! that carries ops to the kernel and brings completions back: the ring here, an AIO context
+//! in `aio.rs`.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, VecDeque};
@@ -46,7 +50,7 @@ use crate::run::{fill, issue_blocking, round_out, untaken, ActorState, Ring, Sha
 use crate::vm::{Control, Event, ForkKind, Op, OpKind, Vm};
 
 /// `user_data` of the read posted on the loop's eventfd.
-const EFD: u64 = u64::MAX;
+pub(crate) const EFD: u64 = u64::MAX;
 /// How long a loop sleeps with nothing to wake it, so the abort flag is seen.
 const IDLE: Duration = Duration::from_millis(50);
 
@@ -54,10 +58,10 @@ const IDLE: Duration = Duration::from_millis(50);
 /// `sqpoll_shared`; the error when that ring could not be built, so nobody waits for it.
 type Gate = (Mutex<Option<std::result::Result<RawFd, String>>>, Condvar);
 
-/// Run this host's instances over the event loops; returns how many loop threads ran and
-/// what the rings were set up with.
-pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<UringReport> {
-    sh.opts.uring.check()?;
+/// This host's instances `(template, actor, count)` dealt round-robin over the event loops
+/// (`--threads`, or one per core, at most one per instance); an instance's sub-actors follow
+/// it. Empty when the host has no instance.
+pub(crate) fn spread(sh: &Shared, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Vec<Vec<(&'static str, i64, i64)>> {
     let mut instances: Vec<(&'static str, i64, i64)> = Vec::new();
     for ((template, count), (lo, hi)) in counts.iter().zip(ranges) {
         for actor in *lo..*hi {
@@ -65,15 +69,26 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
         }
     }
     if instances.is_empty() {
-        return Ok(UringReport { loops: 0, opts: sh.opts.uring.clone(), iowq_defaults: None });
+        return Vec::new();
     }
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
     let threads = if sh.opts.threads == 0 { cores } else { sh.opts.threads }.clamp(1, instances.len());
-    // instances round-robin over the loops; an instance's sub-actors follow it
     let mut per: Vec<Vec<(&'static str, i64, i64)>> = vec![Vec::new(); threads];
     for (i, inst) in instances.into_iter().enumerate() {
         per[i % threads].push(inst);
     }
+    per
+}
+
+/// Run this host's instances over the event loops; returns how many loop threads ran and
+/// what the rings were set up with.
+pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<UringReport> {
+    sh.opts.uring.check()?;
+    let per = spread(sh, counts, ranges);
+    if per.is_empty() {
+        return Ok(UringReport { loops: 0, opts: sh.opts.uring.clone(), iowq_defaults: None });
+    }
+    let threads = per.len();
     let shared = sh.opts.uring.sqpoll_shared;
     let gate: Arc<Gate> = Arc::new((Mutex::new(None), Condvar::new()));
     std::thread::scope(|s| {
@@ -146,26 +161,26 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
 
 // ---------------------------------------------------------------- buffers
 
-struct Chunk {
-    ptr: *mut u8,
+pub(crate) struct Chunk {
+    pub(crate) ptr: *mut u8,
     size: usize,
 }
 
 /// Aligned buffers, one per op in flight. Freed chunks go to the back of their size's queue
 /// and are reused only once the pool holds `target` bytes, so successive I/Os land in
 /// different memory the way a loader's copies do (`NAPKIN_MATH.md` §2.2).
-struct Pool {
+pub(crate) struct Pool {
     free: HashMap<usize, VecDeque<Chunk>>,
     total: usize,
     target: usize,
 }
 
 impl Pool {
-    fn new(target: usize) -> Self {
+    pub(crate) fn new(target: usize) -> Self {
         Pool { free: HashMap::new(), total: 0, target }
     }
 
-    fn get(&mut self, len: usize) -> Chunk {
+    pub(crate) fn get(&mut self, len: usize) -> Chunk {
         let size = (len.max(1) + ALIGN - 1) / ALIGN * ALIGN;
         if self.total >= self.target {
             if let Some(c) = self.free.get_mut(&size).and_then(|q| q.pop_front()) {
@@ -179,7 +194,7 @@ impl Pool {
         Chunk { ptr, size }
     }
 
-    fn put(&mut self, c: Chunk) {
+    pub(crate) fn put(&mut self, c: Chunk) {
         self.free.entry(c.size).or_default().push_back(c);
     }
 }
@@ -295,17 +310,17 @@ enum Wait {
 }
 
 /// What an op in flight needs kept alive and remembered until its completion.
-struct TaskIo {
-    id: usize,
-    a: ActorState,
+pub(crate) struct TaskIo {
+    pub(crate) id: usize,
+    pub(crate) a: ActorState,
     cpath: Option<CString>,
     cpath2: Option<CString>,
     statx: Box<libc::statx>,
-    buf: Option<Chunk>,
-    fd: Option<Arc<OwnedFd>>,
+    pub(crate) buf: Option<Chunk>,
+    pub(crate) fd: Option<Arc<OwnedFd>>,
     /// A direct read rounded out: the aligned start it was issued at.
-    round: Option<i64>,
-    started: Instant,
+    pub(crate) round: Option<i64>,
+    pub(crate) started: Instant,
 }
 
 struct Task {
@@ -324,11 +339,27 @@ struct Task {
     loaders: Vec<usize>,
 }
 
-enum Issued {
+pub(crate) enum Issued {
     /// Done inline: the result and the nanoseconds it took.
     Done(std::io::Result<i64>, u64),
-    /// On the ring.
+    /// On the ring (or in the AIO context).
     Pending,
+}
+
+/// What carries a loop's ops to the kernel and brings their completions back.
+pub(crate) trait Engine {
+    /// Queue the op for the kernel, or do it inline.
+    fn issue(&mut self, sh: &Shared, t: &mut TaskIo, op: &Op) -> Result<Issued>;
+    /// Interpret a completion the way the blocking path interprets a return value.
+    fn complete(&mut self, sh: &Shared, t: &mut TaskIo, op: &Op, res: i32) -> std::io::Result<i64>;
+    /// Ops queued or in the kernel.
+    fn in_flight(&self) -> usize;
+    /// Ask for one completion with `user_data` `EFD` when the eventfd is next written; the
+    /// engine consumes the eventfd's count (`buf` is the loop's, alive until then).
+    fn post_wake(&mut self, efd: RawFd, buf: *mut u64) -> Result<()>;
+    /// Submit what is queued, wait up to `timeout` for a completion, and append every
+    /// completion that is ready as `(user_data, result)`.
+    fn wait(&mut self, timeout: Duration, out: &mut Vec<(u64, i32)>) -> Result<()>;
 }
 
 /// The ring and what issuing needs; disjoint from the tasks so a parked task's op can be
@@ -364,6 +395,34 @@ impl LoopIo {
         let at = Instant::now();
         let r = issue_blocking(&mut *self.inline, sh, &mut t.a, &mut self.rbuf, &mut self.wbuf, op);
         Issued::Done(r, at.elapsed().as_nanos() as u64)
+    }
+
+}
+
+impl Engine for LoopIo {
+    fn in_flight(&self) -> usize {
+        self.in_flight
+    }
+
+    fn post_wake(&mut self, efd: RawFd, buf: *mut u64) -> Result<()> {
+        self.push(opcode::Read::new(types::Fd(efd), buf as *mut u8, 8).build().user_data(EFD))
+    }
+
+    fn wait(&mut self, timeout: Duration, out: &mut Vec<(u64, i32)>) -> Result<()> {
+        let ts = types::Timespec::new().sec(timeout.as_secs()).nsec(timeout.subsec_nanos());
+        let args = types::SubmitArgs::new().timespec(&ts);
+        match self.ring.submitter().submit_with_args(1, &args) {
+            Ok(_) => {}
+            Err(e) if matches!(e.raw_os_error(), Some(libc::ETIME) | Some(libc::EINTR) | Some(libc::EBUSY) | Some(libc::EAGAIN)) => {}
+            Err(e) => return Err(e).context("io_uring_enter"),
+        }
+        for c in self.ring.completion() {
+            if c.user_data() != EFD {
+                self.in_flight -= 1;
+            }
+            out.push((c.user_data(), c.result()));
+        }
+        Ok(())
     }
 
     /// Put the op on the ring, or do it inline.
@@ -520,7 +579,6 @@ impl LoopIo {
         Ok(Issued::Pending)
     }
 
-    /// Interpret a completion the way the blocking path interprets a return value.
     fn complete(&mut self, sh: &Shared, t: &mut TaskIo, op: &Op, res: i32) -> std::io::Result<i64> {
         t.cpath = None;
         t.cpath2 = None;
@@ -567,10 +625,10 @@ impl LoopIo {
 
 // ---------------------------------------------------------------- the loop
 
-struct Loop {
+pub(crate) struct Loop<E: Engine> {
     sh: Arc<Shared>,
     index: usize,
-    io: LoopIo,
+    pub(crate) io: E,
     tasks: Vec<Task>,
     runnable: VecDeque<usize>,
     timers: BinaryHeap<Reverse<(Instant, usize)>>,
@@ -583,7 +641,7 @@ struct Loop {
     live: usize,
 }
 
-impl Loop {
+impl Loop<LoopIo> {
     /// Build the loop's ring with the knobs of `RunOpts::uring` (`attach`: the ring whose
     /// `SQPOLL` thread to share) and cap its io-wq; returns the caps the kernel had before.
     fn new(sh: Arc<Shared>, index: usize, attach: Option<RawFd>) -> Result<(Self, Option<[u32; 2]>)> {
@@ -615,15 +673,23 @@ impl Loop {
         let mut probe = Probe::new();
         ring.submitter().register_probe(&mut probe).context("io_uring probe")?;
         let supported: Vec<bool> = (0..=255u8).map(|c| probe.is_supported(c)).collect();
+        let buf = sh.opts.buffer_bytes;
+        let io = LoopIo { ring, inline: sh.backend(), rbuf: Ring::new(buf), wbuf: Ring::new(buf), pool: Pool::new(buf), supported, in_flight: 0 };
+        Ok((Loop::with(sh, index, io)?, defaults))
+    }
+}
+
+impl<E: Engine> Loop<E> {
+    /// A loop over `io`, with its eventfd subscribed to the coordinator's releases.
+    pub(crate) fn with(sh: Arc<Shared>, index: usize, io: E) -> Result<Self> {
         let efd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
         if efd < 0 {
             return Err(std::io::Error::last_os_error()).context("eventfd");
         }
         let efd = unsafe { OwnedFd::from_raw_fd(efd) };
         sh.coord.subscribe(efd.as_raw_fd());
-        let buf = sh.opts.buffer_bytes;
-        let l = Loop {
-            io: LoopIo { ring, inline: sh.opts.backend.make(), rbuf: Ring::new(buf), wbuf: Ring::new(buf), pool: Pool::new(buf), supported, in_flight: 0 },
+        Ok(Loop {
+            io,
             sh,
             index,
             tasks: Vec::new(),
@@ -636,8 +702,7 @@ impl Loop {
             efd_buf: Box::new(0),
             efd_posted: false,
             live: 0,
-        };
-        Ok((l, defaults))
+        })
     }
 
     fn add_task(&mut self, vm: Vm<'static, 'static>, a: ActorState, inst: Option<usize>, role: Role, active: bool) -> usize {
@@ -682,7 +747,7 @@ impl Loop {
         format!("{}#{} [{}]", ctx.template, ctx.actor, idx.join(","))
     }
 
-    fn run(&mut self, model: &'static Model<'static>, insts: Vec<(&'static str, i64, i64)>) -> Result<()> {
+    pub(crate) fn run(&mut self, model: &'static Model<'static>, insts: Vec<(&'static str, i64, i64)>) -> Result<()> {
         for (template, actor, count) in insts {
             let mut vm = Vm::new(model, template, actor, count);
             vm.start(&model.ast.actors[template].body);
@@ -709,32 +774,24 @@ impl Loop {
                 return Ok(());
             }
             if !self.barrier_waiters.is_empty() && !self.efd_posted {
-                let e = opcode::Read::new(types::Fd(self.efd.as_raw_fd()), &mut *self.efd_buf as *mut u64 as *mut u8, 8).build().user_data(EFD);
-                self.io.push(e)?;
+                self.io.post_wake(self.efd.as_raw_fd(), &mut *self.efd_buf as *mut u64)?;
                 self.efd_posted = true;
             }
-            if self.io.in_flight == 0 && self.timers.is_empty() && !self.efd_posted {
+            if self.io.in_flight() == 0 && self.timers.is_empty() && !self.efd_posted {
                 let parked: Vec<String> = (0..self.tasks.len()).filter(|i| !self.tasks[*i].done).map(|i| self.label(i)).collect();
-                bail!("io_uring loop {}: {} actor(s) wait on channels nothing will complete: {}", self.index, parked.len(), parked.join(", "));
+                bail!("event loop {}: {} actor(s) wait on channels nothing will complete: {}", self.index, parked.len(), parked.join(", "));
             }
             let now = Instant::now();
             let timeout = match self.timers.peek() {
                 Some(Reverse((t, _))) => t.saturating_duration_since(now).min(IDLE),
                 None => IDLE,
             };
-            let ts = types::Timespec::new().sec(timeout.as_secs()).nsec(timeout.subsec_nanos());
-            let args = types::SubmitArgs::new().timespec(&ts);
-            match self.io.ring.submitter().submit_with_args(1, &args) {
-                Ok(_) => {}
-                Err(e) if matches!(e.raw_os_error(), Some(libc::ETIME) | Some(libc::EINTR) | Some(libc::EBUSY) | Some(libc::EAGAIN)) => {}
-                Err(e) => return Err(e).context("io_uring_enter"),
-            }
-            let cqes: Vec<(u64, i32)> = self.io.ring.completion().map(|c| (c.user_data(), c.result())).collect();
+            let mut cqes: Vec<(u64, i32)> = Vec::new();
+            self.io.wait(timeout, &mut cqes)?;
             for (ud, res) in cqes {
                 if ud == EFD {
                     self.efd_posted = false;
                 } else {
-                    self.io.in_flight -= 1;
                     self.complete(ud as usize, res)?;
                 }
             }

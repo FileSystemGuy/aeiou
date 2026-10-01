@@ -7,6 +7,7 @@
 //! in-process coordinator.
 
 pub mod ast;
+pub mod aio;
 pub mod backend;
 pub mod canon;
 pub mod cold;

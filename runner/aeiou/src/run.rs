@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -27,7 +27,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{Ast, Node};
-use crate::backend::{errno_name, Backend, BackendKind, ALIGN};
+use crate::backend::{errno_name, Backend, BackendKind, MmapConsume, MmapMode, MmapStats, ALIGN};
 use crate::coord::{Coordinator, Local};
 use crate::counters::{HostCounters, Sampler};
 use crate::dryrun::{human_bytes, human_ns};
@@ -117,6 +117,95 @@ impl UringReport {
     }
 }
 
+/// What the `libaio` backends report about their AIO contexts (`Report::aio`), summed over
+/// the event loops (and over the hosts once merged); the depth is per loop and the peak is
+/// the largest any loop saw.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AioReport {
+    pub loops: u64,
+    /// `io_setup`'s `nr_events` of each loop's context (`--aio-depth`).
+    pub depth: u64,
+    /// Most requests one context had in flight (queued or in the kernel).
+    pub in_flight_peak: u64,
+    /// `io_submit` calls, the requests they carried, and the time spent inside them: a
+    /// buffered read is done by the time `io_submit` returns, so for a buffered run this is
+    /// the I/O time and the loop was blocked for it.
+    pub submits: u64,
+    pub submitted: u64,
+    pub submit_ns: u64,
+    pub getevents: u64,
+    /// `io_submit` returned `EAGAIN` (the context was full): completions were reaped first.
+    pub full: u64,
+}
+
+impl AioReport {
+    pub fn merge(&mut self, o: &AioReport) {
+        self.loops += o.loops;
+        self.depth = self.depth.max(o.depth);
+        self.in_flight_peak = self.in_flight_peak.max(o.in_flight_peak);
+        self.submits += o.submits;
+        self.submitted += o.submitted;
+        self.submit_ns += o.submit_ns;
+        self.getevents += o.getevents;
+        self.full += o.full;
+    }
+
+    pub fn describe(&self) -> String {
+        format!(
+            "loops {}  context depth {}  in-flight peak {}  io_submit {} calls, {} requests, {} inside  io_getevents {} calls  context full {}",
+            self.loops,
+            self.depth,
+            self.in_flight_peak,
+            self.submits,
+            self.submitted,
+            human_ns(self.submit_ns as i128),
+            self.getevents,
+            self.full
+        )
+    }
+}
+
+/// What the `mmap` backend reports (`Report::mmap`), summed over the actors and the hosts.
+/// The faults themselves are in the host counters (every backend has them).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MmapReport {
+    pub mode: MmapMode,
+    #[serde(default)]
+    pub consume: MmapConsume,
+    pub maps: u64,
+    pub mapped_bytes: u64,
+    /// `madvise` calls (`populate` and `willneed`).
+    pub advised: u64,
+    /// Pages a byte was read from (`touch`; none under `populate`, which touches nothing).
+    #[serde(default)]
+    pub touched_pages: u64,
+    /// Bytes copied into the actors' buffers (`copy`).
+    pub copied_bytes: u64,
+}
+
+impl MmapReport {
+    pub fn merge(&mut self, o: &MmapReport) {
+        self.maps += o.maps;
+        self.mapped_bytes += o.mapped_bytes;
+        self.advised += o.advised;
+        self.touched_pages += o.touched_pages;
+        self.copied_bytes += o.copied_bytes;
+    }
+
+    pub fn describe(&self) -> String {
+        format!(
+            "mode {}  consume {}  mappings {} ({})  madvise calls {}  pages touched {}  copied out {}",
+            self.mode.name(),
+            self.consume.name(),
+            self.maps,
+            human_bytes(self.mapped_bytes),
+            self.advised,
+            self.touched_pages,
+            human_bytes(self.copied_bytes)
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RunOpts {
     /// The directory the abstract's paths are relative to.
@@ -124,8 +213,8 @@ pub struct RunOpts {
     pub backend: BackendKind,
     /// Per-thread read and write buffer ring, bytes.
     pub buffer_bytes: usize,
-    /// Event-loop threads for the `io_uring` backends (0: one per core, at most one per actor
-    /// instance). The `sync` backends run one thread per actor and ignore it.
+    /// Event-loop threads for the `io_uring` and `libaio` backends (0: one per core, at most
+    /// one per actor instance). The other backends run one thread per actor and ignore it.
     pub threads: usize,
     /// Compression ratio of written content.
     pub write_compress: u64,
@@ -133,6 +222,12 @@ pub struct RunOpts {
     pub time_scale: f64,
     /// The ring and io-wq knobs of the `io_uring` backends; the `sync` backends refuse them.
     pub uring: UringOpts,
+    /// What the `mmap` backend does before a read's range is consumed, and how it is
+    /// consumed (a byte of every page, or a copy out).
+    pub mmap: MmapMode,
+    pub mmap_consume: MmapConsume,
+    /// `nr_events` of each `libaio` loop's context (0: `aio::DEPTH`).
+    pub aio_depth: u32,
     pub clean_namespaces: bool,
     pub expect_fingerprint: Option<u64>,
     /// Refuse to start unless every dataset id is in this list (when given).
@@ -479,6 +574,15 @@ pub(crate) struct Shared {
     /// paths it removed (unlink, the source of a rename).
     pub(crate) created: Mutex<Vec<(String, i64)>>,
     pub(crate) removed: Mutex<Vec<String>>,
+    /// What the `mmap` backends count (zero under the others).
+    pub(crate) mmap_stats: Arc<MmapStats>,
+}
+
+impl Shared {
+    /// This run's blocking backend: an actor thread's own, or an event loop's inline one.
+    pub(crate) fn backend(&self) -> Box<dyn Backend> {
+        self.opts.backend.make(self.opts.mmap, self.opts.mmap_consume, &self.mmap_stats)
+    }
 }
 
 /// Per actor instance: its channels and its loader threads.
@@ -573,8 +677,8 @@ impl Drop for Ring {
 
 /// What every actor instance or sub-actor carries whichever driver runs it: its files, its
 /// payload filler, its statistics, and the bookkeeping the namespace manifests need. The
-/// thread-per-actor `Runner` (the `sync` backends) and the `io_uring` event loop
-/// (`uring.rs`) both build on it, so an op is checked and recorded the same way under every
+/// thread-per-actor `Runner` (the blocking backends) and the event loops (`uring.rs`,
+/// `aio.rs`) both build on it, so an op is checked and recorded the same way under every
 /// backend.
 pub(crate) struct ActorState {
     pub(crate) fds: FdTable,
@@ -782,7 +886,12 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
             a.opened(sh, op.path, op.aux, fd);
             Ok(0)
         }
-        OpKind::Close => a.close(op.path).map(|_| 0),
+        OpKind::Close => {
+            if let Ok(fd) = a.fd(op.path) {
+                be.release(fd.as_raw_fd());
+            }
+            a.close(op.path).map(|_| 0)
+        }
         OpKind::Read => {
             let fd = a.fd(op.path)?;
             let al = ALIGN as i64;
@@ -792,21 +901,21 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
                 let buf = rbuf.slice((hi - lo) as usize);
                 let n = be.read(fd.as_fd(), buf, Some(lo))? as i64;
                 let got = (n - (op.offset - lo)).clamp(0, op.len);
-                if !op.positioned {
+                if !op.positioned && !be.positional() {
                     // keep the file position where a plain read would have left it
                     be.lseek(fd.as_fd(), op.offset + got, crate::ast::Whence::SET)?;
                 }
                 return Ok(got);
             }
             let buf = rbuf.slice(op.len as usize);
-            let off = if op.positioned { Some(op.offset) } else { None };
+            let off = if op.positioned || be.positional() { Some(op.offset) } else { None };
             be.read(fd.as_fd(), buf, off).map(|n| n as i64)
         }
         OpKind::Write => {
             let fd = a.fd(op.path)?;
             let buf = wbuf.slice(op.len as usize);
             fill(a, op, buf);
-            let off = if op.positioned { Some(op.offset) } else { None };
+            let off = if op.positioned || be.positional() { Some(op.offset) } else { None };
             be.write(fd.as_fd(), buf, off).map(|n| n as i64)
         }
         OpKind::Lseek => {
@@ -891,7 +1000,7 @@ pub struct Runner {
 
 impl Runner {
     fn new(sh: Arc<Shared>, inst: Arc<Instance>, template: &'static str, actor: i64, main: bool, inherited: Option<Arc<FdTable>>) -> Self {
-        let be = sh.opts.backend.make();
+        let be = sh.backend();
         let buf = sh.opts.buffer_bytes;
         let a = ActorState::new(&sh, template, actor, main, inherited, 1);
         Runner { sh, inst, be, rbuf: Ring::new(buf), wbuf: Ring::new(buf), a }
@@ -1357,6 +1466,11 @@ pub struct Report {
     pub counters: HostCounters,
     /// The rings' setup under the `io_uring` backends (rank 0's once merged); `None` under `sync`.
     pub uring: Option<UringReport>,
+    /// The AIO contexts under the `libaio` backends, and the mappings under `mmap`.
+    #[serde(default)]
+    pub aio: Option<AioReport>,
+    #[serde(default)]
+    pub mmap: Option<MmapReport>,
     /// Each host's cold start (`cold`): the drop when asked, and with `--drop-caches` or
     /// `--require-cold` the dataset residency sample.
     /// Filled by the caller that ran `cold::start` before the gate; empty otherwise.
@@ -1377,7 +1491,7 @@ impl Report {
     pub fn merge_all(reports: Vec<Report>) -> Report {
         let mut it = reports.into_iter();
         let Some(mut m) = it.next() else {
-            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, cold: vec![], created: vec![], removed: vec![], host: String::new() };
+            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, aio: None, mmap: None, cold: vec![], created: vec![], removed: vec![], host: String::new() };
         };
         let mut hosts = vec![m.host.clone()];
         let mut departures: BTreeMap<String, u64> = m.departure_releases.drain(..).collect();
@@ -1391,6 +1505,16 @@ impl Report {
             }
             m.threads_peak += r.threads_peak;
             m.counters.merge(&r.counters);
+            match (&mut m.aio, &r.aio) {
+                (Some(a), Some(b)) => a.merge(b),
+                (None, Some(b)) => m.aio = Some(b.clone()),
+                _ => {}
+            }
+            match (&mut m.mmap, &r.mmap) {
+                (Some(a), Some(b)) => a.merge(b),
+                (None, Some(b)) => m.mmap = Some(b.clone()),
+                _ => {}
+            }
             m.cold.extend(r.cold);
             m.created.extend(r.created);
             m.removed.extend(r.removed);
@@ -1455,18 +1579,23 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
         input_objects,
         created: Mutex::new(Vec::new()),
         removed: Mutex::new(Vec::new()),
+        mmap_stats: Arc::new(MmapStats::default()),
     });
 
     let sampler = Sampler::start(&sh.opts.root);
     let t0 = Instant::now();
-    if sh.opts.backend.uring() {
-        let loops = crate::uring::run(model, &sh, &counts, &ranges);
+    if sh.opts.backend.event_loop() {
+        let loops = if sh.opts.backend.uring() {
+            crate::uring::run(model, &sh, &counts, &ranges).map(|u| (u.loops, Some(u), None))
+        } else {
+            crate::aio::run(model, &sh, &counts, &ranges).map(|a| (a.loops, None, Some(a)))
+        };
         let elapsed = t0.elapsed();
         let counters = sampler.finish();
         return match loops {
-            Ok(info) => {
-                sh.stats.lock().unwrap().threads += info.loops;
-                assemble(sh, counts, rank_record, elapsed, counters, Some(info))
+            Ok((n, uring, aio)) => {
+                sh.stats.lock().unwrap().threads += n;
+                assemble(sh, counts, rank_record, elapsed, counters, uring, aio)
             }
             Err(e) => {
                 sh.coord.stop(&format!("{e:#}"));
@@ -1518,11 +1647,11 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
         sh.coord.stop(&format!("{e:#}"));
         return Err(e);
     }
-    assemble(sh, counts, rank_record, elapsed, counters, None)
+    assemble(sh, counts, rank_record, elapsed, counters, None, None)
 }
 
 /// The host's report once every actor has ended.
-fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: RankRecord, elapsed: Duration, counters: HostCounters, uring: Option<UringReport>) -> Result<Report> {
+fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: RankRecord, elapsed: Duration, counters: HostCounters, uring: Option<UringReport>, aio: Option<AioReport>) -> Result<Report> {
     if sh.aborted.load(Ordering::Relaxed) {
         bail!("run aborted: {}", sh.coord.abort_reason().unwrap_or_else(|| "an actor failed".into()));
     }
@@ -1545,6 +1674,19 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
         departure_releases: sh.coord.departure_releases(),
         counters,
         uring,
+        aio,
+        mmap: (sh.opts.backend == BackendKind::Mmap).then(|| {
+            let m = &sh.mmap_stats;
+            MmapReport {
+                mode: sh.opts.mmap,
+                consume: sh.opts.mmap_consume,
+                touched_pages: m.touched_pages.load(Ordering::Relaxed),
+                maps: m.maps.load(Ordering::Relaxed),
+                mapped_bytes: m.mapped_bytes.load(Ordering::Relaxed),
+                advised: m.advised.load(Ordering::Relaxed),
+                copied_bytes: m.copied_bytes.load(Ordering::Relaxed),
+            }
+        }),
         cold: Vec::new(),
         created,
         removed,
@@ -1559,13 +1701,15 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
 fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()> {
     writeln!(
         out,
-        "host: tasks peak {}  io-wq workers peak {}{}  cpu user {} sys {}  maxrss {}",
+        "host: tasks peak {}  io-wq workers peak {}{}  cpu user {} sys {}  maxrss {}  faults minor {} major {}",
         c.tasks_peak,
         c.iowq_workers_peak,
         if c.sqpoll_threads_peak > 0 { format!("  sqpoll threads peak {}", c.sqpoll_threads_peak) } else { String::new() },
         human_ns(c.cpu_user_ns as i128),
         human_ns(c.cpu_sys_ns as i128),
-        human_bytes(c.maxrss_bytes)
+        human_bytes(c.maxrss_bytes),
+        c.minor_faults,
+        c.major_faults
     )?;
     let Some(m) = &c.mount else { return Ok(()) };
     write!(out, "mount {} ({}, {})", m.mount_point, m.fstype, m.device)?;
@@ -1622,6 +1766,12 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
     writeln!(out, "elapsed {:.3} s  threads {}", secs, s.threads)?;
     if let Some(u) = &r.uring {
         writeln!(out, "io_uring: {}", u.describe())?;
+    }
+    if let Some(a) = &r.aio {
+        writeln!(out, "libaio: {}", a.describe())?;
+    }
+    if let Some(m) = &r.mmap {
+        writeln!(out, "mmap: {}", m.describe())?;
     }
     for c in &r.cold {
         crate::cold::write(out, c)?;

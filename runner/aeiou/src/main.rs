@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Result};
 use clap::{Args, Parser, Subcommand};
 
-use aeiou::backend::BackendKind;
+use aeiou::backend::{BackendKind, MmapConsume, MmapMode};
 use aeiou::coord::{Coordinator, Local, Server, Tcp};
 use aeiou::datagen::{self, DatagenOpts};
 use aeiou::dryrun;
@@ -79,11 +79,14 @@ struct RunCmd {
     #[arg(long)]
     root: PathBuf,
     /// `sync` (buffered POSIX on one thread per actor), `sync-direct` (the same with O_DIRECT),
-    /// `io_uring` (an event loop per thread multiplexing the actors over one ring), `io_uring-direct`.
+    /// `io_uring` (an event loop per thread multiplexing the actors over one ring), `io_uring-direct`,
+    /// `posix-aio` (glibc aio_read/aio_write on one thread per actor), `posix-aio-direct`,
+    /// `libaio` (the kernel AIO calls on the event loop; asynchronous only as `libaio-direct`),
+    /// `mmap` (reads are copies out of a mapping of the file).
     #[arg(long = "io-backend", default_value = "sync")]
     backend: String,
-    /// Event-loop threads for the io_uring backends (default: one per core, at most one per actor
-    /// instance). The sync backends run one thread per actor and ignore it.
+    /// Event-loop threads for the io_uring and libaio backends (default: one per core, at most one
+    /// per actor instance). The other backends run one thread per actor and ignore it.
     #[arg(long)]
     threads: Option<usize>,
     /// Per-thread read and write buffer ring, MiB.
@@ -113,6 +116,19 @@ struct RunCmd {
     /// io_uring: IORING_SETUP_COOP_TASKRUN.
     #[arg(long)]
     coop_taskrun: bool,
+    /// libaio: requests each loop's AIO context holds (io_setup's nr_events; the host's total is
+    /// bounded by fs.aio-max-nr). Default 256.
+    #[arg(long, value_name = "N")]
+    aio_depth: Option<u32>,
+    /// mmap: the prefetch before a read's range is consumed: `fault` (none: the touch faults
+    /// the pages in), `populate` (MADV_POPULATE_READ over the range), `willneed` (MADV_WILLNEED).
+    #[arg(long, value_name = "MODE")]
+    mmap_mode: Option<String>,
+    /// mmap: how a read's range is consumed: `touch` (one byte of every page is read, so each
+    /// page is resident and mapped; nothing under `populate`, which has done that) or `copy`
+    /// (the range is copied into the actor's buffer). Default touch.
+    #[arg(long, value_name = "HOW")]
+    mmap_consume: Option<String>,
     /// Empty the namespace roots before starting instead of refusing.
     #[arg(long)]
     clean_namespaces: bool,
@@ -248,6 +264,22 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         bail!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-backend {} has no ring", backend.name());
     }
     uring.check()?;
+    if a.aio_depth.is_some() && !backend.libaio() {
+        bail!("--aio-depth is a libaio knob; --io-backend {} has no AIO context", backend.name());
+    }
+    if a.aio_depth == Some(0) {
+        bail!("--aio-depth 0: a context needs room for a request");
+    }
+    let mmap = match &a.mmap_mode {
+        None => MmapMode::default(),
+        Some(_) if backend != BackendKind::Mmap => bail!("--mmap-mode is an mmap knob; --io-backend {} maps nothing", backend.name()),
+        Some(m) => MmapMode::parse(m).ok_or_else(|| anyhow::anyhow!("--mmap-mode {m}: not one of fault, populate, willneed"))?,
+    };
+    let mmap_consume = match &a.mmap_consume {
+        None => MmapConsume::default(),
+        Some(_) if backend != BackendKind::Mmap => bail!("--mmap-consume is an mmap knob; --io-backend {} maps nothing", backend.name()),
+        Some(c) => MmapConsume::parse(c).ok_or_else(|| anyhow::anyhow!("--mmap-consume {c}: not one of touch, copy"))?,
+    };
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.abstract_path)?));
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
@@ -259,7 +291,13 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     let mut out = stdout.lock();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
-    writeln!(out, "backend {}  root {}{}", backend.name(), a.root.display(), if uring.any() { format!("  io_uring knobs: {}", uring.describe()) } else { String::new() })?;
+    writeln!(out, "backend {}  root {}{}", backend.name(), a.root.display(), if uring.any() {
+        format!("  io_uring knobs: {}", uring.describe())
+    } else if backend == BackendKind::Mmap {
+        format!("  mmap mode: {}  consume: {}", mmap.name(), mmap_consume.name())
+    } else {
+        String::new()
+    })?;
 
     let checks = run::check_datasets(loaded, cfg, &a.root)?;
     for c in &checks {
@@ -287,6 +325,9 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         write_compress: a.write_compress,
         time_scale: a.time_scale.max(0.0),
         uring,
+        mmap,
+        mmap_consume,
+        aio_depth: a.aio_depth.unwrap_or(0),
         clean_namespaces: a.clean_namespaces,
         expect_fingerprint,
         expect_dataset_ids: a.expect_dataset_ids.clone(),
@@ -323,6 +364,8 @@ fn run_cmd(a: RunCmd) -> Result<()> {
                 "params": payload::params_json(&loaded.doc, cfg, params)?,
                 "dataset_ids": dataset_ids,
                 "backend": backend.name(),
+                "mmap_mode": mmap.name(),
+                "mmap_consume": mmap_consume.name(),
                 "rank_rotate": a.rank_rotate,
                 "time_scale": opts.time_scale,
                 "write_compress": a.write_compress,

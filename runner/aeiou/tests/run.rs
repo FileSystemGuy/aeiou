@@ -3,12 +3,13 @@
 //! returns the computed count), the run's fingerprint equals the dry run's, the manifest
 //! check refuses a changed definition, namespaces must be empty, and a loader delivers its
 //! batches in order under real concurrency. The `io_uring` backends run the same abstracts
-//! on the event loop and must produce the same fingerprint, counts, and bytes.
+//! on the event loop and must produce the same fingerprint, counts, and bytes, and so must
+//! `posix-aio`, `libaio`, and `mmap`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use aeiou::backend::BackendKind;
+use aeiou::backend::{BackendKind, MmapConsume, MmapMode};
 use aeiou::datagen::{datagen, DatagenOpts};
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, Model, Params};
@@ -56,6 +57,9 @@ fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
         write_compress: 1,
         time_scale: 0.0,
         uring: Default::default(),
+        mmap: Default::default(),
+        mmap_consume: Default::default(),
+        aio_depth: 0,
         clean_namespaces: false,
         expect_fingerprint: None,
         expect_dataset_ids: vec![],
@@ -88,7 +92,17 @@ fn small_files_training_round_trip() {
     assert_eq!(checks[0].files, Some(600));
     run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
     let (fp, ops, bytes) = dry_fingerprint(model);
-    for backend in [BackendKind::Sync, BackendKind::SyncDirect, BackendKind::Uring, BackendKind::UringDirect] {
+    for backend in [
+        BackendKind::Sync,
+        BackendKind::SyncDirect,
+        BackendKind::Uring,
+        BackendKind::UringDirect,
+        BackendKind::PosixAio,
+        BackendKind::PosixAioDirect,
+        BackendKind::LibAio,
+        BackendKind::LibAioDirect,
+        BackendKind::Mmap,
+    ] {
         let r = go(model, opts(&root, backend));
         assert_eq!(r.stats.fingerprint, fp, "{:?}: fingerprint", backend);
         assert_eq!(r.stats.ops, ops);
@@ -353,6 +367,113 @@ fn io_uring_reproduces_the_sync_runs() {
             assert_eq!(r.stats.ops, ops);
             assert_eq!(r.stats.barriers, 2 * 2 * 4, "barriers between loops go through the coordinator's eventfd");
             assert_eq!(r.stats.bytes_read, r.stats.bytes_written - 2 * 65536);
+            assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * 65536);
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+#[test]
+fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
+    // The same three abstracts as the io_uring test, under the other backends: glibc AIO and
+    // the mapping on one thread per actor, the kernel AIO context on the event loop. Each
+    // must reproduce the dry run's fingerprint, op count, and bytes, and report its own block.
+    let blocking = [BackendKind::PosixAio, BackendKind::PosixAioDirect, BackendKind::Mmap];
+    let looped = [BackendKind::LibAio, BackendKind::LibAioDirect];
+    {
+        let root = tmpdir("more-kv");
+        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8")];
+        let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(2, 5, &params));
+        gen(loaded, cfg, model, &root);
+        let (fp, ops, bytes) = dry_fingerprint(model);
+        for backend in blocking.into_iter().chain(looped) {
+            for threads in [1usize, 3] {
+                run::prepare_namespaces(&loaded.ast, &root, true).unwrap();
+                let mut o = opts(&root, backend);
+                o.threads = threads;
+                let r = go(model, o);
+                assert_eq!(r.stats.fingerprint, fp, "{backend:?} with --threads {threads}");
+                assert_eq!(r.stats.ops, ops);
+                assert_eq!(r.stats.bytes_read, bytes);
+                assert!(r.uring.is_none());
+                match &r.aio {
+                    Some(a) => {
+                        assert!(backend.libaio());
+                        assert_eq!(r.stats.threads as usize, threads.min(2), "loop threads, not actors");
+                        assert_eq!((a.loops as usize, a.depth), (threads.min(2), aeiou::aio::DEPTH as u64));
+                        let rw = r.stats.counts[&aeiou::vm::OpKind::Read] + r.stats.counts.get(&aeiou::vm::OpKind::Write).copied().unwrap_or(0);
+                        assert!(a.submitted >= rw, "every read and write went through io_submit: {a:?}");
+                        assert!(a.in_flight_peak >= 1 && a.in_flight_peak <= a.depth, "{a:?}");
+                        assert!(a.submits <= a.submitted && a.getevents > 0, "{a:?}");
+                    }
+                    None => assert!(!backend.libaio()),
+                }
+                assert_eq!(r.mmap.is_some(), backend == BackendKind::Mmap);
+            }
+        }
+        // the smallest context that can be asked for (the kernel rounds it up to a few per
+        // CPU, so it does not fill here): the op stream is the same
+        run::prepare_namespaces(&loaded.ast, &root, true).unwrap();
+        let mut o = opts(&root, BackendKind::LibAioDirect);
+        o.threads = 1;
+        o.aio_depth = 1;
+        let r = go(model, o);
+        assert_eq!(r.stats.fingerprint, fp);
+        assert_eq!(r.aio.as_ref().unwrap().depth, 1);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    {
+        let root = tmpdir("more-diskann");
+        let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
+        let (loaded, cfg, model) = leaked_model("vdb_search_diskann", config(2, 9, &params));
+        gen(loaded, cfg, model, &root);
+        let (fp, ops, bytes) = dry_fingerprint(model);
+        for backend in blocking.into_iter().chain(looped) {
+            let r = go(model, opts(&root, backend));
+            assert_eq!(r.stats.fingerprint, fp, "{backend:?}");
+            assert_eq!(r.stats.ops, ops);
+            assert_eq!(r.stats.bytes_read, bytes);
+        }
+        // the mapping under each mode and each way of consuming a range: the two advising
+        // modes call madvise once per read; `touch` reads a byte of every page of every
+        // read (these are 4 KiB reads at 4 KiB offsets: one page each) and copies nothing,
+        // except under `populate`, which leaves nothing to touch; `copy` copies every byte
+        for mode in [MmapMode::Fault, MmapMode::Populate, MmapMode::WillNeed] {
+            for consume in [MmapConsume::Touch, MmapConsume::Copy] {
+                let mut o = opts(&root, BackendKind::Mmap);
+                o.mmap = mode;
+                o.mmap_consume = consume;
+                let r = go(model, o);
+                assert_eq!(r.stats.fingerprint, fp, "{mode:?} {consume:?}");
+                assert_eq!(r.stats.bytes_read, bytes, "{mode:?} {consume:?}");
+                let m = r.mmap.as_ref().unwrap();
+                assert_eq!((m.mode, m.consume), (mode, consume), "{m:?}");
+                assert!(m.maps >= 1 && m.mapped_bytes > 0, "{m:?}");
+                let reads = r.stats.counts[&aeiou::vm::OpKind::Read];
+                assert_eq!(m.advised, if mode == MmapMode::Fault { 0 } else { reads }, "{m:?}");
+                let (touched, copied) = match (consume, mode) {
+                    (MmapConsume::Copy, _) => (0, bytes),
+                    (MmapConsume::Touch, MmapMode::Populate) => (0, 0),
+                    (MmapConsume::Touch, _) => (bytes / 4096, 0),
+                };
+                assert_eq!((m.touched_pages, m.copied_bytes), (touched, copied), "{m:?}");
+                assert!(r.counters.minor_faults + r.counters.major_faults > 0, "{:?}", r.counters);
+            }
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    {
+        let root = tmpdir("more-ckpt");
+        let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true")];
+        let (loaded, _cfg, model) = leaked_model("ckpt_write_dcp", config(2, 3, &params));
+        let (fp, ops, _) = dry_fingerprint(model);
+        for backend in blocking.into_iter().chain(looped) {
+            run::prepare_namespaces(&loaded.ast, &root, true).unwrap();
+            let r = go(model, opts(&root, backend));
+            assert_eq!(r.stats.fingerprint, fp, "{backend:?}");
+            assert_eq!(r.stats.ops, ops);
+            assert_eq!(r.stats.barriers, 2 * 2 * 4, "{backend:?}: barriers (on the loop: the poll on the eventfd)");
+            assert_eq!(r.stats.bytes_read, r.stats.bytes_written - 2 * 65536, "{backend:?}: written, then read back (through a mapping made after the write)");
             assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * 65536);
         }
         std::fs::remove_dir_all(&root).unwrap();
