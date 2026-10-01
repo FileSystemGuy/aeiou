@@ -228,13 +228,15 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
     the two durations and `Cached`, the dentry count, and the inode count before and
     after. The flag is part of the configuration the coordinator compares: a run is cold on
     every host or on none. Never inside a run.
-  - always, the residency sample: for every dataset, at most 256 files at evenly spaced
+  - with `--drop-caches` or `--require-cold` (~~always~~; opt-in since later the same day,
+    `DESIGN_REVIEW.md` §3.31: a plain run does not pay the sample's opens), the residency
+    sample: for every dataset, at most 256 files at evenly spaced
     file ids (`⌊k·files/256⌋`, the same on every host; chunk `id mod chunks` of a chunked
     file), each mapped and passed to `mincore`: whole up to 256 MiB, 64 evenly spaced
     4 MiB windows beyond. No data is read and no root is needed. The line is
-    `256 of 16000 files sampled, 280 of 7959 pages resident (3.5 %)`, with a warning when
-    any page is resident; `--require-cold` turns the warning into a refusal, as it already
-    did for input namespaces written on the reading host. The sample is a floor, not a
+    `256 of 16000 files sampled, 280 of 7959 pages resident (3.5 %)`; `--require-cold`
+    refuses when any page is resident, as it already did for input namespaces written on
+    the reading host, and `--drop-caches` alone warns (pages that survived the drop). The sample is a floor, not a
     proof: it sees data pages of the sampled files only, and its own opens leave those few
     hundred files' dentries and attributes (on NFSv4 possibly delegations) on the client.
   A tmpfs is its own page cache: nothing drops and every page is resident, which the check

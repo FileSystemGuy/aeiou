@@ -1129,7 +1129,8 @@ cache state is solution, not application (§3.12).
 its duration, before/after `Cached` from `/proc/meminfo` and `/proc/sys/fs/dentry-state`
 and `inode-nr` (world-readable), and a residency check that samples a few hundred dataset
 files by formula (no per-file structure, no root) and asks `mincore` what fraction of their
-pages is resident at the start. That line is useful without the flag, as the dataset
+pages is resident at the start. ~~That line is useful without the flag,~~ (revised below:
+sampled only with `--drop-caches` or `--require-cold`) as the dataset
 counterpart of the warm-open count for input namespaces (§3.24), and `--require-cold`
 covers both. The host counters gain the mount's `opts:` line, since `actimeo`,
 `lookupcache`, and `nconnect` decide cache behaviour more than any drop does, and §3.30's
@@ -1172,6 +1173,16 @@ these points settled in the building:
   would be the better figure (not changed yet). Still untried: a real NFS client against a
   real server, and the drop's duration after an enumerate of tens of millions of files.
 - `aeiou-launch --remount` is not built.
+
+**Revised 2026-10-01 (user): the residency sample is opt-in.** It runs only with
+`--drop-caches` (where it is the proof the drop worked; `Cached` proved a poor witness) or
+`--require-cold` (where it is the gate that refuses before an hour is spent). A plain run
+no longer samples. Reasons: the sample perturbs what it measures (the root run above sent
+ten fewer `OPEN`s because of it); it is 256 files of data pages, blind to dentries and
+attributes; on NFS the report's server-read bytes against bytes read already expose a warm
+run exactly, after the fact; and under `O_DIRECT` it is beside the point. What is given
+up: the unprompted warning on filesystems with no client counters. An operator who wants
+it there passes `--require-cold`.
 
 ### 3.32 Object backends through `s3dlio`: a preliminary opinion (added 2026-10-01)
 

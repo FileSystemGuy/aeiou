@@ -289,8 +289,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     fails on any host. The report records the drop, its duration (outside `elapsed` by
     construction), and before/after `Cached`, `dentry-state`, `inode-nr`; a residency check
     (`mincore` over a few hundred dataset files chosen by formula, no root) reports the
-    fraction of sampled dataset pages resident at the start, with or without the flag, and
-    `--require-cold` covers it as it covers input namespaces. The mount's `opts:` line
+    fraction of sampled dataset pages resident at the start, ~~with or without the flag,~~ only
+    with `--drop-caches` or `--require-cold` (revised the same day: a plain run does not pay
+    the sample's opens), and `--require-cold` covers it as it covers input namespaces. The mount's `opts:` line
     (`actimeo`, `lookupcache`, `nconnect`) goes into the host counters. The full reset
     (`fscache`, NFSv4 state) is `aeiou-launch --remount`, outside the runner, which never
     unmounts the storage under test.
