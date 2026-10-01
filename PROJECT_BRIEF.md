@@ -101,7 +101,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   | `sync-direct` | same, `O_DIRECT` | |
   | `posix-aio` | glibc `aio_read`/`lio_listio` | user-space thread pool inside glibc; included for completeness, expect it to track `sync` |
   | `libaio` | `io_submit`/`io_getevents` | the kernel AIO path; truly async only with `O_DIRECT`; what fio and vendors mean by "AIO" |
-  | `io_uring` | `io-uring` crate | feature knobs (SQPOLL, fixed files/buffers, linking) are options, not backends; **built 2026-10-01** (`runner/README.md` §8), the knobs not yet |
+  | `io_uring` | `io-uring` crate | feature knobs (SQPOLL, fixed files/buffers, linking) are options, not backends; **built 2026-10-01** (`runner/README.md` §8); ~~the knobs not yet~~ the ring and io-wq knobs the same day (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`, `--defer-taskrun`, `--coop-taskrun`; `DESIGN_REVIEW.md` §3.34), fixed files/buffers and linking not |
   | `mmap` | `mmap` + page touch, or `MADV_POPULATE_READ` / `MADV_WILLNEED` as prefetch variants | how safetensors, Arrow/HF datasets, and llama.cpp load; runs on the thread pool. The abstract's `read(f, off, len)` maps to populating that range |
   | `gds` | cuFile: `cuFileRead` (sync), batch API, stream-ordered | needs a CUDA device on the client. **Must detect and report compat mode** (POSIX bounce buffer fallback), which is the common case on NFS |
   | `nixl-posix` | NIXL with its POSIX plugin (`nixl-sys` Rust bindings) | needs a CUDA device; per-transfer descriptor setup will dominate small reads, which is a valid result |
@@ -118,7 +118,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   cuFile compat-mode flag and `cufile_stats`, NIXL backend selected) alongside the common
   `mountstats` RPC counts. fio's engine list is the cross-check for this set, and fio itself is
   used to validate each backend's raw numbers before ours are trusted. (The common set is in
-  the report since 2026-10-01: task and io-wq worker peaks, CPU, RSS, the mount's NFS byte
+  the report since 2026-10-01: task, io-wq worker, and `SQPOLL` thread peaks, CPU, RSS, the mount's NFS byte
   and RPC deltas; `runner/README.md` §4, `DESIGN_REVIEW.md` §3.30.)
 
 ## 5. Decisions so far
@@ -203,8 +203,11 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    thread-pool half exists as `aeiou run --io-backend sync|sync-direct` (2026-09-30), **the
    io_uring half as `io_uring|io_uring-direct` (2026-10-01, `runner/README.md` §8)**; the
    measurements wait for the real target. On the loopback mount the io-wq worker count peaks
-   at the core count for buffered and direct reads alike, because every open punts, so the
-   hypothesis needs open-heavy and read-heavy phases measured apart.
+   ~~at the core count~~ at the count of actors with a punted op (20 with 20 actors, 30 to 46
+   with 72; the kernel's cap is 80 per loop) for buffered and direct reads alike, because
+   every open punts, so the hypothesis needs open-heavy and read-heavy phases measured apart.
+   `--iowq-max-workers` (2026-10-01) is the knob for it: on the loopback a cap of one worker
+   per loop lost nothing (`DESIGN_REVIEW.md` §3.34).
 5. Spike 2: correctness and speed of the Feistel permutation at 50M/100M.
 6. Spike 3: client dentry/inode slab growth and NFS op mix when touching 50M files.
 7. Check `RWF_DONTCACHE` support in the NFS client on the target kernels.

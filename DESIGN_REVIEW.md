@@ -1040,10 +1040,12 @@ implemented (`read_all(columns=[…])`) and traced but no committed abstract use
   faster still but used as much CPU as the threads (`runner/README.md` §8). On the loopback
   NFS mount the RPC counts are identical between `sync` and `io_uring`, which is the
   correctness statement (the NFS client sees the same calls), and the io-wq worker count
-  peaked at the core count for buffered and direct reads alike, because `openat` punts
-  whatever the reads do. Spike 1's hypothesis (R1) is neither confirmed nor refuted here: it
-  needs the real target and phases that separate opens from reads. The knobs it will need
-  (`IORING_REGISTER_IOWQ_MAX_WORKERS`, `ATTACH_WQ`, fixed files) are listed and not built.
+  peaked at ~~the core count~~ 20 for buffered and direct reads alike, because `openat` punts
+  whatever the reads do (20 was the actor count, not the core count or a kernel cap:
+  corrected in §3.34). Spike 1's hypothesis (R1) is neither confirmed nor refuted here: it
+  needs the real target and phases that separate opens from reads. ~~The knobs it will need
+  (`IORING_REGISTER_IOWQ_MAX_WORKERS`, `ATTACH_WQ`, fixed files) are listed and not built.~~
+  The ring and io-wq knobs built the same day (§3.34); fixed files and buffers not.
 - **Open.** ~~The per-backend counters (io-wq workers sampled from `/proc`, `mountstats`
   deltas) are shell scripts around the runner, not report fields;~~ (report fields the same
   day, §3.30) `libaio`, `posix-aio`, and `mmap` now have the VM they need and are the next
@@ -1184,6 +1186,54 @@ ten nodes linear. The caveats are the ones the loopback cannot remove: per-RPC C
 connection scaling on a real client, NUMA placement of loops and buffers at 280 GB/s of
 DRAM traffic, and io-wq as the `io_uring` lever rather than loop count.
 
+### 3.34 The `io_uring` knobs as built (added 2026-10-01)
+
+**What was open.** §3.29 left the A/B knobs of `NAPKIN_MATH.md` §8.5 unbuilt, and §3.33
+named the io-wq cap as the first one a big node needs. Built: `--iowq-max-workers`,
+`--sqpoll` with `--sqpoll-shared`, `--defer-taskrun`, `--coop-taskrun`
+(`runner/README.md` §8, `RunOpts::uring`, `tests/uring_knobs.rs`).
+
+**Choices, and why.**
+
+- **Options, not backends** (brief §4): the op stream and the fingerprint are untouched,
+  and every knob combination reproduces the dry-run fingerprint in the tests.
+- **Refused under `sync`, not ignored.** `--threads` is ignored there, which is harmless;
+  a ring knob silently ignored would let a result be labeled with a setup it did not have.
+- **Outside the coordinator's configuration hash,** like `--threads`: host tuning, printed
+  in the report. Whether a published comparison must hold them equal across hosts is the
+  comparison policy's question (brief §5, R17), not the runner's.
+- **The cap is per loop because io-wq is per task.** Since 5.12 the worker pool belongs to
+  the task that owns the ring, so each loop thread has its own and the host total is
+  `N × --threads`. `IORING_SETUP_ATTACH_WQ` no longer shares workers between tasks; it
+  shares the `SQPOLL` thread, whose io-wq then serves every attached ring. That is why
+  `--sqpoll-shared` requires `--sqpoll` and why a bare "attach" knob was not built: without
+  `SQPOLL` it would do nothing.
+- **The kernel's caps are reported with or without the flag.** The register call returns
+  the previous values, and a zero leaves a cap alone, so one call per ring both reads and
+  sets. On this box: 80 bounded (`min(SQ entries, 4 × cores)`), 127,569 unbounded
+  (`RLIMIT_NPROC`).
+- **Not built:** fixed files, fixed buffers, op linking (reasons in the README; linking
+  stays off per §5).
+
+**What the knobs corrected.** §3.29 and the README read the loopback io-wq peak of 20 as
+"the core count (io-wq's bounded-worker cap)". The cap is 80 per loop. 20 was the number of
+actors (4 GPUs × 5), each with one op in flight, on a 20-core box. With 72 actors the peak
+was 30 to 46.
+
+**What the first runs showed (loopback, `runner/README.md` §8 table).** Capping the workers
+at one per loop (four in all) ran the 72-actor small-file mix in the same time as the
+default's 30 to 46, with the same RPCs and a little less CPU. `SQPOLL` per loop cost a third
+more CPU for nothing; one shared poll thread halved the rate. `DEFER_TASKRUN` and
+`COOP_TASKRUN` were neutral. So the lever §3.33 predicted is real in direction (fewer
+workers lose nothing) and unmeasured in size: the loopback server competes for the same
+cores, and Spike 1 on the real target should run the cap at 1, 2, and default with open-heavy
+and read-heavy phases apart.
+
+**A test artifact worth knowing.** A closed ring's `SQPOLL` thread and io-wq workers exit
+asynchronously, some milliseconds after the run returns. Runs in one process (the tests)
+must wait for them before counting the next run's; the CLI is one run per process and is
+unaffected. The knob test lives in its own file, hence its own process, for the same reason.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -1211,8 +1261,9 @@ DRAM traffic, and io-wq as the `io_uring` lever rather than loop count.
   abstracts done the same day (§3.28). ~~Next: the resumable VM and `io_uring`, the per-actor
   sub-actor pool, `mountstats` and `--metrics`;~~ The resumable VM and the `io_uring` backends
   done 2026-10-01 (§3.29), the host counters the same day (§3.30); `--drop-caches` decided
-  and the object-backend opinion recorded (§3.31, §3.32, brief §6 items 16–17). Next: the
-  `io_uring` knobs, `--drop-caches` with the residency check and the mount options in the
+  and the object-backend opinion recorded (§3.31, §3.32, brief §6 items 16–17). ~~Next: the
+  `io_uring` knobs,~~ The ring and io-wq knobs done the same day (§3.34). Next:
+  `--drop-caches` with the residency check and the mount options in the
   counters, `libaio`/`posix-aio`/`mmap`, the per-actor sub-actor pool, `--metrics`; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.

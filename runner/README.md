@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. |
 | `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct] [--threads N] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct] [--threads N] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (`libaio`, `posix-aio`, `mmap`, …; ~~`io_uring`~~
@@ -70,6 +70,7 @@ aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantic
 aeiou/tests/layout.rs   contract 0.2: framed layouts by hand, unit/column handles, stream consume, fadvise
 aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refusals, loader order;
                         the `io_uring` backends over the same abstracts, on one loop and on several
+aeiou/tests/uring_knobs.rs  the ring and io-wq knobs (§8): same fingerprint, the io-wq cap holds, the SQPOLL threads are counted
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
 aeiou-launch            the ssh loop: one rank per host
 ```
@@ -220,6 +221,7 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   (`Report::counters`, summed over hosts by the coordinator). A sampler thread reads
   `/proc/self/status` every 10 ms for the peak task count of the process and, at every
   change, counts the `iou-wrk-*` threads in `/proc/self/task` for the io-wq worker peak
+  (and the `iou-sqp-*` threads, printed as `sqpoll threads peak` when there are any)
   (workers linger idle for seconds, so the peak is not missed); `getrusage` before and after
   gives user and system CPU and the peak RSS; `/proc/self/mountstats` before and after gives
   the mount `--root` is on (longest mount point that is a prefix of the canonical root: its
@@ -458,11 +460,32 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   barrier is a deadlock and is reported with the parked actors.
 - **Stall and latency** are measured as under `sync`: an op from SQE push to CQE (queueing
   in the SQ included, as the application sees it), a `take` from park to wake.
-- **Not done**, deliberately, as the A/B knobs of `NAPKIN_MATH.md` §8.5: fixed files and
+- ~~**Not done**, deliberately, as the A/B knobs of `NAPKIN_MATH.md` §8.5: fixed files and
   buffers, `SQPOLL`, `SINGLE_ISSUER`/`DEFER_TASKRUN`, `IORING_SETUP_ATTACH_WQ`,
-  `IORING_REGISTER_IOWQ_MAX_WORKERS`, op linking. ~~And the per-backend counters (io-wq
-  workers, `mountstats` deltas), which are still shell scripts around the runner.~~ Report
-  fields since 2026-10-01 (§4, host counters).
+  `IORING_REGISTER_IOWQ_MAX_WORKERS`, op linking. And the per-backend counters (io-wq
+  workers, `mountstats` deltas), which are still shell scripts around the runner.~~ The
+  counters are report fields since 2026-10-01 (§4, host counters); the ring knobs follow.
+- **Knobs** (`RunOpts::uring`, added 2026-10-01, `DESIGN_REVIEW.md` §3.34). Options of the
+  two `io_uring` backends, never backends of their own; none changes the op stream or the
+  fingerprint, and the `sync` backends refuse them rather than ignore them, so a row of the
+  A/B matrix cannot be mislabeled. Like `--threads` they are a host's tuning, not part of
+  the configuration the coordinator compares; the report prints them (`io_uring:` line,
+  rank 0's once merged).
+
+  | flag | kernel | what it does |
+  |---|---|---|
+  | `--iowq-max-workers N` | `IORING_REGISTER_IOWQ_MAX_WORKERS` (5.15) | caps the bounded io-wq workers. io-wq belongs to the task that owns the ring, so the cap is **per loop**: `N × --threads` workers on the host. The same call returns the kernel's caps before ours, which the report prints with or without the flag (`min(SQ entries, 4 × cores)` bounded, `RLIMIT_NPROC` unbounded: 80 and 127,569 here). |
+  | `--sqpoll IDLE_MS` | `IORING_SETUP_SQPOLL` (unprivileged since 5.13) | a kernel thread per loop takes SQEs off the ring and sleeps after `IDLE_MS` idle. Punted ops then run on the poll thread's io-wq, and the cap above applies to that one. |
+  | `--sqpoll-shared` | `IORING_SETUP_ATTACH_WQ` | every loop attaches to the first loop's poll thread: one `iou-sqp` thread and one io-wq for the host, so the cap is a host total. Since 5.12 this flag shares the poll thread only; without `SQPOLL` there is nothing for it to share, hence `requires --sqpoll`. |
+  | `--defer-taskrun` | `IORING_SETUP_SINGLE_ISSUER` + `IORING_SETUP_DEFER_TASKRUN` (6.1) | completions are processed only inside the loop's own `io_uring_enter`. The loop already is the single issuer and always enters with `GETEVENTS`. Not with `--sqpoll` (the kernel refuses the pair). |
+  | `--coop-taskrun` | `IORING_SETUP_COOP_TASKRUN` (5.19) | no interrupt of the loop thread to run completions. |
+
+  Each ring is built on its own loop thread (`SINGLE_ISSUER` binds a ring to the task that
+  built it); under `--sqpoll-shared` loops 1.. wait for loop 0's ring. **Still not done:**
+  fixed files (direct descriptors: `openat` into a slot table, a second descriptor table
+  beside the one sub-actors inherit), fixed buffers (the pool would have to be one
+  registered slab carved by size), and op linking (left off by decision, `DESIGN_REVIEW.md`
+  §5).
 
 **Observed (2026-10-01, WSL2).** Every committed abstract reproduces its dry-run fingerprint
 under `io_uring` (`tests/run.rs`: five abstracts with nested `parallel`, loaders, barriers
@@ -485,8 +508,10 @@ bytes in the same time as 320 threads for a third of the CPU. On the loopback NF
 (§7), `train_small_files` with 4 GPUs (11,260 ops: 3,200 reads, 1,620 opens): `sync` and
 `io_uring` put identical RPCs on the wire (1,601 READ, 1,225 OPEN), `io_uring-direct`
 4,801 READ and 1,600 CLOSE like `sync-direct`; the peak count of `iou-wrk` threads was 20,
-the core count (io-wq's bounded-worker cap), for buffered and direct reads alike, because
-every `openat` punts whatever the reads do. Spike 1's question (does `O_DIRECT` keep the
+~~the core count (io-wq's bounded-worker cap),~~ for buffered and direct reads alike, because
+every `openat` punts whatever the reads do. (Corrected 2026-10-01 with the knobs: 20 was the
+actor count, 4 GPUs × 5 actors with one op in flight each, which happens to equal the cores
+of this box. The kernel's cap is 80 per loop; see the knob table below.) Spike 1's question (does `O_DIRECT` keep the
 worker count bounded on a real NFS client) needs open-heavy and read-heavy phases measured
 separately on the real target with `IORING_REGISTER_IOWQ_MAX_WORKERS` in hand; the backend
 exists to ask it.
@@ -512,3 +537,31 @@ and the next run within the (now longer) timeout does not. So warm comparisons a
 backends need the same gap since the last touch, which the counters now make visible. The
 `O_DIRECT requested read` figure is 3.13 GiB for 194.5 MiB from the server: 3,200 reads of
 a 1 MiB aligned buffer each, counted as requested.
+
+**Observed with the knobs (2026-10-01, later still).** `train_small_files` with 8 GPUs
+(72 actors), 16,000 files, 896,000 ops of which 256,000 reads and 88,000 opens, on the
+loopback mount, `--time-scale 0`, `--threads 4`, data from the client's page cache in every
+row (one cold `sync` pass first), so each open still costs its `OPEN` and `DELEGRETURN`:
+
+| row | elapsed | io-wq peak | cpu user + sys | RPCs |
+|---|---|---|---|---|
+| `sync` (72 threads) | 5.2 s | 0 | 10.2 s | 181k |
+| `io_uring` | 6.9 s | 30 (46 on another pass) | 9.6 s | 177k |
+| `io_uring --iowq-max-workers 2` | 7.2 s | 8 | 10.0 s | 177k |
+| `io_uring --iowq-max-workers 1` | 6.4 s | 4 | 8.6 s | 176k |
+| `io_uring --defer-taskrun --coop-taskrun` | 7.0 s | 28 | 8.8 s | 177k |
+| `io_uring --sqpoll 200` | 7.3 s | 54, and 4 `iou-sqp` | 13.0 s | 176k |
+| `io_uring --sqpoll 200 --sqpoll-shared` | 13.6 s | 6, and 1 `iou-sqp` | 9.0 s | 177k |
+| `io_uring-direct` | 21.8 s | 23 | 24.7 s | 560k (READ 384k) |
+| `io_uring-direct --iowq-max-workers 2` | 22.6 s | 8 | 24.6 s | 560k |
+
+What the rows say, with the loopback's usual caveat that the server shares the client's
+cores: (1) the worker peak follows the actors with an op punted at that moment, far below
+the kernel's 4 × 80, and is not the core count; (2) capping it changes almost nothing: four
+workers in all carry the run that 30 to 46 carried, with the same RPCs and slightly less
+CPU, so on this mix the punted opens are short and the workers were mostly waking and
+sleeping; (3) `SQPOLL` buys nothing here and costs CPU (four spinning threads), and one
+shared poll thread halves the rate, since it serializes four rings' submissions and their
+punts; (4) `DEFER_TASKRUN` with `COOP_TASKRUN` is neutral. None of this is a number for a
+real target. It says which rows Spike 1 should run there: the cap at 1, 2, and default,
+separately for open-heavy and read-heavy phases, buffered and direct.
