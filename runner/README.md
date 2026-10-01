@@ -189,8 +189,7 @@ against the namespace a `ckpt_write_dcp` run left, through its manifest), and
 `train_small_files` also under `sync-direct`; a page-cache read of 1 MiB costs
 10 µs, an `O_DIRECT` one 258 µs; `vdb_search_diskann` spawns a thread per beam per hop
 (923 threads for 924 reads), the cost of forking `parallel` afresh each time, and a per-actor
-sub-actor pool is the planned fix. The loopback NFS mount of `PROJECT_BRIEF.md` §7 has not
-been run yet (it needs root on the development box).
+sub-actor pool is the planned fix. The same runs on the loopback NFS mount are §7.
 
 ## 5. `aeiou datagen`, the payload, and the manifest
 
@@ -268,3 +267,83 @@ fingerprint; `ckpt_write_dcp` on two ranks leaves a manifest with both rank reco
 `ckpt_restore` on two ranks with `--rank-rotate 1` reads it, each rank running the other's
 GPU range; a differing seed on one rank is refused on both before any I/O; a failing
 `--expect-fingerprint` fails both ranks and the launcher. Real hosts have not been tried.
+
+## 7. Loopback NFS on WSL2 (2026-09-30)
+
+The development box has no NFS target (`PROJECT_BRIEF.md` §7). A loopback mount exercises
+the real Linux NFS client code paths for correctness, not for performance: the server is
+`nfs-kernel-server` exporting a tmpfs on the same kernel (6.18, WSL2), so every number below
+is RPC overhead over loopback with memory behind it. The sequence that set it up (root
+needed; the tmpfs and the mount do not survive a WSL restart, `/etc/exports` does):
+
+```
+sudo apt install nfs-kernel-server
+sudo mkdir -p /srv/aeiou-export /mnt/aeiou-nfs
+sudo mount -t tmpfs -o size=8g tmpfs /srv/aeiou-export
+sudo chown $USER /srv/aeiou-export && sudo chmod 1777 /srv/aeiou-export
+echo '/srv/aeiou-export localhost(rw,sync,no_subtree_check,no_root_squash)' | sudo tee -a /etc/exports
+sudo exportfs -ra
+sudo systemctl start nfs-server          # or: sudo service nfs-kernel-server start
+sudo mount -t nfs4 localhost:/srv/aeiou-export /mnt/aeiou-nfs
+```
+
+The mount comes up as NFS v4.2 over TCP, `rsize`/`wsize` 1 MiB, `hard`, with the default
+attribute cache (`acregmin=3,acregmax=60,acdirmin=30,acdirmax=60`). Two practices follow
+from what the first attempts showed:
+
+- **Generate behind the server, run through the mount.** `aeiou datagen --root
+  /srv/aeiou-export/…` then `aeiou run --root /mnt/aeiou-nfs/…`: the client's page cache
+  starts cold, so the first buffered run shows what reaches the server. Datagen through the
+  mount works (600 files, 69 MiB, in 145 ms against 39 ms on the tmpfs) but leaves every
+  byte in the client's cache, and the first `sync` run then issues no READ RPC at all.
+- **Use a directory name the client has never looked up.** Removing a tree through the
+  mount and recreating it behind the server makes it invisible for up to `acdirmax` (60 s):
+  the client caches the negative lookup, `aeiou run` reports no manifest, and `mkdir` of the
+  namespace root fails with `EEXIST` because the server has it and the client does not. A
+  fresh name per generation (`smoke-<unix time>` in the runs below) avoids it; so does
+  waiting, or `echo 3 > /proc/sys/vm/drop_caches` as root.
+
+**Observed (2026-09-30).** With `TMPDIR` on the mount, `tests/run.rs` and `tests/coord.rs`
+pass (13 tests: every round trip, the write-then-restore handoff, and the two-rank runs as
+threads and as processes). Every committed abstract then ran on the mount with small
+parameters, each three times: `sync` with a cold client cache, `sync` again, and
+`sync-direct`; all 27 runs reproduced their dry-run fingerprint. The NFS client's counters
+(`/proc/self/mountstats`, per run) show what each backend put on the wire:
+
+| abstract (G) | application ops | `sync`, cold: RPCs | `sync`, warm: RPCs | `sync-direct`: RPCs |
+|---|---|---|---|---|
+| train_small_files (2) | 678; 98 opens, 192 reads, 10.6 MiB | 97 READ (10.5 MiB), 53 OPEN, 2 READDIR | 0 READ, 99 GETATTR | 288 READ (10.7 MiB) |
+| train_large_samples (2) | 412; 244 reads, 159 MiB | 129 READ (80.8 MiB from the server, the rest page-cache hits within the run) | 0 READ, 19 GETATTR | 464 READ (159 MiB) |
+| kv_cache_serving (1) | 1,144; 162 reads, 115 writes, 34 mkdirs | 14 READ, 116 WRITE (28.8 MiB), 117 OPEN, 34 CREATE | 0 READ, 116 WRITE | 162 READ, 116 WRITE, 120 CLOSE |
+| model_load (2) | 88; 76 reads, 4.1 MiB | 53 READ | 0 READ, 5 GETATTR | 76 READ (one per read) |
+| vdb_search_diskann (1) | 244; 240 reads of 4 KiB | 241 READ | 240 READ | 240 READ |
+| vdb_search_ivf (1) | 36; 32 reads, 1.8 MiB | 28 READ | 0 READ | 32 READ (one per read) |
+| vdb_build_diskann (1) | 386; 106 reads, 262 writes, 7 MiB | 139 READ, 8 WRITE, 1 COMMIT | 0 READ, 8 WRITE, 1 COMMIT | 106 READ, 263 WRITE, 0 COMMIT |
+| ckpt_write_dcp (2) | 70; 34 writes, 21.1 MiB | 27 WRITE, 4 COMMIT, 3 RENAME | same | 39 WRITE (21.1 MiB direct), 4 COMMIT |
+| ckpt_restore (2), after the write on this client | 36; 20 reads, 18.1 MiB | **0 READ**: all 18.1 MiB from the client's page cache | 0 READ | 30 READ (18.2 MiB from the server) |
+
+What the table says, with the reasoning in `DESIGN_REVIEW.md` §3.26:
+
+- **A warm restore reaches the server not at all.** Reading a checkpoint on the client that
+  wrote it is served entirely from the page cache; `sync-direct` is the only single-host way
+  to make the restore touch storage, and other hosts (`--rank-rotate`, `--require-cold`) are
+  the real answer (`DESIGN_REVIEW.md` §3.24).
+- **Buffered reads are merged by readahead; O_DIRECT reads go out one RPC per application
+  read** (model_load 76 of 76, IVF 32 of 32; the training abstracts issue more because an
+  unaligned tail read is rounded out and every `until_eof` probe is an RPC returning EOF).
+  This is `NAPKIN_MATH.md` §8.B's expectation that the abstract's `xfer` becomes the wire
+  size, seen on a real NFS client.
+- **The abstract's own `O_DIRECT` is honoured whatever the backend.** DiskANN opens its index
+  direct, and all three runs show 240 READ RPCs of 4 KiB; the backend adds nothing.
+- **Buffered writes coalesce to `wsize`; O_DIRECT writes go out as issued** (vdb_build: 8
+  WRITE RPCs for 262 application writes buffered, 263 direct). The checkpoint's `fsync`
+  becomes COMMIT either way.
+- **Close-to-open costs a GETATTR per open even when everything is cached** (99 for 98 opens
+  in the warm small-file run): the per-file metadata floor of `NAPKIN_MATH.md` §3.2.
+
+Latencies on the loopback: open 40–250 µs (the first open of a name 130–340 µs, later ones
+40–50 µs); buffered read 100–370 µs from the server, 13–18 µs from the cache for a small
+file and ~140 µs for 1 MiB; `O_DIRECT` read 150–550 µs; write 400–650 µs buffered,
+600–800 µs direct; `mkdir` and `rename` 300 µs–2 ms. Against ext4 (§4: 10 µs cached, 258 µs
+direct) the pattern is the same with an RPC round trip added. None of this is throughput:
+the server is memory on the same kernel.

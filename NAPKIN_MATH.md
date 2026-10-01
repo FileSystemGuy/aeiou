@@ -434,6 +434,16 @@ Consequences and caveats **[verify on the target kernel]**:
   decision; with the explicit readahead-size emulation above, the load the server sees can be
   kept representative.
 
+**Observed on the loopback NFS v4.2 mount, 2026-09-30** (`runner/README.md` §7,
+`DESIGN_REVIEW.md` §3.26; the WSL2 6.18 client against a server on the same kernel, so the
+target kernels are still to verify): O_DIRECT reads and writes bypass the client cache (the
+mount's `directreadbytes` counter carries them all, and a same-host checkpoint restore that
+issues zero READ RPCs buffered issues 30 direct); there is no readahead under O_DIRECT, one
+RPC per aligned application read, with an unaligned read rounded out to 4 KiB; buffered reads
+are merged into fewer, larger RPCs; O_DIRECT writes go out one RPC per application write
+where buffered ones coalesce to `wsize`; metadata is unchanged, a GETATTR per open even when
+every byte is cached. The io-wq question (the last bullet) waits for the `io_uring` backend.
+
 Other options to A/B for the reclaim problem:
 - **`RWF_DONTCACHE` / uncached buffered I/O.** Merged around Linux 6.14. Buffered I/O that drops
   the pages after use, so readahead is kept and reclaim is avoided. Filesystem opt-in; NFS client

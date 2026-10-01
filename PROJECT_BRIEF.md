@@ -183,9 +183,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    reproduces its dry-run fingerprint; `runner/aeiou/tests/run.rs` covers the round trips,
    including the checkpoint write-then-restore handoff through the namespace manifest
    (`DESIGN_REVIEW.md` §3.24).
-   Still to do: the loopback NFS run (needs root on the development box), `--metrics`
-   (item 14), `stream` access, and the per-op cost (150–350 ns; caching a bound handle's
-   path is the first fix).
+   ~~Still to do: the loopback NFS run (needs root on the development box),~~ **The loopback
+   NFS run done 2026-09-30** (`runner/README.md` §7, `DESIGN_REVIEW.md` §3.26): every
+   abstract reproduces its fingerprint on the NFS v4.2 mount under `sync` cold, `sync` warm,
+   and `sync-direct`, the two-rank tests pass with their roots on it, and the NFS client's
+   RPC counts per backend are tabulated (a same-host restore issues zero READ RPCs; O_DIRECT
+   sends one per application read). Still to do: `--metrics` (item 14), `stream` access,
+   and the per-op cost (150–350 ns; caching a bound handle's path is the first fix).
 4. **Spike 1:** blocking thread pool first, then io_uring; buffered vs. O_DIRECT, for
    `open → read → close` against the real NFS target, measuring `iou-wrk` count separately for
    open-heavy and read-heavy phases. It decides the I/O backend and the cache strategy. The
@@ -254,8 +258,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS
 target. A loopback NFS mount (`nfs-kernel-server` exporting a tmpfs directory, mounted from
-`localhost`) exercises the real NFS client code paths for correctness. All performance work must
-run on real Linux client nodes.
+`localhost`) exercises the real NFS client code paths for correctness; set up 2026-09-30, the
+sequence and what it showed are `runner/README.md` §7 (the tmpfs and the mount must be
+redone after a WSL restart). All performance work must run on real Linux client nodes.
 
 ## 8. MLPerf Storage use (added 2026-09-30)
 

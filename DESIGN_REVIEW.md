@@ -778,6 +778,58 @@ questions the design had not asked.
   the checks produce, outside the hash. Rank 0 waits up to 5 s after `Result` for the others
   to close, so its exit cannot reset a connection with the verdict still unread.
 
+### 3.26 The loopback NFS run: what a real NFS client does with the abstracts (added 2026-09-30)
+
+The loopback mount of `PROJECT_BRIEF.md` §7 came up (sequence and the full table in
+`runner/README.md` §7). It was a correctness exercise: the same kernel on both sides, tmpfs
+behind the server, so only RPC overhead is measured. Every committed abstract reproduced its
+dry-run fingerprint under `sync` cold, `sync` warm, and `sync-direct`, and the two-rank
+tests pass with their roots on the mount. Six things the NFS client's counters showed, and
+what each settles:
+
+- **The warm restore is invisible to storage.** `ckpt_restore` run on the client that ran
+  `ckpt_write_dcp` issued zero READ RPCs for its 18 MiB: the page cache served it all.
+  §3.24's rule (restore on other hosts; `--rank-rotate`; `--require-cold`) was argued from
+  how the page cache works; this is the measurement. It also fixes the single-host fallback:
+  `sync-direct` is the only backend under which a same-host restore reaches the server
+  (30 READ RPCs, 18.2 MiB), so a one-box checkpoint test that means anything runs direct.
+- **O_DIRECT makes the abstract's transfer size the wire size; buffered I/O does not.**
+  Buffered cold reads were merged by readahead (train_large_samples: 244 application reads,
+  129 READ RPCs; the small-file case 192 reads, 97 RPCs), while `sync-direct` sent one RPC per
+  application read where reads are aligned (model_load 76 of 76, IVF 32 of 32) and more
+  where they are not (an unaligned tail read is rounded out to 4 KiB, and every `until_eof`
+  probe is an RPC that returns EOF). That is `NAPKIN_MATH.md` §8.B's "no kernel readahead"
+  consequence seen on the real client, and it confirms the decision there: under O_DIRECT the
+  benchmark, not the client's heuristics, sets the wire pattern, so `xfer` and `hdr_read` are
+  parameters that matter and must be measured from the real applications, not defaulted.
+- **The abstract's flags and the backend are independent, as the design requires.** DiskANN's
+  abstract opens its index `O_DIRECT` itself; all three backends produced the same 240 READ
+  RPCs of 4 KiB. The backend adds `O_DIRECT` to opens that lack it and changes nothing an
+  abstract already says (`PROJECT_BRIEF.md` §4, backends never change the op stream).
+- **Writes behave symmetrically:** buffered writes coalesce to `wsize` (vdb_build: 262
+  application writes, 8 WRITE RPCs; the checkpoint's 34 writes, 27 RPCs), O_DIRECT writes go
+  out as issued (263 RPCs), and the checkpoint's `fsync` becomes COMMIT under both. The
+  §8.B caveat that O_DIRECT NFS writes wait for stability is consistent with the higher
+  direct write latency (790 µs against 650 µs mean), but the loopback cannot separate that
+  from the extra RPCs; the real target can.
+- **Close-to-open is a GETATTR per open, cached or not** (99 GETATTR for 98 opens in the warm
+  small-file run, 0 READ). For a 50M-file epoch that is the metadata floor
+  `NAPKIN_MATH.md` §3.2 counts, and no backend removes it; it is the reason the small-file
+  regime is metadata-bound before it is data-bound.
+- **Generating data behind the server interacts with the lookup cache.** A tree removed
+  through the mount and recreated on the export was invisible for up to `acdirmax` (60 s):
+  the client's negative dentries made `aeiou run` report no manifest and the namespace
+  `mkdir` fail with `EEXIST`. Two practices are recorded in `runner/README.md` §7: generate
+  behind the server (so the client's cache starts cold, which is the only way a first
+  buffered run shows what reaches the server) and under a name the client has never looked
+  up. On a real deployment the same applies to a dataset regenerated under a name a client
+  has already seen missing; a dataset generated on one host and first used from another is
+  unaffected.
+
+No design change came out of it. What it adds is evidence for three existing decisions
+(O_DIRECT as the fix for the cache-fill regime, the cross-host restore rule, and the
+transfer-size parameters being measured rather than defaulted) and two operating practices.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -796,9 +848,11 @@ questions the design had not asked.
   loopback NFS still to run. Input namespaces, the namespace manifest, and rank rotation
   done the same day (§3.24), so every committed abstract now runs. ~~Next: the loopback NFS
   run, the TCP coordinator (which makes `--ranks` and `--rank-rotate` real),~~ The
-  coordinator done the same day (§3.25) and run as two processes on `localhost`; loopback
-  NFS still to run. Next: the format-class reader protocols and the parameter-file split,
-  then the resumable VM and `io_uring`.
+  coordinator done the same day (§3.25) and run as two processes on `localhost`; ~~loopback
+  NFS still to run.~~ The loopback NFS run done the same day (§3.26): every abstract and the
+  two-rank tests on the mount, with the NFS client's RPC counts per backend. Next: the
+  format-class reader protocols and the parameter-file split, then the resumable VM and
+  `io_uring`.
 
 ## 5. Things reviewed and left as-is
 
