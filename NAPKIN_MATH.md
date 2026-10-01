@@ -147,6 +147,43 @@ across hosts. The runner can hold that easily (§2.2). The important part is **n
 "optimize" it into a high queue-depth blaster. The benchmark's value is that it offers a
 realistic, latency-sensitive, closed-loop load, and scales it up only by adding actors.
 
+### 3.4 Speed of light of the benchmark code (2026-10-01, from the host counters)
+
+§3.2 guessed; the host counters in the report (`runner/README.md` §4) measure. On the
+development box (WSL2, 20 cores), from the page cache so that no storage is in the path:
+
+| run | ops | bytes | process CPU | derived |
+|---|---|---|---|---|
+| `train_small_files`, 64 GPUs, `io_uring --threads 4` | 180k | 3.2 GB | 0.94 s | ~2 µs per op after the copy |
+| same, `io_uring` with 20 loops | 180k | 3.2 GB | 3.3 s | contention: 41 io-wq workers at peak |
+| `train_large_samples` (1 MiB reads), 8 GPUs, `io_uring --threads 4` | 101k | 81 GB | 16 s | 5 GB/s per core, all kernel copy |
+| dry run, the VM alone (`runner/README.md` §3) | | | | 150–350 ns per op |
+
+The benchmark code costs about **2 µs of CPU per op and nothing measurable per byte**; the
+rest is the Linux NFS client. The estimate below is therefore "runner plus kernel client
+against a server that keeps up", for one node of **96 cores with two 400 GbE ports**
+(~92 GB/s of NFS payload on the wire; buffered reads move three times that through DRAM,
+DMA in plus the copy out; roughly 25–40 µs of client CPU per small RPC **[verify on a real
+client]**, plus the per-connection and per-mount serialization in sunrpc):
+
+| workload | one node | ten nodes | what binds |
+|---|---|---|---|
+| 1 MiB reads, buffered | 60–90 GB/s | 0.6–0.9 TB/s | the wire, given 30-plus TCP flows or RDMA; otherwise per-flow and per-mount limits, and ~280 GB/s of DRAM traffic |
+| 1 MiB reads, `O_DIRECT` | 85–92 GB/s | ~0.9 TB/s | the wire; CPU halves without the copy |
+| 128 KiB files, open-read-close | 0.5–0.7M files/s (65–90 GB/s) | 5–7M files/s | wire and RPC rate meet here: ~100 µs of client CPU per file, 3 RPCs per file |
+| 4 KiB `O_DIRECT` random reads | 1–3M IOPS | 10–30M IOPS | RPC CPU and per-mount RPC rate; several mounts needed |
+| metadata-only RPCs | 1–3M RPC/s | 10–30M RPC/s | same; OPEN is the expensive one |
+| checkpoint writes | 80–90 GB/s | ~0.9 TB/s | the wire; COMMIT and close-to-open semantics |
+
+The runner's share is under 1 % of the CPU at the bandwidth ceilings and 5–10 % at the RPC
+ceilings. Ten nodes are linear because the coordinator acts only at phase barriers. Three
+caveats: the per-RPC CPU and the connection scaling are guesses until a real client runs
+against a real target (the loopback cannot test them); a 96-core node is two sockets, and
+buffered reads at 280 GB/s of DRAM traffic need NUMA placement of loops and buffers; and the
+20-loop row says the `io_uring` lever on a big node is io-wq, not loop count:
+`IORING_REGISTER_IOWQ_MAX_WORKERS` and `--threads` at about a quarter of the cores are the
+first knobs to build (§8.5). Supersedes the per-core guesses in §3.2 where they differ.
+
 ---
 
 ## 4. Architecture implications from the numbers
@@ -260,7 +297,7 @@ of the previous one.
 |---|---|---|---|---|
 | **R1** | **io_uring on NFS runs largely through io-wq worker threads.** `openat`/`close`/`statx` usually punt, and buffered reads that miss the page cache likely punt on NFS (async buffered read support is filesystem-dependent) **[verify]**. In that case io_uring behaves like a kernel thread pool, so its advantage over a user-space blocking thread pool may be small for this workload. **Hypothesis to test:** NFS direct I/O is AIO-capable (the client issues the RPCs and returns `-EIOCBQUEUED` for a non-synchronous kiocb), so an O_DIRECT read should *release* its io-wq worker immediately, while a buffered cache-missing read *holds* one for the whole RPC round trip. If so, O_DIRECT keeps `iou-wrk` count small at tens of thousands of outstanding reads and only opens/closes cost a worker each **[verify]**. | CPU per op much higher than expected; per-host op rate lower; "use io_uring" stops being the main performance lever. | High | **Spike 1** (below), measuring `iou-wrk` count separately for open-heavy and read-heavy phases. I/O backend behind a trait; the blocking thread pool is the fidelity reference and is built first (§4.2). Tune `IORING_REGISTER_IOWQ_MAX_WORKERS`; consider `IORING_SETUP_ATTACH_WQ` to share one io-wq pool across rings. **Loopback observation (2026-10-01, `runner/README.md` §8):** 20 `iou-wrk` threads at peak, the core count, for buffered and `O_DIRECT` reads alike, because every `openat` punts; the real-target measurement must separate open-heavy from read-heavy phases. |
 | **R2** | **The client is the bottleneck, not the storage.** Per-mount NFS slot/session limits, RPC processing, per-host NIC. | Can't saturate the SUT from one host; the results measure the client. | High for small-file workloads | Multi-host from the start (§4.3). Report per-host client CPU and NFS RPC stats (`/proc/self/mountstats`) with every run. `nconnect`, multiple mounts. |
-| **R3** | **Client caching distorts the workload.** Page cache, dentry/inode cache (~50–60 GB for 50M files), attribute cache, NFSv4 delegations (can turn OPEN/CLOSE into local ops). | Server sees a different (lighter) op mix than intended; results drift across a run as caches warm. | High | Options for O_DIRECT, drop caches per epoch, recommended mount options (`actimeo`, `lookupcache`), and a check that dataset ≫ aggregate client RAM. Record server-side op counts to validate. |
+| **R3** | **Client caching distorts the workload.** Page cache, dentry/inode cache (~50–60 GB for 50M files), attribute cache, NFSv4 delegations (can turn OPEN/CLOSE into local ops). | Server sees a different (lighter) op mix than intended; results drift across a run as caches warm. | High | Options for O_DIRECT, ~~drop caches per epoch~~ `--drop-caches` at the start gate only, never inside a run (decided 2026-10-01, `DESIGN_REVIEW.md` §3.31), recommended mount options (`actimeo`, `lookupcache`), and a check that dataset ≫ aggregate client RAM. Record server-side op counts to validate. |
 | **R4** | **Abstract language under- or over-designed** (§4.4). | Can't express the target workloads, or the PoC turns into a compiler project. | Medium–High | Write the 3–4 target abstracts (training small-file, training large-sample, checkpoint write burst, checkpoint restore) *by hand, on paper* before writing the parser. **Done 2026-09-29/30:** eight abstracts on paper (`ABSTRACTS.md`), nine constructs added and accepted, AST schema v0.1 drafted (`schema/`). The node set is now fixed for the VM; growth from here needs a §9-style entry and a schema version bump. |
 | **R5** | **Determinism is broken by accident.** Shared RNG, dynamic work distribution, `HashMap` iteration order, thread-count-dependent sharding, per-actor counters shared by concurrent workers, producers that run past the last step, an order-dependent fingerprint. | "Same seed, same workload" stops being true, and runs are no longer comparable. | Medium | Positional RNG keyed on loop indices, no draw counters; sharding by formula; finite producers; order-independent fingerprint (§8.D); dataset seed separate from run seed; a `--dry-run` mode that prints any actor's op stream for any step range (`--dry-run --gpu 17 --steps 300..302`) so two runs can be diffed and golden-tested in CI. |
 | **R6** | **Dataset generation cost.** 50M creates at 5–50K creates/s = **17 min – 2.8 h**; directory fan-out affects both creation and lookup performance. | Slow iteration; layout mismatch between generator and abstract. | High (certain to be slow) | `datagen` mode in the same binary, driven by the *same* filename pattern and size distribution as the abstract. Hierarchical layout (≤~10K entries/dir). Resumable. |
@@ -329,6 +366,8 @@ ext4; the loopback NFS run and Spike 1 on the real target are next.)
 - **Client-side DRAM (kernel caches) is an issue**, mostly as a fidelity problem.
 - **IOPS ceiling is set by the NFS client path and io-wq punting, not by the runner's state
   machine.** Plan for many client hosts and validate io_uring's benefit on NFS early.
+  Measured 2026-10-01 (§3.4): ~2 µs of CPU per op in the runner, nothing per byte; one
+  96-core, 2×400 GbE node is wire-bound near 90 GB/s and RPC-bound near 1–3M RPC/s.
 - **The biggest design risk is the abstract language.** It needs binding, explicit loop
   indices, `parallel` + `channel`, finite producers, and barriers beyond the regex-style sketch.
 - **Exactness is a property of the whole design, not just the RNG.** Positional randomness, a

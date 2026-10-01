@@ -1091,6 +1091,99 @@ difference would have been read as a backend property.
 same structure; the open-file high-water mark is one `RLIMIT` check away and goes in with
 the startup checks.
 
+### 3.31 Cold start: dropping caches at the start gate (decided 2026-10-01)
+
+**Question (user).** Can the runner make Linux drop every cache that could carry storage
+state from before a run into the run: page cache, and the metadata caches too (attribute
+cache, dentries)? Clarified the same day: only before a run, or between the write and the
+read of a checkpoint pair; never between batches or epochs of a training run. The goal is
+only that caching from before the start of a run does not affect that run.
+
+**What the kernel offers.** `/proc/sys/vm/drop_caches`, root only: `1` drops clean page
+cache, `2` drops unreferenced dentries and inodes, `3` both. The NFS metadata lives on
+those objects: the attribute cache, the access cache, and the readdir pages hang off the
+inode; the lookup cache, negative entries included, is the dentry; evicting an NFS inode
+returns its delegation. So one write of `3` after `sync` covers data and metadata, with
+two holes: inodes still referenced keep their state (open files, the mount root, the
+current directory), and `fscache` and the NFSv4 client state are untouched. The shrinker
+is single-threaded and global; after an enumerate of 50M files it takes tens of seconds
+and stalls the host.
+
+**Decision.** One option, `--drop-caches`, on every host after the dataset and
+input-namespace checks and after rank 0 has emptied the namespace roots, immediately
+before the host arrives at the start gate. The gate then guarantees every host has dropped
+before any op is issued, the drop time is outside `elapsed` by construction, and at the
+gate the runner holds no files open, so the referenced-inode hole is the mount root alone.
+No barrier-scoped form: the checkpoint case is already two runs (`ckpt_write_dcp` leaves
+the namespace and its manifest; `ckpt_restore` reads it on other hosts under
+`--rank-rotate`), so a drop at the start of the restore run is the "between write and
+read" the question asked for; if one abstract ever holds both phases, the coordinator can
+grow a drop exchange at a named barrier then. Root is required: the operator runs the
+runner under `sudo -n` or grants the capability, and `--drop-caches` refuses to start when
+the write fails on any host. The option is a harness parameter, never abstract vocabulary:
+cache state is solution, not application (§3.12).
+
+**Verify, not only act.** The goal is a property, so the report measures it: the drop and
+its duration, before/after `Cached` from `/proc/meminfo` and `/proc/sys/fs/dentry-state`
+and `inode-nr` (world-readable), and a residency check that samples a few hundred dataset
+files by formula (no per-file structure, no root) and asks `mincore` what fraction of their
+pages is resident at the start. That line is useful without the flag, as the dataset
+counterpart of the warm-open count for input namespaces (§3.24), and `--require-cold`
+covers both. The host counters gain the mount's `opts:` line, since `actimeo`,
+`lookupcache`, and `nconnect` decide cache behaviour more than any drop does, and §3.30's
+GETATTR finding showed the counters often make a drop unnecessary. The full reset
+(`fscache`, delegations, session) is unmount and mount, which belongs in `aeiou-launch` as
+`--remount` before `aeiou run`; the runner never unmounts the storage under test.
+
+### 3.32 Object backends through `s3dlio`: a preliminary opinion (added 2026-10-01)
+
+**Question (user).** The repository that hosts `dgen-py` also hosts `s3dlio`, a Rust crate
+reading samples over POSIX, S3, Azure Blob, and GCS behind one API chosen at run time. Can
+its object support be used without hurting the short path from queued op to I/O that the
+POSIX backends have? Preliminary only; a task for later.
+
+**Facts checked (2026-10-01).** `s3dlio` 0.9.x, Apache 2.0, a Rust `ObjectStore` trait with
+async `get`, `get_range(uri, offset, length)`, `put`, `put_multipart`, `stat`, `list`,
+`delete`, `rename`, `mkdir`, `exists`, and `get_writer` for streaming uploads; backends by
+URI scheme (`s3://`, `az://`, `gs://`, `file://`, `direct://`); results as `bytes::Bytes`;
+tokio throughout, with the AWS, Azure, and Google SDKs behind it; its blocking wrappers
+exist for the Python layer.
+
+**Opinion.** Feasible behind a cargo feature (`object`), at no cost to the POSIX path, and
+it touches one written invariant. The invariant "no tokio in the runner" would become "no
+tokio in the default build": the feature brings `s3dlio` and a tokio runtime in, confined to
+that backend behind the `Backend` trait's completion-source half, which exists for exactly
+this; `sync` and `io_uring` never see a line of it, and the default binary is unchanged.
+The brief's reason for deferring `s3` ("needs `get`/`put` in the abstract") is reversed: the
+abstract stays POSIX-shaped and the backend maps, as `gds` or `nixl-posix` will. Reads at
+an offset become `get_range`; a sequential `open, read…, close` can become one streaming
+GET per open, which is what a real object loader does and what a shim could do (§3.12), so
+both a ranged and a streaming mode are legal rows; sequential writes to a new object become
+a multipart upload; `fstat` is `stat`, `readdir` is `list`, `rename` a server-side copy and
+delete; `mkdir`, `fsync`, `lseek`, `ioctl` are local. What has no mapping (a write at a
+non-sequential offset, an overwrite in place, `until_eof` on a growing object) is refused at
+`aeiou check` by a validity rule, as V9 refuses access modes a format class lacks. The
+fingerprint is untouched. Expected costs: compile time and size from three cloud SDKs,
+version churn on a 0.9 crate, the library's own thread pools to size and pin, one copy
+from `Bytes` into the sink buffer (deliberate, as the sink copy always is), and `aeiou
+datagen` and the manifests through the same backend. First measurement, before any cloud:
+the same `train_small_files` fingerprint over `file://` through the library against the
+`sync` backend, which prices the library's overhead alone. Recorded as brief §6 item 17.
+
+### 3.33 Speed of light of the benchmark code (added 2026-10-01)
+
+**Question (user).** Given what the counters now show, what is the most a 96-core node with
+two 400 GbE ports could drive, and ten of them, against a storage system that keeps up?
+
+**Answer.** `NAPKIN_MATH.md` §3.4: the runner costs about 2 µs of CPU per op and nothing
+measurable per byte (`io_uring` with four loops; twenty loops cost 3.5× more on the
+small-file mix through io-wq contention), so the ceiling is the Linux NFS client's: wire
+near 92 GB/s of NFS payload for large reads and writes, 0.5–0.7M small files per second
+where the wire and the RPC rate meet, 1–3M RPCs per second for metadata and 4 KiB reads;
+ten nodes linear. The caveats are the ones the loopback cannot remove: per-RPC CPU and
+connection scaling on a real client, NUMA placement of loops and buffers at 280 GB/s of
+DRAM traffic, and io-wq as the `io_uring` lever rather than loop count.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -1117,8 +1210,10 @@ the startup checks.
   protocols,~~ Four format classes, contract 0.2, `aeiou-datagen`, and three container
   abstracts done the same day (§3.28). ~~Next: the resumable VM and `io_uring`, the per-actor
   sub-actor pool, `mountstats` and `--metrics`;~~ The resumable VM and the `io_uring` backends
-  done 2026-10-01 (§3.29), the host counters the same day (§3.30). Next: the `io_uring`
-  knobs, `libaio`/`posix-aio`/`mmap`, the per-actor sub-actor pool, `--metrics`; the
+  done 2026-10-01 (§3.29), the host counters the same day (§3.30); `--drop-caches` decided
+  and the object-backend opinion recorded (§3.31, §3.32, brief §6 items 16–17). Next: the
+  `io_uring` knobs, `--drop-caches` with the residency check and the mount options in the
+  counters, `libaio`/`posix-aio`/`mmap`, the per-actor sub-actor pool, `--metrics`; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 

@@ -33,8 +33,9 @@ cargo test --release
 Not yet: the other asynchronous backends (`libaio`, `posix-aio`, `mmap`, …; ~~`io_uring`~~
 **built 2026-10-01**, §8), ~~the per-backend counters, `mountstats`~~ (the host counters,
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
-backend-specific counters beyond those come with each backend), `RLIMIT` startup
-checks, a JSON report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), and the `replay` node. ~~`stream`
+backend-specific counters beyond those come with each backend), `--drop-caches` at the
+start gate with the residency check and the mount options line (decided 2026-10-01,
+`PROJECT_BRIEF.md` §6 item 16), `RLIMIT` startup checks, a JSON report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), and the `replay` node. ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format

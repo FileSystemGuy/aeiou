@@ -106,7 +106,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   | `gds` | cuFile: `cuFileRead` (sync), batch API, stream-ordered | needs a CUDA device on the client. **Must detect and report compat mode** (POSIX bounce buffer fallback), which is the common case on NFS |
   | `nixl-posix` | NIXL with its POSIX plugin (`nixl-sys` Rust bindings) | needs a CUDA device; per-transfer descriptor setup will dominate small reads, which is a valid result |
   | `libnfs` | user-space NFS client | no kernel page/dentry/attribute cache; every LOOKUP goes over the wire; a floor for "client CPU with no kernel in the path" |
-  | *deferred:* `s3` | object GET/PUT | not POSIX-shaped; needs `get`/`put` in the abstract's vocabulary. MLPerf Storage is heading there |
+  | *deferred:* `s3`, `az`, `gs` | object GET/PUT | ~~not POSIX-shaped; needs `get`/`put` in the abstract's vocabulary.~~ Preliminary opinion 2026-10-01 (`DESIGN_REVIEW.md` §3.32): the abstract stays POSIX-shaped and the backend maps (`open, read…, close` to one streaming GET or ranged GETs, sequential writes to a multipart upload), refusing what has no mapping at `check` time; via the `s3dlio` crate behind a cargo feature (§6 item 17). MLPerf Storage is heading there |
 
   Orthogonal flags: `--buffer pageable|pinned|gpu` and `--cache buffered|direct|dontcache|fadv-dontneed`,
   with a validity table that rejects impossible combinations (buffered `gds`, `direct` `mmap`, …).
@@ -274,6 +274,27 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `train_stream_shards.py` (two workloads, TFRecord and Parquet) plus `train_map_hdf5.py`;
     the loader needs no new knob (under `stream` its unit of work is the shard). Still to do:
     Arrow IPC, MDS, and Megatron classes, and the tenth abstract.
+16. **Cold start: `--drop-caches` (decided 2026-10-01, `DESIGN_REVIEW.md` §3.31).** One run
+    option, applied on every host after the dataset and namespace checks and immediately
+    before the host arrives at the start gate: `sync`, then `3` into `/proc/sys/vm/drop_caches`
+    (page cache, dentries, inodes; evicting an NFS inode drops its attribute and access
+    caches and returns its delegation). Never between batches, epochs, or phases: the goal is
+    only that caching from before the run does not affect the run, and the checkpoint
+    write-then-read case is two runs already (`ckpt_write_dcp` then `ckpt_restore` through
+    the namespace manifest). Root is required; the runner refuses to start when the write
+    fails on any host. The report records the drop, its duration (outside `elapsed` by
+    construction), and before/after `Cached`, `dentry-state`, `inode-nr`; a residency check
+    (`mincore` over a few hundred dataset files chosen by formula, no root) reports the
+    fraction of sampled dataset pages resident at the start, with or without the flag, and
+    `--require-cold` covers it as it covers input namespaces. The mount's `opts:` line
+    (`actimeo`, `lookupcache`, `nconnect`) goes into the host counters. The full reset
+    (`fscache`, NFSv4 state) is `aeiou-launch --remount`, outside the runner, which never
+    unmounts the storage under test.
+17. **Object backends via `s3dlio` (preliminary opinion 2026-10-01, `DESIGN_REVIEW.md`
+    §3.32).** Behind a cargo feature so the default build stays tokio-free; design the
+    POSIX-to-object mapping table and the validity rule first; first measurement is the same
+    fingerprint over `file://` through the library versus the `sync` backend, pricing the
+    library before any cloud is involved.
 
 ## 7. Environment
 
