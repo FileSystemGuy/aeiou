@@ -802,5 +802,23 @@ the shape `mmap` loaders are used for. Cold rows each on a freshly generated dir
    solution-side setting ~~the report does not yet record~~ the host counters record
    since later the same day (`mount read_ahead_kb 128` here, 8192 on this box's ext4),
    recorded and never set by the runner.
+   **Confirmed later the same day (user, as root):** with
+   `echo 1024 > /sys/class/bdi/0:78/read_ahead_kb` and nothing else changed, the same
+   cold rows on fresh directories:
+
+   | row, cold | `read_ahead_kb` 128 | `read_ahead_kb` 1024 |
+   |---|---|---|
+   | `mmap` (touch) | 1.93 s, 3.6 s CPU, 36,981 READ, 3,573 major faults | 0.85 s and 1.04 s, 1.6 s and 2.9 s CPU, 5,376 and 6,587 READ, 249 and 476 major faults |
+   | `mmap --mmap-mode populate` | 2.25 s, 5.0 s CPU, 38,255 READ | 0.91 s, 2.2 s CPU, 6,073 READ |
+   | `mmap --mmap-mode willneed` | 1.74 s, 4.7 s CPU, 18,503 READ | 1.23 s, 3.0 s CPU, 11,318 READ |
+   | `sync` | 1.17 s, 4.8 s CPU, 6,087 READ | 1.38 s, 5.0 s CPU, 6,120 READ |
+
+   The window is what sets the size of a fault's READ: about 109 KiB became 600 to
+   750 KiB, the READ count fell to that of `read(2)`, and `read(2)` itself did not change
+   (a 1 MiB read already asked for its whole length). With the larger window `mmap` is the
+   fastest cold row here and uses a third to a half of `sync`'s CPU, where with the default
+   it was the slowest; `willneed` went from the best `mmap` mode to the worst. So on NFS
+   the cold result of an `mmap` loader is decided by a client setting that defaults to
+   128 KiB whatever `rsize` is, which is why the report records it.
 3. **RSS under `mmap` counts the mapped file pages** (about 1 GiB here against 70 MiB):
    they are page cache, shared and reclaimable, not buffers the runner allocated.

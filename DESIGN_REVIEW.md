@@ -1427,8 +1427,14 @@ other side: the fault path sent 36,981 READs of about 109 KiB where `read(2)` se
 of about 660 KiB, and took 1.9 s against 1.2 s; consistent with the mount's
 `read_ahead_kb` (128) bounding fault readahead, not confirmed by changing it.
 
-**Open.** The real target. ~~`read_ahead_kb` of the mount in the host counters, and~~ A run
-with `read_ahead_kb` raised, to confirm what sets the size of a fault's READ (the value
+**Open.** The real target. ~~`read_ahead_kb` of the mount in the host counters, and~~ ~~A run
+with `read_ahead_kb` raised, to confirm what sets the size of a fault's READ~~ Confirmed
+the same day (user, as root; `runner/README.md` §9): at 1024 the cold fault path sent
+5,376 to 6,587 READs where it had sent 36,981, in 0.85 to 1.04 s where it had taken 1.93 s,
+and `sync` did not change (6,120 READs, 1.38 s), so cold `mmap` went from the slowest row
+to the fastest on a setting of the NFS client that defaults to 128 KiB whatever `rsize`
+is. A comparison of `mmap` with `read(2)` on NFS is therefore a comparison at a stated
+`read_ahead_kb`; whether a run rule should fix or merely report it is a WG question (the value
 is in the host counters since later the same day, user: a `mount read_ahead_kb` line from
 `/sys/class/bdi` for the device `--root` is on; like the mount options it is the
 solution's setting, reported and never changed by the runner, and it is not in the
