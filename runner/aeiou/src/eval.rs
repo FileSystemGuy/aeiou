@@ -19,16 +19,144 @@ pub struct Config {
     pub gpus: i64,
     /// `--param name=value`, value as JSON (a bare word that is not JSON is a string).
     pub overrides: Vec<(String, String)>,
+    /// `--params FILE`, in command-line order: applied over the defaults, under `overrides`.
+    pub sets: Vec<ParamSet>,
 }
 
-/// Parameters in effect: defaults with the overrides applied. Owned, so `Value` can borrow it.
+impl Config {
+    /// Every parameter file names the abstract it is for; one that also names an AST hash is
+    /// for that exact shape.
+    pub fn check_sets(&self, abstract_name: &str, ast_sha256: &str) -> Result<()> {
+        for s in &self.sets {
+            s.check_identity(abstract_name, ast_sha256)?;
+        }
+        Ok(())
+    }
+}
+
+/// The `params_version` this runner reads (`schema/README.md` §8).
+pub const PARAMS_VERSION: u64 = 1;
+
+/// A parameter file: a named set of values for the slots of one abstract (`schema/README.md`
+/// §8, the "three sources" split of `GRAMMAR_OPTIONS.md` Option D). Loaded as JSON; the
+/// values are checked against the abstract's declarations when `Params` is built.
+#[derive(Debug, Clone)]
+pub struct ParamSet {
+    pub path: String,
+    /// SHA-256 of the file's bytes, printed with the parameters in effect.
+    pub sha256: String,
+    pub abstract_name: String,
+    pub ast_sha256: Option<String>,
+    pub doc: Option<String>,
+    pub values: BTreeMap<String, serde_json::Value>,
+}
+
+impl ParamSet {
+    pub fn load(path: &std::path::Path) -> Result<ParamSet> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        Self::parse(&text, &path.display().to_string()).with_context(|| format!("parameter file {}", path.display()))
+    }
+
+    pub fn parse(text: &str, path: &str) -> Result<ParamSet> {
+        use sha2::Digest;
+        let sha256 = format!("{:x}", sha2::Sha256::digest(text.as_bytes()));
+        let doc: serde_json::Value = serde_json::from_str(text).context("not JSON")?;
+        let obj = doc.as_object().ok_or_else(|| anyhow!("not a JSON object"))?;
+        for k in obj.keys() {
+            if !matches!(k.as_str(), "params_version" | "abstract" | "ast_sha256" | "doc" | "params" | "provenance") {
+                bail!("unknown key `{k}` (expected params_version, abstract, ast_sha256, doc, params, provenance)");
+            }
+        }
+        let version = obj.get("params_version").and_then(|v| v.as_u64()).ok_or_else(|| anyhow!("`params_version` missing or not an integer"))?;
+        if version != PARAMS_VERSION {
+            bail!("params_version {version} (this runner reads {PARAMS_VERSION})");
+        }
+        let abstract_name = obj.get("abstract").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("`abstract` missing or not a string"))?.to_string();
+        let ast_sha256 = match obj.get("ast_sha256") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(s)) if s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()) => Some(s.to_ascii_lowercase()),
+            Some(v) => bail!("`ast_sha256` is not 64 hex digits: {v}"),
+        };
+        let doc_text = match obj.get("doc") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            Some(v) => bail!("`doc` is not a string: {v}"),
+        };
+        let values = obj
+            .get("params")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow!("`params` missing or not an object"))?
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Ok(ParamSet { path: path.to_string(), sha256, abstract_name, ast_sha256, doc: doc_text, values })
+    }
+
+    pub fn check_identity(&self, abstract_name: &str, ast_sha256: &str) -> Result<()> {
+        if self.abstract_name != abstract_name {
+            bail!("parameter file {} is for abstract `{}`, not `{abstract_name}`", self.path, self.abstract_name);
+        }
+        if let Some(want) = &self.ast_sha256 {
+            if want != ast_sha256 {
+                bail!("parameter file {} is for AST {}…, not {}…", self.path, &want[..16], &ast_sha256[..16]);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Parameters in effect: the defaults, then every `--params` file in order, then `--param`.
+/// Owned, so `Value` can borrow it.
 pub struct Params {
     pub values: BTreeMap<String, PValue>,
+}
+
+fn pvalue_kind(v: &PValue) -> &'static str {
+    match v {
+        PValue::Dist(_) => "a distribution",
+        PValue::Array(_) => "an array",
+        PValue::Scalar(_) => "a scalar",
+    }
+}
+
+/// A value may replace a default of the same kind: a scalar for a scalar, an array for an
+/// array (any length, elements of the default's element kind), a distribution for a
+/// distribution. The builder decided at build time how each slot is consumed (a distribution
+/// is drawn, an array is indexed), so a change of kind would not be a change of value.
+fn check_kind(name: &str, default: &PValue, v: &PValue, source: &str) -> Result<()> {
+    if std::mem::discriminant(default) != std::mem::discriminant(v) {
+        bail!("{source} {name}: the default is {}, the value is {}", pvalue_kind(default), pvalue_kind(v));
+    }
+    if let (PValue::Array(d), PValue::Array(a)) = (default, v) {
+        if let Some(first) = d.first() {
+            for (i, x) in a.iter().enumerate() {
+                if std::mem::discriminant(first) != std::mem::discriminant(x) {
+                    bail!("{source} {name}[{i}]: the default's elements are {}, this one is {}", pvalue_kind(first), pvalue_kind(x));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Params {
     pub fn new(ast: &Ast, cfg: &Config) -> Result<Params> {
         let mut values: BTreeMap<String, PValue> = ast.params.iter().map(|(k, p)| (k.clone(), p.default.clone())).collect();
+        for set in &cfg.sets {
+            if set.abstract_name != ast.name {
+                bail!("parameter file {} is for abstract `{}`, not `{}`", set.path, set.abstract_name, ast.name);
+            }
+            for (name, v) in &set.values {
+                let source = format!("{}:", set.path);
+                if name == "gpus" {
+                    bail!("{source} `gpus` is set with --gpus, not by a parameter file");
+                }
+                let param = ast.params.get(name).ok_or_else(|| anyhow!("{source} no parameter `{name}` in `{}`", ast.name))?;
+                let pv: PValue = serde_json::from_value(v.clone()).map_err(|e| anyhow!("{source} {name}: not a parameter value (a scalar, a distribution, or an array of these): {e}"))?;
+                check_kind(name, &param.default, &pv, &source)?;
+                values.insert(name.clone(), pv);
+            }
+        }
         for (name, text) in &cfg.overrides {
             if name == "gpus" {
                 bail!("`gpus` is set with --gpus, not --param");
@@ -41,6 +169,7 @@ impl Params {
                 Ok(v) => v,
                 Err(_) => PValue::Scalar(Literal::Str(text.clone())),
             };
+            check_kind(name, &param.default, &v, "--param")?;
             values.insert(name.clone(), v);
         }
         Ok(Params { values })

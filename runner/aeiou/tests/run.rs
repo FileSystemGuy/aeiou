@@ -27,7 +27,7 @@ fn examples() -> PathBuf {
 }
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
-    Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+    Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
 }
 
 /// A run is the process: the model is leaked so the actor threads can borrow it.

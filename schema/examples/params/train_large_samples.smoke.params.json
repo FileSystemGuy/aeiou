@@ -1,0 +1,11 @@
+{
+  "params_version": 1,
+  "abstract": "train_large_samples",
+  "doc": "A laptop-sized run of the shape: 100 samples of about 2 MiB, 10 steps. Not a reference set.",
+  "params": {
+    "files": 100,
+    "steps": 10,
+    "sample_mean": 2097152,
+    "sample_sd": 131072
+  }
+}

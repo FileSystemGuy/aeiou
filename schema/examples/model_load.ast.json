@@ -11,7 +11,7 @@
     "shard_bytes": {
       "default": 5368709120,
       "unit": "bytes",
-      "doc": "[config]"
+      "doc": "[config] every shard is modeled at the largest shard's size"
     },
     "hdr_len": {
       "default": [
@@ -30,6 +30,7 @@
         0,
         0,
         1,
+        1,
         1
       ],
       "unit": "count",
@@ -40,7 +41,8 @@
         98312,
         536969224,
         98312,
-        67207176
+        67207176,
+        1140949000
       ],
       "unit": "bytes"
     },
@@ -49,7 +51,8 @@
         536870912,
         134217728,
         67108864,
-        1073741824
+        1073741824,
+        16384
       ],
       "unit": "bytes"
     },
@@ -58,16 +61,18 @@
         "column",
         "row",
         "column",
-        "row"
+        "row",
+        "full"
       ],
-      "doc": "column: contiguous 1/tp slice; row: one piece per row"
+      "doc": "column: contiguous 1/tp slice; row: one piece per row; full: replicated, read whole"
     },
     "rows": {
       "default": [
         1,
         4096,
         1,
-        8192
+        8192,
+        1
       ],
       "unit": "count"
     },
@@ -76,7 +81,8 @@
         536870912,
         32768,
         67108864,
-        131072
+        131072,
+        16384
       ],
       "unit": "bytes"
     }
@@ -84,7 +90,7 @@
   "datasets": {
     "model": {
       "files": {
-        "pattern": "model-{id:05}-of-00002.safetensors",
+        "pattern": "model-{id:05}.safetensors",
         "count": {
           "param": "shards"
         },
@@ -280,89 +286,133 @@
                                     ],
                                     "else": [
                                       {
-                                        "loop": {
-                                          "index": "r",
-                                          "to": {
-                                            "elem": {
-                                              "array": "rows",
-                                              "index": {
-                                                "index": "t"
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "elem": {
+                                                  "array": "split",
+                                                  "index": {
+                                                    "index": "t"
+                                                  }
+                                                }
+                                              },
+                                              "row"
+                                            ]
+                                          },
+                                          "then": [
+                                            {
+                                              "loop": {
+                                                "index": "r",
+                                                "to": {
+                                                  "elem": {
+                                                    "array": "rows",
+                                                    "index": {
+                                                      "index": "t"
+                                                    }
+                                                  }
+                                                },
+                                                "body": [
+                                                  {
+                                                    "read": {
+                                                      "file": {
+                                                        "ref": "f"
+                                                      },
+                                                      "len": {
+                                                        "div": [
+                                                          {
+                                                            "elem": {
+                                                              "array": "row_bytes",
+                                                              "index": {
+                                                                "index": "t"
+                                                              }
+                                                            }
+                                                          },
+                                                          {
+                                                            "param": "tp"
+                                                          }
+                                                        ]
+                                                      },
+                                                      "offset": {
+                                                        "add": [
+                                                          {
+                                                            "add": [
+                                                              {
+                                                                "elem": {
+                                                                  "array": "off",
+                                                                  "index": {
+                                                                    "index": "t"
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "mul": [
+                                                                  {
+                                                                    "index": "r"
+                                                                  },
+                                                                  {
+                                                                    "elem": {
+                                                                      "array": "row_bytes",
+                                                                      "index": {
+                                                                        "index": "t"
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                ]
+                                                              }
+                                                            ]
+                                                          },
+                                                          {
+                                                            "mul": [
+                                                              {
+                                                                "ref": "rank"
+                                                              },
+                                                              {
+                                                                "div": [
+                                                                  {
+                                                                    "elem": {
+                                                                      "array": "row_bytes",
+                                                                      "index": {
+                                                                        "index": "t"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "param": "tp"
+                                                                  }
+                                                                ]
+                                                              }
+                                                            ]
+                                                          }
+                                                        ]
+                                                      }
+                                                    }
+                                                  }
+                                                ]
                                               }
                                             }
-                                          },
-                                          "body": [
+                                          ],
+                                          "else": [
                                             {
                                               "read": {
                                                 "file": {
                                                   "ref": "f"
                                                 },
                                                 "len": {
-                                                  "div": [
-                                                    {
-                                                      "elem": {
-                                                        "array": "row_bytes",
-                                                        "index": {
-                                                          "index": "t"
-                                                        }
-                                                      }
-                                                    },
-                                                    {
-                                                      "param": "tp"
+                                                  "elem": {
+                                                    "array": "bytes",
+                                                    "index": {
+                                                      "index": "t"
                                                     }
-                                                  ]
+                                                  }
                                                 },
                                                 "offset": {
-                                                  "add": [
-                                                    {
-                                                      "add": [
-                                                        {
-                                                          "elem": {
-                                                            "array": "off",
-                                                            "index": {
-                                                              "index": "t"
-                                                            }
-                                                          }
-                                                        },
-                                                        {
-                                                          "mul": [
-                                                            {
-                                                              "index": "r"
-                                                            },
-                                                            {
-                                                              "elem": {
-                                                                "array": "row_bytes",
-                                                                "index": {
-                                                                  "index": "t"
-                                                                }
-                                                              }
-                                                            }
-                                                          ]
-                                                        }
-                                                      ]
-                                                    },
-                                                    {
-                                                      "mul": [
-                                                        {
-                                                          "ref": "rank"
-                                                        },
-                                                        {
-                                                          "div": [
-                                                            {
-                                                              "elem": {
-                                                                "array": "row_bytes",
-                                                                "index": {
-                                                                  "index": "t"
-                                                                }
-                                                              }
-                                                            },
-                                                            {
-                                                              "param": "tp"
-                                                            }
-                                                          ]
-                                                        }
-                                                      ]
+                                                  "elem": {
+                                                    "array": "off",
+                                                    "index": {
+                                                      "index": "t"
                                                     }
-                                                  ]
+                                                  }
                                                 }
                                               }
                                             }
@@ -402,9 +452,9 @@
   "provenance": {
     "generator": {
       "script": "model_load.py",
-      "sha256": "1d3eb4d591ad1ac1e412adf3901db7637de2dd9ff23fc6a97cd877f4029a0a63",
+      "sha256": "b7a73d834984a3db80c348c497894f24c1c8d78e43e5693f8783e0efd38fd898",
       "builder_version": "0.1.0",
-      "git": "b77a29eb053b"
+      "git": "fb647fd5f803-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -412,6 +462,6 @@
       "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
     },
     "built_twice_identical": true,
-    "ast_sha256": "d03bfddabc0562b3ad5caa88a3897933e3c9a179eedb0b6aa896b01880691b6c"
+    "ast_sha256": "5fa90c2b77e53c07b11c93b37dc29f3544cbe3e3974b063a25222c2b35fcaa5f"
   }
 }

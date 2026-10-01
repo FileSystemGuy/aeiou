@@ -374,7 +374,8 @@ workload's documentation.
 
 **Three sources fill the AST's slots**, and it helps to keep shape and fitted parameters as
 separate artifacts (the AST with named distribution slots, plus a parameter file that fills
-them; the WG can publish one shape with several parameter sets):
+them; the WG can publish one shape with several parameter sets; built 2026-09-30 as
+`schema/params.schema.json` and `aeiou-params`, `schema/README.md` §8):
 1. *Configuration* of the real system: batch size, workers, block size, beam width, nprobe.
 2. *Measurement* of the real system's compute: the `compute` distributions.
 3. *An I/O trace* of the real system, for what only the data determines: sizes, offsets, reuse

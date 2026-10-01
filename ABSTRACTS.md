@@ -457,6 +457,12 @@ Run with `--io-backend mmap`, each `read(f, off, len)` becomes a populate of tha
 kernel's fault-around decides the RPC sizes, which is the point of having the backend: the
 abstract states what the application touched, the run reports what went over the wire.
 
+**Added 2026-09-30.** The builder form has a third `split`, `full`: norms and biases are
+replicated, and every rank reads them whole. The table is a parameter file built from the real
+shards by `aeiou-params safetensors` (`schema/README.md` §8); the five-tensor defaults in the
+script are a stand-in. Shards are modeled at the largest shard's size (`shard_bytes`), and the
+dataset pattern is `model-{id:05}.safetensors` (the names are the dataset's, not the model's).
+
 **Cuts.** The JSON header parse and the tensor copies to the GPU are compute; `compute` nodes
 can be added per tensor if a trace shows they gate the I/O. Replication of the same read by all
 G processes is the real behaviour, not a cut.

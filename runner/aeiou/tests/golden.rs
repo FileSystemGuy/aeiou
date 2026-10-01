@@ -15,7 +15,7 @@ fn examples() -> PathBuf {
 }
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
-    Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+    Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
 }
 
 fn dry(text: &str, cfg: &Config, threads: usize) -> dryrun::Report {
@@ -32,7 +32,7 @@ fn hashes_match_check_py() {
         ("ckpt_restore", "d9724b93648e579a3c9d20a8b912f48f78e4a742f63ab1c0ce7bea16fe31c3a3"),
         ("ckpt_write_dcp", "c8c7bf78006b49fec46d22f5c806d9056dc9a0412c14edc4c487ec2f3ab89f6f"),
         ("kv_cache_serving", "f51d92850a0ecc8b84e6e55b10d08635771f6cb58417bb59135a2ea0329c48e8"),
-        ("model_load", "d03bfddabc0562b3ad5caa88a3897933e3c9a179eedb0b6aa896b01880691b6c"),
+        ("model_load", "5fa90c2b77e53c07b11c93b37dc29f3544cbe3e3974b063a25222c2b35fcaa5f"),
         ("train_large_samples", "780c751d077f20b513df6fcd1429ca9d295ae3a572896aa4fc7a960748dc9ae1"),
         ("train_small_files", "c6cf657c946dbbeeddf8d77e6fd7ed6fc5c7c9eb0d6c3481b73c6d29cea76fca"),
         ("vdb_build_diskann", "735adae78cad5736d946741a71e4ef6c7158cb92c8a5393a8b16ee97b489e5fe"),
@@ -59,7 +59,7 @@ fn golden_fingerprints() {
         ("train_large_samples", 2, &[("steps", "5")], 0x13b5a9aaa823405b, 10728),
         ("ckpt_write_dcp", 2, &[("steps", "200")], 0xc7efab55c3d4e8ee, 70),
         ("ckpt_restore", 2, &[], 0xf370a3cd3570d0ae, 38),
-        ("model_load", 2, &[], 0x0f06cdc81fdbc84a, 24600),
+        ("model_load", 2, &[], 0x898ff58eafd7a634, 24602),
         ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")], 0xc4e18e18bc9bf279, 4232),
         ("vdb_search_ivf", 1, &[("queries", "100"), ("threads", "2")], 0x1dfd886fe80fd785, 12804),
         (
@@ -81,6 +81,55 @@ fn golden_fingerprints() {
         let r4 = dry(&text, &cfg, 4);
         assert_eq!(r4.total.fingerprint, *fp, "{name}: threads");
     }
+}
+
+#[test]
+fn parameter_files_apply_over_defaults_and_under_overrides() {
+    use aeiou::eval::ParamSet;
+    let text = std::fs::read_to_string(examples().join("train_small_files.ast.json")).unwrap();
+    let set = ParamSet::load(&examples().join("params/train_small_files.smoke.params.json")).unwrap();
+    assert_eq!(set.abstract_name, "train_small_files");
+    // the set (files 4000, steps 50) under --param steps=10 equals the same values given as overrides
+    let mut cfg = config(2, 1, &[("steps", "10")]);
+    cfg.sets = vec![set.clone()];
+    let by_file = dry(&text, &cfg, 1);
+    let by_cli = dry(&text, &config(2, 1, &[("files", "4000"), ("steps", "10")]), 1);
+    assert_eq!(by_file.total.fingerprint, by_cli.total.fingerprint);
+    assert_ne!(by_file.total.fingerprint, dry(&text, &config(2, 1, &[("steps", "10")]), 1).total.fingerprint, "files=4000 changes the permutation");
+    // the rules (schema/README.md §8)
+    let loaded = aeiou::load_str(&text).unwrap();
+    let outcome = |json: &str| -> String {
+        let set = ParamSet::parse(json, "x.params.json").unwrap();
+        let cfg = Config { sets: vec![set], ..config(2, 1, &[]) };
+        match Params::new(&loaded.ast, &cfg) {
+            Ok(_) => "accepted".into(),
+            Err(e) => format!("{e:#}"),
+        }
+    };
+    assert!(outcome(r#"{"params_version":1,"abstract":"other","params":{}}"#).contains("for abstract `other`"));
+    assert!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"nope":1}}"#).contains("no parameter `nope`"));
+    assert!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"steps":[1]}}"#).contains("the default is a scalar, the value is an array"));
+    assert!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"step_time":{"const":5}}}"#).contains("the value is a distribution"));
+    assert!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"gpus":2}}"#).contains("--gpus"));
+    assert_eq!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"enumerate":true,"hdr_read":4096}}"#), "accepted");
+    assert!(ParamSet::parse(r#"{"params_version":2,"abstract":"a","params":{}}"#, "x").is_err());
+    assert!(ParamSet::parse(r#"{"params_version":1,"abstract":"a","params":{},"extra":1}"#, "x").is_err());
+    assert!(ParamSet::parse(r#"{"params_version":1,"abstract":"a"}"#, "x").is_err());
+    // an AST hash pins a set to one shape
+    let pinned = ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"train_small_files","ast_sha256":"{}","params":{{}}}}"#, "0".repeat(64)), "x").unwrap();
+    let cfg = Config { sets: vec![pinned], ..config(2, 1, &[]) };
+    assert!(format!("{:#}", cfg.check_sets("train_small_files", &loaded.sha256).unwrap_err()).contains("is for AST"));
+    let pinned = ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"train_small_files","ast_sha256":"{}","params":{{}}}}"#, loaded.sha256), "x").unwrap();
+    assert!(Config { sets: vec![pinned], ..config(2, 1, &[]) }.check_sets("train_small_files", &loaded.sha256).is_ok());
+    // --param keeps the kind too
+    assert!(Params::new(&loaded.ast, &config(2, 1, &[("steps", "[1]")])).is_err());
+    // the committed synthetic tensor table drives model_load
+    let text = std::fs::read_to_string(examples().join("model_load.ast.json")).unwrap();
+    let set = ParamSet::load(&examples().join("params/model_load.synthetic.params.json")).unwrap();
+    let mut cfg = config(2, 1, &[]);
+    cfg.sets = vec![set];
+    let r = dry(&text, &cfg, 1);
+    assert!(r.total.total.ops > 2 * 21, "every tensor of the table is read: {} ops", r.total.total.ops);
 }
 
 #[test]

@@ -170,7 +170,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    workloads since §4 is two), the generated ASTs in `schema/examples/` (the three hand-written
    ones regenerate hash-identical), `aeiou-build --hermetic --twice --check`, and a CI job
    that rebuilds every abstract hermetically twice and fails on drift from the committed ASTs.
-   Still to do here: the format-class reader protocols (item 15) and the parameter-file split.
+   Still to do here: the format-class reader protocols (item 15) ~~and the parameter-file
+   split~~ (**the split done 2026-09-30**: `schema/README.md` §8, `DESIGN_REVIEW.md` §3.27,
+   `aeiou-params`, `aeiou run --params FILE`).
 3. Build the VM with `--dry-run` and the fingerprint; test against ext4 and a loopback NFS mount
    on WSL2 (see §7). Golden-test the fingerprint in CI. **`aeiou dry-run` done 2026-09-30**
    (`runner/`, `DESIGN_REVIEW.md` §3.22): the loader, the canonical hash, the validator (CI
@@ -286,7 +288,7 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Roles | The AST is content-addressed; anyone can author and run one. | The WG authors the reference workloads and publishes their ASTs and hashes; submitters run the published hash and nothing else counts as "official". | `GRAMMAR_OPTIONS.md` Option D "Roles"; `schema/README.md` §0 |
 | Divisions | The backend is part of the application; the interposition test (§5) draws the line between application and solution. | **CLOSED** scores only the backend the real framework uses (`sync` for PyTorch); other backends are speed-of-light rows; `replay` and wall-clock-bounded phases are never CLOSED. Whether a startup phase (the ImageFolder walk) is inside the measured window. | §4 backends, §5 comparison policy; `DESIGN_REVIEW.md` §3.12–3.13, §3.15; `ABSTRACTS.md` §1, §9.8; `NAPKIN_MATH.md` §8 |
 | Data verification and seed privacy | Data is reproducible from (dataset seed, id, offset); the run seed and file order are private to the run. | Motivated by submission fraud under the interposition test; the offline verifier is an audit tool for the WG's review process. | §5; `DESIGN_REVIEW.md` §3.13, §3.16 |
-| Reference parameters | Every workload has parameter slots filled from configuration, measurement, and traces. | Which values are the reference set (batch sizes, step times, dataset scale relative to client DRAM, the 500-step bound) is a WG decision recorded in the published parameter files. | §5 decisions; `ABSTRACTS.md` `[measure]` slots |
+| Reference parameters | Every workload has parameter slots filled from configuration, measurement, and traces; a parameter file (`schema/README.md` §8) is the published form of one set. | Which values are the reference set (batch sizes, step times, dataset scale relative to client DRAM, the 500-step bound) is a WG decision recorded in the published parameter files. | §5 decisions; `ABSTRACTS.md` `[measure]` slots; `schema/examples/params/` |
 | Workload selection | The builder can express any POSIX-shaped skeleton. | The ninth and tenth abstracts follow the MLPerf Storage ResNet50/CosmoFlow and Parquet→Arrow shapes because those are what the WG submits. | §6 item 15; `GRAMMAR_OPTIONS.md` §6.5 |
 | Upstream requests | dgen-py's API is what it is. | The `fill_block`/`seek` request goes through the WG leadership channel. | `DESIGN_REVIEW.md` §3.17 |
 | Checkpoint write and restore | A write run leaves a namespace manifest; a restore run declares the namespace `input`, reads it, and reports the gap and the warm reads (§5, *Checkpoint restore inputs*). | The benchmark runs them as two invocations of the same host list, the restore with `--rank-rotate 1` so no host reads its own shards; the gap between the end of the write and the start of the restore is capped at 30 s (`--max-gap 30`); a failed DP=N job restarts as DP=N (no resharding, `replicas` stays 1 for fully sharded state); `readback` stays off in a scored write. | `DESIGN_REVIEW.md` §3.24; `ABSTRACTS.md` §3–§4 |
@@ -299,8 +301,9 @@ types or imports:
   helper when it exists. This is the command a submitter, or anyone else, runs. (`check` and
   `dry-run` exist since 2026-09-30; `runner/README.md`.)
 - The Python authoring tools are dash-suffixed helpers in the same family, one per job:
-  `aeiou-build` (the builder; renamed from `abstract-build`), and later `aeiou-verify` (the
-  offline content verifier) and `aeiou-fit` (trace fitting). Dash-suffixed because they live in
+  `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
+  2026-09-30), and later `aeiou-verify` (the offline content verifier) and `aeiou-fit` (trace
+  fitting). Dash-suffixed because they live in
   a separate install from the runner and must not fight it for one `aeiou` command.
 - The Python package is `aeiou`; Rust crates are `aeiou` and `aeiou-<part>`.
 - Nothing is named after MLPerf; the package was renamed from `mlps_abstract` on 2026-09-30

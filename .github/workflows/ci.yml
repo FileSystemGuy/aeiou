@@ -21,6 +21,13 @@ jobs:
       - name: Hermetic build-twice of every abstract, compared with the committed ASTs
         working-directory: builder
         run: .venv/bin/aeiou-build --hermetic --twice --check -o ../schema/examples abstracts/*.py
+      - name: Parameter files fit their abstracts
+        working-directory: builder
+        run: |
+          for f in ../schema/examples/params/*.params.json; do
+            a=$(basename "$f" | cut -d. -f1)
+            .venv/bin/aeiou-params check "../schema/examples/$a.ast.json" "$f" || exit 1
+          done
 
   runner:
     runs-on: ubuntu-latest

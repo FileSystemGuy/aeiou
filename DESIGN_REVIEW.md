@@ -830,6 +830,56 @@ No design change came out of it. What it adds is evidence for three existing dec
 (O_DIRECT as the fix for the cache-fill regime, the cross-host restore rule, and the
 transfer-size parameters being measured rather than defaulted) and two operating practices.
 
+### 3.27 Parameter files: the shape/parameters split as built (added 2026-09-30)
+
+Option D's "three sources" paragraph promised that shape and fitted parameters would be
+separate artifacts, and §3.19 named the case that makes it necessary: `model_load`'s tensor
+table, four parallel parameter arrays that read fine at four tensors and will not at four
+hundred, and that no author should type by hand. Built as `schema/params.schema.json`, the
+runner's `--params FILE`, and the `aeiou-params` helper (`schema/README.md` §8). Decisions
+taken on the way:
+
+- **The identity of a run does not change.** A result was already (AST hash, parameters in
+  effect, dataset ids), and `aeiou run` already resolved the parameters before anything else.
+  A parameter file is one more source of values in that resolution, applied over the defaults
+  and under `--param`, so the manifest's resolved dataset definition, the coordinator's
+  configuration hash, and the fingerprint all see exactly what they saw before. The file's
+  name and SHA-256 are printed and recorded as provenance, like the abstract's `provenance`
+  block, and never compared: two sets with the same values are the same run.
+- **A value replaces a default of the same kind.** The builder decides at build time how a
+  slot is consumed: `compute(P.step_time)` wraps a parameter whose default is a distribution in
+  a `draw`, `P.off[t]` indexes an array. A file that turned a scalar into a distribution would
+  not change a value, it would change the shape, and the runner would fail later with a less
+  useful message. So a scalar replaces a scalar, a distribution a distribution, and an array an
+  array of any length whose elements keep the default's element kind. `--param` is held to the
+  same rule now; it was not before.
+- **`cli: false` is about `--param`, not about files.** The flag protects a published shape
+  from ad-hoc overrides at the prompt. A parameter file is the published set itself, so it may
+  set any declared parameter; `gpus` stays the runner's.
+- **An optional AST hash pins a set to a shape.** A set fitted against a trace is fitted for
+  one exact shape; renaming a parameter or changing a loop invalidates it. `ast_sha256` is
+  optional because the smoke sets and the defaults set legitimately follow the shape as it
+  evolves; when present, a mismatch is a refusal, not a warning.
+- **The abstract name is required.** Without it a set for `ckpt_restore` applied to
+  `ckpt_write_dcp` would succeed on the shared parameter names and silently diverge on the
+  rest.
+
+**What building the safetensors tool changed in `model_load`.** Reading real shard headers
+showed two things the §4b paper form had simplified away. First, a tensor-parallel plan has
+three cases, not two: besides column-parallel (q/k/v, gate/up, embeddings, the LM head) and
+row-parallel (o, down) weights, the norms and biases are replicated and every rank reads them
+whole; `split` gained `full`. Second, shards differ in size, and the dataset models every
+shard at the largest (`shard_bytes`), which over-reads nothing (the table's offsets are the
+real ones) but means a `size(f)`-based `until_eof` would be wrong on this dataset; none is
+used. The split decision itself (which tensor is column or row) is not in the safetensors
+header: it belongs to the serving engine's parallel plan, so the tool takes it as name
+patterns with Llama-shaped defaults, which is the right place for a configuration-source
+input. The committed example set is generated from synthetic shards with real headers
+(`builder/tests/test_params.py`), named `model_load.synthetic`, and says so in its `doc`; the
+first real set will come from a real model's shards with the same command.
+
+Not done here: `aeiou-fit` (`ABSTRACTS.md` §11), which will write the same form from a trace.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -850,9 +900,10 @@ transfer-size parameters being measured rather than defaulted) and two operating
   run, the TCP coordinator (which makes `--ranks` and `--rank-rotate` real),~~ The
   coordinator done the same day (§3.25) and run as two processes on `localhost`; ~~loopback
   NFS still to run.~~ The loopback NFS run done the same day (§3.26): every abstract and the
-  two-rank tests on the mount, with the NFS client's RPC counts per backend. Next: the
-  format-class reader protocols and the parameter-file split, then the resumable VM and
-  `io_uring`.
+  two-rank tests on the mount, with the NFS client's RPC counts per backend. ~~Next: the
+  format-class reader protocols and the parameter-file split,~~ The parameter-file split done
+  the same day (§3.27, `schema/README.md` §8, `aeiou-params`). Next: the format-class reader
+  protocols, then the resumable VM and `io_uring`.
 
 ## 5. Things reviewed and left as-is
 

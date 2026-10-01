@@ -9,10 +9,12 @@ publishes with a hash. Nothing here runs on a client node.
 
 ```
 builder/
-  aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli
+  aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli,
+             params (parameter files, `aeiou-params`)
   abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts)
-  tests/             pytest: every abstract builds, matches its committed AST, the discipline holds
-  pyproject.toml     dep: jsonschema; `aeiou-build` entry point
+  tests/             pytest: every abstract builds, matches its committed AST, the discipline holds;
+                     the parameter files fit their abstracts
+  pyproject.toml     dep: jsonschema; `aeiou-build` and `aeiou-params` entry points
 ```
 
 ```
@@ -20,6 +22,7 @@ cd builder && uv sync --extra test              # or: pip install -e '.[test]'
 uv run aeiou-build --hermetic --twice -o ../schema/examples abstracts/*.py
 uv run pytest
 uv run aeiou-build --check -o ../schema/examples abstracts/*.py     # drift check (CI)
+uv run aeiou-params check ../schema/examples/model_load.ast.json ../schema/examples/params/model_load.*.params.json
 ```
 
 ## 1. Writing an abstract
@@ -155,12 +158,32 @@ dict. The Rust validator must reject everything they reject.
 Three don'ts for authors: iterate sets or dicts keyed by nodes, use `id()`/`hash()` for
 ordering, read the environment or the clock. The harness turns each into an immediate error.
 
-## 5. Not yet
+## 5. Parameter files (2026-09-30)
+
+A script's `param` defaults are placeholders or one reference set; the fitted values of a
+shape live in a **parameter file** (`schema/README.md` §8, `schema/params.schema.json`), so
+the shape is published once and its parameter sets separately. `aeiou-params` is the helper:
+
+```
+uv run aeiou-params defaults ../schema/examples/train_small_files.ast.json -o tsf.params.json --pin
+uv run aeiou-params check ../schema/examples/train_small_files.ast.json tsf.params.json
+uv run aeiou-params safetensors ../schema/examples/model_load.ast.json model-0000?-of-00004.safetensors -o llama.params.json --tp 8
+```
+
+`defaults` writes every default as a set to edit or fit; `check` applies the runner's rules
+(declared names, no `gpus`, same kind as the default: scalar, array of the same element kind,
+or distribution); `safetensors` reads real shard headers and emits `model_load`'s tensor
+table (`shard`, `off`, `bytes`, `split`, `rows`, `row_bytes`, `hdr_len`, `shards`,
+`shard_bytes`, `tp`), deciding column- or row-parallel by tensor name (`--column`, `--row`,
+Llama-shaped defaults) and marking the rest replicated. The runner takes the file with
+`aeiou run --params FILE` (repeatable; `--param` still wins). `python -m aeiou.params` is the
+same program.
+
+## 6. Not yet
 
 - The `replay` trace format (schema §6); `cursor.replay` emits the node only.
 - Format classes (`GRAMMAR_OPTIONS.md` §6.4): the reader protocols that emit POSIX nodes for
   Parquet, TFRecord, HDF5, Arrow, WebDataset, MDS, Megatron. `dataset(format={...})` records
   the class for the manifest; nothing is generated from it yet.
-- A parameter file that fills named distribution slots of a published shape (Option D, "three
-  sources"); today the defaults live in the script.
-- The `strace` → parameter fitting tools (`ABSTRACTS.md` §11).
+- The `strace` → parameter fitting tool (`aeiou-fit`, `ABSTRACTS.md` §11), which will write
+  parameter files.

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/FileSystemGuy/aeiou/schema/params.schema.json",
+  "title": "aeiou parameter file",
+  "description": "A named set of values for the parameter slots of one abstract (schema/README.md §8): the second artifact of the shape/parameters split. Values have the form of the AST's parameter defaults (a scalar, a distribution, or an array of these) and must have the same kind as the default they replace. `aeiou run --params FILE` applies it over the defaults and under `--param`; several files apply in order.",
+  "type": "object",
+  "required": ["params_version", "abstract", "params"],
+  "additionalProperties": false,
+  "properties": {
+    "params_version": { "const": 1 },
+    "abstract": { "$ref": "abstract-ast.schema.json#/$defs/ident", "description": "Name of the abstract this set is for." },
+    "ast_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "When present, the exact AST this set was fitted for; the runner refuses any other." },
+    "doc": { "type": "string" },
+    "params": {
+      "type": "object",
+      "propertyNames": { "$ref": "abstract-ast.schema.json#/$defs/ident" },
+      "additionalProperties": { "$ref": "abstract-ast.schema.json#/$defs/value" },
+      "description": "Parameter name to value. `gpus` may not appear."
+    },
+    "provenance": { "type": "object", "description": "How the set was made (tool, source, dates). Never compared." }
+  }
+}

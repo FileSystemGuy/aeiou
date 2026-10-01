@@ -203,6 +203,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, _params: &Params, model: &M
                 "abstract": loaded.ast.name,
                 "ast_sha256": loaded.sha256,
                 "params": params_json,
+                "param_files": cfg.sets.iter().map(|s| json!({"path": s.path, "sha256": s.sha256})).collect::<Vec<_>>(),
                 "datagen": format!("aeiou {}", env!("CARGO_PKG_VERSION")),
                 "host": hostname(),
                 "started": start_secs,

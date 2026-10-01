@@ -309,6 +309,11 @@ pub fn param_values(doc: &Value, cfg: &Config) -> Result<BTreeMap<String, Value>
             out.insert(k.clone(), p.get("default").cloned().unwrap_or(Value::Null));
         }
     }
+    for set in &cfg.sets {
+        for (name, v) in &set.values {
+            out.insert(name.clone(), v.clone());
+        }
+    }
     for (name, text) in &cfg.overrides {
         let v = serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()));
         out.insert(name.clone(), v);

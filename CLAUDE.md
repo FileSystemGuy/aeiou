@@ -2,7 +2,7 @@
 
 Abstract-driven I/O benchmark runner (Rust + `io-uring` crate + a pure-Rust TCP coordinator for multi-host; no MPI). Pre-implementation stage.
 
-Built for the MLPerf Storage WG, meant to be general: name packages, modules, env vars, CLIs, files, and config keys for the mechanism or the repo (`aeiou`), never for MLPerf (convention in `PROJECT_BRIEF.md` §8: runner binary `aeiou` with subcommands, Python helpers `aeiou-build`, `aeiou-verify`, `aeiou-fit`); anything that is WG process (divisions, published hashes, reference parameters) is listed in `PROJECT_BRIEF.md` §8 and says so where it appears. Adding something WG-specific is a conscious, documented decision.
+Built for the MLPerf Storage WG, meant to be general: name packages, modules, env vars, CLIs, files, and config keys for the mechanism or the repo (`aeiou`), never for MLPerf (convention in `PROJECT_BRIEF.md` §8: runner binary `aeiou` with subcommands, Python helpers `aeiou-build`, `aeiou-params`, `aeiou-verify`, `aeiou-fit`); anything that is WG process (divisions, published hashes, reference parameters) is listed in `PROJECT_BRIEF.md` §8 and says so where it appears. Adding something WG-specific is a conscious, documented decision.
 
 Read these before any design or coding work:
 - `PROJECT_BRIEF.md`: original requirements, decisions made so far, open items
@@ -10,7 +10,7 @@ Read these before any design or coding work:
 - `GRAMMAR_OPTIONS.md`: abstract-language extension options
 - `DESIGN_REVIEW.md`: the 2026-09-25 review and the reasoning behind the determinism rules below
 - `ABSTRACTS.md`: paper abstracts for the eight target workloads, and the constructs they surfaced (§9, all accepted 2026-09-30)
-- `schema/README.md` and `schema/abstract-ast.schema.json`: the AST contract (v0.1), canonical form, and validator rules
+- `schema/README.md` and `schema/abstract-ast.schema.json`: the AST contract (v0.1), canonical form, and validator rules; `schema/params.schema.json` and README §8: parameter files (the shape/parameters split; a value keeps the kind of its default)
 - `builder/README.md`: the Python builder (`aeiou`), its API, the build-time discipline, and the hermetic harness; `builder/abstracts/*.py` are the eight workloads as authoring scripts and `schema/examples/*.ast.json` their generated ASTs (never edit them by hand; JSON is the only format on the contract)
 - `runner/README.md`: the Rust runner (`aeiou check`, `aeiou dry-run`, `aeiou datagen`, `aeiou run`), the definitions it fixes on top of the schema (keys, words, permutation, `consume` position, `x @ i`, `until_eof`, the fingerprint; the payload wrapper and what the manifest compares), the run semantics (threads, loader channel, barriers, structural checks, the coordinator for several hosts), and its tests; changing a definition changes every fingerprint or every dataset id and is a recorded decision
 

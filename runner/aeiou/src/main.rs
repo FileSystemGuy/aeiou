@@ -15,7 +15,7 @@ use aeiou::backend::BackendKind;
 use aeiou::coord::{Coordinator, Local, Server, Tcp};
 use aeiou::datagen::{self, DatagenOpts};
 use aeiou::dryrun;
-use aeiou::eval::{build_model, Config, Params};
+use aeiou::eval::{build_model, Config, ParamSet, Params};
 use aeiou::payload;
 use aeiou::run::{self, Report, RunOpts};
 
@@ -54,6 +54,9 @@ struct DatagenArgs {
     /// Override a parameter: `--param name=value` (only those the datasets reference matter).
     #[arg(long = "param", value_name = "NAME=VALUE")]
     params: Vec<String>,
+    /// A parameter file (`.params.json`), applied over the defaults and under --param; repeatable, in order.
+    #[arg(long = "params", value_name = "FILE")]
+    param_files: Vec<PathBuf>,
     /// Writer threads (default: all cores).
     #[arg(long)]
     threads: Option<usize>,
@@ -128,6 +131,9 @@ struct RunArgs {
     /// Override a parameter: `--param name=value` (JSON; a bare word is a string).
     #[arg(long = "param", value_name = "NAME=VALUE")]
     params: Vec<String>,
+    /// A parameter file (`.params.json`, schema/README.md §8), applied over the defaults and under --param; repeatable, in order.
+    #[arg(long = "params", value_name = "FILE")]
+    param_files: Vec<PathBuf>,
 }
 
 #[derive(Args)]
@@ -169,14 +175,16 @@ fn real_main() -> Result<()> {
 }
 
 fn datagen_cmd(a: DatagenArgs) -> Result<()> {
-    let cfg = parse_config(&RunArgs { abstract_path: a.abstract_path.clone(), gpus: a.gpus, seed: 0, params: a.params.clone() })?;
+    let cfg = parse_config(&RunArgs { abstract_path: a.abstract_path.clone(), gpus: a.gpus, seed: 0, params: a.params.clone(), param_files: a.param_files.clone() })?;
     let loaded = aeiou::load(&a.abstract_path)?;
+    cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
     let model = build_model(&loaded.ast, &cfg, &params)?;
     let threads = a.threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
     let opts = DatagenOpts { root: a.root.clone(), threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone() };
     let mut out = std::io::stdout();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+    writeln!(out, "gpus {}  params: {}", cfg.gpus, params_line(&cfg))?;
     let results = datagen::datagen(&loaded, &cfg, &params, &model, &opts, &mut out)?;
     for r in &results {
         writeln!(
@@ -208,6 +216,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     }
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.abstract_path)?));
+    cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
     let model = Box::leak(Box::new(build_model(&loaded.ast, cfg, params)?));
@@ -215,8 +224,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
-    let overrides: Vec<String> = cfg.overrides.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, if overrides.is_empty() { "defaults".to_string() } else { overrides.join(" ") })?;
+    writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
     writeln!(out, "backend {}  root {}", backend.name(), a.root.display())?;
 
     let checks = run::check_datasets(loaded, cfg, &a.root)?;
@@ -441,12 +449,29 @@ fn parse_config(a: &RunArgs) -> Result<Config> {
         let Some((k, v)) = p.split_once('=') else { bail!("--param {p}: expected NAME=VALUE") };
         overrides.push((k.to_string(), v.to_string()));
     }
-    Ok(Config { seed: a.seed, gpus: a.gpus, overrides })
+    let mut sets = Vec::new();
+    for p in &a.param_files {
+        sets.push(ParamSet::load(p)?);
+    }
+    Ok(Config { seed: a.seed, gpus: a.gpus, overrides, sets })
+}
+
+/// The parameters in effect, as the header line prints them: the files (with their hashes)
+/// and the `--param` overrides, or `defaults`.
+fn params_line(cfg: &Config) -> String {
+    let mut parts: Vec<String> = cfg.sets.iter().map(|s| format!("{} ({}…)", s.path, &s.sha256[..16])).collect();
+    parts.extend(cfg.overrides.iter().map(|(k, v)| format!("{k}={v}")));
+    if parts.is_empty() {
+        "defaults".to_string()
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn dry_run(a: DryRunArgs) -> Result<()> {
     let cfg = parse_config(&a.run)?;
     let loaded = aeiou::load(&a.run.abstract_path)?;
+    cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
     let model = build_model(&loaded.ast, &cfg, &params)?;
 
@@ -471,14 +496,7 @@ fn dry_run(a: DryRunArgs) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
-    let overrides: Vec<String> = cfg.overrides.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    writeln!(
-        out,
-        "seed {}  gpus {}  params: {}",
-        cfg.seed,
-        cfg.gpus,
-        if overrides.is_empty() { "defaults".to_string() } else { overrides.join(" ") }
-    )?;
+    writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(&cfg))?;
     for line in report.total.take_lines() {
         writeln!(out, "{line}")?;
     }
