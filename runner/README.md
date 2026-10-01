@@ -27,12 +27,12 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. |
 | `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls, checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct] [--threads N] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
-Not yet: the asynchronous backends (`io_uring`,
-`libaio`, `mmap`, …) and their counters, `mountstats`, `RLIMIT` startup checks, a JSON
-report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), and the `replay` node. ~~`stream`
+Not yet: the other asynchronous backends (`libaio`, `posix-aio`, `mmap`, …; ~~`io_uring`~~
+**built 2026-10-01**, §8) and the per-backend counters, `mountstats`, `RLIMIT` startup
+checks, a JSON report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), and the `replay` node. ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
@@ -48,18 +48,23 @@ aeiou/src/
   pattern.rs   path patterns: {id div 1300:05}, {conv:016x}, {name}
   rng.rs       positional keys, SplitMix64 words, the 4-round Feistel permutation
   eval.rs      the resolved model: parameters, datasets (sizes, layouts, names), namespaces, distributions
-  vm.rs        expression evaluation and the tree walk that emits ops and control to a Sink;
-               the fork protocol a Sink uses to run `parallel` and `loader` sub-actors itself
+  vm.rs        expression evaluation and the walk as a resumable state machine: `next` yields the
+               next op, control, or fork event and the VM can be parked between any two; `drive`
+               feeds a Sink, with the fork protocol a Sink uses to run `parallel` / `loader` sub-actors
   dryrun.rs    the dry-run Sink, parallel over actor instances, and the report
-  backend.rs   the Backend trait (blocking form) and `sync` / `sync-direct`
-  run.rs       the run Sink: threads, channels, barriers, buffers, structural checks, report
+  backend.rs   the backend kinds, the Backend trait (blocking form), `sync` / `sync-direct`
+  run.rs       `aeiou run`: per-actor state shared by both drivers (files, structural checks,
+               recording, namespace bookkeeping), the thread-per-actor Sink, startup checks, report
+  uring.rs     the `io_uring` backends: one event loop per thread, a parked VM per task, the buffer
+               pool, loop-local channels, barriers through the coordinator's eventfd (§8)
   coord.rs     the Coordinator trait, the in-process implementation, the TCP client and the server for several hosts
   payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
   datagen.rs   `aeiou datagen`
   main.rs      the CLI
 aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests, parameter files
 aeiou/tests/layout.rs   contract 0.2: framed layouts by hand, unit/column handles, stream consume, fadvise
-aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refusals, loader order
+aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refusals, loader order;
+                        the `io_uring` backends over the same abstracts, on one loop and on several
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
 aeiou-launch            the ssh loop: one rank per host
 ```
@@ -124,7 +129,9 @@ each is a recorded decision and the golden tests pin them.
 ## 3. Costs
 
 Dry-run walks an actor instance at 150–350 ns per op on one core (one thread per instance,
-so `--gpus 8` uses eight). The committed abstracts at their defaults: training shapes in
+so `--gpus 8` uses eight; re-measured 2026-10-01 after the walk became a resumable state
+machine, §8: `vdb_build_diskann` 203M ops in 36 s against 32 s before, +12 %, the explicit
+stack and the pending op slot standing in for the recursion's stack frames). The committed abstracts at their defaults: training shapes in
 under a second; `kv_cache_serving` 72M ops per instance in 24 s; `vdb_search_diskann` 68M
 ops in 28 s; `vdb_build_diskann` 203M ops in 33 s. Memory is a few MB: no per-file
 structure exists, and an actor's state is its frames, bindings, open files, and the as-written
@@ -139,9 +146,11 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   live until the actor ends; a `parallel` spawns `width` threads and joins them before the
   node returns; either may nest. Every sub-actor starts from a snapshot of its parent's
   position and bindings (`vm::Snapshot`) and sees the files the parent had open at the fork;
-  what it opens itself is its own. The VM's tree walk runs on the thread, so blocking calls
-  are simply blocking: this is the `sync` fidelity reference of `PROJECT_BRIEF.md` §5, and
-  the asynchronous backends will need a resumable VM instead.
+  what it opens itself is its own. The VM's walk runs on the thread, so blocking calls
+  are simply blocking: this is the `sync` fidelity reference of `PROJECT_BRIEF.md` §5~~, and
+  the asynchronous backends will need a resumable VM instead~~. The VM is resumable since
+  2026-10-01 (`vm.rs`: `next` yields one event at a time), and the `io_uring` backends park
+  it on an event loop instead of a thread (§8).
 - **Loader.** An ordered channel named after the loader with `workers × prefetch` slots
   bounds batches *started*: worker `w` builds batches `w, w + W, …` and may start batch `b`
   only once fewer than `workers × prefetch` batches are started-but-untaken, which is
@@ -163,7 +172,7 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   in successive slices and the aggregate across threads exceeds L3 (`NAPKIN_MATH.md` §2.2).
 - **Writes** carry the positional content of §5 for the object at that offset
   (`--write-compress` sets the ratio; no dedupe control on writes yet).
-- **`sync-direct`** adds `O_DIRECT` to every regular-file open. An unaligned read (the
+- **`sync-direct`** (and `io_uring-direct`, §8) adds `O_DIRECT` to every regular-file open. An unaligned read (the
   `until_eof` idiom's last read starts at EOF, which is rarely aligned) is rounded out to
   4 KiB and the requested part is counted, as an `O_DIRECT` shim under a buffered application
   has to do; an unaligned write is refused.
@@ -371,3 +380,85 @@ file and ~140 µs for 1 MiB; `O_DIRECT` read 150–550 µs; write 400–650 µs 
 600–800 µs direct; `mkdir` and `rename` 300 µs–2 ms. Against ext4 (§4: 10 µs cached, 258 µs
 direct) the pattern is the same with an RPC round trip added. None of this is throughput:
 the server is memory on the same kernel.
+
+## 8. The `io_uring` backends (2026-10-01)
+
+`--io-backend io_uring` and `io_uring-direct` run the same abstract, the same op stream,
+and the same fingerprint on an event loop instead of a thread per actor. The reasoning,
+and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
+
+- **The VM is resumable.** The walk is an explicit state machine (`vm.rs`): `next()` yields
+  the next op, control, or fork event, and between two calls the VM holds no borrowed
+  state, so a driver may park it at an event for as long as the event takes. `dry-run` and
+  the `sync` sink call `drive`, which feeds the events to a `Sink` as before; the fork
+  protocol (snapshot, `start_sub`) is unchanged, and no golden fingerprint moved.
+- **Tasks and loops.** `--threads N` event-loop threads (default: one per core, at most one
+  per actor instance); instances go round-robin over the loops, and an instance's
+  sub-actors (`parallel` sub-actors, loader workers) run on its loop, so channels are
+  loop-local and lock-free. A task is a VM plus its `ActorState` (files, payload filler,
+  statistics, created and removed paths), the type the thread-per-actor sink uses too, so
+  the structural checks, `expect`, recording, and the namespace bookkeeping are one
+  implementation under every backend.
+- **One ring per loop; one op in flight per task.** An actor is a sequential program (a
+  PyTorch worker blocks in `read`), so a task issues one SQE and parks; concurrency is the
+  number of tasks on the loop. The loop steps every runnable task, submits, waits in
+  `io_uring_enter` for a completion or the nearest `compute` timer (`IORING_ENTER_EXT_ARG`,
+  kernel 5.11+), drains the CQ, and dispatches by `user_data`. Opcodes used: `openat`,
+  `read`, `write`, `fsync`/`fdatasync`, `statx` (stat, fstat), `unlinkat` (unlink, rmdir),
+  `mkdirat`, `renameat`, `fallocate`, `fadvise`, `ftruncate` (6.9+). What has no opcode
+  (`lseek`, `ioctl`, `readdir`/`getdents64`), or what the ring's probe says the kernel lacks,
+  runs inline on the loop thread through the blocking backend, as an `io_uring` application
+  has to do; `close` drops the actor's reference as under `sync`.
+- **Every read and write is issued at its effective offset**, the one the VM computed and
+  the fingerprint hashes, never at the kernel's file position (`offset = -1`). Observed on
+  Linux 6.18: a `-1` read of an `O_DIRECT` file through the ring returns data but does not
+  advance the position (a buffered one does, and `pread` is right in both modes), so the
+  `until_eof` idiom read the first megabyte again and again. The op stream is unchanged;
+  turning `read` at a known position into `pread` is what a shim may do under the
+  interposition test (`PROJECT_BRIEF.md` §5). `lseek` is still issued (inline) and recorded.
+- **Buffers** are a pool of 4 KiB-aligned chunks per loop, one per op in flight, returned to
+  the back of a FIFO and reused only once the pool holds `--buffer-mib`, so successive
+  copies land in different memory (`NAPKIN_MATH.md` §2.2). Memory is (ops in flight) ×
+  (op size), what any `io_uring` loader needs.
+- **Control.** `compute` is a timer (a heap of deadlines; the enter timeout is the nearest);
+  `take`, `put`, and a loader's slot park the task on the loop-local channel, and every
+  change to the channel wakes its waiters to retry; a `parallel` parent parks until its
+  sub-actors end; a main line that has ended parks until its loader workers end, then
+  checks that every batch was taken. Barriers use the coordinator's non-blocking half
+  (`arrive`, `released`): the loop keeps a read posted on an eventfd that every release
+  writes, local or from the TCP coordinator, so a release arrives as a completion
+  (`NAPKIN_MATH.md` §8.A as designed). A loop with nothing in flight, no timer, and no
+  barrier is a deadlock and is reported with the parked actors.
+- **Stall and latency** are measured as under `sync`: an op from SQE push to CQE (queueing
+  in the SQ included, as the application sees it), a `take` from park to wake.
+- **Not done**, deliberately, as the A/B knobs of `NAPKIN_MATH.md` §8.5: fixed files and
+  buffers, `SQPOLL`, `SINGLE_ISSUER`/`DEFER_TASKRUN`, `IORING_SETUP_ATTACH_WQ`,
+  `IORING_REGISTER_IOWQ_MAX_WORKERS`, op linking; and the per-backend counters (io-wq
+  workers, `mountstats` deltas), which are still shell scripts around the runner.
+
+**Observed (2026-10-01, WSL2).** Every committed abstract reproduces its dry-run fingerprint
+under `io_uring` (`tests/run.rs`: five abstracts with nested `parallel`, loaders, barriers
+across loops, namespace write-then-read, on one loop and on three;
+`builder/tests/test_formats.py`: the three container abstracts; the other five by hand), and
+under `io_uring-direct` wherever `sync-direct` runs. On ext4 from the page cache,
+`train_small_files` with 64 GPUs × (1 + 4 workers) = 320 actors, 92,672 ops, second run:
+
+| backend | threads | elapsed | client CPU (user + sys) | read mean / p99 | RSS |
+|---|---|---|---|---|---|
+| `sync` | 320 | 0.23 s | 1.5 s | 632 µs / 16.8 ms | 210 MB |
+| `io_uring` | 20 loops | 0.18 s | 1.7 s | 450 µs / 6.3 ms | 87 MB |
+| `io_uring --threads 4` | 4 loops | 0.22 s | 0.58 s | 606 µs / 2.1 ms | 91 MB |
+| `sync-direct` | 320 | 0.94 s | 12.9 s | 6.0 ms / 50 ms | 1.85 GB |
+| `io_uring-direct` | 20 loops | 0.93 s | 11.5 s | 5.3 ms / 50 ms | 538 MB |
+
+The direct rows read the virtual disk and say nothing about storage; the buffered rows are
+page-cache copies, where client CPU per op is the whole cost: four loops move the same
+bytes in the same time as 320 threads for a third of the CPU. On the loopback NFS mount
+(§7), `train_small_files` with 4 GPUs (11,260 ops: 3,200 reads, 1,620 opens): `sync` and
+`io_uring` put identical RPCs on the wire (1,601 READ, 1,225 OPEN), `io_uring-direct`
+4,801 READ and 1,600 CLOSE like `sync-direct`; the peak count of `iou-wrk` threads was 20,
+the core count (io-wq's bounded-worker cap), for buffered and direct reads alike, because
+every `openat` punts whatever the reads do. Spike 1's question (does `O_DIRECT` keep the
+worker count bounded on a real NFS client) needs open-heavy and read-heavy phases measured
+separately on the real target with `IORING_REGISTER_IOWQ_MAX_WORKERS` in hand; the backend
+exists to ask it.

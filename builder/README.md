@@ -229,7 +229,8 @@ writer's), each file checked against the geometry its layout predicts (`layout.p
 manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names the writer
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
 ones with a class. `tests/test_formats.py` reads the files back with pyarrow and h5py and,
-when the runner is built, runs the three container abstracts over them.
+when the runner is built, runs the three container abstracts over them under the `sync`
+and `io_uring` backends.
 
 ## 7. Not yet
 

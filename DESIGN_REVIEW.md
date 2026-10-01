@@ -972,6 +972,82 @@ namespace with a format class, which namespaces do not have yet. h5py's sieve hi
 neighbouring rows and tf.data's exact batch timing are stated cuts. Column projection is
 implemented (`read_all(columns=[…])`) and traced but no committed abstract uses it.
 
+### 3.29 The resumable VM and the `io_uring` backends as built (added 2026-10-01)
+
+`runner/README.md` §8 states what exists; this is why it is shaped that way.
+
+- **Three ways to park a tree walk, and the one taken.** §3.23 left the VM recursive (the
+  walk on the actor's thread) and promised a resumable VM for `io_uring`. The options were
+  (a) stackful coroutines (a crate such as `corosensei`: the recursive walk untouched, the
+  sink's `op` suspends the coroutine, the event loop resumes it on the completion; a stack
+  per actor, lazily committed, and an unsafe stack-switching dependency), (b) `async fn`
+  through the walk (a boxed future per recursion level, so an allocation per loop iteration
+  on the dry run's hot path, and a hand-written executor), (c) an explicit state machine:
+  the recursion becomes a stack of continuations (a body, a loop, a phase end, a read or
+  write sequence) and `next()` yields one event. (c) was taken: no new dependency, no
+  per-actor stack, the dry run and the `sync` sink unchanged in behaviour (`drive` feeds a
+  `Sink` from the events, the fork protocol is the same), and a VM between two events is
+  plain data a loop can hold by the thousand. The oracle was the one §3.23 named: the golden
+  fingerprints, the run round trips, and the loader-order test, all unchanged.
+- **What it cost.** The dry run of `vdb_build_diskann` (203M ops) went from 32 s to 36 s on
+  one core (+12 %): a continuation push and pop per body and per loop iteration, and the
+  pending op held in the VM instead of on the stack. Two things were taken back on the way:
+  a single `read` or `write` (no `repeat`) is emitted without the sequence machinery, and
+  the op's path moves into the pending slot rather than being reference-counted. The
+  "cache a bound handle's path" fix of §3.22 is still the lever that matters, and still not
+  done.
+- **One op in flight per actor, by design.** An actor is a sequential program; the brief's
+  fidelity argument (a PyTorch worker blocks in `read`) is why the `sync` backend is one
+  thread per actor, and the same argument says an `io_uring` backend must not issue an
+  actor's next op before the previous one completes. Concurrency is the number of actors on
+  a loop, as it is the number of worker processes under PyTorch. Op linking
+  (`IOSQE_IO_LINK`, §5) would be the way to let one actor keep several ops in flight and
+  stays off.
+- **Sub-actors stay on their instance's loop.** Channels then need no lock and a wake is a
+  push onto the run queue; a `parallel` fan-out is `width` tasks on the same loop, not
+  threads (the DiskANN search no longer spawns 923 threads for 924 reads, the complaint of
+  `runner/README.md` §4). The price is that one instance's sub-actors share one core; a
+  PyTorch rank's loader workers do not, so if a workload ever needs the parallelism inside
+  one instance, instances are the unit to spread and `--threads` already spreads them.
+- **Explicit offsets, not the kernel's file position.** The first run of the checkpoint
+  abstract under `io_uring-direct` failed its structural check: the fifth read of a 4.3 MiB
+  file returned a full megabyte where 320 KiB remained. A probe showed Linux 6.18 does not
+  advance the file position for an `IORING_OP_READ` at offset −1 on an `O_DIRECT` file (it
+  does for a buffered one, and `pread` is right in both modes). The VM computes every read's
+  effective offset anyway, since the fingerprint hashes it, so the backend now issues every
+  read and write at that offset; the rounded-out direct read no longer needs its `lseek`
+  fix-up either. Under the interposition test this is a shim rewriting `read` as `pread` at
+  a position it knows: legal, and the op stream is the same. The `sync` backend keeps using
+  the kernel's position, which is the fidelity reference and shows the two agree.
+- **Inline where the ring has no opcode.** `lseek`, `ioctl`, and `getdents64` have no
+  `io_uring` opcode; `ftruncate` needs 6.9. The loop runs those through the blocking backend
+  on its own thread, after probing the ring at startup for the rest. An `io_uring`
+  application has the same gap and makes the same call; the alternative, a helper thread
+  pool, would be a second backend inside the first.
+- **The eventfd, as designed.** `NAPKIN_MATH.md` §8.A planned a read posted on an eventfd
+  the coordinator writes on release; §3.25 built the condvar half and deferred the eventfd to
+  this step. The `Coordinator` trait grew the non-blocking half (`arrive`, `released`,
+  `subscribe`), and both the local and the TCP coordinator kick every subscribed eventfd on
+  a release and on an abort. A 50 ms idle timeout on the enter call is the belt to those
+  braces: another thread's abort flag is seen without a kick.
+- **The buffer pool replaces the ring.** The `sync` sink's per-thread buffer ring assumed one
+  op at a time per thread. With tens of ops in flight per loop a chunk must stay allocated
+  until its CQE, so the pool hands out aligned chunks and takes them back FIFO; the
+  aggregate-exceeds-L3 property of `NAPKIN_MATH.md` §2.2 is kept by not reusing a chunk
+  until the pool holds `--buffer-mib`.
+- **What the first numbers say, and do not.** Four loops did the 64-GPU small-file run from
+  the page cache in the time of 320 threads with a third of the client CPU; 20 loops were
+  faster still but used as much CPU as the threads (`runner/README.md` §8). On the loopback
+  NFS mount the RPC counts are identical between `sync` and `io_uring`, which is the
+  correctness statement (the NFS client sees the same calls), and the io-wq worker count
+  peaked at the core count for buffered and direct reads alike, because `openat` punts
+  whatever the reads do. Spike 1's hypothesis (R1) is neither confirmed nor refuted here: it
+  needs the real target and phases that separate opens from reads. The knobs it will need
+  (`IORING_REGISTER_IOWQ_MAX_WORKERS`, `ATTACH_WQ`, fixed files) are listed and not built.
+- **Open.** The per-backend counters (io-wq workers sampled from `/proc`, `mountstats`
+  deltas) are shell scripts around the runner, not report fields; `libaio`, `posix-aio`, and
+  `mmap` now have the VM they need and are the next backends in the brief's order.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

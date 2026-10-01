@@ -201,6 +201,15 @@ Requirements that follow:
 - Barrier: per-host atomic counter + cross-host coordinator. At one barrier per 500 steps
   (~150 s at T=0.3 s), even a 10 ms network barrier costs nothing.
 
+**Built 2026-10-01** (`runner/aeiou/src/uring.rs`, `runner/README.md` §8, `DESIGN_REVIEW.md`
+§3.29): as above, with a heap of deadlines in the timer wheel's role (and `IORING_ENTER_EXT_ARG`
+carrying the nearest expiry, as foreseen), one ring per event-loop thread, instances
+round-robin over the loops with their sub-actors beside them, the VM a resumable state
+machine parked at its current event, one op in flight per actor, and every read and write
+issued at its effective offset after Linux 6.18 was seen not to advance the position of an
+`O_DIRECT` file for a −1 read through the ring. The blocking pool remains the fidelity
+reference; the two put identical RPCs on the loopback NFS wire.
+
 ### 4.3 Multi-host
 
 Because every actor's behavior depends only on (seed, actor id), hosts can be given actor ranges
@@ -249,7 +258,7 @@ of the previous one.
 
 | # | Risk | Impact | Likelihood | Mitigation / early test |
 |---|---|---|---|---|
-| **R1** | **io_uring on NFS runs largely through io-wq worker threads.** `openat`/`close`/`statx` usually punt, and buffered reads that miss the page cache likely punt on NFS (async buffered read support is filesystem-dependent) **[verify]**. In that case io_uring behaves like a kernel thread pool, so its advantage over a user-space blocking thread pool may be small for this workload. **Hypothesis to test:** NFS direct I/O is AIO-capable (the client issues the RPCs and returns `-EIOCBQUEUED` for a non-synchronous kiocb), so an O_DIRECT read should *release* its io-wq worker immediately, while a buffered cache-missing read *holds* one for the whole RPC round trip. If so, O_DIRECT keeps `iou-wrk` count small at tens of thousands of outstanding reads and only opens/closes cost a worker each **[verify]**. | CPU per op much higher than expected; per-host op rate lower; "use io_uring" stops being the main performance lever. | High | **Spike 1** (below), measuring `iou-wrk` count separately for open-heavy and read-heavy phases. I/O backend behind a trait; the blocking thread pool is the fidelity reference and is built first (§4.2). Tune `IORING_REGISTER_IOWQ_MAX_WORKERS`; consider `IORING_SETUP_ATTACH_WQ` to share one io-wq pool across rings. |
+| **R1** | **io_uring on NFS runs largely through io-wq worker threads.** `openat`/`close`/`statx` usually punt, and buffered reads that miss the page cache likely punt on NFS (async buffered read support is filesystem-dependent) **[verify]**. In that case io_uring behaves like a kernel thread pool, so its advantage over a user-space blocking thread pool may be small for this workload. **Hypothesis to test:** NFS direct I/O is AIO-capable (the client issues the RPCs and returns `-EIOCBQUEUED` for a non-synchronous kiocb), so an O_DIRECT read should *release* its io-wq worker immediately, while a buffered cache-missing read *holds* one for the whole RPC round trip. If so, O_DIRECT keeps `iou-wrk` count small at tens of thousands of outstanding reads and only opens/closes cost a worker each **[verify]**. | CPU per op much higher than expected; per-host op rate lower; "use io_uring" stops being the main performance lever. | High | **Spike 1** (below), measuring `iou-wrk` count separately for open-heavy and read-heavy phases. I/O backend behind a trait; the blocking thread pool is the fidelity reference and is built first (§4.2). Tune `IORING_REGISTER_IOWQ_MAX_WORKERS`; consider `IORING_SETUP_ATTACH_WQ` to share one io-wq pool across rings. **Loopback observation (2026-10-01, `runner/README.md` §8):** 20 `iou-wrk` threads at peak, the core count, for buffered and `O_DIRECT` reads alike, because every `openat` punts; the real-target measurement must separate open-heavy from read-heavy phases. |
 | **R2** | **The client is the bottleneck, not the storage.** Per-mount NFS slot/session limits, RPC processing, per-host NIC. | Can't saturate the SUT from one host; the results measure the client. | High for small-file workloads | Multi-host from the start (§4.3). Report per-host client CPU and NFS RPC stats (`/proc/self/mountstats`) with every run. `nconnect`, multiple mounts. |
 | **R3** | **Client caching distorts the workload.** Page cache, dentry/inode cache (~50–60 GB for 50M files), attribute cache, NFSv4 delegations (can turn OPEN/CLOSE into local ops). | Server sees a different (lighter) op mix than intended; results drift across a run as caches warm. | High | Options for O_DIRECT, drop caches per epoch, recommended mount options (`actimeo`, `lookupcache`), and a check that dataset ≫ aggregate client RAM. Record server-side op counts to validate. |
 | **R4** | **Abstract language under- or over-designed** (§4.4). | Can't express the target workloads, or the PoC turns into a compiler project. | Medium–High | Write the 3–4 target abstracts (training small-file, training large-sample, checkpoint write burst, checkpoint restore) *by hand, on paper* before writing the parser. **Done 2026-09-29/30:** eight abstracts on paper (`ABSTRACTS.md`), nine constructs added and accepted, AST schema v0.1 drafted (`schema/`). The node set is now fixed for the VM; growth from here needs a §9-style entry and a schema version bump. |
@@ -394,7 +403,9 @@ keeps WSL2 development and CI simple. There is no MPI build dependency in any co
 **Built 2026-09-30** (`runner/aeiou/src/coord.rs`, `runner/README.md` §6, `DESIGN_REVIEW.md`
 §3.25), as above with four changes: JSON frames instead of `postcard`; a reader thread per
 socket instead of one event loop, with rank 0 serving in-process and connecting as a client;
-the release wakes a condvar, the eventfd waits for the `io_uring` backend; and `Leave` beside
+the release wakes a condvar ~~, the eventfd waits for the `io_uring` backend~~ (and, since
+2026-10-01, writes every eventfd an `io_uring` loop subscribed, so the read posted on it is
+the completion this section planned); and `Leave` beside
 `Arrive`, so a host whose instances have all finished stops being expected. The trait is
 `barrier`/`leave`/`stop`; the start gate (`ready`) and the reduction (`report`/`result`) are
 the client's own methods, which `aeiou run` calls around the run. `runner/aeiou-launch` is
