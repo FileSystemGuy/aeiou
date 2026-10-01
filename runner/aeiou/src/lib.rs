@@ -10,6 +10,7 @@ pub mod ast;
 pub mod backend;
 pub mod canon;
 pub mod coord;
+pub mod counters;
 pub mod datagen;
 pub mod dryrun;
 pub mod eval;
