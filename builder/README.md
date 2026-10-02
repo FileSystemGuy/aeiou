@@ -242,7 +242,7 @@ numbers, by the definitions of `runner/README.md` §10 and in the same document
 (`aeiou_metrics: 1`, with `"source": "strace"`), from an `strace` of the application the
 abstract models, and compares two such documents. Standard library only (`aeiou/trace.py`);
 the reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made while building
-(2026-10-01) and are not yet confirmed by the user.**
+and confirmed by the user the same day (decided 2026-10-01).**
 
 ```
 strace -f -ttt -T -yy -e trace=%file,%desc,%process -o trace.txt <command>

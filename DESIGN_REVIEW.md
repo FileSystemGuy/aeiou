@@ -1790,7 +1790,8 @@ choices were made while building and **confirmed by the user the same day (decid
 §3.39 defined the numbers on the abstract's stream and left the trace side unwritten.
 Built as `aeiou-trace` (`builder/aeiou/trace.py`, `builder/README.md` §7): `metrics` turns
 an `strace` into the same `aeiou_metrics: 1` document, `compare` puts two documents side by
-side. The choices were made while building and are **not yet confirmed by the user**:
+side. The choices were made while building and **confirmed by the user the same day
+(decided 2026-10-01)**:
 
 - **Python, in the builder package, as its own command.** Trace analysis is authoring-side
   work and never runs on a client under test; the brief already put it in Python (§8).
@@ -1881,7 +1882,7 @@ been taken; that, and the tolerances, are what remains of item 14 besides `repla
   done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
   the same day (§3.36). ~~Next: `--metrics`,~~ `--metrics` built the same day, its
   definitions decided (§3.39). ~~Next: the `RLIMIT`
-  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices not yet confirmed (§3.42). Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11), `gds`/`nixl-posix`/`libnfs`, the object backends; the
+  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 

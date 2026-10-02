@@ -276,7 +276,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     bytes, hash sampling, a JSON form. The definitions were confirmed by the user the same day (**decided 2026-10-01**).
     ~~Still to do: the trace tool, the tolerances, the `replay` node.~~
     **The trace's side built 2026-10-01** (`aeiou-trace`, `builder/README.md` §7,
-    `DESIGN_REVIEW.md` §3.42; choices not yet confirmed by the user): the same numbers from
+    `DESIGN_REVIEW.md` §3.42; choices confirmed by the user, **decided 2026-10-01**): the same numbers from
     an `strace` (calls under `--root`, completion order, the trace as one instance, a thread
     as a context, fan-out and depth from `io_submit` only) and `aeiou-trace compare`, a
     distance per metric. Checked against traces of the runner itself. Still to do: a trace
