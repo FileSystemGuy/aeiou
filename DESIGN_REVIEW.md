@@ -2021,6 +2021,82 @@ call from; §3.44 and `ABSTRACTS.md` §2 said "DLIO" without that qualifier and 
   workload; a direct backend refuses it at its traced parameters. To come back to, from a
   trace of a real direct checkpoint writer if one is found (`PROJECT_BRIEF.md` §6 item 19).
 
+### 3.47 The fourth row: `dcp.load` and safetensors `from_pretrained` (added 2026-10-01)
+
+Row 4 of the capture plan, both halves. Kits in `builder/traces/ckpt_restore` and
+`builder/traces/model_load`, findings in `ABSTRACTS.md` §4. Both drafts were wrong inside:
+the restore had two reads per item and the real reader has six and 34 seeks; the model load
+had header reads and the real library issues no read at all. **The choices below were made
+while building and are not yet confirmed by the user.**
+
+**`ckpt_restore`.**
+
+- **The item loop is the traced one; hash and fingerprints changed.** DCP calls `torch.load`
+  once per item on a view of the shard file, and everything under it goes through one Python
+  `BufferedReader` of `st_blksize`. The sequence the zip reader asks for is fixed (magic,
+  length, magic, end record, central directory, the leading records, the storage); what
+  reaches the kernel depends on whether each seek lands in the buffer.
+- **The buffer is modeled with four conditions, not simulated.** `far` (the item is at
+  least a buffer long), `held` (the item before was small, so its fill holds this head),
+  `last` (the fill at the end record stops at EOF), and the storage's remainder past the
+  buffer. A general model needs the buffer's start as state carried from item to item,
+  which the language can express as a chain (`x @ t-1`) at the price of an abstract nobody
+  can read. The conditions reproduce both traces call for call. They are inexact for a run
+  of small items longer than the buffer (one fill missing per megabyte of such a run), which
+  no trace here contains. *Open for the user:* whether that is acceptable or the chain is
+  wanted.
+- **`rec2`, `eocd_scan`, `tail_back` are parameters with traced values.** They are facts of
+  torch 2.14's archive layout and of its zip reader, as `hdr` and `trailer` are in §3.45;
+  another version changes the numbers, not the shape. A small last item has them 44 bytes
+  off (its records are shorter); the test allows the 88 bytes that costs two ranks.
+- **Explicit seeks, again.** 87 % of the calls are `lseek`, most of them `lseek(0, CUR)`.
+  They stay in the abstract by §3.44's decision; here they are also the only way the
+  abstract shows why a restore is six reads per item.
+- **`.metadata` is `ceil(meta_bytes / buf)` fills and no EOF read.** Traced only below one
+  buffer; the general form is an extrapolation and is marked so in `ABSTRACTS.md`.
+- **Two kits' worth of evidence in one directory.** `mixed` is where the buffer effects
+  were read off; `small-last` is the checkpoint §3's kit writes, kept so that write and
+  restore are checked on the same files. Both are in `tests/test_trace.py`.
+- **Without root, a cold read is `fsync` then `posix_fadvise(DONTNEED)` per file.** It was
+  enough to see each byte come from the server exactly once (159 READs, 153 MB) while the
+  application read 182 MB.
+
+**`model_load`.**
+
+- **The reads stay, as the shape of what the mappings touch.** The library maps each shard
+  twice and never calls `read`. The abstract is POSIX-shaped and the same for every backend
+  (CLAUDE.md), so the touches are `read` ops and the `mmap` backend turns them back into
+  faults. *Open for the user:* under the interposition test the application's API here is
+  `mmap`, not `read`; a CLOSED run of this abstract under `sync` measures 1 MiB READs the
+  application never issues (451 against about 1,650). Whether CLOSED for this abstract
+  means `mmap` is a rule to decide, not something built.
+- **One descriptor per file and actor.** The application holds two descriptors on a shard
+  at once. The runner keys an actor's open files by path, so the abstract closes the first
+  before the second open; same calls, one order differs. Supporting two would change the
+  runner's handle definition for the sake of an order no file system can observe on its own.
+- **The second close comes after the touches.** The application closes before touching;
+  the abstract cannot read a closed file. On NFSv4 this moves a CLOSE, nothing else.
+- **A second dataset for the three JSON files, and `model/` for the shards.** One size for
+  the three (`config_bytes`), their own root, and the shards out of the top level. This
+  changes the `model` dataset's id.
+- **V13 gained a rule: no dataset root inside another.** The first layout (shards at the
+  top, `config/` below) built, validated, and failed only at `aeiou datagen`, which wants
+  each root empty and to itself. The builder, `schema/check.py` and the runner's validator
+  now refuse it. A validator rule is part of the contract's README; no AST that validated
+  and ran before is refused, since such a layout never got past datagen.
+- **The tensor table is still the draft's.** What a tensor-parallel GPU engine touches per
+  rank (column slices, row strides) was not traced: it needs GPUs and the engine. What the
+  trace does settle is when the bytes move (at the copy to the device, not at load) and
+  through what (page faults on a mapping advised sequential).
+- **The copy's thread count is visible on the wire.** One copying thread: 1,648 READs of
+  about 260 KiB. Torch's default parallel copy on CPU: 2,629 to 2,848 READs of about
+  160 KiB, because several threads fault one tensor and readahead restarts. The runner's
+  `mmap` backend, one touch per op and one thread per actor, gives 1,687. A device copy
+  from pageable memory is one thread as far as is known, so the runner's number is taken as
+  the model; **[verify]** on a GPU host. Nothing was added to the runner to imitate the
+  parallel copy (the fan-out, if real, belongs in the
+  abstract as sub-actors, not in the backend).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -2056,7 +2132,7 @@ call from; §3.44 and `ABSTRACTS.md` §2 said "DLIO" without that qualifier and 
   done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
   the same day (§3.36). ~~Next: `--metrics`,~~ `--metrics` built the same day, its
   definitions decided (§3.39). ~~Next: the `RLIMIT`
-  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11), `gds`/`nixl-posix`/`libnfs`, the object backends; the
+  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 

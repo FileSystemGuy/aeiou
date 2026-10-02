@@ -318,6 +318,10 @@ at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reaso
 (`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44; explicit seeks decided 2026-10-01, the rest not yet confirmed).
 `traces/ckpt_write_dcp` is row 3, `torch.distributed.checkpoint.save` on two ranks
 (`ABSTRACTS.md` §3, `DESIGN_REVIEW.md` §3.45, not yet confirmed).
+`traces/ckpt_restore` and `traces/model_load` are row 4: `torch.distributed.checkpoint.load`
+on two ranks, whose trace rewrote the restore's item loop, and safetensors `from_pretrained`,
+which maps the shards and issues no `read` (`ABSTRACTS.md` §4, `DESIGN_REVIEW.md` §3.47, not
+yet confirmed).
 
 ## 8. Not yet
 

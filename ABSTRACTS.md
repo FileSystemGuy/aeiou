@@ -492,36 +492,67 @@ sharded training (FSDP, ZeRO-3) has `replicas = 1`. The files are the ones a `ck
 run wrote: the namespaces are declared `input` and the run that reads them may not modify them
 (`schema/README.md` V14, `DESIGN_REVIEW.md` §3.24).
 
-**Syscall skeleton, DCP `FileSystemReader`** **[verify]**:
+**Syscall skeleton, DCP `FileSystemReader`** (**traced 2026-10-01**, torch 2.14.1; the
+drafted one had two reads per item, a 1 MiB read of a "zip tail" and one read of the storage
+at `item_off + 40`, and no seeks; see "Trace" below). `O` is the item's offset in the shard
+file, `L` its length (704 + storage + 873), `tell` is `lseek(fd, 0, SEEK_CUR)`:
 
 ```
-openat(".metadata", O_RDONLY); fstat; ioctl; lseek; read(…, blksize)…; close      # every rank
-openat("__3_0.distcp", O_RDONLY); fstat; ioctl; lseek
-for each read item (this rank's slice):
-    lseek(fd, item_offset, SEEK_SET)
-    read(fd, …, blksize)…                            # torch.load on a file view: EOCD, central dir
-    lseek(…); read(fd, …, item_bytes)                # storage; one large read
+openat(".metadata", O_RDONLY|O_CLOEXEC); fstat; ioctl; tell; read(fd, 1MiB) = size; close   # every rank
+openat("__3_0.distcp", O_RDONLY|O_CLOEXEC); fstat; ioctl; tell
+for each read item (one torch.load on a view [O, O+L) of the file):
+    lseek(O); tell; lseek(O); tell; tell; read(1MiB)          # the magic: a buffer fill at the item
+    tell; tell; lseek(O+L); tell                              # the view's length; the buffer is dropped
+    lseek(O); lseek(O); tell; read(1MiB)                      # the magic again
+    lseek(O+L-4096); tell; read(1MiB)                         # end record, central directory (and the next item's head)
+    tell ×8; lseek(O+236); tell; read(1MiB)                   # the records before the storage
+    tell ×5; lseek(O); tell; read(1MiB)                       # data.pkl; the storage's first 1 MiB - 704
+    tell ×3; read(storage - 1MiB + 704)                       # the rest of the storage, one read
 close(fd)
 ```
 
-**Abstract.**
+All of it is one Python `BufferedReader` of `st_blksize` under the zip reader: a seek to a
+target outside the buffer is an `lseek` and empties it, the next read refills it with 1 MiB
+from there, and a seek inside the buffer costs nothing. Three consequences:
+
+- an item smaller than the buffer is one fill and 26 tells, with no seeks;
+- the item after a small one finds its head in that fill: a small one then reads nothing, a
+  large one saves its first fill and its first two seeks;
+- the last item of a file is the exception: a fill that reaches EOF is consumed whole by the
+  read that caused it, so the zip reader's six steps back from the end (22, 42, 98, 561, 727,
+  857 bytes before it) are six short fills.
+
+**Abstract** (rewritten from the trace).
 
 ```
 workload ckpt_restore {
   param items = 900, item_bytes = [ … ], item_off = [ … ]      # [config], prefix sums of §3
   param replicas = 1                                          # ranks reading the same shard file
-  param meta_bytes = 2MiB, hdr_read = 1MiB, lh_len = 40
-  param restore_step = 100
+  param meta_bytes = 2MiB, restore_step = 100
+  param hdr = 704, trailer = 873, buf = 1MiB                  # as §3 writes; BufferedReader = st_blksize
+  param rec2 = 236, eocd_scan = 4096, tail_back = [22, 42, 98, 561, 727, 857]   # traced, torch 2.14
 
   per gpu {
     phase("restore") {
       let m = file("ckpt/step_{restore_step:06}/.metadata"),
-      open(m, RDONLY), fstat(m), read(m, $hdr_read)[until_eof], close(m),
+      open(m, RDONLY|CLOEXEC), fstat(m), ioctl(m, TCGETS, expect = [ENOTTY]), lseek(m, 0, CUR),
+      read(m, $buf)[ceil($meta_bytes / $buf)], close(m),                # no EOF read
       let c = file("ckpt/step_{restore_step:06}/__{gpu div $replicas}_0.distcp"),   # fan-in
-      open(c, RDONLY), fstat(c), ioctl(c, TCGETS, expect = [ENOTTY]), lseek(c, 0, CUR),
+      open(c, RDONLY|CLOEXEC), fstat(c), ioctl(c, TCGETS, expect = [ENOTTY]), lseek(c, 0, CUR),
       for t in $items {
-        read(c, offset = $item_off[t], $hdr_read),                         # zip tail of the item
-        read(c, offset = $item_off[t] + $lh_len, $item_bytes[t])
+        let o = $item_off[t], n = $hdr + $item_bytes[t] + $trailer,
+        let held = t > 0 and $hdr + $item_bytes[t-1] + $trailer < $buf,   # a small item's fill holds this head
+        let far = n >= $buf, last = t == $items - 1,
+        unless held { lseek(c, o) }, tell(c), unless held { lseek(c, o) }, tell(c) × 2,
+        unless held { read(c, $buf) }, tell(c) × 2,
+        when (far or last) {
+          when far { lseek(c, o + n) }, tell(c), lseek(c, o), lseek(c, o), tell(c), read(c, $buf),
+          when far { lseek(c, o + n - $eocd_scan) }, tell(c), when far { read(c, $buf) },
+          when last { for b in $tail_back { lseek(c, o + n - $tail_back[b]), read(c, $buf) } },
+          tell(c) × 8, lseek(c, o + $rec2), tell(c), read(c, $buf),
+          tell(c) × 5, lseek(c, o), tell(c), read(c, $buf),
+          tell(c) × 3, when ($hdr + $item_bytes[t] > $buf) { read(c, $hdr + $item_bytes[t] - $buf) }
+        } otherwise { tell(c) × 21 }
       },
       close(c),
       barrier(global)
@@ -530,9 +561,38 @@ workload ckpt_restore {
 }
 ```
 
+**Trace (2026-10-01).** `builder/traces/ckpt_restore`: `dcp.load` on two ranks (gloo, CPU)
+into `DTensor`s, each rank reading its own shard, on the loopback NFS mount; torch 2.14.1.
+Two checkpoints: `mixed`, nine items of 16 MiB down to 2 KiB per rank with small ones
+between large ones, and `small-last`, the six items §3's kit writes. Reasoning in
+`DESIGN_REVIEW.md` §3.47. **The choices are not yet confirmed by the user.**
+
+- **Every call on the shard files and on `.metadata` is in the abstract, with equal counts**
+  (`mixed`, both ranks: 62 reads, 548 seeks, 182,478,566 bytes; `small-last`: 70 reads, 404
+  seeks, bytes within 88). Largest distance 0.003 and 0.004, the share of `stat`.
+- **Seeks are 87 % of the calls.** A large item is 6 reads and 34 `lseek`s, 26 of them
+  tells. They cost a system call each and nothing on the wire.
+- **The application reads 19 % more bytes than the files hold**: each large item's head is
+  read four times and its tail fill runs into the next item. Cold, the server sent each
+  byte once: 159 READs for 153 MB, about 1 MiB each, and 1 GETATTR. Warm (the client that
+  wrote it): no READ at all, as `runner/README.md` §7 found for the draft.
+- **Not modeled, 2 calls per rank:** a `stat` and an `access` of the checkpoint directory's
+  parent (no `access` op; no handle for a namespace's parent), as in §3.
+- **Not exact, by construction:** `held` looks only at the item before. A run of small items
+  longer than the buffer needs a fill the abstract does not issue, and a small last item has
+  its zip records 44 bytes nearer its ends than `rec2` and `tail_back` say.
+- **`.metadata` was traced only below one buffer** (2,606 and 3,952 bytes: one read, no EOF
+  read). `ceil(meta_bytes / buf)` fills for a larger one is an extrapolation from
+  `pickle.load` on the same reader.
+- **Reads are unaligned but a `-direct` backend runs them:** the runner rounds a direct read
+  out to alignment, as a shim under the application would have to.
+
 **4b. Model load for serving** (Hugging Face `safetensors` shards, vLLM/TGI). Every process
-reads the small `config.json` and `model.safetensors.index.json`, then for **every** shard file:
-`open`, `read(8)` header length, `read(hdr)` JSON header, `mmap` the file, and touch the byte
+reads the small `config.json`, `model.safetensors.index.json` and `generation_config.json`,
+then for **every** shard file: ~~`open`, `read(8)` header length, `read(hdr)` JSON header,
+`mmap` the file,~~ `open`, `fstat`, `mmap` and parse the header from the mapping; `open` again,
+`fstat`, `mmap` a second time as the tensors' storage, `fadvise(SEQUENTIAL)`, close both
+descriptors (**traced 2026-10-01**, safetensors 0.8; see "Trace" below); and touch the byte
 range of each tensor it needs. Tensor-parallel rank `tp` needs a `1/TP` slice of each tensor:
 contiguous for column-parallel weights, strided for row-parallel ones. The result is that all G
 processes read all shards (fan-in G), each touching a different subset of pages.
@@ -543,15 +603,25 @@ workload model_load {
   param tensors = [ (shard, off, bytes, split, rows, row_bytes) … ]   # table from the index json [config];
                                                 # columns referenced as $off[t], $bytes[t], …; tensors_in(s) filters by shard
   param tp = 8
+  param configs = 3, config_bytes = 4KiB                        # the small JSON files (traced: 832, 5,701, 203 bytes)
 
-  dataset model = files("model-{id+1:05}-of-{shards:05}.safetensors", count = $shards,
-                        size = const($shard_bytes), seed = 0x5eed_da7c)
+  dataset model  = files("model/model-{id:05}.safetensors", count = $shards,
+                         size = const($shard_bytes), seed = 0x5eed_da7c)
+  dataset config = files("config/config-{id}.json", count = $configs,
+                         size = const($config_bytes), seed = 0x5eed_da7d)
 
   per gpu {
     phase("load") {
+      for i in $configs {                                       # json.load(open(…))
+        let j = file(config, i),
+        stat(j), open(j, RDONLY|CLOEXEC), fstat(j), ioctl(j, TCGETS, expect = [ENOTTY]),
+        lseek(j, 0, CUR), lseek(j, 0, CUR), fstat(j), read(j, size(j) + 1)[until_eof], close(j)
+      },
       for s in $shards {
         let f = file(model, s),
-        open(f, RDONLY|CLOEXEC), fstat(f), read(f, 8), read(f, $hdr_len[s]),
+        stat(f),
+        open(f, RDONLY|CLOEXEC), fstat(f), read(f, 8), read(f, $hdr_len[s]), close(f),   # the header's mapping
+        open(f, RDONLY), fstat(f), fadvise(f, 0, size(f), SEQUENTIAL),                   # the tensors' mapping
         for t in tensors_in(s) {
           when ($split[t] == column) {
             read(f, offset = $off[t] + (gpu mod $tp) * $bytes[t] / $tp, $bytes[t] / $tp)
@@ -579,7 +649,50 @@ abstract states what the application touched, the run reports what went over the
 replicated, and every rank reads them whole. The table is a parameter file built from the real
 shards by `aeiou-params safetensors` (`schema/README.md` §8); the five-tensor defaults in the
 script are a stand-in. Shards are modeled at the largest shard's size (`shard_bytes`), and the
-dataset pattern is `model-{id:05}.safetensors` (the names are the dataset's, not the model's).
+dataset pattern is ~~`model-{id:05}.safetensors`~~ `model/model-{id:05}.safetensors` since 2026-10-01 (the names are the dataset's, not the model's).
+
+**Trace (2026-10-01).** `builder/traces/model_load`: `AutoModelForCausalLM.from_pretrained`
+on a local directory of five safetensors shards (GPT-2 shape, random weights, 437 MB) on the
+loopback NFS mount; safetensors 0.8.0, transformers 5.18, torch 2.14.1 on CPU. Reasoning in
+`DESIGN_REVIEW.md` §3.47. **The choices are not yet confirmed by the user.**
+
+- **The library issues no `read` on a shard.** `safe_open(framework="pt")` maps the file
+  read-only and parses the header from the mapping, then opens it a second time, maps it
+  privately as the storage every tensor is a view of, calls
+  `posix_fadvise(0, size, SEQUENTIAL)`, and closes both descriptors. The drafted `read(8)`,
+  `read(hdr)` were never issued. The abstract keeps them, and the tensor reads, as the POSIX
+  shape of what the mappings touch; `--io-backend mmap` is this application's own API.
+- **Loading touches almost nothing.** `from_pretrained` returns with the weights still
+  views of the mapping: cold, 32 READs and 6.6 MB of 437 MB. The bytes arrive when a tensor
+  is used or copied to a device. A serving engine copies everything to its GPUs at load,
+  which is the case this abstract models; `strace` cannot see it, and no GPU engine was
+  traced, so the per-tensor slices of the table remain **[verify]**.
+- **The calls around the mappings are in the abstract with equal counts**: 13 opens and
+  closes, 16 `fstat`s, 5 `fadvise`s, and the three JSON files (`stat`, `open`, `fstat`,
+  `ioctl`, two `lseek`s, `fstat`, a read of size + 1, the EOF read, `close`).
+- **Two orders differ.** The application closes the first descriptor after the second open,
+  and the second one before any tensor is touched; the abstract closes the first before the
+  second open (the runner holds one descriptor per file and actor) and the second after the
+  touches (a POSIX read needs the handle; the application's mapping does not).
+- **Not modeled, 25 of 33 `stat`s:** the model directory (12 times), the two directories
+  above each shard (`realpath`), a second `stat` of two JSON files, and the probe for an
+  unsharded `model.safetensors`.
+- **On the wire, cold, every tensor copied once** (a stand-in for the move to a device):
+
+  | Who touches | READs | Bytes received |
+  |---|---|---|
+  | the library, copy with one thread (`touch.py`, `ONE=1`) | 1,648 | 437.8 MB |
+  | the library, torch's default parallel copy | 2,629 to 2,848 | 437.9 MB |
+  | `aeiou run --io-backend mmap`, the fitted table | 1,687 | 439.6 MB |
+  | `aeiou run --io-backend sync`, the fitted table | 451 | 445.7 MB |
+
+  The runner's `mmap` backend is within 2.4 % of the library copying with one thread: about
+  260 KiB per READ, the 128 KiB readahead window doubled by the `fadvise`. A parallel copy
+  faults one tensor from several threads and the windows shrink to about 160 KiB. `sync`
+  turns the same touches into 1 MiB READs, which the application never issues.
+- **The small files live beside the shards in the real layout**; here they are a dataset of
+  their own under `config/`, and the shards moved under `model/`, because each dataset root
+  is emptied, generated and checked as a whole (`schema/README.md` V13).
 
 **Cuts.** The JSON header parse and the tensor copies to the GPU are compute; `compute` nodes
 can be added per tensor if a trace shows they gate the I/O. Replication of the same read by all
@@ -1163,7 +1276,7 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 | §1 small files (**traced 2026-10-01**, §1 "Trace") | PyTorch DataLoader + ImageFolder, `num_workers=2`, 200 steps | per-file syscall sequence and order; `read` length argument (`st_blksize` on NFS); whether the EOF read occurs; wire ops per file from `nfsstat` deltas |
 | §2 large samples (**traced 2026-10-01**, §2 "Trace") | DLIO `unet3d` reader or `np.load` loop on `.npz` | tail-read offsets; member header reads; chunk size of the member reads; `cd_len`, `lh_len` |
 | §3 checkpoint write (**traced 2026-10-01**, §3 "Trace") | `torch.distributed.checkpoint.save` on 2 ranks; `torch.save` on 1 | `mkdir` result per rank; write sizes per item and the coalesced small-record size; `fsync` presence; `.metadata` size and the `rename` |
-| §4 restore / load | `dcp.load`; `AutoModel.from_pretrained` with `safetensors` | per-item `lseek`/`read` pairs; header read lengths; `mmap` and fault pattern (`perf trace -F` or `/proc/PID/smaps` deltas) |
+| §4 restore / load (**traced 2026-10-01**, §4 "Trace"; the fault pattern of a GPU engine still open) | `dcp.load`; `AutoModel.from_pretrained` with `safetensors` | per-item `lseek`/`read` pairs; header read lengths; `mmap` and fault pattern (`perf trace -F` or `/proc/PID/smaps` deltas) |
 | §5 DiskANN | `search_disk_index` on a 10M-point index, `beam_width=4` | `io_submit` batch sizes (= beam), rounds per query (hops), offset histogram (hub concentration), node-cache size |
 | §6 IVF | FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe=64` | list size distribution (from the index), list popularity over a query set, `pread` vs page-fault path |
 | §7 index build | DiskANN `build_disk_index` at 1M points | phase boundaries, read chunk sizes, sample-phase read pattern, layout write sizes |

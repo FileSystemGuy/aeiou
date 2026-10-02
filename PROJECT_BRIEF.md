@@ -295,8 +295,17 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `builder/traces/ckpt_write_dcp`): `dcp.save` on two ranks. The frame was right, the item
     loop was not (704 + item + 873 per item, split at the buffer size, two tells); counts and
     bytes now equal but for 10 path calls the contract cannot express. The traced writes are
-    unaligned, so a direct backend cannot run them. Choices not yet confirmed. Still
-    to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
+    unaligned, so a direct backend cannot run them. Choices not yet confirmed.
+    **Fourth, 2026-10-01** (`ABSTRACTS.md` §4 "Trace", `DESIGN_REVIEW.md` §3.47,
+    `builder/traces/ckpt_restore`, `builder/traces/model_load`): `dcp.load` on two ranks and
+    safetensors `from_pretrained`. The restore's item loop was rewritten (six reads and 34
+    seeks per item through one 1 MiB buffer; counts now equal). The model load issues no
+    `read`: two mappings per shard, `fadvise(SEQUENTIAL)`, and nothing touched until a tensor
+    is used; the abstract gained those calls and the small JSON files, and its per-tensor
+    slices stay unverified without a GPU engine. Choices not yet confirmed; open for the
+    user: whether CLOSED means `mmap` for an application that maps. ~~Still
+    to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.~~ Still
+    to do: rows 5 to 8 of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
