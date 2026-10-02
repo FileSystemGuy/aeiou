@@ -328,7 +328,7 @@ impl LatHist {
         (l * 4 + frac).min(255)
     }
 
-    fn lower(i: usize) -> u64 {
+    pub fn lower(i: usize) -> u64 {
         let l = i / 4;
         let frac = (i % 4) as u64;
         if l < 2 {

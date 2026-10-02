@@ -20,6 +20,7 @@ pub mod limits;
 pub mod metrics;
 pub mod pattern;
 pub mod payload;
+pub mod report;
 pub mod rng;
 pub mod run;
 pub mod sites;

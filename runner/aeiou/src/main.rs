@@ -165,6 +165,15 @@ struct RunCmd {
     /// root; the run refuses when it fails.
     #[arg(long)]
     drop_caches: bool,
+    /// Write the run's report to FILE as JSON (runner/README.md §12): the configuration, the
+    /// results the text report prints with the latency histograms in full, and the verdict.
+    /// Written when the run fails too, with the error; rank 0 of several hosts writes the
+    /// merged report, every other rank its own.
+    #[arg(long, value_name = "FILE")]
+    report_json: Option<PathBuf>,
+    /// With --report-json: every take of every instance (stall and compute), not only the sums.
+    #[arg(long, requires = "report_json")]
+    report_takes: bool,
 }
 
 #[derive(Args)]
@@ -264,6 +273,27 @@ fn datagen_cmd(a: DatagenArgs) -> Result<()> {
 }
 
 fn run_cmd(a: RunCmd) -> Result<()> {
+    let mut doc = aeiou::report::Doc { full_takes: a.report_takes, ..Default::default() };
+    if let Some(path) = &a.report_json {
+        // never leave an earlier run's report where this run's is expected
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => bail!("--report-json {}: {e}", path.display()),
+            _ => {}
+        }
+    }
+    let r = run_checked(&a, &mut doc);
+    if let Some(path) = &a.report_json {
+        let error = r.as_ref().err().map(|e| format!("{e:#}"));
+        match (doc.write(path, error.as_deref()), &r) {
+            (Ok(()), _) => println!("report {}", path.display()),
+            (Err(e), Ok(())) => return Err(e),
+            (Err(e), Err(_)) => eprintln!("aeiou: {e:#}"),
+        }
+    }
+    r
+}
+
+fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
     let cfg = parse_config(&a.run)?;
     let backend = BackendKind::parse(&a.backend).ok_or_else(|| anyhow::anyhow!("--io-backend {}: not one of {}", a.backend, aeiou::backend::NAMES))?;
     let expect_fingerprint = match &a.expect_fingerprint {
@@ -303,6 +333,16 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
     let model = Box::leak(Box::new(build_model(&loaded.ast, cfg, params)?));
+    // the run's identity first, so the report of a run that fails a check still says which run
+    doc.set("abstract", serde_json::json!({"name": loaded.ast.name, "sha256": loaded.sha256}));
+    doc.set("seed", serde_json::json!(cfg.seed));
+    doc.set("gpus", serde_json::json!(cfg.gpus));
+    doc.set("params", payload::params_json(&loaded.doc, cfg, params)?);
+    doc.set("backend", serde_json::json!(backend.name()));
+    doc.set("host", serde_json::json!(run::hostname()));
+    doc.set("rank", serde_json::json!(a.rank));
+    doc.set("ranks", serde_json::json!(a.ranks));
+    doc.expected_fingerprint = expect_fingerprint;
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -369,6 +409,31 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         writeln!(out, "limits: IGNORED: {p}")?;
     }
 
+    doc.set(
+        "options",
+        serde_json::json!({
+            "root": a.root,
+            "threads": a.threads,
+            "buffer_bytes": opts.buffer_bytes,
+            "write_compress": opts.write_compress,
+            "time_scale": opts.time_scale,
+            "io_uring": backend.uring().then_some(&opts.uring),
+            "aio_depth": a.aio_depth,
+            "mmap_mode": (backend == BackendKind::Mmap).then(|| mmap.name()),
+            "mmap_consume": (backend == BackendKind::Mmap).then(|| mmap_consume.name()),
+            "clean_namespaces": a.clean_namespaces,
+            "rank_rotate": a.rank_rotate,
+            "max_gap": a.max_gap,
+            "require_cold": a.require_cold,
+            "drop_caches": a.drop_caches,
+            "ignore_limits": a.ignore_limits,
+        }),
+    );
+    doc.set("gpu_ids", serde_json::json!([lo, hi]));
+    let datasets: Vec<serde_json::Value> = checks.iter().map(|c| serde_json::json!({"name": c.name, "root": c.root, "id": c.id, "payload": c.payload, "files": c.files})).collect();
+    doc.set("datasets", serde_json::json!(datasets));
+    doc.set("limits", serde_json::json!({"checked": limits, "ignored": limits.problems()}));
+
     // several hosts: rank 0 listens, every rank connects and has its configuration checked
     // before anything else happens; a host that fails later tells the others through it
     let participants = run::participants(model, &opts)?;
@@ -406,7 +471,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
         }
         _ => (Arc::new(Local::new(&participants)), None),
     };
-    let r = run_connected(&a, loaded, cfg, model, opts, coord, aborted, tcp.as_deref(), server.as_ref(), &mut out);
+    let r = run_connected(a, loaded, cfg, model, opts, coord, aborted, tcp.as_deref(), server.as_ref(), &mut out, doc);
     if let (Err(e), Some(t)) = (&r, &tcp) {
         // the coordinator relays a failure here to every other host (a no-op after a Stop)
         t.stop(&format!("{e:#}"));
@@ -426,8 +491,25 @@ fn run_connected(
     tcp: Option<&Tcp>,
     server: Option<&Server>,
     out: &mut impl Write,
+    doc: &mut aeiou::report::Doc,
 ) -> Result<()> {
     let (ns_checks, input_objects) = run::check_input_namespaces(loaded, cfg, &a.root, &opts)?;
+    let inputs: Vec<serde_json::Value> = ns_checks
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "names": c.names,
+                "root": c.root,
+                "writer_abstract": c.writer_abstract,
+                "writer_sha256": c.writer_sha256,
+                "writer_hosts": c.writer_hosts,
+                "gap_s": c.gap,
+                "objects": c.objects,
+                "same_host": c.same_host,
+            })
+        })
+        .collect();
+    doc.set("input_namespaces", serde_json::json!(inputs));
     for c in &ns_checks {
         writeln!(
             out,
@@ -467,6 +549,11 @@ fn run_connected(
     let mut report = run::run_with(model, opts.clone(), input_objects, coord, aborted)?;
     report.cold = vec![cold];
     let finished = run::unix_now();
+    doc.started = Some(started);
+    doc.finished = Some(finished);
+    doc.host = Some(aeiou::report::result(&report, doc.full_takes)?);
+    doc.fingerprint = Some(report.stats.fingerprint);
+    doc.whole_run = tcp.is_none();
     if tcp.is_some() {
         writeln!(out, "--- this host ({}), rank {} of {}", report.host, a.rank, a.ranks)?;
     }
@@ -493,6 +580,8 @@ fn run_connected(
             writeln!(out, "report sent to the coordinator; waiting for rank 0's verdict")?;
             out.flush()?;
             let (ok, fp, err) = t.result()?;
+            doc.fingerprint = Some(fp);
+            doc.whole_run = true;
             writeln!(out, "--- all {} hosts: fingerprint {fp:016x}", a.ranks)?;
             if !ok {
                 bail!("rank 0: {}", err.unwrap_or_else(|| "failed".into()));
@@ -509,6 +598,9 @@ fn run_connected(
             t.report(&report)?;
             out.flush()?;
             let merged = s.merged()?;
+            doc.merged = Some(aeiou::report::result(&merged, doc.full_takes)?);
+            doc.fingerprint = Some(merged.stats.fingerprint);
+            doc.whole_run = true;
             writeln!(out, "--- all {} hosts ({})", merged.ranks.len(), merged.host)?;
             for r in &merged.ranks {
                 writeln!(out, "rank {} {}  gpu ids [{}, {})", r.rank, r.host, r.gpus[0], r.gpus[1])?;
