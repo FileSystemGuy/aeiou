@@ -602,7 +602,7 @@ Measured for each run:
 - `/proc/self/mountstats` RPC counts, kernel version, mount options, and the fingerprint.
 
 Which rows may be compared with which is set by the comparison policy in `PROJECT_BRIEF.md`
-§5 (R17): CLOSED results come only from the `sync` row; the other rows are speed-of-light and
+§5 (R17): CLOSED results come only from ~~the `sync` row~~ the row of the backend the abstract declares (2026-10-01; `sync` unless the traced application uses another API, as `model_load` does `mmap`); the other rows are speed-of-light and
 advisory data. Before trusting any backend's numbers, run fio with the matching engine (`psync`,
 `posixaio`, `libaio`, `io_uring`, `mmap`, `libcufile`, `nfs`) against the same files as a
 cross-check.

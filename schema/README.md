@@ -30,7 +30,7 @@ python3 schema/check.py path/to/x.ast.json   # one file
   distribution parameters.
 - **Identifiers** are `[a-z_][a-z0-9_]*`. `gpus` is a reserved parameter set by `--gpus`.
 - **One format: JSON.** The on-disk form is JSON, pretty-printed with two-space indentation
-  and the builder's key order (`ast`, `name`, `doc`, `params`, `datasets`, `namespaces`,
+  and the builder's key order (`ast`, `name`, `doc`, `backend`, `params`, `datasets`, `namespaces`,
   `actors`, `provenance`), file suffix `.ast.json`. The identity of an AST is the SHA-256 of
   its canonical form: the same JSON with keys sorted, no whitespace, ASCII escapes, floats in
   Python `repr` (shortest round-trip), and the `provenance` block removed. `check.py` prints
@@ -39,6 +39,11 @@ python3 schema/check.py path/to/x.ast.json   # one file
   (PyYAML) and YAML 1.2 (the Rust crates) parse the same bytes differently, `serde_yaml` is
   unmaintained, and nobody hand-writes ASTs, so the readability YAML bought was not worth a
   second grammar on the contract.
+- **Declared backend** (0.3, 2026-10-01). The optional root key `backend` names the API the
+  traced application issues its I/O through, as a runner backend name (`sync`, `mmap`, …);
+  absent means `sync`. It is part of the document and of its hash, and of nothing else: the op
+  stream and the fingerprint are the same under every backend. `aeiou run` uses it by
+  default, and a run under another backend reports both (`DESIGN_REVIEW.md` §3.48).
 - **No site ids.** A draw's site is its structural path in the tree (the JSON pointer of the
   node). Two builds of the same source therefore agree on every site without coordination, and
   reordering two independent statements changes the sites, which is intended: they are
@@ -327,3 +332,5 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
   `unit`); the `fadvise` op; `stream` access implemented as the shuffle over files. Every
   committed AST was regenerated; no fingerprint changed (the fingerprint hashes ops, not the
   document). Reasoning in `DESIGN_REVIEW.md` §3.28.
+- **0.3** (2026-10-01): the optional root key `backend` (§1). Every committed AST was
+  regenerated; no fingerprint changed. Reasoning in `DESIGN_REVIEW.md` §3.48.

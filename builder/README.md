@@ -321,7 +321,15 @@ at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reaso
 `traces/ckpt_restore` and `traces/model_load` are row 4: `torch.distributed.checkpoint.load`
 on two ranks, whose trace rewrote the restore's item loop, and safetensors `from_pretrained`,
 which maps the shards and issues no `read` (`ABSTRACTS.md` §4, `DESIGN_REVIEW.md` §3.47, not
-yet confirmed).
+yet confirmed). A third `dcp.load` trace (`name-order`) showed that the reader takes the
+items in the sorted order of their names and that an item's cost depends on where the
+buffer was left; the restore carries the buffer's start as a chain since (§3.48, decided
+2026-10-01), and `traces/ckpt_restore/params.py` makes the parameter file from a real
+checkpoint's `.metadata`.
+
+**The application's API is declared in the script** (contract 0.3, 2026-10-01):
+`Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`
+and `write`. The runner uses it as the default backend (`runner/README.md` §4).
 
 ## 8. Not yet
 

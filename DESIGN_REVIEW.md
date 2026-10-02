@@ -2027,7 +2027,8 @@ Row 4 of the capture plan, both halves. Kits in `builder/traces/ckpt_restore` an
 `builder/traces/model_load`, findings in `ABSTRACTS.md` §4. Both drafts were wrong inside:
 the restore had two reads per item and the real reader has six and 34 seeks; the model load
 had header reads and the real library issues no read at all. **The choices below were made
-while building and are not yet confirmed by the user.**
+while building and are not yet confirmed by the user**, except the two put to the user as
+questions, which were decided the same day and are struck here (§3.48).
 
 **`ckpt_restore`.**
 
@@ -2036,7 +2037,7 @@ while building and are not yet confirmed by the user.**
   `BufferedReader` of `st_blksize`. The sequence the zip reader asks for is fixed (magic,
   length, magic, end record, central directory, the leading records, the storage); what
   reaches the kernel depends on whether each seek lands in the buffer.
-- **The buffer is modeled with four conditions, not simulated.** `far` (the item is at
+- ~~**The buffer is modeled with four conditions, not simulated.** `far` (the item is at
   least a buffer long), `held` (the item before was small, so its fill holds this head),
   `last` (the fill at the end record stops at EOF), and the storage's remainder past the
   buffer. A general model needs the buffer's start as state carried from item to item,
@@ -2044,7 +2045,7 @@ while building and are not yet confirmed by the user.**
   can read. The conditions reproduce both traces call for call. They are inexact for a run
   of small items longer than the buffer (one fill missing per megabyte of such a run), which
   no trace here contains. *Open for the user:* whether that is acceptable or the chain is
-  wanted.
+  wanted.~~ **Superseded 2026-10-01** (§3.48): the chain, after a third trace.
 - **`rec2`, `eocd_scan`, `tail_back` are parameters with traced values.** They are facts of
   torch 2.14's archive layout and of its zip reader, as `hdr` and `trailer` are in §3.45;
   another version changes the numbers, not the shape. A small last item has them 44 bytes
@@ -2066,10 +2067,11 @@ while building and are not yet confirmed by the user.**
 - **The reads stay, as the shape of what the mappings touch.** The library maps each shard
   twice and never calls `read`. The abstract is POSIX-shaped and the same for every backend
   (CLAUDE.md), so the touches are `read` ops and the `mmap` backend turns them back into
-  faults. *Open for the user:* under the interposition test the application's API here is
+  faults. ~~*Open for the user:* under the interposition test the application's API here is
   `mmap`, not `read`; a CLOSED run of this abstract under `sync` measures 1 MiB READs the
   application never issues (451 against about 1,650). Whether CLOSED for this abstract
-  means `mmap` is a rule to decide, not something built.
+  means `mmap` is a rule to decide, not something built.~~ **Decided 2026-10-01** (§3.48):
+  the abstract declares `mmap` and the runner defaults to it.
 - **One descriptor per file and actor.** The application holds two descriptors on a shard
   at once. The runner keys an actor's open files by path, so the abstract closes the first
   before the second open; same calls, one order differs. Supporting two would change the
@@ -2096,6 +2098,73 @@ while building and are not yet confirmed by the user.**
   the model; **[verify]** on a GPU host. Nothing was added to the runner to imitate the
   parallel copy (the fan-out, if real, belongs in the
   abstract as sub-actors, not in the backend).
+
+### 3.48 What CLOSED means; the declared backend; the restore mimics the reader exactly (decided 2026-10-01)
+
+Three answers from the user to §3.47's questions, and what was built from them.
+
+**CLOSED and OPEN are about comparability, not about an API.** The user's definition, from
+how MLPerf Storage uses the words: CLOSED means every system under test sees exactly the
+same operation sequence, so results across makes and models are comparable. OPEN lets a
+submitter say "you saw our CLOSED result; change your application like this and look how
+much better we do", and is comparable with nothing. v2.0 supported only buffered POSIX;
+v3.0 added `O_DIRECT` for training and checkpointing (and the S3 object API), and let a
+submitter choose buffered or direct and still be CLOSED. The user calls that a place where
+more error crept into the imposed workload than should have, and does not want it here.
+The words themselves are workgroup process (`PROJECT_BRIEF.md` §8); the mechanism below is
+general.
+
+**The aim is the pattern the real application imposes on storage, warts and all.** Nobody
+claims PyTorch issues efficient I/O; it is what runs. The price was assessed before
+building: nothing at run time (the runner spends about 2 µs per op and nothing per byte;
+the warts are seeks and re-reads of cached megabytes), and upkeep instead, since the warts
+belong to library versions (torch 2.14, safetensors 0.8) and an abstract needs a retrace
+when its library changes.
+
+**Decided and built:**
+
+- **An abstract declares the backend its application uses; a run defaults to it** (contract
+  0.3). Optional root key `backend`, a runner backend name, absent meaning `sync`.
+  `aeiou run` without `--io-backend` uses it. With another backend the run proceeds, prints
+  that it is not the abstract's, and the JSON report carries `backend` and
+  `backend_declared`; a comparison takes only runs where they are equal. `model_load`
+  declares `mmap`. This keeps the invariant that the abstract is POSIX-shaped and the same
+  for every backend: the op stream and the fingerprint do not change, and the field is in
+  the AST's hash and nowhere else. The alternative, `mmap` and touch ops in the contract,
+  would have put an API into the op stream for the same pattern on the wire.
+- **One abstract, one API: buffered and direct are two workloads.** `sync-direct` on an
+  abstract that declares `sync` is reported as not the abstract's, like any other
+  difference. An application that opens a file `O_DIRECT` says so in its own `open` flags
+  (DiskANN's index), which is part of the op stream. `O_DIRECT` checkpointing stays
+  deferred until a real direct writer is traced (§3.46).
+- **Every committed AST was regenerated for 0.3**; hashes changed, no fingerprint did. The
+  untraced abstracts declare nothing yet; DiskANN's `io_submit` and FAISS's choice of
+  `pread` or a mapping are set when rows 5 to 7 are traced.
+- **The restore carries the buffer, and reads in name order.** Before building the chain a
+  third trace was taken to see what a run of small items longer than the buffer does. It
+  showed more than that: `dcp.load` sorts the state dict's keys, so items are read in the
+  sorted order of their names (`layer1`, `layer10`, …, `layer2`), while `dcp.save` wrote
+  them in the state dict's order. On a real model (`layers.0` … `layers.31`) the restore
+  jumps about the shard file. The four conditions of §3.47 could not express that; the
+  abstract now has `read_order` (the place in the file of the k-th item read) and `bst`,
+  the buffer's start after each item, defined from `bst @ k-1`. Three tests on it
+  (`head_in`, `end_in`, `far`) and `last` decide every seek and fill. All three traces match
+  call for call, the third in bytes too.
+- **The `x @ i` values are kept in the VM.** The chain as first run recursed to the start of
+  the loop from every item: 900 items overflowed the stack. `x @ i` is a pure function of
+  its definition, the index, the indices of the enclosing loops, and the actor, so the VM
+  keeps what it has evaluated under that key (bounded; cleared when full). It stores
+  nothing the definition does not say, which is the line the positional rule draws: no
+  counter, no state a timing could change. A 900-item restore on 8 ranks dry-runs in 17 ms.
+  `kv_cache_serving`'s chains go through the same path and its fingerprint is unchanged.
+- **The archive's trailer is 873 less the storage's length mod 64.** Found fitting the third
+  trace (a 2,096-byte storage has 825 bytes after it: the record after the storage is
+  aligned). `ckpt_write_dcp` writes that now; at its defaults, all multiples of 64, nothing
+  changes. Its kit's smallest item was 2,096 bytes all along, recorded as 2,048; the byte
+  totals had agreed because the two errors cancelled.
+- **Still unverified:** which touch pattern a GPU engine's device copy produces (one thread
+  or several: 1,650 against 2,700 READs, §3.47); `rec2` and `tail_back` for a small item
+  at the end of the file; an item within 4 KiB above the buffer size.
 
 ## 4. Plan changes
 
@@ -2132,7 +2201,7 @@ while building and are not yet confirmed by the user.**
   done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
   the same day (§3.36). ~~Next: `--metrics`,~~ `--metrics` built the same day, its
   definitions decided (§3.39). ~~Next: the `RLIMIT`
-  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
+  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 

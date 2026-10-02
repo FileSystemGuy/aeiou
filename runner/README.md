@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
 | `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits] [--report-json FILE [--report-takes]]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap (default: the backend the abstract declares, `sync` when it declares none)] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits] [--report-json FILE [--report-takes]]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -123,7 +123,12 @@ each is a recorded decision and the golden tests pin them.
   sibling `let`s of the same body are re-evaluated at that index and memoized for the
   duration; draws inside use the shifted index in their key, so `conv @ (r − d)` is the value
   request `r − d` computed. Below the loop's `from`, the enclosing `cond` expression takes
-  its other arm (the "fresh draw" of `ABSTRACTS.md` §9.5).
+  its other arm (the "fresh draw" of `ABSTRACTS.md` §9.5). The VM keeps the values it has
+  evaluated, keyed by definition, index, and the indices of the enclosing loops (since
+  2026-10-01): the value is a pure function of those, so nothing is stored that the
+  definition does not say, and a chain that steps back one index per iteration
+  (`ckpt_restore`'s `bst @ k-1`) costs one link per iteration instead of a walk to the
+  start, with recursion one link deep. Before, a 900-item chain overflowed the stack.
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which
@@ -162,6 +167,13 @@ instead of re-formatting the pattern on every op, is not done yet.
 
 What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md` §3.23.
 
+- **The backend is the abstract's unless the command line names one** (2026-10-01, contract
+  0.3, `DESIGN_REVIEW.md` §3.48). An abstract may declare the API its traced application
+  issues I/O through (`model_load`: `mmap`); one that declares none is `sync`. Under any
+  other `--io-backend` the op stream and the fingerprint are the same and the storage sees
+  another workload, so the run prints `backend X is not the abstract's (Y)` and the report
+  carries both names (§12). `sync` against `sync-direct` is such a difference. `dry-run`
+  prints `declared backend Y` when there is one.
 - **Threads.** One OS thread per actor instance. A `loader` spawns `workers` threads that
   live until the actor ends; a `parallel` ~~spawns `width` threads and joins them before the
   node returns~~ runs its `width` sub-actors on threads the forking actor keeps (the
@@ -1059,7 +1071,7 @@ the same day (decided 2026-10-01).**
 
 ```
 { "aeiou_report": 1, "runner": "0.1.0",
-  "abstract": {"name", "sha256"}, "seed", "gpus", "params": {…resolved…}, "backend",
+  "abstract": {"name", "sha256"}, "seed", "gpus", "params": {…resolved…}, "backend", "backend_declared",
   "host", "rank", "ranks", "gpu_ids": [lo, hi],
   "options": {root, threads, buffer_bytes, write_compress, time_scale, io_uring, aio_depth,
               mmap_mode, mmap_consume, clean_namespaces, rank_rotate, max_gap, require_cold,
@@ -1070,6 +1082,9 @@ the same day (decided 2026-10-01).**
   "scope": "run" | "host", "result": {…}, "this_host": {…},
   "verdict": {"ok", "error", "fingerprint", "fingerprint_scope", "expected_fingerprint"} }
 ```
+
+`backend` is the one the run used and `backend_declared` the abstract's (`sync` when it
+declares none); a tool that compares runs compares only those where the two are equal (§4).
 
 `result` is one report:
 

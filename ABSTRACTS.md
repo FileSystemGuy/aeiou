@@ -367,7 +367,9 @@ barrier
 
 Each item is its own `torch.save` stream: 704 bytes before the storage (zip local headers,
 `data.pkl`, padding to 64), 873 after it (version, byte order, central directory, end
-record). Python's `BufferedWriter` holds `st_blksize` (1 MiB on the traced mount): an item
+record), less the storage's length mod 64 (found 2026-10-01 with §4's third trace: the
+record after the storage is aligned to 64, so a 2,096-byte storage has 825 bytes after it;
+the abstract writes `$trailer - $item_bytes[t] mod 64`). Python's `BufferedWriter` holds `st_blksize` (1 MiB on the traced mount): an item
 larger than that goes to the kernel in one `write`, with its header and trailer as two
 small writes around it; a smaller one leaves as one coalesced write. The stream is flushed
 at every item, so nothing is coalesced across items.
@@ -379,7 +381,7 @@ at every item, so nothing is coalesced across items.
   param items      = 900                         # write items per rank [config]
   param item_bytes = [ … ]                       # per-item bytes, 1/G of each tensor [config]
   param hdr        = 704                         # per item, before the storage (traced)
-  param trailer    = 873                         # per item, after the storage (traced)
+  param trailer    = 873                         # per item, after the storage, less item_bytes mod 64 (traced)
   param buf        = 1MiB                        # BufferedWriter = st_blksize (traced)
   param meta_bytes = 2MiB                        # .metadata size [measure]; about 217 B per item and rank
 
@@ -513,20 +515,29 @@ close(fd)
 
 All of it is one Python `BufferedReader` of `st_blksize` under the zip reader: a seek to a
 target outside the buffer is an `lseek` and empties it, the next read refills it with 1 MiB
-from there, and a seek inside the buffer costs nothing. Three consequences:
+from there, and a seek inside the buffer costs nothing. And the items are not read in file
+order: `dcp.load` sorts the state dict's keys, so `layer.10` comes before `layer.2`, while
+`dcp.save` wrote them in the state dict's own order. What follows from the two:
 
-- an item smaller than the buffer is one fill and 26 tells, with no seeks;
-- the item after a small one finds its head in that fill: a small one then reads nothing, a
-  large one saves its first fill and its first two seeks;
-- the last item of a file is the exception: a fill that reaches EOF is consumed whole by the
-  read that caused it, so the zip reader's six steps back from the end (22, 42, 98, 561, 727,
-  857 bytes before it) are six short fills.
+- every item is 26 tells; which seeks and fills it costs depends on where the buffer was
+  left by the item read before it;
+- an item wholly inside the buffer costs nothing else, so a run of small items that lie
+  together and are read together is one fill per megabyte;
+- an item whose head is in the buffer and whose end is not seeks to its end, back to its
+  start, and fills there;
+- an item longer than the buffer is the skeleton above, and its storage read leaves the
+  buffer empty;
+- the item at the end of the file is the exception: a fill that reaches EOF is consumed
+  whole by the read that caused it, so the zip reader's six steps back from the end (22, 42,
+  98, 561, 727, 857 bytes before it) are six short fills.
 
-**Abstract** (rewritten from the trace).
+**Abstract** (rewritten from the traces; the buffer's start is carried from item to item
+with `bst @ k-1`, §9.5).
 
 ```
 workload ckpt_restore {
-  param items = 900, item_bytes = [ … ], item_off = [ … ]      # [config], prefix sums of §3
+  param items = 900, item_bytes = [ … ], item_off = [ … ]      # [config], in file order, as §3 writes them
+  param read_order = [ … ]                                    # [config] place in the file of the k-th item read (names sorted)
   param replicas = 1                                          # ranks reading the same shard file
   param meta_bytes = 2MiB, restore_step = 100
   param hdr = 704, trailer = 873, buf = 1MiB                  # as §3 writes; BufferedReader = st_blksize
@@ -539,19 +550,24 @@ workload ckpt_restore {
       read(m, $buf)[ceil($meta_bytes / $buf)], close(m),                # no EOF read
       let c = file("ckpt/step_{restore_step:06}/__{gpu div $replicas}_0.distcp"),   # fan-in
       open(c, RDONLY|CLOEXEC), fstat(c), ioctl(c, TCGETS, expect = [ENOTTY]), lseek(c, 0, CUR),
-      for t in $items {
-        let o = $item_off[t], n = $hdr + $item_bytes[t] + $trailer,
-        let held = t > 0 and $hdr + $item_bytes[t-1] + $trailer < $buf,   # a small item's fill holds this head
-        let far = n >= $buf, last = t == $items - 1,
-        unless held { lseek(c, o) }, tell(c), unless held { lseek(c, o) }, tell(c) × 2,
-        unless held { read(c, $buf) }, tell(c) × 2,
-        when (far or last) {
-          when far { lseek(c, o + n) }, tell(c), lseek(c, o), lseek(c, o), tell(c), read(c, $buf),
+      for k in $items {
+        let t = $read_order[k], o = $item_off[t],
+            n = $hdr + $item_bytes[t] + $trailer - $item_bytes[t] mod 64,
+        let pb = when (k == 0) { -1 } else { bst @ (k - 1) },            # the buffer's start; -1: empty
+        let head_in = pb >= 0 and pb <= o and o < min(pb + $buf, size(c)),
+        let be = min((head_in ? pb : o) + $buf, size(c)),                # the buffer's end once the head is in it
+        let end_in = o + n < be, far = n > $buf, last = o + n == size(c),
+        let bst = when (not end_in and far and $hdr + $item_bytes[t] > $buf) { -1 }
+                  else when (head_in and end_in) { pb } else { o },
+        unless head_in { lseek(c, o) }, tell(c), unless head_in { lseek(c, o) }, tell(c) × 2,
+        unless head_in { read(c, $buf) }, tell(c) × 2,
+        when (not end_in) {
+          when (o + n > be) { lseek(c, o + n) }, tell(c), lseek(c, o), lseek(c, o), tell(c), read(c, $buf),
           when far { lseek(c, o + n - $eocd_scan) }, tell(c), when far { read(c, $buf) },
           when last { for b in $tail_back { lseek(c, o + n - $tail_back[b]), read(c, $buf) } },
-          tell(c) × 8, lseek(c, o + $rec2), tell(c), read(c, $buf),
-          tell(c) × 5, lseek(c, o), tell(c), read(c, $buf),
-          tell(c) × 3, when ($hdr + $item_bytes[t] > $buf) { read(c, $hdr + $item_bytes[t] - $buf) }
+          tell(c) × 8, when (far or last) { lseek(c, o + $rec2) }, tell(c), when (far or last) { read(c, $buf) },
+          tell(c) × 5, when (far or last) { lseek(c, o) },         tell(c), when (far or last) { read(c, $buf) },
+          tell(c) × 3, when (far and $hdr + $item_bytes[t] > $buf) { read(c, $hdr + $item_bytes[t] - $buf) }
         } otherwise { tell(c) × 21 }
       },
       close(c),
@@ -563,29 +579,38 @@ workload ckpt_restore {
 
 **Trace (2026-10-01).** `builder/traces/ckpt_restore`: `dcp.load` on two ranks (gloo, CPU)
 into `DTensor`s, each rank reading its own shard, on the loopback NFS mount; torch 2.14.1.
-Two checkpoints: `mixed`, nine items of 16 MiB down to 2 KiB per rank with small ones
-between large ones, and `small-last`, the six items §3's kit writes. Reasoning in
-`DESIGN_REVIEW.md` §3.47. **The choices are not yet confirmed by the user.**
+Three checkpoints: `mixed`, nine items of 16 MiB down to 2 KiB per rank with small ones
+between large ones; `small-last`, the six items §3's kit writes; `name-order`, seventeen
+items whose sorted names differ from their order in the file, with runs of small items
+longer than the buffer. Reasoning in `DESIGN_REVIEW.md` §3.47 and §3.48.
 
-- **Every call on the shard files and on `.metadata` is in the abstract, with equal counts**
-  (`mixed`, both ranks: 62 reads, 548 seeks, 182,478,566 bytes; `small-last`: 70 reads, 404
-  seeks, bytes within 88). Largest distance 0.003 and 0.004, the share of `stat`.
-- **Seeks are 87 % of the calls.** A large item is 6 reads and 34 `lseek`s, 26 of them
-  tells. They cost a system call each and nothing on the wire.
-- **The application reads 19 % more bytes than the files hold**: each large item's head is
-  read four times and its tail fill runs into the next item. Cold, the server sent each
-  byte once: 159 READs for 153 MB, about 1 MiB each, and 1 GETATTR. Warm (the client that
-  wrote it): no READ at all, as `runner/README.md` §7 found for the draft.
+- **Every call on the shard files and on `.metadata` is in the abstract, with equal counts,
+  in all three** (both ranks; `mixed`: 62 reads, 548 seeks, 182,478,566 bytes; `small-last`:
+  70 reads, 404 seeks, bytes within 88; `name-order`: 50 reads, 964 seeks, 77,624,078
+  bytes). Largest distance 0.004, the share of `stat`.
+- **The read order is the sorted names.** In `name-order` the reader goes from the second
+  item to the eleventh, on to the end of the file, and back to the third. ~~The abstract
+  read in file order with four conditions (`held`, `far`, `last`) that looked only at the
+  item before~~; the first version of the rewrite matched two traces and could not have
+  matched this one. Replaced the same day by `read_order` and the chain (the user's
+  direction: mimic what the application imposes, warts and all).
+- **Seeks are 87 % of the calls and more.** A large item is 6 reads and 34 `lseek`s, 26 of
+  them tells. They cost a system call each and nothing on the wire.
+- **The application reads 19 % more bytes than the files hold** (`mixed`): each large item's
+  head is read four times and its tail fill runs into the next item. Cold, the server sent
+  each byte once: 159 READs for 153 MB, about 1 MiB each, and 1 GETATTR. Warm (the client
+  that wrote it): no READ at all, as `runner/README.md` §7 found for the draft.
 - **Not modeled, 2 calls per rank:** a `stat` and an `access` of the checkpoint directory's
   parent (no `access` op; no handle for a namespace's parent), as in §3.
-- **Not exact, by construction:** `held` looks only at the item before. A run of small items
-  longer than the buffer needs a fill the abstract does not issue, and a small last item has
-  its zip records 44 bytes nearer its ends than `rec2` and `tail_back` say.
-- **`.metadata` was traced only below one buffer** (2,606 and 3,952 bytes: one read, no EOF
+- **Not exact:** a small item at the end of the file has its zip records up to 48 bytes
+  nearer its ends than `rec2` and `tail_back` say (88 bytes over two ranks in `small-last`);
+  an item within 4 KiB above the buffer size was not traced.
+- **`.metadata` was traced only below one buffer** (2,606 to 6,916 bytes: one read, no EOF
   read). `ceil(meta_bytes / buf)` fills for a larger one is an extrapolation from
   `pickle.load` on the same reader.
 - **Reads are unaligned but a `-direct` backend runs them:** the runner rounds a direct read
-  out to alignment, as a shim under the application would have to.
+  out to alignment, as a shim under the application would have to. Such a run is another
+  workload than the declared one (§3.48).
 
 **4b. Model load for serving** (Hugging Face `safetensors` shards, vLLM/TGI). Every process
 reads the small `config.json`, `model.safetensors.index.json` and `generation_config.json`,
@@ -599,6 +624,7 @@ processes read all shards (fan-in G), each touching a different subset of pages.
 
 ```
 workload model_load {
+  backend = mmap                                                # the library maps the shards and never reads (traced)
   param shards = 4, shard_bytes = 5GiB                          # [config]
   param tensors = [ (shard, off, bytes, split, rows, row_bytes) … ]   # table from the index json [config];
                                                 # columns referenced as $off[t], $bytes[t], …; tensors_in(s) filters by shard
@@ -654,14 +680,16 @@ dataset pattern is ~~`model-{id:05}.safetensors`~~ `model/model-{id:05}.safetens
 **Trace (2026-10-01).** `builder/traces/model_load`: `AutoModelForCausalLM.from_pretrained`
 on a local directory of five safetensors shards (GPT-2 shape, random weights, 437 MB) on the
 loopback NFS mount; safetensors 0.8.0, transformers 5.18, torch 2.14.1 on CPU. Reasoning in
-`DESIGN_REVIEW.md` §3.47. **The choices are not yet confirmed by the user.**
+`DESIGN_REVIEW.md` §3.47. **The choices other than the backend are not yet confirmed by the user.**
 
 - **The library issues no `read` on a shard.** `safe_open(framework="pt")` maps the file
   read-only and parses the header from the mapping, then opens it a second time, maps it
   privately as the storage every tensor is a view of, calls
   `posix_fadvise(0, size, SEQUENTIAL)`, and closes both descriptors. The drafted `read(8)`,
   `read(hdr)` were never issued. The abstract keeps them, and the tensor reads, as the POSIX
-  shape of what the mappings touch; `--io-backend mmap` is this application's own API.
+  shape of what the mappings touch, and **declares `backend = mmap`** (contract 0.3, decided
+  2026-10-01, `DESIGN_REVIEW.md` §3.48): a run faults the bytes in through a mapping unless
+  told otherwise, and a run under `sync` says that it is not the declared workload.
 - **Loading touches almost nothing.** `from_pretrained` returns with the weights still
   views of the mapping: cold, 32 READs and 6.6 MB of 437 MB. The bytes arrive when a tensor
   is used or copied to a device. A serving engine copies everything to its GPUs at load,
