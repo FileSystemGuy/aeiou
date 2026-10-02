@@ -209,6 +209,10 @@ def test_datasets_are_read_only_and_names_are_reserved():
         w.dataset("d2", pattern="d/other_{id:06}", count=1, size=const(1), seed=1)
     with pytest.raises(BuildError, match="inside dataset"):
         w.namespace("n2", pattern="d/out/{k}", fields={"k": int}, size=0, seed=1)
+    with pytest.raises(BuildError, match="are nested"):                          # either way round
+        w.dataset("d3", pattern="d/sub/f_{id:06}", count=1, size=const(1), seed=1)
+    with pytest.raises(BuildError, match="are nested"):
+        w.dataset("d4", pattern="top_{id:06}", count=1, size=const(1), seed=1)
     w.namespace("ok", pattern="dd/{k}", fields={"k": int}, size=0, seed=1)      # `dd/` is not under `d/`
 
 

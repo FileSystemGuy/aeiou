@@ -221,6 +221,12 @@ impl<'a> Checker<'a> {
             if let Some(other) = roots.get(&root) {
                 self.err(&path, format!("shares root `{root}/` with dataset `{other}` (V13)"));
             }
+            for (other, owner) in &roots {
+                let (inner, outer) = if root.len() > other.len() { (&root, other) } else { (other, &root) };
+                if inner != outer && (outer.is_empty() || inner.starts_with(&format!("{outer}/"))) {
+                    self.err(&path, format!("root `{root}/` and root `{other}/` of dataset `{owner}` are nested (V13)"));
+                }
+            }
             roots.insert(root, dname);
         }
         let mut nroots: HashMap<String, (&str, bool)> = HashMap::new();

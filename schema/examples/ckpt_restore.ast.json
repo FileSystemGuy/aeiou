@@ -26,7 +26,7 @@
         67113595
       ],
       "unit": "bytes",
-      "doc": "[config] prefix sums of hdr + item_bytes + trailer (704 + 873 per item), as §3 writes them since 2026-10-01"
+      "doc": "[config] prefix sums of hdr + item_bytes + trailer, as §3 writes them"
     },
     "replicas": {
       "default": 1,
@@ -36,17 +36,44 @@
     "meta_bytes": {
       "default": 2097152,
       "unit": "bytes",
-      "doc": "[measure]"
+      "doc": "[measure] .metadata size; traced 2,606 bytes for 6 items on 2 ranks"
     },
-    "hdr_read": {
+    "hdr": {
+      "default": 704,
+      "unit": "bytes",
+      "doc": "per item, before the storage, as §3 writes it (traced 2026-10-01, torch 2.14)"
+    },
+    "trailer": {
+      "default": 873,
+      "unit": "bytes",
+      "doc": "per item, after the storage, as §3 writes it"
+    },
+    "buf": {
       "default": 1048576,
       "unit": "bytes",
-      "doc": "[verify] st_blksize"
+      "doc": "Python BufferedReader size = st_blksize; every buffer fill asks for this much"
     },
-    "lh_len": {
-      "default": 40,
+    "rec2": {
+      "default": 236,
       "unit": "bytes",
-      "doc": "[verify] zip local header of a torch.save item"
+      "doc": "offset in an item of its second zip record, where the reader goes after the central directory (traced)"
+    },
+    "eocd_scan": {
+      "default": 4096,
+      "unit": "bytes",
+      "doc": "the zip reader looks for the end record in the last 4096 bytes of an item"
+    },
+    "tail_back": {
+      "default": [
+        22,
+        42,
+        98,
+        561,
+        727,
+        857
+      ],
+      "unit": "bytes",
+      "doc": "the last item of a file only: the fill at the scan offset stops at EOF, so each later step of the zip reader (end record, zip64 locator and record, central directory, the two records after the storage) is a fill of its own, this many bytes before the end (traced)"
     },
     "restore_step": {
       "default": 100,
@@ -65,8 +92,28 @@
           {
             "add": [
               {
+                "add": [
+                  {
+                    "elem": {
+                      "array": "item_off",
+                      "index": {
+                        "sub": [
+                          {
+                            "param": "items"
+                          },
+                          1
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "param": "hdr"
+                  }
+                ]
+              },
+              {
                 "elem": {
-                  "array": "item_off",
+                  "array": "item_bytes",
                   "index": {
                     "sub": [
                       {
@@ -76,24 +123,11 @@
                     ]
                   }
                 }
-              },
-              {
-                "param": "lh_len"
               }
             ]
           },
           {
-            "elem": {
-              "array": "item_bytes",
-              "index": {
-                "sub": [
-                  {
-                    "param": "items"
-                  },
-                  1
-                ]
-              }
-            }
+            "param": "trailer"
           }
         ]
       },
@@ -142,7 +176,8 @@
                     "ref": "m"
                   },
                   "flags": [
-                    "RDONLY"
+                    "RDONLY",
+                    "CLOEXEC"
                   ]
                 }
               },
@@ -154,14 +189,50 @@
                 }
               },
               {
-                "read": {
+                "ioctl": {
                   "file": {
                     "ref": "m"
                   },
-                  "len": {
-                    "param": "hdr_read"
+                  "request": "TCGETS",
+                  "expect": [
+                    "ENOTTY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "m"
                   },
-                  "repeat": "until_eof"
+                  "offset": 0,
+                  "whence": "CUR"
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "param": "meta_bytes"
+                      },
+                      {
+                        "param": "buf"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "m"
+                        },
+                        "len": {
+                          "param": "buf"
+                        }
+                      }
+                    }
+                  ]
                 }
               },
               {
@@ -202,7 +273,8 @@
                     "ref": "c"
                   },
                   "flags": [
-                    "RDONLY"
+                    "RDONLY",
+                    "CLOEXEC"
                   ]
                 }
               },
@@ -241,14 +313,9 @@
                   },
                   "body": [
                     {
-                      "read": {
-                        "file": {
-                          "ref": "c"
-                        },
-                        "len": {
-                          "param": "hdr_read"
-                        },
-                        "offset": {
+                      "let": {
+                        "name": "o",
+                        "value": {
                           "elem": {
                             "array": "item_off",
                             "index": {
@@ -259,33 +326,641 @@
                       }
                     },
                     {
-                      "read": {
-                        "file": {
-                          "ref": "c"
-                        },
-                        "len": {
-                          "elem": {
-                            "array": "item_bytes",
-                            "index": {
-                              "index": "t"
-                            }
-                          }
-                        },
-                        "offset": {
+                      "let": {
+                        "name": "n",
+                        "value": {
                           "add": [
                             {
-                              "elem": {
-                                "array": "item_off",
-                                "index": {
-                                  "index": "t"
+                              "add": [
+                                {
+                                  "param": "hdr"
+                                },
+                                {
+                                  "elem": {
+                                    "array": "item_bytes",
+                                    "index": {
+                                      "index": "t"
+                                    }
+                                  }
                                 }
-                              }
+                              ]
                             },
                             {
-                              "param": "lh_len"
+                              "param": "trailer"
                             }
                           ]
                         }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "held",
+                        "value": {
+                          "and": [
+                            {
+                              "gt": [
+                                {
+                                  "index": "t"
+                                },
+                                0
+                              ]
+                            },
+                            {
+                              "lt": [
+                                {
+                                  "add": [
+                                    {
+                                      "add": [
+                                        {
+                                          "param": "hdr"
+                                        },
+                                        {
+                                          "elem": {
+                                            "array": "item_bytes",
+                                            "index": {
+                                              "max": [
+                                                {
+                                                  "sub": [
+                                                    {
+                                                      "index": "t"
+                                                    },
+                                                    1
+                                                  ]
+                                                },
+                                                0
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "param": "trailer"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "param": "buf"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "not": {
+                            "ref": "held"
+                          }
+                        },
+                        "then": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": {
+                                "ref": "o"
+                              },
+                              "whence": "SET"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "c"
+                        },
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "not": {
+                            "ref": "held"
+                          }
+                        },
+                        "then": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": {
+                                "ref": "o"
+                              },
+                              "whence": "SET"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "k",
+                        "to": 2,
+                        "body": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "not": {
+                            "ref": "held"
+                          }
+                        },
+                        "then": [
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "len": {
+                                "param": "buf"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "k",
+                        "to": 2,
+                        "body": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "far",
+                        "value": {
+                          "ge": [
+                            {
+                              "ref": "n"
+                            },
+                            {
+                              "param": "buf"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "or": [
+                            {
+                              "ref": "far"
+                            },
+                            {
+                              "eq": [
+                                {
+                                  "index": "t"
+                                },
+                                {
+                                  "sub": [
+                                    {
+                                      "param": "items"
+                                    },
+                                    1
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        "then": [
+                          {
+                            "cond": {
+                              "if": {
+                                "ref": "far"
+                              },
+                              "then": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": {
+                                      "add": [
+                                        {
+                                          "ref": "o"
+                                        },
+                                        {
+                                          "ref": "n"
+                                        }
+                                      ]
+                                    },
+                                    "whence": "SET"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": {
+                                "ref": "o"
+                              },
+                              "whence": "SET"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": {
+                                "ref": "o"
+                              },
+                              "whence": "SET"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "len": {
+                                "param": "buf"
+                              }
+                            }
+                          },
+                          {
+                            "cond": {
+                              "if": {
+                                "ref": "far"
+                              },
+                              "then": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": {
+                                      "sub": [
+                                        {
+                                          "add": [
+                                            {
+                                              "ref": "o"
+                                            },
+                                            {
+                                              "ref": "n"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "param": "eocd_scan"
+                                        }
+                                      ]
+                                    },
+                                    "whence": "SET"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "cond": {
+                              "if": {
+                                "ref": "far"
+                              },
+                              "then": [
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "len": {
+                                      "param": "buf"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "cond": {
+                              "if": {
+                                "eq": [
+                                  {
+                                    "index": "t"
+                                  },
+                                  {
+                                    "sub": [
+                                      {
+                                        "param": "items"
+                                      },
+                                      1
+                                    ]
+                                  }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "loop": {
+                                    "index": "b",
+                                    "to": {
+                                      "len": "tail_back"
+                                    },
+                                    "body": [
+                                      {
+                                        "lseek": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "offset": {
+                                            "sub": [
+                                              {
+                                                "add": [
+                                                  {
+                                                    "ref": "o"
+                                                  },
+                                                  {
+                                                    "ref": "n"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "elem": {
+                                                  "array": "tail_back",
+                                                  "index": {
+                                                    "index": "b"
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          },
+                                          "whence": "SET"
+                                        }
+                                      },
+                                      {
+                                        "read": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "param": "buf"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "k",
+                              "to": 8,
+                              "body": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": {
+                                "add": [
+                                  {
+                                    "ref": "o"
+                                  },
+                                  {
+                                    "param": "rec2"
+                                  }
+                                ]
+                              },
+                              "whence": "SET"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "len": {
+                                "param": "buf"
+                              }
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "k",
+                              "to": 5,
+                              "body": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": {
+                                "ref": "o"
+                              },
+                              "whence": "SET"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "len": {
+                                "param": "buf"
+                              }
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "k",
+                              "to": 3,
+                              "body": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "cond": {
+                              "if": {
+                                "gt": [
+                                  {
+                                    "add": [
+                                      {
+                                        "param": "hdr"
+                                      },
+                                      {
+                                        "elem": {
+                                          "array": "item_bytes",
+                                          "index": {
+                                            "index": "t"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "param": "buf"
+                                  }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "len": {
+                                      "sub": [
+                                        {
+                                          "add": [
+                                            {
+                                              "param": "hdr"
+                                            },
+                                            {
+                                              "elem": {
+                                                "array": "item_bytes",
+                                                "index": {
+                                                  "index": "t"
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "param": "buf"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ],
+                        "else": [
+                          {
+                            "loop": {
+                              "index": "k",
+                              "to": 21,
+                              "body": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
                       }
                     }
                   ]
@@ -312,9 +987,9 @@
   "provenance": {
     "generator": {
       "script": "ckpt_restore.py",
-      "sha256": "b5ca764fff971580823e7da8a88f8c5366a56a32e6f5d1728b32426b0d6b52f7",
+      "sha256": "5fe69cd615c18c27c50cdbc72e07c857765e03829707e1000c3f6a1abc7077e6",
       "builder_version": "0.1.0",
-      "git": "3825d47ed88a-dirty"
+      "git": "4ceac9366144-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -322,6 +997,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "7943f49006ddd4349035574b92f04d5699cf301cf4d48625b39036586072fca0"
+    "ast_sha256": "44a49b8f7f112343793aeb4a0ec95bee0a97a2a570a7bb2f34615015597e4c0e"
   }
 }

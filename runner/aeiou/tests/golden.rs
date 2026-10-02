@@ -30,10 +30,10 @@ fn hashes_match_check_py() {
     // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day; re-recorded for
     // contract 0.2 and model_load's `full` split the same day).
     let want = [
-        ("ckpt_restore", "7943f49006ddd4349035574b92f04d5699cf301cf4d48625b39036586072fca0"),
+        ("ckpt_restore", "44a49b8f7f112343793aeb4a0ec95bee0a97a2a570a7bb2f34615015597e4c0e"),
         ("ckpt_write_dcp", "5487223973472bc05334cb903ca31298d4f4902bacb9d28871879c8b7856314d"),
         ("kv_cache_serving", "5f7a6e6f00a25cce63a5f9259d43d4b4d394913cc47e113b976e9c147097c734"),
-        ("model_load", "f62c2390df4ef53ca5f8e4fcf5ce185e941b6e394b626cf00c88b4292eb1f1b2"),
+        ("model_load", "88a447735de551248bca69924a6c84c5bcf14a4440501b47e74b3e69de301b11"),
         ("train_large_samples", "5e93a2b6f1a55d14617a7f24f783a2b5698afc145d8911833084a1fece9b5fc2"),
         ("train_small_files", "46a86b0008dc5348ffac1823f90029938393d5a2ae99d27ca38a63721906cdf5"),
         ("vdb_build_diskann", "237e014e17604b76223301929178b40d037fe17906e641078cd15e9f9dd0efee"),
@@ -60,13 +60,15 @@ fn golden_fingerprints() {
     // readback phase went behind `readback = false`; train_small_files on 2026-10-01 after the trace of
     // the real loader added the second `lseek` per file, DESIGN_REVIEW.md §3.43; train_large_samples the
     // same day, rewritten from the trace of `np.load`, §3.44; ckpt_write_dcp from the trace of
-    // `dcp.save`, §3.45, and ckpt_restore with it: its default offsets follow the writer).
+    // `dcp.save`, §3.45, and ckpt_restore with it: its default offsets follow the writer; ckpt_restore
+    // again the same day, its item loop rewritten from the trace of `dcp.load`, §3.47; model_load with the calls of
+    // `safetensors.safe_open` and the small JSON files, same section).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x71628bdb4289c4c8, 5120),
         ("train_large_samples", 2, &[("steps", "5")], 0xa2c284c6137f9639, 50451),
         ("ckpt_write_dcp", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
-        ("ckpt_restore", 2, &[], 0x44861c8004dad9f7, 38),
-        ("model_load", 2, &[], 0x898ff58eafd7a634, 24602),
+        ("ckpt_restore", 2, &[], 0x22990a88db4e6d4f, 368),
+        ("model_load", 2, &[], 0x2668387c7aa4126b, 24682),
         ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")], 0xc4e18e18bc9bf279, 4232),
         ("vdb_search_ivf", 1, &[("queries", "100"), ("threads", "2")], 0x1dfd886fe80fd785, 12804),
         (
@@ -334,6 +336,14 @@ fn validator_rejects_what_check_py_rejects() {
             "",
         ),
         "shares root",
+    );
+    // or one root inside another (V13, 2026-10-01): datagen wants each root to itself
+    rejects(
+        &base(
+            r#""a": {"files": {"pattern": "x/{id}", "count": 1, "size": {"const": 1}, "seed": 1}}, "b": {"files": {"pattern": "x/y/{id}", "count": 1, "size": {"const": 1}, "seed": 2}}"#,
+            "",
+        ),
+        "are nested",
     );
     // input namespaces are read-only and agree per root (V14)
     let ns = |input_a: &str, input_b: &str| {

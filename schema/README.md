@@ -189,7 +189,9 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
 - **V13 Reserved names** (added 2026-09-30). No path component of a dataset or namespace
   pattern may begin with `.aeiou`; that prefix belongs to the manifest and any future
   sidecar. Two `files` datasets may not share a root (the constant directory prefix of the
-  pattern), and a `regions` dataset's file may not sit at another dataset's root.
+  pattern), and a `regions` dataset's file may not sit at another dataset's root. Nor may one
+  dataset root lie inside another (added 2026-10-01: `aeiou datagen` wants each root empty and
+  to itself; a dataset at the top level, root ``, therefore excludes any other dataset).
 - **V11 Scope.** A `let` is visible to later siblings and to child bodies, not to sibling
   bodies (bind a handle above two phases that share it).
 

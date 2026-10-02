@@ -1,0 +1,270 @@
+{
+  "aeiou_metrics": 1,
+  "source": "strace",
+  "roots": [
+    "/mnt/aeiou-nfs/trace-dcpload-1790916028"
+  ],
+  "block": 4096,
+  "sample": 1,
+  "order": "completion",
+  "instances": 2,
+  "contexts": 15,
+  "chain_gap_us": null,
+  "notes": {
+    "calls_outside_instances": 637,
+    "relative_paths_skipped": 4
+  },
+  "total": {
+    "ops": 628,
+    "counts": {
+      "close": 4,
+      "fstat": 4,
+      "ioctl": 4,
+      "lseek": 548,
+      "open": 4,
+      "read": 62,
+      "stat": 2
+    },
+    "bytes_read": 182478566,
+    "bytes_written": 0,
+    "request_size": {
+      "read": {
+        "n": 62,
+        "mean": 3213468.9032258065,
+        "max": 32506560,
+        "buckets": [
+          [
+            1048576,
+            54
+          ],
+          [
+            7340032,
+            2
+          ],
+          [
+            14680064,
+            4
+          ],
+          [
+            29360128,
+            2
+          ]
+        ]
+      },
+      "write": {
+        "n": 0,
+        "mean": 0.0,
+        "max": 0,
+        "buckets": []
+      }
+    },
+    "run_length": {
+      "read": {
+        "bytes": {
+          "n": 54,
+          "mean": 3379232.703703704,
+          "max": 33555136,
+          "buckets": [
+            [
+              20,
+              2
+            ],
+            [
+              40,
+              2
+            ],
+            [
+              96,
+              2
+            ],
+            [
+              512,
+              2
+            ],
+            [
+              640,
+              2
+            ],
+            [
+              768,
+              2
+            ],
+            [
+              3584,
+              2
+            ],
+            [
+              4096,
+              2
+            ],
+            [
+              1048576,
+              30
+            ],
+            [
+              8388608,
+              2
+            ],
+            [
+              16777216,
+              4
+            ],
+            [
+              33554432,
+              2
+            ]
+          ]
+        },
+        "ops": {
+          "n": 54,
+          "mean": 1.1481481481481481,
+          "max": 2,
+          "buckets": [
+            [
+              1,
+              46
+            ],
+            [
+              2,
+              8
+            ]
+          ]
+        },
+        "multi_op_bytes": 151000576
+      },
+      "write": {
+        "bytes": {
+          "n": 0,
+          "mean": 0.0,
+          "max": 0,
+          "buckets": []
+        },
+        "ops": {
+          "n": 0,
+          "mean": 0.0,
+          "max": 0,
+          "buckets": []
+        },
+        "multi_op_bytes": 0
+      }
+    },
+    "reuse_distance_bytes": {
+      "first_touch": {
+        "read": 37388,
+        "write": 0
+      },
+      "read_after_read": {
+        "n": 7214,
+        "mean": 6021420.925977266,
+        "max": 34607104,
+        "buckets": [
+          [
+            4096,
+            22
+          ],
+          [
+            458752,
+            254
+          ],
+          [
+            524288,
+            258
+          ],
+          [
+            1048576,
+            3594
+          ],
+          [
+            2097152,
+            1540
+          ],
+          [
+            8388608,
+            4
+          ],
+          [
+            16777216,
+            1028
+          ],
+          [
+            33554432,
+            514
+          ]
+        ]
+      },
+      "read_after_write": {
+        "n": 0,
+        "mean": 0.0,
+        "max": 0,
+        "buckets": []
+      },
+      "write_after_read": {
+        "n": 0,
+        "mean": 0.0,
+        "max": 0,
+        "buckets": []
+      },
+      "write_after_write": {
+        "n": 0,
+        "mean": 0.0,
+        "max": 0,
+        "buckets": []
+      }
+    },
+    "popularity_blocks": {
+      "distinct": 37387,
+      "accesses": 44602,
+      "max": 8,
+      "top_0_1_pct": 0.004325702883278776,
+      "top_1_pct": 0.04204632079278956,
+      "top_10_pct": 0.24558764180978432,
+      "counts": [
+        [
+          8,
+          2
+        ],
+        [
+          5,
+          1018
+        ],
+        [
+          4,
+          524
+        ],
+        [
+          3,
+          516
+        ],
+        [
+          2,
+          525
+        ],
+        [
+          1,
+          34802
+        ]
+      ]
+    },
+    "popularity_objects": {
+      "distinct": 3,
+      "accesses": 62,
+      "max": 30,
+      "top_0_1_pct": 0.0014516129032258063,
+      "top_1_pct": 0.014516129032258063,
+      "top_10_pct": 0.14516129032258068,
+      "counts": [
+        [
+          30,
+          2
+        ],
+        [
+          2,
+          1
+        ]
+      ]
+    },
+    "fan_out": {},
+    "depth": {}
+  },
+  "trace": "trace.mixed.txt"
+}

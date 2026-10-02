@@ -339,3 +339,42 @@ def test_checkpoint_write_abstract_matches_the_trace_of_dcp_save(tmp_path):
     assert t["bytes_written"] == d["bytes_written"]
     assert t["request_size"]["write"]["buckets"] == d["request_size"]["write"]["buckets"]
     assert max(r[3] for r in compare(t, d) if r[3] is not None) <= 0.05
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+@pytest.mark.parametrize("which, bytes_off", [("mixed", 0), ("small-last", 88)])
+def test_checkpoint_restore_abstract_matches_the_trace_of_dcp_load(tmp_path, which, bytes_off):
+    """`builder/traces/ckpt_restore`: `torch.distributed.checkpoint.load` on two ranks, traced
+    2026-10-01. Every call on the shard files and `.metadata` is in the abstract, with its
+    count; the check of the checkpoint's parent directory is not (`ABSTRACTS.md` §4). A small
+    last item has its zip records 44 bytes nearer its ends than `rec2` and `tail_back` say,
+    which is 88 bytes over two ranks."""
+    kit = BUILDER / "traces" / "ckpt_restore"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "ckpt_restore.ast.json"), "--gpus", "2",
+                        "--params", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    not_modeled = {"stat": 2}   # per rank, the parent of the checkpoint directory (and an `access`, which the trace metrics do not count)
+    assert {k: v - not_modeled.get(k, 0) for k, v in t["counts"].items() if v != not_modeled.get(k)} == d["counts"]
+    assert d["bytes_read"] - t["bytes_read"] == bytes_off
+    assert t["request_size"]["read"]["buckets"] == d["request_size"]["read"]["buckets"]
+    assert max(r[3] for r in compare(t, d) if r[3] is not None) <= 0.05
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_model_load_abstract_matches_the_trace_of_from_pretrained(tmp_path):
+    """`builder/traces/model_load`: `from_pretrained` on five safetensors shards, traced
+    2026-10-01. The library maps the shards and issues no `read` on them, so the trace has the
+    calls around the mappings and the small JSON files, and nothing of the tensor bytes
+    (`ABSTRACTS.md` §4)."""
+    kit = BUILDER / "traces" / "model_load"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "model_load.ast.json"), "--gpus", "1",
+                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
+    for op in ("open", "close", "fstat", "ioctl", "lseek", "fadvise"):
+        assert t[op] == d[op], op
+    assert d["read"] - t["read"] == 2 * 5 + 76   # through the mappings, unseen by strace: 8 bytes and the header per shard, 76 tensors
+    assert t["stat"] - d["stat"] == 25           # not modeled: directories (the model's 12 times, the two above each shard), a second stat of two JSON files, the probe for an unsharded model.safetensors

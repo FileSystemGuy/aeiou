@@ -302,6 +302,11 @@ class Workload:
         if root in self._roots:
             raise BuildError(f"dataset {name}: shares root {root!r}/ with dataset {self._roots[root]}; "
                              f"one manifest per root (schema/README.md V13)")
+        for other, owner in self._roots.items():   # a dataset root is emptied, generated and checked as a whole
+            inner, outer = (root, other) if len(root) > len(other) else (other, root)
+            if outer == "" or inner.startswith(outer + "/"):
+                raise BuildError(f"dataset {name}: root {root!r}/ and root {other!r}/ of dataset {owner} are nested; "
+                                 f"`aeiou datagen` wants each dataset root to itself (schema/README.md V13)")
         self._roots[root] = name
 
     def _declare(self, name, what):

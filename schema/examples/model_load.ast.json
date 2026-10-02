@@ -25,6 +25,16 @@
       "default": 8,
       "unit": "count"
     },
+    "configs": {
+      "default": 3,
+      "unit": "count",
+      "doc": "small JSON files read before the shards: config.json, model.safetensors.index.json, generation_config.json (traced)"
+    },
+    "config_bytes": {
+      "default": 4096,
+      "unit": "bytes",
+      "doc": "[config] modeled at one size; traced 832, 5,701 and 203 bytes"
+    },
     "shard": {
       "default": [
         0,
@@ -90,7 +100,7 @@
   "datasets": {
     "model": {
       "files": {
-        "pattern": "model-{id:05}.safetensors",
+        "pattern": "model/model-{id:05}.safetensors",
         "count": {
           "param": "shards"
         },
@@ -100,6 +110,20 @@
           }
         },
         "seed": 1592646268
+      }
+    },
+    "config": {
+      "files": {
+        "pattern": "config/config-{id}.json",
+        "count": {
+          "param": "configs"
+        },
+        "size": {
+          "const": {
+            "param": "config_bytes"
+          }
+        },
+        "seed": 1592646269
       }
     }
   },
@@ -127,6 +151,115 @@
             "body": [
               {
                 "loop": {
+                  "index": "i",
+                  "to": {
+                    "param": "configs"
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "j",
+                        "value": {
+                          "file": {
+                            "dataset": "config",
+                            "id": {
+                              "index": "i"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "stat": {
+                        "file": {
+                          "ref": "j"
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "j"
+                        },
+                        "flags": [
+                          "RDONLY",
+                          "CLOEXEC"
+                        ]
+                      }
+                    },
+                    {
+                      "fstat": {
+                        "file": {
+                          "ref": "j"
+                        }
+                      }
+                    },
+                    {
+                      "ioctl": {
+                        "file": {
+                          "ref": "j"
+                        },
+                        "request": "TCGETS",
+                        "expect": [
+                          "ENOTTY"
+                        ]
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "j"
+                        },
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "j"
+                        },
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "fstat": {
+                        "file": {
+                          "ref": "j"
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "j"
+                        },
+                        "len": {
+                          "add": [
+                            {
+                              "size": {
+                                "ref": "j"
+                              }
+                            },
+                            1
+                          ]
+                        },
+                        "repeat": "until_eof"
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "j"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
                   "index": "s",
                   "to": {
                     "param": "shards"
@@ -142,6 +275,13 @@
                               "index": "s"
                             }
                           }
+                        }
+                      }
+                    },
+                    {
+                      "stat": {
+                        "file": {
+                          "ref": "f"
                         }
                       }
                     },
@@ -182,6 +322,44 @@
                             "index": {
                               "index": "s"
                             }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "f"
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "flags": [
+                          "RDONLY"
+                        ]
+                      }
+                    },
+                    {
+                      "fstat": {
+                        "file": {
+                          "ref": "f"
+                        }
+                      }
+                    },
+                    {
+                      "fadvise": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "advice": "SEQUENTIAL",
+                        "offset": 0,
+                        "len": {
+                          "size": {
+                            "ref": "f"
                           }
                         }
                       }
@@ -452,16 +630,16 @@
   "provenance": {
     "generator": {
       "script": "model_load.py",
-      "sha256": "b7a73d834984a3db80c348c497894f24c1c8d78e43e5693f8783e0efd38fd898",
+      "sha256": "ad3aefaa20fe0160bd94d08bfe2cdad806dd91975e0f5638ef4b6c02868356b4",
       "builder_version": "0.1.0",
-      "git": "0aec70405ce1"
+      "git": "4ceac9366144-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
-      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "f62c2390df4ef53ca5f8e4fcf5ce185e941b6e394b626cf00c88b4292eb1f1b2"
+    "ast_sha256": "88a447735de551248bca69924a6c84c5bcf14a4440501b47e74b3e69de301b11"
   }
 }

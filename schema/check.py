@@ -89,6 +89,10 @@ class Check:
             root = dataset_root(d)
             if root in roots:
                 self.err(["datasets", dname], f"shares root `{root}/` with dataset `{roots[root]}` (V13)")
+            for other, owner in roots.items():
+                inner, outer = (root, other) if len(root) > len(other) else (other, root)
+                if inner != outer and (outer == "" or inner.startswith(outer + "/")):
+                    self.err(["datasets", dname], f"root `{root}/` and root `{other}/` of dataset `{owner}` are nested (V13)")
             roots[root] = dname
         nroots = {}
         for nname, n in self.namespaces.items():

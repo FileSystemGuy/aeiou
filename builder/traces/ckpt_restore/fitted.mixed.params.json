@@ -1,0 +1,4 @@
+{"params_version": 1, "abstract": "ckpt_restore",
+ "doc": "Fitted to the 2026-10-01 trace of torch.distributed.checkpoint.load on 2 ranks: 9 items, small ones between large ones.",
+ "params": {"items": 9, "item_bytes": [16777216, 524288, 33554432, 2048, 2048, 524288, 16777216, 2048, 8388608],
+            "item_off": [0, 16778793, 17304658, 50860667, 50864292, 50867917, 51393782, 68172575, 68176200], "meta_bytes": 3952, "restore_step": 200}}
