@@ -1785,6 +1785,67 @@ choices were made while building and **confirmed by the user the same day (decid
 - **Not done:** a JSON Schema for the document. The format is described in the README and
   pinned by `tests/report.rs`; a schema is worth writing when a second tool reads it.
 
+### 3.42 The trace side of the metrics: what a trace has that an abstract does not (added 2026-10-01)
+
+§3.39 defined the numbers on the abstract's stream and left the trace side unwritten.
+Built as `aeiou-trace` (`builder/aeiou/trace.py`, `builder/README.md` §7): `metrics` turns
+an `strace` into the same `aeiou_metrics: 1` document, `compare` puts two documents side by
+side. The choices were made while building and are **not yet confirmed by the user**:
+
+- **Python, in the builder package, as its own command.** Trace analysis is authoring-side
+  work and never runs on a client under test; the brief already put it in Python (§8).
+  It is not `aeiou-fit`: that tool will write parameter files, this one measures. Standard
+  library only, so it runs where the trace was taken. *Against:* a second implementation
+  of the definitions (histogram buckets, stack distance, popularity) that must stay equal
+  to `metrics.rs`; the test that traces the runner is what holds them together.
+- **`strace` text is the input.** It is what `ABSTRACTS.md` §11 already asks for, it is on
+  every client, and `-yy` gives the path behind each descriptor. *Against:* it slows the
+  application several-fold (irrelevant to these metrics, which are not timings, except the
+  chain gap), and it cannot see `io_uring` or page faults. An eBPF or `LD_PRELOAD` capture
+  would be a second front end to the same `Metrics`; none is written.
+- **Only paths under `--root` count.** A real process loads libraries, reads `/proc`,
+  talks on sockets. The abstract models the I/O on the storage under test, so the trace is
+  cut to that before anything is counted.
+- **Completion order.** The lines of an `strace` file are in the order calls returned;
+  an unfinished call is placed where it resumed. Issue order would need the trace buffered
+  until every earlier call is known to have ended. Reuse distance is the only metric that
+  sees the difference, and a cache sees data when it arrives.
+- **The trace is one instance unless told otherwise.** The capture plan traces one
+  application process with its workers, which is one GPU's instance. `--instance-root`
+  splits a trace of several by process tree. The alternative, one instance per process,
+  would make every DataLoader worker its own instance and lose the reuse between them that
+  the abstract's sub-actors share.
+- **A thread is a sequential context**, the counterpart of a sub-actor. The runner's
+  inline sub-actor 0 (§3.38) runs on the forking thread, so a parent's runs and its first
+  sub-actor's could join in a trace of the runner; none did in the three abstracts tested.
+- **One listing is one `readdir`.** `getdents64` is called until it returns nothing; the
+  abstract's `readdir` is the listing. Counting calls would make the mix depend on the
+  directory size and the libc buffer.
+- **Fan-out and depth only from `io_submit`, and no default think time.** A batch of AIO
+  requests is a fork the trace shows. A pool of threads each doing `pread` is not: nothing
+  in the trace says which reads belong to one round, and guessing from timestamps would
+  turn scheduling noise into structure. Depth needs a think-time threshold (§3.39 said
+  so); any default would be a number about someone's application, so there is none and
+  depth is absent without `--chain-gap-us`. *Against:* DiskANN through `io_uring`, or
+  through threads, cannot be checked for depth with this tool at all.
+- **AIO results are matched, not assumed.** The first version took every submitted
+  request as fully transferred; on the runner's `libaio-direct` trace that counted 201 MB
+  for 11.5 MB read, since reads past EOF are requested at full length. Results are now
+  taken from `io_getevents` by context and `aio_data`.
+- **`compare` reports distances and decides nothing.** Share differences, the largest CDF
+  difference over the shared bucket grid (Kolmogorov–Smirnov on bucketed values), and
+  total-variation distance for exact distributions, all in [0, 1]. Tolerances are the
+  open part of item 14 and belong to whoever accepts an abstract for a workload class;
+  `--max-distance` is there for when they exist.
+- **The format gains `source`.** `"dry-run"` or `"strace"`; the `total` is the same shape,
+  so the format number stays 1. A trace document has no templates and no fingerprint.
+
+Checked: the runner under `strace` (`sync`, one GPU) on `train_small_files`,
+`kv_cache_serving`, and `vdb_search_diskann` gives the dry run's request sizes, run
+lengths, popularity, first touches, and data op counts exactly; reuse distance differs by
+the order (CDF distance 0.07 to 0.20 at these sizes). No trace of a real application has
+been taken; that, and the tolerances, are what remains of item 14 besides `replay`.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -1820,7 +1881,7 @@ choices were made while building and **confirmed by the user the same day (decid
   done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
   the same day (§3.36). ~~Next: `--metrics`,~~ `--metrics` built the same day, its
   definitions decided (§3.39). ~~Next: the `RLIMIT`
-  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). Next: the trace-side metrics tool; the
+  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices not yet confirmed (§3.42). Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 

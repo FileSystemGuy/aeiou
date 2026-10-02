@@ -1036,7 +1036,7 @@ One small run per workload on an NFS mount of the target class, one process, a f
 iterations, captured with:
 
 ```
-strace -f -ttt -T -yy -e trace=%file,%desc,%network -o trace.txt <command>
+strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt <command>
 nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstats
 ```
 
@@ -1050,6 +1050,9 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 | §6 IVF | FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe=64` | list size distribution (from the index), list popularity over a query set, `pread` vs page-fault path |
 | §7 index build | DiskANN `build_disk_index` at 1M points | phase boundaries, read chunk sizes, sample-phase read pattern, layout write sizes |
 | §8 KV cache | vLLM + LMCache with the local-disk or shared-fs backend, a chat replay (ShareGPT) | objects per chunk, object size, `stat` lookups, reuse-distance and prompt-length distributions, hit-length vs derived-length agreement |
+
+(`%process` added 2026-10-01: `aeiou-trace` follows `clone` to know which threads share
+descriptors and which processes are one instance; `builder/README.md` §7.)
 
 For each: fit the distributions into the parameter file, run `--dry-run --metrics`, and compare
 reuse distance, run length, popularity, request size, dependency depth, and read/write mix with

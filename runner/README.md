@@ -36,7 +36,7 @@ Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **b
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
 backend-specific counters beyond those come with each backend), `--drop-caches` at the
 start gate with the residency check and the mount options line (decided 2026-10-01,
-`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; the trace-side tool that computes the same numbers from a real trace is not) and the `replay` node. ~~`stream`
+`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; ~~the trace-side tool that computes the same numbers from a real trace is not~~ the trace side is `aeiou-trace`, built 2026-10-01, `builder/README.md` §7) and the `replay` node. ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
@@ -903,8 +903,11 @@ the shape `mmap` loaders are used for. Cold rows each on a freshly generated dir
 The locality-metrics check of `GRAMMAR_OPTIONS.md` §5.4 and `PROJECT_BRIEF.md` §6 item 14:
 the fingerprint proves which stream ran, these numbers are for proving it is the right one,
 by comparison with the same numbers taken from a trace of the real application. This
-section defines the numbers; the reasoning is in `DESIGN_REVIEW.md` §3.39. The trace-side
-tool is not written, so nothing has been compared yet. **The definitions below were chosen
+section defines the numbers; the reasoning is in `DESIGN_REVIEW.md` §3.39. ~~The trace-side
+tool is not written, so nothing has been compared yet.~~ The trace side is `aeiou-trace`
+(`builder/README.md` §7, built 2026-10-01): the same definitions over an `strace`, and
+`aeiou-trace compare`; checked so far only against traces of the runner itself, no real
+application yet. The JSON form carries `"source": "dry-run"` here and `"strace"` there. **The definitions below were chosen
 while building and confirmed by the user the same day (decided 2026-10-01).**
 
 ```

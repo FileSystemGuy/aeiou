@@ -587,8 +587,10 @@ but it is a stated fidelity loss and belongs in the workload's documentation.
   **The dry-run side built 2026-10-01** as `aeiou dry-run --metrics` (`runner/README.md` §10
   has the definitions, decided 2026-10-01: reuse distance is a per-instance
   block-level stack distance in a round-robin order of the instance's sub-actors, since a
-  run has no global order; popularity, sizes, mix, and fan-out are order-free). The trace
-  side and the tolerances are not written.
+  run has no global order; popularity, sizes, mix, and fan-out are order-free). ~~The trace
+  side and the tolerances are not written.~~ The trace side built 2026-10-01 as
+  `aeiou-trace` (`builder/README.md` §7): the same numbers from an `strace`, and a
+  comparison that reports a distance per metric. The tolerances are not set.
 - **Replay mode.** The AST may be a literal captured sequence (a `replay` node holding ops with
   their dependencies). It is bounded to small-scale calibration runs and exists so each workload
   class's abstract can be validated end to end against the real application on the same storage.

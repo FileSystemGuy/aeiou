@@ -274,7 +274,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     §10, `DESIGN_REVIEW.md` §3.39): order-free metrics over the run, order-dependent ones
     per instance in a round-robin order of its sub-actors, block-level stack distance in
     bytes, hash sampling, a JSON form. The definitions were confirmed by the user the same day (**decided 2026-10-01**).
-    Still to do: the trace tool, the tolerances, the `replay` node.
+    ~~Still to do: the trace tool, the tolerances, the `replay` node.~~
+    **The trace's side built 2026-10-01** (`aeiou-trace`, `builder/README.md` §7,
+    `DESIGN_REVIEW.md` §3.42; choices not yet confirmed by the user): the same numbers from
+    an `strace` (calls under `--root`, completion order, the trace as one instance, a thread
+    as a context, fan-out and depth from `io_submit` only) and `aeiou-trace compare`, a
+    distance per metric. Checked against traces of the runner itself. Still to do: a trace
+    of a real application, the tolerances, the `replay` node.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
@@ -364,8 +370,8 @@ types or imports:
   `dry-run` exist since 2026-09-30; `runner/README.md`.)
 - The Python authoring tools are dash-suffixed helpers in the same family, one per job:
   `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
-  2026-09-30), and later `aeiou-verify` (the offline content verifier) and `aeiou-fit` (trace
-  fitting). Dash-suffixed because they live in
+  2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01), and later
+  `aeiou-verify` (the offline content verifier) and `aeiou-fit` (trace fitting). Dash-suffixed because they live in
   a separate install from the runner and must not fight it for one `aeiou` command.
 - The Python package is `aeiou`; Rust crates are `aeiou` and `aeiou-<part>`.
 - Nothing is named after MLPerf; the package was renamed from `mlps_abstract` on 2026-09-30

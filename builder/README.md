@@ -11,14 +11,16 @@ publishes with a hash. Nothing here runs on a client node.
 builder/
   aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli,
              params (parameter files, `aeiou-params`), formats (the format classes), datagen
-             (`aeiou-datagen`), and the ports of the runner's definitions it needs: rng, pattern, layout
+             (`aeiou-datagen`), trace (`aeiou-trace`, §7), and the ports of the runner's definitions
+             it needs: rng, pattern, layout
   abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts), and the
                      container workloads train_stream_shards.py (TFRecord and Parquet) and train_map_hdf5.py
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds;
                      the parameter files fit their abstracts; the format classes write files the
-                     libraries read back and the runner executes to the dry-run fingerprint
+                     libraries read back and the runner executes to the dry-run fingerprint; the
+                     trace metrics against hand-written traces and against the runner under `strace`
   pyproject.toml     dep: jsonschema; extras `test` and `formats` (pyarrow, h5py, numpy, crc32c, dgen-py,
-                     xxhash); `aeiou-build`, `aeiou-params`, `aeiou-datagen` entry points
+                     xxhash); `aeiou-build`, `aeiou-params`, `aeiou-datagen`, `aeiou-trace` entry points
 ```
 
 ```
@@ -232,11 +234,84 @@ ones with a class. `tests/test_formats.py` reads the files back with pyarrow and
 when the runner is built, runs the three container abstracts over them under the `sync`
 and `io_uring` backends.
 
-## 7. Not yet
+## 7. `aeiou-trace`: the metrics of a real trace (2026-10-01)
+
+The trace side of the locality-metrics check (`GRAMMAR_OPTIONS.md` §5.4, `PROJECT_BRIEF.md`
+§6 item 14). `aeiou dry-run --metrics-json` gives an abstract's numbers; this gives the same
+numbers, by the definitions of `runner/README.md` §10 and in the same document
+(`aeiou_metrics: 1`, with `"source": "strace"`), from an `strace` of the application the
+abstract models, and compares two such documents. Standard library only (`aeiou/trace.py`);
+the reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made while building
+(2026-10-01) and are not yet confirmed by the user.**
+
+```
+strace -f -ttt -T -yy -e trace=%file,%desc,%process -o trace.txt <command>
+aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--block BYTES] [--sample N]
+            [--instance-root PID]… [--chain-gap-us US] [--cwd DIR] -o trace.metrics.json
+aeiou dry-run x.ast.json --gpus 1 --params fitted.params.json --metrics-json abstract.metrics.json
+aeiou-trace compare trace.metrics.json abstract.metrics.json [--template-b NAME] [--only PREFIX]… [--max-distance X]
+```
+
+What a trace needs: `-f` (threads and children), `-yy` (the path behind every descriptor,
+which is how a call is known to be on the storage under test), `%process` (the `clone`s,
+so descriptor tables and process trees are followed; without it a thread that uses a
+descriptor it did not open is attached to the table that has that descriptor and path, and
+the document notes `threads_without_clone`). `-ttt -T` are needed only for `--chain-gap-us`.
+
+- **Which calls count.** Calls on paths under `--root`, less `--exclude` (a glob on the
+  part below the root). Library loading, `/proc`, pipes, and sockets are not the workload.
+- **Calls to ops.** `open`/`openat`/`creat` → `open`; `read`, `pread64`, `readv`, `preadv`
+  → `read` and the same for `write`; `fstat`, and `statx`/`newfstatat` on a descriptor →
+  `fstat`, on a path → `stat`; `getdents64` → `readdir`, once per listing (the calls that
+  continue a listing and the empty one that ends it are the same op, as the abstract's
+  `readdir` is one listing); `unlinkat` with `AT_REMOVEDIR` → `rmdir`; `lseek`, `ioctl`,
+  `fsync`, `fdatasync`, `ftruncate`, `fallocate`, `mkdir`, `rename`, `fadvise64`, `close`
+  by name. A failed call counts as its op, as an op the abstract expects to fail does.
+- **Offsets.** `pread`/`pwrite` carry theirs. `read`/`write` use the position of the open
+  file description, tracked from `open`, `lseek`, and the bytes each call moved, shared by
+  `dup`ed descriptors, by threads, and across `fork`. An `O_APPEND` write to a file not
+  created in the trace has an unknown base (noted; counted from 0).
+- **Order.** The order in which calls returned (the order of the trace's lines). A trace
+  has a real order; the dry run has the round-robin of §10. Only reuse distance depends on it.
+- **Instance.** The whole trace is one instance; `--instance-root PID` (repeatable) makes
+  each named process tree one, and leaves out what is under none. Reuse distance is per
+  instance, as on the dry-run side; popularity is over all of them.
+- **Sequential context.** A thread. A run is the consecutive ops of one kind by one thread
+  on one path, ended by a gap, the thread's `close` of the path, or the thread's exit.
+- **Fan-out and depth.** Only where the trace shows a fork: the requests of one
+  `io_submit` (on paths under the root) are a fan-out; their sizes and offsets are in the
+  call, their results in the `io_getevents` that reaps them (matched by context and
+  `aio_data`; a request never seen reaped is taken as complete and noted). Consecutive
+  `io_submit`s of a thread are a chain until the thread issues another counted call or
+  more than `--chain-gap-us` passes between a round's end and the next submit. **There is
+  no default gap**: without the flag no depth is reported, because the think time that
+  separates one search from the next is a property of the application. A beam search done
+  by a thread pool of `pread`s has no fork in the trace: its fan-out and depth are not
+  recoverable, and that row of the comparison says `none`.
+- **Not visible to `strace`:** `io_uring` submissions and page faults on a mapping. Not
+  counted: `sendfile`, `splice`, `copy_file_range`.
+- **`compare`.** One row per metric with both values and a distance in [0, 1]: the
+  difference of two shares (mix, ops by kind, first touches, bytes in multi-op runs,
+  popularity of the top 0.1/1/10 %), the largest difference between two histograms'
+  cumulative shares over the buckets of both (request size, run length, reuse distance),
+  the total-variation distance of two exact distributions (fan-out, depth).
+  `--max-distance X` exits 1 when a row exceeds it; there is no default, since the
+  tolerances for accepting an abstract are not set (`PROJECT_BRIEF.md` §6 item 14).
+
+**Checked against the runner (2026-10-01).** The runner under `strace` is an application
+whose abstract is known, so the trace's numbers must be the dry run's wherever order does
+not enter. `tests/test_trace.py` runs `train_small_files`, `kv_cache_serving`, and
+`vdb_search_diskann` (one GPU, `sync` backend) that way: read and write counts, bytes,
+request sizes, run lengths, block and object popularity, and first touches are equal;
+reuse distances differ by the order alone (CDF distance 0.07 to 0.20 on these small
+configurations). Fan-out and depth are `none` on the trace side, as said above: the
+runner's sub-actors are threads.
+
+## 8. Not yet
 
 - The `replay` trace format (schema §6); `cursor.replay` emits the node only.
 - Format classes for Arrow IPC, MDS, and Megatron `.bin`/`.idx`; the Parquet→Arrow conversion
   abstract (`GRAMMAR_OPTIONS.md` §6.5).
 - The `strace` → parameter fitting tool (`aeiou-fit`, `ABSTRACTS.md` §11), which will write
-  parameter files; the offline content verifier (`aeiou-verify`), which `rng.py` and
+  parameter files (`aeiou-trace` of §7 reads the trace and measures; it fits nothing); the offline content verifier (`aeiou-verify`), which `rng.py` and
   `layout.py` now make a short tool.
