@@ -2235,6 +2235,109 @@ page of every probed list was resident, none missing, on 1, 20, and 200 queries.
   read-around, about one READ per list part not yet in the page cache. It is another workload (§3.48), listed for the size of the difference the backend
   declaration guards against.
 
+### 3.50 The fifth and seventh rows: DiskANN search and build (added 2026-10-02)
+
+Rows 5 and 7 of the capture plan, from one index: DiskANN through `diskannpy` 0.7.0 on
+SIFT1M, built in 13 shards on the loopback NFS mount and then searched. Kits in
+`builder/traces/vdb_build_diskann` and `builder/traces/vdb_search_diskann`, findings in
+`ABSTRACTS.md` §5 and §7. The search draft had the right skeleton and wrong numbers (3 to 8
+rounds where there are 28); the build draft had the wrong skeleton (three reads of the base
+where there are twenty, 4 KiB layout writes where there are 64 MiB ones, an `fsync` that
+does not exist). **The choices below were made while building and are not yet confirmed by
+the user.**
+
+**The capture.**
+
+- **`--seccomp-bpf`.** `strace -f` stops every thread at every system call, traced or not,
+  unless the filter is installed in the kernel. A build with 20 OpenMP threads did 1/16 of
+  its PQ training in 20 minutes without it and the whole build in 407 s with it (161 s
+  untraced). Recorded in `ABSTRACTS.md` §11.
+- **`%desc` has no AIO calls**; they are named in the kit's command and in the runner-trace
+  test, which now runs `vdb_search_diskann` under the backend it declares.
+- **Query boundaries are not in a trace.** `aeiou-trace`'s chain gap (§3.42) found no
+  threshold under `strace`: between 30 and 200 µs it goes from every round a chain to
+  chains of hundreds. The kit's `hops.py` cuts at the read of a medoid's sector, which is
+  the application's own first step, and with a node cache at a `stat` the search script
+  issues between queries. The depth metric of the abstract is compared with that, not
+  with `aeiou-trace`'s.
+
+**Search: choices.**
+
+- **The abstract declares `libaio`**, with `DIRECT` on the open as before. The runner's
+  `libaio` submits a `parallel` of four as one `io_submit` of four here (27,403 submits for
+  110,043 requests), which is the application's shape.
+- **One descriptor per process.** The draft opened the index in every search thread; the
+  trace has one `O_DIRECT` open and sub-actors inherit it. The limit estimate went from 64
+  open files to 2 for two instances.
+- **Three kinds of round.** A `parallel` of one on the `entry` hot set, a `parallel(beam)`
+  on the `near` hot set, then `draw(hops)` uniform rounds. `hotset` ranks go through the
+  dataset's permutation, so the hot sectors are scattered, as medoids are. The draft's
+  single `when (hop < 1)` and a 1 % hot set at weight 0.30 are gone. Both hot-set
+  fractions are configuration (medoids over sectors, and about 0.8 · medoids · degree over
+  sectors); `hops.py --params` fits them.
+- **A node cache is a count of sector reads at load and a switch.** `node_cache > 0` issues
+  that many reads eight at a time and drops the two entry rounds from every query, which
+  is what 1 % cached does (the `hops` distribution of the cached trace is the uncached one
+  less two, to within sampling). A larger cache also shortens the later rounds (87 reads
+  per query at 10 % cached against 101) and that needs its own fitted `hops`.
+- **Full rounds.** The search submits fewer than `beam` when a frontier node is already
+  held (3 % of submits without a cache, more with one). The abstract always submits
+  `beam`: 1.5 % more reads uncached, 3 % with 1 % cached. Modeling it would take a drawn
+  width per round; left out.
+- **CPU once per query.** Measured 0.5 ms of user time per query (0.46 to 0.62), spread
+  over 28 rounds. A `compute` inside the round loop ends a chain by the depth metric's
+  definition (§3.39), and the metric is worth more than the placement: the storage sees
+  the same closed loop either way, with the think time at the end.
+- **The load is the PQ file and the index's first sector.** The PQ file is `nodes ·
+  per_sector · pq_code` bytes, derived so that a small test index has a small PQ file. Its
+  second read is capped at 2 GiB less a page per call, which is what Linux returns; a
+  billion-point index takes 15 calls where the trace took one.
+- **diskannpy's sample warm-up is not modeled.** It is that binding's default and not
+  DiskANN's, and it is 100 times the traced queries. An abstract for it would be this one
+  with `queries` raised and `hops` refitted at search list 15.
+- **Small files not modeled** (8 opens, 9 `stat`s, 28 seeks, about 150 KB), once per process.
+
+**Build: choices.**
+
+- **Two helper functions in the script, not two constructs.** `block_pass` and `load_pass`
+  are Python functions that emit the nodes: five block passes and three load passes in the
+  AST, one of the loads inside the shard loop. The script stays readable; the AST is longer.
+- **The no-op seeks are issued.** 825,000 `lseek(0, SEEK_CUR)`, two per row of the last
+  partial block of each block pass, are the application's calls, and local calls stay explicit (§3.44).
+  They are bounded by the block size, not by the corpus: at most 262,144 per pass at 128
+  dimensions.
+- **Single calls for whole arrays**, in pieces of 2 GiB less a page: the PQ file and the
+  merged graph are written, and a shard's graph read, with one call each in the trace. At
+  the default scale the merged graph is 103 calls.
+- **Shards at one size**, `overlap · n / shards` rows. Traced 52 to 111 MB around a mean of
+  79. A drawn size per shard would need the namespace's sizes to follow a distribution the
+  reader also evaluates; `as_written` covers it, but the per-shard graph size would have
+  to follow the same draw, and one size keeps the parameter file to eight numbers.
+- **Sequential where the builder interleaves** (ids files, the layout's three streams). One
+  actor issues one op at a time; the multiset and the bytes are the same.
+- **No `fsync`.** The draft's was invented. The index a build leaves is as durable as the
+  client's writeback made it.
+- **`sample` and `xfer` are gone; `sample_rows` is the warm-up sample's size.** Parameter
+  names changed with the shape; fingerprints and the golden configuration with them.
+- **The unsharded build is not modeled.** With enough memory DiskANN builds one graph and
+  skips partition, shards, and merge. The sharded path is the one whose I/O matters.
+
+**What was measured.**
+
+| | DiskANN | abstract |
+|---|---|---|
+| search, 1,000 queries, no cache: NFS READ | 108,431 | 110,080 |
+| search, 1,000 queries, 10,000 nodes cached (load included) | 112,049 | 115,588 |
+| build: reads / writes / seeks issued | 176,070 / 292,159 / 825,306 | 176,041 / 292,414 / 825,205 |
+| build: NFS READ / WRITE / COMMIT / REMOVE | 491 / 3,337 / 49 / 61 | 497 / 3,334 / 43 / 52 |
+
+The build's twenty reads of the base are one read on the wire: the client's page cache
+serves the other nineteen, for DiskANN and for the runner alike, because the file is
+smaller than the client's memory. A base larger than memory would be read from the server
+up to twenty times, and that is the case the build abstract exists for; it is not measured.
+The untraced build takes 161 s and the abstract's I/O alone 6.5 s on this mount: the build
+is compute, as §7 says.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -2272,7 +2375,7 @@ page of every probed list was resident, none missing, on 1, 20, and 200 queries.
   definitions decided (§3.39). ~~Next: the `RLIMIT`
   checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
-  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); rows 5, 7, and 8 remain.
+  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); row 8 (vLLM + LMCache) remains.
 
 ## 5. Things reviewed and left as-is
 

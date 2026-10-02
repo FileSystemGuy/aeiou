@@ -742,63 +742,113 @@ address a dataset file by id; parameter arrays of tuples (a table); `when` on a 
 full-precision vectors on storage, one node (vector + neighbour list) packed into 4 KiB sectors
 (several small nodes per sector, or several sectors per large node). A query is a beam search:
 each round takes up to `beam` unvisited frontier nodes and reads their sectors concurrently
-(`io_submit` of `beam` requests, then wait for all **[verify]**), then expands. The first rounds
+(`io_submit` of `beam` requests, then wait for all ~~**[verify]**~~: traced 2026-10-02, below), then expands. The first rounds
 hit an in-memory cache of the nodes nearest the medoid (`num_nodes_to_cache`), so their reads
 never reach storage. Search threads run independent queries in parallel.
 
-**Per-query I/O skeleton** **[verify]**: `open(index)` once per thread at startup; per query,
+**Per-query I/O skeleton** ~~**[verify]**: `open(index)` once per thread at startup;~~ (traced:
+one `open` with `O_DIRECT` for the process, shared by its threads); per query,
 `H` dependent rounds of `beam` concurrent `pread(fd, 4 KiB, off)` at sector-aligned offsets; no
-other I/O. Typical totals are 50–150 sector reads per query at L = 100 **[measure]**.
+other I/O. ~~Typical totals are 50–150 sector reads per query at L = 100 **[measure]**.~~
+Measured on SIFT1M at L = 100, beam 4: 108 sector reads in 28 rounds per query.
 
-**Abstract.**
+**Abstract.** (Rewritten 2026-10-02 from the traces; the draft is in the history of this file.)
 
 ```
-workload vdb_search_diskann {
-  param threads     = 32                       # search threads per node ("gpu" = a search node)
-  param queries     = 100_000                  # per thread; finite
-  param beam        = 4
-  param cached_hops = 2                        # rounds served from the node cache [measure]; documentation only:
-  param hops        = empirical([ … ])         # `hops` holds the trace's rounds minus cached_hops [measure]
-  param hot         = hotset(fraction = 0.01, weight = 0.30)   # hub nodes [measure from trace]
-  param rerank      = 120us                    # [measure]
+workload vdb_search_diskann backend libaio {
+  param threads = 32, queries = 100_000, beam = 4
+  param hops  = empirical([24..30], [1, 135, 536, 269, 47, 9, 2])   # rounds after the two near the entry points
+  param entry = hotset(fraction = 2e-7, weight = 1.0)                # the medoids' sectors [config]
+  param near  = hotset(fraction = 1e-5, weight = 1.0)                # their neighbours' sectors [config]
+  param node_cache = 0, cache_batch = 8                              # sector reads that fill the node cache
+  param rerank = 500us                                               # CPU per query, measured
+  param nodes = 200_000_000, per_sector = 5, pq_code = 32            # sectors; nodes per sector; PQ bytes
 
-  dataset index = regions(file = "diskann/index.bin", count = 200_000_000,   # sectors
-                          slot = 4KiB, size = const(4KiB), seed = 0x5eed_da7d)
+  dataset index = regions(file = "diskann/index.bin", count = $nodes, slot = 4KiB, size = const(4KiB),
+                          seed = 0x5eed_da7d)
+  dataset pq    = files("pq/pq_compressed-{id}.bin", count = 1, size = $nodes * $per_sector * $pq_code + 8)
 
   per gpu {
+    let c = file(pq, 0), open(c, RDONLY), lseek(c, 0, END), lseek(c, 0, SET), lseek(c, 0, SET),
+    read(c, 8191), read(c, 2GiB - 4KiB)[rest], close(c),            # the PQ vectors, through a stream
+    let f = file(index), open(f, RDONLY), read(f, 8191), close(f),
+    open(f, RDONLY|DIRECT),                                          # one descriptor for every thread
+    for cl in $node_cache / $cache_batch {
+      parallel($cache_batch) { let n = pick(index); read(f, offset = offset(n), 4KiB) }
+    }
     parallel(threads) {
-      let f = file(index), open(f, RDONLY|DIRECT),
       for q in $queries {
+        when ($node_cache == 0) {
+          parallel(1)     { let e = pick(index, dist = $entry); read(f, offset = offset(e), 4KiB) }
+          parallel($beam) { let s = pick(index, dist = $near);  read(f, offset = offset(s), 4KiB) }
+        }
         for hop in draw($hops) {
-          parallel($beam) {
-            let s = pick(index, dist = when (hop < 1) { $hot } else { uniform })   # §9.9
-            read(f, offset = offset(s), 4KiB)
-          }
+          parallel($beam) { let s = pick(index); read(f, offset = offset(s), 4KiB) }
         }
         compute($rerank)
-      },
-      close(f)
-    }
+      }
+    },
+    close(f)
   }
 }
 ```
 
-`hop < 1` (after the cached rounds are removed) puts the hub bias on the first storage round,
+**Trace (2026-10-02).** DiskANN's `PQFlashIndex` through diskannpy 0.7.0 over SIFT1M (degree
+64, five nodes to a sector, 200,001 sectors, 13 medoids from a 13-shard build), search list
+100, beam 4, on the loopback NFS mount; kit in `builder/traces/vdb_search_diskann`, reasoning
+in `DESIGN_REVIEW.md` §3.50.
+
+- **Load.** The PQ-compressed vectors (32 MB) are read through a C++ stream: three `lseek`s,
+  a read of 8,191 bytes, then the rest in one `read`. The index's first sector is read the
+  same way, the file closed, and opened again `O_RDONLY|O_DIRECT`, once for the process.
+  `io_setup(1024)` per search thread. Four small files (metadata, PQ pivots, medoids,
+  centroids: 8 opens, 9 `stat`s) are not modeled.
+- **A round is one `io_submit` and one `io_getevents` that waits for all of it**
+  (`io_getevents(ctx, n, n)`), all requests 4,096 bytes at sector offsets.
+- **Without a node cache a query is 26 to 32 rounds** (28 in half the queries), 108 sector
+  reads. The first round is always one read, of a medoid's sector (13 distinct sectors over
+  1,000 queries). The second lands on the medoids' neighbours (661 distinct sectors in
+  3,996 reads). From the third on the reads are spread over the whole index: 3,900 or more
+  distinct sectors in every 3,996. 97 % of the submits after the first carry `beam`
+  requests; the rest carry fewer, because a frontier node may already be held.
+- **A cache of 1 % of the nodes holds exactly those two rounds.** With 10,000 nodes cached
+  by breadth-first levels from the medoids, queries take 24 to 30 rounds (101 reads), the
+  same distribution less two, and no round is concentrated. With 100,000 cached, 25 rounds
+  and 87 reads. The draft's `hops` of 3 to 8 was wrong by a factor of five; its
+  `cached_hops = 2` was right.
+- **The cache's load is sector reads**, eight to a submit, one per cached node, after a few
+  hundred to find them: 10,765 for 10,000 nodes, 102,813 for 100,000.
+- **diskannpy's default warm-up is larger than the queries.** Its default cache mechanism
+  searches the build's sample of the base before the first query: 100,131 searches and 2.7
+  million sector reads here, with nothing cached asked for. DiskANN's own
+  `search_disk_index` uses the breadth-first load. The abstract models neither default; it
+  models the load that is asked for.
+- **Wire, 1,000 queries:** DiskANN 108,431 READs without a cache and 112,049 with (load
+  included); the abstract under `libaio` 110,080 and 115,588: it issues full rounds.
+
+`hop < 1` ~~(after the cached rounds are removed) puts the hub bias on the first storage round,
 where the frontier is still near the medoid; later rounds are close to uniform over sectors,
 with the residual popularity skew of the hot set. The exact split is what the locality check
-(§7) tunes.
+(§7) tunes.~~ The hub bias is the first two rounds and nothing after them (traced); a node
+cache removes it.
 
 **Cuts.** In-memory PQ distance computation and the node cache are compute/absent; both are
 configuration of the real system. Query popularity (repeated identical queries) is not modeled;
-DiskANN has no result cache.
+DiskANN has no result cache. Rounds are full: the abstract issues `beam` reads where the
+search issues fewer for nodes it holds (1.5 % more reads without a cache, 3 % with 1 %
+cached). The query's CPU is one `compute` at its end where the search spends it between
+rounds; a `compute` inside the round loop would end the chain that the depth metric counts.
+The cache's load picks sectors uniformly where the real one reads the medoids' surroundings.
 
 **What it stresses.** Random 4 KiB reads at a dependency depth of `hops` with fan-out `beam`
-per thread: latency-bound, not bandwidth-bound. `--io-backend libaio` is the fidelity reference
-here (what DiskANN uses on Linux); `io_uring` and `sync-direct` are the comparison rows.
+per thread: latency-bound, not bandwidth-bound. ~~`--io-backend libaio` is the fidelity reference
+here (what DiskANN uses on Linux); `io_uring` and `sync-direct` are the comparison rows.~~
+The abstract declares `libaio`, what DiskANN uses on Linux; a run under another backend is
+another workload (`DESIGN_REVIEW.md` §3.48).
 
 **Constructs used.** `regions` dataset (§9.6); `parallel` inside `for` inside `parallel`;
-a `when` expression choosing a distribution by loop index; `pick` with `hotset`; a file handle
-bound outside a `parallel` and shared by its sub-actors.
+~~a `when` expression choosing a distribution by loop index;~~ `pick` with `hotset`; a file handle
+bound outside a `parallel` and shared by its sub-actors; a `parallel` of one.
 
 ---
 
@@ -910,67 +960,142 @@ policy on a mapping, are what the storage sees.
 
 ## 7. Index build (DiskANN)
 
-**Real application.** Training-shaped. Phases: (1) sample the base vectors for PQ training
+**Real application.** Training-shaped. ~~Phases: (1) sample the base vectors for PQ training
 (random rows: many small random reads **[verify]**); (2) for each of `K` shards, read the shard's
 rows sequentially, build a graph in memory (long compute), write the shard index sequentially;
 (3) merge the shard indexes into one graph (sequential read of all, sequential write); (4) write
 the disk layout sector by sector (`ofstream` 4 KiB writes, coalesced by the kernel) plus the PQ
-files. Single process, multi-threaded compute; the I/O is one stream per phase.
+files.~~ Phases as traced (2026-10-02, below): PQ training and compression, partition into
+overlapping shards, per shard a copy of its rows, a graph build, and two saved files, a
+merge, the disk layout, and a sample of the base for the search's warm-up. Single process,
+multi-threaded compute; the I/O is one stream per phase.
 
-**Abstract.**
+**Abstract.** (Rewritten 2026-10-02 from the trace; the draft is in the history of this file.
+`block_pass` and `load_pass` are the two ways the builder reads the base file.)
 
 ```
 workload vdb_build_diskann {
-  param dim = 128, n = 1_000_000_000, shards = 40
-  param sample = 256_000                         # PQ training rows [config]
-  param build_time = normal(1800s, 60s)          # per shard, [measure]; scaled by --time-scale
-  param xfer = 1MiB
-  param shard_index_bytes = 12GiB, index_bytes = 480GiB, sectors = 200_000_000   # [config]
+  param dim = 128, n = 1_000_000_000, shards = 40, overlap = 2
+  param cache = 64MiB, stream = 8191, chunk = 8192, big = 2GiB - 4KiB
+  param pq_code = 32, shard_index_bytes = 5GiB, index_bytes = 205GiB, sectors = 200_000_001   # [config]
+  param sample_rows = 100_000_000
+  param pq_train = normal(60s, 5s), partition_time = normal(90s, 5s), build_time = normal(1800s, 60s)
 
-  dataset base = regions(file = "base.fbin", count = $n, slot = $dim * 4, size = const($dim * 4),
+  dataset base = regions(file = "base/base.fbin", count = $n, slot = $dim * 4, size = const($dim * 4),
                          seed = 0x5eed_da7f)
+  namespace tmp = objects("diskann/tmp_subshard-{k}_{part}", size = as_written)
   namespace out = objects("diskann/{name}", size = as_written)
 
+  def block_pass(b) {                             # the 64 MiB block reader
+    open(b, RDONLY), lseek(b, 0, END), lseek(b, 0, SET),
+    for blk in size(b) / $cache { read(b, $stream), read(b, $cache - $stream) },
+    for fill in ceil(size(b) % $cache / $stream) {            # the last partial block, row by row
+      read(b, $stream), for row in ceil($stream / ($dim * 4)) { lseek(b, 0, CUR), lseek(b, 0, CUR) }
+    },
+    close(b)
+  }
+  def load_pass(b) {                              # the whole file into memory
+    open(b, RDONLY), lseek(b, 0, END), lseek(b, 0, CUR), lseek(b, 0, SET),
+    read(b, $cache), lseek(b, 0, CUR), read(b, $big)[rest], lseek(b, 0, CUR), close(b)
+  }
+
   per gpu {                                       # one builder; --gpus 1
-    let b = file(base), open(b, RDONLY),
-    phase("pq_sample")  { for i in $sample { let r = pick(base); read(b, offset = offset(r), size(r)) } }
+    let b = file(base)
+    phase("pq") {
+      block_pass(b), compute($pq_train), load_pass(b),
+      write("diskann/pq_compressed.bin", $n * $pq_code + 8 in calls of $big)            # one write
+    }
+    phase("partition") {
+      block_pass(b), block_pass(b), compute($partition_time), load_pass(b),
+      for k in $shards { write(tmp(k, "ids"), ids_bytes in calls of $chunk) }
+    }
     phase("shard_build") {
       for k in $shards {
-        read(b, offset = k * $n / $shards * $dim * 4, $xfer)[($n / $shards * $dim * 4) / $xfer],
+        read(tmp(k, "ids"), $stream), read(tmp(k, "ids"), $big)[rest],
+        load_pass(b),                                                                # for this shard's rows
+        write(tmp(k, "rows"), shard_bytes in calls of $chunk),
+        read(tmp(k, "rows"), $stream)[all],
         compute($build_time),
-        let s = file("diskann/shard_{k:03}.index"),
-        open(s, WRONLY|CREAT|TRUNC), write(s, $xfer)[$shard_index_bytes / $xfer], close(s)
+        write(tmp(k, "graph"), $shard_index_bytes in calls of $chunk),
+        write(tmp(k, "graph.data"), shard_bytes in calls of $chunk),                 # the rows again
+        unlink(tmp(k, "rows"))
       }
     }
     phase("merge") {
-      for k in $shards {
-        let s = file("diskann/shard_{k:03}.index"),
-        open(s, RDONLY), read(s, $xfer)[until_eof], close(s)
-      },
-      let g = file("diskann/merged.index"),
-      open(g, WRONLY|CREAT|TRUNC), write(g, $xfer)[$index_bytes / $xfer], close(g)
+      for k in $shards { read(tmp(k, "ids"), whole), read(tmp(k, "graph"), $big)[all] },   # one read each
+      for k in $shards { unlink(tmp(k, "ids")), unlink(tmp(k, "graph")), unlink(tmp(k, "graph.data")) },
+      write("diskann/mem.index", $index_bytes in calls of $big)                      # one write
     }
     phase("layout") {
-      read(b, $xfer)[until_eof],                                 # base re-read for full vectors
-      let d = file("diskann/index.bin"),
-      open(d, WRONLY|CREAT|TRUNC), write(d, 4KiB)[$sectors], fsync(d), close(d)
+      block_pass(b), read("diskann/mem.index", $stream)[all],
+      write("diskann/disk.index", $sectors * 4KiB in calls of $cache + 4KiB)
     }
-    close(b)
+    phase("sample") {
+      block_pass(b),
+      write("diskann/sample_data.bin", $sample_rows * $dim * 4 + 8 in calls of $chunk),
+      write("diskann/sample_ids.bin", $sample_rows * 4 + 8 in calls of $chunk)
+    }
   }
 }
 ```
 
+(`write(x, N in calls of C)` stands for open, `N / C` writes of `C`, one of the remainder,
+close; `shard_bytes` is `overlap · n / shards` rows.)
+
+**Trace (2026-10-02).** `build_disk_index` through diskannpy 0.7.0 on SIFT1M (512 MB of
+vectors), degree 64, 20 threads, a memory budget that gives 13 shards; 407 s; kit in
+`builder/traces/vdb_build_diskann`, reasoning in `DESIGN_REVIEW.md` §3.50.
+
+- **The base file is read whole twenty times** (10.2 GB for a 512 MB file): five passes
+  through a block reader and fifteen loads into memory, one of them per shard. The draft
+  read it about three times.
+- **The block reader** asks for 64 MiB at a time, which reaches the kernel as a stream fill
+  of 8,191 bytes and one read of the rest; the last partial block is read row by row
+  through the stream: 8,191-byte reads, with two `lseek(0, SEEK_CUR)` per row. Those are
+  825,000 of the trace's 1.3 million calls and move nothing.
+- **A load** is a 64 MiB read and then the rest of the file in one `read` (445 MB here; the
+  kernel caps a call at 2 GiB less a page, so a larger file takes more).
+- **No small random reads.** The PQ sample is taken during a sequential block pass, not by
+  seeking to rows.
+- **A point goes to two shards.** The 13 shards hold 2.0 times the base (52 to 111 MB each).
+- **Per shard:** the ids file read whole, a load of the base, the shard's rows written to a
+  file in 8,192-byte calls and read back in 8,191-byte calls, the build, then the graph
+  (132 bytes per point) and a second copy of the rows written in 8,192-byte calls, and
+  the first copy unlinked.
+- **The merge** reads each shard's graph with one `read` and writes the merged graph (205
+  bytes per point) with one `writev`; then the temporary files are unlinked.
+- **The layout** reads the merged graph back in 8,191-byte calls and writes the disk index
+  in calls of 64 MiB plus one sector: thirteen for 819 MB. The draft's 4 KiB writes do not
+  occur.
+- **Nothing is synced.** No `fsync` on any file.
+- **Counts.** Trace against the abstract at the fitted parameters: 176,070 reads against
+  176,041, 292,159 writes against 292,414, 825,306 seeks against 825,205; bytes read and
+  written within 0.1 %.
+- **Wire** (untraced build, 161 s, against `aeiou run --time-scale 0`, 6.5 s of I/O): READ
+  491 against 497, the base file once and every later pass from the client's page cache;
+  WRITE 3,337 against 3,334 (3.45 GB both); COMMIT 49 against 43; REMOVE 61 against 52;
+  OPEN 69 against 57.
+
 **Cuts.** Build compute is hours; `--time-scale` shrinks every `compute` by a factor for
 benchmark runs, which is allowed because compute never gates a dependency across actors here.
-Peak-memory-driven spill behaviour of the real builder is not modeled.
+~~Peak-memory-driven spill behaviour of the real builder is not modeled.~~ The sharded path,
+which is that behaviour, is what was traced; a build that fits in memory skips the partition,
+shard, and merge phases and is not modeled. Shards are modeled at one size. The builder keeps
+every shard's ids file open while it writes them; the abstract writes them one after another.
+The layout reads the base and the merged graph and writes the index as one interleaved
+stream; the abstract issues the three in turn. Not modeled: the PQ pivots file (132 KB), the
+medoids and centroids files, 56 opens that read a file's header, 106 `stat`s.
 
-**What it stresses.** Large sequential read and write streams from one client, small random
-reads in the sample phase, and a 4 KiB write stream that tests write coalescing. This is the
+**What it stresses.** Large sequential read and write streams from one client~~, small random
+reads in the sample phase, and a 4 KiB write stream that tests write coalescing~~: 8 KiB
+calls on one side and single calls of hundreds of megabytes on the other, twenty reads of
+the same file (a client cache as large as the base serves nineteen), and temporary files
+written, read back, and unlinked within minutes. This is the
 least storage-sensitive of the set; it exists so a VDB submission covers build as well as
 search.
 
-**Constructs used.** Sequential loops over phases; `pick` without replacement is not needed
-(sample with replacement is what the real code does).
+**Constructs used.** Sequential loops over phases; ~~`pick` without replacement is not needed
+(sample with replacement is what the real code does)~~ a namespace with two fields; `unlink`.
 
 ---
 
@@ -1359,10 +1484,14 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 | §2 large samples (**traced 2026-10-01**, §2 "Trace") | DLIO `unet3d` reader or `np.load` loop on `.npz` | tail-read offsets; member header reads; chunk size of the member reads; `cd_len`, `lh_len` |
 | §3 checkpoint write (**traced 2026-10-01**, §3 "Trace") | `torch.distributed.checkpoint.save` on 2 ranks; `torch.save` on 1 | `mkdir` result per rank; write sizes per item and the coalesced small-record size; `fsync` presence; `.metadata` size and the `rename` |
 | §4 restore / load (**traced 2026-10-01**, §4 "Trace"; the fault pattern of a GPU engine still open) | `dcp.load`; `AutoModel.from_pretrained` with `safetensors` | per-item `lseek`/`read` pairs; header read lengths; `mmap` and fault pattern (`perf trace -F` or `/proc/PID/smaps` deltas) |
-| §5 DiskANN | `search_disk_index` on a 10M-point index, `beam_width=4` | `io_submit` batch sizes (= beam), rounds per query (hops), offset histogram (hub concentration), node-cache size |
+| §5 DiskANN (**traced 2026-10-02**, §5 "Trace"; a 1M-point index through diskannpy) | `search_disk_index` on a 10M-point index, `beam_width=4` | `io_submit` batch sizes (= beam), rounds per query (hops), offset histogram (hub concentration), node-cache size |
 | §6 IVF (**traced 2026-10-01**, §6 "Trace") | FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe=64` | list size distribution (from the index), list popularity over a query set, `pread` vs page-fault path |
-| §7 index build | DiskANN `build_disk_index` at 1M points | phase boundaries, read chunk sizes, sample-phase read pattern, layout write sizes |
+| §7 index build (**traced 2026-10-02**, §7 "Trace") | DiskANN `build_disk_index` at 1M points | phase boundaries, read chunk sizes, sample-phase read pattern, layout write sizes |
 | §8 KV cache | vLLM + LMCache with the local-disk or shared-fs backend, a chat replay (ShareGPT) | objects per chunk, object size, `stat` lookups, reuse-distance and prompt-length distributions, hit-length vs derived-length agreement |
+
+(2026-10-02: `%desc` does not include `io_setup`, `io_submit`, `io_getevents`, `io_destroy`; name them for an
+application that uses Linux AIO. `--seccomp-bpf` keeps `strace` from stopping a compute-heavy process at
+calls it does not trace.)
 
 (`%process` added 2026-10-01: `aeiou-trace` follows `clone` to know which threads share
 descriptors and which processes are one instance; `builder/README.md` §7.)

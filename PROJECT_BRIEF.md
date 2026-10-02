@@ -309,13 +309,21 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     third trace showed needs the read order (sorted names, not file order) and the buffer
     carried from item to item. The other §3.47 choices are not yet confirmed. ~~Still
     to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.~~ Still
-    to do: ~~rows 5 to 8~~ rows 5, 7, and 8 of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
+    to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ row 8 of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
     **Sixth row, 2026-10-01** (`ABSTRACTS.md` §6 "Trace", `DESIGN_REVIEW.md` §3.49,
     `builder/traces/vdb_search_ivf`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
     FAISS maps the lists file and issues no call on it; 32 prefetch threads per search slice
     touch every probed list, ids before codes. The abstract declares `mmap` and gained the
     index file, the prefetch fan-out, and that order; list-size spread and popularity are
     now SIFT1M's. ~~Choices not yet confirmed.~~ Choices decided 2026-10-01.
+    **Fifth and seventh rows, 2026-10-02** (`ABSTRACTS.md` §5 and §7 "Trace", `DESIGN_REVIEW.md`
+    §3.50, `builder/traces/vdb_search_diskann`, `builder/traces/vdb_build_diskann`): DiskANN
+    through diskannpy on SIFT1M. Search: 28 dependent rounds and 108 sector reads per query
+    (the draft had 3 to 8 rounds), the first two rounds on the medoids and their neighbours,
+    which a 1 % node cache holds; the abstract declares `libaio` and opens once per process.
+    Build: the base file read whole twenty times, 64 MiB layout writes, no `fsync`; the
+    abstract was rewritten and agrees with the trace to 0.1 % in calls and bytes, and with
+    the wire in READ, WRITE, and COMMIT counts. Choices not yet confirmed. Row 8 remains.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its

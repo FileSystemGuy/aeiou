@@ -489,9 +489,9 @@ parameters, each three times: `sync` with a cold client cache, `sync` again, and
 | train_large_samples (2) | 412; 244 reads, 159 MiB | 129 READ (80.8 MiB from the server, the rest page-cache hits within the run) | 0 READ, 19 GETATTR | 464 READ (159 MiB) |
 | kv_cache_serving (1) | 1,144; 162 reads, 115 writes, 34 mkdirs | 14 READ, 116 WRITE (28.8 MiB), 117 OPEN, 34 CREATE | 0 READ, 116 WRITE | 162 READ, 116 WRITE, 120 CLOSE |
 | model_load (2) (the abstract before its 2026-10-01 correction, which added the small files, the second open and the `fadvise`; `ABSTRACTS.md` §4 has the wire numbers of the traced one) | 88; 76 reads, 4.1 MiB | 53 READ | 0 READ, 5 GETATTR | 76 READ (one per read) |
-| vdb_search_diskann (1) | 244; 240 reads of 4 KiB | 241 READ | 240 READ | 240 READ |
+| vdb_search_diskann (1) (the abstract before its 2026-10-02 correction: the load, 28 rounds per query, `libaio` declared; `ABSTRACTS.md` §5) | 244; 240 reads of 4 KiB | 241 READ | 240 READ | 240 READ |
 | vdb_search_ivf (1) (the abstract before its 2026-10-01 correction, which added the index file, the prefetch fan-out and the `mmap` declaration; `ABSTRACTS.md` §6 has the wire numbers of the traced one) | 36; 32 reads, 1.8 MiB | 28 READ | 0 READ | 32 READ (one per read) |
-| vdb_build_diskann (1) | 386; 106 reads, 262 writes, 7 MiB | 139 READ, 8 WRITE, 1 COMMIT | 0 READ, 8 WRITE, 1 COMMIT | 106 READ, 263 WRITE, 0 COMMIT |
+| vdb_build_diskann (1) (the abstract before its 2026-10-02 rewrite; `ABSTRACTS.md` §7 has the wire numbers of the traced one) | 386; 106 reads, 262 writes, 7 MiB | 139 READ, 8 WRITE, 1 COMMIT | 0 READ, 8 WRITE, 1 COMMIT | 106 READ, 263 WRITE, 0 COMMIT |
 | ckpt_write_dcp (2) (the abstract before its 2026-10-01 rewrite; the traced one has unaligned writes and no direct column) | 70; 34 writes, 21.1 MiB | 27 WRITE, 4 COMMIT, 3 RENAME | same | 39 WRITE (21.1 MiB direct), 4 COMMIT |
 | ckpt_restore (2), after the write on this client (the abstract before its 2026-10-01 rewrite: two reads per item, where the traced reader issues six and 34 seeks) | 36; 20 reads, 18.1 MiB | **0 READ**: all 18.1 MiB from the client's page cache | 0 READ | 30 READ (18.2 MiB from the server) |
 
@@ -980,9 +980,12 @@ cannot resolve distances under `N` blocks.
 
 **What it shows on the committed abstracts** (small configurations, seed 1):
 
-- `vdb_search_diskann` (2,000 queries, 2 threads): depth 3–8 in the proportions of the
+- `vdb_search_diskann` (2,000 queries, 2 threads): ~~depth 3–8 in the proportions of the
   `hops` parameter (5/20/35/25/10/5 %), fan-out 4, every run one op, and the hub draw as
-  block skew and as reuse.
+  block skew and as reuse.~~ depth 26–32 (the `hops` parameter plus the two rounds near the
+  entry points; 28 in 53 %), fan-out 4 and 1 (the entry point's sector), every sector read a
+  run of one op, and the entry points as block skew and as reuse (the abstract as corrected
+  from the trace, 2026-10-02).
 - `train_small_files`: one run per file, no block touched twice within an epoch, flat
   popularity.
 - `ckpt_write_dcp`: 98.6 % of the bytes in multi-op write runs, ~~no reuse~~ 0.1 % of block

@@ -329,6 +329,10 @@ checkpoint's `.metadata`.
 `traces/vdb_search_ivf` is row 6: FAISS `IndexIVFPQ` over `OnDiskInvertedLists`, which maps
 the lists file and issues no call on it; its `faults.py` measures with `mincore` what the
 trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, decided 2026-10-01).
+`traces/vdb_build_diskann` and `traces/vdb_search_diskann` are rows 7 and 5: DiskANN through
+`diskannpy`, one index built in 13 shards and then searched; `hops.py` reads the beam search
+(rounds, batch sizes, sector spread) off the `io_submit` lines (`ABSTRACTS.md` §5 and §7,
+`DESIGN_REVIEW.md` §3.50, not yet confirmed).
 
 **The application's API is declared in the script** (contract 0.3, 2026-10-01):
 `Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`
