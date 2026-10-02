@@ -307,6 +307,14 @@ reuse distances differ by the order alone (CDF distance 0.07 to 0.20 on these sm
 configurations). Fan-out and depth are `none` on the trace side, as said above: the
 runner's sub-actors are threads.
 
+**Checked against a real application (2026-10-01).** `traces/train_small_files` holds the
+first row of the capture plan (`ABSTRACTS.md` §11): PyTorch `DataLoader` + `ImageFolder`
+on NFS, the script that was traced, the corpus writer, the fitted parameter file, and the
+trace's metrics document. The trace corrected the abstract (a second `lseek` per file,
+`stat` and `fstat` per directory in the walk); `tests/test_trace.py` now holds the abstract
+at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reasoning in
+`DESIGN_REVIEW.md` §3.43 (not yet confirmed by the user).
+
 ## 8. Not yet
 
 - The `replay` trace format (schema §6); `cursor.replay` emits the node only.

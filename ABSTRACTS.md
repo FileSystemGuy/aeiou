@@ -65,20 +65,22 @@ processes, each building whole batches of `B` samples by reading `B` files seque
 blocking calls; `prefetch_factor` batches in flight per worker; the main process takes batches
 in order and runs the step. Each sample is a JPEG opened with PIL through Python's `open()`.
 
-**Per-sample syscall skeleton** (one worker process, one file) **[verify]**:
+**Per-sample syscall skeleton** (one worker process, one file) ~~**[verify]**~~ **(traced
+2026-10-01, see "Trace" below; the second `lseek` was added from it)**:
 
 ```
 openat(AT_FDCWD, "…/img_000123.jpg", O_RDONLY|O_CLOEXEC) = 5
 fstat(5, {st_size=131072, st_blksize=…})     # FileIO: not-a-directory check; BufferedReader buffer size
 ioctl(5, TCGETS, …) = -1 ENOTTY               # io.open isatty() check; local
 lseek(5, 0, SEEK_CUR) = 0                     # BufferedReader.tell(); local
+lseek(5, 0, SEEK_SET) = 0                     # PIL Image.open: fp.seek(0); local   (added 2026-10-01)
 read(5, …, st_blksize) = 131072               # first buffer fill; short at EOF
-read(5, …, st_blksize) = 0                    # decoder asks for more; EOF   [verify: may be absent]
+read(5, …, st_blksize) = 0                    # decoder asks for more; EOF   (present on every file)
 close(5) = 0
 ```
 
 Two details matter on NFS. First, `st_blksize` on an NFS file is the mount's I/O size, typically
-1 MiB, not 4 KiB **[verify]**, so Python's "small" buffered reads request 1 MiB and a 128 KiB
+1 MiB, not 4 KiB (traced: `st_blksize` 1048576 at rsize 1 MiB, and every `read` asks for 1048576), so Python's "small" buffered reads request 1 MiB and a 128 KiB
 file is read with one short read. Second, which of these reach the wire (LOOKUP, OPEN, GETATTR,
 READ ×⌈S/rsize⌉, CLOSE) depends on the attribute cache, delegations, and directory-entry cache;
 the abstract does not assume, the run reports `mountstats`.
@@ -93,7 +95,7 @@ workload train_small_files {
   param steps      = 500
   param sync_every = 500          # real DDP all-reduces every step (=1); see Cuts
   param step_time  = 105ms        # [measure] GPU step time on the target accelerator
-  param hdr_read   = 1MiB         # Python BufferedReader request = st_blksize [verify]
+  param hdr_read   = 1MiB         # Python BufferedReader request = st_blksize (traced 2026-10-01)
   param enumerate  = false        # include the startup directory walk (§9.8)
 
   dataset train = files("train/{id div 1300:05}/img_{id:09}.jpg",
@@ -105,7 +107,9 @@ workload train_small_files {
     when ($enumerate) {
       phase("enumerate") {                                # every actor walks: ImageFolder has no broadcast
         for d in dirs(train) {                            # 38,462 class directories
-          open(d, RDONLY|DIRECTORY), readdir(d)[until_end], close(d)
+          stat(d),                                        # make_dataset: os.path.isdir   (2026-10-01)
+          open(d, RDONLY|CLOEXEC|DIRECTORY), fstat(d),    # os.scandir                    (2026-10-01)
+          readdir(d)[until_end], close(d)
         }
       }
     }
@@ -115,7 +119,7 @@ workload train_small_files {
       for j in $batch {
         let f = consume(train)                            # position = gpu + G·(b·batch + j)
         open(f, RDONLY|CLOEXEC), fstat(f), ioctl(f, TCGETS, expect = [ENOTTY]),
-        lseek(f, 0, CUR),
+        lseek(f, 0, CUR), lseek(f, 0, SET),
         read(f, $hdr_read)[until_eof],                    # 1 short read + 1 EOF read for S < hdr_read
         close(f)
       }
@@ -138,7 +142,7 @@ workload train_small_files {
 |---|---|
 | `batch`, `workers`, `prefetch` | configuration of the real job |
 | `step_time` | measured on the accelerator; a distribution if it varies |
-| `hdr_read` | `strace`: the length argument of the first `read` |
+| `hdr_read` | `strace`: the length argument of the first `read` (1 MiB on the traced mount) |
 | size distribution | the corpus (fit from `find -printf %s` or the manifest of the reference dataset) |
 | `sync_every` | 1 for DDP; 500 keeps the brief's reference workload |
 
@@ -148,7 +152,12 @@ workload train_small_files {
   into the sink-buffer rule of `NAPKIN_MATH.md` §2.2.
 - Decode CPU time in the worker is not modeled; the worker is I/O-bound in the abstract. If a
   trace shows the decode gap between `close` and the next `openat` matters for the offered
-  concurrency, add `compute($decode)` after `close`.
+  concurrency, add `compute($decode)` after `close`. **The trace (2026-10-01) shows the gap:
+  about 3 ms of CPU per file, most of it between the EOF read and `close`** (the file is
+  open during the decode). It does not change the offered rate while the step time is the
+  limit (prefetch back-pressure holds the workers), and it does when the loader is: a
+  worker then issues a file every 3 ms, not back to back. Not added; open
+  (`DESIGN_REVIEW.md` §3.43).
 - The `enumerate` phase is what the real application does at startup. **Every actor runs the
   walk** (added 2026-09-29): `ImageFolder` is a plain constructor that `os.walk`s the tree in
   the process that builds the dataset, and under DDP every rank builds its own; nothing is
@@ -162,6 +171,33 @@ workload train_small_files {
   lists on rank 0 and broadcasts is modeled by wrapping the phase in `when (gpu == 0)` (§9.1).
   Whether the walk is part of the CLOSED measurement is a WG policy question (`PROJECT_BRIEF.md` §8); here it is a
   separately reported phase, off by default.
+
+**Trace (2026-10-01).** `builder/traces/train_small_files`: `ImageFolder` + `DataLoader`,
+batch 16, 2 workers, 2 epochs over 3,200 real JPEGs (median 111 KiB) on the loopback NFS
+mount (v4.2, rsize 1 MiB); torch 2.14.1, torchvision 0.29.1, Pillow 12.3.0, Python 3.12.3.
+Reasoning in `DESIGN_REVIEW.md` §3.43.
+
+- **The skeleton holds, with one call missing from the draft:** Pillow's `Image.open` seeks
+  to 0 before it reads, so there are two `lseek`s per file. Added to the abstract. The read
+  request is `st_blksize` = 1 MiB and the EOF read happens on every file.
+- **The walk** is, per class directory, `stat` (path), `open`, `fstat`, `getdents64` until
+  empty, `close`; the draft had no `stat` and no `fstat`. Added. The real `open` also sets
+  `O_NONBLOCK`, which a directory ignores and the contract's flag list does not have. One
+  listing of the dataset root (`find_classes`) precedes the walk: 4 ops per actor, not
+  modeled.
+- **After those two changes `aeiou-trace compare` at the fitted parameters** shows every op
+  share, the request sizes, and popularity equal; run length in bytes at distance 0.015
+  (the JPEG corpus is near the lognormal, not drawn from it) and reuse distance at 0.048
+  (the order). The op counts are equal but for the root listing (51,219 against 51,215).
+- **On the wire** (`mountstats` delta, 6,400 opens of 3,200 files): READ 3,200, so one READ
+  per file and none in the second epoch (the corpus fits the page cache: the dataset-size
+  rule, not the abstract, decides whether an epoch reaches the server); OPEN + OPEN_NOATTR
+  5,214, CLOSE 4,028, GETATTR 3,212, READDIR 8. The opens the server did not see were
+  covered by read delegations.
+- **The worker is not I/O-bound.** The file stays open while Pillow decodes: `close` comes
+  after `convert("RGB")`. Untraced, the run took 13.4 s wall and 22.4 s user for 6,400
+  files on two workers, about 3 ms of CPU per file, against about 0.3 ms inside the file's
+  calls. The transform and collate fall between `close` and the next `openat`. See Cuts.
 
 **What it stresses.** Metadata: LOOKUP/OPEN/CLOSE per 110 KiB, client dentry/inode slab growth
 (`NAPKIN_MATH.md` §2.3), attribute-cache and delegation behaviour, and how the client copes when
@@ -1042,7 +1078,7 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 
 | Workload | Command to trace | What to read off the trace |
 |---|---|---|
-| §1 small files | PyTorch DataLoader + ImageFolder, `num_workers=2`, 200 steps | per-file syscall sequence and order; `read` length argument (`st_blksize` on NFS); whether the EOF read occurs; wire ops per file from `nfsstat` deltas |
+| §1 small files (**traced 2026-10-01**, §1 "Trace") | PyTorch DataLoader + ImageFolder, `num_workers=2`, 200 steps | per-file syscall sequence and order; `read` length argument (`st_blksize` on NFS); whether the EOF read occurs; wire ops per file from `nfsstat` deltas |
 | §2 large samples | DLIO `unet3d` reader or `np.load` loop on `.npz` | tail-read offsets; member header reads; chunk size of the member reads; `cd_len`, `lh_len` |
 | §3 checkpoint write | `torch.distributed.checkpoint.save` on 2 ranks; `torch.save` on 1 | `mkdir` result per rank; write sizes per item and the coalesced small-record size; `fsync` presence; `.metadata` size and the `rename` |
 | §4 restore / load | `dcp.load`; `AutoModel.from_pretrained` with `safetensors` | per-item `lseek`/`read` pairs; header read lengths; `mmap` and fault pattern (`perf trace -F` or `/proc/PID/smaps` deltas) |

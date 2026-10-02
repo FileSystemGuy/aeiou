@@ -1847,6 +1847,50 @@ lengths, popularity, first touches, and data op counts exactly; reuse distance d
 the order (CDF distance 0.07 to 0.20 at these sizes). No trace of a real application has
 been taken; that, and the tolerances, are what remains of item 14 besides `replay`.
 
+### 3.43 The first trace of a real application: `train_small_files` against PyTorch (added 2026-10-01)
+
+Until now `aeiou-trace` had only seen the runner itself (§3.42). The first row of the
+capture plan (`ABSTRACTS.md` §11) was run on the loopback NFS mount: `ImageFolder` +
+`DataLoader`, batch 16, 2 workers, 2 epochs of 200 steps over 3,200 real JPEGs. The kit
+(corpus writer, the traced script, the fitted parameters, the trace's metrics) is
+`builder/traces/train_small_files`; the findings are in `ABSTRACTS.md` §1 "Trace". **The
+choices below were made while building and are not yet confirmed by the user.**
+
+- **The abstract was corrected from the trace, and its hash and fingerprints changed.**
+  Two `lseek`s per file, not one (Pillow's `fp.seek(0)`); `stat` and `fstat` per directory
+  in the walk. AST `11ccbefe…` became `46a86b00…`; the golden fingerprint of the abstract
+  was re-recorded. Both are local calls on NFS, so no wire count moves; they are in the
+  abstract because the abstract is the application's call stream, and client CPU per op is
+  the number this workload watches. *Against:* the second `lseek` is Pillow's, and a loader
+  that decodes with another library (DALI, `torchvision.io.decode_jpeg` on bytes read
+  whole) does not issue it. The abstract models the reference pipeline; another decoder is
+  another abstract or a boolean parameter.
+- **The root listing is not modeled.** One `open`/`fstat`/`getdents`/`close` of the dataset
+  root per actor. It would need a handle for a dataset's root directory, which the builder
+  does not have, for 4 ops in a run.
+- **`O_NONBLOCK` on the directory open is dropped.** The contract's flag list does not
+  have it and it has no effect on a directory. Adding a flag is a contract change for
+  nothing measurable.
+- **The decode time is recorded, not modeled.** About 3 ms of CPU per file, with the file
+  open, against 0.3 ms in its calls. Modeling it means a `compute` between the last read
+  and `close` inside the loader's worker, with a `decode` parameter that is [measure] per
+  CPU and per image size. It matters only when the loader, not the step, is the limit.
+  Left open because a default of 0 changes nothing and any other default is a claim about
+  the client's CPU.
+- **A committed regression test, not a tolerance.** `tests/test_trace.py` compares the
+  abstract at the fitted parameters with the committed trace metrics: op counts equal but
+  for the root listing, request-size buckets equal, largest distance at most 0.06
+  (measured 0.048, the reuse distance). This is a guard for this one pair, not the
+  acceptance tolerance of `PROJECT_BRIEF.md` §6 item 14, which is still not set.
+- **What the comparison could not see.** Both epochs touch every file once, so popularity
+  is flat on both sides by construction, and the reuse distance only tests the reshuffle.
+  The trace says nothing about timing that survives `strace` (the 3 ms is from an untraced
+  run). The second epoch never reached the server for data: with a corpus smaller than
+  RAM the abstract and the application agree on the calls and the page cache decides the
+  rest, which is the dataset-size rule's business (`PROJECT_BRIEF.md` §5).
+
+Also fixed: `aeiou-trace compare` on a missing or malformed file printed a traceback.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

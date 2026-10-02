@@ -279,8 +279,15 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `DESIGN_REVIEW.md` §3.42; choices confirmed by the user, **decided 2026-10-01**): the same numbers from
     an `strace` (calls under `--root`, completion order, the trace as one instance, a thread
     as a context, fan-out and depth from `io_submit` only) and `aeiou-trace compare`, a
-    distance per metric. Checked against traces of the runner itself. Still to do: a trace
-    of a real application, the tolerances, the `replay` node.
+    distance per metric. Checked against traces of the runner itself. ~~Still to do: a trace
+    of a real application, the tolerances, the `replay` node.~~
+    **First real application traced 2026-10-01** (`ABSTRACTS.md` §1 "Trace",
+    `DESIGN_REVIEW.md` §3.43, `builder/traces/train_small_files`): PyTorch `DataLoader` +
+    `ImageFolder` on loopback NFS; the abstract gained the second `lseek` per file and the
+    walk's `stat`/`fstat`, after which every op share and request size is equal and the
+    largest distance is 0.048 (reuse distance, the order). Choices not yet confirmed. Still
+    to do: the other seven rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node,
+    whether decode time enters the abstract.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
