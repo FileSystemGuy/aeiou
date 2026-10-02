@@ -340,27 +340,35 @@ G = 8. The per-rank write-item list is the model's parameter table: FSDP2/DTenso
 per parameter and per optimizer state (≈900 items for an 8B model), each `1/G` of the tensor;
 FSDP1 flat-params give a handful of very large items. Both are configuration, not trace.
 
-**DCP per-rank syscall skeleton** **[verify]**:
+**DCP per-rank syscall skeleton** (**traced 2026-10-01**, torch 2.14.1; the drafted one had
+a guessed 64 KiB of small records per item and no seeks; see "Trace" below):
 
 ```
-mkdir("ckpt/step_000100", 0777) = 0 | -1 EEXIST          # every rank, exist_ok
+stat(parent); access(parent, W_OK)                      # not modeled
+mkdir("ckpt/step_000100", 0777) = 0 | -1 EEXIST          # every rank; the loser then stats the directory
+stat("ckpt/step_000100/.metadata") = -1 ENOENT           # is there a checkpoint here already
 openat("ckpt/step_000100/__3_0.distcp", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666)
 fstat; ioctl(TCGETS)=ENOTTY; lseek(0, SEEK_CUR)
 for each write item:                                    # torch.save(tensor, stream)
-    write(fd, …, small) × ~6                            # zip local headers, data.pkl, version, byteorder
-    write(fd, …, item_bytes)                            # storage; ≥ buffer size → direct write
-    write(fd, …, small) × ~3                            # central dir, EOCD
+    lseek(0, SEEK_CUR)                                  # tell: the item's offset
+    item above the buffer:   write(fd, …, 704); write(fd, …, item_bytes); write(fd, …, 873)
+    item within the buffer:  write(fd, …, 704 + item_bytes + 873)
+    lseek(0, SEEK_CUR)                                  # tell: the item's length
 fsync(fd)
 close(fd)
 -- collective: gather WriteResults to coordinator (network, not storage) --
-rank 0: openat(".metadata.tmp", O_WRONLY|O_CREAT|O_TRUNC); write(…, ~MiB); fsync; close;
-        rename(".metadata.tmp", ".metadata")
+rank 0: openat(".metadata.tmp", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC); fstat; ioctl; lseek(0, SEEK_CUR);
+        write(…, meta_bytes); fsync; close;
+        stat(".metadata") = -1 ENOENT; rename(".metadata.tmp", ".metadata")
 barrier
 ```
 
-Small writes are coalesced by Python's `BufferedWriter` (buffer = `st_blksize`, so 1 MiB on
-NFS **[verify]**); the abstract writes what the kernel sees, one `write` per item plus a
-`write($tail)` for the coalesced small records.
+Each item is its own `torch.save` stream: 704 bytes before the storage (zip local headers,
+`data.pkl`, padding to 64), 873 after it (version, byte order, central directory, end
+record). Python's `BufferedWriter` holds `st_blksize` (1 MiB on the traced mount): an item
+larger than that goes to the kernel in one `write`, with its header and trailer as two
+small writes around it; a smaller one leaves as one coalesced write. The stream is flushed
+at every item, so nothing is coalesced across items.
 
 **Abstract** (DCP shape; inserted into the training loop of §1 or §2):
 
@@ -368,8 +376,10 @@ NFS **[verify]**); the abstract writes what the kernel sees, one `write` per ite
   param ckpt_every = 100
   param items      = 900                         # write items per rank [config]
   param item_bytes = [ … ]                       # per-item bytes, 1/G of each tensor [config]
-  param tail       = 64KiB                       # coalesced small records per item [verify]
-  param meta_bytes = 2MiB                        # .metadata size [measure]
+  param hdr        = 704                         # per item, before the storage (traced)
+  param trailer    = 873                         # per item, after the storage (traced)
+  param buf        = 1MiB                        # BufferedWriter = st_blksize (traced)
+  param meta_bytes = 2MiB                        # .metadata size [measure]; about 217 B per item and rank
 
   namespace ckpt = objects("ckpt/step_{step:06}/{name}", size = as_written)
 
@@ -379,15 +389,23 @@ NFS **[verify]**); the abstract writes what the kernel sees, one `write` per ite
     phase("ckpt_write") {
       let dir = file("ckpt/step_{step:06}")
       mkdir(dir, expect = [EEXIST]),
+      stat(file("ckpt/step_{step:06}/.metadata"), expect = [ENOENT]),
       let c = file("ckpt/step_{step:06}/__{gpu}_0.distcp"),
       open(c, WRONLY|CREAT|TRUNC|CLOEXEC), fstat(c), ioctl(c, TCGETS, expect = [ENOTTY]),
       lseek(c, 0, CUR),
-      for t in $items { write(c, $item_bytes[t]), write(c, $tail) },
+      for t in $items {
+        lseek(c, 0, CUR),
+        when ($item_bytes[t] > $buf) { write(c, $hdr), write(c, $item_bytes[t]), write(c, $trailer) }
+        else                         { write(c, $hdr + $item_bytes[t] + $trailer) },
+        lseek(c, 0, CUR)
+      },
       fsync(c), close(c),
       barrier(global),                                      # gather WriteResults
       when (gpu == 0) {
         let m = file("ckpt/step_{step:06}/.metadata.tmp"),
-        open(m, WRONLY|CREAT|TRUNC), write(m, $meta_bytes), fsync(m), close(m),
+        open(m, WRONLY|CREAT|TRUNC|CLOEXEC), fstat(m), ioctl(m, TCGETS, expect = [ENOTTY]), lseek(m, 0, CUR),
+        write(m, $meta_bytes), fsync(m), close(m),
+        stat(file("ckpt/step_{step:06}/.metadata"), expect = [ENOENT]),
         rename(m, file("ckpt/step_{step:06}/.metadata"))
       },
       barrier(global)
@@ -395,10 +413,38 @@ NFS **[verify]**); the abstract writes what the kernel sees, one `write` per ite
   }
 ```
 
+**Trace (2026-10-01).** `builder/traces/ckpt_write_dcp`: `dcp.save` on two ranks (gloo, CPU),
+six `DTensor` items of 16 MiB down to 2 KiB per rank, two checkpoints, on the loopback NFS
+mount; torch 2.14.1. Reasoning in `DESIGN_REVIEW.md` §3.45.
+
+- **Every call on the shard files and on `.metadata` is in the abstract**, with equal
+  counts, equal bytes written (304,138,284), and equal write-size buckets. Largest distance
+  0.046, the share of `stat`.
+- **Not modeled, 10 of 164 calls:** per rank and checkpoint a `stat` and an `access` of the
+  step directory's parent (no `access` op; no handle for a namespace's parent); the `stat`
+  of the directory by the rank that lost the `mkdir` (who loses is timing); once in the
+  job, the `mkdir` of the absent parent.
+- **Each rank is an instance.** With the whole trace as one instance the other rank's
+  writes fall between a rank's own and the reuse distance is off by 0.92; with
+  `--instance-root` per rank it is equal.
+- **On the wire** (an untraced repeat, `mountstats` delta): 294 WRITEs for 304 MB, about
+  1 MiB each; 4 COMMITs, one per shard `fsync` (the two `.metadata` fsyncs sent none);
+  6 OPEN, 3 CREATE, 2 RENAME, no CLOSE.
+- **The writes are not aligned** (704, the item, 873), so the abstract at its traced
+  parameters does not run under a `-direct` backend: the runner refuses unaligned direct
+  writes, as the kernel would refuse Python's. See Cuts.
+- **`torch.save` on one rank** (`save.py --torch-save`, the first variant below) is another
+  writer: a C++ stream, `open` without `O_CLOEXEC` and with no `fstat`/`ioctl`/`lseek`, one
+  `writev` per tensor of a 64-byte record header and the storage (1,088 bytes before the
+  first), small tensors and the central directory in one last `write` (5,373 bytes), no
+  `fsync`.
+
 Variants, each a small edit:
-- **`torch.save` per rank:** drop `mkdir` and the metadata step, drop `fsync`; the per-tensor
-  loop becomes `write(c, $hdr), write(c, $item_bytes[t]), write(c, pad)` with the archive
-  tail once at the end. The measured quantity is then the `close` latency (flush + COMMIT).
+- **`torch.save` per rank:** drop `mkdir` and the metadata step, drop `fsync`, the `fstat`,
+  the `ioctl`, and the seeks; ~~the per-tensor loop becomes `write(c, $hdr),
+  write(c, $item_bytes[t]), write(c, pad)`~~ the per-tensor loop is one `writev` of 64 bytes
+  and the storage (traced 2026-10-01; a `write` of `64 + $item_bytes[t]` in the abstract,
+  which has no vectored op) with the archive tail once at the end. The measured quantity is then the `close` latency (flush + COMMIT).
 - **Asynchronous checkpoint** (`torch.distributed.checkpoint.async_save`): the write runs on a
   background thread while training continues, and the next checkpoint waits for the previous
   one. Expressible as `parallel(1)` forked at the checkpoint step with the join at the next
@@ -414,8 +460,12 @@ Variants, each a small edit:
   own phase when on.
 
 **Cuts.** The collective (NCCL/Gloo) that gathers the write plan is network, not storage, and
-becomes a `barrier`. `O_DIRECT` checkpoint writers (some vendor plugins) are a backend choice,
-not an abstract change.
+becomes a `barrier`. ~~`O_DIRECT` checkpoint writers (some vendor plugins) are a backend choice,
+not an abstract change.~~ **Revised 2026-10-01:** an `O_DIRECT` checkpoint writer is another
+application. The traced writer's requests are 704 bytes, the item, and 873 bytes, none
+aligned; a writer that uses `O_DIRECT` has to buffer and pad differently, and that call
+stream is its own abstract (or this one with `hdr` and `trailer` set to aligned values,
+which is then a statement about that writer, not about PyTorch's).
 
 **What it stresses.** Write bandwidth with G concurrent large sequential streams, `fsync`/COMMIT
 latency, and the `rename` and `mkdir` metadata path. With buffered writes, how much of the
@@ -1110,7 +1160,7 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 |---|---|---|
 | §1 small files (**traced 2026-10-01**, §1 "Trace") | PyTorch DataLoader + ImageFolder, `num_workers=2`, 200 steps | per-file syscall sequence and order; `read` length argument (`st_blksize` on NFS); whether the EOF read occurs; wire ops per file from `nfsstat` deltas |
 | §2 large samples (**traced 2026-10-01**, §2 "Trace") | DLIO `unet3d` reader or `np.load` loop on `.npz` | tail-read offsets; member header reads; chunk size of the member reads; `cd_len`, `lh_len` |
-| §3 checkpoint write | `torch.distributed.checkpoint.save` on 2 ranks; `torch.save` on 1 | `mkdir` result per rank; write sizes per item and the coalesced small-record size; `fsync` presence; `.metadata` size and the `rename` |
+| §3 checkpoint write (**traced 2026-10-01**, §3 "Trace") | `torch.distributed.checkpoint.save` on 2 ranks; `torch.save` on 1 | `mkdir` result per rank; write sizes per item and the coalesced small-record size; `fsync` presence; `.metadata` size and the `rename` |
 | §4 restore / load | `dcp.load`; `AutoModel.from_pretrained` with `safetensors` | per-item `lseek`/`read` pairs; header read lengths; `mmap` and fault pattern (`perf trace -F` or `/proc/PID/smaps` deltas) |
 | §5 DiskANN | `search_disk_index` on a 10M-point index, `beam_width=4` | `io_submit` batch sizes (= beam), rounds per query (hops), offset histogram (hub concentration), node-cache size |
 | §6 IVF | FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe=64` | list size distribution (from the index), list popularity over a query set, `pread` vs page-fault path |

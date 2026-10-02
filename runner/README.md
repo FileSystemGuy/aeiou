@@ -480,7 +480,7 @@ parameters, each three times: `sync` with a cold client cache, `sync` again, and
 | vdb_search_diskann (1) | 244; 240 reads of 4 KiB | 241 READ | 240 READ | 240 READ |
 | vdb_search_ivf (1) | 36; 32 reads, 1.8 MiB | 28 READ | 0 READ | 32 READ (one per read) |
 | vdb_build_diskann (1) | 386; 106 reads, 262 writes, 7 MiB | 139 READ, 8 WRITE, 1 COMMIT | 0 READ, 8 WRITE, 1 COMMIT | 106 READ, 263 WRITE, 0 COMMIT |
-| ckpt_write_dcp (2) | 70; 34 writes, 21.1 MiB | 27 WRITE, 4 COMMIT, 3 RENAME | same | 39 WRITE (21.1 MiB direct), 4 COMMIT |
+| ckpt_write_dcp (2) (the abstract before its 2026-10-01 rewrite; the traced one has unaligned writes and no direct column) | 70; 34 writes, 21.1 MiB | 27 WRITE, 4 COMMIT, 3 RENAME | same | 39 WRITE (21.1 MiB direct), 4 COMMIT |
 | ckpt_restore (2), after the write on this client | 36; 20 reads, 18.1 MiB | **0 READ**: all 18.1 MiB from the client's page cache | 0 READ | 30 READ (18.2 MiB from the server) |
 
 What the table says, with the reasoning in `DESIGN_REVIEW.md` §3.26:
@@ -743,7 +743,8 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
 - **Refusals.** `--aio-depth` without a `libaio` backend and `--mmap-mode` or
   `--mmap-consume` without `mmap` are refused, like the ring knobs under `sync`. There is no `mmap-direct`.
 - **Tests** (`tests/run.rs`). `train_small_files` under all nine backends; the
-  `kv_cache_serving`, `vdb_search_diskann`, and `ckpt_write_dcp` runs of the `io_uring` test
+  `kv_cache_serving`, `vdb_search_diskann`, and `ckpt_write_dcp` (since 2026-10-01 with `hdr` and
+  `trailer` set to 4096, the traced values being unaligned) runs of the `io_uring` test
   under the five new ones (`libaio` on one loop and on three, barriers through the poll,
   write-then-read-back through a mapping made after the write), and the three `mmap`
   modes under `touch` and under `copy` with their counters (pages touched equals bytes
@@ -972,7 +973,9 @@ cannot resolve distances under `N` blocks.
   block skew and as reuse.
 - `train_small_files`: one run per file, no block touched twice within an epoch, flat
   popularity.
-- `ckpt_write_dcp`: 98.6 % of the bytes in multi-op write runs, no reuse.
+- `ckpt_write_dcp`: 98.6 % of the bytes in multi-op write runs, ~~no reuse~~ 0.1 % of block
+  accesses rewrite a block (since the 2026-10-01 trace the writes are unaligned, and a block
+  two consecutive writes share is written twice).
 - `kv_cache_serving`: 7.4 % of block accesses are reads of a block the instance wrote,
   at a median distance of 8 GiB; 51 % are re-reads at a median of 2.5 GiB.
 

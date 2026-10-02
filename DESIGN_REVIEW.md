@@ -1950,6 +1950,49 @@ others are not yet confirmed.**
 The lesson for the remaining six rows: the drafts marked **[verify]** are hypotheses. One
 was nearly right and one was not.
 
+### 3.45 The third trace: `ckpt_write_dcp`, and what it says about direct backends (added 2026-10-01)
+
+Row 3 of the capture plan: `torch.distributed.checkpoint.save` on two ranks over a state
+dict of `DTensor`s, and `torch.save` on one. Kit in `builder/traces/ckpt_write_dcp`,
+findings in `ABSTRACTS.md` §3. The draft had the right frame (mkdir, shard file, fsync,
+`.metadata` through a rename) and the wrong inside of the item loop. **The choices below
+were made while building and are not yet confirmed by the user.**
+
+- **The item loop is the traced one; hash and fingerprints changed.** Per item a tell, the
+  writes, a tell; an item above the buffer is three writes (704, the item, 873), one
+  within it is a single coalesced write. `tail` (a guessed 64 KiB) is replaced by `hdr`,
+  `trailer`, and `buf`. The `.metadata` writer gains the `fstat`/`ioctl`/`lseek` every
+  Python `open` issues, and two `stat`s of `.metadata` that expect ENOENT are added. AST
+  `d537f867…` became `54872239…`.
+- **The split at `buf` is a `when`/`otherwise` on a parameter array element.** The op
+  multiset is still fixed before the run: the condition is over parameters. *Not modeled:*
+  the band between `buf − 704` and `buf`, where CPython flushes the header and buffers the
+  item; and Linux's cap of 2 GiB − 4 KiB per `write`, which splits an item larger than
+  that (a shard of a very large embedding) into several.
+- **`ckpt_restore` follows the writer.** Its default `item_off` table is now the prefix sums
+  of `hdr + item + trailer`; the tests that write and then restore pass the same. Its own
+  read protocol is still the draft's and is row 4.
+- **Ten path calls are left out**, listed in `ABSTRACTS.md` §3: no `access` op in the
+  contract, no handle for a namespace's parent directory (the schema refuses a namespace
+  with no fields), and one `stat` whose issuer is decided by a race. Adding `access` and a
+  parent handle would be a contract change for 8 calls per checkpoint; the race cannot be
+  in a fixed op multiset at all.
+- **Per-rank instances on the trace side.** `--instance-root` per rank is the documented way
+  to compare a multi-rank trace (§3.42); this is the first trace that needed it.
+- **A direct backend cannot run this abstract at its traced parameters, and that is
+  correct.** The runner refuses unaligned `O_DIRECT` writes (`check_align`), and 704 and 873
+  are not aligned. Under the interposition test (`PROJECT_BRIEF.md` §5) a shim that turns
+  these writes into aligned direct I/O must buffer and pad, which is solution-side work the
+  runner does not do for it. So `ABSTRACTS.md` §3's cut "an `O_DIRECT` checkpoint writer is
+  a backend choice" is struck: it is another application. The runner's tests that ran this
+  abstract under the direct backends now pass aligned `hdr` and `trailer` (4096) to keep
+  the direct write path covered. *Open for the user:* whether the runner should offer what
+  such a shim does (coalesce and pad to alignment, final truncate) as a named backend
+  behaviour, which would let OPEN-style direct runs use the PyTorch stream; nothing built.
+- **`torch.save` is recorded as a variant, not built.** One `writev` per tensor; the
+  contract has no vectored op, and a `write` of the summed length is the same request to
+  the file system.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

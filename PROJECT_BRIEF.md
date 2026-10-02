@@ -290,8 +290,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `builder/traces/train_large_samples`): `np.load(...)["x"]` as DLIO issues it. The
     drafted abstract was wrong in shape (two members, header reads, no read at 0) and was
     rewritten from the trace; largest distance 0.040 on a 256-file corpus. Explicit seeks
-    confirmed by the user (**decided 2026-10-01**); the other choices not yet. Still
-    to do: the other six rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
+    confirmed by the user (**decided 2026-10-01**); the other choices not yet.
+    **Third, 2026-10-01** (`ABSTRACTS.md` §3 "Trace", `DESIGN_REVIEW.md` §3.45,
+    `builder/traces/ckpt_write_dcp`): `dcp.save` on two ranks. The frame was right, the item
+    loop was not (704 + item + 873 per item, split at the buffer size, two tells); counts and
+    bytes now equal but for 10 path calls the contract cannot express. The traced writes are
+    unaligned, so a direct backend cannot run them. Choices not yet confirmed. Still
+    to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
