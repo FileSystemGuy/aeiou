@@ -333,6 +333,9 @@ trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, decided 2026-1
 `diskannpy`, one index built in 13 shards and then searched; `hops.py` reads the beam search
 (rounds, batch sizes, sector spread) off the `io_submit` lines (`ABSTRACTS.md` §5 and §7,
 `DESIGN_REVIEW.md` §3.50, not yet confirmed).
+`traces/kv_cache_serving` is row 8: vLLM with LMCache's local-disk backend on a GPU, with a
+synthetic chat load (`chat.py`); it fixes the call sequence, not the distributions
+(`ABSTRACTS.md` §8, `DESIGN_REVIEW.md` §3.51, not yet confirmed).
 
 **The application's API is declared in the script** (contract 0.3, 2026-10-01):
 `Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`

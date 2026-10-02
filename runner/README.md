@@ -487,7 +487,7 @@ parameters, each three times: `sync` with a cold client cache, `sync` again, and
 |---|---|---|---|---|
 | train_small_files (2) | 678; 98 opens, 192 reads, 10.6 MiB | 97 READ (10.5 MiB), 53 OPEN, 2 READDIR | 0 READ, 99 GETATTR | 288 READ (10.7 MiB) |
 | train_large_samples (2) | 412; 244 reads, 159 MiB | 129 READ (80.8 MiB from the server, the rest page-cache hits within the run) | 0 READ, 19 GETATTR | 464 READ (159 MiB) |
-| kv_cache_serving (1) | 1,144; 162 reads, 115 writes, 34 mkdirs | 14 READ, 116 WRITE (28.8 MiB), 117 OPEN, 34 CREATE | 0 READ, 116 WRITE | 162 READ, 116 WRITE, 120 CLOSE |
+| kv_cache_serving (1) (the abstract before its 2026-10-02 correction, which removed the `stat` lookups, the directories and the decode writes; `ABSTRACTS.md` §8) | 1,144; 162 reads, 115 writes, 34 mkdirs | 14 READ, 116 WRITE (28.8 MiB), 117 OPEN, 34 CREATE | 0 READ, 116 WRITE | 162 READ, 116 WRITE, 120 CLOSE |
 | model_load (2) (the abstract before its 2026-10-01 correction, which added the small files, the second open and the `fadvise`; `ABSTRACTS.md` §4 has the wire numbers of the traced one) | 88; 76 reads, 4.1 MiB | 53 READ | 0 READ, 5 GETATTR | 76 READ (one per read) |
 | vdb_search_diskann (1) (the abstract before its 2026-10-02 correction: the load, 28 rounds per query, `libaio` declared; `ABSTRACTS.md` §5) | 244; 240 reads of 4 KiB | 241 READ | 240 READ | 240 READ |
 | vdb_search_ivf (1) (the abstract before its 2026-10-01 correction, which added the index file, the prefetch fan-out and the `mmap` declaration; `ABSTRACTS.md` §6 has the wire numbers of the traced one) | 36; 32 reads, 1.8 MiB | 28 READ | 0 READ | 32 READ (one per read) |
@@ -991,7 +991,7 @@ cannot resolve distances under `N` blocks.
 - `ckpt_write_dcp`: 98.6 % of the bytes in multi-op write runs, ~~no reuse~~ 0.1 % of block
   accesses rewrite a block (since the 2026-10-01 trace the writes are unaligned, and a block
   two consecutive writes share is written twice).
-- `kv_cache_serving`: 7.4 % of block accesses are reads of a block the instance wrote,
+- `kv_cache_serving` (the abstract before its 2026-10-02 correction): 7.4 % of block accesses are reads of a block the instance wrote,
   at a median distance of 8 GiB; 51 % are re-reads at a median of 2.5 GiB.
 
 **Limits.** (1) The order is a model: equal op rates, no compute time, no backpressure. A

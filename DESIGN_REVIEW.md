@@ -2338,6 +2338,68 @@ up to twenty times, and that is the case the build abstract exists for; it is no
 The untraced build takes 161 s and the abstract's I/O alone 6.5 s on this mount: the build
 is compute, as §7 says.
 
+### 3.51 The eighth row: vLLM with LMCache (added 2026-10-02)
+
+Row 8 of the capture plan, the last. Kit in `builder/traces/kv_cache_serving`, findings in
+`ABSTRACTS.md` §8. The draft's chain of conversations stands; its I/O skeleton was wrong in
+three places (a `stat` per chunk per request, a directory per conversation, writes during
+decode) and missed the fact that decides the read volume: the engine has a cache of its own
+in front of this one. **The choices below were made while building and are not yet confirmed
+by the user.**
+
+**What was traced, and what was not.** The call sequence of LMCache's local-disk backend
+under a real vLLM on a GPU, with a synthetic chat load. Not traced: a public chat replay.
+The reuse distance, the prompt and reply lengths, and the system-prompt popularity stay
+**[measure]**; they are properties of a workload's users, not of the software, and need a
+replay (ShareGPT or a production log) through the same kit. Other tiers (vLLM's own
+connectors, Mooncake, HiCache, a remote LMCache server) are other traces.
+
+**Choices.**
+
+- **The `stat` loops are removed, not parameterized.** The draft kept them as a stated
+  choice for "a shared-filesystem backend with no index". The traced backend has an index
+  and issues none; a workload for a backend that has none should come from that backend's
+  trace. Ops per request fall by more than half.
+- **Six calls per chunk**, including the terminal probe that fails `ENOTTY` and the no-op
+  `lseek`: they are Python's `open`, as in `model_load`'s small files (§3.47).
+- **One flat namespace**, `kv/{conv:016x}-{k:04}.pt`; `kv_dir` and the `mkdir` are gone. The
+  real name is a hash of the token prefix; a conversation id and a chunk index give the
+  same sharing structure for a conversation's own chunks.
+- **Tokens are counted along the chain.** The draft added `ceil((in + out) / chunk)` blocks
+  per turn. The trace stores `floor(prompt tokens / chunk)` chunks in total, the reply
+  entering with the next turn, so the abstract carries the conversation's own prompt tokens
+  (`ptoks @ (r − d) + out @ (r − d) + in`) and stores the whole chunks not yet stored. A
+  new conversation starts with the system prompt's tokens past its last whole chunk.
+- **`local`: what the engine still holds, in requests.** A conversation back within `local`
+  requests reads nothing; one back later reads all the chunks it had. The real quantity is
+  GPU KV memory in bytes against the tokens of the conversations in between, which is not
+  positional without a simulated cache, and `GRAMMAR_OPTIONS.md` §5.3 rules that out as it
+  does for `retain`. On the traced load the abstract reads 88 chunks where the engine read
+  47: the engine's memory was still filling during the first turns, and it kept the
+  shared first chunk. A steady-state trace with a replay is what would fit `local`.
+- **`sys_local`.** The system prompts' whole chunks are never read while the engine holds
+  them, which on one engine is always. `false` is the cold engine beside a filled cache
+  (a restart, or a second engine), where they are read by every new conversation.
+- **A request's chunk reads are a `parallel` as wide as the chunks.** The trace shows four
+  at once from a pool of four or five threads; a request that loads more than the pool is
+  wide would queue, which is not modeled.
+- **Writes are issued in the request's line**, after the prefill `compute`. LMCache issues
+  them from two background threads while the request decodes.
+- **The system prompts stay a dataset** written by datagen (V12, V13): the trace has two
+  more writes, the first use of each prompt.
+- **`sys_tokens_min` and `sys_tokens_max`** bound the system prompt length so that a fitted
+  file can give every prompt one length; a log-normal's sigma is a literal in the contract.
+
+**Measured.** 40 requests: 47 chunk writes and 47 chunk reads of 3,145,728 bytes in the
+trace; 48 writes and 88 reads in the abstract at the fitted parameters (three more of the
+conversations' own chunks, because some replies ended short of the 100 tokens the fitted
+file gives every reply, and two fewer for the system prompts). The NFS RPC counts were not taken for this row.
+
+**Capture notes.** vLLM keeps a small chat entirely in GPU memory and LMCache is then never
+read: the kit limits the engine's KV memory (`--kv-cache-memory-bytes`). The flashinfer
+sampler compiles kernels at first use and needs the CUDA compiler; the kit turns it off.
+`%network` is left out of the trace.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -2375,7 +2437,7 @@ is compute, as §7 says.
   definitions decided (§3.39). ~~Next: the `RLIMIT`
   checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
-  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); row 8 (vLLM + LMCache) remains.
+  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51). Every row of the capture plan has a trace; open: a chat replay for the KV distributions, the tolerances, the `replay` node, a GPU engine's touch pattern for `model_load`.
 
 ## 5. Things reviewed and left as-is
 

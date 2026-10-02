@@ -309,7 +309,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     third trace showed needs the read order (sorted names, not file order) and the buffer
     carried from item to item. The other §3.47 choices are not yet confirmed. ~~Still
     to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.~~ Still
-    to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ row 8 of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
+    to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ a chat replay for row 8 of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
     **Sixth row, 2026-10-01** (`ABSTRACTS.md` §6 "Trace", `DESIGN_REVIEW.md` §3.49,
     `builder/traces/vdb_search_ivf`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
     FAISS maps the lists file and issues no call on it; 32 prefetch threads per search slice
@@ -323,7 +323,15 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     which a 1 % node cache holds; the abstract declares `libaio` and opens once per process.
     Build: the base file read whole twenty times, 64 MiB layout writes, no `fsync`; the
     abstract was rewritten and agrees with the trace to 0.1 % in calls and bytes, and with
-    the wire in READ, WRITE, and COMMIT counts. Choices not yet confirmed. Row 8 remains.
+    the wire in READ, WRITE, and COMMIT counts. Choices not yet confirmed. ~~Row 8 remains.~~
+    **Eighth row, 2026-10-02** (`ABSTRACTS.md` §8 "Trace", `DESIGN_REVIEW.md` §3.51,
+    `builder/traces/kv_cache_serving`): vLLM with LMCache's local-disk backend on a GPU. No
+    lookup reaches storage; a chunk is one file in one flat directory, one `write`, one
+    `read`; only whole chunks of the prompt are stored and nothing during decode; reads
+    happen only for what the engine's own GPU cache lost. The abstract lost its `stat`
+    loops, directories, and decode writes and gained `local` and `sys_local`. Choices not
+    yet confirmed. Every row now has a trace; the chat replay for the KV distributions is
+    still to do.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its

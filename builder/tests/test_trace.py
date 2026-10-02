@@ -450,9 +450,9 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
 def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     """`builder/traces/kv_cache_serving`: vLLM with LMCache's local-disk backend, 40 requests
     over 8 conversations, traced 2026-10-02. Every chunk is the same six calls around one
-    `read` or `write`; the abstract stores one chunk more (it generates 100 tokens where
-    some replies were shorter) and not the two chunks of the system prompts, which are a
-    dataset here; it reads every chunk of a returning conversation where the traced engine,
+    `read` or `write`; the abstract stores three more of the conversations' chunks (it
+    generates 100 tokens where some replies were shorter) and not the two chunks of the
+    system prompts, which are a dataset here; it reads every chunk of a returning conversation where the traced engine,
     its GPU memory not yet full, still held the first turns (`ABSTRACTS.md` §8)."""
     kit = BUILDER / "traces" / "kv_cache_serving"
     dry = tmp_path / "dry.json"

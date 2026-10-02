@@ -1118,20 +1118,26 @@ configuration: one object per chunk, or one object per chunk per layer (vLLM's
 `SharedStorageConnector` writes a `safetensors` file per layer per block **[verify]**, i.e. 32
 files of 64 KiB for one 8B block).
 
-**Per-request I/O skeleton** (LMCache-style shared-filesystem backend) **[verify]**:
+**Per-request I/O skeleton** (LMCache local-disk backend; traced 2026-10-02, below; the draft's
+`stat` per chunk and its writes during decode do not occur):
 
 ```
-for each chunk of the prompt:      stat("kv/{hash}") = 0 | ENOENT          # lookup
-for each hit chunk, in order:      openat("kv/{hash}", O_RDONLY); read(…, chunk_bytes); close
--- prefill compute for the miss tail --
-for each new chunk:                openat("kv/{hash}", O_WRONLY|O_CREAT|O_TRUNC); write(…, chunk_bytes); close
--- decode; every chunk_tokens of output: another write --
+-- lookup: LMCache's in-memory index; no call --
+for each cached chunk the engine no longer holds, all at once from a thread pool:
+    openat("kv/{model}@…@{hash}.pt", O_RDONLY|O_CLOEXEC); fstat; ioctl(TCGETS) = ENOTTY; lseek(0, SEEK_CUR);
+    read(…, chunk_bytes); close
+-- prefill compute for the rest --
+for each new whole chunk of the prompt:
+    openat("kv/{model}@…@{hash}.pt", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC); fstat; ioctl = ENOTTY; lseek;
+    write(…, chunk_bytes); close
+-- decode: no I/O --
 ```
 
 **Abstract.** The conversation identity is a *chain*: request `r` either continues the
 conversation of an earlier request `r − d` or starts a new one (§9.5). Everything about the
-conversation (its id, how many blocks it had) is recomputed positionally from the earlier index,
-so no history is stored and any request is computable in isolation.
+conversation (its id, how many tokens it had) is recomputed positionally from the earlier index,
+so no history is stored and any request is computable in isolation. (Rewritten 2026-10-02 from
+the trace; the draft is in the history of this file.)
 
 ```
 workload kv_cache_serving {
@@ -1139,22 +1145,23 @@ workload kv_cache_serving {
   param warm         = 2_000                    # requests per slot before measurement (§9.5)
   param requests     = 20_000                   # per slot, measured
   param chunk_tokens = 256
-  param chunk_bytes  = 32MiB                    # 128 KiB/token × 256 [config]
-  param files_per_chunk = 1                     # or layers, for per-layer objects [config]
+  param chunk_bytes  = 32MiB                    # 128 KiB/token × 256 [config]; a file is exactly this
   param sys_prompts  = 50                       # hot set, pre-populated by datagen
   param sys_pop      = zipf(s = 1.1)            # [measure]
-  param sys_len      = lognormal(median = 1500, sigma = 0.3)    # tokens [measure]
+  param sys_tokens   = 1500                     # median, log-normal sigma 0.3 [measure]
+  param sys_local    = true                     # the engine holds the system prompts in GPU memory [config]
   param reuse        = mixture(0.55: none,      # new conversation
                                0.45: lognormal(median = 40, sigma = 1.2))  # requests ago [measure]
+  param local        = 8                        # requests; a conversation back sooner is still in the engine [config: GPU KV memory]
   param retain       = 5_000                    # requests; older chunks are evicted [config: capacity]
   param turn_in      = lognormal(median = 300, sigma = 0.8)     # new prompt tokens [measure]
   param turn_out     = lognormal(median = 250, sigma = 0.6)     # generated tokens [measure]
   param prefill_per_token = 40us, decode_per_token = 12ms       # [measure]
 
   dataset  sysp = files("kv/sys/{id:04}/blk_{k:04}", count = $sys_prompts,
-                        size = $sys_len * 128KiB, chunk = $chunk_bytes,   # realized as chunks(sp) block objects
+                        size = lognormal($sys_tokens × bytes per token, 0.3), chunk = $chunk_bytes,
                         seed = 0x5eed_da80)
-  namespace kv = objects("kv/{conv:016x}/blk_{k:04}", size = const($chunk_bytes))
+  namespace kv = objects("kv/{conv:016x}-{k:04}.pt", size = const($chunk_bytes))     # one flat directory
 
   per gpu {
     parallel($concurrency) {
@@ -1163,22 +1170,19 @@ workload kv_cache_serving {
         let cont   = d != none && d <= r
         let conv   = when (cont) { conv @ (r - d) } else { draw(uniform64) }      # chain
         let sp     = when (cont) { sp @ (r - d) } else { pick(sysp, dist = $sys_pop) }
-        let prev   = when (cont) { total @ (r - d) } else { 0 }    # blocks the conversation had
-        let hit    = when (cont && d <= $retain) { prev } else { 0 }
-        let inn    = draw($turn_in), out = draw($turn_out)         # one draw each; reused below
-        let total  = prev + ceil((inn + out) / $chunk_tokens)
-        let sysblk = chunks(sp)                                     # block objects of this system prompt
+        let inn    = draw($turn_in), out = draw($turn_out)
+        let sysblk = size(sp) / $chunk_bytes                        # whole chunks inside the system prompt
+        let ptoks  = when (cont) { ptoks @ (r - d) + out @ (r - d) }               # the conversation's own prompt tokens
+                     else { size(sp) % $chunk_bytes / bytes per token } + inn
+        let stored = ptoks / $chunk_tokens                          # whole chunks only
+        let had    = when (cont && d <= $retain) { stored @ (r - d) } else { 0 }
+        let load   = when (cont && d > $local) { had } else { 0 }
 
         phase(when (r < $warm) { "warm" } else { "serve" }) {
-          for k in sysblk        { stat(file(sp, k)) }                           # lookups
-          for k in total         { stat(file("kv/{conv:016x}/blk_{k:04}"), expect = [ENOENT]) }
-          for k in sysblk        { let b = file(sp, k), open(b, RDONLY), read(b, $chunk_bytes), close(b) }
-          for k in hit           { let b = file("kv/{conv:016x}/blk_{k:04}"),
-                                   open(b, RDONLY), read(b, $chunk_bytes), close(b) }
-          compute($prefill_per_token * (total - hit) * $chunk_tokens)
-          when (hit < total)     { mkdir("kv/{conv:016x}", expect = [EEXIST]) }   # the conversation directory
-          for k in hit .. total  { let b = file("kv/{conv:016x}/blk_{k:04}"),
-                                   open(b, WRONLY|CREAT|TRUNC), write(b, $chunk_bytes), close(b) }
+          when (!$sys_local) { parallel(sysblk) { chunk_read(file(sp, k)) } }
+          parallel(load)     { chunk_read(file("kv/{conv:016x}-{k:04}.pt")) }      # all at once
+          compute($prefill_per_token * (stored - had) * $chunk_tokens)
+          for k in had .. stored { chunk_write(file("kv/{conv:016x}-{k:04}.pt")) }
           compute($decode_per_token * out)
         }
       }
@@ -1187,6 +1191,38 @@ workload kv_cache_serving {
 }
 ```
 
+(`chunk_read(b)` is `open(b, RDONLY|CLOEXEC), fstat(b), ioctl(b, TCGETS, expect = [ENOTTY]),
+lseek(b, 0, CUR), read(b, $chunk_bytes), close(b)`; `chunk_write` the same with
+`WRONLY|CREAT|TRUNC|CLOEXEC` and `write`.)
+
+**Trace (2026-10-02).** vLLM 0.30.0 with LMCache 0.5.5 (`LMCacheConnectorV1`, `local_disk` on
+the loopback NFS mount, `local_cpu` off), Qwen2.5-0.5B (12,288 bytes of KV per token), GPU KV
+memory limited to 96 MiB; 8 conversations of 5 turns round-robin from one client, 2 system
+prompts; kit in `builder/traces/kv_cache_serving`, reasoning in `DESIGN_REVIEW.md` §3.51.
+
+- **No lookup reaches storage.** LMCache's index is in memory: no `stat`, no `access`, no
+  directory read. The whole trace on the cache directory is 47 chunk writes, 47 chunk
+  reads, and a `stat`, `mkdir`, `stat`, `statfs` of the directory at start.
+- **A chunk is a file of exactly `chunk_bytes`** (3,145,728 here), no header, in one flat
+  directory, named `{model}@{world}@{worker}@{hash}@{dtype}.pt`: no directory per
+  conversation, no `mkdir` per request.
+- **One `write`, one `read`**, each inside Python's `open`: `openat`, `fstat`,
+  `ioctl(TCGETS)` failing `ENOTTY`, `lseek(0, SEEK_CUR)`, the data call, `close`. No
+  `fsync`, no temporary name, no `rename`.
+- **Only whole chunks of the prompt are stored, at prefill.** A 661-token first prompt
+  stores 512 tokens; the next turn's prompt (958 tokens, which includes the first reply)
+  stores the third chunk. The trailing partial chunk and the tokens being generated are
+  not written; a reply reaches storage as part of the next turn's prompt.
+- **Chunks shared by hash.** The two system prompts' first chunks were written once each
+  and hit by the other conversations (`LMCache hit tokens: 256`).
+- **Reads happen only for what the engine lost.** vLLM's own prefix cache serves a
+  returning conversation while its blocks are in GPU memory; LMCache reports
+  `need to load` for the rest. 13 of 32 returning requests loaded, 1 to 5 chunks each,
+  usually without the system prompt's chunk (1,024 tokens retrieved of 1,280 hit); the
+  first two turns loaded nothing, presumably because the GPU memory was not yet full.
+- **A request's chunks are read at once**: four `read`s issued within a millisecond from
+  four pool threads. Writes come from two threads, after the prefill.
+
 Notes on the shape:
 - The `warm` prefix of the index space exists so that `conv @ (r − d)` has something to reach
   back to when measurement starts; its writes populate the cache, its statistics are discarded.
@@ -1194,9 +1230,10 @@ Notes on the shape:
 - Eviction is an input (`retain`), as `GRAMMAR_OPTIONS.md` §5.3 requires: a conversation older
   than `retain` requests is a miss, the engine recomputes, and the blocks are rewritten under
   the same names (real caches re-store on miss). No simulated cache exists in the runner.
-- Decode-time writes are folded into the tail of the write loop; a finer model writes one block
+- ~~Decode-time writes are folded into the tail of the write loop; a finer model writes one block
   every `chunk_tokens × decode_per_token` during decode, which is a `for` with a `compute`
-  inside and needs nothing new.
+  inside and needs nothing new.~~ LMCache writes nothing during decode by default (traced;
+  `save_decode_cache` is an option). Generated tokens are counted into the next turn's prompt.
 - `files_per_chunk > 1` wraps each block access in `for l in $files_per_chunk` with `/l_{l:02}`
   appended to the name.
 
@@ -1207,14 +1244,21 @@ Notes on the shape:
   conversation from a pre-populated shared namespace written by `datagen` (a hit by
   construction), or run a barrier-separated two-phase variant.
 - **Lookups are metadata.** Real LMCache keeps an in-memory index and only touches storage for
-  data; the `stat` loop models a shared-filesystem backend with no index. Keep or drop per the
-  system being modeled; it doubles the op count, so the choice must be stated.
+  data; ~~the `stat` loop models a shared-filesystem backend with no index. Keep or drop per the
+  system being modeled; it doubles the op count, so the choice must be stated.~~ the `stat` loop
+  is gone (2026-10-02): the traced backend issues none.
+- **What the engine holds is a threshold in requests** (`local`), where the real one is GPU
+  memory in bytes. The system prompts' chunks are read only with `sys_local = false`.
+- **The system prompts are a dataset** with a directory to itself (V13), where LMCache keeps
+  them beside the other chunks and writes them at their first use: two fewer writes in the trace.
+- **One chunk per file is LMCache's layout.** vLLM's own connectors and other tiers differ
+  (`files_per_chunk` of the draft); they are other traces.
 - Router behaviour (session affinity) is assumed perfect; imperfect affinity is a smaller
   `reuse` hit fraction, i.e. a parameter.
 
 **What it stresses.** Write-then-read with a lag measured in minutes, a hot set that every
 engine reads continuously, multi-MiB whole-object reads and writes with an open/close per
-object, and a `stat` storm if lookups go to storage. Client-side caching of the hot set is a
+object~~, and a `stat` storm if lookups go to storage~~. Client-side caching of the hot set is a
 legitimate win and the workload rewards it; the `retain` window sets how much storage-side
 capacity matters.
 
@@ -1487,7 +1531,7 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 | §5 DiskANN (**traced 2026-10-02**, §5 "Trace"; a 1M-point index through diskannpy) | `search_disk_index` on a 10M-point index, `beam_width=4` | `io_submit` batch sizes (= beam), rounds per query (hops), offset histogram (hub concentration), node-cache size |
 | §6 IVF (**traced 2026-10-01**, §6 "Trace") | FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe=64` | list size distribution (from the index), list popularity over a query set, `pread` vs page-fault path |
 | §7 index build (**traced 2026-10-02**, §7 "Trace") | DiskANN `build_disk_index` at 1M points | phase boundaries, read chunk sizes, sample-phase read pattern, layout write sizes |
-| §8 KV cache | vLLM + LMCache with the local-disk or shared-fs backend, a chat replay (ShareGPT) | objects per chunk, object size, `stat` lookups, reuse-distance and prompt-length distributions, hit-length vs derived-length agreement |
+| §8 KV cache (**traced 2026-10-02**, §8 "Trace"; the call sequence, with a synthetic load: the chat replay for the distributions is still open) | vLLM + LMCache with the local-disk or shared-fs backend, a chat replay (ShareGPT) | objects per chunk, object size, `stat` lookups, reuse-distance and prompt-length distributions, hit-length vs derived-length agreement |
 
 (2026-10-02: `%desc` does not include `io_setup`, `io_submit`, `io_getevents`, `io_destroy`; name them for an
 application that uses Linux AIO. `--seccomp-bpf` keeps `strace` from stopping a compute-heavy process at
