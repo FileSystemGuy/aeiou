@@ -1,0 +1,31 @@
+{
+  "aeiou_tolerances": 1,
+  "unseen": [
+    {
+      "metric": "run length, read",
+      "reason": "a run belongs to a thread, and the two reads of a load are issued by different threads of the pool on one descriptor (checked in the raw trace)"
+    },
+    {
+      "metric": "fan-out",
+      "reason": "the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)"
+    }
+  ],
+  "outside": [
+    {
+      "metric": "ops: stat",
+      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
+    },
+    {
+      "metric": "reuse: first touches / block reads",
+      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
+    },
+    {
+      "metric": "reuse: read after read",
+      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
+    },
+    {
+      "metric": "reuse distance, read after read",
+      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
+    }
+  ]
+}

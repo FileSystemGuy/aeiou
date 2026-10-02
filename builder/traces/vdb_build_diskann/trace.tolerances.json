@@ -1,0 +1,33 @@
+{
+  "aeiou_tolerances": 1,
+  "outside": [
+    {
+      "metric": "run length, read, ",
+      "reason": "a run-length histogram counts runs, and a third to a half of the trace's runs are the small files and file headers the abstract does not model (ABSTRACTS.md §7); the bytes in multi-op runs agree"
+    },
+    {
+      "metric": "run length, write, ",
+      "reason": "a run-length histogram counts runs, and a third to a half of the trace's runs are the small files and file headers the abstract does not model (ABSTRACTS.md §7); the bytes in multi-op runs agree"
+    },
+    {
+      "metric": "reuse distance, read after read",
+      "reason": "cause not isolated; the shards are modeled at one size where the traced ones are 52 to 111 MB, and the builder interleaves streams the abstract issues in turn (ABSTRACTS.md §7)"
+    },
+    {
+      "metric": "reuse distance, read after write",
+      "reason": "cause not isolated; the shards are modeled at one size where the traced ones are 52 to 111 MB, and the builder interleaves streams the abstract issues in turn (ABSTRACTS.md §7)"
+    },
+    {
+      "metric": "reuse: first touches / block writes",
+      "reason": "the traced files begin with a small header, so the stream's 8,192-byte writes start off a block boundary and each rewrites the last block of the one before; the abstract's writes start at 0"
+    },
+    {
+      "metric": "reuse: write after write",
+      "reason": "the traced files begin with a small header, so the stream's 8,192-byte writes start off a block boundary and each rewrites the last block of the one before; the abstract's writes start at 0"
+    },
+    {
+      "metric": "reuse distance, write after write",
+      "reason": "the traced files begin with a small header, so the stream's 8,192-byte writes start off a block boundary and each rewrites the last block of the one before; the abstract's writes start at 0"
+    }
+  ]
+}

@@ -504,3 +504,99 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     pw, pr = (json.loads((kit / f).read_text())["params"] for f in ("fitted.params.json", "fitted.reader.params.json"))
     assert pw == pr
 
+
+
+def test_judge_classes_spread_and_the_tolerance_file(tmp_path):
+    """The rule of `compare --judge`: a row is within when its distance is at most its
+    class's tolerance plus what the abstract differs from itself by at other seeds."""
+    assert trace.tolerance_class("reuse distance, read after read (p50 / p90 / p99)") == "reuse distance"
+    assert trace.tolerance_class("reuse: first touches / block reads") == "reuse"
+    assert trace.tolerance_class("ops: read / all ops") == "ops"
+    pop = {"distinct": 5000, "accesses": 1, "max": 1, "top_0_1_pct": 0.001, "top_1_pct": 0.01, "top_10_pct": 0.1, "counts": []}
+    a, b = {"popularity_blocks": pop, "popularity_objects": {**pop, "distinct": 50}}, {"popularity_blocks": pop, "popularity_objects": pop}
+    rows = [
+        ("mix: reads / data ops", "", "", 0.04),
+        ("request size, read (p50 / p90 / p99)", "", "", 0.06),
+        ("reuse distance, read after read (p50 / p90 / p99)", "", "", 0.25),
+        ("popularity, blocks: accesses to the top 0.1 %", "", "", 0.9),    # 5 blocks: says nothing
+        ("popularity, blocks: accesses to the top 1 %", "", "", 0.01),     # 50 blocks
+        ("popularity, objects: accesses to the top 10 %", "", "", 0.9),    # 5 objects on one side
+        ("fan-out", "none", "", 1.0),
+        ("depth", "none", "", 1.0),
+        ("run length, write, ops (p50 / p90 / p99)", "none", "none", None),
+    ]
+    verdicts = lambda j: [r[5] for r in j]
+    j, stale = trace.judge(rows, a, b)
+    assert verdicts(j) == ["ok", "outside", "outside", "not judged", "ok", "not judged", "outside", "outside", "not judged"] and not stale
+    assert j[0][4] == 0.05 and j[2][4] == 0.10
+    # a trace read without --chain-gap-us has no depth to judge
+    j, _ = trace.judge(rows, a, b, docs=[{"source": "strace", "chain_gap_us": None}, {"source": "dry-run"}])
+    assert verdicts(j)[7] == "not judged"
+    spec = {"aeiou_tolerances": 1, "tolerances": {"request size": 0.07},
+            "unseen": [{"metric": "fan-out", "reason": "threads"}, {"metric": "ops: mkdir", "reason": "no such row"}],
+            "outside": [{"metric": "reuse distance, read after read", "reason": "known"}, {"metric": "mix: reads", "reason": "was"}]}
+    j, stale = trace.judge(rows, a, b, spec=spec)
+    assert verdicts(j)[:3] == ["ok", "ok", "outside"] and j[2][6] == "known" and (j[6][5], j[6][6]) == ("unseen", "threads")
+    assert len(stale) == 2 and "ops: mkdir" in stale[0] and "mix: reads" in stale[1]
+    f = tmp_path / "t.json"
+    f.write_text(json.dumps(spec))
+    assert trace.load_tolerances(str(f)) == spec
+    for bad in ({"aeiou_tolerances": 2}, {**spec, "waive": []}, {**spec, "tolerances": {"sizes": 0.1}}, {**spec, "unseen": [{"metric": "x"}]}):
+        f.write_text(json.dumps(bad))
+        with pytest.raises(SystemExit):
+            trace.load_tolerances(str(f))
+
+
+# Every traced pair under the default tolerances (`DESIGN_REVIEW.md` §3.55): the trace's
+# metrics, the abstract, the fitted parameters, `--gpus`, and the verdict. A pair's
+# tolerance file, beside its trace document, names the rows the trace cannot show and
+# records, with the reason, the rows that are outside.
+KIT_PAIRS = [
+    ("train_small_files", "trace", "train_small_files", "fitted.params.json", 1, "accepted"),
+    ("train_large_samples", "trace.140MiB", "train_large_samples", "fitted.140MiB.params.json", 1, "accepted"),
+    ("train_large_samples", "trace.8MiB", "train_large_samples", "fitted.8MiB.params.json", 1, "accepted"),
+    ("ckpt_write_dcp", "trace", "ckpt_write_dcp", "fitted.params.json", 2, "accepted"),
+    ("ckpt_restore", "trace.mixed", "ckpt_restore", "fitted.mixed.params.json", 2, "accepted"),
+    ("ckpt_restore", "trace.small-last", "ckpt_restore", "fitted.small-last.params.json", 2, "accepted"),
+    ("ckpt_restore", "trace.name-order", "ckpt_restore", "fitted.name-order.params.json", 2, "accepted"),
+    ("model_load", "trace", "model_load", "fitted.params.json", 1, "nothing judged"),
+    ("vdb_search_ivf", "trace", "vdb_search_ivf", "fitted.params.json", 1, "nothing judged"),
+    ("vdb_search_diskann", "trace.nocache", "vdb_search_diskann", "fitted.nocache.params.json", 1, "accepted"),
+    ("vdb_search_diskann", "trace.cache", "vdb_search_diskann", "fitted.cache.params.json", 1, "accepted"),
+    ("vdb_build_diskann", "trace", "vdb_build_diskann", "fitted.params.json", 1, "not accepted"),
+    ("kv_cache_serving", "trace", "kv_cache_serving", "fitted.params.json", 1, "not accepted"),
+    ("kv_cache_shared", "writer.trace", "kv_cache_shared", "fitted.params.json", 1, "not accepted"),
+    ("kv_cache_shared", "reader.trace", "kv_cache_shared_reader", "fitted.reader.params.json", 1, "not accepted"),
+]
+
+
+def test_every_trace_of_a_kit_is_a_pair():
+    have = {(p.parent.name, p.name[: -len(".metrics.json")]) for p in (BUILDER / "traces").glob("*/*.metrics.json")}
+    assert have == {(k, t) for k, t, *_ in KIT_PAIRS}
+    files = {(p.parent.name, p.name[: -len(".tolerances.json")]) for p in (BUILDER / "traces").glob("*/*.tolerances.json")}
+    assert files <= have
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+@pytest.mark.parametrize("kit, which, ast, params, gpus, verdict", KIT_PAIRS, ids=[f"{k}:{t}" for k, t, *_ in KIT_PAIRS])
+def test_kit_pair_against_the_tolerances(tmp_path, capsys, kit, which, ast, params, gpus, verdict):
+    """`aeiou-trace compare --judge` on a committed trace and its abstract at the fitted
+    parameters, with the abstract at three other seeds as its own spread. The verdict is
+    the recorded one, every row outside has its reason in the pair's file, and the file
+    has no entry that matches nothing."""
+    kit = BUILDER / "traces" / kit
+    docs = []
+    for seed in (1, 2, 3, 4):
+        docs.append(tmp_path / f"dry.{seed}.json")
+        r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", str(gpus), "--seed", str(seed),
+                            "--params", str(kit / params), "--metrics-json", str(docs[-1])], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    spec = kit / f"{which}.tolerances.json"
+    args = ["compare", str(kit / f"{which}.metrics.json"), str(docs[0]), *[x for d in docs[1:] for x in ("--self", str(d))]]
+    rc = trace.main(args + (["--tolerances", str(spec)] if spec.exists() else ["--judge"]))
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1].startswith(verdict + ": "), out[-1]
+    assert rc == (0 if verdict == "accepted" else 1)
+    assert not [l for l in out if l.startswith("note: ")], out
+    assert not [l for l in out if l.endswith("OUTSIDE")], out          # an outside row without a recorded reason
+    assert (verdict == "not accepted") == any(" OUTSIDE (" in l for l in out)

@@ -1,0 +1,29 @@
+{
+  "aeiou_tolerances": 1,
+  "unseen": [
+    {
+      "metric": "mix",
+      "reason": "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+    },
+    {
+      "metric": "ops",
+      "reason": "the application reads through a mapping, and strace does not show page faults: with those reads on one side only, every share of all ops is of a different total"
+    },
+    {
+      "metric": "request size, read",
+      "reason": "the application reads through a mapping, and strace does not show page faults"
+    },
+    {
+      "metric": "run length, read",
+      "reason": "the application reads through a mapping, and strace does not show page faults"
+    },
+    {
+      "metric": "reuse",
+      "reason": "the application reads through a mapping, and strace does not show page faults"
+    },
+    {
+      "metric": "popularity",
+      "reason": "the application reads through a mapping, and strace does not show page faults"
+    }
+  ]
+}

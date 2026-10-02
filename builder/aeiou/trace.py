@@ -10,6 +10,10 @@ models, so the two can be compared (`GRAMMAR_OPTIONS.md` §5.4):
     aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
     aeiou dry-run x.ast.json --gpus 1 --metrics-json abstract.metrics.json
     aeiou-trace compare trace.metrics.json abstract.metrics.json
+    aeiou-trace compare trace.metrics.json abstract.metrics.json --judge --self other-seed.metrics.json
+
+`--judge` holds each row to the tolerance of its class (`TOLERANCES` below, `builder/README.md`
+§7), raised by what the abstract differs from itself by at other seeds.
 
 What differs from the dry-run side, because a trace is not an abstract:
 
@@ -946,6 +950,111 @@ def compare(a: dict, b: dict) -> list[tuple[str, str, str, float | None]]:
     return rows
 
 
+# ---------------------------------------------------------------- tolerances
+
+TOLERANCES_FORMAT = 1
+# The largest distance at which a row of `compare` still counts as a match, by the class
+# of the row (the longest of these prefixes of its name). The repository's defaults; a
+# tolerance file may replace any of them. `DESIGN_REVIEW.md` §3.55 has where they come from.
+TOLERANCES = {
+    "mix": 0.05,
+    "ops": 0.05,
+    "request size": 0.05,
+    "run length": 0.10,
+    "reuse": 0.10,
+    "reuse distance": 0.10,
+    "popularity": 0.05,
+    "fan-out": 0.10,
+    "depth": 0.10,
+}
+# A popularity row is the share of accesses that go to the top fraction of the units; it
+# says something only when that fraction is at least this many units on both sides.
+POPULARITY_MIN_UNITS = 10
+_TOP = {"0.1 %": 0.001, "1 %": 0.01, "10 %": 0.1}
+
+
+def tolerance_class(metric: str) -> str:
+    return max((c for c in TOLERANCES if metric.startswith(c)), key=len)
+
+
+def load_tolerances(path: str) -> dict:
+    """A tolerance file: `{"aeiou_tolerances": 1, "tolerances": {class: x},
+    "unseen": [{"metric": prefix, "reason": text}], "outside": [the same]}`. `unseen` names
+    rows the trace cannot show (they are not judged); `outside` records rows known to be
+    outside, with the reason (they are judged, and still outside)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            spec = json.load(f)
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"aeiou-trace: {path}: {e}")
+    if not isinstance(spec, dict) or spec.get("aeiou_tolerances") != TOLERANCES_FORMAT:
+        raise SystemExit(f"aeiou-trace: {path}: not an aeiou_tolerances: {TOLERANCES_FORMAT} document")
+    extra = set(spec) - {"aeiou_tolerances", "tolerances", "unseen", "outside", "comment"}
+    if extra:
+        raise SystemExit(f"aeiou-trace: {path}: unknown key(s) {', '.join(sorted(extra))}")
+    for c, x in spec.get("tolerances", {}).items():
+        if c not in TOLERANCES or not isinstance(x, (int, float)) or isinstance(x, bool) or not 0 <= x <= 1:
+            raise SystemExit(f"aeiou-trace: {path}: tolerances: `{c}` must be one of {', '.join(TOLERANCES)} with a value in [0, 1]")
+    for key in ("unseen", "outside"):
+        for e in spec.get(key, []):
+            if not isinstance(e, dict) or set(e) != {"metric", "reason"} or not all(isinstance(v, str) and v for v in e.values()):
+                raise SystemExit(f"aeiou-trace: {path}: {key}: each entry is {{\"metric\": prefix, \"reason\": text}}")
+    return spec
+
+
+def judge(rows, a: dict, b: dict, docs=(), selfs=(), spec: dict | None = None):
+    """Rows `(metric, a, b, distance, allowed, verdict, note)` for the rows of `compare(a, b)`.
+    `allowed` is the class tolerance plus the largest distance of that row between `b` and
+    each of `selfs` (the same abstract at other seeds: what the abstract differs from itself
+    by). Verdicts: `ok`, `outside`, `unseen` (the tolerance file says the trace cannot show
+    it), `not judged` (nothing on either side, too few units for a popularity share, or a
+    depth without `--chain-gap-us`). Also returns the entries of the file that matched no
+    row, or recorded as outside a row that is not."""
+    spec = spec or {}
+    tol = {**TOLERANCES, **spec.get("tolerances", {})}
+    spread: dict[str, float] = {}
+    for s in selfs:
+        for name, _, _, dist in compare(b, s):
+            spread[name] = max(spread.get(name, 0.0), dist or 0.0)
+    no_depth = any(d.get("source") == "strace" and d.get("chain_gap_us") is None for d in docs)
+    used = set()
+
+    def listed(key, name):
+        for i, e in enumerate(spec.get(key, [])):
+            if name.startswith(e["metric"]):
+                used.add((key, i))
+                return e["reason"]
+        return None
+
+    out = []
+    for name, va, vb, dist in rows:
+        allowed = tol[tolerance_class(name)] + spread.get(name, 0.0)
+        why = listed("unseen", name)
+        if why is not None:
+            out.append((name, va, vb, dist, None, "unseen", why))
+            continue
+        if dist is None:
+            out.append((name, va, vb, dist, None, "not judged", "nothing on either side"))
+            continue
+        if name.startswith("popularity"):
+            unit, top = name.split(":")[0].split(", ")[1], name.rsplit("top ", 1)[1]
+            fewest = min(a[f"popularity_{unit}"]["distinct"], b[f"popularity_{unit}"]["distinct"])
+            if fewest * _TOP[top] < POPULARITY_MIN_UNITS:
+                out.append((name, va, vb, dist, None, "not judged", f"the top {top} of {fewest} {unit} is fewer than {POPULARITY_MIN_UNITS}"))
+                continue
+        if name == "depth" and no_depth:
+            out.append((name, va, vb, dist, None, "not judged", "the trace was read without --chain-gap-us"))
+            continue
+        why = listed("outside", name)
+        if dist <= allowed:
+            out.append((name, va, vb, dist, allowed, "ok", "recorded as outside, now within" if why is not None else ""))
+        else:
+            out.append((name, va, vb, dist, allowed, "outside", why or ""))
+    stale = [f"{key}: `{e['metric']}` matches no row" for key in ("unseen", "outside") for i, e in enumerate(spec.get(key, [])) if (key, i) not in used]
+    stale += [f"outside: `{r[0]}` is recorded as outside and is within" for r in out if r[5] == "ok" and r[6]]
+    return out, stale
+
+
 # ---------------------------------------------------------------- CLI
 
 
@@ -974,7 +1083,10 @@ def main(argv=None) -> int:
     cp.add_argument("b")
     cp.add_argument("--template-a", metavar="NAME", help="use this actor template's metrics of A instead of its total")
     cp.add_argument("--template-b", metavar="NAME", help="use this actor template's metrics of B instead of its total")
-    cp.add_argument("--max-distance", type=float, metavar="X", help="exit 1 if any distance exceeds X (no default: tolerances are not part of this tool)")
+    cp.add_argument("--max-distance", type=float, metavar="X", help="exit 1 if any distance exceeds X (one number for every row; --judge is the rule by class)")
+    cp.add_argument("--judge", action="store_true", help="judge each row against the tolerance of its class (A the trace, B the abstract) and exit 1 if any is outside")
+    cp.add_argument("--tolerances", metavar="FILE", help="a tolerance file (aeiou_tolerances: 1): class tolerances that replace the defaults, the rows the trace cannot show, the rows recorded as outside; implies --judge")
+    cp.add_argument("--self", dest="selfs", action="append", default=[], metavar="FILE", help="a metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge")
     cp.add_argument("--only", action="append", default=[], metavar="PREFIX", help="only the rows whose metric starts with PREFIX (repeatable)")
     args = ap.parse_args(argv)
 
@@ -1009,11 +1121,14 @@ def main(argv=None) -> int:
         docs.append(d)
     if docs[0]["block"] != docs[1]["block"]:
         raise SystemExit(f"aeiou-trace: block sizes differ ({docs[0]['block']} and {docs[1]['block']}): reuse distance and block popularity are not comparable")
-    rows = compare(select(docs[0], args.template_a), select(docs[1], args.template_b))
+    a, b = select(docs[0], args.template_a), select(docs[1], args.template_b)
+    rows = compare(a, b)
     if args.only:
         rows = [r for r in rows if any(r[0].startswith(p) for p in args.only)]
     print(f"A: {args.a}: {_describe(docs[0])}")
     print(f"B: {args.b}: {_describe(docs[1])}")
+    if args.judge or args.tolerances or args.selfs:
+        return _judged(args, rows, a, b, docs)
     w = [max(len(r[i]) for r in rows + [("metric", "A", "B", 0)]) for i in range(3)]
     print(f"{'metric':<{w[0]}}  {'A':>{w[1]}}  {'B':>{w[2]}}  distance")
     worst = 0.0
@@ -1027,6 +1142,44 @@ def main(argv=None) -> int:
         return 1
     return 0
 
+
+def _judged(args, rows, a, b, docs) -> int:
+    if args.max_distance is not None:
+        raise SystemExit("aeiou-trace: --max-distance and --judge are two rules; give one")
+    selfs = []
+    for path in args.selfs:
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"aeiou-trace: {path}: {e}")
+        if not isinstance(d, dict) or d.get("aeiou_metrics") != FORMAT:
+            raise SystemExit(f"aeiou-trace: {path}: not an aeiou_metrics: {FORMAT} document")
+        for key in ("source", "sha256", "gpus", "block", "sample"):
+            if d.get(key) != docs[1].get(key):
+                raise SystemExit(f"aeiou-trace: {path}: --self is B's abstract at another seed, and its `{key}` is not B's ({d.get(key)} and {docs[1].get(key)})")
+        if d.get("seed") == docs[1].get("seed"):
+            raise SystemExit(f"aeiou-trace: {path}: --self has B's seed ({d.get('seed')}); another seed is the point")
+        print(f"self: {path}: seed {d.get('seed')}")
+        selfs.append(select(d, args.template_b))
+    spec = load_tolerances(args.tolerances) if args.tolerances else None
+    judged, stale = judge(rows, a, b, docs, selfs, spec)
+    w = [max(len(r[i]) for r in rows + [("metric", "A", "B", 0)]) for i in range(3)]
+    print(f"{'metric':<{w[0]}}  {'A':>{w[1]}}  {'B':>{w[2]}}  distance  allowed  verdict")
+    for name, va, vb, dist, allowed, verdict, note in judged:
+        print(f"{name:<{w[0]}}  {va:>{w[1]}}  {vb:>{w[2]}}  {'-' if dist is None else f'{dist:.3f}':>8}  {'-' if allowed is None else f'{allowed:.3f}':>7}  {verdict.upper() if verdict == 'outside' else verdict}{f' ({note})' if note else ''}")
+    n = Counter(r[5] for r in judged)
+    for line in stale:
+        print(f"note: {line}")
+    counts = f"{n['ok']} row(s) within tolerance, {n['outside']} outside, {n['unseen']} unseen, {n['not judged']} not judged"
+    if n["outside"]:
+        print(f"not accepted: {counts}")
+        return 1
+    if not n["ok"]:
+        print(f"nothing judged: {counts}")
+        return 1
+    print(f"accepted: {counts}")
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())
