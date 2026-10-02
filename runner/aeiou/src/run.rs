@@ -1,5 +1,7 @@
 //! `aeiou run`: execute an abstract against a directory with a blocking backend. One OS thread
-//! per actor instance, one per loader worker, one per `parallel` sub-actor (the `sync`
+//! per actor instance, one per loader worker, one per `parallel` sub-actor, the last kept in a
+//! pool by the actor that forks them (`Pool`) so a `parallel` inside a loop does not spawn its
+//! threads afresh on every iteration (the `sync`
 //! fidelity reference of `PROJECT_BRIEF.md` §5, *Backend order*: literally what a PyTorch
 //! worker does). The VM of `vm.rs` walks the body; this module is its `Sink`: it issues each
 //! op through the backend, times it, checks the result structurally (byte counts, expected
@@ -19,6 +21,7 @@ use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -989,6 +992,70 @@ pub(crate) fn fill(a: &mut ActorState, op: &Op, buf: &mut [u8]) {
 
 // ---------------------------------------------------------------- the sink
 
+/// One `parallel` sub-actor for a pool thread: where the parent stood at the fork, which
+/// sub-actor of the fork this is, and its state (it sees the files the parent had open).
+struct Job {
+    snap: Snapshot<'static, 'static>,
+    k: i64,
+    a: ActorState,
+    done: mpsc::Sender<(i64, Result<()>, Stats)>,
+}
+
+/// An actor's `parallel` sub-actor threads, kept between forks. Sub-actor `k` of a fork
+/// always runs on pool thread `k` (the assignment is positional; there is no shared queue),
+/// and the pool grows to the widest fork the actor has issued. A thread keeps its two buffer
+/// rings and, when its sub-actors fork in turn, its own pool; the backend and the file table
+/// are new for every sub-actor, as they were when the thread was. Threads idle in `recv`
+/// between forks and end with the actor that owns the pool.
+#[derive(Default)]
+struct Pool {
+    workers: Vec<(mpsc::Sender<Job>, JoinHandle<()>)>,
+}
+
+impl Pool {
+    /// Grow to `width` threads; returns how many were spawned.
+    fn grow(&mut self, width: usize, sh: &Arc<Shared>, inst: &Arc<Instance>, template: &'static str, actor: i64) -> u64 {
+        let mut spawned = 0;
+        while self.workers.len() < width {
+            let (tx, rx) = mpsc::channel::<Job>();
+            let (sh, inst) = (sh.clone(), inst.clone());
+            let h = std::thread::Builder::new()
+                .name(format!("{template}#{actor} sub {}", self.workers.len()))
+                .spawn(move || {
+                    let buf = sh.opts.buffer_bytes;
+                    let (mut rbuf, mut wbuf, mut pool) = (Ring::new(buf), Ring::new(buf), Pool::default());
+                    while let Ok(Job { snap, k, a, done }) = rx.recv() {
+                        let mut sink = Runner { sh: sh.clone(), inst: inst.clone(), be: sh.backend(), rbuf, wbuf, a, pool };
+                        let mut vm = Vm::resume(snap);
+                        vm.start_sub(k);
+                        let r = drive(&mut vm, &mut sink).and_then(|_| sink.finish());
+                        if r.is_err() {
+                            sh.aborted.store(true, Ordering::Relaxed);
+                        }
+                        let st = std::mem::take(&mut sink.a.st);
+                        // the sub-actor's files and backend end here, before the parent's join
+                        let Runner { rbuf: rb, wbuf: wb, pool: pl, .. } = sink;
+                        (rbuf, wbuf, pool) = (rb, wb, pl);
+                        let _ = done.send((k, r, st));
+                    }
+                })
+                .expect("spawn");
+            self.workers.push((tx, h));
+            spawned += 1;
+        }
+        spawned
+    }
+}
+
+impl Drop for Pool {
+    fn drop(&mut self) {
+        for (tx, h) in self.workers.drain(..) {
+            drop(tx);
+            let _ = h.join();
+        }
+    }
+}
+
 pub struct Runner {
     sh: Arc<Shared>,
     inst: Arc<Instance>,
@@ -996,6 +1063,7 @@ pub struct Runner {
     rbuf: Ring,
     wbuf: Ring,
     a: ActorState,
+    pool: Pool,
 }
 
 impl Runner {
@@ -1003,7 +1071,7 @@ impl Runner {
         let be = sh.backend();
         let buf = sh.opts.buffer_bytes;
         let a = ActorState::new(&sh, template, actor, main, inherited, 1);
-        Runner { sh, inst, be, rbuf: Ring::new(buf), wbuf: Ring::new(buf), a }
+        Runner { sh, inst, be, rbuf: Ring::new(buf), wbuf: Ring::new(buf), a, pool: Pool::default() }
     }
 
     fn child(&self) -> Runner {
@@ -1086,25 +1154,22 @@ impl Sink<'static, 'static> for Runner {
         let snap = snapshot();
         match *kind {
             ForkKind::Parallel { index, width } => {
-                let mut handles = Vec::with_capacity(width as usize);
-                for k in 0..width {
-                    let label = format!("{}#{} {index}={k}", self.a.template, self.a.actor);
-                    handles.push(self.spawn_sub(snap.clone(), label, move |vm, sink| {
-                        vm.start_sub(k);
-                        drive(vm, sink)
-                    }));
+                let width = width.max(0) as usize;
+                self.a.st.threads += self.pool.grow(width, &self.sh, &self.inst, self.a.template, self.a.actor);
+                let (done, results) = mpsc::channel();
+                for (k, (tx, _)) in self.pool.workers.iter().take(width).enumerate() {
+                    let job = Job { snap: snap.clone(), k: k as i64, a: self.a.child(&self.sh, 0), done: done.clone() };
+                    tx.send(job).map_err(|_| anyhow!("a `{index}` sub-actor thread has ended (an earlier sub-actor panicked)"))?;
                 }
-                let mut first_err = None;
-                for h in handles {
-                    let (r, st) = h.join().map_err(|_| anyhow!("a `{index}` sub-actor panicked"))?;
+                drop(done);
+                let mut errs: Vec<Option<anyhow::Error>> = (0..width).map(|_| None).collect();
+                for _ in 0..width {
+                    // every sender gone before `width` results: a thread died with its job
+                    let (k, r, st) = results.recv().map_err(|_| anyhow!("a `{index}` sub-actor panicked"))?;
                     self.a.st.merge(&st);
-                    if let Err(e) = r {
-                        if first_err.is_none() {
-                            first_err = Some(e);
-                        }
-                    }
+                    errs[k as usize] = r.err();
                 }
-                match first_err {
+                match errs.into_iter().flatten().next() {
                     Some(e) => Err(e),
                     None => Ok(true),
                 }

@@ -199,6 +199,11 @@ fn regions_dataset_nested_parallel_and_direct_reads() {
     assert_eq!(r.stats.fingerprint, fp);
     assert_eq!(r.stats.ops, ops);
     assert_eq!(r.stats.bytes_read, bytes);
+    // the sub-actor pool: one thread for the instance, `threads` for the outer `parallel`,
+    // and under each of those `beam` kept across every hop of every query, not `beam` per hop
+    let beam: u64 = 4;
+    assert!(ops > 2 * 6 * 2 * beam, "several hops per query: {ops} ops");
+    assert_eq!(r.stats.threads, 1 + 2 + 2 * beam);
     std::fs::remove_dir_all(&root).unwrap();
 }
 
