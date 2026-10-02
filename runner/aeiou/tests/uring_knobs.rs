@@ -114,6 +114,10 @@ fn io_uring_knobs_keep_the_fingerprint() {
         let mut o = opts(&root, BackendKind::Uring);
         o.threads = loops as usize;
         o.uring = k.clone();
+        // the thread counts below come from a 10 ms sampler, which sees a ring's threads only
+        // while the ring exists: scale the steps' compute so a row lasts several periods
+        // (10 steps of 105 ms × 0.05), however fast the host reads 300 small files
+        o.time_scale = 0.05;
         let r = match run::run(model, o, std::collections::HashMap::new()) {
             Ok(r) => r,
             Err(e) if format!("{e:#}").contains("io_uring_setup") => {
