@@ -326,6 +326,9 @@ items in the sorted order of their names and that an item's cost depends on wher
 buffer was left; the restore carries the buffer's start as a chain since (§3.48, decided
 2026-10-01), and `traces/ckpt_restore/params.py` makes the parameter file from a real
 checkpoint's `.metadata`.
+`traces/vdb_search_ivf` is row 6: FAISS `IndexIVFPQ` over `OnDiskInvertedLists`, which maps
+the lists file and issues no call on it; its `faults.py` measures with `mincore` what the
+trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, not yet confirmed).
 
 **The application's API is declared in the script** (contract 0.3, 2026-10-01):
 `Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`

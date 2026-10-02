@@ -2166,6 +2166,74 @@ when its library changes.
   or several: 1,650 against 2,700 READs, §3.47); `rec2` and `tail_back` for a small item
   at the end of the file; an item within 4 KiB above the buffer size.
 
+### 3.49 The sixth row: FAISS IVF over `OnDiskInvertedLists` (added 2026-10-01)
+
+Row 6 of the capture plan. Kit in `builder/traces/vdb_search_ivf`, findings in `ABSTRACTS.md`
+§6. The draft had the right shape (per query, `nprobe` whole lists, no dependency between
+them) and the wrong API: its **[verify]** said a thread pool issues `pread`s, and FAISS
+issues nothing at all on the lists file after mapping it. **The choices below were made
+while building and are not yet confirmed by the user.**
+
+**What `strace` could and could not give.** The trace has `read_index` (seven reads of the
+index file, the lists file opened read-write and mapped shared, no advice) and the threads
+(32 new prefetch threads per slice per search call). It has nothing of the lists. The rest
+came from the index and from the kernel: list offsets and sizes through the Python binding,
+the probed lists from the coarse quantizer, the touched pages from `mincore` on a second
+mapping after a cold search, the wire from the mount's READ counters (`faults.py`). Every
+page of every probed list was resident, none missing, on 1, 20, and 200 queries.
+
+**Choices.**
+
+- **The abstract declares `mmap`** (contract 0.3, §3.48). This is the second abstract whose
+  application never calls `read` on its data.
+- **Two reads per list, the ids first.** The prefetch thread sums a list's ids and then its
+  codes, and a list on storage is its codes followed by its ids, so the first fault lands
+  four fifths into the list. The kernel's read-around window on a mapping is centred on the
+  fault (`read_ahead_kb` 128 here), and from that point one window covers the typical 36 KB
+  list; from the list's start it does not, and a second window follows. Measured cold, one
+  query, 64 lists: FAISS 62 READs and 7.5 MiB; the abstract with one read per list from its
+  start 109 to 112 READs and 12.9 to 13.5 MiB; with the ids first, 71 READs and 8.7 MiB,
+  the index file's 0.65 MiB included. The order is the application's and costs one `let`
+  and one read; `code_size` became a parameter for it.
+- **Only the prefetch is issued.** The slice's thread scans the same lists while the
+  prefetch runs; whichever arrives first faults. The abstract issues the prefetch's touches
+  and then the scan as `compute`, so a call is the fan-out followed by the scan time, where
+  in FAISS they overlap. Issuing both would double the reads for pages already asked for.
+- **A prefetch thread's lists are a fixed share** (`batch × nprobe / prefetch` each). FAISS's
+  threads pull from a queue, which is work distributed by timing and so not expressible
+  here by rule; the multiset of lists is the same.
+- **The index file is a second dataset with its read lengths as a parameter array.** The
+  lengths are stdio's arithmetic over the three large arrays in the file; `params.py` takes
+  them from the trace. The defaults are the same pattern scaled to a million lists of 128
+  dimensions (528 MiB, mostly centroids).
+- **`RDONLY` where FAISS opens `O_RDWR`.** A dataset is read-only (V12), and FAISS writes
+  nothing in a search. On NFS the share access of the OPEN differs; nothing else was seen
+  to. FAISS has a read-only flag that an application may set.
+- **Defaults moved to what SIFT1M shows:** sigma 0.4 for list bytes (was 0.9), Zipf `s` 0.2
+  for popularity (was 0.8). One corpus, with its own query set, and a small index (1,024
+  lists); a corpus whose queries are concentrated would give another `s`, which is what
+  the parameter is for. `queries` became `calls` and `batch`, since the batch decides the
+  slices and the prefetch width.
+- **Thread creation is not modeled.** 32 `clone3` per slice per call is CPU, not storage.
+
+**What the abstract does not carry, measured.**
+
+- **Read-around in a packed file lands on other lists.** 20 queries, cold: FAISS 435 READs
+  and 37 MiB for 23 MiB of distinct lists, in a 40 MB file that the 20 queries probe 59 %
+  of; the abstract 764 to 778 READs and 94 MiB, in a 256 MiB file of slots where a window
+  around a list reads padding. At one query the two agree (62 against about 66), so the gap
+  is the small real file saturating. It should close when the lists file is much larger
+  than what a run touches, and that case is not measured: SIFT1M is the largest corpus
+  tried. The slot layout stays (§3.18, the naive layout on purpose); this is its cost
+  under a mapping, recorded.
+- **Draws are independent.** Real queries share lists (607 distinct in 1,280 probes, where
+  independent draws at this popularity give about 730), and larger lists are probed more
+  (5.7 % more bytes per query than `nprobe` mean lists). Both could be fitted with `x @ i`
+  or a joint distribution if a tolerance later says they matter.
+- **Under `sync` the same ops cost 1,486 READs and 30 MiB** for the 20 queries: no
+  read-around, about one READ per list part not yet in the page cache. It is another workload (§3.48), listed for the size of the difference the backend
+  declaration guards against.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -2203,7 +2271,7 @@ when its library changes.
   definitions decided (§3.39). ~~Next: the `RLIMIT`
   checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
-  can be traced.
+  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); rows 5, 7, and 8 remain.
 
 ## 5. Things reviewed and left as-is
 

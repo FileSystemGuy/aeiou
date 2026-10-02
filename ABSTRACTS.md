@@ -806,51 +806,105 @@ bound outside a `parallel` and shared by its sub-actors.
 
 **Real application.** FAISS `IndexIVF` with `OnDiskInvertedLists`: the coarse quantizer is in
 memory; a query selects `nprobe` lists, and each list's codes and ids are read as one contiguous
-region of the inverted-lists file (FAISS `mmap`s the file; a prefetch mode issues `pread`s
-from a thread pool **[verify]**). List sizes are skewed (imbalance factors of 1.2–3 are common),
+region of the inverted-lists file (FAISS `mmap`s the file; ~~a prefetch mode issues `pread`s
+from a thread pool **[verify]**~~ a pool of prefetch threads touches the mapped lists and
+issues no call: traced 2026-10-01, below). List sizes are skewed (imbalance factors of 1.2–3 are common),
 and list popularity is skewed because queries follow the data distribution.
 
-**Abstract.**
+**Abstract.** (Rewritten 2026-10-01 from the trace; the draft is in the history of this file.)
 
 ```
-workload vdb_search_ivf {
-  param threads = 32, queries = 100_000
-  param nprobe  = 64
-  param list_pop = zipf(s = 0.8)               # list popularity [measure]
-  param distance = 400us                        # [measure]
+workload vdb_search_ivf backend mmap {
+  param threads = 32, calls = 100_000, batch = 1     # OpenMP slices; queries per slice per call
+  param nprobe  = 64, prefetch = 32                   # prefetch threads per slice (traced)
+  param list_pop = zipf(s = 0.2)                      # measured on SIFT1M
+  param distance = 400us                              # [measure]
+  param code_size = 32                                # PQ32; an id is 8 more
+  param index_reads = [8192, 512MiB - 8192, 8192, 120KiB, 8192, 16MiB - 8192, 8192]
 
-  dataset lists = regions(file = "ivf/invlists.bin", count = 1_000_000,
-                          slot = 256KiB,                       # ≥ p99 list size
-                          size = lognormal(median = 40KiB, sigma = 0.9),   # codes+ids [measure]
+  dataset lists = regions(file = "ivf/merged_index.ivfdata", count = 1_000_000,
+                          slot = 256KiB,                       # ≥ the largest list
+                          size = lognormal(median = 40KiB, sigma = 0.4),   # sigma measured on SIFT1M
                           seed = 0x5eed_da7e)
+  dataset index = files("index/populated-{id}.index", count = 1, size = 528MiB + 128KiB + 276)
 
-  per gpu {
-    parallel(threads) {
-      let f = file(lists), open(f, RDONLY),
-      for q in $queries {
-        parallel($nprobe) {
-          let c = pick(lists, dist = $list_pop)
-          read(f, offset = offset(c), size(c))                  # one sequential run per list
+  per gpu {                                           # one searching process
+    let i = file(index, 0), open(i, RDONLY), fstat(i),
+    for r in len($index_reads) { read(i, $index_reads[r]) },      # stdio; the last is short
+    let f = file(lists), open(f, RDONLY),             # mapped whole
+    close(i),
+    for q in $calls {
+      parallel($threads) {                            # a slice of the batch
+        parallel($prefetch) {
+          for k in $batch * $nprobe / $prefetch {
+            let c = pick(lists, dist = $list_pop)
+            let ids = size(c) * 8 / ($code_size + 8)
+            read(f, offset = offset(c) + size(c) - ids, ids)      # the ids, at the list's end
+            read(f, offset = offset(c), size(c) - ids)            # then the codes
+          }
         }
-        compute($distance)
-      },
-      close(f)
-    }
+        compute($distance * $batch)                   # the scan
+      }
+    },
+    close(f)
   }
 }
 ```
 
-**Cuts.** The real file packs lists back to back; `regions` with fixed slots pads each list to
-`slot`, so addresses are spaced differently while sizes and popularity are identical (§9.6). For
-`nprobe` random lists out of a million this changes nothing a prefetcher could use; it would
-matter only for a scan.
+**Trace (2026-10-01).** faiss-cpu 1.15.1, `IndexIVFPQ` built as `IVF1024,PQ32` over SIFT1M by
+the documented route (shard indexes, then `merge_ondisk`), searched with `nprobe = 64` on the
+loopback NFS mount; kit in `builder/traces/vdb_search_ivf`, reasoning in `DESIGN_REVIEW.md`
+§3.49.
 
-**What it stresses.** Medium-sized (tens to hundreds of KiB) reads with a Zipf popularity, so
-server and client caching are legitimately rewarded; fan-out `nprobe` with no dependency
-between the reads. With `--io-backend mmap` it is FAISS's real path.
+- **`read_index` reads the index file and maps the lists file.** `open`, `fstat`, seven
+  `read`s of the 680,212-byte index file (stdio: 8,192-byte fills, and the bulk of each
+  large array, the centroids, the codebooks, the table of list offsets, in one direct read
+  each), then `open(O_RDWR)`, `mmap(PROT_READ|PROT_WRITE, MAP_SHARED)` of the whole lists
+  file, and `close`. No `madvise`, no `fadvise`. Read-only flags exist
+  (`IO_FLAG_READ_ONLY`) and are not the default.
+- **A search issues no call on the lists file.** The abstract's op counts equal the trace's
+  but for the reads through the mapping, which `strace` cannot see.
+- **Every probed list is touched whole.** `mincore` after a cold search: every page of every
+  list the quantizer selected is resident (693 pages for one query, 2.6 MB), with the
+  kernel's read-around on top (1,923 pages resident).
+- **Threads.** A `search` call of `n` queries runs `min(OpenMP threads, n)` slices, and each
+  slice starts `min(32, its queries × nprobe)` prefetch threads, new at every call, which
+  take lists from a queue and sum each list's ids, then its codes, while the slice's thread
+  scans.
+- **The order within a list matters on the wire.** A list is its codes followed by its ids.
+  The first touch lands at the ids, four fifths into the list, and the kernel's read-around
+  window, centred on the fault, covers the typical list in one READ: 62 READs for 64 lists.
+  Touching each list from its start costs 109.
+- **Lists are packed back to back in list order, capacity equal to size** after
+  `merge_ondisk`. Sizes on SIFT1M: median 35.9 KB, mean 39.1 KB, largest 176 KB, log-normal
+  sigma 0.39 (the draft had 0.9).
+- **Popularity is nearly flat on SIFT1M.** Over its 10,000 queries the most probed tenth of
+  the lists takes 18 % of the probes; a Zipf fit gives `s` of 0.20 to 0.25 (the draft had
+  0.8). Larger lists are probed more (correlation 0.31 at `nprobe` 64), which the abstract's
+  independent draws do not carry: a real query reads 5.7 % more bytes than `nprobe` mean lists.
+
+**Cuts.** The real file packs lists back to back; `regions` with fixed slots pads each list to
+`slot`, so addresses are spaced differently while sizes and popularity are identical (§9.6). ~~For
+`nprobe` random lists out of a million this changes nothing a prefetcher could use; it would
+matter only for a scan.~~ Under a mapping the kernel reads around every fault, and in the
+packed file what it reads around a list is other lists: on the 40 MB traced file, 20 queries
+cost FAISS 435 READs and 37 MiB, and the abstract 770 READs and 94 MiB, where one query costs
+62 against about 66 (2026-10-01). The gap is the small file filling up, and it should close
+as the lists file grows past what the queries touch; that is not measured yet. The open is
+`RDONLY` where FAISS opens read-write (a dataset is read-only, V12). The scan's own touches
+are not issued: the prefetch has the same pages. A prefetch thread's lists are a fixed share,
+where FAISS's threads take them from a queue. A query's lists are independent draws: no
+correlation between consecutive queries (the 20 traced queries probe 607 distinct lists
+where independent draws would probe about 730), none between size and popularity.
+
+**What it stresses.** Medium-sized (tens to hundreds of KiB) reads ~~with a Zipf popularity,
+so server and client caching are legitimately rewarded~~ with a mild popularity skew; fan-out `nprobe` with no dependency
+between the reads, 32 wide per slice. ~~With `--io-backend mmap` it is FAISS's real path.~~
+The abstract declares `mmap`, FAISS's own path: page faults, and the client's read-around
+policy on a mapping, are what the storage sees.
 
 **Constructs used.** `regions` with a size distribution; `pick` with `zipf`; `size(c)` and
-`offset(c)` on a region.
+`offset(c)` on a region; nested `parallel`; a parameter array for the index file's reads.
 
 ---
 
@@ -1306,7 +1360,7 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 | §3 checkpoint write (**traced 2026-10-01**, §3 "Trace") | `torch.distributed.checkpoint.save` on 2 ranks; `torch.save` on 1 | `mkdir` result per rank; write sizes per item and the coalesced small-record size; `fsync` presence; `.metadata` size and the `rename` |
 | §4 restore / load (**traced 2026-10-01**, §4 "Trace"; the fault pattern of a GPU engine still open) | `dcp.load`; `AutoModel.from_pretrained` with `safetensors` | per-item `lseek`/`read` pairs; header read lengths; `mmap` and fault pattern (`perf trace -F` or `/proc/PID/smaps` deltas) |
 | §5 DiskANN | `search_disk_index` on a 10M-point index, `beam_width=4` | `io_submit` batch sizes (= beam), rounds per query (hops), offset histogram (hub concentration), node-cache size |
-| §6 IVF | FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe=64` | list size distribution (from the index), list popularity over a query set, `pread` vs page-fault path |
+| §6 IVF (**traced 2026-10-01**, §6 "Trace") | FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe=64` | list size distribution (from the index), list popularity over a query set, `pread` vs page-fault path |
 | §7 index build | DiskANN `build_disk_index` at 1M points | phase boundaries, read chunk sizes, sample-phase read pattern, layout write sizes |
 | §8 KV cache | vLLM + LMCache with the local-disk or shared-fs backend, a chat replay (ShareGPT) | objects per chunk, object size, `stat` lookups, reuse-distance and prompt-length distributions, hit-length vs derived-length agreement |
 

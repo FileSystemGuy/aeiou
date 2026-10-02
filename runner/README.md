@@ -490,7 +490,7 @@ parameters, each three times: `sync` with a cold client cache, `sync` again, and
 | kv_cache_serving (1) | 1,144; 162 reads, 115 writes, 34 mkdirs | 14 READ, 116 WRITE (28.8 MiB), 117 OPEN, 34 CREATE | 0 READ, 116 WRITE | 162 READ, 116 WRITE, 120 CLOSE |
 | model_load (2) (the abstract before its 2026-10-01 correction, which added the small files, the second open and the `fadvise`; `ABSTRACTS.md` §4 has the wire numbers of the traced one) | 88; 76 reads, 4.1 MiB | 53 READ | 0 READ, 5 GETATTR | 76 READ (one per read) |
 | vdb_search_diskann (1) | 244; 240 reads of 4 KiB | 241 READ | 240 READ | 240 READ |
-| vdb_search_ivf (1) | 36; 32 reads, 1.8 MiB | 28 READ | 0 READ | 32 READ (one per read) |
+| vdb_search_ivf (1) (the abstract before its 2026-10-01 correction, which added the index file, the prefetch fan-out and the `mmap` declaration; `ABSTRACTS.md` §6 has the wire numbers of the traced one) | 36; 32 reads, 1.8 MiB | 28 READ | 0 READ | 32 READ (one per read) |
 | vdb_build_diskann (1) | 386; 106 reads, 262 writes, 7 MiB | 139 READ, 8 WRITE, 1 COMMIT | 0 READ, 8 WRITE, 1 COMMIT | 106 READ, 263 WRITE, 0 COMMIT |
 | ckpt_write_dcp (2) (the abstract before its 2026-10-01 rewrite; the traced one has unaligned writes and no direct column) | 70; 34 writes, 21.1 MiB | 27 WRITE, 4 COMMIT, 3 RENAME | same | 39 WRITE (21.1 MiB direct), 4 COMMIT |
 | ckpt_restore (2), after the write on this client (the abstract before its 2026-10-01 rewrite: two reads per item, where the traced reader issues six and 34 seeks) | 36; 20 reads, 18.1 MiB | **0 READ**: all 18.1 MiB from the client's page cache | 0 READ | 30 READ (18.2 MiB from the server) |
