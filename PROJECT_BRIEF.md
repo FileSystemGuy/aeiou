@@ -289,8 +289,8 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     **Second, 2026-10-01** (`ABSTRACTS.md` §2 "Trace", `DESIGN_REVIEW.md` §3.44,
     `builder/traces/train_large_samples`): `np.load(...)["x"]` as DLIO issues it. The
     drafted abstract was wrong in shape (two members, header reads, no read at 0) and was
-    rewritten from the trace; largest distance 0.040 on a 256-file corpus. Choices not yet
-    confirmed. Still
+    rewritten from the trace; largest distance 0.040 on a 256-file corpus. Explicit seeks
+    confirmed by the user (**decided 2026-10-01**); the other choices not yet. Still
     to do: the other six rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,

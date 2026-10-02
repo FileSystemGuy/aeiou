@@ -1899,7 +1899,8 @@ Row 2 of the capture plan: `np.load(path, allow_pickle=True)["x"]`, the call in 
 `npz_generator.py` writes them (`np.savez(x=volume, y=labels)`). Kit in
 `builder/traces/train_large_samples`, findings in `ABSTRACTS.md` §2. Unlike §3.43, where
 the draft was one call short, here the draft was wrong in shape. **The choices below were
-made while building and are not yet confirmed by the user.**
+made while building. The user confirmed the explicit seeks (decided 2026-10-01); the
+others are not yet confirmed.**
 
 - **What the draft had wrong.** Two members of equal size, each found by a read of its
   local header and then read from a re-seeked offset; no read at offset 0 before the tail;
@@ -1917,6 +1918,16 @@ made while building and are not yet confirmed by the user.**
   application's, so the seeks are in it. *Against:* 80 % of the abstract's ops now do
   nothing on any storage. They are kept because client CPU per byte is part of what this
   workload measures, and a backend is charged what the application does.
+  **Decided 2026-10-01** after the user asked whether the seeks spend client CPU that
+  more virtual GPUs could use. Measured on warm local files, 4.43 GiB read, `sync`:
+  18,382 seeks cost 0.57 s of runner CPU in two runs, 4,872 seeks (`np_chunk = xfer`)
+  cost 0.65 s and 0.54 s. The 13,500 seeks are below the noise; the CPU is the copy. On
+  the authoring side explicit seeks make the per-file skeleton mechanical (one line per
+  distinct call, no position tracking by hand, and the op mix is checked by `compare`)
+  and make the count rules somewhat more work (position queries tied to a library's
+  chunking need their own loop). The abstract stays compact either way: 15 op lines for
+  a trace of 23,000 calls. If a workload ever is seek-bound, the saving belongs in a
+  runner option, which changes the op stream and is its own decision.
 - **The seek count is exact, by two loops.** Whole buffer fills carry four seeks each; the
   remainder of the reads and of the seeks follow. The order inside the last megabyte
   differs from the application's (reads, then seeks); the counts per file are equal for

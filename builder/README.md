@@ -315,7 +315,7 @@ trace's metrics document. The trace corrected the abstract (a second `lseek` per
 at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reasoning in
 `DESIGN_REVIEW.md` §3.43 (decided 2026-10-01). `traces/train_large_samples` is row 2,
 `np.load(...)["x"]` as DLIO issues it: that abstract was rewritten from its trace
-(`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44, not yet confirmed by the user).
+(`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44; explicit seeks decided 2026-10-01, the rest not yet confirmed).
 
 ## 8. Not yet
 
