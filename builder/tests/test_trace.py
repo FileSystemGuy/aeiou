@@ -381,6 +381,7 @@ def test_model_load_abstract_matches_the_trace_of_from_pretrained(tmp_path):
     assert t["stat"] - d["stat"] == 25           # not modeled: directories (the model's 12 times, the two above each shard), a second stat of two JSON files, the probe for an unsharded model.safetensors
 
 
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_ivf_abstract_matches_the_trace_of_faiss_search(tmp_path):
     """`builder/traces/vdb_search_ivf`: `faiss.read_index` and 20 searches over
     `OnDiskInvertedLists`, traced 2026-10-01. FAISS maps the lists file and issues no call on
