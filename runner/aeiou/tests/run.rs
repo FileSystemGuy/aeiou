@@ -443,7 +443,9 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
         }
         // the mapping under each mode and each way of consuming a range: the two advising
         // modes call madvise once per read; `touch` reads a byte of every page of every
-        // read (these are 4 KiB reads at 4 KiB offsets: one page each) and copies nothing,
+        // read (the sector reads are 4 KiB at 4 KiB offsets: one page each; the load's stream
+        // reads are 8,191 bytes of the PQ file, two pages, the rest of it, 195, and 8,191
+        // bytes of the index) and copies nothing,
         // except under `populate`, which leaves nothing to touch; `copy` copies every byte
         for mode in [MmapMode::Fault, MmapMode::Populate, MmapMode::WillNeed] {
             for consume in [MmapConsume::Touch, MmapConsume::Copy] {
@@ -455,15 +457,16 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
                 assert_eq!(r.stats.bytes_read, bytes, "{mode:?} {consume:?}");
                 let m = r.mmap.as_ref().unwrap();
                 assert_eq!((m.mode, m.consume), (mode, consume), "{m:?}");
-                // one mapping per open, whoever reads: each of the 2 × 2 search threads opens
-                // the index and only its beam sub-actors read it, through the one mapping
-                assert_eq!((m.maps, m.mapped_bytes), (4, 4 * 5000 * 4096), "{m:?}");
+                // one mapping per open, whoever reads: each of the 2 instances opens the PQ
+                // file once and the index twice, and its search threads and their beam
+                // sub-actors read the index through the second mapping
+                assert_eq!((m.maps, m.mapped_bytes), (6, 2 * (5000 * 5 * 32 + 8 + 2 * 5000 * 4096)), "{m:?}");
                 let reads = r.stats.counts[&aeiou::vm::OpKind::Read];
                 assert_eq!(m.advised, if mode == MmapMode::Fault { 0 } else { reads }, "{m:?}");
                 let (touched, copied) = match (consume, mode) {
                     (MmapConsume::Copy, _) => (0, bytes),
                     (MmapConsume::Touch, MmapMode::Populate) => (0, 0),
-                    (MmapConsume::Touch, _) => (bytes / 4096, 0),
+                    (MmapConsume::Touch, _) => ((bytes - 2 * (5000 * 5 * 32 + 8 + 8191)) / 4096 + 2 * (2 + 195 + 2), 0),
                 };
                 assert_eq!((m.touched_pages, m.copied_bytes), (touched, copied), "{m:?}");
                 assert!(r.counters.minor_faults + r.counters.major_faults > 0, "{:?}", r.counters);

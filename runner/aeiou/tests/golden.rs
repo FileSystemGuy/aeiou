@@ -38,7 +38,7 @@ fn hashes_match_check_py() {
         ("train_large_samples", "a614e020420787cf55281294508bfc87e72997c16fe4a537b19255d3bd3326e1"),
         ("train_small_files", "a1f595eebddcd31cd13799f8a10e6f415023924ead93046626103267d5079ac8"),
         ("vdb_build_diskann", "8ec528846e8fae2879901808901cd265f7f557dd941617dff981d682f25b06ac"),
-        ("vdb_search_diskann", "63b47cc7e6e0eb25c56660f23ad932a33dd2010e2c3300aa84b604c8974c1310"),
+        ("vdb_search_diskann", "1493d8de203823aef7740b4e4705fc91e40633086544f4cfc7a93f83ede2b41a"),
         ("train_stream_tfrecord", "bdba2a200488c0a7cf3d3b9269074990d1f54c013be0dd5fd84519469c886784"),
         ("train_stream_parquet", "0e629d8ffd38043367d6bd690f2e7cb10cea8f179bea003c78e30450564b0ec2"),
         ("train_map_hdf5", "4f20c7789667ecca22d3f4b11fcf29a6067eedf5647c83dc84712b9e25b80ccd"),
@@ -64,14 +64,15 @@ fn golden_fingerprints() {
     // `dcp.save`, §3.45, and ckpt_restore with it: its default offsets follow the writer; ckpt_restore
     // again the same day, its item loop rewritten from the trace of `dcp.load`, §3.47; model_load with the calls of
     // `safetensors.safe_open` and the small JSON files, same section; vdb_search_ivf from the trace of FAISS
-    // `OnDiskInvertedLists`, §3.49: the index file, the prefetch threads, ids before codes).
+    // `OnDiskInvertedLists`, §3.49: the index file, the prefetch threads, ids before codes; vdb_search_diskann
+    // 2026-10-02 from the trace of DiskANN's `PQFlashIndex`, §3.50: the load, the entry rounds, 24 to 30 more).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x71628bdb4289c4c8, 5120),
         ("train_large_samples", 2, &[("steps", "5")], 0xa2c284c6137f9639, 50451),
         ("ckpt_write_dcp", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
         ("ckpt_restore", 2, &[], 0x22990a88db4e6d4f, 368),
         ("model_load", 2, &[], 0x2668387c7aa4126b, 24682),
-        ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")], 0xc4e18e18bc9bf279, 4232),
+        ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
         ("vdb_search_ivf", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
         (
             "vdb_build_diskann",

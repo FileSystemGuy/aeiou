@@ -250,7 +250,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     r = run(RUNNER, "dry-run", *common, "--seed", seed, "--metrics-json", dry)
     assert r.returncode == 0, r.stderr
     st = tmp_path / "strace.txt"
-    r = run("strace", "-f", "-ttt", "-T", "-yy", "-e", "trace=%file,%desc,%process", "-o", st, RUNNER, "run", *common, "--seed", seed, "--root", root, "--time-scale", "0")
+    r = run("strace", "-f", "-ttt", "-T", "-yy", "-e", "trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy", "-o", st, RUNNER, "run", *common, "--seed", seed, "--root", root, "--time-scale", "0")
     assert r.returncode == 0, r.stdout + r.stderr
     out = tmp_path / "trace.json"
     assert trace.main(["metrics", str(st), "--root", str(root), "--exclude", "*.aeiou-*", "-o", str(out)]) == 0
@@ -395,3 +395,30 @@ def test_ivf_abstract_matches_the_trace_of_faiss_search(tmp_path):
     t, d = json.loads((kit / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
     assert {k: v for k, v in d.items() if k != "read"} == {k: v for k, v in t.items() if k != "read"}
     assert d["read"] - t["read"] == 20 * 64 * 2   # through the mapping, unseen by strace: ids and codes of 64 lists per query
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+@pytest.mark.parametrize("which, reads_off", [("nocache", 0.02), ("cache", 0.04)])
+def test_diskann_search_abstract_matches_the_trace(tmp_path, which, reads_off):
+    """`builder/traces/vdb_search_diskann`: 1,000 queries through DiskANN's `PQFlashIndex`,
+    traced 2026-10-02 without a node cache and with 10,000 nodes cached. The abstract issues
+    full rounds of `beam` reads where the search skips nodes it already holds, so it reads a
+    little more; the load's small files (pivots, medoids, centroids, metadata) are not
+    modeled (`ABSTRACTS.md` §5)."""
+    kit = BUILDER / "traces" / "vdb_search_diskann"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_search_diskann.ast.json"), "--gpus", "1",
+                        "--params", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    tc, dc = t["counts"], d["counts"]
+    assert 0 <= (dc["read"] - tc["read"]) / tc["read"] <= reads_off
+    small = {"open": 8, "close": 9, "lseek": 28, "stat": 9, "fstat": 3, "ioctl": 1}   # the unmodeled small files
+    assert {k: tc[k] - dc.get(k, 0) for k in small} == small
+    share = lambda m: m["fan_out"]["4"] / sum(m["fan_out"].values())
+    assert share(t) > 0.85 and share(d) > 0.85
+    rows = {r[0]: r[3] for r in compare(t, d)}
+    assert rows["request size, read (p50 / p90 / p99)"] <= 0.001
+    assert rows["popularity, blocks: accesses to the top 1 %"] <= 0.01
+    assert rows["reuse: first touches / block reads"] <= 0.06
+

@@ -69,25 +69,26 @@ fn metrics_do_not_depend_on_the_thread_count() {
     }
 }
 
-/// DiskANN search: the depth distribution is the `hops` parameter's, the fan-out is `beam`,
-/// no read continues another, and the hub nodes show as reuse and as skew.
+/// DiskANN search: the depth distribution is the `hops` parameter's plus the two rounds near
+/// the entry points, the fan-out is `beam` (and 1 for the entry point's sector), no sector
+/// read continues another, and the entry points show as reuse and as skew.
 #[test]
 fn diskann_structure_is_recovered() {
     let r = dry("vdb_search_diskann", 1, &[("queries", "2000"), ("threads", "2"), ("nodes", "20000")], 2, Some(Opts::default()));
     let m = r.total.metrics.as_ref().unwrap();
-    assert_eq!(m.depth.keys().copied().collect::<Vec<_>>(), vec![1, 3, 4, 5, 6, 7, 8]); // 1: the thread fork
-    let chains: u64 = m.depth.iter().filter(|(k, _)| **k >= 3).map(|(_, v)| v).sum();
+    assert_eq!(m.depth.keys().copied().collect::<Vec<_>>(), vec![1, 26, 27, 28, 29, 30, 31, 32]); // 1: the thread fork
+    let chains: u64 = m.depth.iter().filter(|(k, _)| **k >= 26).map(|(_, v)| v).sum();
     assert_eq!(chains, 2 * 2000);
     let share = |d: u64| m.depth[&d] as f64 / chains as f64;
-    for (d, want) in [(3, 0.05), (4, 0.20), (5, 0.35), (6, 0.25), (7, 0.10), (8, 0.05)] {
+    for (d, want) in [(27, 0.135), (28, 0.537), (29, 0.269), (30, 0.047)] {
         assert!((share(d) - want).abs() < 0.03, "depth {d}: {}", share(d));
     }
-    assert_eq!(m.fan_out.keys().copied().collect::<Vec<_>>(), vec![2, 4]);
-    assert_eq!(m.runs[0].ops.max, 1);
-    assert_eq!(m.runs[0].multi_op_bytes, 0);
-    // the first round of every query draws 30 % of its reads from 1 % of the nodes: 16,000 first-round
-    // reads put 24 on each of 200 hub blocks, over 4.2 per block from the uniform rounds (which alone
-    // would give the top 1 % about 2.4 % of the accesses)
+    assert_eq!(m.fan_out.keys().copied().collect::<Vec<_>>(), vec![1, 2, 4]);
+    assert_eq!(m.runs[0].ops.max, 2); // the two stream reads of the PQ file at load
+    assert_eq!(m.runs[0].multi_op_bytes, 20000 * 5 * 32 + 8);
+    // the first round of every query reads an entry point's sector and the second lands on the entry
+    // points' neighbours: at 20,000 sectors both sets are one sector, which takes over 4 %
+    // of the accesses, where the uniform rounds alone would give the top 1 % about 1.5 %
     let p = m.popularity_blocks();
     assert!(p.top_1_pct > 0.05, "top 1% of blocks: {}", p.top_1_pct);
     assert!(m.reuse[0][0].n > 0);

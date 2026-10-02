@@ -1,7 +1,8 @@
 {
   "ast": "0.3",
   "name": "vdb_search_diskann",
-  "doc": "Beam search over a sector-packed graph index: `hops` dependent rounds of `beam` concurrent 4 KiB reads per query.",
+  "doc": "Beam search over a sector-packed graph index: dependent rounds of `beam` concurrent 4 KiB reads per query.",
+  "backend": "libaio",
   "params": {
     "threads": {
       "default": 32,
@@ -17,48 +18,64 @@
       "default": 4,
       "unit": "count"
     },
-    "cached_hops": {
-      "default": 2,
-      "unit": "count",
-      "doc": "rounds served from the node cache [measure]; documentation only"
-    },
     "hops": {
       "default": {
         "empirical": {
           "values": [
-            3,
-            4,
-            5,
-            6,
-            7,
-            8
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
           ],
           "weights": [
-            5,
-            20,
-            35,
-            25,
-            10,
-            5
+            1,
+            135,
+            536,
+            269,
+            47,
+            9,
+            2
           ]
         }
       },
       "unit": "count",
-      "doc": "[measure] rounds that reach storage: the trace's rounds minus cached_hops"
+      "doc": "rounds of a query after the two near the entry points; measured on SIFT1M at search list 100, beam 4"
     },
-    "hot": {
+    "entry": {
       "default": {
         "hotset": {
-          "fraction": 0.01,
-          "weight": 0.3
+          "fraction": 2e-07,
+          "weight": 1
         }
       },
-      "doc": "hub nodes [measure from trace]"
+      "doc": "[config] the entry points' sectors: medoids / sectors (one medoid per build shard; 40 here)"
+    },
+    "near": {
+      "default": {
+        "hotset": {
+          "fraction": 1e-05,
+          "weight": 1
+        }
+      },
+      "doc": "[config] the sectors of the entry points' neighbours: about 0.8 * medoids * degree / sectors (661 distinct sectors for 13 medoids of degree 64, measured)"
+    },
+    "node_cache": {
+      "default": 0,
+      "unit": "count",
+      "doc": "[config] sector reads that fill the node cache at load (about one per cached node); with a cache, queries skip the two rounds near the entry points"
+    },
+    "cache_batch": {
+      "default": 8,
+      "unit": "count",
+      "doc": "requests per submit while the node cache loads (traced)"
     },
     "rerank": {
-      "default": 120000,
+      "default": 500000,
       "unit": "ns",
-      "doc": "[measure]"
+      "doc": "CPU of one query; measured 0.5 ms of user time over 28 rounds, one host"
     },
     "sector": {
       "default": 4096,
@@ -67,7 +84,27 @@
     "nodes": {
       "default": 200000000,
       "unit": "count",
-      "doc": "[config] graph nodes, one sector each"
+      "doc": "[config] sectors of the index (a sector holds per_sector graph nodes)"
+    },
+    "per_sector": {
+      "default": 5,
+      "unit": "count",
+      "doc": "[config] graph nodes per sector: 4 KiB over (vector bytes + 4 + 4 * degree)"
+    },
+    "pq_code": {
+      "default": 32,
+      "unit": "bytes",
+      "doc": "[config] bytes of one PQ-compressed vector, held in memory"
+    },
+    "stream": {
+      "default": 8191,
+      "unit": "bytes",
+      "doc": "the first read of a C++ stream on a file (traced)"
+    },
+    "pq_read": {
+      "default": 2147479552,
+      "unit": "bytes",
+      "doc": "the stream reads the rest of the PQ file in one call; Linux returns at most this much per read"
     }
   },
   "datasets": {
@@ -87,11 +124,244 @@
         },
         "seed": 1592646269
       }
+    },
+    "pq": {
+      "files": {
+        "pattern": "pq/pq_compressed-{id}.bin",
+        "count": 1,
+        "size": {
+          "const": {
+            "add": [
+              {
+                "mul": [
+                  {
+                    "mul": [
+                      {
+                        "param": "nodes"
+                      },
+                      {
+                        "param": "per_sector"
+                      }
+                    ]
+                  },
+                  {
+                    "param": "pq_code"
+                  }
+                ]
+              },
+              8
+            ]
+          }
+        },
+        "seed": 1592646272
+      }
     }
   },
   "actors": {
     "gpu": {
       "body": [
+        {
+          "let": {
+            "name": "c",
+            "value": {
+              "file": {
+                "dataset": "pq",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "c"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "lseek": {
+            "file": {
+              "ref": "c"
+            },
+            "offset": 0,
+            "whence": "END"
+          }
+        },
+        {
+          "lseek": {
+            "file": {
+              "ref": "c"
+            },
+            "offset": 0,
+            "whence": "SET"
+          }
+        },
+        {
+          "lseek": {
+            "file": {
+              "ref": "c"
+            },
+            "offset": 0,
+            "whence": "SET"
+          }
+        },
+        {
+          "read": {
+            "file": {
+              "ref": "c"
+            },
+            "len": {
+              "param": "stream"
+            }
+          }
+        },
+        {
+          "loop": {
+            "index": "rep",
+            "to": {
+              "ceil_div": [
+                {
+                  "sub": [
+                    {
+                      "size": {
+                        "ref": "c"
+                      }
+                    },
+                    {
+                      "param": "stream"
+                    }
+                  ]
+                },
+                {
+                  "param": "pq_read"
+                }
+              ]
+            },
+            "body": [
+              {
+                "read": {
+                  "file": {
+                    "ref": "c"
+                  },
+                  "len": {
+                    "param": "pq_read"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "c"
+            }
+          }
+        },
+        {
+          "let": {
+            "name": "f",
+            "value": {
+              "file": {
+                "dataset": "index",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "f"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "read": {
+            "file": {
+              "ref": "f"
+            },
+            "len": {
+              "param": "stream"
+            }
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "f"
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "f"
+            },
+            "flags": [
+              "RDONLY",
+              "DIRECT"
+            ]
+          }
+        },
+        {
+          "loop": {
+            "index": "cl",
+            "to": {
+              "div": [
+                {
+                  "param": "node_cache"
+                },
+                {
+                  "param": "cache_batch"
+                }
+              ]
+            },
+            "body": [
+              {
+                "parallel": {
+                  "index": "cb",
+                  "width": {
+                    "param": "cache_batch"
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "n",
+                        "value": {
+                          "pick": {
+                            "dataset": "index"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": {
+                          "param": "sector"
+                        },
+                        "offset": {
+                          "offset": {
+                            "ref": "n"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
         {
           "parallel": {
             "index": "th",
@@ -100,34 +370,100 @@
             },
             "body": [
               {
-                "let": {
-                  "name": "f",
-                  "value": {
-                    "file": {
-                      "dataset": "index",
-                      "id": 0
-                    }
-                  }
-                }
-              },
-              {
-                "open": {
-                  "file": {
-                    "ref": "f"
-                  },
-                  "flags": [
-                    "RDONLY",
-                    "DIRECT"
-                  ]
-                }
-              },
-              {
                 "loop": {
                   "index": "q",
                   "to": {
                     "param": "queries"
                   },
                   "body": [
+                    {
+                      "cond": {
+                        "if": {
+                          "eq": [
+                            {
+                              "param": "node_cache"
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "parallel": {
+                              "index": "en",
+                              "width": 1,
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "e",
+                                    "value": {
+                                      "pick": {
+                                        "dataset": "index",
+                                        "dist": {
+                                          "param": "entry"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "sector"
+                                    },
+                                    "offset": {
+                                      "offset": {
+                                        "ref": "e"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "parallel": {
+                              "index": "nb",
+                              "width": {
+                                "param": "beam"
+                              },
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "s",
+                                    "value": {
+                                      "pick": {
+                                        "dataset": "index",
+                                        "dist": {
+                                          "param": "near"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "sector"
+                                    },
+                                    "offset": {
+                                      "offset": {
+                                        "ref": "s"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
                     {
                       "loop": {
                         "index": "hop",
@@ -149,30 +485,7 @@
                                     "name": "s",
                                     "value": {
                                       "pick": {
-                                        "dataset": "index",
-                                        "dist": {
-                                          "cond": {
-                                            "if": {
-                                              "lt": [
-                                                {
-                                                  "index": "hop"
-                                                },
-                                                1
-                                              ]
-                                            },
-                                            "then": {
-                                              "param": "hot"
-                                            },
-                                            "else": {
-                                              "uniform": {
-                                                "lo": 0,
-                                                "hi": {
-                                                  "count": "index"
-                                                }
-                                              }
-                                            }
-                                          }
-                                        }
+                                        "dataset": "index"
                                       }
                                     }
                                   }
@@ -207,15 +520,15 @@
                     }
                   ]
                 }
-              },
-              {
-                "close": {
-                  "file": {
-                    "ref": "f"
-                  }
-                }
               }
             ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "f"
+            }
           }
         }
       ]
@@ -224,16 +537,15 @@
   "provenance": {
     "generator": {
       "script": "vdb_search_diskann.py",
-      "sha256": "907839daa7563dc68bfd7ad3a79017a2f57aeca86a22696f58204670260205c4",
+      "sha256": "94ba3088883122fa19aa100bc15b24220a30e14f025a9f1e6f069aabc99f4eff",
       "builder_version": "0.1.0",
-      "git": "32e33f8e9e9b"
+      "git": "f32ef8878045-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
-    "built_twice_identical": true,
-    "ast_sha256": "63b47cc7e6e0eb25c56660f23ad932a33dd2010e2c3300aa84b604c8974c1310"
+    "ast_sha256": "1493d8de203823aef7740b4e4705fc91e40633086544f4cfc7a93f83ede2b41a"
   }
 }
