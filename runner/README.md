@@ -266,8 +266,8 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   ends those workers on its own schedule and no code of ours runs when it does, so their
   peak can only be sampled. What need not be sampled is not (2026-10-01, user;
   `DESIGN_REVIEW.md` §3.37): the `SQPOLL` threads live exactly as long as their rings,
-  so each loop reads its ring's `/proc/self/fdinfo` entry once it is built, where the
-  kernel states the ring's poll thread (`SqThread:`), and the report has the number of
+  so each loop reads its ring's `/proc/self/fdinfo` entry when its work is done and the
+  ring still open, where the kernel states the ring's poll thread (`SqThread:`), and the report has the number of
   distinct ones (printed as `sqpoll threads N`; rings that share a thread state the same
   one); and the ops in flight are the loop's own doing, so
   each loop counts them and the `io_uring:` and `libaio:` lines print the largest

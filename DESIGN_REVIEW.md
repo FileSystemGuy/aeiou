@@ -1568,10 +1568,19 @@ depends on how long the task runs. The answer sorts the counters into three kind
   its ring (`uring.rs`, `Built`), the last to arrive reads the thread list once, and then
   all run.~~ That first form failed in CI as well (2 threads seen of 3): the thread list
   finds them by name, and an `SQPOLL` thread names itself `iou-sqp-*` only when it first
-  runs, which on a two-core host can be after all three rings are built. Each loop now
+  runs, which on a two-core host can be after all three rings are built. ~~Each loop now
   reads its own ring's `fdinfo` once the ring is built, where the kernel states the poll
-  thread from the moment setup returns (`SqThread:`), and the host's count is the number
-  of distinct threads stated; the loops do not wait for each other.
+  thread from the moment setup returns (`SqThread:`)~~ A second form read each ring's
+  `fdinfo` (`SqThread:`) once the ring was built and failed in CI too (2 distinct threads
+  stated by three rings sharing one): the CI kernel (Ubuntu 24.04) states the pid of the
+  ring's creator in that field until the poll thread first runs, and the thread's own
+  after. Each loop now reads its ring's `fdinfo` when its work is done and the ring is
+  still open, by which time the thread has carried every submission; the kernel fills
+  the field under a trylock and states -1 when it loses, so the read is tried a few
+  times. The host's count is the number
+  of distinct threads stated; the loops do not wait for each other. The lesson for the
+  rule in this section's title: "a moment the runner knows" has to be a moment at which
+  the kernel's own statement has settled, and just after setup is not one.
   `HostCounters::sqpoll_threads` (was `sqpoll_threads_peak`) is that count: exact
   at any run length, still an observation of the kernel (a shared poll thread shows as
   one), and taken before any op is issued. The 50 ms was taken back out of the test.
