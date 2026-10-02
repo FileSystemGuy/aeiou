@@ -30,15 +30,25 @@
       "unit": "bytes",
       "doc": "per-item bytes, 1/G of each tensor [config]"
     },
-    "tail": {
-      "default": 65536,
+    "hdr": {
+      "default": 704,
       "unit": "bytes",
-      "doc": "[verify] coalesced small records per item"
+      "doc": "per item, before the storage: zip local headers, data.pkl, padding to 64 (traced 2026-10-01, torch 2.14)"
+    },
+    "trailer": {
+      "default": 873,
+      "unit": "bytes",
+      "doc": "per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01)"
+    },
+    "buf": {
+      "default": 1048576,
+      "unit": "bytes",
+      "doc": "Python BufferedWriter size = st_blksize; an item above it is written directly, one at or below it is coalesced with its header and trailer"
     },
     "meta_bytes": {
       "default": 2097152,
       "unit": "bytes",
-      "doc": "[measure] .metadata size"
+      "doc": "[measure] .metadata size; traced 2,602 bytes for 6 items on 2 ranks, about 217 per item and rank"
     },
     "xfer": {
       "default": 1048576,
@@ -159,6 +169,24 @@
                             }
                           },
                           {
+                            "stat": {
+                              "file": {
+                                "object": {
+                                  "namespace": "ckpt_meta",
+                                  "fields": {
+                                    "step": {
+                                      "index": "step"
+                                    },
+                                    "name": ".metadata"
+                                  }
+                                }
+                              },
+                              "expect": [
+                                "ENOENT"
+                              ]
+                            }
+                          },
+                          {
                             "open": {
                               "file": {
                                 "ref": "c"
@@ -206,28 +234,108 @@
                               },
                               "body": [
                                 {
-                                  "write": {
+                                  "lseek": {
                                     "file": {
                                       "ref": "c"
                                     },
-                                    "len": {
-                                      "elem": {
-                                        "array": "item_bytes",
-                                        "index": {
-                                          "index": "t"
-                                        }
-                                      }
-                                    }
+                                    "offset": 0,
+                                    "whence": "CUR"
                                   }
                                 },
                                 {
-                                  "write": {
+                                  "cond": {
+                                    "if": {
+                                      "gt": [
+                                        {
+                                          "elem": {
+                                            "array": "item_bytes",
+                                            "index": {
+                                              "index": "t"
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "param": "buf"
+                                        }
+                                      ]
+                                    },
+                                    "then": [
+                                      {
+                                        "write": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "param": "hdr"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "write": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "elem": {
+                                              "array": "item_bytes",
+                                              "index": {
+                                                "index": "t"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "write": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "param": "trailer"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "else": [
+                                      {
+                                        "write": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "add": [
+                                              {
+                                                "add": [
+                                                  {
+                                                    "param": "hdr"
+                                                  },
+                                                  {
+                                                    "elem": {
+                                                      "array": "item_bytes",
+                                                      "index": {
+                                                        "index": "t"
+                                                      }
+                                                    }
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "param": "trailer"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "lseek": {
                                     "file": {
                                       "ref": "c"
                                     },
-                                    "len": {
-                                      "param": "tail"
-                                    }
+                                    "offset": 0,
+                                    "whence": "CUR"
                                   }
                                 }
                               ]
@@ -287,8 +395,36 @@
                                     "flags": [
                                       "WRONLY",
                                       "CREAT",
-                                      "TRUNC"
+                                      "TRUNC",
+                                      "CLOEXEC"
                                     ]
+                                  }
+                                },
+                                {
+                                  "fstat": {
+                                    "file": {
+                                      "ref": "m"
+                                    }
+                                  }
+                                },
+                                {
+                                  "ioctl": {
+                                    "file": {
+                                      "ref": "m"
+                                    },
+                                    "request": "TCGETS",
+                                    "expect": [
+                                      "ENOTTY"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "m"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
                                   }
                                 },
                                 {
@@ -313,6 +449,24 @@
                                     "file": {
                                       "ref": "m"
                                     }
+                                  }
+                                },
+                                {
+                                  "stat": {
+                                    "file": {
+                                      "object": {
+                                        "namespace": "ckpt_meta",
+                                        "fields": {
+                                          "step": {
+                                            "index": "step"
+                                          },
+                                          "name": ".metadata"
+                                        }
+                                      }
+                                    },
+                                    "expect": [
+                                      "ENOENT"
+                                    ]
                                   }
                                 },
                                 {
@@ -405,16 +559,16 @@
   "provenance": {
     "generator": {
       "script": "ckpt_write_dcp.py",
-      "sha256": "e1b563afcd15841ec886ce392a7c4f371ac5205cafeba54f3a98f438d5fc0dd6",
+      "sha256": "5b722ea14959372003bf669ea35044ea39e51881ec78a22fd5f7d6a49161d484",
       "builder_version": "0.1.0",
-      "git": "0aec70405ce1"
+      "git": "3825d47ed88a-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
-      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "d537f867988d9530e2511f3af34f35904099a793743cdfa748f59df6bba3ff13"
+    "ast_sha256": "5487223973472bc05334cb903ca31298d4f4902bacb9d28871879c8b7856314d"
   }
 }

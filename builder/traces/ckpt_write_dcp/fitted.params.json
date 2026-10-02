@@ -1,0 +1,3 @@
+{"params_version": 1, "abstract": "ckpt_write_dcp",
+ "doc": "Fitted to the 2026-10-01 trace of torch.distributed.checkpoint.save on 2 ranks: 6 DTensor items, 2 checkpoints.",
+ "params": {"steps": 200, "ckpt_every": 100, "items": 6, "item_bytes": [16777216, 33554432, 16777216, 8388608, 524288, 2048], "meta_bytes": 2602}}

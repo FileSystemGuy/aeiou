@@ -30,8 +30,8 @@ fn hashes_match_check_py() {
     // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day; re-recorded for
     // contract 0.2 and model_load's `full` split the same day).
     let want = [
-        ("ckpt_restore", "7977f576a042df867623e6009b544040f538980f4e2b8f1779cdba8c9892e66f"),
-        ("ckpt_write_dcp", "d537f867988d9530e2511f3af34f35904099a793743cdfa748f59df6bba3ff13"),
+        ("ckpt_restore", "7943f49006ddd4349035574b92f04d5699cf301cf4d48625b39036586072fca0"),
+        ("ckpt_write_dcp", "5487223973472bc05334cb903ca31298d4f4902bacb9d28871879c8b7856314d"),
         ("kv_cache_serving", "5f7a6e6f00a25cce63a5f9259d43d4b4d394913cc47e113b976e9c147097c734"),
         ("model_load", "f62c2390df4ef53ca5f8e4fcf5ce185e941b6e394b626cf00c88b4292eb1f1b2"),
         ("train_large_samples", "5e93a2b6f1a55d14617a7f24f783a2b5698afc145d8911833084a1fece9b5fc2"),
@@ -59,12 +59,13 @@ fn golden_fingerprints() {
     // vdb_build_diskann likewise when its base file moved to `base/base.fbin`; ckpt_write_dcp when its
     // readback phase went behind `readback = false`; train_small_files on 2026-10-01 after the trace of
     // the real loader added the second `lseek` per file, DESIGN_REVIEW.md §3.43; train_large_samples the
-    // same day, rewritten from the trace of `np.load`, §3.44).
+    // same day, rewritten from the trace of `np.load`, §3.44; ckpt_write_dcp from the trace of
+    // `dcp.save`, §3.45, and ckpt_restore with it: its default offsets follow the writer).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x71628bdb4289c4c8, 5120),
         ("train_large_samples", 2, &[("steps", "5")], 0xa2c284c6137f9639, 50451),
-        ("ckpt_write_dcp", 2, &[("steps", "200")], 0xc7efab55c3d4e8ee, 70),
-        ("ckpt_restore", 2, &[], 0xf370a3cd3570d0ae, 38),
+        ("ckpt_write_dcp", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
+        ("ckpt_restore", 2, &[], 0x44861c8004dad9f7, 38),
         ("model_load", 2, &[], 0x898ff58eafd7a634, 24602),
         ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")], 0xc4e18e18bc9bf279, 4232),
         ("vdb_search_ivf", 1, &[("queries", "100"), ("threads", "2")], 0x1dfd886fe80fd785, 12804),

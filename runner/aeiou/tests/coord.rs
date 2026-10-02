@@ -289,7 +289,7 @@ fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
 
     // the restore on two ranks, rotated: each process reads the other's shard (same host
     // here, so the warm-open warning is expected and --require-cold would refuse)
-    let rparams = ["restore_step=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "item_off=[0, 1114112, 3276800, 4390912]", "meta_bytes=65536"];
+    let rparams = ["restore_step=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "item_off=[0, 1050153, 3148882, 4199035]", "meta_bytes=65536"];
     let rfp = dry_fingerprint_cli("ckpt_restore.ast.json", "2", &rparams);
     let outs = run_ranks("ckpt_restore.ast.json", &root, "2", &rparams, 2, &["--rank-rotate", "1", "--max-gap", "120", "--expect-fingerprint", &rfp]);
     for (ok, stdout, stderr) in &outs {
@@ -310,7 +310,7 @@ fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
 /// Two ranks of `ckpt_restore` with different seeds.
 fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
     let port = free_port();
-    let rparams = ["restore_step=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "item_off=[0, 1114112, 3276800, 4390912]", "meta_bytes=65536"];
+    let rparams = ["restore_step=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "item_off=[0, 1050153, 3148882, 4199035]", "meta_bytes=65536"];
     let mut children = Vec::new();
     for rank in 0..2 {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));

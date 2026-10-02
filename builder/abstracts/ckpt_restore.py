@@ -13,8 +13,8 @@ w = Workload("ckpt_restore",
 P = w.P
 w.param("items", 4, unit="count", doc="read items per rank [config]; 900 for an 8B model")
 w.param("item_bytes", [16 * MiB, 32 * MiB, 16 * MiB, 8 * MiB], unit="bytes", doc="[config]")
-w.param("item_off", [0, 16 * MiB + 64 * KiB, 48 * MiB + 128 * KiB, 64 * MiB + 192 * KiB], unit="bytes",
-        doc="[config] prefix sums of item_bytes + tail, as §3 wrote them")
+w.param("item_off", [0, 16 * MiB + 1577, 48 * MiB + 2 * 1577, 64 * MiB + 3 * 1577], unit="bytes",
+        doc="[config] prefix sums of hdr + item_bytes + trailer (704 + 873 per item), as §3 writes them since 2026-10-01")
 w.param("replicas", 1, unit="count", doc="ranks that read the same shard file (replicated state saved once); 1 when fully sharded")
 w.param("meta_bytes", 2 * MiB, unit="bytes", doc="[measure]")
 w.param("hdr_read", 1 * MiB, unit="bytes", doc="[verify] st_blksize")

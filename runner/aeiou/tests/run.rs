@@ -153,7 +153,7 @@ fn namespaces_must_be_empty_and_writes_are_read_back() {
     assert_eq!(r.stats.bytes_read, r.stats.bytes_written - 2 * 65536, "read-back of the shard files (not .metadata)");
     // the objects exist with the computed sizes
     let shard = root.join("ckpt/step_000002/__1_0.distcp");
-    assert_eq!(std::fs::metadata(&shard).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * 65536);
+    assert_eq!(std::fs::metadata(&shard).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * (704 + 873));
     assert!(root.join("ckpt/step_000002/.metadata").exists());
     // a second run refuses the stale namespace, and --clean-namespaces empties it
     let e = run::prepare_namespaces(&loaded.ast, &root, false).unwrap_err();
@@ -259,7 +259,7 @@ fn write_then_restore_through_the_namespace_manifest() {
     let rparams = [
         ("restore_step", "2"),
         ("item_bytes", "[1048576, 2097152, 1048576, 1048576]"),
-        ("item_off", "[0, 1114112, 3276800, 4390912]"),   // Σ (item + 64 KiB tail) of the writer
+        ("item_off", "[0, 1050153, 3148882, 4199035]"),   // Σ (704 + item + 873) of the writer
         ("meta_bytes", "65536"),
     ];
     let (rl, rcfg, rmodel) = leaked_model("ckpt_restore", config(2, 5, &rparams));
@@ -363,7 +363,8 @@ fn io_uring_reproduces_the_sync_runs() {
     }
     {
         let root = tmpdir("uring-ckpt");
-        let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true")];
+        let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true"),
+            ("hdr", "4096"), ("trailer", "4096")];   // the traced 704 and 873 are not aligned, and a direct backend refuses such writes
         let (loaded, _cfg, model) = leaked_model("ckpt_write_dcp", config(2, 3, &params));
         let (fp, ops, _) = dry_fingerprint(model);
         for backend in [BackendKind::Uring, BackendKind::UringDirect] {
@@ -373,7 +374,7 @@ fn io_uring_reproduces_the_sync_runs() {
             assert_eq!(r.stats.ops, ops);
             assert_eq!(r.stats.barriers, 2 * 2 * 4, "barriers between loops go through the coordinator's eventfd");
             assert_eq!(r.stats.bytes_read, r.stats.bytes_written - 2 * 65536);
-            assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * 65536);
+            assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * (4096 + 4096));
         }
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -472,7 +473,8 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
     }
     {
         let root = tmpdir("more-ckpt");
-        let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true")];
+        let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true"),
+            ("hdr", "4096"), ("trailer", "4096")];   // the traced 704 and 873 are not aligned, and a direct backend refuses such writes
         let (loaded, _cfg, model) = leaked_model("ckpt_write_dcp", config(2, 3, &params));
         let (fp, ops, _) = dry_fingerprint(model);
         for backend in blocking.into_iter().chain(looped) {
@@ -482,7 +484,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
             assert_eq!(r.stats.ops, ops);
             assert_eq!(r.stats.barriers, 2 * 2 * 4, "{backend:?}: barriers (on the loop: the poll on the eventfd)");
             assert_eq!(r.stats.bytes_read, r.stats.bytes_written - 2 * 65536, "{backend:?}: written, then read back (through a mapping made after the write)");
-            assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * 65536);
+            assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * (4096 + 4096));
         }
         std::fs::remove_dir_all(&root).unwrap();
     }

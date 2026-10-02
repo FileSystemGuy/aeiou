@@ -21,12 +21,12 @@
     "item_off": {
       "default": [
         0,
-        16842752,
-        50462720,
-        67305472
+        16778793,
+        50334802,
+        67113595
       ],
       "unit": "bytes",
-      "doc": "[config] prefix sums of item_bytes + tail, as §3 wrote them"
+      "doc": "[config] prefix sums of hdr + item_bytes + trailer (704 + 873 per item), as §3 writes them since 2026-10-01"
     },
     "replicas": {
       "default": 1,
@@ -312,16 +312,16 @@
   "provenance": {
     "generator": {
       "script": "ckpt_restore.py",
-      "sha256": "0b9d66e178185a5df53dea0c812555dd4026a682491250eb0260a735438bf795",
+      "sha256": "b5ca764fff971580823e7da8a88f8c5366a56a32e6f5d1728b32426b0d6b52f7",
       "builder_version": "0.1.0",
-      "git": "0aec70405ce1"
+      "git": "3825d47ed88a-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
-      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "7977f576a042df867623e6009b544040f538980f4e2b8f1779cdba8c9892e66f"
+    "ast_sha256": "7943f49006ddd4349035574b92f04d5699cf301cf4d48625b39036586072fca0"
   }
 }

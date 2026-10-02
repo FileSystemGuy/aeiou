@@ -315,3 +315,24 @@ def test_large_sample_abstract_matches_the_trace_of_np_load(tmp_path, which, reu
     for name, _, _, dist in compare(t, d):
         if dist is not None:
             assert dist <= (reuse if name.startswith("reuse distance") else 0.01), name
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_checkpoint_write_abstract_matches_the_trace_of_dcp_save(tmp_path):
+    """`builder/traces/ckpt_write_dcp`: `torch.distributed.checkpoint.save` on two ranks,
+    traced 2026-10-01. Every call on the shard files and `.metadata` is in the abstract; the
+    path checks around `mkdir` that it cannot express are listed here (`ABSTRACTS.md` §3)."""
+    kit = BUILDER / "traces" / "ckpt_write_dcp"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "ckpt_write_dcp.ast.json"), "--gpus", "2",
+                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    not_modeled = {
+        "mkdir": 2,   # once in the job: the step directory's parent is absent (ENOENT), then made
+        "stat": 8,    # per rank and checkpoint the parent (4); the rank that lost the mkdir, the directory (2); the root, first time (2)
+    }
+    assert {k: v - not_modeled.get(k, 0) for k, v in t["counts"].items()} == d["counts"]
+    assert t["bytes_written"] == d["bytes_written"]
+    assert t["request_size"]["write"]["buckets"] == d["request_size"]["write"]["buckets"]
+    assert max(r[3] for r in compare(t, d) if r[3] is not None) <= 0.05
