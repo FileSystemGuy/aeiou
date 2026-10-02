@@ -293,3 +293,25 @@ def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
 
     assert subprocess.run([sys.executable, "-m", "aeiou.trace", "compare", str(tmp_path / "absent.json"), str(dry)],
                           capture_output=True, text=True, cwd=BUILDER).stderr.startswith("aeiou-trace: ")
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+@pytest.mark.parametrize("which, reuse", [("140MiB", 0.3), ("8MiB", 0.07)])
+def test_large_sample_abstract_matches_the_trace_of_np_load(tmp_path, which, reuse):
+    """`builder/traces/train_large_samples`: `np.load(...)["x"]` on NFS, traced 2026-10-01.
+    The abstract draws its sizes, the corpus has its own, so the counts are near, not equal
+    (they are exact per file: `ABSTRACTS.md` §2). Sixteen files say little about the reuse
+    distance; 256 say more."""
+    kit = BUILDER / "traces" / "train_large_samples"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "train_large_samples.ast.json"), "--gpus", "1",
+                        "--params", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    listing = {"open": 2, "fstat": 2, "readdir": 2, "close": 2}       # glob over the two directories
+    for k, v in t["counts"].items():
+        v -= listing.get(k, 0)
+        assert abs(v - d["counts"].get(k, 0)) <= 0.01 * v, k
+    for name, _, _, dist in compare(t, d):
+        if dist is not None:
+            assert dist <= (reuse if name.startswith("reuse distance") else 0.01), name

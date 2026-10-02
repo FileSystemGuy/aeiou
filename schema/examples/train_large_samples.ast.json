@@ -1,7 +1,7 @@
 {
   "ast": "0.2",
   "name": "train_large_samples",
-  "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; tail read, central directory, then members.",
+  "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
   "params": {
     "batch": {
       "default": 7,
@@ -31,27 +31,27 @@
     "hdr_read": {
       "default": 1048576,
       "unit": "bytes",
-      "doc": "[verify] st_blksize"
+      "doc": "Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01)"
     },
     "xfer": {
       "default": 1048576,
       "unit": "bytes",
-      "doc": "[verify] member read chunk (numpy 256 KiB, BufferedReader max(256 KiB, st_blksize))"
+      "doc": "buffer fill under the member read: the same BufferedReader, so st_blksize (traced 2026-10-01)"
     },
-    "members": {
-      "default": 2,
-      "unit": "count",
-      "doc": "[verify] \"x\" and \"y\" in the npz"
+    "np_chunk": {
+      "default": 262144,
+      "unit": "bytes",
+      "doc": "NumPy's read chunk from a zip member (numpy.lib.format BUFFER_SIZE); one tell per chunk"
     },
     "cd_len": {
-      "default": 200,
+      "default": 102,
       "unit": "bytes",
-      "doc": "[verify] central directory bytes"
+      "doc": "central directory bytes: two entries, \"x.npy\" and \"y.npy\" (traced 2026-10-01)"
     },
-    "lh_len": {
-      "default": 40,
+    "framing": {
+      "default": 498,
       "unit": "bytes",
-      "doc": "[verify] local header + name bytes"
+      "doc": "archive bytes that are not x's data: x's local header and npy header (183), the y member (191), central directory (102), EOCD (22); np.savez(x=, y=[0]) (traced 2026-10-01)"
     },
     "files": {
       "default": 50000,
@@ -170,18 +170,34 @@
                         },
                         "len": {
                           "param": "hdr_read"
+                        }
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "f"
                         },
-                        "offset": {
-                          "sub": [
-                            {
-                              "size": {
-                                "ref": "f"
-                              }
-                            },
-                            22
-                          ]
+                        "offset": 0,
+                        "whence": "END"
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "f"
                         },
-                        "repeat": "until_eof"
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "offset": -22,
+                        "whence": "END"
                       }
                     },
                     {
@@ -191,6 +207,13 @@
                         },
                         "len": {
                           "param": "hdr_read"
+                        }
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "f"
                         },
                         "offset": {
                           "sub": [
@@ -201,21 +224,104 @@
                                     "ref": "f"
                                   }
                                 },
-                                {
-                                  "param": "cd_len"
-                                }
+                                22
                               ]
                             },
-                            22
+                            20
                           ]
+                        },
+                        "whence": "SET"
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": {
+                          "param": "hdr_read"
                         }
                       }
                     },
                     {
+                      "lseek": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "offset": {
+                          "sub": [
+                            {
+                              "sub": [
+                                {
+                                  "size": {
+                                    "ref": "f"
+                                  }
+                                },
+                                22
+                              ]
+                            },
+                            {
+                              "param": "cd_len"
+                            }
+                          ]
+                        },
+                        "whence": "SET"
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": {
+                          "param": "hdr_read"
+                        }
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "offset": 0,
+                        "whence": "SET"
+                      }
+                    },
+                    {
                       "loop": {
-                        "index": "m",
+                        "index": "k",
                         "to": {
-                          "param": "members"
+                          "div": [
+                            {
+                              "ceil_div": [
+                                {
+                                  "sub": [
+                                    {
+                                      "size": {
+                                        "ref": "f"
+                                      }
+                                    },
+                                    {
+                                      "param": "framing"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "param": "np_chunk"
+                                }
+                              ]
+                            },
+                            {
+                              "div": [
+                                {
+                                  "param": "xfer"
+                                },
+                                {
+                                  "param": "np_chunk"
+                                }
+                              ]
+                            }
+                          ]
                         },
                         "body": [
                           {
@@ -224,189 +330,154 @@
                                 "ref": "f"
                               },
                               "len": {
-                                "param": "hdr_read"
-                              },
-                              "offset": {
-                                "mul": [
-                                  {
-                                    "index": "m"
-                                  },
-                                  {
-                                    "add": [
-                                      {
-                                        "param": "lh_len"
-                                      },
-                                      {
-                                        "div": [
-                                          {
-                                            "sub": [
-                                              {
-                                                "sub": [
-                                                  {
-                                                    "sub": [
-                                                      {
-                                                        "size": {
-                                                          "ref": "f"
-                                                        }
-                                                      },
-                                                      22
-                                                    ]
-                                                  },
-                                                  {
-                                                    "param": "cd_len"
-                                                  }
-                                                ]
-                                              },
-                                              {
-                                                "mul": [
-                                                  {
-                                                    "param": "members"
-                                                  },
-                                                  {
-                                                    "param": "lh_len"
-                                                  }
-                                                ]
-                                              }
-                                            ]
-                                          },
-                                          {
-                                            "param": "members"
-                                          }
-                                        ]
-                                      }
-                                    ]
-                                  }
-                                ]
+                                "param": "xfer"
                               }
                             }
                           },
                           {
-                            "lseek": {
-                              "file": {
-                                "ref": "f"
-                              },
-                              "offset": {
-                                "add": [
-                                  {
-                                    "mul": [
-                                      {
-                                        "index": "m"
-                                      },
-                                      {
-                                        "add": [
-                                          {
-                                            "param": "lh_len"
-                                          },
-                                          {
-                                            "div": [
-                                              {
-                                                "sub": [
-                                                  {
-                                                    "sub": [
-                                                      {
-                                                        "sub": [
-                                                          {
-                                                            "size": {
-                                                              "ref": "f"
-                                                            }
-                                                          },
-                                                          22
-                                                        ]
-                                                      },
-                                                      {
-                                                        "param": "cd_len"
-                                                      }
-                                                    ]
-                                                  },
-                                                  {
-                                                    "mul": [
-                                                      {
-                                                        "param": "members"
-                                                      },
-                                                      {
-                                                        "param": "lh_len"
-                                                      }
-                                                    ]
-                                                  }
-                                                ]
-                                              },
-                                              {
-                                                "param": "members"
-                                              }
-                                            ]
-                                          }
-                                        ]
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "param": "lh_len"
-                                  }
-                                ]
-                              },
-                              "whence": "SET"
-                            }
-                          },
-                          {
                             "loop": {
-                              "index": "rep",
+                              "index": "t",
                               "to": {
-                                "ceil_div": [
-                                  {
-                                    "div": [
-                                      {
-                                        "sub": [
-                                          {
-                                            "sub": [
-                                              {
-                                                "sub": [
-                                                  {
-                                                    "size": {
-                                                      "ref": "f"
-                                                    }
-                                                  },
-                                                  22
-                                                ]
-                                              },
-                                              {
-                                                "param": "cd_len"
-                                              }
-                                            ]
-                                          },
-                                          {
-                                            "mul": [
-                                              {
-                                                "param": "members"
-                                              },
-                                              {
-                                                "param": "lh_len"
-                                              }
-                                            ]
-                                          }
-                                        ]
-                                      },
-                                      {
-                                        "param": "members"
-                                      }
-                                    ]
-                                  },
+                                "div": [
                                   {
                                     "param": "xfer"
+                                  },
+                                  {
+                                    "param": "np_chunk"
                                   }
                                 ]
                               },
                               "body": [
                                 {
-                                  "read": {
+                                  "lseek": {
                                     "file": {
                                       "ref": "f"
                                     },
-                                    "len": {
-                                      "param": "xfer"
-                                    }
+                                    "offset": 0,
+                                    "whence": "CUR"
                                   }
                                 }
                               ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "sub": [
+                            {
+                              "ceil_div": [
+                                {
+                                  "size": {
+                                    "ref": "f"
+                                  }
+                                },
+                                {
+                                  "param": "xfer"
+                                }
+                              ]
+                            },
+                            {
+                              "div": [
+                                {
+                                  "ceil_div": [
+                                    {
+                                      "sub": [
+                                        {
+                                          "size": {
+                                            "ref": "f"
+                                          }
+                                        },
+                                        {
+                                          "param": "framing"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "param": "np_chunk"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "div": [
+                                    {
+                                      "param": "xfer"
+                                    },
+                                    {
+                                      "param": "np_chunk"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "f"
+                              },
+                              "len": {
+                                "param": "xfer"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "t",
+                        "to": {
+                          "add": [
+                            {
+                              "mod": [
+                                {
+                                  "ceil_div": [
+                                    {
+                                      "sub": [
+                                        {
+                                          "size": {
+                                            "ref": "f"
+                                          }
+                                        },
+                                        {
+                                          "param": "framing"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "param": "np_chunk"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "div": [
+                                    {
+                                      "param": "xfer"
+                                    },
+                                    {
+                                      "param": "np_chunk"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            4
+                          ]
+                        },
+                        "body": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
                             }
                           }
                         ]
@@ -486,16 +557,16 @@
   "provenance": {
     "generator": {
       "script": "train_large_samples.py",
-      "sha256": "d1638d5247a17ca58bb44a35652b23697e4d511a6448f295e3f5fa640abba801",
+      "sha256": "cf3b541b443a5e13c4acf53a131db6d2ef248cfdbef56ccb7dcfd27731e69653",
       "builder_version": "0.1.0",
-      "git": "0aec70405ce1"
+      "git": "00931289bb03-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
-      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "ee7689cba58eaa1541ed78bed3b5e058cc36a52a6bb62cd2be82e8538c53e9a4"
+    "ast_sha256": "5e93a2b6f1a55d14617a7f24f783a2b5698afc145d8911833084a1fece9b5fc2"
   }
 }

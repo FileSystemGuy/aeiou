@@ -1,0 +1,3 @@
+{"params_version": 1, "abstract": "train_large_samples",
+ "doc": "Fitted to the 2026-10-01 trace of np.load(...)[\"x\"] through a DataLoader: 16 .npz files, batch 2, 2 workers, 2 epochs.",
+ "params": {"batch": 2, "workers": 2, "prefetch": 2, "steps": 16, "files": 16, "sample_mean": 146800640, "sample_sd": 4194304}}

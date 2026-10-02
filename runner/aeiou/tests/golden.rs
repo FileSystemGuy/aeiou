@@ -34,7 +34,7 @@ fn hashes_match_check_py() {
         ("ckpt_write_dcp", "d537f867988d9530e2511f3af34f35904099a793743cdfa748f59df6bba3ff13"),
         ("kv_cache_serving", "5f7a6e6f00a25cce63a5f9259d43d4b4d394913cc47e113b976e9c147097c734"),
         ("model_load", "f62c2390df4ef53ca5f8e4fcf5ce185e941b6e394b626cf00c88b4292eb1f1b2"),
-        ("train_large_samples", "ee7689cba58eaa1541ed78bed3b5e058cc36a52a6bb62cd2be82e8538c53e9a4"),
+        ("train_large_samples", "5e93a2b6f1a55d14617a7f24f783a2b5698afc145d8911833084a1fece9b5fc2"),
         ("train_small_files", "46a86b0008dc5348ffac1823f90029938393d5a2ae99d27ca38a63721906cdf5"),
         ("vdb_build_diskann", "237e014e17604b76223301929178b40d037fe17906e641078cd15e9f9dd0efee"),
         ("vdb_search_diskann", "8f57b52ae06867c77676cf9a8388d9c1bbb87249f1927db03c6d6447c0938cde"),
@@ -58,10 +58,11 @@ fn golden_fingerprints() {
     // re-recorded the same day after the conversation-directory `mkdir` was added to the abstract;
     // vdb_build_diskann likewise when its base file moved to `base/base.fbin`; ckpt_write_dcp when its
     // readback phase went behind `readback = false`; train_small_files on 2026-10-01 after the trace of
-    // the real loader added the second `lseek` per file, DESIGN_REVIEW.md §3.43).
+    // the real loader added the second `lseek` per file, DESIGN_REVIEW.md §3.43; train_large_samples the
+    // same day, rewritten from the trace of `np.load`, §3.44).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x71628bdb4289c4c8, 5120),
-        ("train_large_samples", 2, &[("steps", "5")], 0x13b5a9aaa823405b, 10728),
+        ("train_large_samples", 2, &[("steps", "5")], 0xa2c284c6137f9639, 50451),
         ("ckpt_write_dcp", 2, &[("steps", "200")], 0xc7efab55c3d4e8ee, 70),
         ("ckpt_restore", 2, &[], 0xf370a3cd3570d0ae, 38),
         ("model_load", 2, &[], 0x898ff58eafd7a634, 24602),
