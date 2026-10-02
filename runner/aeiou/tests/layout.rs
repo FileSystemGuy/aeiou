@@ -42,7 +42,7 @@ fn collect(text: &str, cfg: &Config, count: i64) -> Vec<(i64, OpKind, String, i6
 /// A TFRecord-shaped shard dataset: 100 records of 1000 bytes in shards of 10, each record
 /// framed by a 12-byte header and a 4-byte footer, read sequentially under `stream`.
 const TFRECORD: &str = r#"{
-  "ast": "0.2", "name": "stream_test",
+  "ast": "0.3", "name": "stream_test",
   "params": {"batches": {"default": 10}, "xfer": {"default": 4096}},
   "datasets": {"shards": {"files": {"pattern": "s/{id:04}.tfrecord", "count": 100, "samples_per_file": 10,
      "size": {"const": 1000}, "seed": 7, "access": "stream",
@@ -99,7 +99,7 @@ fn stream_consume_shuffles_shards_and_frames_records() {
 /// column of 8 bytes per row and a 22-byte page header); 4 magic bytes before the groups and a
 /// footer of 200 + 120 per group after them.
 const PARQUET: &str = r#"{
-  "ast": "0.2", "name": "parquet_test",
+  "ast": "0.3", "name": "parquet_test",
   "params": {"groups": {"default": 3}},
   "datasets": {"t": {"files": {"pattern": "p/{id:04}.parquet", "count": 192, "samples_per_file": 192,
      "size": {"const": 100000}, "seed": 7, "access": "stream",
@@ -164,7 +164,7 @@ fn framed_layout_geometry_by_hand() {
 /// Alignment: tar members (512-byte header, data padded to 512), the archive padded to
 /// 10240 after two zero blocks.
 const TAR: &str = r#"{
-  "ast": "0.2", "name": "tar_test",
+  "ast": "0.3", "name": "tar_test",
   "datasets": {"t": {"files": {"pattern": "w/{id:04}.tar", "count": 25, "samples_per_file": 10,
      "size": {"const": 1000}, "seed": 7, "access": "stream",
      "format": {"class": "webdataset", "layout": {"file_footer": 1024, "file_align": 10240,
@@ -202,7 +202,7 @@ fn alignment_and_short_last_shard() {
 
 /// `fadvise` runs against a real file and is part of the fingerprint.
 const FADVISE: &str = r#"{
-  "ast": "0.2", "name": "fadvise_test",
+  "ast": "0.3", "name": "fadvise_test",
   "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 4, "size": {"const": 20000}, "seed": 3}}},
   "actors": {"gpu": {"body": [
     {"loop": {"index": "i", "to": 4, "body": [

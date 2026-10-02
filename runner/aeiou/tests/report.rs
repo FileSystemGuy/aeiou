@@ -174,3 +174,40 @@ fn two_ranks_merged_on_rank_0_and_own_on_rank_1() {
     }
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Contract 0.3: an abstract may declare the API its application uses; a run takes it as the
+/// default backend, and a run under another one says so in the text and in the report.
+#[test]
+fn the_declared_backend_is_the_default_and_another_is_named() {
+    let root = tmpdir("declared");
+    let json = root.join("report.json");
+    let small = ["shard_bytes=4194304", "hdr_len=[4096, 4096]", "off=[4104, 1052680, 4104, 1052680, 2101256]", "bytes=[1048576, 1048576, 1048576, 1048576, 16384]", "rows=[1, 64, 1, 64, 1]", "row_bytes=[1048576, 16384, 1048576, 16384, 16384]"];
+    let (ok, _, err) = out(aeiou("datagen", "model_load.ast.json", &small).arg("--root").arg(&root).args(["--gpus", "2"]));
+    assert!(ok, "{err}");
+    let (_, dry, _) = out(aeiou("dry-run", "model_load.ast.json", &small).args(["--gpus", "2"]));
+    assert!(dry.contains("declared backend mmap"), "{dry}");
+    let run = |extra: &[&str]| {
+        let mut c = aeiou("run", "model_load.ast.json", &small);
+        c.arg("--root").arg(&root).args(["--gpus", "2", "--time-scale", "0"]).arg("--report-json").arg(&json).args(extra);
+        out(&mut c)
+    };
+    let (ok, text, err) = run(&[]);
+    assert!(ok, "{text}\n{err}");
+    assert!(text.contains("backend mmap  root"), "{text}");
+    assert!(!text.contains("not the abstract's"), "{text}");
+    let d = read(&json);
+    assert_eq!((d["backend"].as_str(), d["backend_declared"].as_str()), (Some("mmap"), Some("mmap")));
+    let fp = d["fingerprint"].clone();
+
+    let (ok, text, err) = run(&["--io-backend", "sync"]);
+    assert!(ok, "{text}\n{err}");
+    assert!(text.contains("backend sync is not the abstract's (mmap)"), "{text}");
+    let d = read(&json);
+    assert_eq!((d["backend"].as_str(), d["backend_declared"].as_str()), (Some("sync"), Some("mmap")));
+    assert_eq!(d["fingerprint"], fp, "the backend never changes the op stream");
+
+    // an abstract that declares none is `sync`, and buffered against direct is a difference too
+    let (_, text, _) = out(aeiou("run", "train_small_files.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2", "--io-backend", "sync-direct"]));
+    assert!(text.contains("backend sync-direct is not the abstract's (sync)"), "{text}");
+    std::fs::remove_dir_all(&root).unwrap();
+}

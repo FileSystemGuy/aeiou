@@ -170,12 +170,21 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.2"
+    AST_VERSION = "0.3"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
-    def __init__(self, name: str, doc: str | None = None, *, lint: bool = True):
+    BACKENDS = ("sync", "sync-direct", "io_uring", "io_uring-direct", "posix-aio", "posix-aio-direct",
+                "libaio", "libaio-direct", "mmap")
+
+    def __init__(self, name: str, doc: str | None = None, *, backend: str | None = None, lint: bool = True):
+        """`backend`: the API the traced application issues its I/O through (a runner backend
+        name); a run uses it by default. Leave it out for an application that calls read and
+        write (`sync`)."""
         self.name = check_ident(name, "workload name")
         self.doc = doc
+        if backend is not None and backend not in self.BACKENDS:
+            raise BuildError(f"workload {name}: backend must be one of {self.BACKENDS}")
+        self.backend = backend
         self.lint = lint
         self._params: dict[str, Param] = {}
         self._param_specs: dict[str, dict] = {}
@@ -322,6 +331,8 @@ class Workload:
         ast = {"ast": self.AST_VERSION, "name": self.name}
         if self.doc:
             ast["doc"] = self.doc
+        if self.backend:
+            ast["backend"] = self.backend
         if self._param_specs:
             ast["params"] = {k: _strip_none({**v, "default": _ast_value(v["default"])})
                              for k, v in self._param_specs.items()}

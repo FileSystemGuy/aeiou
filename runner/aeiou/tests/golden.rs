@@ -28,20 +28,21 @@ fn dry(text: &str, cfg: &Config, threads: usize) -> dryrun::Report {
 #[test]
 fn hashes_match_check_py() {
     // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day; re-recorded for
-    // contract 0.2 and model_load's `full` split the same day).
+    // contract 0.2 and model_load's `full` split the same day; all again 2026-10-01 for contract 0.3, the
+    // optional `backend`).
     let want = [
-        ("ckpt_restore", "44a49b8f7f112343793aeb4a0ec95bee0a97a2a570a7bb2f34615015597e4c0e"),
-        ("ckpt_write_dcp", "5487223973472bc05334cb903ca31298d4f4902bacb9d28871879c8b7856314d"),
-        ("kv_cache_serving", "5f7a6e6f00a25cce63a5f9259d43d4b4d394913cc47e113b976e9c147097c734"),
-        ("model_load", "88a447735de551248bca69924a6c84c5bcf14a4440501b47e74b3e69de301b11"),
-        ("train_large_samples", "5e93a2b6f1a55d14617a7f24f783a2b5698afc145d8911833084a1fece9b5fc2"),
-        ("train_small_files", "46a86b0008dc5348ffac1823f90029938393d5a2ae99d27ca38a63721906cdf5"),
-        ("vdb_build_diskann", "237e014e17604b76223301929178b40d037fe17906e641078cd15e9f9dd0efee"),
-        ("vdb_search_diskann", "8f57b52ae06867c77676cf9a8388d9c1bbb87249f1927db03c6d6447c0938cde"),
-        ("train_stream_tfrecord", "e5430c583b3454fe9f3125725272de9905476c93470a141458bcacac79b76013"),
-        ("train_stream_parquet", "f200e0ddcfce9ea4dd5f1354732b6a43e5e11a60d2c6879fd722ee262884d622"),
-        ("train_map_hdf5", "279887ce72ff01c20ab2eb5697ff4f114418c6b13e80783c62579ab0e1278988"),
-        ("vdb_search_ivf", "07449f43afaa49f835a3f1ee14c911bb7d1aedcb7b7280b972ba3e0eeac29510"),
+        ("ckpt_restore", "0183dda15546db6dca81c5033aede32f0b351784336298b7fae095329e14260a"),
+        ("ckpt_write_dcp", "cffdb8c102c3fb1a2875a44679bb50308c042346cf5062910231a25e4c025f0c"),
+        ("kv_cache_serving", "5254c9951cef630a394cf4807163459a2c0fd56a5639f6f939681bf7442bc66b"),
+        ("model_load", "6a22e3b84c3844e46bc4244961006e9add7b18605e9977ab5333d34998d5b111"),
+        ("train_large_samples", "a614e020420787cf55281294508bfc87e72997c16fe4a537b19255d3bd3326e1"),
+        ("train_small_files", "a1f595eebddcd31cd13799f8a10e6f415023924ead93046626103267d5079ac8"),
+        ("vdb_build_diskann", "8ec528846e8fae2879901808901cd265f7f557dd941617dff981d682f25b06ac"),
+        ("vdb_search_diskann", "63b47cc7e6e0eb25c56660f23ad932a33dd2010e2c3300aa84b604c8974c1310"),
+        ("train_stream_tfrecord", "bdba2a200488c0a7cf3d3b9269074990d1f54c013be0dd5fd84519469c886784"),
+        ("train_stream_parquet", "0e629d8ffd38043367d6bd690f2e7cb10cea8f179bea003c78e30450564b0ec2"),
+        ("train_map_hdf5", "4f20c7789667ecca22d3f4b11fcf29a6067eedf5647c83dc84712b9e25b80ccd"),
+        ("vdb_search_ivf", "9d72a58e47fa81a9f6d07c4d8a9e66a9e70859b438417e67e7c7c8634346af5d"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -186,7 +187,7 @@ fn collect(text: &str, cfg: &Config, template: &str, count: i64) -> Vec<(i64, Ve
 }
 
 const CONSUME: &str = r#"{
-  "ast": "0.2", "name": "consume_test",
+  "ast": "0.3", "name": "consume_test",
   "params": {"batches": {"default": 24}, "batch": {"default": 4}},
   "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}}},
   "actors": {"gpu": {"body": [
@@ -225,7 +226,7 @@ fn consume_is_a_permutation_per_epoch_across_actors() {
 }
 
 const CHAIN: &str = r#"{
-  "ast": "0.2", "name": "chain_test",
+  "ast": "0.3", "name": "chain_test",
   "params": {"reuse": {"default": {"mixture": [{"weight": 0.4, "dist": null}, {"weight": 0.6, "dist": {"uniform": {"lo": 1, "hi": 5}}}]}}},
   "namespaces": {"kv": {"pattern": "kv/{conv:016x}/d{d}", "fields": {"conv": "int", "d": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
@@ -266,7 +267,7 @@ fn at_chains_reach_the_original_conversation() {
 }
 
 const UNTIL_EOF: &str = r#"{
-  "ast": "0.2", "name": "eof_test",
+  "ast": "0.3", "name": "eof_test",
   "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 1, "body": [
@@ -313,7 +314,7 @@ fn rejects(text: &str, needle: &str) {
 fn validator_rejects_what_check_py_rejects() {
     let base = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.2", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.3", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{{datasets}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )

@@ -218,7 +218,7 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
 @needs_runner
 def test_size_draws_match_the_runner(tmp_path):
     """The Python `sample_size` port against sizes the Rust datagen wrote."""
-    ast = {"ast": "0.2", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,
+    ast = {"ast": "0.3", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,
            "size": {"mixture": [{"weight": 1, "dist": {"normal": {"mean": 50000, "sd": 20000, "min": 100}}},
                                 {"weight": 1, "dist": {"lognormal": {"median": 30000, "sigma": 0.7, "min": 1, "max": 90000}}},
                                 {"weight": 1, "dist": {"uniform": {"lo": 10, "hi": 5000}}},

@@ -12,7 +12,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.2",
+      "const": "0.3",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -20,6 +20,10 @@
     },
     "doc": {
       "type": "string"
+    },
+    "backend": {
+      "enum": ["sync", "sync-direct", "io_uring", "io_uring-direct", "posix-aio", "posix-aio-direct", "libaio", "libaio-direct", "mmap"],
+      "description": "The API the application this abstract was traced from issues its I/O through, as a runner backend name. Absent: sync. A run uses it by default; a run under another backend imposes another workload on the storage. Not part of the op stream or the fingerprint."
     },
     "params": {
       "type": "object",

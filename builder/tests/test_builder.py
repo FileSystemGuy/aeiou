@@ -309,3 +309,18 @@ def test_check_mode_reports_drift(tmp_path):
     p.write_text(emit.render(doc))
     r = _run_cli(["--check", "-o", tmp_path, script])
     assert r.returncode == 1 and "DRIFT" in r.stdout
+
+
+def test_a_workload_may_declare_its_backend():
+    """Contract 0.3: the API of the traced application, a run's default backend."""
+    with pytest.raises(BuildError, match="backend must be one of"):
+        Workload("w", backend="pread")
+    w = Workload("w", backend="mmap")
+    d = w.dataset("d", pattern="d/f_{id:06}", count=1, size=const(1), seed=1)
+    with w.actor("a", count=1) as a:
+        a.stat(d.file(0))
+    ast = w.build()
+    assert ast["backend"] == "mmap" and list(ast)[:2] == ["ast", "name"]
+    examples = pathlib.Path(__file__).resolve().parents[2] / "schema" / "examples"
+    assert "backend" not in json.loads((examples / "train_small_files.ast.json").read_text())
+    assert json.loads((examples / "model_load.ast.json").read_text())["backend"] == "mmap"

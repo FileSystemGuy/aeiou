@@ -1,5 +1,5 @@
 {
-  "ast": "0.2",
+  "ast": "0.3",
   "name": "vdb_search_diskann",
   "doc": "Beam search over a sector-packed graph index: `hops` dependent rounds of `beam` concurrent 4 KiB reads per query.",
   "params": {
@@ -226,14 +226,14 @@
       "script": "vdb_search_diskann.py",
       "sha256": "907839daa7563dc68bfd7ad3a79017a2f57aeca86a22696f58204670260205c4",
       "builder_version": "0.1.0",
-      "git": "0aec70405ce1"
+      "git": "32e33f8e9e9b"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
-      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "8f57b52ae06867c77676cf9a8388d9c1bbb87249f1927db03c6d6447c0938cde"
+    "ast_sha256": "63b47cc7e6e0eb25c56660f23ad932a33dd2010e2c3300aa84b604c8974c1310"
   }
 }

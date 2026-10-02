@@ -120,6 +120,11 @@ impl<'a> Checker<'a> {
         if !is_ident(&ast.name) {
             self.err(&vec!["name".into()], "not an identifier");
         }
+        if let Some(b) = &ast.backend {
+            if crate::backend::BackendKind::parse(b).is_none() {
+                self.err(&vec!["backend".into()], format!("`{b}` is not one of {}", crate::backend::NAMES));
+            }
+        }
         if ast.params.contains_key("gpus") {
             self.err(&vec!["params".into()], "`gpus` is reserved and set by the runner");
         }

@@ -83,8 +83,10 @@ struct RunCmd {
     /// `posix-aio` (glibc aio_read/aio_write on one thread per actor), `posix-aio-direct`,
     /// `libaio` (the kernel AIO calls on the event loop; asynchronous only as `libaio-direct`),
     /// `mmap` (reads are copies out of a mapping of the file).
-    #[arg(long = "io-backend", default_value = "sync")]
-    backend: String,
+    /// Default: the backend the abstract declares (`sync` when it declares none). Any other is a
+    /// different workload on the storage, and the run says so.
+    #[arg(long = "io-backend")]
+    backend: Option<String>,
     /// Event-loop threads for the io_uring and libaio backends (default: one per core, at most one
     /// per actor instance). The other backends run one thread per actor and ignore it.
     #[arg(long)]
@@ -295,7 +297,11 @@ fn run_cmd(a: RunCmd) -> Result<()> {
 
 fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
     let cfg = parse_config(&a.run)?;
-    let backend = BackendKind::parse(&a.backend).ok_or_else(|| anyhow::anyhow!("--io-backend {}: not one of {}", a.backend, aeiou::backend::NAMES))?;
+    // the run is the process: the abstract and the model live for the threads' lifetime
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.abstract_path)?));
+    let declared = loaded.ast.backend.as_deref().unwrap_or("sync");
+    let backend_name = a.backend.as_deref().unwrap_or(declared);
+    let backend = BackendKind::parse(backend_name).ok_or_else(|| anyhow::anyhow!("--io-backend {}: not one of {}", backend_name, aeiou::backend::NAMES))?;
     let expect_fingerprint = match &a.expect_fingerprint {
         None => None,
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| anyhow::anyhow!("--expect-fingerprint {h}: not hex"))?),
@@ -327,8 +333,6 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
         Some(_) if backend != BackendKind::Mmap => bail!("--mmap-consume is an mmap knob; --io-backend {} maps nothing", backend.name()),
         Some(c) => MmapConsume::parse(c).ok_or_else(|| anyhow::anyhow!("--mmap-consume {c}: not one of touch, copy"))?,
     };
-    // the run is the process: the abstract and the model live for the threads' lifetime
-    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.abstract_path)?));
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
@@ -339,6 +343,7 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
     doc.set("gpus", serde_json::json!(cfg.gpus));
     doc.set("params", payload::params_json(&loaded.doc, cfg, params)?);
     doc.set("backend", serde_json::json!(backend.name()));
+    doc.set("backend_declared", serde_json::json!(declared));
     doc.set("host", serde_json::json!(run::hostname()));
     doc.set("rank", serde_json::json!(a.rank));
     doc.set("ranks", serde_json::json!(a.ranks));
@@ -348,6 +353,9 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
     let mut out = stdout.lock();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
+    if backend.name() != declared {
+        writeln!(out, "backend {} is not the abstract's ({declared}): the storage sees another workload, and this run is not comparable with runs of the abstract as declared", backend.name())?;
+    }
     writeln!(out, "backend {}  root {}{}", backend.name(), a.root.display(), if uring.any() {
         format!("  io_uring knobs: {}", uring.describe())
     } else if backend == BackendKind::Mmap {
@@ -725,6 +733,9 @@ fn dry_run(a: DryRunArgs) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+    if let Some(b) = &loaded.ast.backend {
+        writeln!(out, "declared backend {b}")?;
+    }
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(&cfg))?;
     for line in report.total.take_lines() {
         writeln!(out, "{line}")?;
