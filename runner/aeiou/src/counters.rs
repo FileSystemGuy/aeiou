@@ -51,6 +51,10 @@ pub struct HostCounters {
     pub minor_faults: u64,
     #[serde(default)]
     pub major_faults: u64,
+    /// The most files the actors held open at once: counted at every open and close the
+    /// runner makes (`backend::open_files_peak`), not sampled.
+    #[serde(default)]
+    pub open_files_peak: u64,
     /// The mount `--root` is on, when `/proc/self/mountstats` lists one.
     pub mount: Option<MountCounters>,
 }
@@ -138,6 +142,7 @@ impl HostCounters {
         self.maxrss_bytes += o.maxrss_bytes;
         self.minor_faults += o.minor_faults;
         self.major_faults += o.major_faults;
+        self.open_files_peak += o.open_files_peak;
         match (&mut self.mount, &o.mount) {
             (Some(m), Some(n)) => m.merge(n),
             (None, Some(n)) => self.mount = Some(n.clone()),
@@ -392,6 +397,7 @@ impl Sampler {
             maxrss_bytes: ru1.maxrss_bytes,
             minor_faults: ru1.minflt.saturating_sub(self.ru0.minflt),
             major_faults: ru1.majflt.saturating_sub(self.ru0.majflt),
+            open_files_peak: crate::backend::open_files_peak(),
             mount,
         }
     }

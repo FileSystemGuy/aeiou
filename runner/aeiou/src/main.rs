@@ -98,6 +98,10 @@ struct RunCmd {
     /// Multiply every `compute` sleep (0 runs the I/O back to back).
     #[arg(long, default_value_t = 1.0)]
     time_scale: f64,
+    /// Start even when the estimated open files, threads, or mappings exceed this host's
+    /// limits (RLIMIT_NOFILE, RLIMIT_NPROC, kernel.threads-max, vm.max_map_count).
+    #[arg(long)]
+    ignore_limits: bool,
     /// io_uring: cap each loop's bounded io-wq workers (IORING_REGISTER_IOWQ_MAX_WORKERS); the
     /// report shows the kernel's default either way.
     #[arg(long, value_name = "N")]
@@ -353,6 +357,17 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     };
     let (lo, hi) = run::gpu_range(cfg.gpus, opts.ranks, opts.rank, opts.rank_rotate);
     writeln!(out, "host {}  rank {} of {}  rotate {}  gpu ids [{lo}, {hi})", run::hostname(), opts.rank, opts.ranks, opts.rank_rotate)?;
+
+    // the limits, before any other host is kept waiting: soft limits raised to the hard ones,
+    // the estimated open files and threads against them
+    let loops = if backend.event_loop() { run::loop_count(model, &opts)? } else { 0 };
+    let limits = aeiou::limits::check(model, &opts, loops, a.ignore_limits)?;
+    for line in limits.lines() {
+        writeln!(out, "{line}")?;
+    }
+    for p in limits.problems() {
+        writeln!(out, "limits: IGNORED: {p}")?;
+    }
 
     // several hosts: rank 0 listens, every rank connects and has its configuration checked
     // before anything else happens; a host that fails later tells the others through it

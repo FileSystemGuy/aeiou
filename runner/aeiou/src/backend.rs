@@ -599,8 +599,24 @@ pub struct OpenFile {
 unsafe impl Send for OpenFile {}
 unsafe impl std::marker::Sync for OpenFile {}
 
+/// Files the actors of this process hold open, and the most they have held since
+/// `open_files_reset`: counted where an `OpenFile` is made and dropped, not sampled.
+static OPEN_FILES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static OPEN_FILES_PEAK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Start a run's count: the peak becomes what is open now.
+pub fn open_files_reset() {
+    OPEN_FILES_PEAK.store(OPEN_FILES.load(Ordering::Relaxed), Ordering::Relaxed);
+}
+
+pub fn open_files_peak() -> u64 {
+    OPEN_FILES_PEAK.load(Ordering::Relaxed)
+}
+
 impl From<OwnedFd> for OpenFile {
     fn from(fd: OwnedFd) -> Self {
+        let now = OPEN_FILES.fetch_add(1, Ordering::Relaxed) + 1;
+        OPEN_FILES_PEAK.fetch_max(now, Ordering::Relaxed);
         OpenFile { fd, map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()) }
     }
 }
@@ -614,6 +630,7 @@ impl std::ops::Deref for OpenFile {
 
 impl Drop for OpenFile {
     fn drop(&mut self) {
+        OPEN_FILES.fetch_sub(1, Ordering::Relaxed);
         for m in self.all.get_mut().unwrap_or_else(|e| e.into_inner()).drain(..) {
             unsafe { libc::munmap(m.ptr as *mut libc::c_void, m.len) };
         }

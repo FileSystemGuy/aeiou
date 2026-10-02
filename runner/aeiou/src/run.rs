@@ -258,6 +258,21 @@ pub struct RunOpts {
     pub drop_caches: bool,
 }
 
+/// The event-loop threads this host will run under an event-loop backend: `--threads`, or
+/// one per core, at most one per instance (as `uring::spread` deals them).
+pub fn loop_count(model: &Model<'_>, opts: &RunOpts) -> Result<u64> {
+    let mut instances = 0i64;
+    for (_, count) in actor_counts(model)? {
+        let (lo, hi) = gpu_range(count, opts.ranks, opts.rank, opts.rank_rotate);
+        instances += (hi - lo).max(0);
+    }
+    if instances == 0 {
+        return Ok(0);
+    }
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    Ok(if opts.threads == 0 { cores } else { opts.threads }.clamp(1, instances as usize) as u64)
+}
+
 /// The `[lo, hi)` of instance ids host `rank` of `ranks` runs for a template of `count`
 /// instances: contiguous ranges of `ceil(count / ranks)`, rotated by `rotate` hosts
 /// (`NAPKIN_MATH.md` §8.A: rank is only the host index that selects a GPU id range).
@@ -835,6 +850,9 @@ impl ActorState {
                     let mut extra = String::new();
                     if matches!(op.kind, OpKind::Read | OpKind::Write) {
                         extra = format!(" off={} len={}", op.offset, op.len);
+                    }
+                    if code == libc::EMFILE {
+                        extra.push_str(" [RLIMIT_NOFILE reached: the `limits:` lines at startup have the estimate and the limit]");
                     }
                     Err(anyhow!("{}{}: {} ({})", where_(), extra, e, name))
                 }
@@ -1770,6 +1788,7 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
         mmap_stats: Arc::new(MmapStats::default()),
     });
 
+    crate::backend::open_files_reset();
     let sampler = Sampler::start(&sh.opts.root);
     let t0 = Instant::now();
     if sh.opts.backend.event_loop() {
@@ -1890,8 +1909,9 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
 fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()> {
     writeln!(
         out,
-        "host: tasks peak {}  io-wq workers peak {}{}  cpu user {} sys {}  maxrss {}  faults minor {} major {}",
+        "host: tasks peak {}  open files peak {}  io-wq workers peak {}{}  cpu user {} sys {}  maxrss {}  faults minor {} major {}",
         c.tasks_peak,
+        c.open_files_peak,
         c.iowq_workers_peak,
         if c.sqpoll_threads > 0 { format!("  sqpoll threads {}", c.sqpoll_threads) } else { String::new() },
         human_ns(c.cpu_user_ns as i128),
