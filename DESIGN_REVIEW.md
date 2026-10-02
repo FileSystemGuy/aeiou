@@ -2420,13 +2420,107 @@ checkpoint pair already has (§3.31).
 **Decided 2026-10-02** (the user): the cold reader is two runs. A writer run fills the
 store; a reader run takes it as an `input` namespace after `--drop-caches`. No parameter
 set sized against the client's memory, which would tie the workload to the client's DRAM.
-Not built yet: the reader half is a second abstract over the writer's namespace, as
-`ckpt_restore` is to `ckpt_write_dcp`.
+~~Not built yet: the reader half is a second abstract over the writer's namespace, as
+`ckpt_restore` is to `ckpt_write_dcp`.~~ Built the same day, from traces of another
+backend, since this one turned out to have no reader (§3.52).
 
 **Capture notes.** vLLM keeps a small chat entirely in GPU memory and LMCache is then never
 read: the kit limits the engine's KV memory (`--kv-cache-memory-bytes`). The flashinfer
 sampler compiles kernels at first use and needs the CUDA compiler; the kit turns it off.
 `%network` is left out of the trace.
+
+### 3.52 The shared store: a writer and a cold reader, from LMCache's `fs://` backend (added 2026-10-02)
+
+§3.51 ended with a decision: the KV read path is measured with two runs, a writer and then
+a reader over the writer's namespace after `--drop-caches`. The user asked for the reader.
+Building it began, as every row has, with what the application does, and the first thing
+found was that the application traced in §3.51 has no such reader. **The choices below
+were made while building and are not yet confirmed by the user.**
+
+**What was tried, in order.**
+
+1. *The local-disk backend, restarted on a filled directory.* It wrote 47 new files beside
+   the 47 old ones. LMCache names a chunk by Python's `hash` of the token prefix, which is
+   seeded per process (its log says `Using hash algorithm: builtin` and warns of
+   "inconsistencies in distributed caching").
+2. *The same with `PYTHONHASHSEED=0`.* The names now agree, and the restarted engine opens
+   each with `O_TRUNC` and writes it again (OPEN_NOATTR and SETATTR on the wire in place
+   of OPEN). It reads back only what it wrote itself. The index of that backend is in
+   memory and is not rebuilt from the directory.
+3. *The `fs://` remote backend* (`fs_connector.py`): existence by `stat`, a put through a
+   temporary name and a rename, a get through `aiofiles`. A restarted engine finds the
+   first one's chunks. But its second turn's prompts differed: a model that loaded its KV
+   cache replies differently from one that computed it, so from the second turn on the
+   history hashes to chunks the store does not have, and 27 of 47 were written again.
+4. *The same with the replies replayed* (`chat.py --save`, `--replay`): the restarted
+   engine is sent the first one's requests byte for byte. No write, 168 `stat`s, 91
+   loads, 188 READs on the wire. This is the reader's trace.
+
+So the draft of this row (before §3.51) had been closer to the `fs://` backend than to the
+one §3.51 traced: its `stat` loop and its rename are here.
+
+**Choices.**
+
+- **Two new abstracts; `kv_cache_serving` is unchanged.** The local-disk backend is a real
+  configuration with its own call sequence, and as measured it exercises writes only
+  (§3.51). `kv_cache_shared` is the same request stream on the `fs://` backend, and
+  `kv_cache_shared_reader` is that stream in front of the store the first run left. The
+  decision of §3.51 named "a reader over an `input` namespace"; it did not say on which
+  backend, because the finding that only one of them can have a reader came after it.
+  *Against:* three KV abstracts where there was one, two of them differing only in the
+  state of the store.
+- **One script, two ASTs, and the draws at the same sites.** The reader has to name the
+  chunks the writer left, and the names are positional draws (`conv` is a `uniform64` at
+  a new conversation). A draw's key is its actor, its site (the JSON pointer of its node),
+  and the loop indices (`runner/README.md` §2), so two abstracts draw the same values when
+  the draws stand at the same places and the run has the same `--seed`, `--gpus`, and
+  parameters. `shape(name, reader)` emits the chain's statements first and identically,
+  then the ops. Nothing in the contract or the runner changed. *Against:* the coupling is
+  by construction in the script and is not checked by the validator; it is checked by the
+  run (a reader with another seed, or built from a script whose prelude moved, fails at
+  its first `stat` or `open` with `ENOENT`) and by `tests/run.rs`. The namespace manifest
+  compares the namespace's definition, not the seed or the parameters of the run that
+  wrote it; recording those and comparing them at the reader's start would turn the late
+  failure into a refusal before the gate, and is a contract change left for the user.
+- **`hit` is the one difference in the chain.** The chunks the store has for a prompt are
+  `had` (what earlier turns stored) on an empty store and `stored` (every whole chunk of
+  the prompt) on a filled one. Lookups walk `hit` chunks; loads are `hit − held`, where
+  `held = (ptoks − inn) / chunk_tokens` for a conversation back within `local` requests
+  and 0 otherwise. This is the rule LMCache's log shows in all 80 requests (hit chunks
+  less the whole chunks of `Inference Engine computed tokens`). For the writer it gives
+  what `kv_cache_serving` already had (`had` when the engine lost the conversation, else
+  nothing).
+- **The reader issues no prefill `compute`.** Every whole chunk of the prompt is loaded or
+  held; the tokens past the last whole chunk are computed by the real engine and are not
+  charged here, as they are not in the writer.
+- **The writer's terminating `stat` expects `ENOENT` and tolerates a hit.** After an
+  eviction (`d > retain`) the abstract stores the chunks again under names that exist
+  (no simulated cache, `GRAMMAR_OPTIONS.md` §5.3), where the real store would have
+  removed them.
+- **`buf` is a parameter** (1 MiB, the mount's `st_blksize`), as in `ckpt_restore`: the
+  first read of a chunk file is the buffered reader's fill and its length is the file
+  system's answer, not the application's. A chunk file no longer than `buf` is one read.
+- **The system prompts stay a dataset**, in chunk files of the same size as the store's
+  (header included), with a `stat` per whole chunk in every lookup. The traces have a miss
+  and two stores at the first use of each prompt.
+- **Backend: none declared, so `sync`.** `aiofiles` runs ordinary blocking calls on a
+  thread pool. The connector's `O_DIRECT` option (`fs_connector_use_odirect`) is another
+  call sequence and was not traced.
+- **`chat.py` gained `--save` and `--replay`**, and the kit sets `PYTHONHASHSEED`. Both are
+  conditions for a second engine to hit at all, and worth knowing about LMCache on a
+  shared file system apart from this benchmark.
+
+**Measured** (tables in `ABSTRACTS.md` §8). Calls: 47 / 48 chunks stored, 47 / 88 and
+91 / 136 loaded (trace / abstract; `local = 8` gives 0 and 32, the traced engine lies
+between as in §3.51). Wire, reader: 188 READs for vLLM, 192 for the abstract, four per
+chunk file, each file once. Not explained: five WRITEs per chunk from vLLM against the
+abstract's four, and three times the GETATTRs. The reader was made cold with `fsync` and
+`POSIX_FADV_DONTNEED` per file, since `--drop-caches` needs root; `aeiou run` warned, as
+it should, that the reading host had written the objects.
+
+**Not done.** A reader on a second client (the OPEN and delegation traffic of a client
+that did not write the files); two engines on one store at once; the `O_DIRECT` option;
+the chat replay for the distributions, which is unchanged from §3.51.
 
 ## 4. Plan changes
 
@@ -2465,7 +2559,7 @@ sampler compiles kernels at first use and needs the CUDA compiler; the kit turns
   definitions decided (§3.39). ~~Next: the `RLIMIT`
   checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
-  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51). Every row of the capture plan has a trace; open: a chat replay for the KV distributions, the tolerances, the `replay` node, a GPU engine's touch pattern for `model_load`.
+  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: a chat replay for the KV distributions, the tolerances, the `replay` node, a GPU engine's touch pattern for `model_load`.
 
 ## 5. Things reviewed and left as-is
 

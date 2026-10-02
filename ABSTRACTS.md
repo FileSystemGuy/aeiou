@@ -1234,7 +1234,8 @@ prompts; kit in `builder/traces/kv_cache_serving`, reasoning in `DESIGN_REVIEW.m
   chunks have left the client's cache: a store larger than the client's memory, or a
   second engine or a restarted one in front of a filled store. Neither was measured.
   Decided 2026-10-02: the cold reader is a second run over the first run's namespace after
-  `--drop-caches` (`DESIGN_REVIEW.md` §3.51); not built yet.
+  `--drop-caches` (`DESIGN_REVIEW.md` §3.51); ~~not built yet~~ built the same day, on
+  another LMCache backend, because this one has no reader ("The shared store", below).
 
 Notes on the shape:
 - The `warm` prefix of the index space exists so that `conv @ (r − d)` has something to reach
@@ -1250,16 +1251,81 @@ Notes on the shape:
 - `files_per_chunk > 1` wraps each block access in `for l in $files_per_chunk` with `/l_{l:02}`
   appended to the name.
 
+**The shared store (2026-10-02): `kv_cache_shared` and `kv_cache_shared_reader`.** The
+reader that the wire counts above call for cannot be an engine on the local-disk backend.
+Restarted on a filled directory that backend found nothing: its index is in memory and its
+chunk names come from Python's per-process hash, and with the hash seed fixed
+(`PYTHONHASHSEED=0`, the same names) it still truncated and rewrote all 47 chunks and read
+none it had not written. LMCache's backend for a store that engines share is `remote_url:
+fs://…`, and it was traced twice on the loopback NFS mount with the 40 requests above: an
+engine on an empty store, then a restarted engine on the filled store, sent the same
+requests byte for byte (`chat.py --save`, `--replay`). Kit in `builder/traces/kv_cache_shared`,
+reasoning in `DESIGN_REVIEW.md` §3.52.
+
+- **The store is the directory.** No index: a lookup is one `stat` per whole chunk of the
+  prompt, in order, ending at the first chunk that is missing (one `ENOENT` per request on
+  an empty store, none on a filled one). The draft's `stat` loop was this backend.
+- **A chunk file is a 28-byte header and the chunk** (3,145,756 bytes here), written as
+  `<name>.tmp` with two `write`s (28, then the chunk) inside Python's `open`, and renamed
+  to `<name>.data`. No `fsync`, no `stat` before the store.
+- **A load is two reads**: Python's buffered reader fills its buffer for the header (1 MiB,
+  the mount's `st_blksize`) and reads the rest (2,097,180) into the chunk's memory.
+- **What is loaded is exact**: the chunks the store has for the prompt, less the whole
+  chunks the engine still holds in GPU memory (all 80 requests, from LMCache's log). On an
+  empty store the store has what earlier turns wrote, so an engine that still holds the
+  conversation loads nothing. On a filled store it has every whole chunk of the prompt,
+  the new ones included: the reader loads those where the writer computed and stored them.
+- **The reader writes nothing.** 91 loads and 168 lookups, against the writer's 47 stores,
+  47 loads, and 161 lookups.
+- **Two abstracts from one script** (`builder/abstracts/kv_cache_shared.py`): the same
+  request stream, with the store empty (a namespace) or filled (`input`, V14). The reader
+  is run with the writer's `--seed`, `--gpus`, and parameters; the conversation ids are
+  positional draws at the same sites in both, so the reader names the chunks the writer
+  left. Another seed fails on its first lookup.
+- **Against the traces** at the fitted parameters:
+
+  | | writer trace | `kv_cache_shared` | reader trace | `kv_cache_shared_reader` |
+  |---|---|---|---|---|
+  | chunks stored (`rename`) | 47 | 48 | 0 | 0 |
+  | chunks loaded | 47 | 88 | 91 | 136 |
+  | `stat` | 161 | 168 | 168 | 176 |
+
+  The differences are those of the local-disk row: one more chunk stored (replies shorter
+  than the fitted 100 tokens), a `stat` of the system prompt's chunk in every request
+  where the first use of each prompt misses, and `local = 7`, which loads every returning
+  conversation whole while the traced engine still held the first turns. `local = 8`
+  gives 0 and 32 loads; the traces lie between.
+- **On the wire** (`mountstats`; the store evicted from the client's cache between the
+  two runs with `fsync` and `POSIX_FADV_DONTNEED` per file, for want of root):
+
+  | | writer, vLLM | writer, abstract | reader, vLLM | reader, abstract |
+  |---|---|---|---|---|
+  | WRITE / COMMIT / RENAME | 235 / 47 / 47 | 192 / 48 / 48 | 0 | 0 |
+  | READ | 0 | 0 | 188 | 192 |
+  | OPEN | 47 | 48 | 47 | 0 |
+  | LOOKUP | 40 | 44 | 0 | 0 |
+  | GETATTR | 133 | 51 | 141 | 46 |
+
+  Four READs per chunk file, each file once: the reader's 91 loads (286 MB asked for)
+  cost the server 47 files (148 MB), the client's cache serving a chunk's later loads.
+  Not explained: the server's fifth WRITE per chunk (the abstract sends four), and the
+  GETATTR counts, where vLLM sends about one per `stat` and the runner far fewer. The
+  runner's reader sent no OPEN because the same client still held the writer's
+  delegations; a reader on another client has none.
+
 **Cuts (stated).**
 - **Cross-engine sharing.** A block written by engine A and read by engine B is a hit only
   because of timing (§5.3 of `GRAMMAR_OPTIONS.md`, R21). Not modeled in this shape. If a trace
   shows it matters, add a statistical term: a fraction of "new" conversations instead draw a
   conversation from a pre-populated shared namespace written by `datagen` (a hit by
-  construction), or run a barrier-separated two-phase variant.
+  construction), or run a barrier-separated two-phase variant. *2026-10-02:* the two-run
+  form exists for the backend that shares (`kv_cache_shared`, then `kv_cache_shared_reader`
+  over its namespace); two engines on one store at the same time are still not modeled.
 - **Lookups are metadata.** Real LMCache keeps an in-memory index and only touches storage for
   data; ~~the `stat` loop models a shared-filesystem backend with no index. Keep or drop per the
   system being modeled; it doubles the op count, so the choice must be stated.~~ the `stat` loop
-  is gone (2026-10-02): the traced backend issues none.
+  is gone (2026-10-02): the traced backend issues none. The backend with no index is
+  `kv_cache_shared`, from its own trace.
 - **What the engine holds is a threshold in requests** (`local`), where the real one is GPU
   memory in bytes. The system prompts' chunks are read only with `sys_local = false`.
 - **The system prompts are a dataset** with a directory to itself (V13), where LMCache keeps

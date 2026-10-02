@@ -336,7 +336,14 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     the server and the abstract alike, and no READ in either, since the client still holds
     the chunks it wrote. ~~Which cold-reader configuration to score is open (§3.51).~~
     **Decided 2026-10-02:** the cold reader is two runs, a writer and then a reader over an
-    `input` namespace after `--drop-caches` (§3.51); the reader abstract is not built yet.
+    `input` namespace after `--drop-caches` (§3.51); ~~the reader abstract is not built yet.~~
+    **Built 2026-10-02** (§3.52, `builder/traces/kv_cache_shared`): the local-disk backend
+    has no reader (a restarted engine rewrites the store), so the pair is traced from
+    LMCache's `fs://` backend: `kv_cache_shared` (stat lookups, header and chunk written to
+    a temporary name and renamed) and `kv_cache_shared_reader` (the same request stream on
+    the filled store: no write, every chunk it does not hold loaded). The reader runs with
+    the writer's seed and parameters. 188 READs on the wire for vLLM, 192 for the abstract.
+    Choices not yet confirmed.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
