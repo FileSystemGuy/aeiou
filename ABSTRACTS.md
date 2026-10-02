@@ -216,22 +216,30 @@ about 140 MiB. A `.npz` is a zip archive, so the read pattern is not sequential 
 the tail is read first (end-of-central-directory record), then the central directory, then each
 member. NumPy reads a non-seekable member in fixed chunks.
 
-**Per-sample syscall skeleton** **[verify]**:
+**Per-sample syscall skeleton** (**traced 2026-10-01** and rewritten from the trace; the
+drafted skeleton, which read two equal members by header and had no read at offset 0, is
+in the history before that date. See "Trace" below.):
 
 ```
 openat(…, O_RDONLY|O_CLOEXEC); fstat; ioctl(TCGETS)=ENOTTY; lseek(0, SEEK_CUR)
-lseek(fd, 0, SEEK_END); lseek(fd, -22, SEEK_END); read(fd, …, blksize) = 22   # zipfile._EndRecData
-lseek(fd, cd_offset, SEEK_SET); read(fd, …, blksize)                          # central directory
-for each member (1–2):
-    lseek(fd, header_offset, SEEK_SET); read(fd, …, blksize)                  # local header + name
-    read(fd, …, xfer) × ⌈member_size / xfer⌉                                  # numpy.lib.format._read_bytes
+read(fd, …, blksize) = blksize                                    # np.load peeks the magic: a buffer fill at 0
+lseek(fd, 0, SEEK_END); lseek(fd, 0, SEEK_CUR)                    # zipfile._EndRecData
+lseek(fd, -22, SEEK_END); read(fd, …, blksize) = 22               # EOCD record
+lseek(fd, size-42, SEEK_SET); read(fd, …, blksize) = 42           # zip64 locator probe
+lseek(fd, size-22-cd_len, SEEK_SET); read(fd, …, blksize) = cd_len+22   # central directory
+lseek(fd, 0, SEEK_SET)                                            # local header of "x"
+read(fd, …, blksize) × ⌈size / blksize⌉                           # front to back; the last is short, no EOF read
+lseek(fd, 0, SEEK_CUR) × (⌈(size − framing) / 256 KiB⌉ + 4)       # between the reads: one tell per NumPy chunk
 close(fd)
 ```
 
-`xfer` is what the trace decides: NumPy requests 256 KiB per chunk from a `ZipExtFile`, and the
-BufferedReader beneath it requests `max(256 KiB, st_blksize)`, so on NFS the chunk is likely
-1 MiB **[verify]**. `np.load` returns lazily; the member read happens when the sample is
-indexed, still inside the worker.
+NumPy asks the zip member for 256 KiB at a time; the `BufferedReader` beneath fills
+`st_blksize` (1 MiB on the traced mount), so each fill serves four chunks, and each chunk
+costs one `lseek(0, SEEK_CUR)` (the buffered seek asks the raw position). The first
+megabyte is read twice, once for the magic and once as data. DLIO's reader indexes only
+`"x"`; `"y"` (a label list, 191 bytes with its headers) sits between `x` and the central
+directory and is fetched only as part of the last buffer fill. `framing` is the 498 bytes of
+the archive that are not `x`'s data.
 
 **Abstract.**
 
@@ -239,10 +247,11 @@ indexed, still inside the worker.
 workload train_large_samples {
   param batch = 7, workers = 4, prefetch = 2, steps = 500, sync_every = 500
   param step_time = 323ms                 # [measure]
-  param hdr_read  = 1MiB                  # [verify] st_blksize
-  param xfer      = 1MiB                  # [verify] member read chunk
-  param members   = 2                     # [verify] "x" and "y" in the npz
-  param cd_len    = 200, lh_len = 40      # [verify] central directory and local header bytes
+  param hdr_read  = 1MiB                  # st_blksize (traced)
+  param xfer      = 1MiB                  # buffer fill under the member read: st_blksize (traced)
+  param np_chunk  = 256KiB                # NumPy's read chunk; one tell each
+  param cd_len    = 102                   # central directory: "x.npy", "y.npy" (traced)
+  param framing   = 498                   # archive bytes that are not x's data (traced)
 
   dataset train = files("train/{id div 10000:05}/sample_{id:09}.npz",
                         count = 50_000,
@@ -255,12 +264,17 @@ workload train_large_samples {
       for j in $batch {
         let f = consume(train)
         open(f, RDONLY|CLOEXEC), fstat(f), ioctl(f, TCGETS, expect = [ENOTTY]), lseek(f, 0, CUR),
-        read(f, offset = size(f) - 22, $hdr_read)[until_eof],       # tail: EOCD record
-        read(f, offset = size(f) - $cd_len - 22, $hdr_read),        # central directory
-        for m in $members {
-          read(f, offset = member_off(f, m), $hdr_read),            # local header (§9.4)
-          read(f, offset = member_off(f, m) + $lh_len, $xfer)[member_len(f, m) / $xfer]
-        },
+        read(f, $hdr_read),                                         # magic: buffer fill at 0
+        lseek(f, 0, END), lseek(f, 0, CUR),
+        lseek(f, -22, END), read(f, $hdr_read),                     # EOCD
+        lseek(f, size(f) - 42, SET), read(f, $hdr_read),            # zip64 locator probe
+        lseek(f, size(f) - 22 - $cd_len, SET), read(f, $hdr_read),  # central directory
+        lseek(f, 0, SET),
+        for k in chunks(f) / per_fill {                             # fills NumPy drains whole
+          read(f, $xfer), for t in per_fill { lseek(f, 0, CUR) }
+        }
+        read(f, $xfer)[ceil(size(f) / $xfer) - chunks(f) / per_fill],   # the rest, to EOF
+        for t in chunks(f) % per_fill + 4 { lseek(f, 0, CUR) },
         close(f)
       }
     }
@@ -271,12 +285,28 @@ workload train_large_samples {
 }
 ```
 
-`member_off`/`member_len` are functions of `size(f)` and the member count (the archive layout is
-fixed by the generator, so `datagen` writes members of known proportion and the abstract
-computes their offsets; §9.4).
+`per_fill = $xfer / $np_chunk` and `chunks(f) = ceil((size(f) − $framing) / $np_chunk)` are
+builder-side helpers over `size(f)` (§9.4). The counts are exact per file: `4 + ⌈size/xfer⌉`
+reads and `11 + chunks(f)` seeks, checked against every file of both traced corpora.
 
-**Parameters and sources.** As §1, plus `xfer`, `members`, and the archive layout constants
-from the trace; `step_time` from the accelerator.
+**Parameters and sources.** As §1, plus `xfer`, `np_chunk`, `cd_len`, and `framing` from
+the trace; `step_time` from the accelerator. ~~`members` and `lh_len`~~ are gone (2026-10-01):
+the reader takes one member and never reads a local header as a request of its own.
+
+**Trace (2026-10-01).** `builder/traces/train_large_samples`: DLIO's read call through a
+`DataLoader`, 2 workers, 2 epochs, on the loopback NFS mount, over corpora written the way
+DLIO's generator writes them; NumPy 2.5.2, Python 3.12.3. Reasoning in `DESIGN_REVIEW.md`
+§3.44.
+
+- **16 files of about 140 MiB:** every op share, request size, run length, and popularity
+  within 0.002 of the abstract at the fitted parameters; reuse distance at 0.27, which
+  sixteen files cannot settle (two seeds of the abstract differ by 0.12).
+- **256 files of about 8 MiB:** largest distance 0.040, the reuse distance, inside the 0.062
+  between two seeds of the abstract.
+- **80 % of the calls are `lseek`**, all local. They cost client CPU and no wire op.
+- **On the wire** (140 MiB corpus, `mountstats` delta): 2,260 READs for 2.35 GB, one pass
+  over each file at about 1 MiB per READ; the second epoch came from the page cache. 2,247
+  GETATTRs, about one per READ; the cause was not looked into. 16 OPEN_NOATTR, no CLOSE.
 
 **Cuts.** None specific. The `.npz` may be stored uncompressed (`np.savez`) or deflated
 (`np.savez_compressed`); only the uncompressed layout has this shape, and the reference dataset
@@ -288,8 +318,8 @@ readahead window thrash and a good one detect the run late. Under O_DIRECT the w
 the abstract's `xfer`, which is the intended way to make the wire pattern explicit
 (`NAPKIN_MATH.md` §8.B).
 
-**Constructs used.** `read` with an explicit `offset` expression using `size(f)`; repeat count
-from file metadata; the archive-layout helper functions.
+**Constructs used.** `lseek` with `END` and with an offset expression over `size(f)`; repeat
+counts from file metadata; builder-side helper functions.
 
 ---
 
@@ -1079,7 +1109,7 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 | Workload | Command to trace | What to read off the trace |
 |---|---|---|
 | §1 small files (**traced 2026-10-01**, §1 "Trace") | PyTorch DataLoader + ImageFolder, `num_workers=2`, 200 steps | per-file syscall sequence and order; `read` length argument (`st_blksize` on NFS); whether the EOF read occurs; wire ops per file from `nfsstat` deltas |
-| §2 large samples | DLIO `unet3d` reader or `np.load` loop on `.npz` | tail-read offsets; member header reads; chunk size of the member reads; `cd_len`, `lh_len` |
+| §2 large samples (**traced 2026-10-01**, §2 "Trace") | DLIO `unet3d` reader or `np.load` loop on `.npz` | tail-read offsets; member header reads; chunk size of the member reads; `cd_len`, `lh_len` |
 | §3 checkpoint write | `torch.distributed.checkpoint.save` on 2 ranks; `torch.save` on 1 | `mkdir` result per rank; write sizes per item and the coalesced small-record size; `fsync` presence; `.metadata` size and the `rename` |
 | §4 restore / load | `dcp.load`; `AutoModel.from_pretrained` with `safetensors` | per-item `lseek`/`read` pairs; header read lengths; `mmap` and fault pattern (`perf trace -F` or `/proc/PID/smaps` deltas) |
 | §5 DiskANN | `search_disk_index` on a 10M-point index, `beam_width=4` | `io_submit` batch sizes (= beam), rounds per query (hops), offset histogram (hub concentration), node-cache size |

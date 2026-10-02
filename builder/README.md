@@ -113,7 +113,7 @@ row (a hand-unrolled iteration); `Workload(..., lint=False)` allows it.
 Sugar that never reaches the AST: `every(n)` (a `cond` on `mod`), `repeat=n` on `read`/`write`
 (a `loop` with a generated index `rep`, so a drawn length is re-drawn per repetition),
 parameter tables (parallel arrays), `draw(name, dist)`, unit multipliers, and any helper
-function an author writes over nodes (`member_off(f, m)` in `abstracts/train_large_samples.py`).
+function an author writes over nodes (`chunks(f)` in `abstracts/train_large_samples.py`).
 `x @ (i − d)` is spelled `cursor.ref("x").at(i - d)`; `recent` is not a construct.
 
 Namespaces are always explicit (`w.namespace(...)` then `ns.object(...)`); the paper form's
@@ -313,7 +313,9 @@ on NFS, the script that was traced, the corpus writer, the fitted parameter file
 trace's metrics document. The trace corrected the abstract (a second `lseek` per file,
 `stat` and `fstat` per directory in the walk); `tests/test_trace.py` now holds the abstract
 at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reasoning in
-`DESIGN_REVIEW.md` §3.43 (decided 2026-10-01).
+`DESIGN_REVIEW.md` §3.43 (decided 2026-10-01). `traces/train_large_samples` is row 2,
+`np.load(...)["x"]` as DLIO issues it: that abstract was rewritten from its trace
+(`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44, not yet confirmed by the user).
 
 ## 8. Not yet
 

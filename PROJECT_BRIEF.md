@@ -285,8 +285,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `DESIGN_REVIEW.md` §3.43, `builder/traces/train_small_files`): PyTorch `DataLoader` +
     `ImageFolder` on loopback NFS; the abstract gained the second `lseek` per file and the
     walk's `stat`/`fstat`, after which every op share and request size is equal and the
-    largest distance is 0.048 (reuse distance, the order). Choices confirmed by the user (**decided 2026-10-01**). Still
-    to do: the other seven rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
+    largest distance is 0.048 (reuse distance, the order). Choices confirmed by the user (**decided 2026-10-01**). 
+    **Second, 2026-10-01** (`ABSTRACTS.md` §2 "Trace", `DESIGN_REVIEW.md` §3.44,
+    `builder/traces/train_large_samples`): `np.load(...)["x"]` as DLIO issues it. The
+    drafted abstract was wrong in shape (two members, header reads, no read at 0) and was
+    rewritten from the trace; largest distance 0.040 on a 256-file corpus. Choices not yet
+    confirmed. Still
+    to do: the other six rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its

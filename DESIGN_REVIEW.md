@@ -1892,6 +1892,53 @@ choices below were made while building and confirmed by the user the same day (d
 
 Also fixed: `aeiou-trace compare` on a missing or malformed file printed a traceback.
 
+### 3.44 The second trace: `train_large_samples` was a guess, and the trace replaced it (added 2026-10-01)
+
+Row 2 of the capture plan: `np.load(path, allow_pickle=True)["x"]`, the call in DLIO's
+`npz_reader.py`, through a `DataLoader` on loopback NFS, over archives written as DLIO's
+`npz_generator.py` writes them (`np.savez(x=volume, y=labels)`). Kit in
+`builder/traces/train_large_samples`, findings in `ABSTRACTS.md` §2. Unlike §3.43, where
+the draft was one call short, here the draft was wrong in shape. **The choices below were
+made while building and are not yet confirmed by the user.**
+
+- **What the draft had wrong.** Two members of equal size, each found by a read of its
+  local header and then read from a re-seeked offset; no read at offset 0 before the tail;
+  an EOF read after the tail read; one `lseek` per member. The application reads one
+  member (`x`; `y` is 191 bytes and is never asked for), reads the first megabyte twice
+  (the magic, then the data), probes for a zip64 locator, never issues a zero-length read,
+  and issues one `lseek(0, SEEK_CUR)` per 256 KiB NumPy chunk, so four of five calls are
+  seeks.
+- **The abstract was rewritten; hash and fingerprints changed.** AST `ee7689cb…` became
+  `5e93a2b6…`. Parameters `members` and `lh_len` are removed, `np_chunk` and `framing`
+  added, `cd_len` goes from 200 to the traced 102. A parameter file naming the removed
+  ones is now refused, which is the intended failure.
+- **Seeks are explicit ops, reads are sequential.** The draft used reads with an `offset`
+  (a `pread`), which is one call where the application makes two. The op stream is the
+  application's, so the seeks are in it. *Against:* 80 % of the abstract's ops now do
+  nothing on any storage. They are kept because client CPU per byte is part of what this
+  workload measures, and a backend is charged what the application does.
+- **The seek count is exact, by two loops.** Whole buffer fills carry four seeks each; the
+  remainder of the reads and of the seeks follow. The order inside the last megabyte
+  differs from the application's (reads, then seeks); the counts per file are equal for
+  every file of both corpora. An approximation (four per fill throughout) was 0 to 3
+  seeks per file off and was replaced once the rule was understood.
+- **`framing = 498` is a parameter, not a constant.** It is the layout of
+  `np.savez(x=, y=[0])` with NumPy's forced zip64 local headers. Another generator
+  (more members, longer names, `savez_compressed`) has another value or another shape.
+- **Two corpora, two committed metrics documents.** Sixteen 140 MiB files are the
+  reference shape and settle everything but the reuse distance; 256 files of 8 MiB settle
+  that (0.040 against a seed-to-seed 0.062). The test allows 0.3 and 0.07 on the reuse
+  distance and 0.01 on every other row; counts within 1 %, since the abstract draws its
+  sizes and the corpus has its own.
+- **Not modeled.** The `glob` that lists the corpus (two directories). DLIO lists files
+  itself and differently; the walk is not part of this abstract.
+- **Seen and not explained.** About one GETATTR per READ on the wire. Recorded in
+  `ABSTRACTS.md` §2; whether it is the client revalidating during a long buffered read
+  without a delegation is a question for a run with `rpcdebug`, not for the abstract.
+
+The lesson for the remaining six rows: the drafts marked **[verify]** are hypotheses. One
+was nearly right and one was not.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
