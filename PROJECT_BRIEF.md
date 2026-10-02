@@ -192,7 +192,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    abstract reproduces its fingerprint on the NFS v4.2 mount under `sync` cold, `sync` warm,
    and `sync-direct`, the two-rank tests pass with their roots on it, and the NFS client's
    RPC counts per backend are tabulated (a same-host restore issues zero READ RPCs; O_DIRECT
-   sends one per application read). Still to do: `--metrics` (item 14), ~~`stream` access~~
+   sends one per application read). Still to do: ~~`--metrics` (item 14),~~ (built 2026-10-01, item 14) ~~`stream` access~~
    (contract 0.2, 2026-09-30), and the per-op cost (150–350 ns; caching a bound handle's
    path is the first fix). **The resumable VM and the `io_uring` backends done 2026-10-01**
    (`runner/README.md` §8, `DESIGN_REVIEW.md` §3.29): every committed abstract reproduces its
@@ -265,6 +265,11 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     read/write mix on the abstract's stream; a trace tool computes the same from a real trace; an
     abstract is accepted for a workload class only when they match within tolerances. A `replay`
     AST node holds a literal captured sequence for small-scale calibration; never CLOSED.
+    **The abstract's side built 2026-10-01** (`aeiou dry-run --metrics`, `runner/README.md`
+    §10, `DESIGN_REVIEW.md` §3.39): order-free metrics over the run, order-dependent ones
+    per instance in a round-robin order of its sub-actors, block-level stack distance in
+    bytes, hash sampling, a JSON form. The definitions were confirmed by the user the same day (**decided 2026-10-01**).
+    Still to do: the trace tool, the tolerances, the `replay` node.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its

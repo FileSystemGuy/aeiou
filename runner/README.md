@@ -25,7 +25,7 @@ cargo test --release
 | Command | What it does |
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
-| `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. |
+| `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
 | `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
@@ -36,7 +36,7 @@ Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **b
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
 backend-specific counters beyond those come with each backend), `--drop-caches` at the
 start gate with the residency check and the mount options line (decided 2026-10-01,
-`PROJECT_BRIEF.md` §6 item 16), `RLIMIT` startup checks, a JSON report, `--metrics` (`PROJECT_BRIEF.md` §6 item 14), and the `replay` node. ~~`stream`
+`PROJECT_BRIEF.md` §6 item 16), `RLIMIT` startup checks, a JSON report, ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; the trace-side tool that computes the same numbers from a real trace is not) and the `replay` node. ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
@@ -56,6 +56,8 @@ aeiou/src/
                next op, control, or fork event and the VM can be parked between any two; `drive`
                feeds a Sink, with the fork protocol a Sink uses to run `parallel` / `loader` sub-actors
   dryrun.rs    the dry-run Sink, parallel over actor instances, and the report
+  metrics.rs   `dry-run --metrics`: the round-robin walk of an instance's sub-actors, reuse distance,
+               sequential runs, popularity, request sizes, fan-out and depth, the JSON form (§10)
   backend.rs   the backend kinds, the Backend trait (blocking form), `sync` / `sync-direct`
   run.rs       `aeiou run`: per-actor state shared by both drivers (files, structural checks,
                recording, namespace bookkeeping), the thread-per-actor Sink, startup checks, report
@@ -76,6 +78,8 @@ aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refu
                         the `io_uring` backends over the same abstracts, on one loop and on several;
                         `posix-aio`, `libaio`, and `mmap` over the same (§9)
 aeiou/tests/uring_knobs.rs  the ring and io-wq knobs (§8): same fingerprint, the io-wq cap holds, the SQPOLL threads are counted
+aeiou/tests/metrics.rs  `--metrics` (§10): same op multiset as the inline walk, thread-count independence,
+                        the DiskANN structure recovered, sampling against exact
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
 aeiou-launch            the ssh loop: one rank per host
 ```
@@ -888,3 +892,87 @@ the shape `mmap` loaders are used for. Cold rows each on a freshly generated dir
    128 KiB whatever `rsize` is, which is why the report records it.
 3. **RSS under `mmap` counts the mapped file pages** (about 1 GiB here against 70 MiB):
    they are page cache, shared and reclaimable, not buffers the runner allocated.
+
+## 10. `aeiou dry-run --metrics` (2026-10-01)
+
+The locality-metrics check of `GRAMMAR_OPTIONS.md` §5.4 and `PROJECT_BRIEF.md` §6 item 14:
+the fingerprint proves which stream ran, these numbers are for proving it is the right one,
+by comparison with the same numbers taken from a trace of the real application. This
+section defines the numbers; the reasoning is in `DESIGN_REVIEW.md` §3.39. The trace-side
+tool is not written, so nothing has been compared yet. **The definitions below were chosen
+while building and confirmed by the user the same day (decided 2026-10-01).**
+
+```
+aeiou dry-run AST --gpus G --metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]
+```
+
+Nothing here touches the op stream or the fingerprint: counts, bytes, controls, and the
+fingerprint are the same with and without the flag (`tests/metrics.rs`).
+
+**Two kinds of metric.** A run has no global op order (issue order is timing), so only some
+metrics have something to stand on:
+
+- *Order-free*, sums over the op multiset, the same under every interleaving and summed
+  over all instances: the read/write mix, request sizes, popularity of blocks and of
+  objects, `parallel` fan-out.
+- *Order-dependent*: reuse distance, sequential runs, dependency depth. These are taken
+  over **one actor instance at a time**, in the **round-robin order** of its concurrent
+  sub-actors, and their histograms are then summed over instances. Reuse *between*
+  instances has no order and appears only as popularity.
+
+**The round-robin order.** At a `parallel`, the forking line waits and its sub-actors take
+turns in index order, one op per turn, until all have ended. A `loader`'s workers take
+turns beside the line that forked them (which goes on), worker `w` walking batches
+`w, w + workers, …`. A fork nested in a sub-actor issues its ops during that sub-actor's
+turns. Channels and barriers do not hold anyone back. This is one linearization of the
+partial order the abstract defines: concurrent contexts advancing at equal op rates. It was
+chosen over the inline order of the plain dry run (sub-actor 0 to its end, then 1), under
+which the 32 search threads of `vdb_search_diskann` would run one after another and every
+block a later thread shares with an earlier one would show a reuse distance of a whole
+thread's work. With `--gpu`, the printed stream is in this order.
+
+**Definitions.**
+
+| Metric | Definition |
+|---|---|
+| mix | data ops (`read` + `write`) as a share of all ops; reads as a share of data ops and of data bytes |
+| request size | the requested `len` of every `read` and `write`, per kind (an EOF read counts with its `len`) |
+| block | `--metrics-block` bytes (default 4096) of one path; an op touches every block its transferred bytes overlap (a read's expected count, a write's `len`) |
+| reuse distance | per block access: the distinct blocks the instance has touched since its last access to this block, this block included, times the block size. It is the smallest LRU cache, in bytes, in which the access is a hit (Mattson stack distance). Four histograms by (previous access, this access): read after read, read after write (the write-then-read lag), write after read, write after write. An access with no earlier one is a *first touch*, counted per kind |
+| run length | a run is the consecutive ops of one kind by one sequential context (a main line or one sub-actor) on one path, each starting at the offset where the previous ended; it ends at a gap, at `close` of the path, or with the context. Histograms of bytes per run and ops per run, and the bytes in runs of two or more ops |
+| popularity | accesses per block (block accesses) and per object (data ops), over all instances, as counts of counts; the text report gives the share of accesses going to the most popular 0.1 %, 1 %, and 10 % |
+| fan-out | the width of every `parallel` |
+| depth | consecutive `parallel`s issued by one context with no op and no control (`compute`, `barrier`, `put`, `take`) of its own between them: the dependent rounds of a beam search |
+
+Histograms of bytes use quarter-octave buckets (a bucket's lower bound keeps the value's
+top three bits, so powers of two are exact and a bound is at most 25 % low); the quantiles
+printed are bucket lower bounds. Fan-out and depth are exact.
+
+**Memory and sampling.** The pass keeps one entry per distinct block an instance touches
+(its last access time, in a Fenwick tree for the distance) and one count per distinct block
+and object overall. That is per-block state, which the runner never keeps; this is an
+analysis pass and does not run with I/O. `--metrics-sample N` keeps the blocks and objects
+whose hash is 0 mod `N` and scales distances and counts by `N` (SHARDS); the pass stops
+with a message naming the flag at 2^26 entries. On `kv_cache_serving` (18.0M block
+accesses) one in 16 gave the same percentiles as exact in 0.25 s against 5.8 s. Sampling
+cannot resolve distances under `N` blocks.
+
+**What it shows on the committed abstracts** (small configurations, seed 1):
+
+- `vdb_search_diskann` (2,000 queries, 2 threads): depth 3–8 in the proportions of the
+  `hops` parameter (5/20/35/25/10/5 %), fan-out 4, every run one op, and the hub draw as
+  block skew and as reuse.
+- `train_small_files`: one run per file, no block touched twice within an epoch, flat
+  popularity.
+- `ckpt_write_dcp`: 98.6 % of the bytes in multi-op write runs, no reuse.
+- `kv_cache_serving`: 7.4 % of block accesses are reads of a block the instance wrote,
+  at a median distance of 8 GiB; 51 % are re-reads at a median of 2.5 GiB.
+
+**Limits.** (1) The order is a model: equal op rates, no compute time, no backpressure. A
+trace has a real order; the comparison is between distributions, and the per-thread parts
+(runs, depth) do not depend on the interleaving at all. (2) Reuse across instances is
+unordered here; a server-side cache sees all instances, so its distances are larger than
+these by about the instance count for disjoint work, and smaller for shared hot blocks.
+(3) A run is tracked per path, not per open handle. (4) `--metrics-json` writes format
+`aeiou_metrics: 1` (the histograms in full, per template and in total); the JSON report of
+a run is a separate, later item and may absorb it.

@@ -584,6 +584,11 @@ but it is a stated fidelity loss and belongs in the workload's documentation.
   metrics on the abstract's op stream. An abstract is accepted for a workload class only when the
   two match within stated tolerances. This sits next to the fingerprint: the fingerprint proves
   *which* stream ran, the metrics prove it is the *right* stream.
+  **The dry-run side built 2026-10-01** as `aeiou dry-run --metrics` (`runner/README.md` §10
+  has the definitions, decided 2026-10-01: reuse distance is a per-instance
+  block-level stack distance in a round-robin order of the instance's sub-actors, since a
+  run has no global order; popularity, sizes, mix, and fan-out are order-free). The trace
+  side and the tolerances are not written.
 - **Replay mode.** The AST may be a literal captured sequence (a `replay` node holding ops with
   their dependencies). It is bounded to small-scale calibration runs and exists so each workload
   class's abstract can be validated end to end against the real application on the same storage.

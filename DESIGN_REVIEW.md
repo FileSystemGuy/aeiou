@@ -1654,6 +1654,58 @@ It would hide the wake by burning CPU that is then charged to the run, and it wo
 wrong for any read slower than the spin. The figure should be re-taken on bare metal
 before anyone reads much into it.
 
+### 3.39 `--metrics`: what can be measured on a stream with no global order (added 2026-10-01)
+
+Built as the next item in the recorded order (`runner/README.md` §10, `metrics.rs`,
+`tests/metrics.rs`). The user asked for the work to resume; the definitions were chosen
+while building and **confirmed by the user the same day (decided 2026-10-01)**. The choices and what
+argues against each:
+
+- **Order-free and order-dependent metrics are kept apart.** Issue order within a GPU is
+  timing and across GPUs there is none, so a reuse distance "of the run" does not exist.
+  Popularity, request sizes, the mix, and fan-out are sums over the op multiset and are
+  reported over all instances. Reuse distance, runs, and depth need an order and are taken
+  per actor instance. *Against:* a server cache sees every instance at once, and the
+  per-instance distance understates what it needs for disjoint work (by about the instance
+  count) and overstates it for shared hot blocks. A whole-run order would need a model of
+  time across instances; a virtual clock from the `compute` nodes with zero-time I/O is
+  the obvious candidate and was not built.
+- **Round-robin over an instance's sub-actors, not the inline order.** The plain dry run
+  walks sub-actor 0 to its end, then 1. For `vdb_search_diskann` that is 32 search threads
+  one after another, so blocks shared between threads show distances of a thread's whole
+  work. Round-robin (one op per live sub-actor per turn, a nested fork inside its parent's
+  turn, a `loader`'s workers beside the forking line) is the linearization in which
+  concurrent contexts advance at equal op rates, and it needs no timing. It costs a VM
+  per live sub-actor, which the resumable VM of §3.29 already allows. *Against:* it is
+  still a model. A loader's workers are not held back by the channel, and a line that
+  computes for a long time between ops advances as fast as one that does not.
+- **Blocks, not objects, are the unit of reuse.** The DiskANN index is one file, so
+  object-level reuse says nothing there, and caches hold blocks. 4 KiB by default,
+  `--metrics-block` to change it. Object popularity is reported beside block popularity
+  because IVF lists and KV objects are files.
+- **Stack distance in bytes, not the gap in accesses.** The distinct blocks since the last
+  access, times the block size, is the LRU cache size at which the access hits, which is
+  the question storage asks. Split by (previous, current) kind so that read-after-write
+  is the write-then-read lag of `GRAMMAR_OPTIONS.md` §5.1.
+- **Runs belong to a sequential context.** A run is tracked by the context that issues
+  the ops, so two sub-actors reading the same file at their own offsets are two streams,
+  as a de-interleaving prefetcher would see them. Tracked per path rather than per open
+  handle, since the op carries the path.
+- **Depth is structural.** Consecutive `parallel`s of one context with nothing of its own
+  between them. On the DiskANN abstract this returns the `hops` distribution exactly.
+  *Against:* an abstract that puts a `compute` between hops would report chains of one;
+  the trace side has the mirror problem (it needs a think-time threshold to cut chains).
+- **Per-block state is accepted here and bounded by sampling.** The invariant against
+  per-file data structures is the runner's; this pass does no I/O and is not part of a
+  scored run. Hash sampling (SHARDS) keeps one block in `N` and scales; a cap of 2^26
+  entries stops the pass with the flag named.
+- **A JSON form now, ahead of the JSON report.** A comparison within tolerances is done by
+  a tool, so the histograms have to be machine-readable. `--metrics-json` writes
+  `aeiou_metrics: 1`; the run's JSON report may absorb it.
+
+Not done: the trace-side tool (strace to the same numbers), tolerances, a whole-run order,
+the `replay` node.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -1687,8 +1739,9 @@ before anyone reads much into it.
   counters,~~ `--drop-caches`, the residency check, and the mount options done the same day
   (§3.31, Built). ~~Next: `libaio`/`posix-aio`/`mmap`,~~ `posix-aio`, `libaio`, and `mmap`
   done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
-  the same day (§3.36). Next: `--metrics`, the `RLIMIT`
-  checks, the JSON report; the
+  the same day (§3.36). ~~Next: `--metrics`,~~ `--metrics` built the same day, its
+  definitions decided (§3.39). Next: the `RLIMIT`
+  checks, the JSON report, the trace-side metrics tool; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 
