@@ -234,7 +234,7 @@ needs_run = pytest.mark.skipif(not RUNNER.exists() or not _strace_works(), reaso
     "name, seed, params",
     [
         ("train_small_files", 7, ["files=600", "batch=4", "workers=2", "prefetch=2", "steps=12"]),
-        ("kv_cache_serving", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8"]),
+        ("kv_cache_serving", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8", "local=1"]),
         ("vdb_search_diskann", 9, ["nodes=5000", "threads=2", "queries=6"]),
     ],
 )
@@ -444,4 +444,28 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
         assert rows[k] <= 0.01, (k, rows[k])
     # 13 unlinks of files already gone and one of a file this abstract does not write
     assert t["counts"]["unlink"] - d["counts"]["unlink"] == 14
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
+    """`builder/traces/kv_cache_serving`: vLLM with LMCache's local-disk backend, 40 requests
+    over 8 conversations, traced 2026-10-02. Every chunk is the same six calls around one
+    `read` or `write`; the abstract stores one chunk more (it generates 100 tokens where
+    some replies were shorter) and not the two chunks of the system prompts, which are a
+    dataset here; it reads every chunk of a returning conversation where the traced engine,
+    its GPU memory not yet full, still held the first turns (`ABSTRACTS.md` §8)."""
+    kit = BUILDER / "traces" / "kv_cache_serving"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1",
+                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    tc, dc = t["counts"], d["counts"]
+    for c in (tc, dc):                                    # one open, fstat, ioctl, lseek and close per data call
+        assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"] == c["read"] + c["write"]
+    assert (tc["write"], dc["write"]) == (47, 48)
+    assert (tc["read"], dc["read"]) == (47, 88)
+    assert t["request_size"] == {k: {**v, "n": t["request_size"][k]["n"], "buckets": [[3145728, t["request_size"][k]["n"]]]} for k, v in t["request_size"].items()}
+    assert d["request_size"]["read"]["buckets"][0][0] == d["request_size"]["write"]["buckets"][0][0] == 3145728
+    assert set(tc) - set(dc) == {"mkdir", "stat"}         # of the cache directory, once at start
 

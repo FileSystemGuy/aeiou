@@ -167,7 +167,7 @@ fn namespaces_must_be_empty_and_writes_are_read_back() {
 #[test]
 fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
     let root = tmpdir("kv");
-    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8")];
+    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("local", "1")];
     let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(1, 5, &params));
     gen(loaded, cfg, model, &root);
     // the chunked files exist: kv/sys/0000/blk_0000 …
@@ -181,8 +181,8 @@ fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
     assert_eq!(r.stats.fingerprint, fp);
     assert_eq!(r.stats.ops, ops);
     assert_eq!(r.stats.bytes_read, bytes);
-    assert_eq!(r.stats.threads, 1 + 2, "the actor's thread runs slot 0 itself: two pool threads for three slots");
-    assert!(r.stats.expected_errors > 0, "ENOENT lookups and EEXIST mkdirs");
+    assert!(r.stats.threads >= 1 + 2, "the actor's thread runs slot 0 itself: two pool threads for three slots, and one more under any slot that loads two chunks at once: {}", r.stats.threads);
+    assert!(r.stats.expected_errors > 0, "the ENOTTY of the terminal probe in every open (ENOENT lookups and EEXIST mkdirs until the 2026-10-02 trace)");
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -324,7 +324,7 @@ fn io_uring_reproduces_the_sync_runs() {
     // dry run's exactly, on one loop and on several.
     for threads in [1usize, 3] {
         let root = tmpdir("uring-kv");
-        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8")];
+        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("local", "1")];
         let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(2, 5, &params));
         gen(loaded, cfg, model, &root);
         run::check_datasets(loaded, cfg, &root).unwrap();
@@ -389,7 +389,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
     let looped = [BackendKind::LibAio, BackendKind::LibAioDirect];
     {
         let root = tmpdir("more-kv");
-        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8")];
+        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("local", "1")];
         let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(2, 5, &params));
         gen(loaded, cfg, model, &root);
         let (fp, ops, bytes) = dry_fingerprint(model);

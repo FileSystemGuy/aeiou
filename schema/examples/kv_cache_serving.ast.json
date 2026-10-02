@@ -23,7 +23,7 @@
     "chunk_bytes": {
       "default": 33554432,
       "unit": "bytes",
-      "doc": "128 KiB/token × 256 [config]"
+      "doc": "128 KiB/token × 256 [config]; a file is exactly this, no header (traced)"
     },
     "sys_prompts": {
       "default": 50,
@@ -34,6 +34,15 @@
       "unit": "tokens",
       "doc": "median system prompt length [measure]"
     },
+    "sys_tokens_min": {
+      "default": 1,
+      "unit": "tokens",
+      "doc": "bounds of the system prompt length; equal bounds give every prompt that length"
+    },
+    "sys_tokens_max": {
+      "default": 100000,
+      "unit": "tokens"
+    },
     "sys_pop": {
       "default": {
         "zipf": {
@@ -41,6 +50,10 @@
         }
       },
       "doc": "[measure]"
+    },
+    "sys_local": {
+      "default": true,
+      "doc": "[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false for an engine that starts cold beside a filled cache"
     },
     "reuse": {
       "default": {
@@ -62,6 +75,11 @@
         ]
       },
       "doc": "requests ago, or none for a new conversation [measure]"
+    },
+    "local": {
+      "default": 8,
+      "unit": "count",
+      "doc": "[config: GPU KV memory] a conversation returning within this many requests is still in the engine and reads nothing"
     },
     "retain": {
       "default": 5000,
@@ -107,17 +125,55 @@
             "median": {
               "mul": [
                 {
-                  "mul": [
-                    {
-                      "param": "sys_tokens"
-                    },
-                    128
-                  ]
+                  "param": "sys_tokens"
                 },
-                1024
+                {
+                  "div": [
+                    {
+                      "param": "chunk_bytes"
+                    },
+                    {
+                      "param": "chunk_tokens"
+                    }
+                  ]
+                }
               ]
             },
-            "sigma": 0.3
+            "sigma": 0.3,
+            "min": {
+              "mul": [
+                {
+                  "param": "sys_tokens_min"
+                },
+                {
+                  "div": [
+                    {
+                      "param": "chunk_bytes"
+                    },
+                    {
+                      "param": "chunk_tokens"
+                    }
+                  ]
+                }
+              ]
+            },
+            "max": {
+              "mul": [
+                {
+                  "param": "sys_tokens_max"
+                },
+                {
+                  "div": [
+                    {
+                      "param": "chunk_bytes"
+                    },
+                    {
+                      "param": "chunk_tokens"
+                    }
+                  ]
+                }
+              ]
+            }
           }
         },
         "seed": 1592646272,
@@ -129,7 +185,7 @@
   },
   "namespaces": {
     "kv": {
-      "pattern": "kv/{conv:016x}/blk_{k:04}",
+      "pattern": "kv/{conv:016x}-{k:04}.pt",
       "fields": {
         "conv": "int",
         "k": "int"
@@ -137,14 +193,6 @@
       "size": {
         "param": "chunk_bytes"
       },
-      "seed": 1592646273
-    },
-    "kv_dir": {
-      "pattern": "kv/{conv:016x}",
-      "fields": {
-        "conv": "int"
-      },
-      "size": 0,
       "seed": 1592646273
     }
   },
@@ -278,64 +326,6 @@
                     },
                     {
                       "let": {
-                        "name": "prev",
-                        "value": {
-                          "cond": {
-                            "if": {
-                              "ref": "cont"
-                            },
-                            "then": {
-                              "at": {
-                                "ref": "total",
-                                "index": {
-                                  "sub": [
-                                    {
-                                      "index": "r"
-                                    },
-                                    {
-                                      "ref": "d"
-                                    }
-                                  ]
-                                }
-                              }
-                            },
-                            "else": 0
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "let": {
-                        "name": "hit",
-                        "value": {
-                          "cond": {
-                            "if": {
-                              "and": [
-                                {
-                                  "ref": "cont"
-                                },
-                                {
-                                  "le": [
-                                    {
-                                      "ref": "d"
-                                    },
-                                    {
-                                      "param": "retain"
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            "then": {
-                              "ref": "prev"
-                            },
-                            "else": 0
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "let": {
                         "name": "inn",
                         "value": {
                           "draw": {
@@ -356,28 +346,16 @@
                     },
                     {
                       "let": {
-                        "name": "total",
+                        "name": "sysblk",
                         "value": {
-                          "add": [
+                          "div": [
                             {
-                              "ref": "prev"
+                              "size": {
+                                "ref": "sp"
+                              }
                             },
                             {
-                              "ceil_div": [
-                                {
-                                  "add": [
-                                    {
-                                      "ref": "inn"
-                                    },
-                                    {
-                                      "ref": "out"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "param": "chunk_tokens"
-                                }
-                              ]
+                              "param": "chunk_bytes"
                             }
                           ]
                         }
@@ -385,10 +363,166 @@
                     },
                     {
                       "let": {
-                        "name": "sysblk",
+                        "name": "ptoks",
                         "value": {
-                          "chunks": {
-                            "ref": "sp"
+                          "add": [
+                            {
+                              "cond": {
+                                "if": {
+                                  "ref": "cont"
+                                },
+                                "then": {
+                                  "add": [
+                                    {
+                                      "at": {
+                                        "ref": "ptoks",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            {
+                                              "ref": "d"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "at": {
+                                        "ref": "out",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            {
+                                              "ref": "d"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "else": {
+                                  "div": [
+                                    {
+                                      "mod": [
+                                        {
+                                          "size": {
+                                            "ref": "sp"
+                                          }
+                                        },
+                                        {
+                                          "param": "chunk_bytes"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "div": [
+                                        {
+                                          "param": "chunk_bytes"
+                                        },
+                                        {
+                                          "param": "chunk_tokens"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            {
+                              "ref": "inn"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "stored",
+                        "value": {
+                          "div": [
+                            {
+                              "ref": "ptoks"
+                            },
+                            {
+                              "param": "chunk_tokens"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "had",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "and": [
+                                {
+                                  "ref": "cont"
+                                },
+                                {
+                                  "le": [
+                                    {
+                                      "ref": "d"
+                                    },
+                                    {
+                                      "param": "retain"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "then": {
+                              "at": {
+                                "ref": "stored",
+                                "index": {
+                                  "sub": [
+                                    {
+                                      "index": "r"
+                                    },
+                                    {
+                                      "ref": "d"
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "else": 0
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "load",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "and": [
+                                {
+                                  "ref": "cont"
+                                },
+                                {
+                                  "gt": [
+                                    {
+                                      "ref": "d"
+                                    },
+                                    {
+                                      "param": "local"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "then": {
+                              "ref": "had"
+                            },
+                            "else": 0
                           }
                         }
                       }
@@ -413,39 +547,110 @@
                         },
                         "body": [
                           {
-                            "loop": {
-                              "index": "k",
-                              "to": {
-                                "ref": "sysblk"
+                            "cond": {
+                              "if": {
+                                "eq": [
+                                  {
+                                    "param": "sys_local"
+                                  },
+                                  false
+                                ]
                               },
-                              "body": [
+                              "then": [
                                 {
-                                  "stat": {
-                                    "file": {
-                                      "file": {
-                                        "of": {
-                                          "ref": "sp"
-                                        },
-                                        "chunk": {
-                                          "index": "k"
+                                  "parallel": {
+                                    "index": "sk",
+                                    "width": {
+                                      "ref": "sysblk"
+                                    },
+                                    "body": [
+                                      {
+                                        "let": {
+                                          "name": "b",
+                                          "value": {
+                                            "file": {
+                                              "of": {
+                                                "ref": "sp"
+                                              },
+                                              "chunk": {
+                                                "index": "sk"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "open": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "flags": [
+                                            "RDONLY",
+                                            "CLOEXEC"
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "fstat": {
+                                          "file": {
+                                            "ref": "b"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "ioctl": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "request": "TCGETS",
+                                          "expect": [
+                                            "ENOTTY"
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "lseek": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "offset": 0,
+                                          "whence": "CUR"
+                                        }
+                                      },
+                                      {
+                                        "read": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "len": {
+                                            "param": "chunk_bytes"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "close": {
+                                          "file": {
+                                            "ref": "b"
+                                          }
                                         }
                                       }
-                                    }
+                                    ]
                                   }
                                 }
                               ]
                             }
                           },
                           {
-                            "loop": {
-                              "index": "k",
-                              "to": {
-                                "ref": "total"
+                            "parallel": {
+                              "index": "lk",
+                              "width": {
+                                "ref": "load"
                               },
                               "body": [
                                 {
-                                  "stat": {
-                                    "file": {
+                                  "let": {
+                                    "name": "b",
+                                    "value": {
                                       "object": {
                                         "namespace": "kv",
                                         "fields": {
@@ -453,104 +658,49 @@
                                             "ref": "conv"
                                           },
                                           "k": {
-                                            "index": "k"
+                                            "index": "lk"
                                           }
                                         }
                                       }
+                                    }
+                                  }
+                                },
+                                {
+                                  "open": {
+                                    "file": {
+                                      "ref": "b"
                                     },
+                                    "flags": [
+                                      "RDONLY",
+                                      "CLOEXEC"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "fstat": {
+                                    "file": {
+                                      "ref": "b"
+                                    }
+                                  }
+                                },
+                                {
+                                  "ioctl": {
+                                    "file": {
+                                      "ref": "b"
+                                    },
+                                    "request": "TCGETS",
                                     "expect": [
-                                      "ENOENT"
-                                    ]
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "loop": {
-                              "index": "k",
-                              "to": {
-                                "ref": "sysblk"
-                              },
-                              "body": [
-                                {
-                                  "let": {
-                                    "name": "b",
-                                    "value": {
-                                      "file": {
-                                        "of": {
-                                          "ref": "sp"
-                                        },
-                                        "chunk": {
-                                          "index": "k"
-                                        }
-                                      }
-                                    }
-                                  }
-                                },
-                                {
-                                  "open": {
-                                    "file": {
-                                      "ref": "b"
-                                    },
-                                    "flags": [
-                                      "RDONLY"
+                                      "ENOTTY"
                                     ]
                                   }
                                 },
                                 {
-                                  "read": {
+                                  "lseek": {
                                     "file": {
                                       "ref": "b"
                                     },
-                                    "len": {
-                                      "param": "chunk_bytes"
-                                    }
-                                  }
-                                },
-                                {
-                                  "close": {
-                                    "file": {
-                                      "ref": "b"
-                                    }
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "loop": {
-                              "index": "k",
-                              "to": {
-                                "ref": "hit"
-                              },
-                              "body": [
-                                {
-                                  "let": {
-                                    "name": "b",
-                                    "value": {
-                                      "object": {
-                                        "namespace": "kv",
-                                        "fields": {
-                                          "conv": {
-                                            "ref": "conv"
-                                          },
-                                          "k": {
-                                            "index": "k"
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                },
-                                {
-                                  "open": {
-                                    "file": {
-                                      "ref": "b"
-                                    },
-                                    "flags": [
-                                      "RDONLY"
-                                    ]
+                                    "offset": 0,
+                                    "whence": "CUR"
                                   }
                                 },
                                 {
@@ -585,10 +735,10 @@
                                       {
                                         "sub": [
                                           {
-                                            "ref": "total"
+                                            "ref": "stored"
                                           },
                                           {
-                                            "ref": "hit"
+                                            "ref": "had"
                                           }
                                         ]
                                       },
@@ -602,46 +752,13 @@
                             }
                           },
                           {
-                            "cond": {
-                              "if": {
-                                "lt": [
-                                  {
-                                    "ref": "hit"
-                                  },
-                                  {
-                                    "ref": "total"
-                                  }
-                                ]
-                              },
-                              "then": [
-                                {
-                                  "mkdir": {
-                                    "dir": {
-                                      "object": {
-                                        "namespace": "kv_dir",
-                                        "fields": {
-                                          "conv": {
-                                            "ref": "conv"
-                                          }
-                                        }
-                                      }
-                                    },
-                                    "expect": [
-                                      "EEXIST"
-                                    ]
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
                             "loop": {
                               "index": "k",
                               "from": {
-                                "ref": "hit"
+                                "ref": "had"
                               },
                               "to": {
-                                "ref": "total"
+                                "ref": "stored"
                               },
                               "body": [
                                 {
@@ -670,8 +787,36 @@
                                     "flags": [
                                       "WRONLY",
                                       "CREAT",
-                                      "TRUNC"
+                                      "TRUNC",
+                                      "CLOEXEC"
                                     ]
+                                  }
+                                },
+                                {
+                                  "fstat": {
+                                    "file": {
+                                      "ref": "b"
+                                    }
+                                  }
+                                },
+                                {
+                                  "ioctl": {
+                                    "file": {
+                                      "ref": "b"
+                                    },
+                                    "request": "TCGETS",
+                                    "expect": [
+                                      "ENOTTY"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "b"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
                                   }
                                 },
                                 {
@@ -723,16 +868,15 @@
   "provenance": {
     "generator": {
       "script": "kv_cache_serving.py",
-      "sha256": "61392db6acad4a711d6306cd2d1ca9172099e8dba73b0312ce7c1291d5c2bff1",
+      "sha256": "dac78480f02cb8aa021b9eaa33539c0c8e570d752f9328a6ce8013a360ac6b95",
       "builder_version": "0.1.0",
-      "git": "32e33f8e9e9b"
+      "git": "53c4341307af-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
-    "built_twice_identical": true,
-    "ast_sha256": "5254c9951cef630a394cf4807163459a2c0fd56a5639f6f939681bf7442bc66b"
+    "ast_sha256": "3dd9d9e47e9cb3e59084e29496a8e3c49cad6cf33500317e45991fd88c53133c"
   }
 }

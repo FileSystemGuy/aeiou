@@ -33,7 +33,7 @@ fn hashes_match_check_py() {
     let want = [
         ("ckpt_restore", "df29f09389b797751926d930e00647a81b02bf09490ca80d0b51250e97b1a33f"),
         ("ckpt_write_dcp", "9b410bed69fe9b2fd8b0e4742abe3f4b5e6a7da6927164df6fde668ff17b31c3"),
-        ("kv_cache_serving", "5254c9951cef630a394cf4807163459a2c0fd56a5639f6f939681bf7442bc66b"),
+        ("kv_cache_serving", "3dd9d9e47e9cb3e59084e29496a8e3c49cad6cf33500317e45991fd88c53133c"),
         ("model_load", "6a22e3b84c3844e46bc4244961006e9add7b18605e9977ab5333d34998d5b111"),
         ("train_large_samples", "a614e020420787cf55281294508bfc87e72997c16fe4a537b19255d3bd3326e1"),
         ("train_small_files", "a1f595eebddcd31cd13799f8a10e6f415023924ead93046626103267d5079ac8"),
@@ -66,7 +66,9 @@ fn golden_fingerprints() {
     // `safetensors.safe_open` and the small JSON files, same section; vdb_search_ivf from the trace of FAISS
     // `OnDiskInvertedLists`, §3.49: the index file, the prefetch threads, ids before codes; vdb_search_diskann
     // 2026-10-02 from the trace of DiskANN's `PQFlashIndex`, §3.50: the load, the entry rounds, 24 to 30 more; vdb_build_diskann
-    // the same day from the trace of `build_disk_index`, same section: the passes over the base, the shard files).
+    // the same day from the trace of `build_disk_index`, same section: the passes over the base, the shard files;
+    // kv_cache_serving the same day from the trace of vLLM with LMCache, §3.51: no lookups on storage, one flat
+    // directory, whole chunks of the prompt only, reads only for what the engine lost).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x71628bdb4289c4c8, 5120),
         ("train_large_samples", 2, &[("steps", "5")], 0xa2c284c6137f9639, 50451),
@@ -82,7 +84,7 @@ fn golden_fingerprints() {
             0xeaf5da9b000203a1,
             1229207,
         ),
-        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc546a6b9840b58ff, 9312),
+        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xd755f9d88f8c38ee, 3006),
         // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations
         ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
         ("train_stream_parquet", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),
