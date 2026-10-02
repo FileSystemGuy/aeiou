@@ -80,54 +80,18 @@ pub(crate) fn spread(sh: &Shared, counts: &[(&'static str, i64)], ranges: &[(i64
     per
 }
 
-/// Where the loops meet once each has built its ring (or failed to), before any of them
-/// runs: the last to arrive counts the process's `SQPOLL` threads, which exist from the
-/// ring's setup to its close, so the count is exact however short the run is.
-struct Built {
-    loops: usize,
-    /// How many loops have arrived, and the count once the last one has taken it.
-    m: Mutex<(usize, Option<u64>)>,
-    cv: Condvar,
-}
-
-/// One loop's arrival at `Built`; dropped without `wait` (an early return, a panic) it still
-/// counts, so the other loops are not left waiting.
-struct Arrival<'a> {
-    built: &'a Built,
-    arrived: bool,
-}
-
-impl Arrival<'_> {
-    fn arrive(&mut self) {
-        if self.arrived {
-            return;
-        }
-        self.arrived = true;
-        let mut g = self.built.m.lock().unwrap_or_else(|e| e.into_inner());
-        g.0 += 1;
-        if g.0 == self.built.loops {
-            g.1 = Some(crate::counters::io_threads().1);
-            self.built.cv.notify_all();
-        }
-    }
-
-    fn wait(&mut self) {
-        self.arrive();
-        let mut g = self.built.m.lock().unwrap_or_else(|e| e.into_inner());
-        while g.1.is_none() {
-            g = self.built.cv.wait(g).unwrap_or_else(|e| e.into_inner());
-        }
-    }
-}
-
-impl Drop for Arrival<'_> {
-    fn drop(&mut self) {
-        self.arrive();
-    }
+/// The `SQPOLL` thread of a ring, as the kernel states it in the ring's `fdinfo`
+/// (`SqThread:`, there from the moment `io_uring_setup` returns; the thread's name is not,
+/// since the thread names itself `iou-sqp-*` only when it first runs). `None` without
+/// `SQPOLL`. Rings that share a poll thread state the same one.
+fn sq_thread(ring: RawFd) -> Option<i64> {
+    let s = std::fs::read_to_string(format!("/proc/self/fdinfo/{ring}")).ok()?;
+    let pid: i64 = s.lines().find_map(|l| l.strip_prefix("SqThread:"))?.trim().parse().ok()?;
+    (pid > 0).then_some(pid)
 }
 
 /// Run this host's instances over the event loops; returns how many loop threads ran and
-/// what the rings were set up with, and the `SQPOLL` threads counted once the rings were up.
+/// what the rings were set up with, and the distinct `SQPOLL` threads the rings stated once built.
 pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<(UringReport, u64)> {
     sh.opts.uring.check()?;
     let per = spread(sh, counts, ranges);
@@ -137,8 +101,6 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
     let threads = per.len();
     let shared = sh.opts.uring.sqpoll_shared;
     let gate: Arc<Gate> = Arc::new((Mutex::new(None), Condvar::new()));
-    let built = Built { loops: threads, m: Mutex::new((0, None)), cv: Condvar::new() };
-    let built = &built;
     std::thread::scope(|s| {
         let handles: Vec<_> = per
             .into_iter()
@@ -149,7 +111,6 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
                 std::thread::Builder::new()
                     .name(format!("io_uring loop {i}"))
                     .spawn_scoped(s, move || {
-                        let mut arrival = Arrival { built, arrived: false };
                         // the rings are built on their own threads (SINGLE_ISSUER binds a
                         // ring to the task that built it); under `sqpoll_shared` loops 1.. wait
                         // for loop 0's ring and attach to it
@@ -175,9 +136,10 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
                             *m.lock().unwrap() = Some(built.as_ref().map(|(l, _)| l.io.ring.as_raw_fd()).map_err(|e| format!("{e:#}")));
                             cv.notify_all();
                         }
-                        // every ring is up before any loop runs: the `SQPOLL` threads are counted here
-                        arrival.wait();
-                        let r = built.and_then(|(mut l, defaults)| l.run(model, insts).map(|_| (defaults, l.io.in_flight_peak as u64)));
+                        let r = built.and_then(|(mut l, defaults)| {
+                            let sq = sq_thread(l.io.ring.as_raw_fd());
+                            l.run(model, insts).map(|_| (defaults, l.io.in_flight_peak as u64, sq))
+                        });
                         if r.is_err() {
                             sh.aborted.store(true, Ordering::Relaxed);
                         }
@@ -189,9 +151,11 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
         let mut first: Option<anyhow::Error> = None;
         let mut defaults = None;
         let mut in_flight_peak = 0;
+        let mut sq_threads = std::collections::BTreeSet::new();
         for (i, h) in handles.into_iter().enumerate() {
             match h.join() {
-                Ok(Ok((d, peak))) => {
+                Ok(Ok((d, peak, sq))) => {
+                    sq_threads.extend(sq);
                     if i == 0 {
                         defaults = d;
                     }
@@ -207,10 +171,7 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
         }
         match first {
             Some(e) => Err(e),
-            None => {
-                let sqpoll = built.m.lock().unwrap_or_else(|e| e.into_inner()).1.unwrap_or(0);
-                Ok((UringReport { loops: threads as u64, opts: sh.opts.uring.clone(), iowq_defaults: defaults, in_flight_peak }, sqpoll))
-            }
+            None => Ok((UringReport { loops: threads as u64, opts: sh.opts.uring.clone(), iowq_defaults: defaults, in_flight_peak }, sq_threads.len() as u64)),
         }
     })
 }

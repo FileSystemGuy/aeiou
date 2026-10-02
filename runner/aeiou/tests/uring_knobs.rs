@@ -140,7 +140,7 @@ fn io_uring_knobs_keep_the_fingerprint() {
             assert_eq!(k.iowq_max_workers, 0, "`{name}`: a cap without the register call cannot succeed");
         }
         match (k.sqpoll_idle_ms, k.sqpoll_shared) {
-            // counted once every ring is built, not sampled: exact however short the row is
+            // what each ring's fdinfo states once built, not a sample: exact however short the row is
             (Some(_), true) => assert_eq!(c.sqpoll_threads, 1, "`{name}`: {c:?}"),
             (Some(_), false) => assert_eq!(c.sqpoll_threads, loops, "`{name}`: {c:?}"),
             (None, _) => assert_eq!(c.sqpoll_threads, 0, "`{name}`: {c:?}"),

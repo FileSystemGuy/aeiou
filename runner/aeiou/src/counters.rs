@@ -35,9 +35,9 @@ pub struct HostCounters {
     pub tasks_peak: u64,
     /// Peak count of io-wq worker threads (`iou-wrk-*`), sampled; 0 under the `sync` backends.
     pub iowq_workers_peak: u64,
-    /// The `SQPOLL` submission threads (`iou-sqp-*`) of the process, counted once, when every
-    /// loop has built its ring and before any runs (they live exactly as long as their
-    /// rings, so this is not a sample); 0 without `--sqpoll`.
+    /// The `SQPOLL` submission threads of the rings: the distinct threads the rings' `fdinfo`
+    /// states (`SqThread:`) once each is built. They live exactly as long as their rings, so
+    /// this is not a sample; 0 without `--sqpoll`.
     #[serde(default)]
     pub sqpoll_threads: u64,
     /// CPU time of the process over the run.
@@ -289,9 +289,9 @@ fn task_count() -> Option<u64> {
 
 /// The io-wq workers (`iou-wrk-*`) and `SQPOLL` threads (`iou-sqp-*`) among the process's
 /// tasks, by thread name. The kernel starts and ends the workers on its own schedule, so
-/// their peak can only be sampled; the `SQPOLL` threads are counted by one call of this
-/// once the rings exist (`uring::run`).
-pub(crate) fn io_threads() -> (u64, u64) {
+/// their peak can only be sampled (the sampler uses the first count; the `SQPOLL` threads
+/// of the report come from the rings' `fdinfo`, `uring::run`).
+fn io_threads() -> (u64, u64) {
     let Ok(rd) = std::fs::read_dir("/proc/self/task") else {
         return (0, 0);
     };
