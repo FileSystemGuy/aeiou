@@ -2166,13 +2166,14 @@ when its library changes.
   or several: 1,650 against 2,700 READs, §3.47); `rec2` and `tail_back` for a small item
   at the end of the file; an item within 4 KiB above the buffer size.
 
-### 3.49 The sixth row: FAISS IVF over `OnDiskInvertedLists` (added 2026-10-01)
+### 3.49 The sixth row: FAISS IVF over `OnDiskInvertedLists` (added 2026-10-01; choices decided the same day)
 
 Row 6 of the capture plan. Kit in `builder/traces/vdb_search_ivf`, findings in `ABSTRACTS.md`
 §6. The draft had the right shape (per query, `nprobe` whole lists, no dependency between
 them) and the wrong API: its **[verify]** said a thread pool issues `pread`s, and FAISS
-issues nothing at all on the lists file after mapping it. **The choices below were made
-while building and are not yet confirmed by the user.**
+issues nothing at all on the lists file after mapping it. ~~**The choices below were made
+while building and are not yet confirmed by the user.**~~ **Decided 2026-10-01:** the user
+confirmed every choice below.
 
 **What `strace` could and could not give.** The trace has `read_index` (seven reads of the
 index file, the lists file opened read-write and mapped shared, no advice) and the threads

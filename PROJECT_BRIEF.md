@@ -315,7 +315,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     FAISS maps the lists file and issues no call on it; 32 prefetch threads per search slice
     touch every probed list, ids before codes. The abstract declares `mmap` and gained the
     index file, the prefetch fan-out, and that order; list-size spread and popularity are
-    now SIFT1M's. Choices not yet confirmed.
+    now SIFT1M's. ~~Choices not yet confirmed.~~ Choices decided 2026-10-01.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its

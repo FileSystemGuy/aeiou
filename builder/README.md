@@ -328,7 +328,7 @@ buffer was left; the restore carries the buffer's start as a chain since (§3.48
 checkpoint's `.metadata`.
 `traces/vdb_search_ivf` is row 6: FAISS `IndexIVFPQ` over `OnDiskInvertedLists`, which maps
 the lists file and issues no call on it; its `faults.py` measures with `mincore` what the
-trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, not yet confirmed).
+trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, decided 2026-10-01).
 
 **The application's API is declared in the script** (contract 0.3, 2026-10-01):
 `Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`
