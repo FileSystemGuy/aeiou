@@ -1468,11 +1468,15 @@ there is `width` tasks on the instance's loop).
   keeps that true without an argument. The pool grows to the widest fork the actor issues
   and never shrinks.
 - **What a pool thread keeps, and what it does not.** It keeps the two buffer rings and a
-  nested pool. The backend object and the file table are made per sub-actor, as before: a
+  nested pool. ~~The backend object and the file table are made per sub-actor, as before: a
   sub-actor sees the files its parent had open *at that fork*, and the `mmap` backend's
   table of mappings is keyed by descriptor number, which the parent may have closed and
   the kernel reused by the next fork. So a sub-actor's own files and mappings still end
-  with it, before the parent's join returns.
+  with it, before the parent's join returns.~~ The file table is made per sub-actor (a
+  sub-actor sees the files its parent had open *at that fork*, and its own files end with
+  it, before the parent's join returns). The backend object was made per sub-actor too,
+  because the `mmap` backend kept its mappings by descriptor number; see **Revised**: the
+  backend holds no mappings now and the thread keeps it.
 - **Loader workers are unchanged.** They already lived until their actor ended. A worker
   whose body forks gets a pool of its own, as any actor does.
 - **`threads` in the report changes meaning** from sub-actors run to threads created
@@ -1485,15 +1489,99 @@ there is `width` tasks on the instance's loop).
 - **Not done: sub-actors as processes.** §3.35 considered it for `mmap` (one
   `mmap_lock`) and dropped it; nothing here needs it.
 
-**Open.** Under `mmap` a sub-actor inherits its parent's descriptors but not its mappings,
+**Open.** ~~Under `mmap` a sub-actor inherits its parent's descriptors but not its mappings,
 so each DiskANN beam sub-actor maps the whole index for one 4 KiB read and unmaps it (one
 map and one fault per read: 508,669 minor faults, 48 s of system time, 12.0 s elapsed
 against 6.3 s for `sync`). A search library that reads through a mapping maps the index
 once. Whether a sub-actor should read through the mapping its parent made is a question
 about what the backend is charged with (§3.35, Revised), not about the pool, and is left
-for the user. The pool's idle threads hold their rings (`--buffer-mib` each, twice once
+for the user.~~ Decided the same day, **Revised** below. The pool's idle threads hold their rings (`--buffer-mib` each, twice once
 the actor writes), which at `threads × beam` per instance is the figure to watch on a
 host with thousands of instances.
+
+**Revised (2026-10-01, later): a mapping belongs to the open file.** Raised by the user:
+if a sub-actor stands for a thread of the application, sharing the parent's mapping is
+the efficient architecture, with no repeated `mmap`/`munmap`. Agreed, on two grounds
+already recorded: a `parallel` sub-actor is a thread of its parent's address space, where
+a mapping is visible to every thread; and a map and an unmap per sub-actor is work the
+API does not need, which §3.35 (Revised) says is not to be charged to the backend.
+
+- **Not "inherit the parent's mapping".** In the DiskANN abstract the search thread opens
+  the index and never reads it; only its beam sub-actors do, so at the fork there is
+  nothing to inherit. The rule is that the mapping belongs to the open file: the first
+  reader makes it, whoever that is, everyone holding the descriptor reads through it, and
+  it is unmapped when the last holder lets the descriptor go (`backend::OpenFile`, which
+  the actors' file tables now hold in place of the bare descriptor). `mappings` in the
+  report is therefore one per open that was read. Which thread makes it is a race; the
+  count, the op stream, and the fingerprint do not depend on who wins.
+- **It needs no special case for loaders.** A PyTorch loader worker is a process, but the
+  files it opens are its own in the model too, so its mappings are its own. Only a file
+  opened before the fork is shared, and a mapping made before a real `fork` is inherited
+  by the child as well. (One made after it is not; no abstract depends on that.)
+  Instances never share: each opens its own descriptors.
+- **No lock on the read path.** The current mapping is published through an atomic
+  pointer. A lock per read, or one table for the process, would have been the runner
+  adding a cost to `mmap` that the application does not pay.
+- **A file that grows** is mapped again at its new size, under the file's lock, and the
+  earlier mapping is kept until the close, since another sub-actor may be touching it.
+  The cost is address space only. Before, the one actor that owned the mapping could
+  replace it.
+- **What stays charged to `mmap`:** one map and one unmap per open, the faults, and the
+  translation flush at the unmap, which now reaches every thread of the instance. §3.35's
+  "one address space" caveat is unchanged between instances.
+- **The pool thread keeps its backend** now that no backend holds state per descriptor.
+
+Measured (same run as above, warm): `mmap` went from 12.0 s to 2.1 s, 507,608 mappings to
+8, 508,669 minor faults to 7,267, 48 s of system time to 13 s, and the read from 198 µs
+to 1 µs; `sync` did not change (6.2 s). `copy`, `populate`, and `willneed` are within
+0.1 s of `touch`. Counter-arguments and limits, so the row is not over-read: (a) it is a
+hypothetical, since DiskANN reads with `O_DIRECT` and asynchronous I/O and the mapping
+ignores the abstract's `DIRECT`; warm, it compares a page touch with a device read, which
+is the page cache against the device and says little about `mmap`; the cold run (as
+root) is the comparison that matters and has not been made. (b) The resident set reads
+6.11 GiB because the 781 MiB index is counted once per mapping. (c) With the read at
+1 µs the run is the runner's own fork and join: about 130 µs elapsed per hop of four
+sub-actors, and about 15 µs of user and 26 µs of system time per sub-actor (the wake of
+the pool thread, the VM snapshot, the file table and the payload filler made per
+sub-actor). The `sync` rows carry the same cost, about a third of their elapsed time.
+
+**Open.** The per-sub-actor cost above: against roughly 2 µs per op for the VM (§3.33) it
+is the next thing to reduce for the `parallel`-heavy abstracts under the blocking
+backends (the event loops fork a task, not a thread, and do not pay the wake). The cold
+DiskANN rows.
+
+### 3.37 Count what the runner does; sample only what the kernel does (added 2026-10-01)
+
+CI failed on `tests/uring_knobs.rs`: the shared-`SQPOLL` row reported no `SQPOLL` thread.
+The count came from the 10 ms sampler of §3.30, and on the CI host the row ended inside
+one period (the sampler's last look comes after the rings are closed). The first fix made
+the test's rows last 50 ms. The user asked whether that hurt anything (no: the test only)
+and then whether an atomic counter would not be better than a polling loop whose result
+depends on how long the task runs. The answer sorts the counters into three kinds:
+
+- **Done by the kernel, on its own schedule: sampled.** io-wq workers are created when an
+  op would block and retired after an idle time; no code of the runner runs at either
+  moment, and without privilege the thread list is the only view. `iowq_workers_peak`
+  stays on the sampler, as does `tasks_peak` (which includes them and glibc's AIO threads).
+- **Done by the kernel, at a moment the runner knows: counted once.** An `SQPOLL` thread
+  exists from `io_uring_setup` to the ring's close. The loops now meet when each has built
+  its ring (`uring.rs`, `Built`), the last to arrive reads the thread list once, and then
+  all run. `HostCounters::sqpoll_threads` (was `sqpoll_threads_peak`) is that count: exact
+  at any run length, still an observation of the kernel (a shared poll thread shows as
+  one), and taken before any op is issued. The 50 ms was taken back out of the test.
+  Rejected: holding every ring open until all loops end so a last look would see them; a
+  finished loop's poll thread would spin on, and its CPU would be charged to the run.
+- **Done by the runner: counted where it happens.** The ops a loop has on its ring are the
+  loop's own bookkeeping (it already kept the count to detect a stall), so the peak is a
+  plain maximum in the single-threaded loop: `UringReport::in_flight_peak`, printed on the
+  `io_uring:` line as the `libaio:` line always did, the largest over loops and hosts. An
+  actor has one op in flight at most (§3.29), so it is the number of a loop's actors
+  waiting on I/O together: the queue depth actually reached.
+
+Not done for the blocking backends: an exact count of threads inside a system call would
+be an atomic shared by every actor thread and written twice per op, a contended cache
+line the application does not have (a backend is charged only what its API needs, §3.35). It is
+bounded by the actor count in any case.
 
 ## 4. Plan changes
 

@@ -160,7 +160,10 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   either may nest. Sub-actor `k` of a fork always runs on pool thread `k`, the pool grows to
   the widest fork its actor has issued, and its threads idle between forks and end with the
   actor. A pool thread keeps its two buffer rings and, when its sub-actors fork in turn, a
-  pool of its own; the backend and the file table are new for every sub-actor. The report's
+  pool of its own; ~~the backend and the file table are new for every sub-actor~~ the file
+  table is new for every sub-actor (what the parent had open at that fork), and the
+  backend is kept too since the `mmap` backend holds no mappings of its own (the same
+  day, §9). The report's
   `threads` is therefore the number of threads the run created, not the number of
   sub-actors it ran. Every sub-actor starts from a snapshot of its parent's
   position and bindings (`vm::Snapshot`) and sees the files the parent had open at the fork;
@@ -258,8 +261,16 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   (`Report::counters`, summed over hosts by the coordinator). A sampler thread reads
   `/proc/self/status` every 10 ms for the peak task count of the process and, at every
   change, counts the `iou-wrk-*` threads in `/proc/self/task` for the io-wq worker peak
-  (and the `iou-sqp-*` threads, printed as `sqpoll threads peak` when there are any)
-  (workers linger idle for seconds, so the peak is not missed); `getrusage` before and after
+  ~~(and the `iou-sqp-*` threads, printed as `sqpoll threads peak` when there are any)~~
+  (workers linger idle for seconds, so the peak is not missed). The kernel starts and
+  ends those workers on its own schedule and no code of ours runs when it does, so their
+  peak can only be sampled. What need not be sampled is not (2026-10-01, user;
+  `DESIGN_REVIEW.md` §3.37): the `iou-sqp-*` threads live exactly as long as their rings,
+  so they are counted once, when every loop has built its ring and before any loop runs
+  (printed as `sqpoll threads N`); and the ops in flight are the loop's own doing, so
+  each loop counts them and the `io_uring:` and `libaio:` lines print the largest
+  `in-flight peak` any loop reached. (The sampled `SQPOLL` count read zero on a row that
+  ended inside one period, which failed `tests/uring_knobs.rs` in CI that day.) `getrusage` before and after
   gives user and system CPU, the peak RSS, and (since later on 2026-10-01, §9) the minor and major page faults; `/proc/self/mountstats` before and after gives
   the mount `--root` is on (longest mount point that is a prefix of the canonical root: its
   device and type on any filesystem, and its options as a `mount opts` line: the `opts:`
@@ -299,13 +310,25 @@ fingerprint before and after):
 | `sync`, pool | 41 | 6.3 s | 197 µs | 13.3 s | 36.2 s | 66,559 | 264 MiB |
 | `mmap`, a thread per sub-actor | 507,617 | 38.0 s | 420 µs | 16.4 s | 130 s | 1,019,792 | 21 MiB |
 | `mmap`, pool | 41 | 12.0 s | 198 µs | 10.0 s | 48.1 s | 508,669 | 31 MiB |
+| `mmap`, pool, one mapping per open | 41 | 2.1 s | 1 µs | 7.4 s | 13.2 s | 7,267 | 6.11 GiB |
 
 The resident set under `sync` is the buffer rings: a thread that lived for one read only
 ever touched the first slice of its ring, and a pool thread walks the whole of it, as
-`NAPKIN_MATH.md` §2.2 intends. Under `mmap` every beam sub-actor still maps the index
+`NAPKIN_MATH.md` §2.2 intends. ~~Under `mmap` every beam sub-actor still maps the index
 file for its one read (a sub-actor inherits descriptors, not mappings), which is the
 remaining half-million faults and the reason `mmap` is the slower row here; open in
-`DESIGN_REVIEW.md` §3.36. The same runs on the loopback NFS mount are §7.
+`DESIGN_REVIEW.md` §3.36.~~ Under `mmap` every beam sub-actor mapped the index file for
+its one read (507,608 mappings) until the mapping was made to belong to the open file
+(user, the same day; §9, `DESIGN_REVIEW.md` §3.36 Revised): the last row has 8 mappings,
+one per search thread's open, and a warm read is a touch of a mapped page. Three things
+to know when reading that row. It is a hypothetical: DiskANN reads with `O_DIRECT` and
+asynchronous I/O, not through a mapping, and the abstract's `DIRECT` flag means nothing to
+a mapping. Its resident set is the 781 MiB index counted once per mapping, not memory
+the runner holds. And with the read at 1 µs what remains is the runner's own fork and
+join: about 130 µs of elapsed time per hop of four sub-actors, and about 15 µs of user and
+26 µs of system time per sub-actor (waking the pool thread, the VM snapshot, the file
+table), which the `sync` rows carry as well. Cold was not run (it needs the cache drop,
+as root). The same runs on the loopback NFS mount are §7.
 
 ## 5. `aeiou datagen`, the payload, and the manifest
 
@@ -654,11 +677,22 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
   full context returns `EAGAIN`, and the loop then reaps a completion and submits again.
   The interface is asynchronous only with `O_DIRECT`: a buffered read is carried out
   inside `io_submit`. The report's `libaio:` line says how long the loops spent there.
-- **`mmap`** (`backend.rs`). The first read of a descriptor maps the whole file
+- **`mmap`** (`backend.rs`). The first read of ~~a descriptor~~ an open file maps the whole file
   (`PROT_READ`, `MAP_SHARED`, the size from an `fstat` the backend issues itself), a read
   makes its range of the mapping resident, and `close` unmaps: the shape of a safetensors
   or Arrow load. A read at or past the end returns what `pread` would; a read past the
-  mapped length asks `fstat` again and remaps if the file has grown. Writes and every
+  mapped length asks `fstat` again and ~~remaps~~ maps the file again if it has grown.
+  **The mapping belongs to the open file, not to the actor that reads** (2026-10-01,
+  user; `backend::OpenFile`, `DESIGN_REVIEW.md` §3.36 Revised): the actor that opened the
+  file and every sub-actor that inherited the descriptor at a fork read through the one
+  mapping, made by whichever of them reads first and unmapped when the last of them lets
+  the descriptor go. So the report's `mappings` is one per open that was read, whichever
+  thread made it. Sub-actors are threads of one address space, where a mapping is visible
+  to all; a loader worker's own opens are its own mappings, as a worker process's are, and
+  instances never share. Readers find the mapping without a lock; a file that has grown
+  is mapped again under a lock, and the earlier mapping stays until the close because
+  another sub-actor may be inside it. Before this, every sub-actor mapped an inherited
+  descriptor for itself and unmapped it when it ended. Writes and every
   other op are the `sync` calls. Two options, both part of the configuration the
   coordinator compares (`--aio-depth`, like `--threads`, is a host's tuning and is not):
   - `--mmap-consume touch` (default) reads one byte of every page of the range and copies
