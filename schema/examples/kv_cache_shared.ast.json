@@ -69,50 +69,148 @@
       "default": {
         "mixture": [
           {
-            "weight": 0.55,
+            "weight": 0.15,
             "dist": null
           },
           {
-            "weight": 0.45,
+            "weight": 0.85,
             "dist": {
-              "lognormal": {
-                "median": 40,
-                "sigma": 1.2,
-                "min": 1
-              }
+              "const": 40
             }
           }
         ]
       },
-      "doc": "requests ago, or none for a new conversation [measure]"
+      "doc": "none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one"
     },
-    "local": {
-      "default": 8,
-      "unit": "count",
-      "doc": "[config: GPU KV memory] a conversation returning within this many requests is still in the engine"
+    "keep": {
+      "default": {
+        "empirical": {
+          "values": [
+            0,
+            1000000
+          ],
+          "weights": [
+            91,
+            9
+          ]
+        }
+      },
+      "unit": "tokens",
+      "doc": "[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded"
     },
     "retain": {
       "default": 5000,
       "unit": "count",
       "doc": "older chunks are evicted [config: capacity]"
     },
+    "context": {
+      "default": 8192,
+      "unit": "tokens",
+      "doc": "[config: model] a conversation whose next prompt and reply would not fit starts anew"
+    },
     "turn_in": {
       "default": {
-        "lognormal": {
-          "median": 300,
-          "sigma": 0.8
+        "empirical": {
+          "values": [
+            1,
+            4,
+            6,
+            7,
+            9,
+            10,
+            11,
+            13,
+            15,
+            17,
+            19,
+            22,
+            26,
+            31,
+            39,
+            50,
+            68,
+            107,
+            214,
+            944
+          ],
+          "weights": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
         }
       },
-      "unit": "tokens"
+      "unit": "tokens",
+      "doc": "the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean)"
     },
     "turn_out": {
       "default": {
-        "lognormal": {
-          "median": 250,
-          "sigma": 0.6
+        "empirical": {
+          "values": [
+            12,
+            34,
+            62,
+            92,
+            119,
+            148,
+            175,
+            201,
+            225,
+            248,
+            271,
+            294,
+            317,
+            342,
+            370,
+            407,
+            454,
+            519,
+            615,
+            785
+          ],
+          "weights": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
         }
       },
-      "unit": "tokens"
+      "unit": "tokens",
+      "doc": "generated tokens (measured: ShareGPT replies, the same way)"
     },
     "prefill_per_token": {
       "default": 40000,
@@ -257,7 +355,37 @@
                     },
                     {
                       "let": {
-                        "name": "cont",
+                        "name": "inn",
+                        "value": {
+                          "draw": {
+                            "param": "turn_in"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "out",
+                        "value": {
+                          "draw": {
+                            "param": "turn_out"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "kp",
+                        "value": {
+                          "draw": {
+                            "param": "keep"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "back",
                         "value": {
                           "and": [
                             {
@@ -275,6 +403,123 @@
                                 },
                                 {
                                   "index": "r"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "prior",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "ref": "back"
+                            },
+                            "then": {
+                              "add": [
+                                {
+                                  "at": {
+                                    "ref": "ptoks",
+                                    "index": {
+                                      "sub": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        {
+                                          "ref": "d"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "at": {
+                                    "ref": "out",
+                                    "index": {
+                                      "sub": [
+                                        {
+                                          "index": "r"
+                                        },
+                                        {
+                                          "ref": "d"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "else": 0
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "cont",
+                        "value": {
+                          "and": [
+                            {
+                              "ref": "back"
+                            },
+                            {
+                              "le": [
+                                {
+                                  "add": [
+                                    {
+                                      "add": [
+                                        {
+                                          "add": [
+                                            {
+                                              "mul": [
+                                                {
+                                                  "cond": {
+                                                    "if": {
+                                                      "ref": "back"
+                                                    },
+                                                    "then": {
+                                                      "at": {
+                                                        "ref": "sysblk",
+                                                        "index": {
+                                                          "sub": [
+                                                            {
+                                                              "index": "r"
+                                                            },
+                                                            {
+                                                              "ref": "d"
+                                                            }
+                                                          ]
+                                                        }
+                                                      }
+                                                    },
+                                                    "else": 0
+                                                  }
+                                                },
+                                                {
+                                                  "param": "chunk_tokens"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "ref": "prior"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "ref": "inn"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "ref": "out"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "param": "context"
                                 }
                               ]
                             }
@@ -351,26 +596,6 @@
                     },
                     {
                       "let": {
-                        "name": "inn",
-                        "value": {
-                          "draw": {
-                            "param": "turn_in"
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "let": {
-                        "name": "out",
-                        "value": {
-                          "draw": {
-                            "param": "turn_out"
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "let": {
                         "name": "sysblk",
                         "value": {
                           "div": [
@@ -404,38 +629,7 @@
                                   "ref": "cont"
                                 },
                                 "then": {
-                                  "add": [
-                                    {
-                                      "at": {
-                                        "ref": "ptoks",
-                                        "index": {
-                                          "sub": [
-                                            {
-                                              "index": "r"
-                                            },
-                                            {
-                                              "ref": "d"
-                                            }
-                                          ]
-                                        }
-                                      }
-                                    },
-                                    {
-                                      "at": {
-                                        "ref": "out",
-                                        "index": {
-                                          "sub": [
-                                            {
-                                              "index": "r"
-                                            },
-                                            {
-                                              "ref": "d"
-                                            }
-                                          ]
-                                        }
-                                      }
-                                    }
-                                  ]
+                                  "ref": "prior"
                                 },
                                 "else": {
                                   "div": [
@@ -542,31 +736,17 @@
                         "value": {
                           "cond": {
                             "if": {
-                              "and": [
-                                {
-                                  "ref": "cont"
-                                },
-                                {
-                                  "le": [
-                                    {
-                                      "ref": "d"
-                                    },
-                                    {
-                                      "param": "local"
-                                    }
-                                  ]
-                                }
-                              ]
+                              "ref": "cont"
                             },
                             "then": {
                               "div": [
                                 {
-                                  "sub": [
+                                  "min": [
                                     {
-                                      "ref": "ptoks"
+                                      "ref": "prior"
                                     },
                                     {
-                                      "ref": "inn"
+                                      "ref": "kp"
                                     }
                                   ]
                                 },
@@ -1182,9 +1362,9 @@
   "provenance": {
     "generator": {
       "script": "kv_cache_shared.py",
-      "sha256": "6c9c53fae26253ecbb6626b434ac63aad4532eee77a58beebb6d5869a5c9fb9e",
+      "sha256": "c3b684085a0ee6b949204e7d62d12e50d0a59a03be6224e464dc78df5c466be3",
       "builder_version": "0.1.0",
-      "git": "88cdc5e8957c-dirty"
+      "git": "7c665988ff1c-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -1192,6 +1372,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "19759baf9b1561587802a7ca0693e9c6b5a18dde9731c20e7f126afd1d7e1202"
+    "ast_sha256": "412dd49700599d2ccbfd6543599bd821e162a8cf84f70cf37eda8119b177ca3e"
   }
 }

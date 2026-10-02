@@ -2391,6 +2391,8 @@ connectors, Mooncake, HiCache, a remote LMCache server) are other traces.
   does for `retain`. On the traced load the abstract reads 88 chunks where the engine read
   47: the engine's memory was still filling during the first turns, and it kept the
   shared first chunk. A steady-state trace with a replay is what would fit `local`.
+  *2026-10-02, later:* the replay showed a threshold cannot be fitted; `local` is replaced
+  by `keep`, a draw of the tokens the engine still holds (§3.56).
 - **`sys_local`.** The system prompts' whole chunks are never read while the engine holds
   them, which on one engine is always. `false` is the cold engine beside a filled cache
   (a restart, or a second engine), where they are read by every new conversation.
@@ -2728,7 +2730,7 @@ What the rule found:
   parameters the abstract loads 88 (136 for the reader) chunks where the traced engine
   loaded 47 (91). §3.51 and §3.52 said the synthetic load fixes the call sequence and not
   the distributions; the tolerance now says so with a verdict. The chat replay is what
-  can change it.
+  can change it. *2026-10-02, later:* it did, to 1, 2, and 1 rows (§3.56).
 - **`model_load` and `vdb_search_ivf` cannot be judged this way.** They read through a
   mapping; with the reads on one side only, every share is of a different total. Their
   evidence is the exact call counts of their tests and the `mincore` measurements.
@@ -2741,6 +2743,137 @@ Not done: the parameters are not in a metrics document, so a `--self` document o
 parameter set is not refused; the existing per-pair assertions of `tests/test_trace.py`
 (0.3, 0.07, 0.01, confirmed in §3.54) were left beside the new test; no tolerance on wire
 counts (RPCs), which are compared by hand in `ABSTRACTS.md`.
+
+### 3.56 The chat replay: ShareGPT through vLLM and LMCache (added and decided 2026-10-02)
+
+The item §3.51 left open ("a steady-state trace with a replay is what would fit `local`")
+and §3.55 turned into three verdicts. Done at the user's instruction as the first task of
+the session. Kits: `builder/traces/kv_cache_serving` (`replay.py`, `fit.py`, the two logs)
+and `builder/traces/kv_cache_shared`; findings in `ABSTRACTS.md` §8 "Replay". ~~**The choices
+below were made while building and are not yet confirmed by the user.**~~ **Decided
+2026-10-02:** the user confirmed the choices, and agreed to widening the `at` rule for the
+per-round draw under "Not done" (§3.57).
+
+**What was run.** ShareGPT (the file vLLM's benchmarks use) through the server of §3.51,
+five times: two untraced runs to see what the engine does, then the three traced runs that
+are now the committed pairs (local disk; `fs://` on an empty store; a restarted engine on
+the filled store, sent the writer's requests byte for byte). 300 requests each, 8
+conversations open, context 4,096 tokens, 96 MiB of GPU KV memory, two synthetic system
+prompts.
+
+**What the dataset gives, and what it does not.**
+
+- The file holds long conversations in parts whose ids end in the index of their first
+  message, and consecutive parts overlap by one message. Joined: 50,142 conversations,
+  49,699 of which alternate human and gpt from a human turn. Read as it is, the file says
+  a conversation has 3.4 turns and never exceeds about 2,200 tokens; joined, 6.7 turns
+  (median 3, p90 15, p99 62), and 15 % of conversations exceed 4,096 tokens.
+- Lengths with the Qwen tokenizer over 26,996 turns of 4,000 conversations: user turn
+  median 18, mean 81, p99 1,226; reply median 260, mean 284, p99 782. A log-normal fits
+  neither (the reply's is skewed the other way), so the defaults are twenty equal shares
+  of the sample, each its mean, which keeps the totals.
+- **No timestamps.** How conversations interleave, and so the lag between a store and its
+  load, is not in the data. No public dataset was found that has both the turns and their
+  times (the Azure and BurstGPT traces have times and token counts but no conversations).
+  The reuse distance therefore stays a load parameter, and the brief's **[measure]** on it
+  becomes **[config: load]**.
+- **No system prompts.** `sys_tokens` and `sys_pop` stay **[measure]**.
+
+**What the runs showed.**
+
+- **A reply must go back as the tokens the engine generated.** Replies are forced to the
+  dataset's lengths (`max_tokens` and `ignore_eos`). With special tokens stripped from the
+  text, as the API does by default, the next prompt was shorter than the engine's own copy
+  of the conversation and the engine's cache missed from that point: 8 % of a conversation
+  lost at a distance of one request. `skip_special_tokens: false` removes it (0 of 222
+  returning prompts shorter than the engine's copy).
+- **What the engine holds is not a threshold in requests.** vLLM frees a finished request's
+  blocks tail first into one LRU queue, so a returning conversation is held from its start
+  up to some token, and the shared system prompt is nearly always held. In the traced run,
+  of 220 returning requests the engine held the whole conversation in 37, the system prompt
+  and nothing else in 147, a part in 28, and nothing in 8. With conversations chosen at
+  random (the second untraced run), the best `local` (8) was wrong by 105 chunks, summed
+  request by request, of 344 loaded.
+- **A distribution of distances forks conversations.** `conv @ (r − d)` lets every request
+  choose its parent, so with more than one distance two requests can choose the same one.
+  Fitted to the first untraced run (distances 1 to 35), the abstract issued 348 chunk
+  writes onto 249 files: 99 rewrites of a name, where the real store never writes a chunk
+  twice (a real branch has other hashes and other files). The defaults (log-normal, median
+  40) had the same property since §9.5.
+- **The loads come in bursts.** The engine's memory is shared by the open conversations:
+  when they are long each is cut short and all of them load. Loads per round of eight
+  requests have a standard deviation of 13.9 in the trace and 9.8 (at most 11.5 in 200
+  trials) when what the engine kept is drawn independently for the same conversations.
+
+**Choices.**
+
+- **The load serves its open conversations in turn.** With no times in the data any
+  interleaving is the load's choice, and in turn is the one the chain expresses without
+  forks: one distance, every request at most one continuation. `reuse` stays a mixture
+  with a `none` arm; its other arm is now `const(40)` by default, and the parameter's text
+  says what a second distance does. *Against:* the lag between a store and its load is one
+  value in requests where real users give a broad one; in time it still varies with the
+  requests in between.
+- **`keep` replaces `local`.** A positional draw per request of the tokens the engine
+  still holds of a returning conversation, counted from its start; `held = min(prior,
+  keep) / chunk_tokens`, and the chunks past it are loaded. It is the engine's quantity
+  (memory left after the other open conversations), so it is a number of tokens and not a
+  share: fitted as a share, the abstract loaded 519 to 668 chunks against the trace's 755;
+  as tokens, 621 to 781. The default, `empirical(0: 91, 1_000_000: 9)`, is the old
+  default's meaning (9 % of returns within `local = 8` under the old log-normal): nothing
+  or everything. All three abstracts use one formula now; `kv_cache_serving` loads from
+  chunk `held` on, as the shared ones already did.
+- **The fit of `keep` treats a conversation held whole as a lower bound** (the engine
+  would have kept at least that much): the product-limit estimate, the weight past the
+  longest observation put at the context length.
+- **`context`.** A conversation whose next prompt and reply would not fit starts anew
+  (`replay.py` cuts the same way; 14 of 80 conversations). Without it the chain's token
+  count has no bound. Default 8,192, **[config: model]**.
+- **The measured values are the defaults**: the none weight 0.15 (ShareGPT's first turns
+  are 0.148 of requests) and the two length tables. They are not the chat template's:
+  `turn_in` in a fitted file includes its few tokens per turn, the default does not.
+- **`fit.py` lives in the kit**, not in `aeiou-fit`: it reads the load generator's log and
+  LMCache's, not an `strace`. Both logs are committed (the server's reduced to LMCache's
+  line per request) and a test repeats the fit.
+- **The synthetic traces are replaced.** The 40-request pairs of §3.51 and §3.52 fixed
+  the call sequence; their fitted files name `local`, which no longer exists. Their
+  numbers stay in `ABSTRACTS.md` §8 and in this file, and `chat.py` stays in the kit.
+- **The reader's `keep` is the writer's.** `same_run` requires one parameter set, and the
+  restarted engine sees the same requests, so it holds about what the writer's did.
+
+**Verdicts** (`aeiou-trace compare --judge`, seed 1 against the trace, seeds 2 to 4 as the
+spread; before the replay the three pairs had 6, 7, and 4 rows outside):
+
+| pair | rows outside before | now | the rows |
+|---|---|---|---|
+| `kv_cache_serving` | 6 | 1 | reuse distance, read after read: 0.274 against 0.271 allowed |
+| `kv_cache_shared`, writer | 7 | 2 | the same row, 0.274 against 0.256; reuse distance, write after write (a file's chunk write after its header write: in 231 of 370 another thread's call came between, the store threads' order against the dry run's) |
+| `kv_cache_shared_reader` | 4 | 1 | the same row, 0.280 against 0.275 |
+
+Still not accepted, all three: a row outside is outside (§3.55), by 0.003 to 0.018 here.
+The read share, the reuse shares, the popularity, and the `stat` share are inside now.
+Chunks, trace against abstract at seed 1 (and over the seeds tried): stored 370 against 382
+(355 to 389); loaded by the writer 755 against 633 (621 to 781, eight seeds); loaded by the
+reader 1,124 against 950 (950 to 1,111, four seeds). The engine on `fs://` stored and
+loaded what the engine on local disk did, chunk for chunk, and held the same of every
+request: `fit.py` gives one parameter set from either run.
+
+**The one row.** Its distance is the bytes accessed between two reads of a chunk, and the
+trace's is longer (median 112 MiB against 96) in every seed tried; seed 2 is inside, seed
+1 is the lowest of the seeds in chunks loaded. The cause that was measured is the bursts
+above. For the reader there is a second, which is the capture's and not the abstract's: the
+restarted engine was sent the writer's replies as history, so it never held a reply it had
+generated itself (0 of 220 returning requests, 37 for the writer) and loaded about one
+chunk more for each conversation it otherwise held whole. A real second engine holds its
+own replies, as the abstract has it.
+
+**Not done.** One `keep` draw per round of open conversations, which the bursts call for:
+`kp @ (r − (r % d + 1))` is refused by the validator (the offset of an `at` must be
+provably at least one, and `d` may be `none`), and widening that rule is a contract
+change. The wire counts under the replay (the tables of `ABSTRACTS.md` §8 are the
+synthetic load's). More than one request in flight (`--concurrency`), a second engine on
+the store at the same time, a model with a longer context, and a `keep` measured at
+another ratio of GPU memory to open conversations.
 
 ## 4. Plan changes
 
@@ -2779,7 +2912,7 @@ counts (RPCs), which are compared by hand in `ABSTRACTS.md`.
   definitions decided (§3.39). ~~Next: the `RLIMIT`
   checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
-  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: a chat replay for the KV distributions, ~~the tolerances,~~ (built and decided 2026-10-02, §3.55) the `replay` node, a GPU engine's touch pattern for `model_load`.
+  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: ~~a chat replay for the KV distributions,~~ (run 2026-10-02, §3.56, decided) ~~the tolerances,~~ (built and decided 2026-10-02, §3.55) the `replay` node, a GPU engine's touch pattern for `model_load`.
 
 ## 5. Things reviewed and left as-is
 

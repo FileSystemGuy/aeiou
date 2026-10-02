@@ -309,8 +309,8 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     third trace showed needs the read order (sorted names, not file order) and the buffer
     carried from item to item. ~~The other §3.47 choices are not yet confirmed.~~ Those that need no GPU were confirmed 2026-10-02. ~~Still
     to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.~~ Still
-    to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ a chat replay for row 8 of `ABSTRACTS.md` §11, ~~the tolerances,~~ the `replay` node.
-    **Tolerances built 2026-10-02** (`aeiou-trace compare --judge`, `builder/README.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now): a tolerance per class of metric (0.05 for the op mix, request sizes, and popularity; 0.10 for run lengths, reuse, fan-out, and depth), raised by what the abstract differs from itself by at other seeds; rows the trace cannot show are named per pair and not judged. Of the fifteen committed pairs nine are accepted, four are not (the DiskANN build and the three KV-cache pairs, each row with its recorded reason), and the two applications that read through a mapping cannot be judged from an `strace` at all.
+    to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ ~~a chat replay for row 8 of `ABSTRACTS.md` §11,~~ ~~the tolerances,~~ the `replay` node.
+    **Tolerances built 2026-10-02** (`aeiou-trace compare --judge`, `builder/README.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now): a tolerance per class of metric (0.05 for the op mix, request sizes, and popularity; 0.10 for run lengths, reuse, fan-out, and depth), raised by what the abstract differs from itself by at other seeds; rows the trace cannot show are named per pair and not judged. Of the fifteen committed pairs nine are accepted, four are not (the DiskANN build and the three KV-cache pairs, each row with its recorded reason; the KV pairs' rows are those of the replay since §3.56), and the two applications that read through a mapping cannot be judged from an `strace` at all.
     **Sixth row, 2026-10-01** (`ABSTRACTS.md` §6 "Trace", `DESIGN_REVIEW.md` §3.49,
     `builder/traces/vdb_search_ivf`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
     FAISS maps the lists file and issues no call on it; 32 prefetch threads per search slice
@@ -331,8 +331,23 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `read`; only whole chunks of the prompt are stored and nothing during decode; reads
     happen only for what the engine's own GPU cache lost. The abstract lost its `stat`
     loops, directories, and decode writes and gained `local` and `sys_local`. ~~Choices not
-    yet confirmed.~~ Choices decided 2026-10-02. Every row now has a trace; the chat replay for the KV distributions is
-    still to do.
+    yet confirmed.~~ Choices decided 2026-10-02. Every row now has a trace; ~~the chat replay for the KV distributions is
+    still to do.~~
+    **Chat replay, 2026-10-02** (`ABSTRACTS.md` §8 "Replay", `DESIGN_REVIEW.md` §3.56,
+    `replay.py` and `fit.py` in `builder/traces/kv_cache_serving`): ShareGPT through the same
+    server, on local disk and on the shared store, 300 requests with eight conversations
+    open. The dataset gives the lengths and the share of first turns, now the defaults; it
+    has no timestamps, so the reuse distance is a load parameter and no longer
+    **[measure]**. `local` is replaced by `keep` (a draw of the tokens the engine still
+    holds, since it keeps the start of a conversation and not all or nothing), `reuse` has
+    one distance (several make two requests continue one conversation and rewrite its
+    chunks), and `context` ends a conversation that no longer fits. The three KV pairs went
+    from 6, 7, and 4 rows outside the tolerances to 1, 2, and 1, and are still not
+    accepted: the reuse distance of the reads misses by 0.003 to 0.018, because the traced
+    loads come in bursts that an independent draw per request does not make. ~~Choices not
+    yet confirmed.~~ Choices decided 2026-10-02, and the user agreed to the wider `at` rule
+    that one draw per round of conversations needs (§3.57). The wire counts were not taken
+    again under the replay.
     Wire counts taken later the same day: three WRITEs, one COMMIT, one OPEN per chunk for
     the server and the abstract alike, and no READ in either, since the client still holds
     the chunks it wrote. ~~Which cold-reader configuration to score is open (§3.51).~~

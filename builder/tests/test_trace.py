@@ -3,6 +3,7 @@
 comparison's distances, and, when `strace` and the runner binary are there, the trace of
 `aeiou run` against the same abstract's `aeiou dry-run --metrics-json`: everything that
 does not depend on the order must be equal."""
+import importlib.util
 import json
 import os
 import pathlib
@@ -234,7 +235,9 @@ needs_run = pytest.mark.skipif(not RUNNER.exists() or not _strace_works(), reaso
     "name, seed, params",
     [
         ("train_small_files", 7, ["files=600", "batch=4", "workers=2", "prefetch=2", "steps=12"]),
-        ("kv_cache_serving", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8", "local=1"]),
+        ("kv_cache_serving", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
+                              'reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}',
+                              'keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}']),
         ("vdb_search_diskann", 9, ["nodes=5000", "threads=2", "queries=6"]),
     ],
 )
@@ -448,42 +451,66 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
-    """`builder/traces/kv_cache_serving`: vLLM with LMCache's local-disk backend, 40 requests
-    over 8 conversations, traced 2026-10-02. Every chunk is the same six calls around one
-    `read` or `write`; the abstract stores three more of the conversations' chunks (it
-    generates 100 tokens where some replies were shorter) and not the two chunks of the
-    system prompts, which are a dataset here; it reads every chunk of a returning conversation where the traced engine,
-    its GPU memory not yet full, still held the first turns (`ABSTRACTS.md` §8)."""
+    """`builder/traces/kv_cache_serving`: vLLM with LMCache's local-disk backend under a replay
+    of ShareGPT, 300 requests with 8 conversations open, traced 2026-10-02. Every chunk is the
+    same six calls around one `read` or `write`. At the parameters `fit.py` takes from the
+    run's two logs the abstract stores 382 chunks where the engine stored 370 (two of them
+    the system prompts', a dataset here) and reads 633 where it read 755 (seed 1; over eight
+    seeds it reads 621 to 781) (`ABSTRACTS.md` §8)."""
     kit = BUILDER / "traces" / "kv_cache_serving"
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1",
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
                         "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
     for c in (tc, dc):                                    # one open, fstat, ioctl, lseek and close per data call
         assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"] == c["read"] + c["write"]
-    assert (tc["write"], dc["write"]) == (47, 48)
-    assert (tc["read"], dc["read"]) == (47, 88)
+    assert (tc["write"], dc["write"]) == (370, 382)
+    assert (tc["read"], dc["read"]) == (755, 633)
     assert t["request_size"] == {k: {**v, "n": t["request_size"][k]["n"], "buckets": [[3145728, t["request_size"][k]["n"]]]} for k, v in t["request_size"].items()}
     assert d["request_size"]["read"]["buckets"][0][0] == d["request_size"]["write"]["buckets"][0][0] == 3145728
     assert set(tc) - set(dc) == {"mkdir", "stat"}         # of the cache directory, once at start
+    # no chunk is written twice, in either: a request has one continuation (one `reuse` distance)
+    assert t["reuse_distance_bytes"]["write_after_write"]["n"] == d["reuse_distance_bytes"]["write_after_write"]["n"] == 0
+
+
+def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path):
+    """The kit's `fitted.params.json` is `fit.py` on the kit's two logs: the load's, and
+    LMCache's line per request from the server's. `keep` is a product-limit estimate: a
+    conversation the engine held whole is a lower bound on what it would have kept."""
+    kit = BUILDER / "traces" / "kv_cache_serving"
+    have = json.loads((kit / "fitted.params.json").read_text())
+    out = tmp_path / "fit.json"
+    r = subprocess.run([sys.executable, str(kit / "fit.py"), str(kit / "replay.log"), str(kit / "lmcache.log"), "--set", "chunk_bytes=3145728",
+                        "--doc", have["doc"], "-o", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(out.read_text()) == have
+    p = have["params"]
+    assert p["reuse"]["mixture"][1]["dist"] == {"const": 8} and p["requests"] == 300 and p["context"] == 4096
+    keep = p["keep"]["empirical"]["values"]
+    assert keep == sorted(keep) and keep[-1] == p["context"] and keep.count(208) == 13      # 208: the system prompt's tokens past its whole chunk, all the engine kept
+    spec = importlib.util.spec_from_file_location("kv_fit", kit / "fit.py")
+    fit = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fit)
+    # uncensored: the sample's own equal shares; a censored observation moves its weight to the larger ones
+    assert fit.kept([(10, False), (20, False), (30, False), (40, False)], 4, 99)["empirical"]["values"] == [10, 20, 30, 40]
+    assert fit.kept([(10, False), (20, True), (30, False), (40, True)], 4, 100)["empirical"]["values"] == [10, 30, 65, 100]
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
-    """`builder/traces/kv_cache_shared`: vLLM with LMCache's `fs://` backend, the 40 requests of
+    """`builder/traces/kv_cache_shared`: vLLM with LMCache's `fs://` backend, the 300 requests of
     the row above sent to an engine on an empty store and then to a restarted engine on the
     filled one, traced 2026-10-02. A chunk file is a 28-byte header and the chunk, read as one
     buffer and the rest; the writer renames every file into place and the reader writes
-    nothing. The counts differ from the traces as the local-disk row's do (one more chunk
-    stored, loads at `local = 7` where the traced engine still held the first turns) and by
-    the system prompts' first use (`ABSTRACTS.md` §8)."""
+    nothing. The writer stores and loads what the local-disk engine did, chunk for chunk; the
+    abstract's counts at seed 1 are the low end of its seeds (`ABSTRACTS.md` §8)."""
     kit = BUILDER / "traces" / "kv_cache_shared"
     got = {}
     for who, ast, params in (("writer", "kv_cache_shared", "fitted.params.json"), ("reader", "kv_cache_shared_reader", "fitted.reader.params.json")):
         dry = tmp_path / f"{who}.json"
-        r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", "1",
+        r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", "1", "--seed", "1",
                             "--params", str(kit / params), "--metrics-json", str(dry)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         t, d = json.loads((kit / f"{who}.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
@@ -493,16 +520,18 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
         assert set(t["counts"]) - set(d["counts"]) == {"mkdir"}          # of the store's directory, once at start
         assert [b[0] for b in t["request_size"]["read"]["buckets"]] == [b[0] for b in d["request_size"]["read"]["buckets"]] == [1048576, 2097152]
     (tw, dw), (tr, dr) = got["writer"], got["reader"]
-    assert (tw["rename"], dw["rename"]) == (47, 48) and "rename" not in tr and "rename" not in dr
-    assert (tw["write"], dw["write"]) == (2 * 47, 2 * 48) and "write" not in tr and "write" not in dr
-    assert (tw["open"] - tw["rename"], dw["open"] - dw["rename"]) == (47, 88)        # chunks loaded by the writer
-    assert (tr["open"], dr["open"]) == (91, 136)                                      # and by the reader
-    assert (tw["read"], tr["read"]) == (2 * 47, 2 * 91) and (dw["read"], dr["read"]) == (2 * 88, 2 * 136)
-    assert (tw["stat"], dw["stat"]) == (161, 168)         # 121 hits and 40 misses; 128 and 40
-    assert (tr["stat"], dr["stat"]) == (169, 176)         # every chunk of every prompt, and the directory once in the trace
-    # the same parameter values in both files: the reader is run with the writer's
+    assert (tw["rename"], dw["rename"]) == (370, 381) and "rename" not in tr and "rename" not in dr
+    assert (tw["write"], dw["write"]) == (2 * 370, 2 * 381) and "write" not in tr and "write" not in dr
+    assert (tw["open"] - tw["rename"], dw["open"] - dw["rename"]) == (755, 632)      # chunks loaded by the writer
+    assert (tr["open"], dr["open"]) == (1124, 950)                                    # and by the reader
+    assert (tw["read"], tr["read"]) == (2 * 755, 2 * 1124) and (dw["read"], dr["read"]) == (2 * 632, 2 * 950)
+    assert (tw["stat"], dw["stat"]) == (1418, 1336)       # 1,193 hits and a miss in most requests
+    assert (tr["stat"], dr["stat"]) == (1564, 1499)       # every chunk of every prompt, and the directory once in the trace
+    # the same parameter values in both files: the reader is run with the writer's; and they are the local-disk
+    # kit's (the same requests, and the engine held the same of each) with the header and the buffer
     pw, pr = (json.loads((kit / f).read_text())["params"] for f in ("fitted.params.json", "fitted.reader.params.json"))
     assert pw == pr
+    assert pw == {**json.loads((BUILDER / "traces" / "kv_cache_serving" / "fitted.params.json").read_text())["params"], "meta_bytes": 28, "buf": 1048576}
 
 
 
@@ -564,6 +593,7 @@ KIT_PAIRS = [
     ("vdb_search_diskann", "trace.nocache", "vdb_search_diskann", "fitted.nocache.params.json", 1, "accepted"),
     ("vdb_search_diskann", "trace.cache", "vdb_search_diskann", "fitted.cache.params.json", 1, "accepted"),
     ("vdb_build_diskann", "trace", "vdb_build_diskann", "fitted.params.json", 1, "not accepted"),
+    # the three KV-cache pairs are the ShareGPT replay (DESIGN_REVIEW.md §3.56): one row outside each, by 0.003 to 0.018, and the writer's store order
     ("kv_cache_serving", "trace", "kv_cache_serving", "fitted.params.json", 1, "not accepted"),
     ("kv_cache_shared", "writer.trace", "kv_cache_shared", "fitted.params.json", 1, "not accepted"),
     ("kv_cache_shared", "reader.trace", "kv_cache_shared_reader", "fitted.reader.params.json", 1, "not accepted"),

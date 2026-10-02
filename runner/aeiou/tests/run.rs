@@ -164,10 +164,15 @@ fn namespaces_must_be_empty_and_writes_are_read_back() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// The KV-cache abstracts in a few requests: a slot with two conversations open (the default's forty would start
+/// nothing but new ones), and an engine that keeps none, half, or all of a returning one.
+const KV_REUSE: &str = r#"{"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}"#;
+const KV_KEEP: &str = r#"{"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}"#;
+
 #[test]
 fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
     let root = tmpdir("kv");
-    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("local", "1")];
+    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
     let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(1, 5, &params));
     gen(loaded, cfg, model, &root);
     // the chunked files exist: kv/sys/0000/blk_0000 …
@@ -193,7 +198,7 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
     // renamed into place (two instances, eviction with re-store, system prompts loaded).
     let root = tmpdir("kvshared");
     let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("buf", "65536"), ("concurrency", "3"), ("warm", "4"),
-                  ("requests", "12"), ("local", "1"), ("retain", "6"), ("sys_local", "false")];
+                  ("requests", "12"), ("reuse", KV_REUSE), ("keep", KV_KEEP), ("retain", "6"), ("sys_local", "false")];
     let (wl, wcfg, wmodel) = leaked_model("kv_cache_shared", config(2, 5, &params));
     gen(wl, wcfg, wmodel, &root);
     run::check_datasets(wl, wcfg, &root).unwrap();
@@ -233,9 +238,9 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
     let e = refusal(5, 1, &params);
     assert!(e.contains("--gpus 1 here, 2 in the writer"), "{e}");
     let mut other = params.to_vec();
-    other[7] = ("local", "2");
+    other[9] = ("retain", "7");
     let e = refusal(5, 2, &other);
-    assert!(e.contains("parameter `local`: 2 here, 1 in the writer") && !e.contains("--seed"), "{e}");
+    assert!(e.contains("parameter `retain`: 7 here, 6 in the writer") && !e.contains("--seed"), "{e}");
     // without the check the same mismatch fails late, at the first chunk the store does not have
     let (_, _, late) = leaked_model("kv_cache_shared_reader", config(2, 6, &params));
     let (_, inputs) = run::check_input_namespaces(rl, rcfg, &root, &opts(&root, BackendKind::Sync)).unwrap();
@@ -381,7 +386,7 @@ fn io_uring_reproduces_the_sync_runs() {
     // dry run's exactly, on one loop and on several.
     for threads in [1usize, 3] {
         let root = tmpdir("uring-kv");
-        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("local", "1")];
+        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
         let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(2, 5, &params));
         gen(loaded, cfg, model, &root);
         run::check_datasets(loaded, cfg, &root).unwrap();
@@ -446,7 +451,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
     let looped = [BackendKind::LibAio, BackendKind::LibAioDirect];
     {
         let root = tmpdir("more-kv");
-        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("local", "1")];
+        let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
         let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(2, 5, &params));
         gen(loaded, cfg, model, &root);
         let (fp, ops, bytes) = dry_fingerprint(model);

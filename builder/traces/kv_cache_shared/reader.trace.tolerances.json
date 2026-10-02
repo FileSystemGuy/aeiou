@@ -12,20 +12,8 @@
   ],
   "outside": [
     {
-      "metric": "ops: stat",
-      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
-    },
-    {
-      "metric": "reuse: first touches / block reads",
-      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
-    },
-    {
-      "metric": "reuse: read after read",
-      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
-    },
-    {
       "metric": "reuse distance, read after read",
-      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
+      "reason": "0.280 against 0.275 at seed 1. The loads of the trace come in bursts, as in the writer's pair (the engine's memory is shared by the open conversations; the abstract draws what it kept independently per request, DESIGN_REVIEW.md §3.56); and the traced reader was sent the writer's replies as history, so its engine never held a reply it had generated and loaded about one chunk more per conversation it otherwise held whole"
     }
   ]
 }

@@ -1,0 +1,373 @@
+conversations 49699 context 4096 system prompts [466, 466]
+req 0 conv 0 turn 0 ago - prompt 759 cached None completion 340 4.18s
+req 1 conv 1 turn 0 ago - prompt 487 cached None completion 245 2.79s
+req 2 conv 2 turn 0 ago - prompt 507 cached None completion 510 6.55s
+req 3 conv 3 turn 0 ago - prompt 486 cached None completion 288 3.36s
+req 4 conv 4 turn 0 ago - prompt 503 cached None completion 347 4.15s
+req 5 conv 5 turn 0 ago - prompt 475 cached None completion 9 0.15s
+req 6 conv 6 turn 0 ago - prompt 483 cached None completion 271 3.33s
+req 7 conv 7 turn 0 ago - prompt 609 cached None completion 237 2.88s
+conv 0 ended after 1 turns
+req 8 conv 8 turn 0 ago - prompt 480 cached None completion 107 1.29s
+req 9 conv 1 turn 1 ago 8 prompt 770 cached None completion 349 4.32s
+req 10 conv 2 turn 1 ago 8 prompt 1052 cached None completion 432 5.85s
+req 11 conv 3 turn 1 ago 8 prompt 820 cached None completion 226 3.63s
+req 12 conv 4 turn 1 ago 8 prompt 887 cached None completion 261 4.61s
+req 13 conv 5 turn 1 ago 8 prompt 518 cached None completion 701 21.76s
+req 14 conv 6 turn 1 ago 8 prompt 774 cached None completion 421 18.11s
+conv 7 ended after 1 turns
+req 15 conv 9 turn 0 ago - prompt 480 cached None completion 30 1.21s
+req 16 conv 8 turn 1 ago 8 prompt 603 cached None completion 239 9.57s
+req 17 conv 1 turn 2 ago 8 prompt 1147 cached None completion 396 15.22s
+req 18 conv 2 turn 2 ago 8 prompt 1599 cached None completion 488 17.99s
+conv 3 ended after 2 turns
+req 19 conv 10 turn 0 ago - prompt 554 cached None completion 431 16.16s
+conv 4 ended after 2 turns
+req 20 conv 11 turn 0 ago - prompt 485 cached None completion 41 1.99s
+conv 5 ended after 2 turns
+req 21 conv 12 turn 0 ago - prompt 635 cached None completion 227 6.76s
+req 22 conv 6 turn 2 ago 8 prompt 1226 cached None completion 268 3.56s
+req 23 conv 9 turn 1 ago 8 prompt 1062 cached None completion 31 0.49s
+conv 8 ended after 2 turns
+req 24 conv 13 turn 0 ago - prompt 592 cached None completion 25 0.37s
+req 25 conv 1 turn 3 ago 8 prompt 1567 cached None completion 456 9.37s
+req 26 conv 2 turn 3 ago 8 prompt 2107 cached None completion 496 15.81s
+req 27 conv 10 turn 1 ago 8 prompt 1016 cached None completion 540 17.43s
+conv 11 ended after 1 turns
+req 28 conv 14 turn 0 ago - prompt 483 cached None completion 220 7.12s
+req 29 conv 12 turn 1 ago 8 prompt 943 cached None completion 489 10.53s
+req 30 conv 6 turn 3 ago 8 prompt 1522 cached None completion 155 2.36s
+req 31 conv 9 turn 2 ago 8 prompt 1127 cached None completion 241 3.38s
+req 32 conv 13 turn 1 ago 8 prompt 964 cached None completion 23 0.45s
+req 33 conv 1 turn 4 ago 8 prompt 2065 cached None completion 377 5.86s
+req 34 conv 2 turn 4 ago 8 prompt 2614 cached None completion 26 0.44s
+req 35 conv 10 turn 2 ago 8 prompt 1576 cached None completion 603 8.58s
+conv 14 ended after 1 turns
+req 36 conv 15 turn 0 ago - prompt 551 cached None completion 91 1.42s
+req 37 conv 12 turn 2 ago 8 prompt 1453 cached None completion 106 1.68s
+req 38 conv 6 turn 4 ago 8 prompt 1710 cached None completion 149 2.41s
+req 39 conv 9 turn 3 ago 8 prompt 1385 cached None completion 243 4.32s
+req 40 conv 13 turn 2 ago 8 prompt 1070 cached None completion 291 4.71s
+req 41 conv 1 turn 5 ago 8 prompt 2473 cached None completion 376 5.92s
+conv 2 ended after 5 turns
+req 42 conv 16 turn 0 ago - prompt 480 cached None completion 102 1.58s
+req 43 conv 10 turn 3 ago 8 prompt 2202 cached None completion 591 18.77s
+req 44 conv 15 turn 1 ago 8 prompt 737 cached None completion 43 1.64s
+conv 12 ended after 3 turns
+req 45 conv 17 turn 0 ago - prompt 526 cached None completion 144 5.36s
+req 46 conv 6 turn 5 ago 8 prompt 1896 cached None completion 245 9.80s
+conv 9 ended after 4 turns
+req 47 conv 18 turn 0 ago - prompt 485 cached None completion 499 18.74s
+req 48 conv 13 turn 3 ago 8 prompt 1432 cached None completion 419 13.58s
+req 49 conv 1 turn 6 ago 8 prompt 3013 cached None completion 769 23.74s
+req 50 conv 16 turn 1 ago 8 prompt 598 cached None completion 106 3.41s
+req 51 conv 10 turn 4 ago 8 prompt 2835 cached None completion 806 12.61s
+req 52 conv 15 turn 2 ago 8 prompt 981 cached None completion 243 3.64s
+conv 17 ended after 1 turns
+req 53 conv 19 turn 0 ago - prompt 480 cached None completion 191 2.67s
+req 54 conv 6 turn 6 ago 8 prompt 2159 cached None completion 299 4.26s
+req 55 conv 18 turn 1 ago 8 prompt 1032 cached None completion 18 0.38s
+req 56 conv 13 turn 4 ago 8 prompt 1903 cached None completion 853 12.38s
+conv 1 cut after 7 turns
+req 57 conv 20 turn 0 ago - prompt 485 cached None completion 206 3.15s
+conv 16 ended after 2 turns
+req 58 conv 21 turn 0 ago - prompt 492 cached None completion 474 7.40s
+req 59 conv 10 turn 5 ago 8 prompt 3682 cached None completion 240 3.63s
+req 60 conv 15 turn 3 ago 8 prompt 1259 cached None completion 39 0.65s
+req 61 conv 19 turn 1 ago 8 prompt 704 cached None completion 217 5.71s
+req 62 conv 6 turn 7 ago 8 prompt 2570 cached None completion 237 8.41s
+req 63 conv 18 turn 2 ago 8 prompt 1149 cached None completion 584 21.04s
+req 64 conv 13 turn 5 ago 8 prompt 2818 cached None completion 178 6.28s
+req 65 conv 20 turn 1 ago 8 prompt 717 cached None completion 292 9.72s
+conv 21 ended after 1 turns
+req 66 conv 22 turn 0 ago - prompt 3257 cached None completion 732 23.55s
+conv 10 cut after 6 turns
+req 67 conv 23 turn 0 ago - prompt 549 cached None completion 760 23.81s
+req 68 conv 15 turn 4 ago 8 prompt 3026 cached None completion 779 25.54s
+req 69 conv 19 turn 2 ago 8 prompt 939 cached None completion 342 10.42s
+req 70 conv 6 turn 8 ago 8 prompt 2848 cached None completion 137 4.39s
+req 71 conv 18 turn 3 ago 8 prompt 1828 cached None completion 28 1.13s
+req 72 conv 13 turn 6 ago 8 prompt 3077 cached None completion 161 5.21s
+req 73 conv 20 turn 2 ago 8 prompt 1029 cached None completion 276 9.31s
+req 74 conv 22 turn 1 ago 8 prompt 4000 cached None completion 29 1.17s
+conv 23 ended after 1 turns
+req 75 conv 24 turn 0 ago - prompt 486 cached None completion 778 25.37s
+conv 15 cut after 5 turns
+req 76 conv 25 turn 0 ago - prompt 500 cached None completion 224 7.13s
+conv 19 ended after 3 turns
+req 77 conv 26 turn 0 ago - prompt 658 cached None completion 243 7.15s
+req 78 conv 6 turn 9 ago 8 prompt 3005 cached None completion 134 4.08s
+req 79 conv 18 turn 4 ago 8 prompt 2229 cached None completion 76 2.39s
+req 80 conv 13 turn 7 ago 8 prompt 3286 cached None completion 196 5.90s
+req 81 conv 20 turn 3 ago 8 prompt 1326 cached None completion 227 7.06s
+conv 22 cut after 2 turns
+req 82 conv 27 turn 0 ago - prompt 502 cached None completion 270 8.53s
+req 83 conv 24 turn 1 ago 8 prompt 1281 cached None completion 267 7.82s
+req 84 conv 25 turn 1 ago 8 prompt 839 cached None completion 82 2.44s
+req 85 conv 26 turn 1 ago 8 prompt 2459 cached None completion 657 19.65s
+req 86 conv 6 turn 10 ago 8 prompt 3291 cached None completion 190 5.08s
+req 87 conv 18 turn 5 ago 8 prompt 2404 cached None completion 588 17.39s
+conv 13 cut after 8 turns
+req 88 conv 28 turn 0 ago - prompt 496 cached None completion 571 11.28s
+req 89 conv 20 turn 4 ago 8 prompt 1592 cached None completion 302 6.73s
+req 90 conv 27 turn 1 ago 8 prompt 796 cached None completion 334 6.32s
+req 91 conv 24 turn 2 ago 8 prompt 1561 cached None completion 170 3.22s
+req 92 conv 25 turn 2 ago 8 prompt 1020 cached None completion 94 2.20s
+conv 26 ended after 2 turns
+req 93 conv 29 turn 0 ago - prompt 489 cached None completion 639 12.54s
+req 94 conv 6 turn 11 ago 8 prompt 3524 cached None completion 109 1.78s
+req 95 conv 18 turn 6 ago 8 prompt 3035 cached None completion 608 10.74s
+req 96 conv 28 turn 1 ago 8 prompt 1087 cached None completion 370 6.22s
+req 97 conv 20 turn 5 ago 8 prompt 1920 cached None completion 149 2.58s
+conv 27 ended after 2 turns
+req 98 conv 30 turn 0 ago - prompt 491 cached None completion 334 5.67s
+req 99 conv 24 turn 3 ago 8 prompt 1746 cached None completion 144 2.49s
+req 100 conv 25 turn 3 ago 8 prompt 1204 cached None completion 287 4.75s
+conv 29 ended after 1 turns
+req 101 conv 31 turn 0 ago - prompt 475 cached None completion 347 5.54s
+req 102 conv 6 turn 12 ago 8 prompt 3682 cached None completion 83 1.43s
+req 103 conv 18 turn 7 ago 8 prompt 3657 cached None completion 26 0.56s
+req 104 conv 28 turn 2 ago 8 prompt 1494 cached None completion 322 5.35s
+req 105 conv 20 turn 6 ago 8 prompt 2097 cached None completion 152 2.62s
+req 106 conv 30 turn 1 ago 8 prompt 895 cached None completion 376 7.28s
+conv 24 ended after 4 turns
+req 107 conv 32 turn 0 ago - prompt 1387 cached None completion 576 9.57s
+req 108 conv 25 turn 4 ago 8 prompt 1549 cached None completion 240 4.01s
+req 109 conv 31 turn 1 ago 8 prompt 833 cached None completion 591 10.06s
+req 110 conv 6 turn 13 ago 8 prompt 3795 cached None completion 210 3.56s
+req 111 conv 18 turn 8 ago 8 prompt 3703 cached None completion 48 0.91s
+req 112 conv 28 turn 3 ago 8 prompt 1864 cached None completion 496 8.46s
+req 113 conv 20 turn 7 ago 8 prompt 2284 cached None completion 316 5.06s
+req 114 conv 30 turn 2 ago 8 prompt 1300 cached None completion 304 5.23s
+conv 32 ended after 1 turns
+req 115 conv 33 turn 0 ago - prompt 485 cached None completion 701 11.94s
+req 116 conv 25 turn 5 ago 8 prompt 1840 cached None completion 278 4.78s
+conv 31 ended after 2 turns
+req 117 conv 34 turn 0 ago - prompt 2063 cached None completion 72 1.34s
+conv 6 cut after 14 turns
+req 118 conv 35 turn 0 ago - prompt 567 cached None completion 722 12.91s
+conv 18 cut after 9 turns
+req 119 conv 36 turn 0 ago - prompt 489 cached None completion 381 6.45s
+req 120 conv 28 turn 4 ago 8 prompt 2385 cached None completion 125 2.27s
+req 121 conv 20 turn 8 ago 8 prompt 2622 cached None completion 206 3.51s
+req 122 conv 30 turn 3 ago 8 prompt 1635 cached None completion 312 5.30s
+req 123 conv 33 turn 1 ago 8 prompt 1210 cached None completion 769 12.75s
+req 124 conv 25 turn 6 ago 8 prompt 2132 cached None completion 16 0.33s
+req 125 conv 34 turn 1 ago 8 prompt 2155 cached None completion 450 7.51s
+conv 35 ended after 1 turns
+req 126 conv 37 turn 0 ago - prompt 551 cached None completion 123 2.11s
+req 127 conv 36 turn 1 ago 8 prompt 897 cached None completion 491 8.95s
+req 128 conv 28 turn 5 ago 8 prompt 2543 cached None completion 330 5.68s
+req 129 conv 20 turn 9 ago 8 prompt 2864 cached None completion 431 7.27s
+req 130 conv 30 turn 4 ago 8 prompt 1991 cached None completion 48 0.88s
+req 131 conv 33 turn 2 ago 8 prompt 2000 cached None completion 677 12.02s
+req 132 conv 25 turn 7 ago 8 prompt 2293 cached None completion 307 5.53s
+req 133 conv 34 turn 2 ago 8 prompt 2625 cached None completion 282 4.78s
+conv 37 ended after 1 turns
+req 134 conv 38 turn 0 ago - prompt 482 cached None completion 597 9.22s
+req 135 conv 36 turn 2 ago 8 prompt 1410 cached None completion 479 8.17s
+req 136 conv 28 turn 6 ago 8 prompt 2906 cached None completion 357 6.18s
+req 137 conv 20 turn 10 ago 8 prompt 3336 cached None completion 200 3.84s
+conv 30 ended after 5 turns
+req 138 conv 39 turn 0 ago - prompt 491 cached None completion 26 0.72s
+req 139 conv 33 turn 3 ago 8 prompt 2699 cached None completion 498 11.68s
+req 140 conv 25 turn 8 ago 8 prompt 2672 cached None completion 370 4.60s
+req 141 conv 34 turn 3 ago 8 prompt 2931 cached None completion 673 8.52s
+req 142 conv 38 turn 1 ago 8 prompt 1109 cached None completion 668 8.93s
+req 143 conv 36 turn 3 ago 8 prompt 1919 cached None completion 583 7.16s
+req 144 conv 28 turn 7 ago 8 prompt 3297 cached None completion 308 3.96s
+req 145 conv 20 turn 11 ago 8 prompt 3598 cached None completion 179 2.37s
+req 146 conv 39 turn 1 ago 8 prompt 533 cached None completion 47 0.62s
+req 147 conv 33 turn 4 ago 8 prompt 3221 cached None completion 635 8.66s
+req 148 conv 25 turn 9 ago 8 prompt 3676 cached None completion 229 3.27s
+conv 34 ended after 4 turns
+req 149 conv 40 turn 0 ago - prompt 492 cached None completion 485 6.81s
+req 150 conv 38 turn 2 ago 8 prompt 1796 cached None completion 110 1.63s
+req 151 conv 36 turn 4 ago 8 prompt 2542 cached None completion 486 6.65s
+conv 28 ended after 8 turns
+req 152 conv 41 turn 0 ago - prompt 521 cached None completion 264 3.89s
+conv 20 cut after 12 turns
+req 153 conv 42 turn 0 ago - prompt 484 cached None completion 186 2.73s
+req 154 conv 39 turn 2 ago 8 prompt 782 cached None completion 176 2.50s
+conv 33 cut after 5 turns
+req 155 conv 43 turn 0 ago - prompt 492 cached None completion 723 10.33s
+req 156 conv 25 turn 10 ago 8 prompt 3933 cached None completion 88 1.35s
+req 157 conv 40 turn 1 ago 8 prompt 1032 cached None completion 451 6.74s
+req 158 conv 38 turn 3 ago 8 prompt 1927 cached None completion 815 12.08s
+req 159 conv 36 turn 5 ago 8 prompt 3056 cached None completion 460 7.00s
+conv 41 ended after 1 turns
+req 160 conv 44 turn 0 ago - prompt 488 cached None completion 336 5.07s
+req 161 conv 42 turn 1 ago 8 prompt 685 cached None completion 18 0.33s
+req 162 conv 39 turn 3 ago 8 prompt 1162 cached None completion 197 2.95s
+conv 43 ended after 1 turns
+req 163 conv 45 turn 0 ago - prompt 1284 cached None completion 558 8.10s
+conv 25 cut after 11 turns
+req 164 conv 46 turn 0 ago - prompt 485 cached None completion 91 1.40s
+req 165 conv 40 turn 2 ago 8 prompt 1511 cached None completion 465 6.78s
+req 166 conv 38 turn 4 ago 8 prompt 2752 cached None completion 246 3.75s
+req 167 conv 36 turn 6 ago 8 prompt 3538 cached None completion 429 7.24s
+req 168 conv 44 turn 1 ago 8 prompt 861 cached None completion 320 8.31s
+req 169 conv 42 turn 2 ago 8 prompt 723 cached None completion 2 0.12s
+req 170 conv 39 turn 4 ago 8 prompt 1384 cached None completion 62 1.21s
+req 171 conv 45 turn 1 ago 8 prompt 1863 cached None completion 580 9.82s
+conv 46 ended after 1 turns
+req 172 conv 47 turn 0 ago - prompt 493 cached None completion 314 5.07s
+req 173 conv 40 turn 3 ago 8 prompt 2044 cached None completion 571 8.64s
+req 174 conv 38 turn 5 ago 8 prompt 3016 cached None completion 55 0.94s
+conv 36 cut after 7 turns
+req 175 conv 48 turn 0 ago - prompt 588 cached None completion 415 6.36s
+req 176 conv 44 turn 2 ago 8 prompt 1216 cached None completion 361 5.18s
+req 177 conv 42 turn 3 ago 8 prompt 745 cached None completion 2 0.08s
+req 178 conv 39 turn 5 ago 8 prompt 1475 cached None completion 265 3.88s
+conv 45 ended after 2 turns
+req 179 conv 49 turn 0 ago - prompt 522 cached None completion 215 3.21s
+req 180 conv 47 turn 1 ago 8 prompt 832 cached None completion 365 5.76s
+conv 40 ended after 4 turns
+req 181 conv 50 turn 0 ago - prompt 594 cached None completion 205 3.22s
+req 182 conv 38 turn 6 ago 8 prompt 3178 cached None completion 675 12.33s
+req 183 conv 48 turn 1 ago 8 prompt 1040 cached None completion 389 7.02s
+req 184 conv 44 turn 3 ago 8 prompt 1597 cached None completion 179 3.15s
+req 185 conv 42 turn 4 ago 8 prompt 773 cached None completion 56 1.06s
+req 186 conv 39 turn 6 ago 8 prompt 1789 cached None completion 298 5.39s
+req 187 conv 49 turn 1 ago 8 prompt 778 cached None completion 231 4.93s
+req 188 conv 47 turn 2 ago 8 prompt 1224 cached None completion 637 11.78s
+conv 50 ended after 1 turns
+req 189 conv 51 turn 0 ago - prompt 692 cached None completion 370 6.32s
+conv 38 cut after 7 turns
+req 190 conv 52 turn 0 ago - prompt 480 cached None completion 363 6.03s
+req 191 conv 48 turn 2 ago 8 prompt 1462 cached None completion 280 5.12s
+req 192 conv 44 turn 4 ago 8 prompt 1804 cached None completion 210 3.91s
+req 193 conv 42 turn 5 ago 8 prompt 844 cached None completion 96 2.22s
+conv 39 ended after 7 turns
+req 194 conv 53 turn 0 ago - prompt 498 cached None completion 248 4.24s
+conv 49 ended after 2 turns
+req 195 conv 54 turn 0 ago - prompt 493 cached None completion 13 0.25s
+req 196 conv 47 turn 3 ago 8 prompt 1890 cached None completion 449 8.58s
+conv 51 ended after 1 turns
+req 197 conv 55 turn 0 ago - prompt 486 cached None completion 286 5.25s
+req 198 conv 52 turn 1 ago 8 prompt 867 cached None completion 411 9.48s
+req 199 conv 48 turn 3 ago 8 prompt 1761 cached None completion 353 5.06s
+req 200 conv 44 turn 5 ago 8 prompt 2033 cached None completion 153 1.89s
+req 201 conv 42 turn 6 ago 8 prompt 964 cached None completion 149 1.88s
+req 202 conv 53 turn 1 ago 8 prompt 769 cached None completion 301 3.65s
+req 203 conv 54 turn 1 ago 8 prompt 919 cached None completion 519 6.18s
+req 204 conv 47 turn 4 ago 8 prompt 2387 cached None completion 288 3.63s
+req 205 conv 55 turn 1 ago 8 prompt 786 cached None completion 193 2.36s
+req 206 conv 52 turn 2 ago 8 prompt 1329 cached None completion 382 4.79s
+req 207 conv 48 turn 4 ago 8 prompt 2134 cached None completion 260 3.34s
+req 208 conv 44 turn 6 ago 8 prompt 2213 cached None completion 313 4.28s
+req 209 conv 42 turn 7 ago 8 prompt 1136 cached None completion 121 1.66s
+conv 53 ended after 2 turns
+req 210 conv 56 turn 0 ago - prompt 492 cached None completion 306 4.00s
+req 211 conv 54 turn 2 ago 8 prompt 1455 cached None completion 377 4.83s
+req 212 conv 47 turn 5 ago 8 prompt 2693 cached None completion 350 4.59s
+req 213 conv 55 turn 2 ago 8 prompt 1015 cached None completion 310 4.05s
+req 214 conv 52 turn 3 ago 8 prompt 1733 cached None completion 222 2.93s
+req 215 conv 48 turn 5 ago 8 prompt 2424 cached None completion 388 5.13s
+req 216 conv 44 turn 7 ago 8 prompt 2543 cached None completion 459 6.28s
+req 217 conv 42 turn 8 ago 8 prompt 1324 cached None completion 118 1.72s
+conv 56 ended after 1 turns
+req 218 conv 57 turn 0 ago - prompt 522 cached None completion 104 1.45s
+req 219 conv 54 turn 3 ago 8 prompt 1850 cached None completion 771 10.18s
+conv 47 ended after 6 turns
+req 220 conv 58 turn 0 ago - prompt 531 cached None completion 73 1.00s
+req 221 conv 55 turn 3 ago 8 prompt 1361 cached None completion 234 3.40s
+req 222 conv 52 turn 4 ago 8 prompt 1977 cached None completion 213 3.55s
+req 223 conv 48 turn 6 ago 8 prompt 2839 cached None completion 459 6.68s
+req 224 conv 44 turn 8 ago 8 prompt 3059 cached None completion 366 5.17s
+req 225 conv 42 turn 9 ago 8 prompt 1458 cached None completion 121 1.76s
+req 226 conv 57 turn 1 ago 8 prompt 639 cached None completion 259 3.68s
+req 227 conv 54 turn 4 ago 8 prompt 2633 cached None completion 237 3.22s
+req 228 conv 58 turn 1 ago 8 prompt 620 cached None completion 135 1.84s
+conv 55 ended after 4 turns
+req 229 conv 59 turn 0 ago - prompt 514 cached None completion 615 9.62s
+req 230 conv 52 turn 5 ago 8 prompt 2214 cached None completion 449 6.62s
+req 231 conv 48 turn 7 ago 8 prompt 3320 cached None completion 153 2.22s
+req 232 conv 44 turn 9 ago 8 prompt 3444 cached None completion 441 6.33s
+req 233 conv 42 turn 10 ago 8 prompt 1606 cached None completion 82 1.20s
+req 234 conv 57 turn 2 ago 8 prompt 928 cached None completion 179 2.53s
+req 235 conv 54 turn 5 ago 8 prompt 2897 cached None completion 347 4.90s
+conv 58 ended after 2 turns
+req 236 conv 60 turn 0 ago - prompt 483 cached None completion 152 2.19s
+conv 59 ended after 1 turns
+req 237 conv 61 turn 0 ago - prompt 475 cached None completion 9 0.17s
+conv 52 ended after 6 turns
+req 238 conv 62 turn 0 ago - prompt 484 cached None completion 78 1.16s
+conv 48 ended after 8 turns
+req 239 conv 63 turn 0 ago - prompt 489 cached None completion 234 3.43s
+conv 44 cut after 10 turns
+req 240 conv 64 turn 0 ago - prompt 484 cached None completion 230 3.41s
+req 241 conv 42 turn 11 ago 8 prompt 1713 cached None completion 180 2.67s
+req 242 conv 57 turn 3 ago 8 prompt 1137 cached None completion 252 3.69s
+req 243 conv 54 turn 6 ago 8 prompt 3270 cached None completion 506 7.75s
+req 244 conv 60 turn 1 ago 8 prompt 667 cached None completion 213 3.34s
+conv 61 ended after 1 turns
+req 245 conv 65 turn 0 ago - prompt 481 cached None completion 162 2.45s
+req 246 conv 62 turn 1 ago 8 prompt 589 cached None completion 173 2.67s
+conv 63 ended after 1 turns
+req 247 conv 66 turn 0 ago - prompt 518 cached None completion 203 3.10s
+req 248 conv 64 turn 1 ago 8 prompt 735 cached None completion 266 4.04s
+req 249 conv 42 turn 12 ago 8 prompt 1913 cached None completion 195 2.96s
+req 250 conv 57 turn 4 ago 8 prompt 1410 cached None completion 191 3.29s
+conv 54 cut after 7 turns
+req 251 conv 67 turn 0 ago - prompt 484 cached None completion 35 0.59s
+conv 60 ended after 2 turns
+req 252 conv 68 turn 0 ago - prompt 556 cached None completion 455 6.85s
+conv 65 ended after 1 turns
+req 253 conv 69 turn 0 ago - prompt 605 cached None completion 145 2.24s
+req 254 conv 62 turn 2 ago 8 prompt 793 cached None completion 226 3.35s
+req 255 conv 66 turn 1 ago 8 prompt 757 cached None completion 199 3.06s
+req 256 conv 64 turn 2 ago 8 prompt 1021 cached None completion 132 2.27s
+req 257 conv 42 turn 13 ago 8 prompt 2125 cached None completion 214 3.38s
+req 258 conv 57 turn 5 ago 8 prompt 1626 cached None completion 334 5.56s
+conv 67 ended after 1 turns
+req 259 conv 70 turn 0 ago - prompt 484 cached None completion 198 3.03s
+req 260 conv 68 turn 1 ago 8 prompt 1023 cached None completion 295 4.50s
+req 261 conv 69 turn 1 ago 8 prompt 768 cached None completion 20 0.36s
+req 262 conv 62 turn 3 ago 8 prompt 1057 cached None completion 165 2.57s
+req 263 conv 66 turn 2 ago 8 prompt 1160 cached None completion 242 3.70s
+conv 64 ended after 3 turns
+req 264 conv 71 turn 0 ago - prompt 542 cached None completion 256 3.91s
+req 265 conv 42 turn 14 ago 8 prompt 2376 cached None completion 507 8.10s
+req 266 conv 57 turn 6 ago 8 prompt 1992 cached None completion 176 2.85s
+req 267 conv 70 turn 1 ago 8 prompt 700 cached None completion 323 5.10s
+req 268 conv 68 turn 2 ago 8 prompt 1331 cached None completion 237 4.99s
+req 269 conv 69 turn 2 ago 8 prompt 934 cached None completion 190 3.33s
+req 270 conv 62 turn 4 ago 8 prompt 1239 cached None completion 139 2.29s
+req 271 conv 66 turn 3 ago 8 prompt 1461 cached None completion 203 3.94s
+req 272 conv 71 turn 1 ago 8 prompt 867 cached None completion 224 3.85s
+conv 42 ended after 15 turns
+req 273 conv 72 turn 0 ago - prompt 637 cached None completion 497 7.79s
+req 274 conv 57 turn 7 ago 8 prompt 2200 cached None completion 185 2.98s
+conv 70 ended after 2 turns
+req 275 conv 73 turn 0 ago - prompt 524 cached None completion 268 4.37s
+req 276 conv 68 turn 3 ago 8 prompt 1581 cached None completion 277 4.56s
+conv 69 ended after 3 turns
+req 277 conv 74 turn 0 ago - prompt 493 cached None completion 160 2.58s
+req 278 conv 62 turn 5 ago 8 prompt 1444 cached None completion 247 4.03s
+req 279 conv 66 turn 4 ago 8 prompt 1717 cached None completion 195 3.13s
+req 280 conv 71 turn 2 ago 8 prompt 1110 cached None completion 172 2.77s
+req 281 conv 72 turn 1 ago 8 prompt 1191 cached None completion 497 8.22s
+req 282 conv 57 turn 8 ago 8 prompt 2417 cached None completion 224 3.76s
+req 283 conv 73 turn 1 ago 8 prompt 858 cached None completion 203 3.35s
+conv 68 ended after 4 turns
+req 284 conv 75 turn 0 ago - prompt 485 cached None completion 305 4.99s
+conv 74 ended after 1 turns
+req 285 conv 76 turn 0 ago - prompt 547 cached None completion 571 10.12s
+req 286 conv 62 turn 6 ago 8 prompt 1709 cached None completion 136 2.27s
+req 287 conv 66 turn 5 ago 8 prompt 2030 cached None completion 243 3.74s
+conv 71 ended after 3 turns
+req 288 conv 77 turn 0 ago - prompt 514 cached None completion 163 2.46s
+req 289 conv 72 turn 2 ago 8 prompt 1705 cached None completion 736 11.68s
+req 290 conv 57 turn 9 ago 8 prompt 2670 cached None completion 289 5.36s
+req 291 conv 73 turn 2 ago 8 prompt 1123 cached None completion 81 1.30s
+conv 75 ended after 1 turns
+req 292 conv 78 turn 0 ago - prompt 521 cached None completion 482 7.43s
+conv 76 ended after 1 turns
+req 293 conv 79 turn 0 ago - prompt 483 cached None completion 302 4.67s
+req 294 conv 62 turn 7 ago 8 prompt 1872 cached None completion 153 2.56s
+req 295 conv 66 turn 6 ago 8 prompt 2572 cached None completion 310 5.56s
+req 296 conv 77 turn 1 ago 8 prompt 780 cached None completion 86 1.47s
+req 297 conv 72 turn 3 ago 8 prompt 2707 cached None completion 282 4.70s
+req 298 conv 57 turn 10 ago 8 prompt 2985 cached None completion 170 2.76s
+req 299 conv 73 turn 3 ago 8 prompt 1234 cached None completion 241 4.03s

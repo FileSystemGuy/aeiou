@@ -1143,7 +1143,8 @@ for each new whole chunk of the prompt:
 conversation of an earlier request `r − d` or starts a new one (§9.5). Everything about the
 conversation (its id, how many tokens it had) is recomputed positionally from the earlier index,
 so no history is stored and any request is computable in isolation. (Rewritten 2026-10-02 from
-the trace; the draft is in the history of this file.)
+the trace; the draft is in the history of this file. The lengths, the one `reuse` distance,
+`keep` in place of `local`, and `context` are from the replay of the same day, "Replay" below.)
 
 ```
 workload kv_cache_serving {
@@ -1156,12 +1157,13 @@ workload kv_cache_serving {
   param sys_pop      = zipf(s = 1.1)            # [measure]
   param sys_tokens   = 1500                     # median, log-normal sigma 0.3 [measure]
   param sys_local    = true                     # the engine holds the system prompts in GPU memory [config]
-  param reuse        = mixture(0.55: none,      # new conversation
-                               0.45: lognormal(median = 40, sigma = 1.2))  # requests ago [measure]
-  param local        = 8                        # requests; a conversation back sooner is still in the engine [config: GPU KV memory]
+  param reuse        = mixture(0.15: none,      # new conversation: the share of first turns, measured (ShareGPT 0.148)
+                               0.85: const(40))                 # requests ago: the conversations a slot has open [config: load]
+  param keep         = empirical(0: 91, 1_000_000: 9)           # tokens of a returning conversation still in the engine [config: GPU KV memory]
   param retain       = 5_000                    # requests; older chunks are evicted [config: capacity]
-  param turn_in      = lognormal(median = 300, sigma = 0.8)     # new prompt tokens [measure]
-  param turn_out     = lognormal(median = 250, sigma = 0.6)     # generated tokens [measure]
+  param context      = 8192                     # tokens; a conversation that would not fit starts anew [config: model]
+  param turn_in      = empirical(1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944)      # new prompt tokens, measured (ShareGPT)
+  param turn_out     = empirical(12, 34, 62, 92, 119, 148, 175, 201, 225, 248, 271, 294, 317, 342, 370, 407, 454, 519, 615, 785)   # generated tokens, measured
   param prefill_per_token = 40us, decode_per_token = 12ms       # [measure]
 
   dataset  sysp = files("kv/sys/{id:04}/blk_{k:04}", count = $sys_prompts,
@@ -1173,20 +1175,23 @@ workload kv_cache_serving {
     parallel($concurrency) {
       for r in $warm + $requests {                                  # one index space (§9.5)
         let d      = draw($reuse)                                   # none, or requests ago
-        let cont   = d != none && d <= r
+        let inn    = draw($turn_in), out = draw($turn_out), kp = draw($keep)
+        let back   = d != none && d <= r
+        let prior  = when (back) { ptoks @ (r - d) + out @ (r - d) } else { 0 }    # its own tokens when its last request ended
+        let cont   = back && sysblk @ (r - d) * $chunk_tokens + prior + inn + out <= $context
         let conv   = when (cont) { conv @ (r - d) } else { draw(uniform64) }      # chain
         let sp     = when (cont) { sp @ (r - d) } else { pick(sysp, dist = $sys_pop) }
-        let inn    = draw($turn_in), out = draw($turn_out)
         let sysblk = size(sp) / $chunk_bytes                        # whole chunks inside the system prompt
-        let ptoks  = when (cont) { ptoks @ (r - d) + out @ (r - d) }               # the conversation's own prompt tokens
+        let ptoks  = when (cont) { prior }                          # the conversation's own prompt tokens
                      else { size(sp) % $chunk_bytes / bytes per token } + inn
         let stored = ptoks / $chunk_tokens                          # whole chunks only
         let had    = when (cont && d <= $retain) { stored @ (r - d) } else { 0 }
-        let load   = when (cont && d > $local) { had } else { 0 }
+        let held   = when (cont) { min(prior, kp) / $chunk_tokens } else { 0 }     # whole chunks the engine kept, from the start
+        let load   = max(had - held, 0)
 
         phase(when (r < $warm) { "warm" } else { "serve" }) {
           when (!$sys_local) { parallel(sysblk) { chunk_read(file(sp, k)) } }
-          parallel(load)     { chunk_read(file("kv/{conv:016x}-{k:04}.pt")) }      # all at once
+          parallel(load)     { chunk_read(file("kv/{conv:016x}-{held + k:04}.pt")) }   # all at once
           compute($prefill_per_token * (stored - had) * $chunk_tokens)
           for k in had .. stored { chunk_write(file("kv/{conv:016x}-{k:04}.pt")) }
           compute($decode_per_token * out)
@@ -1242,6 +1247,41 @@ prompts; kit in `builder/traces/kv_cache_serving`, reasoning in `DESIGN_REVIEW.m
   Decided 2026-10-02: the cold reader is a second run over the first run's namespace after
   `--drop-caches` (`DESIGN_REVIEW.md` §3.51); ~~not built yet~~ built the same day, on
   another LMCache backend, because this one has no reader ("The shared store", below).
+
+**Replay (2026-10-02).** The same server under a replay of public conversations (ShareGPT,
+`replay.py` in the kit), which is what the lengths, the share of new conversations, and
+what the engine keeps were waiting for; reasoning in `DESIGN_REVIEW.md` §3.56.
+
+- **What the dataset gives.** 50,142 conversations once the file's overlapping parts are
+  joined, 49,699 of them alternating human and gpt. Over 26,996 turns (Qwen tokenizer):
+  6.7 turns per conversation (median 3, p90 15, p99 62), so first turns are 0.148 of
+  requests; a user turn has a median of 18 tokens and a mean of 81 (p90 140, p99 1,226);
+  a reply a median of 260 and a mean of 284 (p90 558, p99 782). 85 % of conversations fit
+  4,096 tokens, 94 % fit 8,192. These are the defaults above.
+- **What it does not give.** When the turns were sent: the dataset has no timestamps, so
+  how many conversations are open at once, and with it the lag from a store to its load,
+  is a parameter of the load (`reuse`'s distance). And system prompts (`sys_tokens`,
+  `sys_pop` stay **[measure]**).
+- **The load.** 300 requests, 8 conversations open and served in turn, a context of 4,096
+  tokens, replies generated to the dataset's lengths: 80 conversations, 58 ended, 14 cut
+  by the context. 370 chunks stored (1.1 GB), 755 loaded.
+- **The engine keeps the start of a conversation.** vLLM frees a request's blocks tail
+  first into one LRU queue. Of 220 returning requests the engine held the conversation
+  whole in 37, the system prompt and nothing more in 147, a part in 28, nothing in 8; the
+  chunks loaded are the store's hits less the whole chunks held, in all 300 requests.
+  That is `keep`: a draw of the tokens still held, counted from the start. A threshold in
+  requests (`local`) cannot say it.
+- **One distance.** A distribution of distances lets two requests continue the same
+  earlier one; the second then rewrites the first's chunks (99 rewrites in 348 writes,
+  fitted to a load with distances 1 to 35), which the real store never does. With one
+  distance every request has at most one continuation and no chunk is written twice, in
+  the trace and in the abstract.
+- **Against the trace** at the parameters `fit.py` takes from the run's logs
+  (`fitted.params.json`): 370 chunks stored against 382 (355 to 389 over eight seeds) and
+  755 loaded against 633 (621 to 781). `aeiou-trace compare --judge`: one row outside,
+  the reuse distance of the reads, 0.274 against 0.271 allowed (six rows before the
+  replay). The trace's loads come in bursts, because the open conversations share the
+  engine's memory and lose it together; the abstract draws `keep` per request.
 
 Notes on the shape:
 - The `warm` prefix of the index space exists so that `conv @ (r − d)` has something to reach
@@ -1302,7 +1342,24 @@ reasoning in `DESIGN_REVIEW.md` §3.52.
   than the fitted 100 tokens), a `stat` of the system prompt's chunk in every request
   where the first use of each prompt misses, and `local = 7`, which loads every returning
   conversation whole while the traced engine still held the first turns. `local = 8`
-  gives 0 and 32 loads; the traces lie between.
+  gives 0 and 32 loads; the traces lie between. (The synthetic load of 40 requests, with
+  the abstract as it was then.)
+- **Under the replay** (2026-10-02, the committed traces; 300 requests, the reader sent
+  the writer's replies), abstract at seed 1 and over four seeds:
+
+  | | writer trace | `kv_cache_shared` | reader trace | `kv_cache_shared_reader` |
+  |---|---|---|---|---|
+  | chunks stored (`rename`) | 370 | 381 (364 to 389) | 0 | 0 |
+  | chunks loaded | 755 | 632 (632 to 780) | 1,124 | 950 (950 to 1,111) |
+  | `stat` | 1,418 | 1,336 (1,336 to 1,480) | 1,564 | 1,499 (1,499 to 1,631) |
+
+  The engine on this backend stored, held, and loaded exactly what the engine on local
+  disk did. `--judge`: two rows outside for the writer (the reuse distance of the reads,
+  as on local disk, and the distance from a file's header write to its chunk write, which
+  other threads' calls separate in 231 of 370 stores) and one for the reader (the same
+  reuse distance); seven and four before. The traced reader never held a reply of its own,
+  since its history was the writer's, and loaded about one chunk more per conversation it
+  otherwise held whole; a real second engine holds its replies, as the abstract does.
 - **On the wire** (`mountstats`; the store evicted from the client's cache between the
   two runs with `fsync` and `POSIX_FADV_DONTNEED` per file, for want of root):
 
@@ -1338,8 +1395,13 @@ reasoning in `DESIGN_REVIEW.md` §3.52.
   system being modeled; it doubles the op count, so the choice must be stated.~~ the `stat` loop
   is gone (2026-10-02): the traced backend issues none. The backend with no index is
   `kv_cache_shared`, from its own trace.
-- **What the engine holds is a threshold in requests** (`local`), where the real one is GPU
-  memory in bytes. The system prompts' chunks are read only with `sys_local = false`.
+- ~~**What the engine holds is a threshold in requests** (`local`), where the real one is GPU
+  memory in bytes.~~ **What the engine holds is drawn per request** (`keep`, 2026-10-02),
+  where the real one is GPU memory shared by the open conversations: the draws of
+  neighbouring requests are independent, the engine's are not. The system prompts' chunks
+  are read only with `sys_local = false` (the traced engine lost them in 8 of 220 returns).
+- **Conversations are served in turn** (one `reuse` distance). Real users return after
+  lags of every length; a second distance forks conversations ("Replay", above).
 - **The system prompts are a dataset** with a directory to itself (V13), where LMCache keeps
   them beside the other chunks and writes them at their first use: two fewer writes in the trace.
 - **One chunk per file is LMCache's layout.** vLLM's own connectors and other tiers differ
@@ -1622,7 +1684,7 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 | §5 DiskANN (**traced 2026-10-02**, §5 "Trace"; a 1M-point index through diskannpy) | `search_disk_index` on a 10M-point index, `beam_width=4` | `io_submit` batch sizes (= beam), rounds per query (hops), offset histogram (hub concentration), node-cache size |
 | §6 IVF (**traced 2026-10-01**, §6 "Trace") | FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe=64` | list size distribution (from the index), list popularity over a query set, `pread` vs page-fault path |
 | §7 index build (**traced 2026-10-02**, §7 "Trace") | DiskANN `build_disk_index` at 1M points | phase boundaries, read chunk sizes, sample-phase read pattern, layout write sizes |
-| §8 KV cache (**traced 2026-10-02**, §8 "Trace"; the call sequence, with a synthetic load: the chat replay for the distributions is still open) | vLLM + LMCache with the local-disk or shared-fs backend, a chat replay (ShareGPT) | objects per chunk, object size, `stat` lookups, reuse-distance and prompt-length distributions, hit-length vs derived-length agreement |
+| §8 KV cache (**traced 2026-10-02**, §8 "Trace" and "Replay"; the call sequence with a synthetic load, the distributions with a ShareGPT replay the same day) | vLLM + LMCache with the local-disk or shared-fs backend, a chat replay (ShareGPT) | objects per chunk, object size, `stat` lookups, reuse-distance and prompt-length distributions, hit-length vs derived-length agreement |
 
 (2026-10-02: `%desc` does not include `io_setup`, `io_submit`, `io_getevents`, `io_destroy`; name them for an
 application that uses Linux AIO. `--seccomp-bpf` keeps `strace` from stopping a compute-heavy process at

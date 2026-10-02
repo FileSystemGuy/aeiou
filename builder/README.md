@@ -354,8 +354,8 @@ each pair's file):
 | `ckpt_restore`, three traces | accepted | |
 | `vdb_search_diskann`, with and without the node cache | accepted | depth not judged (no `--chain-gap-us`) |
 | `vdb_build_diskann` | not accepted, 9 rows | run-length histograms (unmodeled small files and headers), write-after-write (a header puts the stream's writes off block boundaries), two reuse distances (cause not isolated) |
-| `kv_cache_serving` | not accepted, 6 rows | read share and the reuse rows: the abstract loads 88 chunks, the traced engine 47; fan-out unseen |
-| `kv_cache_shared`, writer and reader | not accepted, 7 and 4 rows | the same cause; run length and fan-out unseen (a thread pool) |
+| `kv_cache_serving` | not accepted, 1 row | the reuse distance of the reads, 0.274 against 0.271: the traced loads come in bursts; fan-out unseen (6 rows before the ShareGPT replay, `DESIGN_REVIEW.md` §3.56) |
+| `kv_cache_shared`, writer and reader | not accepted, 2 rows and 1 | the same row (0.274 against 0.256, 0.280 against 0.275), and for the writer the distance from a file's header write to its chunk write (thread order); run length and fan-out unseen (a thread pool); 7 and 4 rows before the replay |
 | `model_load`, `vdb_search_ivf` | nothing judged | the application reads through a mapping: every row is unseen. The exact call counts of their tests and `faults.py` are the evidence for these two. |
 
 **Checked against the runner (2026-10-01).** The runner under `strace` is an application
@@ -393,12 +393,16 @@ trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, decided 2026-1
 `diskannpy`, one index built in 13 shards and then searched; `hops.py` reads the beam search
 (rounds, batch sizes, sector spread) off the `io_submit` lines (`ABSTRACTS.md` §5 and §7,
 `DESIGN_REVIEW.md` §3.50, decided 2026-10-02).
-`traces/kv_cache_serving` is row 8: vLLM with LMCache's local-disk backend on a GPU, with a
-synthetic chat load (`chat.py`); it fixes the call sequence, not the distributions
-(`ABSTRACTS.md` §8, `DESIGN_REVIEW.md` §3.51, decided 2026-10-02).
+`traces/kv_cache_serving` is row 8: vLLM with LMCache's local-disk backend on a GPU. A
+synthetic chat load (`chat.py`) fixed the call sequence (`ABSTRACTS.md` §8,
+`DESIGN_REVIEW.md` §3.51, decided 2026-10-02); the committed trace is a replay of ShareGPT
+(`replay.py`: the dataset's turns and reply lengths, eight conversations open and served
+in turn), and `fit.py` writes `fitted.params.json` from the two logs of that run, the
+load's and LMCache's, both in the kit (§3.56, decided 2026-10-02). It is a kit
+script and not `aeiou-fit`: it reads no `strace`.
 `traces/kv_cache_shared` is the same load on LMCache's `fs://` backend, twice: an engine on
 an empty store, then a restarted engine on the filled one, sent the same requests
-(`chat.py --save`, `--replay`). `abstracts/kv_cache_shared.py` emits both abstracts,
+(`replay.py --save`, `--replay`). `abstracts/kv_cache_shared.py` emits both abstracts,
 `kv_cache_shared` and `kv_cache_shared_reader`; the reader takes the writer's namespace as
 `input` and `same_run` (contract 0.4: `w.namespace(..., input=True, same_run=True)`), so a run
 without the writer's `--seed`, `--gpus`, and parameters is refused before the gate

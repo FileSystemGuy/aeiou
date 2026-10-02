@@ -8,16 +8,8 @@
   ],
   "outside": [
     {
-      "metric": "mix: read",
-      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
-    },
-    {
-      "metric": "reuse: read after",
-      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
-    },
-    {
-      "metric": "reuse distance, read after",
-      "reason": "the abstract at the fitted parameters loads more chunks than the traced engine did, which still held the first turns in GPU memory (ABSTRACTS.md §8); the load distributions wait for a chat replay"
+      "metric": "reuse distance, read after read",
+      "reason": "0.274 against 0.271 at seed 1 (inside at seed 2). The engine's cache is one memory shared by the open conversations: when they are long, each of them is cut short and all of them load, so the trace's loads come in bursts and its distances are longer (median 112 MiB against 96). The abstract draws what the engine kept independently per request (DESIGN_REVIEW.md §3.56)"
     }
   ]
 }

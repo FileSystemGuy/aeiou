@@ -1,8 +1,9 @@
 # Trace of the real server behind `kv_cache_serving` (2026-10-02)
 
 `ABSTRACTS.md` §11, row 8: vLLM with LMCache's local-disk backend on the loopback NFS mount
-of `runner/README.md` §7, a multi-turn chat load from `chat.py`. What was read off the trace
-is in `ABSTRACTS.md` §8 and `DESIGN_REVIEW.md` §3.51.
+of `runner/README.md` §7, under a replay of public chat conversations (`replay.py`, ShareGPT).
+What was read off the trace is in `ABSTRACTS.md` §8 and `DESIGN_REVIEW.md` §3.51 (the call
+sequence, from the synthetic load of `chat.py`) and §3.56 (the replay and the distributions).
 
 Versions: Python 3.12, vLLM 0.30.0, LMCache 0.5.5, torch 2.13.0; one 8 GB GPU. The model is
 `Qwen/Qwen2.5-0.5B-Instruct` (24 layers, 2 KV heads of 64, bf16: 12,288 bytes of KV per
@@ -13,11 +14,21 @@ token, so a 256-token chunk is 3,145,728 bytes).
 KV_BYTES=100663296 strace -f --seccomp-bpf -ttt -T -yy \
     -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy,io_uring_setup,io_uring_enter \
     -o trace.txt sh serve.sh &
-python chat.py --conversations 8 --turns 5 --system-prompts 2      # once /health answers
+python replay.py ShareGPT_V3_unfiltered_cleaned_split.json --requests 300 --active 8 \
+    > replay.log                                                   # once /health answers
 aeiou-trace metrics trace.txt --root /mnt/nfs -o trace.metrics.json
+grep "Inference Engine computed" serve.log > lmcache.log           # the server's output, colors stripped
+python fit.py replay.log lmcache.log --set chunk_bytes=3145728 -o fitted.params.json
 aeiou dry-run ../../../schema/examples/kv_cache_serving.ast.json --gpus 1 \
     --params fitted.params.json --metrics-json abstract.metrics.json
 ```
+
+- `replay.py` sends the users' turns of ShareGPT (the file vLLM's own benchmarks use,
+  672,837,942 bytes, SHA-256 `35f0e213…f6479ba4`; its parts joined back into 50,142 whole
+  conversations) and asks for replies of the dataset's lengths. The dataset has no
+  timestamps: 8 conversations are open and are served in turn, a load parameter. Its
+  docstring has the rest. `chat.py` is the synthetic load the call sequence was first
+  traced with; `replay.py` takes its system prompts from it.
 
 - `KV_BYTES` limits vLLM's own KV memory (96 MiB here, 7,800 tokens). Without a limit the
   engine keeps every conversation of a small load in GPU memory and LMCache is never read.
@@ -27,15 +38,19 @@ aeiou dry-run ../../../schema/examples/kv_cache_serving.ast.json --gpus 1 \
 - LMCache's log (`Stored … tokens`, `Retrieved … tokens`, `LMCache hit tokens: …, need to
   load: …`) gives per request what the trace gives per file.
 
-`fitted.params.json` is written by hand from the load's shape (system prompts of 464
-tokens, 197 tokens per user turn, 100 generated, every conversation returning 8 requests
-later). The token counts are the server's `usage` figures that `chat.py` prints.
+`fitted.params.json` is `fit.py` on the two committed logs: `replay.log` (the load's line
+per request, with the server's `usage` figures) and `lmcache.log` (LMCache's line per
+request, which has what the engine still held). The lengths and the share of new
+conversations come from the first, `keep` from the second. `tests/test_trace.py` repeats
+the fit.
 
-The wire counts in `ABSTRACTS.md` §8 are from a repeat without `strace`, the mount's block
-of `/proc/self/mountstats` before and after `chat.py`, against the `rpcs` line of `aeiou run
---params fitted.params.json` on the same mount (datagen first, for the system prompts).
+The wire counts in `ABSTRACTS.md` §8 are from the synthetic load (`chat.py`, 40 requests):
+a repeat without `strace`, the mount's block of `/proc/self/mountstats` before and after,
+against the `rpcs` line of `aeiou run` on the same mount (datagen first, for the system
+prompts). They were not taken again under the replay.
 
-Not captured: a public chat replay (ShareGPT) for the reuse and length distributions, which
-stay **[measure]** in the abstract; `chat.py` is a synthetic load for the call sequence.
+Not captured: when users send their turns (no public dataset found with both the turns and
+their times), so the number of open conversations is a load parameter; and system prompts,
+which ShareGPT does not have.
 
-`tests/test_trace.py` repeats the dry run against the committed metrics.
+`tests/test_trace.py` repeats the dry run and the judgement against the committed metrics.

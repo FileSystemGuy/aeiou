@@ -8,7 +8,8 @@ second engine finds what the first one wrote. A lookup is a `stat` per whole chu
 prompt, from the first chunk until one is missing. A chunk is a file of `meta_bytes` of
 header and `chunk_bytes`, written under a temporary name and renamed, and read through a
 Python buffered reader: one `read` of the buffer, one of the rest. An engine loads the
-chunks the store has, less the whole chunks it still holds in GPU memory.
+chunks the store has, less the whole chunks it still holds in GPU memory. The lengths and
+the request stream are `kv_cache_serving`'s (a ShareGPT replay; one `reuse` distance).
 
 Two workloads from one script, because they are the same request stream on two states of
 the store:
@@ -44,12 +45,18 @@ def shape(name, reader, doc):
     w.param("sys_tokens_max", 100_000, unit="tokens")
     w.param("sys_pop", zipf(s=1.1), doc="[measure]")
     w.param("sys_local", True, doc="[config] the engine holds the system prompts in GPU memory and never loads their chunks; false loads them for every new conversation")
-    w.param("reuse", mixture((0.55, none), (0.45, lognormal(median=40, sigma=1.2, min=1))),
-            doc="requests ago, or none for a new conversation [measure]")
-    w.param("local", 8, unit="count", doc="[config: GPU KV memory] a conversation returning within this many requests is still in the engine")
+    w.param("reuse", mixture((0.15, none), (0.85, const(40))),
+            doc="none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations "
+                "a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one")
+    w.param("keep", empirical({0: 91, 1_000_000: 9}), unit="tokens",
+            doc="[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, "
+                "counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded")
     w.param("retain", 5000, unit="count", doc="older chunks are evicted [config: capacity]")
-    w.param("turn_in", lognormal(median=300, sigma=0.8), unit="tokens")
-    w.param("turn_out", lognormal(median=250, sigma=0.6), unit="tokens")
+    w.param("context", 8192, unit="tokens", doc="[config: model] a conversation whose next prompt and reply would not fit starts anew")
+    w.param("turn_in", empirical([1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944]), unit="tokens",
+            doc="the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean)")
+    w.param("turn_out", empirical([12, 34, 62, 92, 119, 148, 175, 201, 225, 248, 271, 294, 317, 342, 370, 407, 454, 519, 615, 785]), unit="tokens",
+            doc="generated tokens (measured: ShareGPT replies, the same way)")
     w.param("prefill_per_token", 40 * us, unit="ns")
     w.param("decode_per_token", 12 * ms, unit="ns")
 
@@ -79,18 +86,21 @@ def shape(name, reader, doc):
             with slot.loop("r", P.warm + P.requests) as r:            # one index space (§9.5)
                 # the same statements, in the same places, in both workloads: the draws are keyed by where they stand
                 d = slot.draw("d", P.reuse)
-                cont = slot.let("cont", (d != None) & (d <= r))        # noqa: E711
-                conv = slot.let("conv", when(cont, slot.ref("conv").at(r - d), draw(uniform64())))
-                sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d), sysp.pick(P.sys_pop)))
                 inn = slot.draw("inn", P.turn_in)
                 out = slot.draw("out", P.turn_out)
+                kp = slot.draw("kp", P.keep)
+                back = slot.let("back", (d != None) & (d <= r))        # noqa: E711
+                # the conversation's own tokens when its last request ended: that prompt and its reply
+                prior = slot.let("prior", when(back, slot.ref("ptoks").at(r - d) + slot.ref("out").at(r - d), 0))
+                cont = slot.let("cont", back & (when(back, slot.ref("sysblk").at(r - d), 0) * P.chunk_tokens + prior + inn + out <= P.context))
+                conv = slot.let("conv", when(cont, slot.ref("conv").at(r - d), draw(uniform64())))
+                sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d), sysp.pick(P.sys_pop)))
                 sysblk = slot.let("sysblk", sp.size // fsize)          # whole chunks inside the system prompt, shared by its conversations
-                ptoks = slot.let("ptoks", when(cont, slot.ref("ptoks").at(r - d) + slot.ref("out").at(r - d),
-                                               (sp.size % fsize) // token_bytes) + inn)
+                ptoks = slot.let("ptoks", when(cont, prior, (sp.size % fsize) // token_bytes) + inn)
                 stored = slot.let("stored", ptoks // P.chunk_tokens)   # whole chunks only
                 had = slot.let("had", when(cont & (d <= P.retain), slot.ref("stored").at(r - d), 0))
-                # what the engine itself still holds of this conversation: its last prompt and reply, in whole chunks
-                held = slot.let("held", when(cont & (d <= P.local), (ptoks - inn) // P.chunk_tokens, 0))
+                # what the engine itself still holds of this conversation: what it kept of its last prompt and reply, in whole chunks
+                held = slot.let("held", when(cont, min_(prior, kp) // P.chunk_tokens, 0))
                 hit = slot.let("hit", stored if reader else had)       # the chunks the store has for this prompt
                 nload = slot.let("nload", when(hit > held, hit - held, 0))
 

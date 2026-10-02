@@ -33,7 +33,7 @@ fn hashes_match_check_py() {
     let want = [
         ("ckpt_restore", "bcf096f4246d1a27163dcceb722e7cbef5a5232bc110f7a8dfd5f117c8509913"),
         ("ckpt_write_dcp", "962bc54a749e8e4f6e0c330ad9a1ef1fe9c5008bd5e9b445447be22260cfdce1"),
-        ("kv_cache_serving", "461cd53175546c1b36f575dd8152ba42d895ef09548ee606e8eb77a0bf5b5e69"),
+        ("kv_cache_serving", "fa57aadf5bbc815be07ec67a50bb35d626e6a27730b1220260e31e0304d72187"),
         ("model_load", "74f0499b2ef9695f6b27156ce1aed924c05aadcdf1d7a833332729b3eaa32c78"),
         ("train_large_samples", "11eeee32824e31e2dbc7b282244eeca347197b39cd6fbd58ee02ea6d8abd5de2"),   // 2026-10-02: the `enumerate` phase, on by default
         ("train_small_files", "c5869d55ce47593823fe976febe14bdbf545f1867044c42761f220bff13535f6"),   // 2026-10-02: `enumerate` on by default
@@ -44,8 +44,8 @@ fn hashes_match_check_py() {
         ("train_map_hdf5", "fa9c9ea4f7b55361141ee1b78912a3ab4a6ad72680aea7aa55ddaebcc2bf0354"),
         ("vdb_search_ivf", "9e4dc1626dbb06ed987fbad647fcdaa4b75f38462789fe09d7c7a7547c6772fd"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("kv_cache_shared", "19759baf9b1561587802a7ca0693e9c6b5a18dde9731c20e7f126afd1d7e1202"),
-        ("kv_cache_shared_reader", "8171a377caf11109ae558e180707b1d247f8609eb6606152f2f9633b16fedcfd"),
+        ("kv_cache_shared", "412dd49700599d2ccbfd6543599bd821e162a8cf84f70cf37eda8119b177ca3e"),
+        ("kv_cache_shared_reader", "aa7b1438b9a3b22e956f623eac23a68c3696fab4e6eb2c8774c60bb3121ca0be"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -71,7 +71,9 @@ fn golden_fingerprints() {
     // 2026-10-02 from the trace of DiskANN's `PQFlashIndex`, §3.50: the load, the entry rounds, 24 to 30 more; vdb_build_diskann
     // the same day from the trace of `build_disk_index`, same section: the passes over the base, the shard files;
     // kv_cache_serving the same day from the trace of vLLM with LMCache, §3.51: no lookups on storage, one flat
-    // directory, whole chunks of the prompt only, reads only for what the engine lost).
+    // directory, whole chunks of the prompt only, reads only for what the engine lost; the three KV-cache abstracts
+    // again the same day from the replay of ShareGPT, §3.56: one `reuse` distance, `keep` in place of `local`,
+    // `context`, and the measured lengths as defaults).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         // the directory walk is on by default since 2026-10-02 (DESIGN_REVIEW §3.54): five ops per class directory and
         // actor in train_small_files (38,462 directories), four per directory in train_large_samples; with
@@ -92,10 +94,10 @@ fn golden_fingerprints() {
             0xeaf5da9b000203a1,
             1229207,
         ),
-        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xd755f9d88f8c38ee, 3006),
+        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xef3b218934a38657, 1656),
         // the same request stream on LMCache's fs:// backend, and the cold engine on the store it leaves (2026-10-02, §3.52)
-        ("kv_cache_shared", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x9fb7a17b6919a6c7, 5407),
-        ("kv_cache_shared_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xbb832f7f91f48d29, 5129),
+        ("kv_cache_shared", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xfc6d9b70f1a9abf0, 3518),
+        ("kv_cache_shared_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x957193e883de8ba0, 3353),
         // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations
         ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
         ("train_stream_parquet", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),
