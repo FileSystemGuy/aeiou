@@ -314,7 +314,7 @@ trace's metrics document. The trace corrected the abstract (a second `lseek` per
 `stat` and `fstat` per directory in the walk); `tests/test_trace.py` now holds the abstract
 at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reasoning in
 `DESIGN_REVIEW.md` §3.43 (decided 2026-10-01). `traces/train_large_samples` is row 2,
-`np.load(...)["x"]` as DLIO issues it: that abstract was rewritten from its trace
+`np.load(...)["x"]` as upstream DLIO and any NumPy user issues it: that abstract was rewritten from its trace
 (`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44; explicit seeks decided 2026-10-01, the rest not yet confirmed).
 `traces/ckpt_write_dcp` is row 3, `torch.distributed.checkpoint.save` on two ranks
 (`ABSTRACTS.md` §3, `DESIGN_REVIEW.md` §3.45, not yet confirmed).

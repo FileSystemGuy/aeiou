@@ -236,7 +236,7 @@ close(fd)
 NumPy asks the zip member for 256 KiB at a time; the `BufferedReader` beneath fills
 `st_blksize` (1 MiB on the traced mount), so each fill serves four chunks, and each chunk
 costs one `lseek(0, SEEK_CUR)` (the buffered seek asks the raw position). The first
-megabyte is read twice, once for the magic and once as data. DLIO's reader indexes only
+megabyte is read twice, once for the magic and once as data. Upstream DLIO's reader indexes only
 `"x"`; `"y"` (a label list, 191 bytes with its headers) sits between `x` and the central
 directory and is fetched only as part of the last buffer fill. `framing` is the 498 bytes of
 the archive that are not `x`'s data.
@@ -293,7 +293,9 @@ reads and `11 + chunks(f)` seeks, checked against every file of both traced corp
 the trace; `step_time` from the accelerator. ~~`members` and `lh_len`~~ are gone (2026-10-01):
 the reader takes one member and never reads a local header as a request of its own.
 
-**Trace (2026-10-01).** `builder/traces/train_large_samples`: DLIO's read call through a
+**Trace (2026-10-01).** `builder/traces/train_large_samples`: upstream DLIO's read call (argonne-lcf
+`npz_reader.py`; the MLCommons fork reads differently and is not modeled, `DESIGN_REVIEW.md`
+§3.46) through a
 `DataLoader`, 2 workers, 2 epochs, on the loopback NFS mount, over corpora written the way
 DLIO's generator writes them; NumPy 2.5.2, Python 3.12.3. Reasoning in `DESIGN_REVIEW.md`
 §3.44.

@@ -1894,8 +1894,8 @@ Also fixed: `aeiou-trace compare` on a missing or malformed file printed a trace
 
 ### 3.44 The second trace: `train_large_samples` was a guess, and the trace replaced it (added 2026-10-01)
 
-Row 2 of the capture plan: `np.load(path, allow_pickle=True)["x"]`, the call in DLIO's
-`npz_reader.py`, through a `DataLoader` on loopback NFS, over archives written as DLIO's
+Row 2 of the capture plan: `np.load(path, allow_pickle=True)["x"]`, the call in upstream
+DLIO's `npz_reader.py` (argonne-lcf; qualified 2026-10-01, §3.46), through a `DataLoader` on loopback NFS, over archives written as DLIO's
 `npz_generator.py` writes them (`np.savez(x=volume, y=labels)`). Kit in
 `builder/traces/train_large_samples`, findings in `ABSTRACTS.md` §2. Unlike §3.43, where
 the draft was one call short, here the draft was wrong in shape. **The choices below were
@@ -1986,12 +1986,40 @@ were made while building and are not yet confirmed by the user.**
   runner does not do for it. So `ABSTRACTS.md` §3's cut "an `O_DIRECT` checkpoint writer is
   a backend choice" is struck: it is another application. The runner's tests that ran this
   abstract under the direct backends now pass aligned `hdr` and `trailer` (4096) to keep
-  the direct write path covered. *Open for the user:* whether the runner should offer what
+  the direct write path covered. ~~*Open for the user:* whether the runner should offer what
   such a shim does (coalesce and pad to alignment, final truncate) as a named backend
-  behaviour, which would let OPEN-style direct runs use the PyTorch stream; nothing built.
+  behaviour, which would let OPEN-style direct runs use the PyTorch stream; nothing built.~~
+  **Deferred by the user 2026-10-01** (§3.46): no abstract and no runner behaviour for
+  `O_DIRECT` checkpointing yet; it is item 19 of `PROJECT_BRIEF.md` §6, low on the list.
 - **`torch.save` is recorded as a variant, not built.** One `writev` per tensor; the
   contract has no vectored op, and a `write` of the summed length is the same request to
   the file system.
+
+### 3.46 DLIO is not an application to trace; `O_DIRECT` checkpointing is deferred (decided 2026-10-01)
+
+The user asked whether the traces were of DLIO, whose MLCommons fork
+(`mlcommons/DLIO_local_changes`, v3.0.5 read here) has `O_DIRECT` paths that could be the
+model for a direct checkpoint abstract. They were not: the traces are of PyTorch and NumPy.
+Reading the fork beside the traces gave the comparison the user wanted:
+
+| | Real library (traced) | MLCommons DLIO fork (source read) |
+|---|---|---|
+| `.npz` sample read | `np.load(...)["x"]`: magic at 0, zip tail, then 1 MiB buffer fills front to back with one seek per 256 KiB; about 720 calls for 140 MiB | default: whole-file buffered `open().read()` on a 64-thread prefetch pool, decode skipped; `odirect`: `O_DIRECT` open and one `readv` of the file rounded up to 4 KiB, zip parsed in memory; `direct://`: s3dlio's Rust runtime, 64 in flight |
+| Checkpoint write | `dcp.save`: per item 704 + storage + 873 bytes, split at the buffer size, `fsync`, `.metadata` by rename; `torch.save`: one `writev` per tensor, no `fsync` | a streaming writer of 32 MiB chunks of generated data, buffered with `fadvise`, or direct through s3dlio; neither `torch.save` nor DCP is called |
+
+Upstream DLIO (argonne-lcf) does call `np.load(...)["x"]`, which is where row 2 took the
+call from; §3.44 and `ABSTRACTS.md` §2 said "DLIO" without that qualifier and now carry it.
+
+**Decided by the user:**
+
+- **No abstract is built from DLIO, with or without `O_DIRECT`.** DLIO is itself an
+  emulator, and the fork's read and checkpoint paths are not what the frameworks issue;
+  an abstract traced from it would carry those liberties into the thing meant to remove
+  them. The applications are the frameworks.
+- **`O_DIRECT` checkpointing is deferred.** No abstract, and no pad-and-coalesce behaviour
+  in the runner (§3.45's open question, struck there). `ckpt_write_dcp` stays a buffered
+  workload; a direct backend refuses it at its traced parameters. To come back to, from a
+  trace of a real direct checkpoint writer if one is found (`PROJECT_BRIEF.md` §6 item 19).
 
 ## 4. Plan changes
 

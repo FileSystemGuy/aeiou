@@ -287,7 +287,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     walk's `stat`/`fstat`, after which every op share and request size is equal and the
     largest distance is 0.048 (reuse distance, the order). Choices confirmed by the user (**decided 2026-10-01**). 
     **Second, 2026-10-01** (`ABSTRACTS.md` §2 "Trace", `DESIGN_REVIEW.md` §3.44,
-    `builder/traces/train_large_samples`): `np.load(...)["x"]` as DLIO issues it. The
+    `builder/traces/train_large_samples`): `np.load(...)["x"]` as upstream DLIO and any NumPy user issues it. The
     drafted abstract was wrong in shape (two members, header reads, no read at 0) and was
     rewritten from the trace; largest distance 0.040 on a 256-file corpus. Explicit seeks
     confirmed by the user (**decided 2026-10-01**); the other choices not yet.
@@ -339,6 +339,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     run's identity, results (latency histograms in full), and verdict as format
     `aeiou_report: 1`; written on failure too; rank 0 holds the merged report, every other
     rank its own; `--report-takes` adds every take. No JSON Schema yet.
+
+19. **`O_DIRECT` checkpointing (deferred 2026-10-01, `DESIGN_REVIEW.md` §3.45, §3.46).**
+    The traced PyTorch checkpoint writer issues unaligned writes, so `ckpt_write_dcp` does
+    not run under a direct backend. Low priority, to come back to: find and trace a real
+    application that checkpoints with `O_DIRECT` and write its abstract. Not from DLIO
+    (decided 2026-10-01: DLIO is an emulator and is not traced), and no pad-and-coalesce
+    behaviour in the runner.
 
 ## 7. Environment
 

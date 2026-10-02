@@ -1,6 +1,6 @@
 """ABSTRACTS.md §2: large-sample training (one large .npz file per sample, unet3d shape).
 
-`np.load(path)["x"]` as DLIO's reader issues it (traced 2026-10-01, `builder/traces/train_large_samples`):
+`np.load(path)["x"]` as upstream DLIO's reader (argonne-lcf) issues it (traced 2026-10-01, `builder/traces/train_large_samples`):
 a buffer fill at offset 0 for the magic, the zip tail (EOCD, the zip64 locator probe, the central
 directory), then the archive front to back in buffer fills, with one `tell` per NumPy chunk. The
 `x` member is the whole archive but for a few hundred bytes of `y` and directory at the end.
