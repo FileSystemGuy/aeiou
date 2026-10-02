@@ -43,6 +43,9 @@ fn hashes_match_check_py() {
         ("train_stream_parquet", "0e629d8ffd38043367d6bd690f2e7cb10cea8f179bea003c78e30450564b0ec2"),
         ("train_map_hdf5", "4f20c7789667ecca22d3f4b11fcf29a6067eedf5647c83dc84712b9e25b80ccd"),
         ("vdb_search_ivf", "5e9bf135c59824c2a033a8822eeb1130162fdbc6fe68f824f1b43dada367a9a1"),
+        // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
+        ("kv_cache_shared", "5aba8c06612f031b933cacdbcd2f25eb850be07a58755e03278adc30a1f321a0"),
+        ("kv_cache_shared_reader", "c29d7c1db412c25df1d91d3037dc22657c8dbad46620804b9c41c81d1ad8136b"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -85,6 +88,9 @@ fn golden_fingerprints() {
             1229207,
         ),
         ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xd755f9d88f8c38ee, 3006),
+        // the same request stream on LMCache's fs:// backend, and the cold engine on the store it leaves (2026-10-02, §3.52)
+        ("kv_cache_shared", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x9fb7a17b6919a6c7, 5407),
+        ("kv_cache_shared_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xbb832f7f91f48d29, 5129),
         // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations
         ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
         ("train_stream_parquet", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),

@@ -1,0 +1,228 @@
+{
+  "aeiou_metrics": 1,
+  "source": "strace",
+  "roots": [
+    "/mnt/aeiou-nfs/fsr-1790955186"
+  ],
+  "block": 4096,
+  "sample": 1,
+  "order": "completion",
+  "instances": 1,
+  "contexts": 102,
+  "chain_gap_us": null,
+  "notes": {
+    "append_to_unknown_size": 2,
+    "relative_paths_skipped": 164,
+    "threads_without_clone": 3
+  },
+  "total": {
+    "ops": 807,
+    "counts": {
+      "close": 91,
+      "fstat": 91,
+      "ioctl": 91,
+      "lseek": 91,
+      "mkdir": 1,
+      "open": 91,
+      "read": 182,
+      "stat": 169
+    },
+    "bytes_read": 286263796,
+    "bytes_written": 0,
+    "request_size": {
+      "read": {
+        "n": 182,
+        "mean": 1572878.0,
+        "max": 2097180,
+        "buckets": [
+          [
+            1048576,
+            91
+          ],
+          [
+            2097152,
+            91
+          ]
+        ]
+      },
+      "write": {
+        "n": 0,
+        "mean": 0.0,
+        "max": 0,
+        "buckets": []
+      }
+    },
+    "run_length": {
+      "read": {
+        "bytes": {
+          "n": 176,
+          "mean": 1626498.8409090908,
+          "max": 3145756,
+          "buckets": [
+            [
+              1048576,
+              85
+            ],
+            [
+              2097152,
+              85
+            ],
+            [
+              3145728,
+              6
+            ]
+          ]
+        },
+        "ops": {
+          "n": 176,
+          "mean": 1.0340909090909092,
+          "max": 2,
+          "buckets": [
+            [
+              1,
+              170
+            ],
+            [
+              2,
+              6
+            ]
+          ]
+        },
+        "multi_op_bytes": 18874536
+      },
+      "write": {
+        "bytes": {
+          "n": 0,
+          "mean": 0.0,
+          "max": 0,
+          "buckets": []
+        },
+        "ops": {
+          "n": 0,
+          "mean": 0.0,
+          "max": 0,
+          "buckets": []
+        },
+        "multi_op_bytes": 0
+      }
+    },
+    "reuse_distance_bytes": {
+      "first_touch": {
+        "read": 36143,
+        "write": 0
+      },
+      "read_after_read": {
+        "n": 33836,
+        "mean": 103355288.01418607,
+        "max": 138592256,
+        "buckets": [
+          [
+            29360128,
+            769
+          ],
+          [
+            33554432,
+            769
+          ],
+          [
+            41943040,
+            769
+          ],
+          [
+            50331648,
+            769
+          ],
+          [
+            58720256,
+            1537
+          ],
+          [
+            67108864,
+            3846
+          ],
+          [
+            83886080,
+            4613
+          ],
+          [
+            100663296,
+            6408
+          ],
+          [
+            117440512,
+            8204
+          ],
+          [
+            134217728,
+            6152
+          ]
+        ]
+      },
+      "read_after_write": {
+        "n": 0,
+        "mean": 0.0,
+        "max": 0,
+        "buckets": []
+      },
+      "write_after_read": {
+        "n": 0,
+        "mean": 0.0,
+        "max": 0,
+        "buckets": []
+      },
+      "write_after_write": {
+        "n": 0,
+        "mean": 0.0,
+        "max": 0,
+        "buckets": []
+      }
+    },
+    "popularity_blocks": {
+      "distinct": 36143,
+      "accesses": 69979,
+      "max": 3,
+      "top_0_1_pct": 0.0015494505494505495,
+      "top_1_pct": 0.015494505494505494,
+      "top_10_pct": 0.15494505494505498,
+      "counts": [
+        [
+          3,
+          6921
+        ],
+        [
+          2,
+          19994
+        ],
+        [
+          1,
+          9228
+        ]
+      ]
+    },
+    "popularity_objects": {
+      "distinct": 47,
+      "accesses": 182,
+      "max": 6,
+      "top_0_1_pct": 0.0015494505494505497,
+      "top_1_pct": 0.015494505494505496,
+      "top_10_pct": 0.15494505494505495,
+      "counts": [
+        [
+          6,
+          9
+        ],
+        [
+          4,
+          26
+        ],
+        [
+          2,
+          12
+        ]
+      ]
+    },
+    "fan_out": {},
+    "depth": {}
+  },
+  "trace": "/tmp/claude-1000/-home-curtis-MLPerfStorage-driver/ab1a7fc8-d08a-4026-9698-8e5c322e4460/scratchpad/fsr.2.trace.txt"
+}

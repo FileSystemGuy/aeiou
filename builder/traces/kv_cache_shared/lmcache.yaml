@@ -1,0 +1,5 @@
+chunk_size: 256
+local_cpu: false
+max_local_cpu_size: 2
+remote_url: "fs://localhost:0/mnt/nfs/kv/"
+remote_serde: "naive"

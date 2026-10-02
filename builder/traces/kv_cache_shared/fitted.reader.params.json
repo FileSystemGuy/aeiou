@@ -1,0 +1,7 @@
+{"params_version": 1, "abstract": "kv_cache_shared_reader",
+ "doc": "Fitted to the 2026-10-02 traces of vLLM 0.30 + LMCache 0.5.5 (fs:// remote backend): Qwen2.5-0.5B (12,288 bytes per token), 8 conversations of 5 turns taken round-robin by one client, 2 system prompts of 464 tokens, 197 tokens per user turn, up to 100 generated. The same values in both files: the reader is run with the writer's parameters.",
+ "params": {"concurrency": 1, "warm": 0, "requests": 40, "chunk_tokens": 256, "chunk_bytes": 3145728, "meta_bytes": 28, "buf": 1048576,
+            "sys_prompts": 2, "sys_tokens": 464, "sys_tokens_min": 464, "sys_tokens_max": 464, "sys_local": true,
+            "reuse": {"mixture": [{"weight": 1.0, "dist": {"uniform": {"lo": 8, "hi": 9}}}]},
+            "local": 7, "retain": 5000,
+            "turn_in": {"uniform": {"lo": 197, "hi": 198}}, "turn_out": {"uniform": {"lo": 100, "hi": 101}}}}

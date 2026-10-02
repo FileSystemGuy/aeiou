@@ -187,6 +187,49 @@ fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
 }
 
 #[test]
+fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
+    // kv_cache_shared and kv_cache_shared_reader come from one script and place their draws at the same sites:
+    // with the writer's seed, instance count and parameters the reader opens exactly the chunks the writer
+    // renamed into place (two instances, eviction with re-store, system prompts loaded).
+    let root = tmpdir("kvshared");
+    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("buf", "65536"), ("concurrency", "3"), ("warm", "4"),
+                  ("requests", "12"), ("local", "1"), ("retain", "6"), ("sys_local", "false")];
+    let (wl, wcfg, wmodel) = leaked_model("kv_cache_shared", config(2, 5, &params));
+    gen(wl, wcfg, wmodel, &root);
+    run::check_datasets(wl, wcfg, &root).unwrap();
+    run::prepare_namespaces(&wl.ast, &root, false).unwrap();
+    let (wfp, wops, _) = dry_fingerprint(wmodel);
+    let wo = opts(&root, BackendKind::Sync);
+    let t0 = run::unix_now();
+    let wr = go(wmodel, wo.clone());
+    assert_eq!((wr.stats.fingerprint, wr.stats.ops), (wfp, wops));
+    let renames = wr.stats.counts[&aeiou::vm::OpKind::Rename];
+    assert!(renames > 0 && wr.stats.counts[&aeiou::vm::OpKind::Write] == 2 * renames, "a header and a chunk per stored file");
+    run::write_namespace_manifests(wl, wcfg, &root, &wo, &wr, t0, run::unix_now()).unwrap();
+    let m = aeiou::payload::NamespaceManifest::read(&root.join("kv")).unwrap();
+    let objects = m.objects.as_ref().unwrap();
+    assert!(objects.iter().all(|(p, _)| p.ends_with(".data")), "the temporary names are gone: {objects:?}");
+
+    let (rl, rcfg, rmodel) = leaked_model("kv_cache_shared_reader", config(2, 5, &params));
+    let ro = opts(&root, BackendKind::Sync);
+    let (checks, input_objects) = run::check_input_namespaces(rl, rcfg, &root, &ro).unwrap();
+    assert_eq!(checks[0].names, vec!["kv".to_string()]);
+    run::prepare_namespaces(&rl.ast, &root, false).unwrap();
+    let (fp, ops, bytes) = dry_fingerprint(rmodel);
+    let r = run::run(rmodel, ro, input_objects).unwrap();
+    assert_eq!((r.stats.fingerprint, r.stats.ops, r.stats.bytes_read), (fp, ops, bytes));
+    assert_eq!(r.stats.counts.get(&aeiou::vm::OpKind::Write), None);
+    assert_eq!(r.stats.counts.get(&aeiou::vm::OpKind::Rename), None);
+    assert!(r.stats.counts[&aeiou::vm::OpKind::Open] > wr.stats.counts[&aeiou::vm::OpKind::Open] - renames, "the reader loads the chunks the writer computed");
+    assert!(r.stats.input_opens > 0 && r.stats.input_opens == r.stats.warm_opens, "every chunk was written on this host");
+    // another seed draws other conversation ids: the store does not have them
+    let (_, _, other) = leaked_model("kv_cache_shared_reader", config(2, 6, &params));
+    let (_, inputs) = run::check_input_namespaces(rl, rcfg, &root, &opts(&root, BackendKind::Sync)).unwrap();
+    assert!(run::run(other, opts(&root, BackendKind::Sync), inputs).is_err());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn regions_dataset_nested_parallel_and_direct_reads() {
     let root = tmpdir("diskann");
     let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];

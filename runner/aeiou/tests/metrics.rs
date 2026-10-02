@@ -31,6 +31,8 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("vdb_search_ivf", 1, &[("calls", "100"), ("threads", "2")]),
     ("vdb_build_diskann", 1, &[("sectors", "1000"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000")]),
     ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
+    ("kv_cache_shared", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
+    ("kv_cache_shared_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
     ("train_stream_parquet", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
     ("train_map_hdf5", 2, &[("samples", "64"), ("per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")]),

@@ -469,3 +469,38 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     assert d["request_size"]["read"]["buckets"][0][0] == d["request_size"]["write"]["buckets"][0][0] == 3145728
     assert set(tc) - set(dc) == {"mkdir", "stat"}         # of the cache directory, once at start
 
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
+    """`builder/traces/kv_cache_shared`: vLLM with LMCache's `fs://` backend, the 40 requests of
+    the row above sent to an engine on an empty store and then to a restarted engine on the
+    filled one, traced 2026-10-02. A chunk file is a 28-byte header and the chunk, read as one
+    buffer and the rest; the writer renames every file into place and the reader writes
+    nothing. The counts differ from the traces as the local-disk row's do (one more chunk
+    stored, loads at `local = 7` where the traced engine still held the first turns) and by
+    the system prompts' first use (`ABSTRACTS.md` §8)."""
+    kit = BUILDER / "traces" / "kv_cache_shared"
+    got = {}
+    for who, ast, params in (("writer", "kv_cache_shared", "fitted.params.json"), ("reader", "kv_cache_shared_reader", "fitted.reader.params.json")):
+        dry = tmp_path / f"{who}.json"
+        r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", "1",
+                            "--params", str(kit / params), "--metrics-json", str(dry)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        t, d = json.loads((kit / f"{who}.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+        got[who] = (t["counts"], d["counts"])
+        for c in (t["counts"], d["counts"]):              # Python's open around every file; a load is two reads
+            assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"]
+        assert set(t["counts"]) - set(d["counts"]) == {"mkdir"}          # of the store's directory, once at start
+        assert [b[0] for b in t["request_size"]["read"]["buckets"]] == [b[0] for b in d["request_size"]["read"]["buckets"]] == [1048576, 2097152]
+    (tw, dw), (tr, dr) = got["writer"], got["reader"]
+    assert (tw["rename"], dw["rename"]) == (47, 48) and "rename" not in tr and "rename" not in dr
+    assert (tw["write"], dw["write"]) == (2 * 47, 2 * 48) and "write" not in tr and "write" not in dr
+    assert (tw["open"] - tw["rename"], dw["open"] - dw["rename"]) == (47, 88)        # chunks loaded by the writer
+    assert (tr["open"], dr["open"]) == (91, 136)                                      # and by the reader
+    assert (tw["read"], tr["read"]) == (2 * 47, 2 * 91) and (dw["read"], dr["read"]) == (2 * 88, 2 * 136)
+    assert (tw["stat"], dw["stat"]) == (161, 168)         # 121 hits and 40 misses; 128 and 40
+    assert (tr["stat"], dr["stat"]) == (169, 176)         # every chunk of every prompt, and the directory once in the trace
+    # the same parameter values in both files: the reader is run with the writer's
+    pw, pr = (json.loads((kit / f).read_text())["params"] for f in ("fitted.params.json", "fitted.reader.params.json"))
+    assert pw == pr
+

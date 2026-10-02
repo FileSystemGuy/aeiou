@@ -1,0 +1,1013 @@
+{
+  "ast": "0.3",
+  "name": "kv_cache_shared_reader",
+  "doc": "A cold engine in front of the store a kv_cache_shared run filled: every lookup hits, every chunk it does not hold is read, nothing is written.",
+  "params": {
+    "concurrency": {
+      "default": 64,
+      "unit": "count"
+    },
+    "warm": {
+      "default": 2000,
+      "unit": "count",
+      "doc": "requests per slot before measurement (§9.5)"
+    },
+    "requests": {
+      "default": 20000,
+      "unit": "count"
+    },
+    "chunk_tokens": {
+      "default": 256,
+      "unit": "tokens"
+    },
+    "chunk_bytes": {
+      "default": 33554432,
+      "unit": "bytes",
+      "doc": "128 KiB/token × 256 [config]"
+    },
+    "meta_bytes": {
+      "default": 28,
+      "unit": "bytes",
+      "doc": "the header in front of a chunk (traced: seven 32-bit integers)"
+    },
+    "buf": {
+      "default": 1048576,
+      "unit": "bytes",
+      "doc": "Python BufferedReader size = st_blksize; the first read of a chunk file is this long"
+    },
+    "sys_prompts": {
+      "default": 50,
+      "unit": "count"
+    },
+    "sys_tokens": {
+      "default": 1500,
+      "unit": "tokens",
+      "doc": "median system prompt length [measure]"
+    },
+    "sys_tokens_min": {
+      "default": 1,
+      "unit": "tokens",
+      "doc": "bounds of the system prompt length; equal bounds give every prompt that length"
+    },
+    "sys_tokens_max": {
+      "default": 100000,
+      "unit": "tokens"
+    },
+    "sys_pop": {
+      "default": {
+        "zipf": {
+          "s": 1.1
+        }
+      },
+      "doc": "[measure]"
+    },
+    "sys_local": {
+      "default": true,
+      "doc": "[config] the engine holds the system prompts in GPU memory and never loads their chunks; false loads them for every new conversation"
+    },
+    "reuse": {
+      "default": {
+        "mixture": [
+          {
+            "weight": 0.55,
+            "dist": null
+          },
+          {
+            "weight": 0.45,
+            "dist": {
+              "lognormal": {
+                "median": 40,
+                "sigma": 1.2,
+                "min": 1
+              }
+            }
+          }
+        ]
+      },
+      "doc": "requests ago, or none for a new conversation [measure]"
+    },
+    "local": {
+      "default": 8,
+      "unit": "count",
+      "doc": "[config: GPU KV memory] a conversation returning within this many requests is still in the engine"
+    },
+    "retain": {
+      "default": 5000,
+      "unit": "count",
+      "doc": "older chunks are evicted [config: capacity]"
+    },
+    "turn_in": {
+      "default": {
+        "lognormal": {
+          "median": 300,
+          "sigma": 0.8
+        }
+      },
+      "unit": "tokens"
+    },
+    "turn_out": {
+      "default": {
+        "lognormal": {
+          "median": 250,
+          "sigma": 0.6
+        }
+      },
+      "unit": "tokens"
+    },
+    "prefill_per_token": {
+      "default": 40000,
+      "unit": "ns"
+    },
+    "decode_per_token": {
+      "default": 12000000,
+      "unit": "ns"
+    }
+  },
+  "datasets": {
+    "sysp": {
+      "files": {
+        "pattern": "kv/sys/{id:04}/blk_{k:04}",
+        "count": {
+          "param": "sys_prompts"
+        },
+        "size": {
+          "lognormal": {
+            "median": {
+              "mul": [
+                {
+                  "param": "sys_tokens"
+                },
+                {
+                  "div": [
+                    {
+                      "param": "chunk_bytes"
+                    },
+                    {
+                      "param": "chunk_tokens"
+                    }
+                  ]
+                }
+              ]
+            },
+            "sigma": 0.3,
+            "min": {
+              "mul": [
+                {
+                  "param": "sys_tokens_min"
+                },
+                {
+                  "div": [
+                    {
+                      "param": "chunk_bytes"
+                    },
+                    {
+                      "param": "chunk_tokens"
+                    }
+                  ]
+                }
+              ]
+            },
+            "max": {
+              "mul": [
+                {
+                  "param": "sys_tokens_max"
+                },
+                {
+                  "div": [
+                    {
+                      "param": "chunk_bytes"
+                    },
+                    {
+                      "param": "chunk_tokens"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "seed": 1592646272,
+        "chunk": {
+          "add": [
+            {
+              "param": "meta_bytes"
+            },
+            {
+              "param": "chunk_bytes"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "namespaces": {
+    "kv": {
+      "pattern": "kv/{conv:016x}-{k:04}.{ext}",
+      "fields": {
+        "conv": "int",
+        "k": "int",
+        "ext": "str"
+      },
+      "size": {
+        "add": [
+          {
+            "param": "meta_bytes"
+          },
+          {
+            "param": "chunk_bytes"
+          }
+        ]
+      },
+      "seed": 1592646275,
+      "input": true
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "parallel": {
+            "index": "slot",
+            "width": {
+              "param": "concurrency"
+            },
+            "body": [
+              {
+                "loop": {
+                  "index": "r",
+                  "to": {
+                    "add": [
+                      {
+                        "param": "warm"
+                      },
+                      {
+                        "param": "requests"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "d",
+                        "value": {
+                          "draw": {
+                            "param": "reuse"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "cont",
+                        "value": {
+                          "and": [
+                            {
+                              "ne": [
+                                {
+                                  "ref": "d"
+                                },
+                                null
+                              ]
+                            },
+                            {
+                              "le": [
+                                {
+                                  "ref": "d"
+                                },
+                                {
+                                  "index": "r"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "conv",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "ref": "cont"
+                            },
+                            "then": {
+                              "at": {
+                                "ref": "conv",
+                                "index": {
+                                  "sub": [
+                                    {
+                                      "index": "r"
+                                    },
+                                    {
+                                      "ref": "d"
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "else": {
+                              "draw": {
+                                "uniform64": {}
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "sp",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "ref": "cont"
+                            },
+                            "then": {
+                              "at": {
+                                "ref": "sp",
+                                "index": {
+                                  "sub": [
+                                    {
+                                      "index": "r"
+                                    },
+                                    {
+                                      "ref": "d"
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "else": {
+                              "pick": {
+                                "dataset": "sysp",
+                                "dist": {
+                                  "param": "sys_pop"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "inn",
+                        "value": {
+                          "draw": {
+                            "param": "turn_in"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "out",
+                        "value": {
+                          "draw": {
+                            "param": "turn_out"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "sysblk",
+                        "value": {
+                          "div": [
+                            {
+                              "size": {
+                                "ref": "sp"
+                              }
+                            },
+                            {
+                              "add": [
+                                {
+                                  "param": "meta_bytes"
+                                },
+                                {
+                                  "param": "chunk_bytes"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "ptoks",
+                        "value": {
+                          "add": [
+                            {
+                              "cond": {
+                                "if": {
+                                  "ref": "cont"
+                                },
+                                "then": {
+                                  "add": [
+                                    {
+                                      "at": {
+                                        "ref": "ptoks",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            {
+                                              "ref": "d"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "at": {
+                                        "ref": "out",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            {
+                                              "ref": "d"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "else": {
+                                  "div": [
+                                    {
+                                      "mod": [
+                                        {
+                                          "size": {
+                                            "ref": "sp"
+                                          }
+                                        },
+                                        {
+                                          "add": [
+                                            {
+                                              "param": "meta_bytes"
+                                            },
+                                            {
+                                              "param": "chunk_bytes"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "div": [
+                                        {
+                                          "param": "chunk_bytes"
+                                        },
+                                        {
+                                          "param": "chunk_tokens"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            {
+                              "ref": "inn"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "stored",
+                        "value": {
+                          "div": [
+                            {
+                              "ref": "ptoks"
+                            },
+                            {
+                              "param": "chunk_tokens"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "had",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "and": [
+                                {
+                                  "ref": "cont"
+                                },
+                                {
+                                  "le": [
+                                    {
+                                      "ref": "d"
+                                    },
+                                    {
+                                      "param": "retain"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "then": {
+                              "at": {
+                                "ref": "stored",
+                                "index": {
+                                  "sub": [
+                                    {
+                                      "index": "r"
+                                    },
+                                    {
+                                      "ref": "d"
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "else": 0
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "held",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "and": [
+                                {
+                                  "ref": "cont"
+                                },
+                                {
+                                  "le": [
+                                    {
+                                      "ref": "d"
+                                    },
+                                    {
+                                      "param": "local"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "then": {
+                              "div": [
+                                {
+                                  "sub": [
+                                    {
+                                      "ref": "ptoks"
+                                    },
+                                    {
+                                      "ref": "inn"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "param": "chunk_tokens"
+                                }
+                              ]
+                            },
+                            "else": 0
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "hit",
+                        "value": {
+                          "ref": "stored"
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "nload",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "gt": [
+                                {
+                                  "ref": "hit"
+                                },
+                                {
+                                  "ref": "held"
+                                }
+                              ]
+                            },
+                            "then": {
+                              "sub": [
+                                {
+                                  "ref": "hit"
+                                },
+                                {
+                                  "ref": "held"
+                                }
+                              ]
+                            },
+                            "else": 0
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "phase": {
+                        "name": {
+                          "cond": {
+                            "if": {
+                              "lt": [
+                                {
+                                  "index": "r"
+                                },
+                                {
+                                  "param": "warm"
+                                }
+                              ]
+                            },
+                            "then": "warm",
+                            "else": "serve"
+                          }
+                        },
+                        "body": [
+                          {
+                            "loop": {
+                              "index": "q",
+                              "to": {
+                                "ref": "sysblk"
+                              },
+                              "body": [
+                                {
+                                  "stat": {
+                                    "file": {
+                                      "file": {
+                                        "of": {
+                                          "ref": "sp"
+                                        },
+                                        "chunk": {
+                                          "index": "q"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "q",
+                              "to": {
+                                "ref": "hit"
+                              },
+                              "body": [
+                                {
+                                  "stat": {
+                                    "file": {
+                                      "object": {
+                                        "namespace": "kv",
+                                        "fields": {
+                                          "conv": {
+                                            "ref": "conv"
+                                          },
+                                          "k": {
+                                            "index": "q"
+                                          },
+                                          "ext": "data"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "cond": {
+                              "if": {
+                                "eq": [
+                                  {
+                                    "param": "sys_local"
+                                  },
+                                  false
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "parallel": {
+                                    "index": "sk",
+                                    "width": {
+                                      "ref": "sysblk"
+                                    },
+                                    "body": [
+                                      {
+                                        "let": {
+                                          "name": "b",
+                                          "value": {
+                                            "file": {
+                                              "of": {
+                                                "ref": "sp"
+                                              },
+                                              "chunk": {
+                                                "index": "sk"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "open": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "flags": [
+                                            "RDONLY",
+                                            "CLOEXEC"
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "fstat": {
+                                          "file": {
+                                            "ref": "b"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "ioctl": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "request": "TCGETS",
+                                          "expect": [
+                                            "ENOTTY"
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "lseek": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "offset": 0,
+                                          "whence": "CUR"
+                                        }
+                                      },
+                                      {
+                                        "read": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "len": {
+                                            "param": "buf"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "cond": {
+                                          "if": {
+                                            "gt": [
+                                              {
+                                                "add": [
+                                                  {
+                                                    "param": "meta_bytes"
+                                                  },
+                                                  {
+                                                    "param": "chunk_bytes"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "param": "buf"
+                                              }
+                                            ]
+                                          },
+                                          "then": [
+                                            {
+                                              "read": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "len": {
+                                                  "sub": [
+                                                    {
+                                                      "add": [
+                                                        {
+                                                          "param": "meta_bytes"
+                                                        },
+                                                        {
+                                                          "param": "chunk_bytes"
+                                                        }
+                                                      ]
+                                                    },
+                                                    {
+                                                      "param": "buf"
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "close": {
+                                          "file": {
+                                            "ref": "b"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "parallel": {
+                              "index": "lk",
+                              "width": {
+                                "ref": "nload"
+                              },
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "b",
+                                    "value": {
+                                      "object": {
+                                        "namespace": "kv",
+                                        "fields": {
+                                          "conv": {
+                                            "ref": "conv"
+                                          },
+                                          "k": {
+                                            "add": [
+                                              {
+                                                "ref": "held"
+                                              },
+                                              {
+                                                "index": "lk"
+                                              }
+                                            ]
+                                          },
+                                          "ext": "data"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "open": {
+                                    "file": {
+                                      "ref": "b"
+                                    },
+                                    "flags": [
+                                      "RDONLY",
+                                      "CLOEXEC"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "fstat": {
+                                    "file": {
+                                      "ref": "b"
+                                    }
+                                  }
+                                },
+                                {
+                                  "ioctl": {
+                                    "file": {
+                                      "ref": "b"
+                                    },
+                                    "request": "TCGETS",
+                                    "expect": [
+                                      "ENOTTY"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "b"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "b"
+                                    },
+                                    "len": {
+                                      "param": "buf"
+                                    }
+                                  }
+                                },
+                                {
+                                  "cond": {
+                                    "if": {
+                                      "gt": [
+                                        {
+                                          "add": [
+                                            {
+                                              "param": "meta_bytes"
+                                            },
+                                            {
+                                              "param": "chunk_bytes"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "param": "buf"
+                                        }
+                                      ]
+                                    },
+                                    "then": [
+                                      {
+                                        "read": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "len": {
+                                            "sub": [
+                                              {
+                                                "add": [
+                                                  {
+                                                    "param": "meta_bytes"
+                                                  },
+                                                  {
+                                                    "param": "chunk_bytes"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "param": "buf"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "close": {
+                                    "file": {
+                                      "ref": "b"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "compute": {
+                              "ns": {
+                                "mul": [
+                                  {
+                                    "param": "decode_per_token"
+                                  },
+                                  {
+                                    "ref": "out"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "kv_cache_shared.py",
+      "sha256": "1994cecdba3ae63d330ac4bb47bbac9e17c2b98331c536494616888e85724135",
+      "builder_version": "0.1.0",
+      "git": "0cbbc49608c0-dirty"
+    },
+    "python": "3.12.13",
+    "lock": {
+      "file": "uv.lock",
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
+    },
+    "built_twice_identical": true,
+    "ast_sha256": "c29d7c1db412c25df1d91d3037dc22657c8dbad46620804b9c41c81d1ad8136b"
+  }
+}
