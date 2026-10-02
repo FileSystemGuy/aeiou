@@ -1854,7 +1854,8 @@ capture plan (`ABSTRACTS.md` §11) was run on the loopback NFS mount: `ImageFold
 `DataLoader`, batch 16, 2 workers, 2 epochs of 200 steps over 3,200 real JPEGs. The kit
 (corpus writer, the traced script, the fitted parameters, the trace's metrics) is
 `builder/traces/train_small_files`; the findings are in `ABSTRACTS.md` §1 "Trace". **The
-choices below were made while building and are not yet confirmed by the user.**
+choices below were made while building and confirmed by the user the same day (decided
+2026-10-01).**
 
 - **The abstract was corrected from the trace, and its hash and fingerprints changed.**
   Two `lseek`s per file, not one (Pillow's `fp.seek(0)`); `stat` and `fstat` per directory
@@ -1875,8 +1876,8 @@ choices below were made while building and are not yet confirmed by the user.**
   open, against 0.3 ms in its calls. Modeling it means a `compute` between the last read
   and `close` inside the loader's worker, with a `decode` parameter that is [measure] per
   CPU and per image size. It matters only when the loader, not the step, is the limit.
-  Left open because a default of 0 changes nothing and any other default is a claim about
-  the client's CPU.
+  Not added (decided 2026-10-01): a default of 0 changes nothing and any other default is a
+  claim about the client's CPU.
 - **A committed regression test, not a tolerance.** `tests/test_trace.py` compares the
   abstract at the fitted parameters with the committed trace metrics: op counts equal but
   for the root listing, request-size buckets equal, largest distance at most 0.06

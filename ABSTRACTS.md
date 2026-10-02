@@ -156,8 +156,8 @@ workload train_small_files {
   about 3 ms of CPU per file, most of it between the EOF read and `close`** (the file is
   open during the decode). It does not change the offered rate while the step time is the
   limit (prefetch back-pressure holds the workers), and it does when the loader is: a
-  worker then issues a file every 3 ms, not back to back. Not added; open
-  (`DESIGN_REVIEW.md` §3.43).
+  worker then issues a file every 3 ms, not back to back. Not added (decided
+  2026-10-01, `DESIGN_REVIEW.md` §3.43).
 - The `enumerate` phase is what the real application does at startup. **Every actor runs the
   walk** (added 2026-09-29): `ImageFolder` is a plain constructor that `os.walk`s the tree in
   the process that builds the dataset, and under DDP every rank builds its own; nothing is

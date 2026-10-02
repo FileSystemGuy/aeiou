@@ -313,7 +313,7 @@ on NFS, the script that was traced, the corpus writer, the fitted parameter file
 trace's metrics document. The trace corrected the abstract (a second `lseek` per file,
 `stat` and `fstat` per directory in the walk); `tests/test_trace.py` now holds the abstract
 at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reasoning in
-`DESIGN_REVIEW.md` §3.43 (not yet confirmed by the user).
+`DESIGN_REVIEW.md` §3.43 (decided 2026-10-01).
 
 ## 8. Not yet
 
