@@ -16,7 +16,7 @@
         8388608
       ],
       "unit": "bytes",
-      "doc": "[config]"
+      "doc": "[config] storage bytes of the item at each place in the file"
     },
     "item_off": {
       "default": [
@@ -26,7 +26,17 @@
         67113595
       ],
       "unit": "bytes",
-      "doc": "[config] prefix sums of hdr + item_bytes + trailer, as §3 writes them"
+      "doc": "[config] the item's offset in the file: prefix sums of hdr + item_bytes + trailer - item_bytes mod 64, as §3 writes them"
+    },
+    "read_order": {
+      "default": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "unit": "count",
+      "doc": "[config] the place in the file of the k-th item read: the items sorted by name (layer.10 before layer.2), against the writer's state-dict order"
     },
     "replicas": {
       "default": 1,
@@ -46,7 +56,7 @@
     "trailer": {
       "default": 873,
       "unit": "bytes",
-      "doc": "per item, after the storage, as §3 writes it"
+      "doc": "per item, after the storage, less the storage's length mod 64 (the next record is aligned), as §3 writes it"
     },
     "buf": {
       "default": 1048576,
@@ -73,7 +83,7 @@
         857
       ],
       "unit": "bytes",
-      "doc": "the last item of a file only: the fill at the scan offset stops at EOF, so each later step of the zip reader (end record, zip64 locator and record, central directory, the two records after the storage) is a fill of its own, this many bytes before the end (traced)"
+      "doc": "the item at the end of the file only: a fill there stops at EOF and is used up by the read that caused it, so each later step of the zip reader (end record, zip64 locator and record, central directory, the two records after the storage) is a fill of its own, this many bytes before the end (traced)"
     },
     "restore_step": {
       "default": 100,
@@ -88,14 +98,34 @@
         "rank": "int"
       },
       "size": {
-        "add": [
+        "sub": [
           {
             "add": [
               {
                 "add": [
                   {
+                    "add": [
+                      {
+                        "elem": {
+                          "array": "item_off",
+                          "index": {
+                            "sub": [
+                              {
+                                "param": "items"
+                              },
+                              1
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "param": "hdr"
+                      }
+                    ]
+                  },
+                  {
                     "elem": {
-                      "array": "item_off",
+                      "array": "item_bytes",
                       "index": {
                         "sub": [
                           {
@@ -105,12 +135,16 @@
                         ]
                       }
                     }
-                  },
-                  {
-                    "param": "hdr"
                   }
                 ]
               },
+              {
+                "param": "trailer"
+              }
+            ]
+          },
+          {
+            "mod": [
               {
                 "elem": {
                   "array": "item_bytes",
@@ -123,11 +157,9 @@
                     ]
                   }
                 }
-              }
+              },
+              64
             ]
-          },
-          {
-            "param": "trailer"
           }
         ]
       },
@@ -307,11 +339,24 @@
               },
               {
                 "loop": {
-                  "index": "t",
+                  "index": "k",
                   "to": {
                     "param": "items"
                   },
                   "body": [
+                    {
+                      "let": {
+                        "name": "t",
+                        "value": {
+                          "elem": {
+                            "array": "read_order",
+                            "index": {
+                              "index": "k"
+                            }
+                          }
+                        }
+                      }
+                    },
                     {
                       "let": {
                         "name": "o",
@@ -319,7 +364,7 @@
                           "elem": {
                             "array": "item_off",
                             "index": {
-                              "index": "t"
+                              "ref": "t"
                             }
                           }
                         }
@@ -329,24 +374,41 @@
                       "let": {
                         "name": "n",
                         "value": {
-                          "add": [
+                          "sub": [
                             {
                               "add": [
                                 {
-                                  "param": "hdr"
+                                  "add": [
+                                    {
+                                      "param": "hdr"
+                                    },
+                                    {
+                                      "elem": {
+                                        "array": "item_bytes",
+                                        "index": {
+                                          "ref": "t"
+                                        }
+                                      }
+                                    }
+                                  ]
                                 },
                                 {
-                                  "elem": {
-                                    "array": "item_bytes",
-                                    "index": {
-                                      "index": "t"
-                                    }
-                                  }
+                                  "param": "trailer"
                                 }
                               ]
                             },
                             {
-                              "param": "trailer"
+                              "mod": [
+                                {
+                                  "elem": {
+                                    "array": "item_bytes",
+                                    "index": {
+                                      "ref": "t"
+                                    }
+                                  }
+                                },
+                                64
+                              ]
                             }
                           ]
                         }
@@ -354,40 +416,213 @@
                     },
                     {
                       "let": {
-                        "name": "held",
+                        "name": "pb",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "eq": [
+                                {
+                                  "index": "k"
+                                },
+                                0
+                              ]
+                            },
+                            "then": -1,
+                            "else": {
+                              "at": {
+                                "ref": "bst",
+                                "index": {
+                                  "sub": [
+                                    {
+                                      "index": "k"
+                                    },
+                                    1
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "head_in",
                         "value": {
                           "and": [
                             {
-                              "gt": [
+                              "and": [
                                 {
-                                  "index": "t"
+                                  "ge": [
+                                    {
+                                      "ref": "pb"
+                                    },
+                                    0
+                                  ]
                                 },
-                                0
+                                {
+                                  "le": [
+                                    {
+                                      "ref": "pb"
+                                    },
+                                    {
+                                      "ref": "o"
+                                    }
+                                  ]
+                                }
                               ]
                             },
                             {
                               "lt": [
                                 {
+                                  "ref": "o"
+                                },
+                                {
+                                  "min": [
+                                    {
+                                      "add": [
+                                        {
+                                          "ref": "pb"
+                                        },
+                                        {
+                                          "param": "buf"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "sub": [
+                                        {
+                                          "add": [
+                                            {
+                                              "add": [
+                                                {
+                                                  "add": [
+                                                    {
+                                                      "elem": {
+                                                        "array": "item_off",
+                                                        "index": {
+                                                          "sub": [
+                                                            {
+                                                              "param": "items"
+                                                            },
+                                                            1
+                                                          ]
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "param": "hdr"
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "elem": {
+                                                    "array": "item_bytes",
+                                                    "index": {
+                                                      "sub": [
+                                                        {
+                                                          "param": "items"
+                                                        },
+                                                        1
+                                                      ]
+                                                    }
+                                                  }
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "trailer"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "mod": [
+                                            {
+                                              "elem": {
+                                                "array": "item_bytes",
+                                                "index": {
+                                                  "sub": [
+                                                    {
+                                                      "param": "items"
+                                                    },
+                                                    1
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            64
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "be",
+                        "value": {
+                          "min": [
+                            {
+                              "add": [
+                                {
+                                  "cond": {
+                                    "if": {
+                                      "ref": "head_in"
+                                    },
+                                    "then": {
+                                      "ref": "pb"
+                                    },
+                                    "else": {
+                                      "ref": "o"
+                                    }
+                                  }
+                                },
+                                {
+                                  "param": "buf"
+                                }
+                              ]
+                            },
+                            {
+                              "sub": [
+                                {
                                   "add": [
                                     {
                                       "add": [
                                         {
-                                          "param": "hdr"
+                                          "add": [
+                                            {
+                                              "elem": {
+                                                "array": "item_off",
+                                                "index": {
+                                                  "sub": [
+                                                    {
+                                                      "param": "items"
+                                                    },
+                                                    1
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "param": "hdr"
+                                            }
+                                          ]
                                         },
                                         {
                                           "elem": {
                                             "array": "item_bytes",
                                             "index": {
-                                              "max": [
+                                              "sub": [
                                                 {
-                                                  "sub": [
-                                                    {
-                                                      "index": "t"
-                                                    },
-                                                    1
-                                                  ]
+                                                  "param": "items"
                                                 },
-                                                0
+                                                1
                                               ]
                                             }
                                           }
@@ -400,7 +635,22 @@
                                   ]
                                 },
                                 {
-                                  "param": "buf"
+                                  "mod": [
+                                    {
+                                      "elem": {
+                                        "array": "item_bytes",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "param": "items"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    64
+                                  ]
                                 }
                               ]
                             }
@@ -409,10 +659,200 @@
                       }
                     },
                     {
+                      "let": {
+                        "name": "end_in",
+                        "value": {
+                          "lt": [
+                            {
+                              "add": [
+                                {
+                                  "ref": "o"
+                                },
+                                {
+                                  "ref": "n"
+                                }
+                              ]
+                            },
+                            {
+                              "ref": "be"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "far",
+                        "value": {
+                          "gt": [
+                            {
+                              "ref": "n"
+                            },
+                            {
+                              "param": "buf"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "last",
+                        "value": {
+                          "eq": [
+                            {
+                              "add": [
+                                {
+                                  "ref": "o"
+                                },
+                                {
+                                  "ref": "n"
+                                }
+                              ]
+                            },
+                            {
+                              "sub": [
+                                {
+                                  "add": [
+                                    {
+                                      "add": [
+                                        {
+                                          "add": [
+                                            {
+                                              "elem": {
+                                                "array": "item_off",
+                                                "index": {
+                                                  "sub": [
+                                                    {
+                                                      "param": "items"
+                                                    },
+                                                    1
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "param": "hdr"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "elem": {
+                                            "array": "item_bytes",
+                                            "index": {
+                                              "sub": [
+                                                {
+                                                  "param": "items"
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "param": "trailer"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "mod": [
+                                    {
+                                      "elem": {
+                                        "array": "item_bytes",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "param": "items"
+                                            },
+                                            1
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    64
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "bst",
+                        "value": {
+                          "cond": {
+                            "if": {
+                              "and": [
+                                {
+                                  "and": [
+                                    {
+                                      "not": {
+                                        "ref": "end_in"
+                                      }
+                                    },
+                                    {
+                                      "ref": "far"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "gt": [
+                                    {
+                                      "add": [
+                                        {
+                                          "param": "hdr"
+                                        },
+                                        {
+                                          "elem": {
+                                            "array": "item_bytes",
+                                            "index": {
+                                              "ref": "t"
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "param": "buf"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "then": -1,
+                            "else": {
+                              "cond": {
+                                "if": {
+                                  "and": [
+                                    {
+                                      "ref": "head_in"
+                                    },
+                                    {
+                                      "ref": "end_in"
+                                    }
+                                  ]
+                                },
+                                "then": {
+                                  "ref": "pb"
+                                },
+                                "else": {
+                                  "ref": "o"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
                       "cond": {
                         "if": {
                           "not": {
-                            "ref": "held"
+                            "ref": "head_in"
                           }
                         },
                         "then": [
@@ -443,7 +883,7 @@
                       "cond": {
                         "if": {
                           "not": {
-                            "ref": "held"
+                            "ref": "head_in"
                           }
                         },
                         "then": [
@@ -463,7 +903,7 @@
                     },
                     {
                       "loop": {
-                        "index": "k",
+                        "index": "i",
                         "to": 2,
                         "body": [
                           {
@@ -482,7 +922,7 @@
                       "cond": {
                         "if": {
                           "not": {
-                            "ref": "held"
+                            "ref": "head_in"
                           }
                         },
                         "then": [
@@ -501,7 +941,7 @@
                     },
                     {
                       "loop": {
-                        "index": "k",
+                        "index": "i",
                         "to": 2,
                         "body": [
                           {
@@ -517,49 +957,31 @@
                       }
                     },
                     {
-                      "let": {
-                        "name": "far",
-                        "value": {
-                          "ge": [
-                            {
-                              "ref": "n"
-                            },
-                            {
-                              "param": "buf"
-                            }
-                          ]
-                        }
-                      }
-                    },
-                    {
                       "cond": {
                         "if": {
-                          "or": [
-                            {
-                              "ref": "far"
-                            },
-                            {
-                              "eq": [
-                                {
-                                  "index": "t"
-                                },
-                                {
-                                  "sub": [
-                                    {
-                                      "param": "items"
-                                    },
-                                    1
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
+                          "not": {
+                            "ref": "end_in"
+                          }
                         },
                         "then": [
                           {
                             "cond": {
                               "if": {
-                                "ref": "far"
+                                "gt": [
+                                  {
+                                    "add": [
+                                      {
+                                        "ref": "o"
+                                      },
+                                      {
+                                        "ref": "n"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "ref": "be"
+                                  }
+                                ]
                               },
                               "then": [
                                 {
@@ -698,19 +1120,7 @@
                           {
                             "cond": {
                               "if": {
-                                "eq": [
-                                  {
-                                    "index": "t"
-                                  },
-                                  {
-                                    "sub": [
-                                      {
-                                        "param": "items"
-                                      },
-                                      1
-                                    ]
-                                  }
-                                ]
+                                "ref": "last"
                               },
                               "then": [
                                 {
@@ -768,7 +1178,7 @@
                           },
                           {
                             "loop": {
-                              "index": "k",
+                              "index": "i",
                               "to": 8,
                               "body": [
                                 {
@@ -784,21 +1194,37 @@
                             }
                           },
                           {
-                            "lseek": {
-                              "file": {
-                                "ref": "c"
-                              },
-                              "offset": {
-                                "add": [
+                            "cond": {
+                              "if": {
+                                "or": [
                                   {
-                                    "ref": "o"
+                                    "ref": "far"
                                   },
                                   {
-                                    "param": "rec2"
+                                    "ref": "last"
                                   }
                                 ]
                               },
-                              "whence": "SET"
+                              "then": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": {
+                                      "add": [
+                                        {
+                                          "ref": "o"
+                                        },
+                                        {
+                                          "param": "rec2"
+                                        }
+                                      ]
+                                    },
+                                    "whence": "SET"
+                                  }
+                                }
+                              ]
                             }
                           },
                           {
@@ -811,18 +1237,34 @@
                             }
                           },
                           {
-                            "read": {
-                              "file": {
-                                "ref": "c"
+                            "cond": {
+                              "if": {
+                                "or": [
+                                  {
+                                    "ref": "far"
+                                  },
+                                  {
+                                    "ref": "last"
+                                  }
+                                ]
                               },
-                              "len": {
-                                "param": "buf"
-                              }
+                              "then": [
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "len": {
+                                      "param": "buf"
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           },
                           {
                             "loop": {
-                              "index": "k",
+                              "index": "i",
                               "to": 5,
                               "body": [
                                 {
@@ -838,14 +1280,30 @@
                             }
                           },
                           {
-                            "lseek": {
-                              "file": {
-                                "ref": "c"
+                            "cond": {
+                              "if": {
+                                "or": [
+                                  {
+                                    "ref": "far"
+                                  },
+                                  {
+                                    "ref": "last"
+                                  }
+                                ]
                               },
-                              "offset": {
-                                "ref": "o"
-                              },
-                              "whence": "SET"
+                              "then": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": {
+                                      "ref": "o"
+                                    },
+                                    "whence": "SET"
+                                  }
+                                }
+                              ]
                             }
                           },
                           {
@@ -858,18 +1316,34 @@
                             }
                           },
                           {
-                            "read": {
-                              "file": {
-                                "ref": "c"
+                            "cond": {
+                              "if": {
+                                "or": [
+                                  {
+                                    "ref": "far"
+                                  },
+                                  {
+                                    "ref": "last"
+                                  }
+                                ]
                               },
-                              "len": {
-                                "param": "buf"
-                              }
+                              "then": [
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "len": {
+                                      "param": "buf"
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           },
                           {
                             "loop": {
-                              "index": "k",
+                              "index": "i",
                               "to": 3,
                               "body": [
                                 {
@@ -887,24 +1361,31 @@
                           {
                             "cond": {
                               "if": {
-                                "gt": [
+                                "and": [
                                   {
-                                    "add": [
-                                      {
-                                        "param": "hdr"
-                                      },
-                                      {
-                                        "elem": {
-                                          "array": "item_bytes",
-                                          "index": {
-                                            "index": "t"
-                                          }
-                                        }
-                                      }
-                                    ]
+                                    "ref": "far"
                                   },
                                   {
-                                    "param": "buf"
+                                    "gt": [
+                                      {
+                                        "add": [
+                                          {
+                                            "param": "hdr"
+                                          },
+                                          {
+                                            "elem": {
+                                              "array": "item_bytes",
+                                              "index": {
+                                                "ref": "t"
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "param": "buf"
+                                      }
+                                    ]
                                   }
                                 ]
                               },
@@ -925,7 +1406,7 @@
                                               "elem": {
                                                 "array": "item_bytes",
                                                 "index": {
-                                                  "index": "t"
+                                                  "ref": "t"
                                                 }
                                               }
                                             }
@@ -945,7 +1426,7 @@
                         "else": [
                           {
                             "loop": {
-                              "index": "k",
+                              "index": "i",
                               "to": 21,
                               "body": [
                                 {
@@ -987,9 +1468,9 @@
   "provenance": {
     "generator": {
       "script": "ckpt_restore.py",
-      "sha256": "5fe69cd615c18c27c50cdbc72e07c857765e03829707e1000c3f6a1abc7077e6",
+      "sha256": "577424dd1d09dc1e2c701d466965f58c8b80f4eebeff4a6a5dd45a430620eb73",
       "builder_version": "0.1.0",
-      "git": "32e33f8e9e9b"
+      "git": "7d067292bf85-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -997,6 +1478,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "0183dda15546db6dca81c5033aede32f0b351784336298b7fae095329e14260a"
+    "ast_sha256": "df29f09389b797751926d930e00647a81b02bf09490ca80d0b51250e97b1a33f"
   }
 }

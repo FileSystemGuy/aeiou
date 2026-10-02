@@ -207,6 +207,9 @@ struct ScopeLevel<'a> {
     depth: usize,
 }
 
+/// Entries `Vm::at_cache` holds before it starts over.
+const AT_CACHE_MAX: usize = 1 << 16;
+
 /// An active `x @ i` evaluation: frame `frame` reads as `idx`, sibling lets of `body` are
 /// re-evaluated at that index and memoized.
 struct Shift<'a> {
@@ -367,6 +370,12 @@ pub struct Vm<'m, 'a> {
     frames: Vec<Frame<'a>>,
     scopes: Vec<ScopeLevel<'a>>,
     shifts: Vec<Shift<'a>>,
+    /// Values of `x @ i` already evaluated, by definition, index, and the indices of the
+    /// enclosing loops. `x @ i` is a pure function of those (and of this actor), so this
+    /// stores nothing the definition does not say; it makes a chain that steps back one
+    /// index per iteration (`x @ k-1`) one link per iteration instead of a walk to the
+    /// start, and keeps the recursion as deep as one link, not as the loop is long.
+    at_cache: HashMap<(usize, i64, Vec<i64>), Value<'a>>,
     /// Frames visible to the expression being evaluated (shorter during a shifted evaluation).
     depth: usize,
     fields: Option<HashMap<&'a str, Value<'a>>>,
@@ -394,6 +403,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             frames: Vec::new(),
             scopes: vec![ScopeLevel { bindings: HashMap::new(), body: &[], depth: 0 }],
             shifts: Vec::new(),
+            at_cache: HashMap::new(),
             depth: 0,
             fields: None,
             open: HashMap::new(),
@@ -419,6 +429,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             frames: snap.frames,
             scopes: snap.scopes,
             shifts: Vec::new(),
+            at_cache: HashMap::new(),
             depth,
             fields: None,
             open: snap.open,
@@ -884,12 +895,23 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             return Err(EvalError::BelowFrom);
         }
         let def = Self::find_let(body, name).expect("checked above");
+        // a namespace's field values are not part of the key, so nothing is kept under them
+        let key = if self.fields.is_none() { Some((def as *const ExprLike as usize, i, (0..frame).map(|f| self.frame_index(f)).collect::<Vec<i64>>())) } else { None };
+        if let Some(v) = key.as_ref().and_then(|k| self.at_cache.get(k)) {
+            return Ok(v.clone());
+        }
         let saved_depth = self.depth;
         self.shifts.push(Shift { frame, idx: i, body, depth, memo: HashMap::new() });
         self.depth = depth;
         let r = self.exprlike(def);
         self.depth = saved_depth;
         self.shifts.pop();
+        if let (Some(k), Ok(v)) = (key, &r) {
+            if self.at_cache.len() >= AT_CACHE_MAX {
+                self.at_cache.clear();
+            }
+            self.at_cache.insert(k, v.clone());
+        }
         r
     }
 

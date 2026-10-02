@@ -1,4 +1,1 @@
-{"params_version": 1, "abstract": "ckpt_restore",
- "doc": "Fitted to the 2026-10-01 trace of torch.distributed.checkpoint.load on 2 ranks: the 6 items ckpt_write_dcp's kit wrote (the last one small).",
- "params": {"items": 6, "item_bytes": [16777216, 33554432, 16777216, 8388608, 524288, 2048],
-            "item_off": [0, 16778793, 50334802, 67113595, 75503780, 76029645], "meta_bytes": 2606}}
+{"params_version": 1, "abstract": "ckpt_restore", "doc": "Fitted to the 2026-10-01 trace of torch.distributed.checkpoint.load on 2 ranks: the 6 items ckpt_write_dcp's kit wrote (the last one small).", "params": {"items": 6, "item_bytes": [16777216, 33554432, 16777216, 8388608, 524288, 2096], "item_off": [0, 16778793, 50334802, 67113595, 75503780, 76029645], "read_order": [0, 1, 2, 3, 4, 5], "meta_bytes": 2606, "restore_step": 100}}

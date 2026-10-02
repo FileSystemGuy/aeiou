@@ -38,7 +38,7 @@
     "trailer": {
       "default": 873,
       "unit": "bytes",
-      "doc": "per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01)"
+      "doc": "per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01); less the storage's length mod 64, since the record after it is aligned"
     },
     "buf": {
       "default": 1048576,
@@ -291,7 +291,24 @@
                                             "ref": "c"
                                           },
                                           "len": {
-                                            "param": "trailer"
+                                            "sub": [
+                                              {
+                                                "param": "trailer"
+                                              },
+                                              {
+                                                "mod": [
+                                                  {
+                                                    "elem": {
+                                                      "array": "item_bytes",
+                                                      "index": {
+                                                        "index": "t"
+                                                      }
+                                                    }
+                                                  },
+                                                  64
+                                                ]
+                                              }
+                                            ]
                                           }
                                         }
                                       }
@@ -303,12 +320,31 @@
                                             "ref": "c"
                                           },
                                           "len": {
-                                            "add": [
+                                            "sub": [
                                               {
                                                 "add": [
                                                   {
-                                                    "param": "hdr"
+                                                    "add": [
+                                                      {
+                                                        "param": "hdr"
+                                                      },
+                                                      {
+                                                        "elem": {
+                                                          "array": "item_bytes",
+                                                          "index": {
+                                                            "index": "t"
+                                                          }
+                                                        }
+                                                      }
+                                                    ]
                                                   },
+                                                  {
+                                                    "param": "trailer"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "mod": [
                                                   {
                                                     "elem": {
                                                       "array": "item_bytes",
@@ -316,11 +352,9 @@
                                                         "index": "t"
                                                       }
                                                     }
-                                                  }
+                                                  },
+                                                  64
                                                 ]
-                                              },
-                                              {
-                                                "param": "trailer"
                                               }
                                             ]
                                           }
@@ -559,9 +593,9 @@
   "provenance": {
     "generator": {
       "script": "ckpt_write_dcp.py",
-      "sha256": "5b722ea14959372003bf669ea35044ea39e51881ec78a22fd5f7d6a49161d484",
+      "sha256": "e7b2f66f04086eadb0e07ca260339aa930118915c19fd0a258b07ddbe8f69441",
       "builder_version": "0.1.0",
-      "git": "32e33f8e9e9b"
+      "git": "7d067292bf85-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -569,6 +603,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "cffdb8c102c3fb1a2875a44679bb50308c042346cf5062910231a25e4c025f0c"
+    "ast_sha256": "9b410bed69fe9b2fd8b0e4742abe3f4b5e6a7da6927164df6fde668ff17b31c3"
   }
 }

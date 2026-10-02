@@ -31,8 +31,8 @@ fn hashes_match_check_py() {
     // contract 0.2 and model_load's `full` split the same day; all again 2026-10-01 for contract 0.3, the
     // optional `backend`).
     let want = [
-        ("ckpt_restore", "0183dda15546db6dca81c5033aede32f0b351784336298b7fae095329e14260a"),
-        ("ckpt_write_dcp", "cffdb8c102c3fb1a2875a44679bb50308c042346cf5062910231a25e4c025f0c"),
+        ("ckpt_restore", "df29f09389b797751926d930e00647a81b02bf09490ca80d0b51250e97b1a33f"),
+        ("ckpt_write_dcp", "9b410bed69fe9b2fd8b0e4742abe3f4b5e6a7da6927164df6fde668ff17b31c3"),
         ("kv_cache_serving", "5254c9951cef630a394cf4807163459a2c0fd56a5639f6f939681bf7442bc66b"),
         ("model_load", "6a22e3b84c3844e46bc4244961006e9add7b18605e9977ab5333d34998d5b111"),
         ("train_large_samples", "a614e020420787cf55281294508bfc87e72997c16fe4a537b19255d3bd3326e1"),
@@ -361,4 +361,27 @@ fn validator_rejects_what_check_py_rejects() {
     // structural: an unknown node kind, an unknown field
     rejects(&base(ds, r#"{"frobnicate": {}}"#), "unknown variant");
     rejects(&base(ds, r#"{"compute": {"ns": 1, "bogus": 2}}"#), "unknown field");
+}
+
+/// A chain that steps back one index per iteration (`x @ k-1`, the restore's buffer start)
+/// is one link per iteration: the values already evaluated are kept, so a long loop neither
+/// walks to its start every time nor recurses as deep as it is long.
+#[test]
+fn a_long_at_chain_is_one_link_per_iteration() {
+    let text = r#"{
+  "ast": "0.3", "name": "long_chain",
+  "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
+  "actors": {"gpu": {"count": 1, "body": [
+    {"loop": {"index": "k", "to": 200000, "body": [
+      {"let": {"name": "acc", "value": {"cond": {"if": {"eq": [{"index": "k"}, 0]}, "then": 0,
+          "else": {"add": [{"at": {"ref": "acc", "index": {"sub": [{"index": "k"}, 1]}}}, {"mod": [{"index": "k"}, 3]}]}}}}},
+      {"stat": {"file": {"object": {"namespace": "o", "fields": {"v": {"ref": "acc"}}}}}}
+    ]}}
+  ]}}
+}"#;
+    let ops = collect(text, &config(1, 1, &[]), "gpu", 1);
+    assert_eq!(ops.len(), 200_000);
+    assert_eq!(ops[0].3, "o/0");
+    assert_eq!(ops[4].3, "o/4");                // 0 + 1 + 2 + 0 + 1
+    assert_eq!(ops[199_999].3, "o/199999");     // 66,666 full periods of 0 + 1 + 2, then 0 + 1
 }

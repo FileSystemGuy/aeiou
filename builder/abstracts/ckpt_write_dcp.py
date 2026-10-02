@@ -18,7 +18,7 @@ w.param("items", 4, unit="count",
 w.param("item_bytes", [16 * MiB, 32 * MiB, 16 * MiB, 8 * MiB], unit="bytes",
         doc="per-item bytes, 1/G of each tensor [config]")
 w.param("hdr", 704, unit="bytes", doc="per item, before the storage: zip local headers, data.pkl, padding to 64 (traced 2026-10-01, torch 2.14)")
-w.param("trailer", 873, unit="bytes", doc="per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01)")
+w.param("trailer", 873, unit="bytes", doc="per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01); less the storage's length mod 64, since the record after it is aligned")
 w.param("buf", 1 * MiB, unit="bytes", doc="Python BufferedWriter size = st_blksize; an item above it is written directly, one at or below it is coalesced with its header and trailer")
 w.param("meta_bytes", 2 * MiB, unit="bytes", doc="[measure] .metadata size; traced 2,602 bytes for 6 items on 2 ranks, about 217 per item and rank")
 w.param("xfer", 1 * MiB, unit="bytes")
@@ -50,9 +50,9 @@ with w.actor("gpu") as gpu:
                     with gpu.when(P.item_bytes[t] > P.buf):
                         gpu.write(c, P.hdr)
                         gpu.write(c, P.item_bytes[t])               # the storage, past the buffer in one call
-                        gpu.write(c, P.trailer)
+                        gpu.write(c, P.trailer - P.item_bytes[t] % 64)
                     with gpu.otherwise():
-                        gpu.write(c, P.hdr + P.item_bytes[t] + P.trailer)
+                        gpu.write(c, P.hdr + P.item_bytes[t] + P.trailer - P.item_bytes[t] % 64)
                     gpu.lseek(c, 0, "CUR")                          # tell: the item's length
                 gpu.fsync(c)
                 gpu.close(c)

@@ -342,13 +342,14 @@ def test_checkpoint_write_abstract_matches_the_trace_of_dcp_save(tmp_path):
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
-@pytest.mark.parametrize("which, bytes_off", [("mixed", 0), ("small-last", 88)])
+@pytest.mark.parametrize("which, bytes_off", [("mixed", 0), ("small-last", 88), ("name-order", 0)])
 def test_checkpoint_restore_abstract_matches_the_trace_of_dcp_load(tmp_path, which, bytes_off):
     """`builder/traces/ckpt_restore`: `torch.distributed.checkpoint.load` on two ranks, traced
     2026-10-01. Every call on the shard files and `.metadata` is in the abstract, with its
     count; the check of the checkpoint's parent directory is not (`ABSTRACTS.md` §4). A small
     last item has its zip records 44 bytes nearer its ends than `rec2` and `tail_back` say,
-    which is 88 bytes over two ranks."""
+    which is 88 bytes over two ranks. `name-order` has 17 items, read in the sorted order of
+    their names across runs of small ones longer than the buffer: the buffer chain."""
     kit = BUILDER / "traces" / "ckpt_restore"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "ckpt_restore.ast.json"), "--gpus", "2",
