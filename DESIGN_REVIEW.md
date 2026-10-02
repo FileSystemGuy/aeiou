@@ -1444,6 +1444,57 @@ merged report lists the distinct values). `aio_init` (glibc's pool size) as a kn
 context under test. The `--cache` and `--buffer` axes of the brief's validity table are
 still only the `-direct` suffix.
 
+### 3.36 The sub-actor pool (added 2026-10-01)
+
+`runner/README.md` §4 states what exists; this is why it is shaped that way. It was the
+planned fix of §3.23's follow-ups for the blocking backends (`sync`, `posix-aio`, `mmap`
+and their `-direct` forms); the event loops never had the problem (§3.29: a `parallel`
+there is `width` tasks on the instance's loop).
+
+- **The problem was the runner's, not the workload's.** A `parallel` inside a loop spawned
+  and joined `width` OS threads on every iteration, so the DiskANN search (`beam`
+  concurrent reads per hop) created one thread per read: 507,617 threads for 507,608 reads
+  in the run measured, with 135 s of system time against 41 s elapsed. No search library
+  does that; a thread per beam slot that lives as long as the search thread is the nearest
+  thing to what one does (a pool, or asynchronous I/O). The latency clock covers only the
+  read, yet the mean was 611 µs under that churn and is 197 µs with the pool (41 threads,
+  36 s of system time, the fingerprint unchanged): two thirds of the measured read time
+  was the client's own thread creation getting in the way of the reads beside it.
+- **The pool belongs to the forking actor, and the assignment is positional.** Sub-actor
+  `k` of a fork runs on pool thread `k` over that thread's own queue; there is no shared
+  queue for idle threads to race on. Which OS thread runs a sub-actor could not change the
+  op multiset in any case (a sub-actor's randomness is keyed on its indices), but the rule
+  of `CLAUDE.md` is that no work is distributed based on timing, and a fixed assignment
+  keeps that true without an argument. The pool grows to the widest fork the actor issues
+  and never shrinks.
+- **What a pool thread keeps, and what it does not.** It keeps the two buffer rings and a
+  nested pool. The backend object and the file table are made per sub-actor, as before: a
+  sub-actor sees the files its parent had open *at that fork*, and the `mmap` backend's
+  table of mappings is keyed by descriptor number, which the parent may have closed and
+  the kernel reused by the next fork. So a sub-actor's own files and mappings still end
+  with it, before the parent's join returns.
+- **Loader workers are unchanged.** They already lived until their actor ended. A worker
+  whose body forks gets a pool of its own, as any actor does.
+- **`threads` in the report changes meaning** from sub-actors run to threads created
+  (the `tasks peak` of the host counters was always the latter).
+- **A side effect on memory.** The resident set of the `sync` run went from 7.8 MiB to
+  264 MiB. That is the ring doing what `NAPKIN_MATH.md` §2.2 asks (successive reads land in
+  successive slices, so the copy is not cache-hot): a thread that lived for one read only
+  ever used the first slice. The earlier figures for `parallel`-heavy abstracts under the
+  blocking backends therefore had cache-hot copies as well as thread creation in them.
+- **Not done: sub-actors as processes.** §3.35 considered it for `mmap` (one
+  `mmap_lock`) and dropped it; nothing here needs it.
+
+**Open.** Under `mmap` a sub-actor inherits its parent's descriptors but not its mappings,
+so each DiskANN beam sub-actor maps the whole index for one 4 KiB read and unmaps it (one
+map and one fault per read: 508,669 minor faults, 48 s of system time, 12.0 s elapsed
+against 6.3 s for `sync`). A search library that reads through a mapping maps the index
+once. Whether a sub-actor should read through the mapping its parent made is a question
+about what the backend is charged with (§3.35, Revised), not about the pool, and is left
+for the user. The pool's idle threads hold their rings (`--buffer-mib` each, twice once
+the actor writes), which at `threads × beam` per instance is the figure to watch on a
+host with thousands of instances.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -1476,7 +1527,8 @@ still only the `-direct` suffix.
   `--drop-caches` with the residency check and the mount options in the
   counters,~~ `--drop-caches`, the residency check, and the mount options done the same day
   (§3.31, Built). ~~Next: `libaio`/`posix-aio`/`mmap`,~~ `posix-aio`, `libaio`, and `mmap`
-  done the same day (§3.35). Next: the per-actor sub-actor pool, `--metrics`, the `RLIMIT`
+  done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
+  the same day (§3.36). Next: `--metrics`, the `RLIMIT`
   checks, the JSON report; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.

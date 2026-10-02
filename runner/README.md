@@ -154,8 +154,15 @@ instead of re-formatting the pattern on every op, is not done yet.
 What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md` §3.23.
 
 - **Threads.** One OS thread per actor instance. A `loader` spawns `workers` threads that
-  live until the actor ends; a `parallel` spawns `width` threads and joins them before the
-  node returns; either may nest. Every sub-actor starts from a snapshot of its parent's
+  live until the actor ends; a `parallel` ~~spawns `width` threads and joins them before the
+  node returns~~ runs its `width` sub-actors on threads the forking actor keeps (the
+  sub-actor pool, 2026-10-01, `DESIGN_REVIEW.md` §3.36) and returns when all have ended;
+  either may nest. Sub-actor `k` of a fork always runs on pool thread `k`, the pool grows to
+  the widest fork its actor has issued, and its threads idle between forks and end with the
+  actor. A pool thread keeps its two buffer rings and, when its sub-actors fork in turn, a
+  pool of its own; the backend and the file table are new for every sub-actor. The report's
+  `threads` is therefore the number of threads the run created, not the number of
+  sub-actors it ran. Every sub-actor starts from a snapshot of its parent's
   position and bindings (`vm::Snapshot`) and sees the files the parent had open at the fork;
   what it opens itself is its own. The VM's walk runs on the thread, so blocking calls
   are simply blocking: this is the `sync` fidelity reference of `PROJECT_BRIEF.md` §5~~, and
@@ -279,9 +286,26 @@ Observed on the WSL2 ext4 disk (2026-09-30, `runner/aeiou/tests/run.rs` and the 
 every committed abstract runs to the dry-run fingerprint under `sync` (`ckpt_restore`
 against the namespace a `ckpt_write_dcp` run left, through its manifest), and
 `train_small_files` also under `sync-direct`; a page-cache read of 1 MiB costs
-10 µs, an `O_DIRECT` one 258 µs; `vdb_search_diskann` spawns a thread per beam per hop
+10 µs, an `O_DIRECT` one 258 µs; `vdb_search_diskann` ~~spawns a thread per beam per hop
 (923 threads for 924 reads), the cost of forking `parallel` afresh each time, and a per-actor
-sub-actor pool is the planned fix. The same runs on the loopback NFS mount are §7.
+sub-actor pool is the planned fix~~ spawned a thread per beam per hop (923 threads for 924
+reads) until the sub-actor pool (2026-10-01). With it, on the same disk (`nodes=200000
+threads=8 queries=3000`, one instance, 507,608 `O_DIRECT` reads of 4 KiB, the same
+fingerprint before and after):
+
+| | threads created | elapsed | read mean | cpu user | cpu sys | minor faults | maxrss |
+|---|---|---|---|---|---|---|---|
+| `sync`, a thread per sub-actor | 507,617 | 41.5 s | 611 µs | 19.5 s | 135 s | 1,017,433 | 7.8 MiB |
+| `sync`, pool | 41 | 6.3 s | 197 µs | 13.3 s | 36.2 s | 66,559 | 264 MiB |
+| `mmap`, a thread per sub-actor | 507,617 | 38.0 s | 420 µs | 16.4 s | 130 s | 1,019,792 | 21 MiB |
+| `mmap`, pool | 41 | 12.0 s | 198 µs | 10.0 s | 48.1 s | 508,669 | 31 MiB |
+
+The resident set under `sync` is the buffer rings: a thread that lived for one read only
+ever touched the first slice of its ring, and a pool thread walks the whole of it, as
+`NAPKIN_MATH.md` §2.2 intends. Under `mmap` every beam sub-actor still maps the index
+file for its one read (a sub-actor inherits descriptors, not mappings), which is the
+remaining half-million faults and the reason `mmap` is the slower row here; open in
+`DESIGN_REVIEW.md` §3.36. The same runs on the loopback NFS mount are §7.
 
 ## 5. `aeiou datagen`, the payload, and the manifest
 
