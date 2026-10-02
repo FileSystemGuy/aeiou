@@ -1048,8 +1048,8 @@ the first refuses (53 needed); with `ulimit -Sn 40` the soft limit is raised and
 `aeiou run … --report-json FILE [--report-takes]` writes what the text report prints as one
 JSON document, format `aeiou_report: 1`, for the tools that compare runs (`report.rs`; the
 reasoning is in `DESIGN_REVIEW.md` §3.41). The text report is unchanged and stays the
-thing a person reads. **The choices below were made while building (2026-10-01) and are
-not yet confirmed by the user.**
+thing a person reads. **The choices below were made while building and confirmed by the user
+the same day (decided 2026-10-01).**
 
 ```
 { "aeiou_report": 1, "runner": "0.1.0",

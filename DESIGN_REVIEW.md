@@ -1751,7 +1751,8 @@ were made while building and **confirmed by the user the same day (decided 2026-
 The text report is for a person; comparing runs, plotting latency, and a submission checker
 need the same numbers in a form a tool reads. Built as `report.rs` and
 `aeiou run --report-json FILE` (`runner/README.md` §12, format `aeiou_report: 1`). The
-choices were made while building and are **not yet confirmed by the user**:
+choices were made while building and **confirmed by the user the same day (decided
+2026-10-01)**:
 
 - **A document built for the purpose, not the wire `Report` dumped.** The struct the hosts
   send to the coordinator holds the list of created paths (per file, unbounded), durations
@@ -1819,7 +1820,7 @@ choices were made while building and are **not yet confirmed by the user**:
   done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
   the same day (§3.36). ~~Next: `--metrics`,~~ `--metrics` built the same day, its
   definitions decided (§3.39). ~~Next: the `RLIMIT`
-  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices not yet confirmed (§3.41). Next: the trace-side metrics tool; the
+  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). Next: the trace-side metrics tool; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 
