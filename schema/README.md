@@ -1,7 +1,6 @@
 # The AST contract
 
-Version `0.2`, 2026-09-30 (`0.1` was drafted the same day; `0.2` adds the container layout,
-unit and column handles, `units` and `unit_index`, and the `fadvise` op, §9). This directory is layer 2 of the three-layer design in
+Version `0.5`, 2026-10-02 (~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -162,13 +161,25 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
 - **V1 Names resolve.** Every `param`, dataset, namespace, channel, index, and `ref` is
   declared in scope. `at` may name a binding defined later in the same loop body.
 - **V2 `gpus` is reserved.** It may not appear in `params`.
-- **V3 `at` decreases.** A self-reference (`at` on the binding being defined) or a forward
-  reference must use an index of the form `{sub: [{index: i}, e]}` where `i` is the innermost
-  loop index and `e` is provably `≥ 1`: a positive literal, or a draw from a distribution with
-  `min ≥ 1` (`uniform` with `lo ≥ 1`, `empirical` with all values `≥ 1`, a `mixture` whose
-  non-null arms all qualify). The runtime guard for a null arm is the author's `cond`. An `at`
-  whose index falls below the loop's `from` evaluates the binding's non-recursive arm (the
-  "fresh draw" of `ABSTRACTS.md` §9.5).
+- **V3 `at` decreases.** An `at` on a binding of the same loop body (the binding being
+  defined, one defined later, or one defined earlier in that body; ~~a self-reference or a
+  forward reference~~ the wording until contract 0.5, which the runner never followed: a
+  chain through an earlier binding looking ahead would not end, `DESIGN_REVIEW.md` §3.57)
+  must use an index of the form `{sub: [{index: i}, e]}` where `i` is the innermost loop
+  index and `e` is provably `≥ 1`. A binding of an enclosing body is free. Provably `≥ k`,
+  for `k` 1 or 0: a literal `≥ k`; a `ref`, `param`, or `draw` whose distribution has `min ≥
+  k` (`uniform` with `lo ≥ k`, `normal` or `lognormal` with `min ≥ k`, `empirical` with all
+  values `≥ k`, a `mixture` whose non-null arms all qualify, `const` of such a term); `add`
+  of a term `≥ k` and a term `≥ 0` (contract 0.5); and for `k = 0` also any `mod` (the
+  runner's `mod` is Euclidean, so the result is in `[0, |b|)`) and a loop index whose loop
+  has no `from` or a `from` provably `≥ 0` (steps are positive; `parallel` and `loader`
+  indices start at 0). Nothing else qualifies (`mul`, `min`, `max`, `div`, `when`, a
+  parameter with a literal default), so `kp @ (r − (r mod d + 1))` is accepted and `x @ (r −
+  2·d)` is not. The runtime guard for a null arm is the author's `cond`. An `at` whose index
+  falls below the loop's `from` evaluates the binding's non-recursive arm (the "fresh draw"
+  of `ABSTRACTS.md` §9.5). The rule is judged on the document's parameter defaults; the
+  runner judges it again on the parameter values in effect, before a run or a dry run, since
+  a value may replace a distribution with one whose minimum is lower.
 - **V4 Sizes are computed, never observed.** For a namespace with `size: as_written`, an
   object's size is the sum of the write lengths in the sequence that created it. `until_eof`
   on such an object is allowed only through the handle binding those writes used, which pins
@@ -350,3 +361,10 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
   committed AST was regenerated; no fingerprint changed. The namespace manifest's format
   is unchanged: it has recorded the writer's seed, instance count, and parameters since
   2026-09-30, and they are now compared. Reasoning in `DESIGN_REVIEW.md` §3.54.
+- **0.5** (2026-10-02): rule V3 widened (§4): the `at` offset may be an expression provably
+  `≥ 1` (`add` of a term `≥ 1` and one `≥ 0`, where `mod` and a nonnegative loop index are
+  `≥ 0`), and the rule is stated for every binding of the same loop body, which is what the
+  runner enforced all along. Every 0.4 document is a valid 0.5 document after the version
+  string. Every committed AST was regenerated; three fingerprints changed, not from the
+  contract but because the three KV-cache abstracts now draw `keep` once per round of open
+  conversations with the new form. Reasoning in `DESIGN_REVIEW.md` §3.57.

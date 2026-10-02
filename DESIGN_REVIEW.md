@@ -2867,13 +2867,106 @@ generated itself (0 of 220 returning requests, 37 for the writer) and loaded abo
 chunk more for each conversation it otherwise held whole. A real second engine holds its
 own replies, as the abstract has it.
 
-**Not done.** One `keep` draw per round of open conversations, which the bursts call for:
+**Not done.** ~~One `keep` draw per round of open conversations, which the bursts call for:
 `kp @ (r − (r % d + 1))` is refused by the validator (the offset of an `at` must be
 provably at least one, and `d` may be `none`), and widening that rule is a contract
-change. The wire counts under the replay (the tables of `ABSTRACTS.md` §8 are the
-synthetic load's). More than one request in flight (`--concurrency`), a second engine on
-the store at the same time, a model with a longer context, and a `keep` measured at
-another ratio of GPU memory to open conversations.
+change.~~ (Done, §3.57, contract 0.5.) The wire counts under the replay (the tables of
+`ABSTRACTS.md` §8 are the synthetic load's). More than one request in flight
+(`--concurrency`), a second engine on the store at the same time, a model with a longer
+context, and a `keep` measured at another ratio of GPU memory to open conversations.
+
+### 3.57 One `keep` draw per round: the `at` offset as an expression (contract 0.5, built 2026-10-02)
+
+The user agreed in §3.56 to widen rule V3 so that the per-round draw can be written. Built
+the same day: contract 0.5, the three KV-cache abstracts changed under it, two of the three
+pairs accepted.
+
+**The need.** The engine's GPU memory is one state shared by its open conversations: when it
+runs short, every conversation is cut and every one of them loads in the same round. `keep`
+drawn per request cannot say that (§3.56: loads per round of eight requests have a standard
+deviation of 13.9 in the trace, 9.8 under independent draws), and the reuse distance of the
+reads was the one row outside in each KV pair. The draw a round shares is the one made at
+the last request of the previous round: `kp @ (r − (r mod d + 1))`, where `d` is the one
+reuse distance and the rounds are the blocks of `d` requests. Under the `cont` guard `d` is
+never `none` and `r ≥ d`, so the index is never below the loop's start.
+
+**The rule as it was, and as it is.** V3 read: a self- or forward-reference's index is `i −
+e` with `e` a positive literal, or a draw or parameter whose distribution has `min ≥ 1`. Two
+things were found while widening it:
+
+- **The three validators disagreed on whom the rule binds.** The README and the builder said
+  the binding being defined or one defined later; the runner and `check.py` applied it to
+  *every* `let` of the same loop body, earlier ones included (`scope.forward` is the body's
+  whole set of names). The runner's reading is the sound one: `x = y @ (i + 1)` with `y`
+  earlier in the body and `y = x @ (i − 1)` is a cycle (`x @ i → y @ (i + 1) → x @ i`) that
+  the self/forward reading lets through. Every committed AST passed the runner, so the
+  README and the builder now say what the runner always enforced: **on a binding of the same
+  loop body, itself included,** the index is `i − e` with `e` provably `≥ 1`. A binding of
+  an enclosing body is free, as before. The runner's error text changed from "self- or
+  forward-reference" to "names a binding of this loop body".
+- **"Provably `≥ 1`" is now one predicate with a threshold,** `at_least(e, k)` for `k ∈ {0,
+  1}`, in all three (`builder.py`, `check.py`, `validate.rs`): a literal `≥ k`; a `ref`,
+  `param`, or `draw` whose distribution has `min ≥ k` (the forms already known: `uniform`'s
+  `lo`, `normal` and `lognormal`'s `min`, every `empirical` value, every non-null `mixture`
+  arm, `const`); and **`add` of a term `≥ k` and a term `≥ 0`.** For `k = 0` two more forms:
+  **any `mod`**, because the runner's `mod` is Euclidean (`rem_euclid`: the result is in `[0,
+  |b|)`, and `mod` by zero is an error, never a value), and **a loop index whose loop has no
+  `from` or a `from` provably `≥ 0`** (steps are checked positive at run time, so an index
+  is never below its `from`; `parallel` and `loader` indices start at 0). The scopes carry
+  the set of such indices. Nothing else: `mul`, `min`, `max`, `div`, `when`, and a parameter
+  with a literal default are not forms the rule knows, and a `sub` never is. Each is a
+  one-line addition when an abstract needs it; none does today.
+
+**What the proof judges, and a crash found on the way.** The document: parameter
+*defaults*. That was so before, and it was a hole: `--param reuse='{"const": 0}'` passed V3
+because the default's minimum is 1, and the VM then evaluated `conv @ r` while defining
+`conv @ r`, with no guard but the stack (verified: `dry-run` aborted with a stack overflow).
+Fixed here: `Params::new` runs the rules once more with the values in effect in place of the
+defaults (`validate::check_given`) and refuses before anything is evaluated, naming each
+`at`; every subcommand resolves parameters through it. The builder judges the defaults, as
+it must; `check.py` judges the document.
+
+**Contract 0.5.** The schema's `at` description says the rule; the version constant is 0.5;
+every committed AST was regenerated. Unlike 0.2 to 0.4, **three fingerprints changed**, not
+because of the contract but because `kv_cache_serving`, `kv_cache_shared`, and
+`kv_cache_shared_reader` now use the per-round draw (the goldens in `golden.rs` are
+re-recorded with the reason). The widening is backward compatible: every 0.4 document is a
+valid 0.5 document after the version string.
+
+**Against the traces** (`fit.py`'s parameters, unchanged; eight seeds for the counts, seeds
+2 to 4 as the spread for the judge):
+
+| | trace | before (seed 1; seeds) | now (seed 1; seeds) |
+|---|---|---|---|
+| `kv_cache_serving`, chunks loaded | 755 | 633 (621 to 781) | 596 (587 to 781) |
+| loads per round of 8, sd | 13.9 | 9.8 | 13.1 (10.6 to 13.4 over four seeds) |
+| `kv_cache_shared`, writer, chunks loaded | 755 | 632 (632 to 780) | 595 (595 to 781) |
+| `kv_cache_shared_reader`, chunks loaded | 1,124 | 950 (950 to 1,111) | 902 (902 to 1,113) |
+| reuse distance, read after read: distance / allowed | | 0.274 / 0.271, 0.274 / 0.256, 0.280 / 0.275 | 0.110 / 0.274, 0.096 / 0.286, 0.131 / 0.273 |
+
+The chunks stored and the `stat` counts did not move (`keep` touches only the loads). The
+bursts are there: the spread of loads per round is the trace's, and the spread between
+seeds is wider than before (587 to 781 against 621 to 781), as a shared draw makes it. Seed
+1 is a low seed in both before and after. **Verdicts:** `kv_cache_serving` and the reader
+**accepted**; the writer still **not accepted** on one row, the distance from a file's header
+write to its chunk write, which is the trace's two store threads interleaving and was
+recorded as outside in §3.52. The three tolerance files lose their `reuse distance, read
+after read` entries (the judge reports an entry recorded as outside that is within).
+Eleven of the fifteen committed pairs are now accepted, the DiskANN build and the KV writer
+are not, and two cannot be judged.
+
+**Choices made here, for the user to confirm:**
+
+- The rule binds every `let` of the same loop body (the runner's reading, documented now),
+  not only self and forward references.
+- The forms added: `add`, `mod`, a nonnegative loop index; and the forms left out.
+- A contract bump (0.5) for a widening of a validator rule, since a 0.4 validator refuses a
+  0.5 document that uses it. The alternative, calling it 0.4 and widening in place, would
+  have left committed 0.4 documents that the published 0.4 rule rejects.
+- The check of the parameters in effect lives in `Params::new`, so it is one place and no
+  subcommand can miss it, at the cost of walking the AST a second time (microseconds).
+
+**Not done.** `max` and `mul` as forms. The rest of §3.56's list.
 
 ## 4. Plan changes
 

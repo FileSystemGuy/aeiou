@@ -126,7 +126,7 @@ those belong in one place.
 |---|---|
 | Python control flow over a node; `/`; callables or foreign objects in a node | every rule in `schema/README.md` §4, on the emitted AST, with JSON-pointer paths |
 | unknown flag, errno, ioctl, whence, unit; duplicate flag; `gpus` as a param | unresolved names (a `ref` never bound, an unknown dataset) |
-| `x @ e` on the binding being defined, or one defined later, unless `e` is `i - d` with `d` provably ≥ 1 (V3) | `consume` outside any loop (V6) |
+| `x @ e` on a binding of the same loop body (itself included) unless `e` is `i - d` with `d` provably ≥ 1: a literal, a draw with that minimum, or `add` of such a term and one provably ≥ 0 (a `mod`, a loop index, a draw with minimum ≥ 0; contract 0.5) (V3) | `consume` outside any loop (V6) |
 | `until_eof` on an `as_written` object through a different binding (V4) | AST size |
 | index shadowing; `every` outside a loop; channel not declared; namespace fields vs pattern | |
 | three identical sibling statements (lint) | |
@@ -354,8 +354,9 @@ each pair's file):
 | `ckpt_restore`, three traces | accepted | |
 | `vdb_search_diskann`, with and without the node cache | accepted | depth not judged (no `--chain-gap-us`) |
 | `vdb_build_diskann` | not accepted, 9 rows | run-length histograms (unmodeled small files and headers), write-after-write (a header puts the stream's writes off block boundaries), two reuse distances (cause not isolated) |
-| `kv_cache_serving` | not accepted, 1 row | the reuse distance of the reads, 0.274 against 0.271: the traced loads come in bursts; fan-out unseen (6 rows before the ShareGPT replay, `DESIGN_REVIEW.md` §3.56) |
-| `kv_cache_shared`, writer and reader | not accepted, 2 rows and 1 | the same row (0.274 against 0.256, 0.280 against 0.275), and for the writer the distance from a file's header write to its chunk write (thread order); run length and fan-out unseen (a thread pool); 7 and 4 rows before the replay |
+| `kv_cache_serving` | accepted | fan-out unseen (a thread pool); the reuse distance of the reads was outside until `keep` was drawn once per round of conversations (`DESIGN_REVIEW.md` §3.57; 1 row before, 6 before the ShareGPT replay, §3.56) |
+| `kv_cache_shared`, writer | not accepted, 1 row | the distance from a file's header write to its chunk write (two store threads); run length and fan-out unseen (a thread pool); 2 rows before §3.57, 7 before the replay |
+| `kv_cache_shared`, reader | accepted | run length and fan-out unseen; 1 row before §3.57, 4 before the replay |
 | `model_load`, `vdb_search_ivf` | nothing judged | the application reads through a mapping: every row is unseen. The exact call counts of their tests and `faults.py` are the evidence for these two. |
 
 **Checked against the runner (2026-10-01).** The runner under `strace` is an application

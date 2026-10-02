@@ -128,7 +128,12 @@ each is a recorded decision and the golden tests pin them.
   2026-10-01): the value is a pure function of those, so nothing is stored that the
   definition does not say, and a chain that steps back one index per iteration
   (`ckpt_restore`'s `bst @ k-1`) costs one link per iteration instead of a walk to the
-  start, with recursion one link deep. Before, a 900-item chain overflowed the stack.
+  start, with recursion one link deep. Before, a 900-item chain overflowed the stack. The
+  index may be any expression the validator proves to step back (rule V3, contract 0.5:
+  `kp @ (r − (r mod d + 1))` is the draw at the last request of the previous round of `d`);
+  since the proof is on the document's parameter defaults, `Params::new` runs the rules
+  again on the values in effect and refuses, before the gate, a `--param` or parameter file
+  that lowers a distribution's minimum under an `at` (§3.57; it was a stack overflow).
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which

@@ -1159,7 +1159,7 @@ workload kv_cache_serving {
   param sys_local    = true                     # the engine holds the system prompts in GPU memory [config]
   param reuse        = mixture(0.15: none,      # new conversation: the share of first turns, measured (ShareGPT 0.148)
                                0.85: const(40))                 # requests ago: the conversations a slot has open [config: load]
-  param keep         = empirical(0: 91, 1_000_000: 9)           # tokens of a returning conversation still in the engine [config: GPU KV memory]
+  param keep         = empirical(0: 91, 1_000_000: 9)           # tokens of a returning conversation still in the engine, one draw per round [config: GPU KV memory]
   param retain       = 5_000                    # requests; older chunks are evicted [config: capacity]
   param context      = 8192                     # tokens; a conversation that would not fit starts anew [config: model]
   param turn_in      = empirical(1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944)      # new prompt tokens, measured (ShareGPT)
@@ -1186,7 +1186,8 @@ workload kv_cache_serving {
                      else { size(sp) % $chunk_bytes / bytes per token } + inn
         let stored = ptoks / $chunk_tokens                          # whole chunks only
         let had    = when (cont && d <= $retain) { stored @ (r - d) } else { 0 }
-        let held   = when (cont) { min(prior, kp) / $chunk_tokens } else { 0 }     # whole chunks the engine kept, from the start
+        let held   = when (cont) { min(prior, kp @ (r - (r % d + 1))) / $chunk_tokens } else { 0 }   # whole chunks the engine kept, from the start;
+                                                                    # the round's shared draw: the one at the last request of the previous round (§3.57)
         let load   = max(had - held, 0)
 
         phase(when (r < $warm) { "warm" } else { "serve" }) {
@@ -1278,10 +1279,17 @@ what the engine keeps were waiting for; reasoning in `DESIGN_REVIEW.md` §3.56.
   the trace and in the abstract.
 - **Against the trace** at the parameters `fit.py` takes from the run's logs
   (`fitted.params.json`): 370 chunks stored against 382 (355 to 389 over eight seeds) and
-  755 loaded against 633 (621 to 781). `aeiou-trace compare --judge`: one row outside,
-  the reuse distance of the reads, 0.274 against 0.271 allowed (six rows before the
-  replay). The trace's loads come in bursts, because the open conversations share the
-  engine's memory and lose it together; the abstract draws `keep` per request.
+  755 loaded against ~~633 (621 to 781)~~ 596 (587 to 781). ~~`aeiou-trace compare
+  --judge`: one row outside, the reuse distance of the reads, 0.274 against 0.271 allowed
+  (six rows before the replay). The trace's loads come in bursts, because the open
+  conversations share the engine's memory and lose it together; the abstract draws `keep`
+  per request.~~ The trace's loads come in bursts, because the open conversations share
+  the engine's memory and lose it together; since 2026-10-02 the abstract draws `keep`
+  once per round of the open conversations (`kp @ (r − (r mod d + 1))`, the draw at the
+  last request of the previous round; `DESIGN_REVIEW.md` §3.57), and the loads per round
+  of eight spread as the trace's do (standard deviation 13.1 against 13.9; 9.8 with a draw
+  per request). `aeiou-trace compare --judge`: **accepted**, no row outside (one before,
+  the reuse distance of the reads, 0.274 against 0.271 allowed; six before the replay).
 
 Notes on the shape:
 - The `warm` prefix of the index space exists so that `conv @ (r − d)` has something to reach
@@ -1350,14 +1358,18 @@ reasoning in `DESIGN_REVIEW.md` §3.52.
   | | writer trace | `kv_cache_shared` | reader trace | `kv_cache_shared_reader` |
   |---|---|---|---|---|
   | chunks stored (`rename`) | 370 | 381 (364 to 389) | 0 | 0 |
-  | chunks loaded | 755 | 632 (632 to 780) | 1,124 | 950 (950 to 1,111) |
+  | chunks loaded | 755 | ~~632 (632 to 780)~~ 595 (595 to 781) | 1,124 | ~~950 (950 to 1,111)~~ 902 (902 to 1,113) |
   | `stat` | 1,418 | 1,336 (1,336 to 1,480) | 1,564 | 1,499 (1,499 to 1,631) |
 
   The engine on this backend stored, held, and loaded exactly what the engine on local
-  disk did. `--judge`: two rows outside for the writer (the reuse distance of the reads,
+  disk did. `--judge`: ~~two rows outside for the writer (the reuse distance of the reads,
   as on local disk, and the distance from a file's header write to its chunk write, which
   other threads' calls separate in 231 of 370 stores) and one for the reader (the same
-  reuse distance); seven and four before. The traced reader never held a reply of its own,
+  reuse distance); seven and four before.~~ with `keep` drawn once per round (§3.57,
+  2026-10-02) one row outside for the writer, the distance from a file's header write to
+  its chunk write, which other threads' calls separate in 231 of 370 stores, and the
+  **reader accepted**; two and one before, seven and four before the replay. The traced
+  reader never held a reply of its own,
   since its history was the writer's, and loaded about one chunk more per conversation it
   otherwise held whole; a real second engine holds its replies, as the abstract does.
 - **On the wire** (`mountstats`; the store evicted from the client's cache between the
@@ -1396,10 +1408,15 @@ reasoning in `DESIGN_REVIEW.md` §3.52.
   is gone (2026-10-02): the traced backend issues none. The backend with no index is
   `kv_cache_shared`, from its own trace.
 - ~~**What the engine holds is a threshold in requests** (`local`), where the real one is GPU
-  memory in bytes.~~ **What the engine holds is drawn per request** (`keep`, 2026-10-02),
+  memory in bytes.~~ ~~**What the engine holds is drawn per request** (`keep`, 2026-10-02),
   where the real one is GPU memory shared by the open conversations: the draws of
-  neighbouring requests are independent, the engine's are not. The system prompts' chunks
-  are read only with `sys_local = false` (the traced engine lost them in 8 of 220 returns).
+  neighbouring requests are independent, the engine's are not.~~ **What the engine holds is
+  drawn once per round of the open conversations** (`keep`, later on 2026-10-02, §3.57):
+  the GPU's memory is one state for all of them, so when it runs short they all load in the
+  same round. The round's draw is `kp @ (r − (r mod d + 1))`, the draw at the last request
+  of the previous round, under the `at` rule as widened in contract 0.5. The system
+  prompts' chunks are read only with `sys_local = false` (the traced engine lost them in 8
+  of 220 returns).
 - **Conversations are served in turn** (one `reuse` distance). Real users return after
   lags of every length; a second distance forks conversations ("Replay", above).
 - **The system prompts are a dataset** with a directory to itself (V13), where LMCache keeps
@@ -1496,6 +1513,9 @@ the index space exists.
 refer to itself at a strictly smaller index. The validator checks that every self-reference
 decreases the index (syntactically: the index expression is `i − e` with `e ≥ 1`).
 **Decided 2026-09-30**; `recent` is gone from the model. AST form: `{at: {ref: x, index: e}}`.
+Since contract 0.5 (2026-10-02) the rule covers every binding of the same loop body and `e`
+may be an expression provably `≥ 1`, such as `r mod d + 1` (`schema/README.md` V3,
+`DESIGN_REVIEW.md` §3.57).
 
 ### 9.6 `regions`: a dataset of fixed-slot regions inside one file
 
@@ -1633,8 +1653,9 @@ with slot.loop("r", P.warm + P.requests) as r:
 ```
 
 `slot.ref("conv").at(r - d)` builds an `At` node whose index is `r − d`; the builder rejects
-an `At` on the binding being defined unless the index expression is provably smaller than the
-loop index (here `d ≥ 1` when `cont` holds), which is the validator rule of §9.5 applied at
+an `At` on a binding of the same loop body (the one being defined included) unless the index
+expression is provably smaller than the loop index (here `d ≥ 1` when `cont` holds; `r mod d
++ 1` qualifies since contract 0.5), which is the validator rule of §9.5 applied at
 construction time. Everything else in §1–§8 (`when`, `phase`, `regions`, `namespace`,
 parameter arrays, `expect`) is a node type plus a builder method; nothing needs Python to run
 the workload.
