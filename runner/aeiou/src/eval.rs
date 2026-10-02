@@ -172,6 +172,12 @@ impl Params {
             check_kind(name, &param.default, &v, "--param")?;
             values.insert(name.clone(), v);
         }
+        // rule V3 again on what was given: a distribution whose minimum is below the default's
+        // can turn an `at` offset into zero (§3.57)
+        let errs = crate::validate::check_given(ast, &values);
+        if !errs.is_empty() {
+            bail!("invalid with the parameters given:\n  {}", errs.join("\n  "));
+        }
         Ok(Params { values })
     }
 }

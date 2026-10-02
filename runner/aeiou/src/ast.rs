@@ -1,4 +1,4 @@
-//! The AST contract (`schema/abstract-ast.schema.json`, v0.4) as Rust types.
+//! The AST contract (`schema/abstract-ast.schema.json`, v0.5) as Rust types.
 //!
 //! Every node, expression, distribution, and handle is externally tagged: a JSON object with
 //! exactly one key naming its kind. `deny_unknown_fields` on every struct and serde's enum
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.4";
+pub const AST_VERSION: &str = "0.5";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

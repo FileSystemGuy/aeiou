@@ -14,7 +14,8 @@ The lengths are those of a public chat replay (ShareGPT through the same server,
 builder/traces/kv_cache_serving/replay.py). A slot serves its open conversations in turn:
 `reuse` has one distance, so a request has at most one continuation.
 
-Exercises: `at` chains (§9.5), a mixture with a none arm, expression-selected phase names, a
+Exercises: `at` chains (§9.5), an `at` offset that is an expression (`kp @ (r − (r mod d + 1))`,
+rule V3 as widened in contract 0.5), a mixture with a none arm, expression-selected phase names, a
 chunk-realized dataset, a namespace with a size expression.
 """
 from aeiou import *
@@ -38,7 +39,8 @@ w.param("reuse", mixture((0.15, none), (0.85, const(40))),
             "a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one")
 w.param("keep", empirical({0: 91, 1_000_000: 9}), unit="tokens",
         doc="[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, "
-            "counted from its start: all of it when the draw exceeds its length, else the chunks past them are read")
+            "counted from its start: all of it when the draw exceeds its length, else the chunks past them are read. Drawn once per "
+            "round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together")
 w.param("retain", 5000, unit="count", doc="older chunks are evicted [config: capacity]")
 w.param("context", 8192, unit="tokens", doc="[config: model] a conversation whose next prompt and reply would not fit starts anew")
 w.param("turn_in", empirical([1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944]), unit="tokens",
@@ -85,7 +87,9 @@ with w.actor("gpu") as gpu:
             ptoks = slot.let("ptoks", when(cont, prior, (sp.size % P.chunk_bytes) // token_bytes) + inn)
             stored = slot.let("stored", ptoks // P.chunk_tokens)       # whole chunks only
             had = slot.let("had", when(cont & (d <= P.retain), slot.ref("stored").at(r - d), 0))
-            held = slot.let("held", when(cont, min_(prior, kp) // P.chunk_tokens, 0))   # whole chunks the engine kept, from the start
+            # whole chunks the engine kept, from the start: one `keep` draw per round of the d open conversations, the one
+            # made at the last request of the previous round, so a round's loads come together (§3.57)
+            held = slot.let("held", when(cont, min_(prior, slot.ref("kp").at(r - (r % d + 1))) // P.chunk_tokens, 0))
             load = slot.let("load", when(had > held, had - held, 0))
 
             with slot.phase(when(r < P.warm, "warm", "serve")):

@@ -1,5 +1,5 @@
 {
-  "ast": "0.4",
+  "ast": "0.5",
   "name": "kv_cache_serving",
   "doc": "One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one.",
   "params": {
@@ -86,7 +86,7 @@
         }
       },
       "unit": "tokens",
-      "doc": "[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are read"
+      "doc": "[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are read. Drawn once per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together"
     },
     "retain": {
       "default": 5000,
@@ -707,7 +707,31 @@
                                       "ref": "prior"
                                     },
                                     {
-                                      "ref": "kp"
+                                      "at": {
+                                        "ref": "kp",
+                                        "index": {
+                                          "sub": [
+                                            {
+                                              "index": "r"
+                                            },
+                                            {
+                                              "add": [
+                                                {
+                                                  "mod": [
+                                                    {
+                                                      "index": "r"
+                                                    },
+                                                    {
+                                                      "ref": "d"
+                                                    }
+                                                  ]
+                                                },
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      }
                                     }
                                   ]
                                 },
@@ -1099,9 +1123,9 @@
   "provenance": {
     "generator": {
       "script": "kv_cache_serving.py",
-      "sha256": "6ebdbdb26d2e3865a98e5d0f7f0a3a50b0c3df932c3c4fa6a2edc454ded91d75",
+      "sha256": "70026ef41cf8ea4782506047b9195b751b3edf22d11c9e7b3d260486a4255153",
       "builder_version": "0.1.0",
-      "git": "7c665988ff1c-dirty"
+      "git": "cf63737dfbcd-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -1109,6 +1133,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "fa57aadf5bbc815be07ec67a50bb35d626e6a27730b1220260e31e0304d72187"
+    "ast_sha256": "5b1ffc0c77ca06a85071c62ec8004148cfc2ec5ab6fcdcf4bb5a394eb40918ae"
   }
 }

@@ -170,7 +170,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.4"
+    AST_VERSION = "0.5"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     BACKENDS = ("sync", "sync-direct", "io_uring", "io_uring-direct", "posix-aio", "posix-aio-direct",
@@ -489,6 +489,7 @@ class Cursor:
     def __init__(self, wl: Workload, body: list):
         self.wl = wl
         self._frames = [_Frame(body, (), {}, set(), set(), "actor")]
+        self._nonneg_indices: set[str] = set()   # indices provably >= 0 (V3); names are distinct in scope
 
     # ---- frame plumbing ----
     @property
@@ -556,46 +557,63 @@ class Cursor:
         return Ref(check_ident(name, "binding"))
 
     def _check_at(self, binding: str, value):
-        """Rule V3 at construction: a self- or forward-reference `x @ e` needs e = i - d with
-        d provably >= 1, i the innermost index."""
+        """Rule V3 at construction: an `x @ e` on a binding of the same loop body (the one being
+        defined, one defined later, or one defined earlier in that body) needs e = i - d with d
+        provably >= 1, i the innermost index. A binding of an enclosing body is free."""
+        same_body = {n["let"]["name"] for n in self._top.body if "let" in n}
         for n in walk(value):
             if not isinstance(n, At):
                 continue
             target = n.name
-            is_self, is_forward = target == binding, self._lookup(target) is None
-            if not (is_self or is_forward):
+            if not (target == binding or target in same_body or self._lookup(target) is None):
                 continue
             if not self._top.indices:
                 raise BuildError(f"let {binding}: `{target} @` outside any loop")
             i = self._top.indices[-1]
             idx = n.index
             ok = (isinstance(idx, Op) and idx.kind == "sub" and isinstance(idx.args[0], Index)
-                  and idx.args[0].name == i.name and self._positive(idx.args[1]))
+                  and idx.args[0].name == i.name and self._at_least(idx.args[1], 1))
             if not ok:
-                raise BuildError(f"let {binding}: `{target} @ e` refers to the binding being "
-                                 f"defined (or one defined later), so e must be `{i.name} - d` "
-                                 f"with d provably >= 1 (a positive literal, or a draw from a "
-                                 f"distribution whose minimum is >= 1); got {ast_of(idx)}")
+                raise BuildError(f"let {binding}: `{target} @ e` refers to a binding of this loop "
+                                 f"body, so e must be `{i.name} - d` with d provably >= 1 (a "
+                                 f"positive literal, a draw from a distribution whose minimum is "
+                                 f">= 1, or `add` of such a term and one provably >= 0: a `mod`, "
+                                 f"a loop index, a literal, a draw with minimum >= 0); got {ast_of(idx)}")
 
-    def _positive(self, e) -> bool:
+    def _at_least(self, e, k: int) -> bool:
+        """`e` provably >= k, for k in {0, 1} (rule V3). Judged on the defaults; the runner judges
+        the same forms again on what it was given."""
         if isinstance(e, bool):
             return False
         if isinstance(e, (int, float)):
-            return e >= 1
+            return e >= k
         if isinstance(e, Ref):
             v = self._lookup(e.name)
-            return v is not None and self._positive(v)
+            return v is not None and self._at_least(v, k)
         if isinstance(e, Param):
             d = self.wl._param_specs.get(e.name, {}).get("default")
-            return isinstance(d, Dist) and (d.lower_bound() or 0) >= 1
+            return isinstance(d, Dist) and self._dist_at_least(d, k)
         if isinstance(e, Draw):
             d = e.dist
             if isinstance(d, Param):
-                return self._positive(d)
-            return isinstance(d, Dist) and (d.lower_bound() or 0) >= 1
+                return self._at_least(d, k)
+            return isinstance(d, Dist) and self._dist_at_least(d, k)
         if isinstance(e, Dist):
-            return (e.lower_bound() or 0) >= 1
+            return self._dist_at_least(e, k)
+        if isinstance(e, Op) and e.kind == "add":
+            a, b = e.args
+            return ((self._at_least(a, k) and self._at_least(b, 0))
+                    or (self._at_least(a, 0) and self._at_least(b, k)))
+        if k == 0:
+            if isinstance(e, Op) and e.kind == "mod":          # Euclidean in the runner: in [0, |b|)
+                return True
+            if isinstance(e, Index):                            # steps are positive: index >= from
+                return e.name in self._nonneg_indices
         return False
+
+    def _dist_at_least(self, d: Dist, k: int) -> bool:
+        lb = d.lower_bound()
+        return lb is not None and lb >= k
 
     # ---- control statements ----
     @contextlib.contextmanager
@@ -604,8 +622,12 @@ class Cursor:
         idx = self._new_index(index)
         body: list = []
         node = {"index": index}
+        self._nonneg_indices.discard(index)
         if start is not None:
-            node["from"] = ast_of(lift(start, "loop start"))
+            start = lift(start, "loop start")
+            node["from"] = ast_of(start)
+        if start is None or self._at_least(start, 0):
+            self._nonneg_indices.add(index)
         node["to"] = ast_of(lift(to, "loop bound"))
         if step is not None:
             node["step"] = ast_of(lift(step, "loop step"))
@@ -619,6 +641,7 @@ class Cursor:
         """`width` concurrent sub-actors, index 0..width, joined on exit. Yields a sub-cursor
         whose `.index` is the sub-actor index."""
         idx = self._new_index(index)
+        self._nonneg_indices.add(index)
         body: list = []
         self._emit({"parallel": {"index": index, "width": ast_of(lift(width, "width")), "body": body}})
         with self._push(body, "parallel", idx):
@@ -631,6 +654,7 @@ class Cursor:
         whose `.index` is the batch index."""
         check_ident(name, "loader")
         idx = self._new_index(index)
+        self._nonneg_indices.add(index)
         if name in self._top.channels:
             raise BuildError(f"channel {name!r} already declared")
         self._top.channels.add(name)

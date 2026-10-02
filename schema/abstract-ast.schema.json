@@ -12,7 +12,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.4",
+      "const": "0.5",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -372,7 +372,7 @@
                   "$ref": "#/$defs/expr"
                 }
               },
-              "description": "The value binding `ref` takes at another index of its enclosing loop. A self-reference must use an index of the form {sub: [{index: i}, e]} with e >= 1."
+              "description": "The value binding `ref` takes at another index of its enclosing loop. On a binding of the same loop body (itself included) the index must be {sub: [{index: i}, e]} with e provably >= 1: a literal, a draw or parameter whose distribution has that minimum, or `add` of such a term and one provably >= 0 (a `mod`, a loop index, a literal, a draw with minimum >= 0); rule V3, contract 0.5."
             },
             "actor": {
               "type": "string",

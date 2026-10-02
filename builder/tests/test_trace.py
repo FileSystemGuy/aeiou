@@ -455,8 +455,10 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     of ShareGPT, 300 requests with 8 conversations open, traced 2026-10-02. Every chunk is the
     same six calls around one `read` or `write`. At the parameters `fit.py` takes from the
     run's two logs the abstract stores 382 chunks where the engine stored 370 (two of them
-    the system prompts', a dataset here) and reads 633 where it read 755 (seed 1; over eight
-    seeds it reads 621 to 781) (`ABSTRACTS.md` §8)."""
+    the system prompts', a dataset here) and reads 596 where it read 755 (seed 1; over eight
+    seeds it reads 587 to 781: one `keep` draw per round of conversations, §3.57, makes the
+    loads come in bursts, so the seeds spread wider than with a draw per request)
+    (`ABSTRACTS.md` §8)."""
     kit = BUILDER / "traces" / "kv_cache_serving"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
@@ -467,7 +469,7 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     for c in (tc, dc):                                    # one open, fstat, ioctl, lseek and close per data call
         assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"] == c["read"] + c["write"]
     assert (tc["write"], dc["write"]) == (370, 382)
-    assert (tc["read"], dc["read"]) == (755, 633)
+    assert (tc["read"], dc["read"]) == (755, 596)
     assert t["request_size"] == {k: {**v, "n": t["request_size"][k]["n"], "buckets": [[3145728, t["request_size"][k]["n"]]]} for k, v in t["request_size"].items()}
     assert d["request_size"]["read"]["buckets"][0][0] == d["request_size"]["write"]["buckets"][0][0] == 3145728
     assert set(tc) - set(dc) == {"mkdir", "stat"}         # of the cache directory, once at start
@@ -522,9 +524,9 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     (tw, dw), (tr, dr) = got["writer"], got["reader"]
     assert (tw["rename"], dw["rename"]) == (370, 381) and "rename" not in tr and "rename" not in dr
     assert (tw["write"], dw["write"]) == (2 * 370, 2 * 381) and "write" not in tr and "write" not in dr
-    assert (tw["open"] - tw["rename"], dw["open"] - dw["rename"]) == (755, 632)      # chunks loaded by the writer
-    assert (tr["open"], dr["open"]) == (1124, 950)                                    # and by the reader
-    assert (tw["read"], tr["read"]) == (2 * 755, 2 * 1124) and (dw["read"], dr["read"]) == (2 * 632, 2 * 950)
+    assert (tw["open"] - tw["rename"], dw["open"] - dw["rename"]) == (755, 595)      # chunks loaded by the writer
+    assert (tr["open"], dr["open"]) == (1124, 902)                                    # and by the reader
+    assert (tw["read"], tr["read"]) == (2 * 755, 2 * 1124) and (dw["read"], dr["read"]) == (2 * 595, 2 * 902)
     assert (tw["stat"], dw["stat"]) == (1418, 1336)       # 1,193 hits and a miss in most requests
     assert (tr["stat"], dr["stat"]) == (1564, 1499)       # every chunk of every prompt, and the directory once in the trace
     # the same parameter values in both files: the reader is run with the writer's; and they are the local-disk
@@ -593,10 +595,11 @@ KIT_PAIRS = [
     ("vdb_search_diskann", "trace.nocache", "vdb_search_diskann", "fitted.nocache.params.json", 1, "accepted"),
     ("vdb_search_diskann", "trace.cache", "vdb_search_diskann", "fitted.cache.params.json", 1, "accepted"),
     ("vdb_build_diskann", "trace", "vdb_build_diskann", "fitted.params.json", 1, "not accepted"),
-    # the three KV-cache pairs are the ShareGPT replay (DESIGN_REVIEW.md §3.56): one row outside each, by 0.003 to 0.018, and the writer's store order
-    ("kv_cache_serving", "trace", "kv_cache_serving", "fitted.params.json", 1, "not accepted"),
+    # the three KV-cache pairs are the ShareGPT replay (DESIGN_REVIEW.md §3.56); with one `keep` draw per round of
+    # conversations (§3.57) the reuse distance is within, and only the writer's store order (two threads) stays outside
+    ("kv_cache_serving", "trace", "kv_cache_serving", "fitted.params.json", 1, "accepted"),
     ("kv_cache_shared", "writer.trace", "kv_cache_shared", "fitted.params.json", 1, "not accepted"),
-    ("kv_cache_shared", "reader.trace", "kv_cache_shared_reader", "fitted.reader.params.json", 1, "not accepted"),
+    ("kv_cache_shared", "reader.trace", "kv_cache_shared_reader", "fitted.reader.params.json", 1, "accepted"),
 ]
 
 

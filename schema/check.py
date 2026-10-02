@@ -150,7 +150,8 @@ class Check:
         for k in ("from", "to", "step"):
             if k in a:
                 self.expr(a[k], p + [k], scope)
-        self.body(a["body"], p + ["body"], scope.with_index(a["index"]))
+        nonneg = "from" not in a or self.at_least(a["from"], 0, scope)
+        self.body(a["body"], p + ["body"], scope.with_index(a["index"], nonneg))
 
     def n_parallel(self, a, p, scope):
         self.expr(a["width"], p + ["width"], scope)
@@ -369,39 +370,52 @@ class Check:
             return
         loop_index = scope.indices[-1]
         ok = (isinstance(idx, dict) and "sub" in idx and idx["sub"][0] == {"index": loop_index}
-              and self.positive(idx["sub"][1], scope))
+              and self.at_least(idx["sub"][1], 1, scope))
+        # a binding of the same loop body: the one being defined, or any `let` of this body
         if binding == name or name in scope.forward:
             if not ok:
-                self.err(p, f"self- or forward-reference `{name} @` must use index "
+                self.err(p, f"`{name} @` names a binding of this loop body, so its index must be "
                             f"{{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1")
         self.expr(idx, p + ["index"], scope)
 
-    def positive(self, e, scope):
-        """e provably >= 1: a positive literal, or a draw/param/binding whose distribution has
-        min >= 1 (uniform lo >= 1, empirical values all >= 1); mixtures need every non-null arm to."""
+    def at_least(self, e, k, scope):
+        """e provably >= k, k in {0, 1} (rule V3): a literal >= k; a ref/param/draw whose
+        distribution has min >= k (uniform lo, normal/lognormal min, every empirical value, every
+        non-null mixture arm, const); `add` of a term >= k and a term >= 0. For k = 0 also any
+        `mod` (Euclidean: the result is in [0, |b|)) and a loop index whose `from` is absent or
+        provably >= 0 (steps are positive; `parallel` and `loader` indices start at 0)."""
         if isinstance(e, (int, float)) and not isinstance(e, bool):
-            return e >= 1
+            return e >= k
         if not isinstance(e, dict):
             return False
-        k, a = next(iter(e.items()))
-        if k == "ref":
+        kind, a = next(iter(e.items()))
+        if kind == "ref":
             v = scope.lookup(a)
-            return v is not None and self.positive(v, scope)
-        if k == "param":
+            return v is not None and self.at_least(v, k, scope)
+        if kind == "param":
             d = self.ast["params"].get(a, {}).get("default")
-            return isinstance(d, dict) and self.positive(d, scope)
-        if k == "draw":
-            return self.positive(a, scope)
-        if k in ("uniform",):
-            return isinstance(a["lo"], (int, float)) and a["lo"] >= 1
-        if k in ("normal", "lognormal"):
-            return isinstance(a.get("min"), (int, float)) and a["min"] >= 1
-        if k == "empirical":
-            return all(isinstance(v, (int, float)) and v >= 1 for v in a["values"])
-        if k == "mixture":
-            return all(arm["dist"] is None or self.positive(arm["dist"], scope) for arm in a)
-        if k == "const":
-            return self.positive(a, scope)
+            return isinstance(d, dict) and self.at_least(d, k, scope)
+        if kind == "draw":
+            return self.at_least(a, k, scope)
+        if kind == "uniform":
+            return isinstance(a["lo"], (int, float)) and a["lo"] >= k
+        if kind in ("normal", "lognormal"):
+            return isinstance(a.get("min"), (int, float)) and a["min"] >= k
+        if kind == "empirical":
+            return all(isinstance(v, (int, float)) and v >= k for v in a["values"])
+        if kind == "mixture":
+            return all(arm["dist"] is None or self.at_least(arm["dist"], k, scope) for arm in a)
+        if kind == "const":
+            return self.at_least(a, k, scope)
+        if kind == "add":
+            x, y = a
+            return ((self.at_least(x, k, scope) and self.at_least(y, 0, scope))
+                    or (self.at_least(x, 0, scope) and self.at_least(y, k, scope)))
+        if k == 0:
+            if kind == "mod":
+                return True
+            if kind == "index":
+                return a in scope.nonneg_indices
         return False
 
     def handle(self, h, p, scope):
@@ -450,6 +464,7 @@ class Scope:
     def __init__(self, check, parent=None, fields=()):
         self.check, self.parent = check, parent
         self.bindings, self.indices = {}, list(parent.indices) if parent else []
+        self.nonneg_indices = set(parent.nonneg_indices) if parent else set()
         self.channels = parent.channels if parent else set()
         self.written = parent.written if parent else set()
         self.forward = set()
@@ -458,9 +473,13 @@ class Scope:
     def child(self):
         return Scope(self.check, self)
 
-    def with_index(self, name):
+    def with_index(self, name, nonneg=True):
         s = Scope(self.check, self)
         s.indices.append(name)
+        if nonneg:
+            s.nonneg_indices.add(name)
+        else:
+            s.nonneg_indices.discard(name)
         return s
 
     def bind(self, name, value):

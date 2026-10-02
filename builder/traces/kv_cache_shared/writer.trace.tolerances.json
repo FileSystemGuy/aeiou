@@ -12,10 +12,6 @@
   ],
   "outside": [
     {
-      "metric": "reuse distance, read after read",
-      "reason": "0.274 against 0.256 at seed 1. The engine's cache is one memory shared by the open conversations: when they are long, each of them is cut short and all of them load, so the trace's loads come in bursts and its distances are longer (median 112 MiB against 96). The abstract draws what the engine kept independently per request (DESIGN_REVIEW.md §3.56)"
-    },
-    {
       "metric": "reuse distance, write after write",
       "reason": "370 samples, a file's chunk write after its header write; in 231 of them another thread's call completed in between (two store threads and the load pool, against the dry run's one request after another)"
     }

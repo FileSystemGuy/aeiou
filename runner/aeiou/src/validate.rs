@@ -11,14 +11,14 @@ use crate::ast::*;
 pub const RESERVED_PREFIX: &str = ".aeiou";
 
 pub fn check(ast: &Ast) -> Vec<String> {
-    let mut c = Checker { ast, errors: Vec::new(), ops: BTreeMap::new() };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new() };
     c.run();
     c.errors
 }
 
 /// Validate and return the op-kind counts (as `check.py` prints them) when there are no errors.
 pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<String>> {
-    let mut c = Checker { ast, errors: Vec::new(), ops: BTreeMap::new() };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new() };
     c.run();
     if c.errors.is_empty() {
         Ok(c.ops)
@@ -27,8 +27,20 @@ pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<St
     }
 }
 
+/// The rules again with the parameters in effect in place of the defaults (§3.57): rule V3
+/// judges a `param` by its distribution's minimum, and a `--params` file or `--param` may
+/// replace that distribution with one whose minimum is lower. Without this an `at` offset
+/// of zero is a loop in the VM. Called from `Params::new`, so every subcommand gets it.
+pub fn check_given(ast: &Ast, given: &BTreeMap<String, PValue>) -> Vec<String> {
+    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new() };
+    c.run();
+    c.errors
+}
+
 struct Checker<'a> {
     ast: &'a Ast,
+    /// the parameter values in effect, when the check is on a run and not on the document
+    given: Option<&'a BTreeMap<String, PValue>>,
     errors: Vec<String>,
     ops: BTreeMap<&'static str, usize>,
 }
@@ -37,6 +49,8 @@ struct Checker<'a> {
 struct Scope<'a> {
     bindings: Vec<HashMap<&'a str, &'a ExprLike>>, // innermost last
     indices: Vec<&'a str>,
+    /// indices provably ≥ 0 (rule V3): a `loop` whose `from` is absent or provably ≥ 0, every `parallel` and `loader`
+    nonneg_indices: HashSet<&'a str>,
     fields: HashSet<&'a str>,
     forward: HashSet<&'a str>,
 }
@@ -50,7 +64,7 @@ struct ActorState<'a> {
 
 impl<'a> Scope<'a> {
     fn new(fields: HashSet<&'a str>) -> Self {
-        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), fields, forward: HashSet::new() }
+        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new() }
     }
 
     fn child(&self) -> Self {
@@ -60,9 +74,14 @@ impl<'a> Scope<'a> {
         s
     }
 
-    fn with_index(&self, name: &'a str) -> Self {
+    fn with_index(&self, name: &'a str, nonneg: bool) -> Self {
         let mut s = self.child();
         s.indices.push(name);
+        if nonneg {
+            s.nonneg_indices.insert(name);
+        } else {
+            s.nonneg_indices.remove(name);
+        }
         s
     }
 
@@ -356,7 +375,8 @@ impl<'a> Checker<'a> {
                 if let Some(e) = step {
                     self.expr(e, &p(pp, &["step"]), scope, st, None);
                 }
-                let inner = scope.with_index(index);
+                let nonneg = from.as_ref().map_or(true, |e| self.at_least(e, 0, scope));
+                let inner = scope.with_index(index, nonneg);
                 self.body(body, &p(pp, &["body"]), &inner, st);
             }
             Node::Parallel { index, width, body } => {
@@ -364,7 +384,7 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["index"]), "not an identifier");
                 }
                 self.expr(width, &p(pp, &["width"]), scope, st, None);
-                let inner = scope.with_index(index);
+                let inner = scope.with_index(index, true);
                 self.body(body, &p(pp, &["body"]), &inner, st);
             }
             Node::Loader { name, index, workers, prefetch, batches, body, .. } => {
@@ -378,7 +398,7 @@ impl<'a> Checker<'a> {
                 self.expr(prefetch, &p(pp, &["prefetch"]), scope, st, None);
                 self.expr(batches, &p(pp, &["batches"]), scope, st, None);
                 st.channels.insert(name);
-                let inner = scope.with_index(index);
+                let inner = scope.with_index(index, true);
                 self.body(body, &p(pp, &["body"]), &inner, st);
             }
             Node::Channel { name, capacity, .. } => {
@@ -818,60 +838,71 @@ impl<'a> Checker<'a> {
         let ok = match idx {
             Expr::Node(n) => match n.as_ref() {
                 ExprNode::Sub([a, b]) => {
-                    matches!(a, Expr::Node(m) if matches!(m.as_ref(), ExprNode::Index(i) if i == loop_index)) && self.positive(b, scope)
+                    matches!(a, Expr::Node(m) if matches!(m.as_ref(), ExprNode::Index(i) if i == loop_index)) && self.at_least(b, 1, scope)
                 }
                 _ => false,
             },
             _ => false,
         };
+        // a binding of the same loop body: the one being defined, or any `let` of this body
         if (binding == Some(name) || scope.forward.contains(name)) && !ok {
-            self.err(path, format!("self- or forward-reference `{name} @` must use index {{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1"));
+            self.err(path, format!("`{name} @` names a binding of this loop body, so its index must be {{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1"));
         }
         self.expr(idx, &p(path, &["index"]), scope, st, None);
     }
 
-    /// `e` provably ≥ 1 (rule V3).
-    fn positive(&self, e: &'a Expr, scope: &Scope<'a>) -> bool {
+    /// `e` provably ≥ `k`, `k` ∈ {0, 1} (rule V3): a literal ≥ k; a `ref`, `param`, or `draw` whose distribution has
+    /// min ≥ k; `add` of a term ≥ k and a term ≥ 0. For k = 0 also any `mod` (Euclidean: in `[0, |b|)`) and an index
+    /// of `scope.nonneg_indices`. Judged on the document: parameter defaults, not the values a run was given.
+    fn at_least(&self, e: &'a Expr, k: i64, scope: &Scope<'a>) -> bool {
         match e {
-            Expr::Lit(Literal::Int(n)) => *n >= 1,
-            Expr::Lit(Literal::Float(x)) => *x >= 1.0,
+            Expr::Lit(Literal::Int(n)) => *n >= k,
+            Expr::Lit(Literal::Float(x)) => *x >= k as f64,
             Expr::Lit(_) => false,
             Expr::Node(n) => match n.as_ref() {
                 ExprNode::Ref(name) => match scope.lookup(name) {
-                    Some(ExprLike::Expr(v)) => self.positive(v, scope),
-                    Some(ExprLike::Dist(d)) => self.positive_dist(d, scope),
+                    Some(ExprLike::Expr(v)) => self.at_least(v, k, scope),
+                    Some(ExprLike::Dist(d)) => self.dist_at_least(d, k, scope),
                     _ => false,
                 },
-                ExprNode::Param(name) => match self.ast.params.get(name).map(|p| &p.default) {
-                    Some(PValue::Dist(d)) => self.positive_dist(d, scope),
-                    _ => false,
-                },
-                ExprNode::Draw(d) => self.positive_distref(&d.dist, scope),
+                ExprNode::Param(name) => {
+                    let value = self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).map(|p| &p.default));
+                    match value {
+                        Some(PValue::Dist(d)) => self.dist_at_least(d, k, scope),
+                        _ => false,
+                    }
+                }
+                ExprNode::Draw(d) => self.distref_at_least(&d.dist, k, scope),
+                ExprNode::Add([a, b]) => {
+                    (self.at_least(a, k, scope) && self.at_least(b, 0, scope)) || (self.at_least(a, 0, scope) && self.at_least(b, k, scope))
+                }
+                ExprNode::Mod(_) if k == 0 => true,
+                ExprNode::Index(i) if k == 0 => scope.nonneg_indices.contains(i.as_str()),
                 _ => false,
             },
         }
     }
 
-    fn positive_distref(&self, d: &'a DistRef, scope: &Scope<'a>) -> bool {
+    fn distref_at_least(&self, d: &'a DistRef, k: i64, scope: &Scope<'a>) -> bool {
         match d {
-            DistRef::Dist(d) => self.positive_dist(d, scope),
-            DistRef::Expr(e) => self.positive(e, scope),
+            DistRef::Dist(d) => self.dist_at_least(d, k, scope),
+            DistRef::Expr(e) => self.at_least(e, k, scope),
         }
     }
 
-    fn positive_dist(&self, d: &'a Dist, scope: &Scope<'a>) -> bool {
-        let lit_ge1 = |e: &Expr| matches!(e, Expr::Lit(Literal::Int(n)) if *n >= 1) || matches!(e, Expr::Lit(Literal::Float(x)) if *x >= 1.0);
+    fn dist_at_least(&self, d: &'a Dist, k: i64, scope: &Scope<'a>) -> bool {
+        let lit_ge = |e: &Expr| matches!(e, Expr::Lit(Literal::Int(n)) if *n >= k) || matches!(e, Expr::Lit(Literal::Float(x)) if *x >= k as f64);
         match d {
-            Dist::Uniform { lo, .. } => lit_ge1(lo),
-            Dist::Normal { min: Some(m), .. } | Dist::Lognormal { min: Some(m), .. } => lit_ge1(m),
+            Dist::Uniform { lo, .. } => lit_ge(lo),
+            Dist::Normal { min: Some(m), .. } | Dist::Lognormal { min: Some(m), .. } => lit_ge(m),
             Dist::Normal { .. } | Dist::Lognormal { .. } => false,
             Dist::Empirical { values, .. } => values.iter().all(|v| match v {
-                Literal::Int(n) => *n >= 1,
-                Literal::Float(x) => *x >= 1.0,
+                Literal::Int(n) => *n >= k,
+                Literal::Float(x) => *x >= k as f64,
                 _ => false,
             }),
-            Dist::Mixture(arms) => arms.iter().all(|a| a.dist.as_ref().map_or(true, |d| self.positive_distref(d, scope))),
-            Dist::Const(e) => self.positive(e, scope),
+            Dist::Mixture(arms) => arms.iter().all(|a| a.dist.as_ref().map_or(true, |d| self.distref_at_least(d, k, scope))),
+            Dist::Const(e) => self.at_least(e, k, scope),
             _ => false,
         }
     }

@@ -1,5 +1,5 @@
 {
-  "ast": "0.4",
+  "ast": "0.5",
   "name": "train_stream_tfrecord",
   "doc": "tf.data over TFRecord shards: cycle shards streamed concurrently, positioned reads of the buffer size to EOF.",
   "params": {
@@ -265,7 +265,7 @@
       "script": "train_stream_shards.py",
       "sha256": "cd091d66f4c3fcf5e7b7e78767aaca769aa0e1934825362154f45397eea1f441",
       "builder_version": "0.1.0",
-      "git": "88cdc5e8957c"
+      "git": "cf63737dfbcd"
     },
     "python": "3.12.13",
     "lock": {
@@ -273,6 +273,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "e86490784d2cf5c5df01dac655a4ae6c0fe0d7d65a66c5af534af5bf64e88871"
+    "ast_sha256": "76148083eaa787365ba7de7238d106d54a65a4993394c4f59458a633272e6472"
   }
 }

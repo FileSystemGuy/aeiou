@@ -109,6 +109,41 @@ def test_at_rule_at_construction():
             a.let("q", a.ref("q").at(0))
 
 
+def test_at_rule_offset_may_be_an_expression_provably_at_least_one():
+    """Contract 0.5 (DESIGN_REVIEW.md §3.57): the offset may be `add` of a term >= 1 and a
+    term >= 0, where `mod` (Euclidean in the runner), a loop index whose start is not below
+    zero, a literal, and a draw with min >= 0 are >= 0. The rule covers every binding of the
+    same loop body, earlier ones included, and both validators (the builder's at construction
+    and `schema/check.py` at build) agree."""
+    w, P, ds = _wl()
+    w.param("gap", uniform(1, 5))
+    w.param("bad", uniform(0, 5))
+    with w.actor("a") as a:
+        with a.loop("r", P.n) as r:
+            d = a.draw("d", P.gap)
+            kp = a.draw("kp", P.bad)
+            a.let("x", when(d <= r, a.ref("x").at(r - (r % d + 1)), 0))   # the per-round draw: r − (r mod d + 1)
+            a.let("x2", when(True, a.ref("x2").at(r - (r + d)), 0))       # an index (start 0) plus a draw >= 1
+            a.let("x3", when(True, a.ref("x3").at(r - (kp + 1)), 0))      # a draw >= 0 plus a literal >= 1
+            a.let("x4", when(d <= r, a.ref("kp").at(r - (r % d + 1)), 0))  # an earlier binding of this body, stepping back: fine
+            with pytest.raises(BuildError, match="provably >= 1"):
+                a.let("z", when(True, a.ref("z").at(r - (r % d)), 0))     # >= 0 only
+            with pytest.raises(BuildError, match="provably >= 1"):
+                a.let("z", when(True, a.ref("z").at(r - (kp + kp)), 0))
+            with pytest.raises(BuildError, match="provably >= 1"):
+                a.let("z", when(True, a.ref("z").at(r - d * 2), 0))       # `mul` is not a form the rule knows
+            with pytest.raises(BuildError, match="binding of this loop body"):
+                a.let("z", a.ref("kp").at(r + 1))                         # an earlier binding of this body, looking ahead
+            with a.loop("j", P.n, start=-2) as j:
+                with pytest.raises(BuildError, match="provably >= 1"):
+                    a.let("z", when(True, a.ref("z").at(j - (j + 1)), 0))  # an index that may be negative
+            with a.loop("k", P.n, start=d) as k:
+                a.let("ok", when(True, a.ref("ok").at(k - (k + 1)), 0))    # a start provably >= 0 (here >= 1)
+            with a.loop("m", P.n) as m:
+                a.let("ok2", a.ref("kp").at(m + 1))                        # a binding of an enclosing body is free
+    w.build()
+
+
 def test_as_written_until_eof_needs_the_creating_handle():
     w, P, ds = _wl()
     ns = w.namespace("o", pattern="o/{k}", fields={"k": int}, size="as_written", seed=2)

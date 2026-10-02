@@ -50,7 +50,8 @@ def shape(name, reader, doc):
                 "a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one")
     w.param("keep", empirical({0: 91, 1_000_000: 9}), unit="tokens",
             doc="[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, "
-                "counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded")
+                "counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded. Drawn once "
+                "per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together")
     w.param("retain", 5000, unit="count", doc="older chunks are evicted [config: capacity]")
     w.param("context", 8192, unit="tokens", doc="[config: model] a conversation whose next prompt and reply would not fit starts anew")
     w.param("turn_in", empirical([1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944]), unit="tokens",
@@ -99,8 +100,9 @@ def shape(name, reader, doc):
                 ptoks = slot.let("ptoks", when(cont, prior, (sp.size % fsize) // token_bytes) + inn)
                 stored = slot.let("stored", ptoks // P.chunk_tokens)   # whole chunks only
                 had = slot.let("had", when(cont & (d <= P.retain), slot.ref("stored").at(r - d), 0))
-                # what the engine itself still holds of this conversation: what it kept of its last prompt and reply, in whole chunks
-                held = slot.let("held", when(cont, min_(prior, kp) // P.chunk_tokens, 0))
+                # what the engine itself still holds of this conversation: what it kept of its last prompt and reply, in whole
+                # chunks; one `keep` draw per round of the d open conversations, made at the last request of the previous round (§3.57)
+                held = slot.let("held", when(cont, min_(prior, slot.ref("kp").at(r - (r % d + 1))) // P.chunk_tokens, 0))
                 hit = slot.let("hit", stored if reader else had)       # the chunks the store has for this prompt
                 nload = slot.let("nload", when(hit > held, hit - held, 0))
 
