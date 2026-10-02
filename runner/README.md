@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
 | `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -36,7 +36,7 @@ Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **b
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
 backend-specific counters beyond those come with each backend), `--drop-caches` at the
 start gate with the residency check and the mount options line (decided 2026-10-01,
-`PROJECT_BRIEF.md` §6 item 16), `RLIMIT` startup checks, a JSON report, ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; the trace-side tool that computes the same numbers from a real trace is not) and the `replay` node. ~~`stream`
+`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) a JSON report, ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; the trace-side tool that computes the same numbers from a real trace is not) and the `replay` node. ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
@@ -69,6 +69,8 @@ aeiou/src/
                `mincore` residency sample of every dataset, the `--require-cold` refusal
   counters.rs  the host counters around a run: task and io-wq worker peaks sampled from `/proc`,
                `getrusage`, and the `mountstats` delta of the mount `--root` is on (§4)
+  limits.rs    the limits before the gate: the estimate of open files and threads from a bounded walk,
+               the soft limits raised, the refusal that names the limit (§11)
   payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
   datagen.rs   `aeiou datagen`
   main.rs      the CLI
@@ -80,6 +82,7 @@ aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refu
 aeiou/tests/uring_knobs.rs  the ring and io-wq knobs (§8): same fingerprint, the io-wq cap holds, the SQPOLL threads are counted
 aeiou/tests/metrics.rs  `--metrics` (§10): same op multiset as the inline walk, thread-count independence,
                         the DiskANN structure recovered, sampling against exact
+aeiou/tests/limits.rs   the limit checks (§11): the estimate against the counted peak, a truncated walk, the refusals
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
 aeiou-launch            the ssh loop: one rank per host
 ```
@@ -263,7 +266,7 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   A tmpfs is its own page cache: nothing drops and every page is resident, which the check
   reports truthfully. What a drop cannot reach (`fscache`, the NFSv4 client state) needs a
   remount, which is the launcher's job, not the runner's.
-- **Host counters** (`counters.rs`, added 2026-10-01): what the client did meanwhile, as
+- **Host counters** (`counters.rs`, added 2026-10-01; `open files peak` on the `host:` line since later the same day, §11): what the client did meanwhile, as
   distinct from what the abstract did, printed after the totals and carried in the report
   (`Report::counters`, summed over hosts by the coordinator). A sampler thread reads
   `/proc/self/status` every 10 ms for the peak task count of the process and, at every
@@ -976,3 +979,61 @@ these by about the instance count for disjoint work, and smaller for shared hot 
 (3) A run is tracked per path, not per open handle. (4) `--metrics-json` writes format
 `aeiou_metrics: 1` (the histograms in full, per template and in total); the JSON report of
 a run is a separate, later item and may absorb it.
+
+## 11. Limits before the gate (2026-10-01)
+
+`NAPKIN_MATH.md` R8 and `PROJECT_BRIEF.md` §6 item 9: a host whose limits cannot hold the
+run should refuse at startup with the limit named, not fail hours in with `EMFILE`.
+`aeiou run` does this after the dataset checks and before it connects to the coordinator,
+so no other host is kept waiting at the gate by one that cannot start. The reasoning is in
+`DESIGN_REVIEW.md` §3.40. **The choices below were made while building and confirmed by
+the user the same day (decided 2026-10-01).**
+
+```
+limits: open files ~32 (+21 of the process); RLIMIT_NOFILE soft 1048576 (raised from 1024) hard 1048576
+limits: threads ~39; RLIMIT_NPROC soft 127569 hard 127569, kernel.threads-max 255139; mappings ~112, vm.max_map_count 1048576
+…
+host: tasks peak 36  open files peak 31  io-wq workers peak 0  …
+```
+
+- **The need is an estimate, and says so.** The first instance of each template on this
+  host is walked without I/O for at most 2^20 ops (`limits::BUDGET`; under a second), and
+  the result is multiplied by the instances the host runs. A context counts its own opens
+  less its closes. The sub-actors of a `parallel` are all live at once, so their peaks add,
+  on top of what the forking line holds. A `loader`'s workers live beside the line that
+  forked them until it ends; the first batch of each worker stands for its later ones.
+  When the budget ends inside a fork, the sub-actors walked are scaled to the fork's width,
+  and the line says `estimate from the first 1048576 ops`. What the walk cannot see: opens
+  that come after the budget, instances that differ from the first, and opens the abstract
+  expects to fail (counted as open).
+- **Threads.** Under the thread-per-actor backends a context is a thread (sub-actor 0 of
+  a `parallel` runs on the forking thread, §4), so the same walk gives the thread count.
+  Under the event-loop backends it is the loop count. io-wq workers and the `posix-aio`
+  helper threads are not estimated; `tasks peak` reports them.
+- **Soft limits are raised to the hard ones**, for `RLIMIT_NOFILE` and `RLIMIT_NPROC`,
+  always, and the line shows `raised from` when it changed anything. Raising a soft limit
+  needs no privilege and is what the administrator's hard limit permits.
+- **What is compared.** Descriptors: the estimate, plus those open at the check, four per
+  event loop, one per host on rank 0, and 16 of slack, against `RLIMIT_NOFILE`. Threads
+  against `RLIMIT_NPROC` (not for root, whom it does not bind; it counts every task of
+  the user, so a pass here is necessary, not sufficient) and `kernel.threads-max`.
+  Mappings (two per thread for its stack and guard, one per open file under `mmap`)
+  against `vm.max_map_count`, which at its usual 65,530 is the first limit 16,000 threads
+  would meet.
+- **Refusal, and the override.** Anything that does not fit refuses the run with the
+  limit and the way to raise it. `--ignore-limits` starts anyway and prints the problem as
+  `limits: IGNORED:`; the estimate can be high (the slack; opens expected to fail). An
+  `EMFILE` during the run then points back at these lines.
+- **The measured number.** `open files peak` on the `host:` line is the most files the
+  actors held at once, counted at every open and close the runner makes (not sampled, per
+  `DESIGN_REVIEW.md` §3.37), summed over hosts in the merged report.
+- **Not computed:** `RLIMIT_MEMLOCK` (it bounds `io_uring` ring memory only on kernels
+  before 5.12; no such kernel has been tried, and there the ring setup would fail with
+  `ENOMEM`, unnamed), and `fs.aio-max-nr`
+  (the `libaio` setup error already names it, §9). A disabled `io_uring` is named by the
+  ring setup error (§8).
+
+Observed (ext4, 2026-10-01): `train_small_files`, 4 GPUs: estimate 32 open files, counted
+31 (`sync`) and 32 (`io_uring`); threads estimated 39, `tasks peak` 36.
+`vdb_search_diskann`, 2 GPUs × 4 threads: 8 and 8; threads 35 and 34. With `ulimit -n 40`
+the first refuses (53 needed); with `ulimit -Sn 40` the soft limit is raised and it runs.

@@ -1706,6 +1706,46 @@ argues against each:
 Not done: the trace-side tool (strace to the same numbers), tolerances, a whole-run order,
 the `replay` node.
 
+### 3.40 Limits before the gate: an estimate, a refusal, and a counted peak (added 2026-10-01)
+
+§3.8 and R8 asked for a startup probe that computes the needed descriptors "from G, W,
+and the abstract", raises the soft limit, fails early with the limit named, and reports
+the open-file high-water mark. Built as `limits.rs` (`runner/README.md` §11). The choices
+were made while building and **confirmed by the user the same day (decided 2026-10-01)**:
+
+- **A bounded walk, not a formula.** G and W do not determine the count: the DiskANN
+  abstract holds one file per search thread, the checkpoint abstracts one per writer, a
+  loader one per worker. The count is a property of the fork structure and of where the
+  opens and closes sit in it, which only the walk knows. An exact answer is a full dry
+  run of every instance, minutes at scale, before a host may even say it is ready. So
+  the first instance of each template is walked for at most 2^20 ops and scaled.
+  *Against:* it is an estimate in both directions. It misses opens past the budget and
+  instances that differ from the first, and it counts opens that are expected to fail.
+  That is why the line prints `~`, the refusal has an override, and the report carries
+  the counted peak to check the estimate against.
+- **Concurrency is taken from the structure, not from an interleaving.** Sub-actors of a
+  `parallel` are assumed all live at their own peaks at once; a loader's workers the
+  same, beside their parent. That is an upper bound for the part walked, which is the
+  right side to err on for a limit.
+- **Refuse by default.** A host that starts and dies of `EMFILE` takes the whole run
+  with it through the coordinator, after the others have dropped caches and waited at
+  the gate. The check therefore sits before the coordinator connection. `--ignore-limits`
+  is for when the estimate is known to be high.
+- **Always raise the soft limits.** The hard limit is the administrator's decision; the
+  soft one is a default for programs that do not ask. *Against:* a run then behaves the
+  same under `ulimit -Sn 1024` and without it, which hides a misconfigured launch
+  environment; the `raised from` note is what is left of that signal.
+- **Threads and mappings came with it.** The same walk counts contexts, which are threads
+  under the blocking backends, and at 16,000 threads the limit met first is
+  `vm.max_map_count` (two mappings per thread), not `RLIMIT_NPROC`. `RLIMIT_NPROC` counts
+  the user's tasks in every process, so passing it proves little; it is still compared.
+- **The peak is counted, not sampled** (§3.37): opens and closes are the runner's own
+  acts, in one place (`OpenFile`).
+- **`RLIMIT_MEMLOCK` is not computed.** It bounds ring memory only before Linux 5.12 (since then
+  rings are charged to the memory cgroup). No target that old is in view, so the check
+  was dropped rather than built; on such a kernel the ring setup would fail with `ENOMEM`
+  and the error would not name the limit. Item 9 of the brief named it; this records why.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -1740,8 +1780,8 @@ the `replay` node.
   (§3.31, Built). ~~Next: `libaio`/`posix-aio`/`mmap`,~~ `posix-aio`, `libaio`, and `mmap`
   done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
   the same day (§3.36). ~~Next: `--metrics`,~~ `--metrics` built the same day, its
-  definitions decided (§3.39). Next: the `RLIMIT`
-  checks, the JSON report, the trace-side metrics tool; the
+  definitions decided (§3.39). ~~Next: the `RLIMIT`
+  checks,~~ The limit checks built the same day, their choices decided (§3.40). Next: the JSON report, the trace-side metrics tool; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 

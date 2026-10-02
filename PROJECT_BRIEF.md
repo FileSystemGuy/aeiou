@@ -231,7 +231,12 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    still to come.
 9. Startup checks: `kernel.io_uring_disabled`, `RLIMIT_MEMLOCK`, and `RLIMIT_NOFILE` computed
    from G, W, and the abstract. (Since 2026-10-01 a disabled `io_uring` shows up as the ring
-   setup failing, with the sysctl named in the error; the limit computations are not done.)
+   setup failing, with the sysctl named in the error; ~~the limit computations are not done.~~)
+   **Built 2026-10-01** (`runner/README.md` §11, `DESIGN_REVIEW.md` §3.40; the choices
+   decided 2026-10-01): open files and threads estimated from a bounded walk of one instance
+   per template, soft limits raised, a refusal naming `RLIMIT_NOFILE`, `RLIMIT_NPROC`,
+   `kernel.threads-max`, or `vm.max_map_count` (`--ignore-limits` overrides), and the counted
+   open-file peak in the report. `RLIMIT_MEMLOCK` is not computed (pre-5.12 kernels only).
 10. ~~Coordinator protocol and launch script (`pdsh`/ssh loop); test it on WSL2 with several
     ranks on `localhost`.~~ **Done 2026-09-30** (`runner/README.md` §6, `DESIGN_REVIEW.md`
     §3.25): `aeiou run --ranks R --rank r --coordinator HOST:PORT`, rank 0 serving
