@@ -37,7 +37,7 @@ fn hashes_match_check_py() {
         ("model_load", "6a22e3b84c3844e46bc4244961006e9add7b18605e9977ab5333d34998d5b111"),
         ("train_large_samples", "a614e020420787cf55281294508bfc87e72997c16fe4a537b19255d3bd3326e1"),
         ("train_small_files", "a1f595eebddcd31cd13799f8a10e6f415023924ead93046626103267d5079ac8"),
-        ("vdb_build_diskann", "8ec528846e8fae2879901808901cd265f7f557dd941617dff981d682f25b06ac"),
+        ("vdb_build_diskann", "36fe7582229b21115e1b0bf5f419e93a523b5162466add2768f3ab7f1177f092"),
         ("vdb_search_diskann", "1493d8de203823aef7740b4e4705fc91e40633086544f4cfc7a93f83ede2b41a"),
         ("train_stream_tfrecord", "bdba2a200488c0a7cf3d3b9269074990d1f54c013be0dd5fd84519469c886784"),
         ("train_stream_parquet", "0e629d8ffd38043367d6bd690f2e7cb10cea8f179bea003c78e30450564b0ec2"),
@@ -65,7 +65,8 @@ fn golden_fingerprints() {
     // again the same day, its item loop rewritten from the trace of `dcp.load`, §3.47; model_load with the calls of
     // `safetensors.safe_open` and the small JSON files, same section; vdb_search_ivf from the trace of FAISS
     // `OnDiskInvertedLists`, §3.49: the index file, the prefetch threads, ids before codes; vdb_search_diskann
-    // 2026-10-02 from the trace of DiskANN's `PQFlashIndex`, §3.50: the load, the entry rounds, 24 to 30 more).
+    // 2026-10-02 from the trace of DiskANN's `PQFlashIndex`, §3.50: the load, the entry rounds, 24 to 30 more; vdb_build_diskann
+    // the same day from the trace of `build_disk_index`, same section: the passes over the base, the shard files).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x71628bdb4289c4c8, 5120),
         ("train_large_samples", 2, &[("steps", "5")], 0xa2c284c6137f9639, 50451),
@@ -77,9 +78,9 @@ fn golden_fingerprints() {
         (
             "vdb_build_diskann",
             1,
-            &[("sectors", "1000"), ("sample", "100"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608")],
-            0x2fe7d1243d7fa7d9,
-            2122,
+            &[("sectors", "1000"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000")],
+            0xeaf5da9b000203a1,
+            1229207,
         ),
         ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc546a6b9840b58ff, 9312),
         // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations

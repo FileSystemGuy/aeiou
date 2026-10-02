@@ -422,3 +422,26 @@ def test_diskann_search_abstract_matches_the_trace(tmp_path, which, reads_off):
     assert rows["popularity, blocks: accesses to the top 1 %"] <= 0.01
     assert rows["reuse: first touches / block reads"] <= 0.06
 
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_diskann_build_abstract_matches_the_trace(tmp_path):
+    """`builder/traces/vdb_build_diskann`: `build_disk_index` on SIFT1M in 13 shards, traced
+    2026-10-02. The data path agrees to a part in a thousand; the shards are modeled at one
+    size and the files' small headers and probes are not modeled (`ABSTRACTS.md` §7)."""
+    kit = BUILDER / "traces" / "vdb_build_diskann"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_build_diskann.ast.json"), "--gpus", "1",
+                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    for k in ("read", "write", "lseek"):
+        assert abs(t["counts"][k] - d["counts"][k]) / t["counts"][k] < 0.001, k
+    for k in ("bytes_read", "bytes_written"):
+        assert abs(t[k] - d[k]) / t[k] < 0.001, k
+    rows = {r[0]: r[3] for r in compare(t, d)}
+    for k in ("request size, read (p50 / p90 / p99)", "request size, write (p50 / p90 / p99)",
+              "run length, read: bytes in multi-op runs", "reuse: read after write / block reads"):
+        assert rows[k] <= 0.01, (k, rows[k])
+    # 13 unlinks of files already gone and one of a file this abstract does not write
+    assert t["counts"]["unlink"] - d["counts"]["unlink"] == 14
+

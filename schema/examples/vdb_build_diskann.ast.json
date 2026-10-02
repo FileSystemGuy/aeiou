@@ -1,7 +1,7 @@
 {
   "ast": "0.3",
   "name": "vdb_build_diskann",
-  "doc": "Single builder: PQ sample, per-shard build, merge, disk layout write.",
+  "doc": "Single builder: PQ training and compression, partition into shards, per-shard build, merge, disk layout, sample.",
   "params": {
     "dim": {
       "default": 128,
@@ -13,12 +13,84 @@
     },
     "shards": {
       "default": 40,
-      "unit": "count"
-    },
-    "sample": {
-      "default": 256000,
       "unit": "count",
-      "doc": "PQ training rows [config]"
+      "doc": "[config] from the build's memory budget"
+    },
+    "overlap": {
+      "default": 2,
+      "unit": "count",
+      "doc": "shards a point is put in (traced)"
+    },
+    "cache": {
+      "default": 67108864,
+      "unit": "bytes",
+      "doc": "the block reader's and the layout writer's block (traced)"
+    },
+    "stream": {
+      "default": 8191,
+      "unit": "bytes",
+      "doc": "the read length of a C++ stream on a file (traced)"
+    },
+    "chunk": {
+      "default": 8192,
+      "unit": "bytes",
+      "doc": "the write length of a C++ stream (traced)"
+    },
+    "big": {
+      "default": 2147479552,
+      "unit": "bytes",
+      "doc": "one read or write call for a whole array; Linux transfers at most this much per call"
+    },
+    "pq_code": {
+      "default": 32,
+      "unit": "bytes",
+      "doc": "[config] bytes of one PQ-compressed vector"
+    },
+    "shard_index_bytes": {
+      "default": 5368709120,
+      "unit": "bytes",
+      "doc": "[config] a shard's graph: about 132 bytes per point of the shard (measured, degree 64)"
+    },
+    "index_bytes": {
+      "default": 220117073920,
+      "unit": "bytes",
+      "doc": "[config] the merged graph: about 205 bytes per point (measured, degree 64)"
+    },
+    "sectors": {
+      "default": 200000001,
+      "unit": "count",
+      "doc": "[config] 4 KiB sectors of the disk index, the header's included"
+    },
+    "sector": {
+      "default": 4096,
+      "unit": "bytes"
+    },
+    "sample_rows": {
+      "default": 100000000,
+      "unit": "count",
+      "doc": "[config] rows of the sample of the base written for the search's warm-up; a tenth here, 100,131 of a million traced"
+    },
+    "pq_train": {
+      "default": {
+        "normal": {
+          "mean": 60000000000,
+          "sd": 5000000000,
+          "min": 1000000000
+        }
+      },
+      "unit": "ns",
+      "doc": "[measure] 59 s traced on 256,000 sampled rows, 20 cores"
+    },
+    "partition_time": {
+      "default": {
+        "normal": {
+          "mean": 90000000000,
+          "sd": 5000000000,
+          "min": 1000000000
+        }
+      },
+      "unit": "ns",
+      "doc": "[measure] 91 s traced at a million points"
     },
     "build_time": {
       "default": {
@@ -30,29 +102,6 @@
       },
       "unit": "ns",
       "doc": "per shard [measure]; scaled by --time-scale"
-    },
-    "xfer": {
-      "default": 1048576,
-      "unit": "bytes"
-    },
-    "shard_index_bytes": {
-      "default": 12884901888,
-      "unit": "bytes",
-      "doc": "[config]"
-    },
-    "index_bytes": {
-      "default": 515396075520,
-      "unit": "bytes",
-      "doc": "[config]"
-    },
-    "sectors": {
-      "default": 200000000,
-      "unit": "count",
-      "doc": "[config]"
-    },
-    "sector": {
-      "default": 4096,
-      "unit": "bytes"
     }
   },
   "datasets": {
@@ -85,10 +134,11 @@
     }
   },
   "namespaces": {
-    "shard": {
-      "pattern": "diskann/shard_{k:03}.index",
+    "tmp": {
+      "pattern": "diskann/tmp_subshard-{k}_{part}",
       "fields": {
-        "k": "int"
+        "k": "int",
+        "part": "str"
       },
       "size": "as_written",
       "seed": 1592646275
@@ -118,33 +168,75 @@
           }
         },
         {
-          "open": {
-            "file": {
-              "ref": "base_f"
-            },
-            "flags": [
-              "RDONLY"
-            ]
-          }
-        },
-        {
           "phase": {
-            "name": "pq_sample",
+            "name": "pq",
             "body": [
               {
+                "open": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "END"
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "SET"
+                }
+              },
+              {
                 "loop": {
-                  "index": "i",
+                  "index": "blk0",
                   "to": {
-                    "param": "sample"
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "n"
+                              },
+                              {
+                                "mul": [
+                                  {
+                                    "param": "dim"
+                                  },
+                                  4
+                                ]
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      {
+                        "param": "cache"
+                      }
+                    ]
                   },
                   "body": [
                     {
-                      "let": {
-                        "name": "r",
-                        "value": {
-                          "pick": {
-                            "dataset": "base"
-                          }
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
                         }
                       }
                     },
@@ -154,14 +246,1072 @@
                           "ref": "base_f"
                         },
                         "len": {
-                          "size": {
-                            "ref": "r"
+                          "sub": [
+                            {
+                              "param": "cache"
+                            },
+                            {
+                              "param": "stream"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "fill0",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "mod": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "n"
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "cache"
                           }
+                        ]
+                      },
+                      {
+                        "param": "stream"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
                         },
-                        "offset": {
-                          "offset": {
-                            "ref": "r"
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "row0",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "param": "stream"
+                            },
+                            {
+                              "mul": [
+                                {
+                                  "param": "dim"
+                                },
+                                4
+                              ]
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
                           }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "base_f"
+                  }
+                }
+              },
+              {
+                "compute": {
+                  "ns": {
+                    "draw": {
+                      "param": "pq_train"
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "END"
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "CUR"
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "SET"
+                }
+              },
+              {
+                "read": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "len": {
+                    "param": "cache"
+                  }
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "CUR"
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "sub": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "n"
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "cache"
+                          }
+                        ]
+                      },
+                      {
+                        "param": "big"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "big"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "CUR"
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "base_f"
+                  }
+                }
+              },
+              {
+                "let": {
+                  "name": "c",
+                  "value": {
+                    "object": {
+                      "namespace": "out",
+                      "fields": {
+                        "name": "pq_compressed.bin"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "c"
+                  },
+                  "flags": [
+                    "WRONLY",
+                    "CREAT",
+                    "TRUNC"
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "n"
+                              },
+                              {
+                                "param": "pq_code"
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      {
+                        "param": "big"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "c"
+                        },
+                        "len": {
+                          "param": "big"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "cond": {
+                  "if": {
+                    "gt": [
+                      {
+                        "mod": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "n"
+                                  },
+                                  {
+                                    "param": "pq_code"
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "big"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  },
+                  "then": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "c"
+                        },
+                        "len": {
+                          "mod": [
+                            {
+                              "add": [
+                                {
+                                  "mul": [
+                                    {
+                                      "param": "n"
+                                    },
+                                    {
+                                      "param": "pq_code"
+                                    }
+                                  ]
+                                },
+                                8
+                              ]
+                            },
+                            {
+                              "param": "big"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "c"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "partition",
+            "body": [
+              {
+                "open": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "END"
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "SET"
+                }
+              },
+              {
+                "loop": {
+                  "index": "blk1",
+                  "to": {
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "n"
+                              },
+                              {
+                                "mul": [
+                                  {
+                                    "param": "dim"
+                                  },
+                                  4
+                                ]
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      {
+                        "param": "cache"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "sub": [
+                            {
+                              "param": "cache"
+                            },
+                            {
+                              "param": "stream"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "fill1",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "mod": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "n"
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "cache"
+                          }
+                        ]
+                      },
+                      {
+                        "param": "stream"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "row1",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "param": "stream"
+                            },
+                            {
+                              "mul": [
+                                {
+                                  "param": "dim"
+                                },
+                                4
+                              ]
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "base_f"
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "END"
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "SET"
+                }
+              },
+              {
+                "loop": {
+                  "index": "blk2",
+                  "to": {
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "n"
+                              },
+                              {
+                                "mul": [
+                                  {
+                                    "param": "dim"
+                                  },
+                                  4
+                                ]
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      {
+                        "param": "cache"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "sub": [
+                            {
+                              "param": "cache"
+                            },
+                            {
+                              "param": "stream"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "fill2",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "mod": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "n"
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "cache"
+                          }
+                        ]
+                      },
+                      {
+                        "param": "stream"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "row2",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "param": "stream"
+                            },
+                            {
+                              "mul": [
+                                {
+                                  "param": "dim"
+                                },
+                                4
+                              ]
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "base_f"
+                  }
+                }
+              },
+              {
+                "compute": {
+                  "ns": {
+                    "draw": {
+                      "param": "partition_time"
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "END"
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "CUR"
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "SET"
+                }
+              },
+              {
+                "read": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "len": {
+                    "param": "cache"
+                  }
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "CUR"
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "sub": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "n"
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "cache"
+                          }
+                        ]
+                      },
+                      {
+                        "param": "big"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "big"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "CUR"
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "base_f"
+                  }
+                }
+              },
+              {
+                "loop": {
+                  "index": "k",
+                  "to": {
+                    "param": "shards"
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "i",
+                        "value": {
+                          "object": {
+                            "namespace": "tmp",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              },
+                              "part": "ids"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "i"
+                        },
+                        "flags": [
+                          "WRONLY",
+                          "CREAT",
+                          "TRUNC"
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "div": [
+                            {
+                              "add": [
+                                {
+                                  "mul": [
+                                    {
+                                      "div": [
+                                        {
+                                          "mul": [
+                                            {
+                                              "param": "overlap"
+                                            },
+                                            {
+                                              "param": "n"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "param": "shards"
+                                        }
+                                      ]
+                                    },
+                                    4
+                                  ]
+                                },
+                                8
+                              ]
+                            },
+                            {
+                              "param": "chunk"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "write": {
+                              "file": {
+                                "ref": "i"
+                              },
+                              "len": {
+                                "param": "chunk"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "gt": [
+                            {
+                              "mod": [
+                                {
+                                  "add": [
+                                    {
+                                      "mul": [
+                                        {
+                                          "div": [
+                                            {
+                                              "mul": [
+                                                {
+                                                  "param": "overlap"
+                                                },
+                                                {
+                                                  "param": "n"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "shards"
+                                            }
+                                          ]
+                                        },
+                                        4
+                                      ]
+                                    },
+                                    8
+                                  ]
+                                },
+                                {
+                                  "param": "chunk"
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "write": {
+                              "file": {
+                                "ref": "i"
+                              },
+                              "len": {
+                                "mod": [
+                                  {
+                                    "add": [
+                                      {
+                                        "mul": [
+                                          {
+                                            "div": [
+                                              {
+                                                "mul": [
+                                                  {
+                                                    "param": "overlap"
+                                                  },
+                                                  {
+                                                    "param": "n"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "param": "shards"
+                                              }
+                                            ]
+                                          },
+                                          4
+                                        ]
+                                      },
+                                      8
+                                    ]
+                                  },
+                                  {
+                                    "param": "chunk"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "i"
                         }
                       }
                     }
@@ -183,40 +1333,67 @@
                   },
                   "body": [
                     {
-                      "lseek": {
-                        "file": {
-                          "ref": "base_f"
-                        },
-                        "offset": {
-                          "mul": [
-                            {
-                              "index": "k"
-                            },
-                            {
-                              "mul": [
-                                {
-                                  "mul": [
-                                    {
-                                      "div": [
-                                        {
-                                          "param": "n"
-                                        },
-                                        {
-                                          "param": "shards"
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "param": "dim"
-                                    }
-                                  ]
-                                },
-                                4
-                              ]
+                      "let": {
+                        "name": "d",
+                        "value": {
+                          "object": {
+                            "namespace": "tmp",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              },
+                              "part": "rows"
                             }
-                          ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "i",
+                        "value": {
+                          "object": {
+                            "namespace": "tmp",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              },
+                              "part": "ids"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "d"
                         },
-                        "whence": "SET"
+                        "flags": [
+                          "WRONLY",
+                          "CREAT",
+                          "TRUNC"
+                        ]
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "i"
+                        },
+                        "flags": [
+                          "RDONLY"
+                        ]
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "i"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
                       }
                     },
                     {
@@ -225,29 +1402,155 @@
                         "to": {
                           "ceil_div": [
                             {
-                              "mul": [
+                              "sub": [
                                 {
-                                  "mul": [
+                                  "add": [
                                     {
-                                      "div": [
+                                      "mul": [
+                                        {
+                                          "div": [
+                                            {
+                                              "mul": [
+                                                {
+                                                  "param": "overlap"
+                                                },
+                                                {
+                                                  "param": "n"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "shards"
+                                            }
+                                          ]
+                                        },
+                                        4
+                                      ]
+                                    },
+                                    8
+                                  ]
+                                },
+                                {
+                                  "param": "stream"
+                                }
+                              ]
+                            },
+                            {
+                              "param": "big"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "i"
+                              },
+                              "len": {
+                                "param": "big"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "i"
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "flags": [
+                          "RDONLY"
+                        ]
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "offset": 0,
+                        "whence": "END"
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "offset": 0,
+                        "whence": "SET"
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "cache"
+                        }
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "sub": [
+                                {
+                                  "add": [
+                                    {
+                                      "mul": [
                                         {
                                           "param": "n"
                                         },
                                         {
-                                          "param": "shards"
+                                          "mul": [
+                                            {
+                                              "param": "dim"
+                                            },
+                                            4
+                                          ]
                                         }
                                       ]
                                     },
-                                    {
-                                      "param": "dim"
-                                    }
+                                    8
                                   ]
                                 },
-                                4
+                                {
+                                  "param": "cache"
+                                }
                               ]
                             },
                             {
-                              "param": "xfer"
+                              "param": "big"
                             }
                           ]
                         },
@@ -258,11 +1561,267 @@
                                 "ref": "base_f"
                               },
                               "len": {
-                                "param": "xfer"
+                                "param": "big"
                               }
                             }
                           }
                         ]
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "base_f"
+                        }
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "div": [
+                            {
+                              "add": [
+                                {
+                                  "mul": [
+                                    {
+                                      "div": [
+                                        {
+                                          "mul": [
+                                            {
+                                              "param": "overlap"
+                                            },
+                                            {
+                                              "param": "n"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "param": "shards"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "mul": [
+                                        {
+                                          "param": "dim"
+                                        },
+                                        4
+                                      ]
+                                    }
+                                  ]
+                                },
+                                8
+                              ]
+                            },
+                            {
+                              "param": "chunk"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "write": {
+                              "file": {
+                                "ref": "d"
+                              },
+                              "len": {
+                                "param": "chunk"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "gt": [
+                            {
+                              "mod": [
+                                {
+                                  "add": [
+                                    {
+                                      "mul": [
+                                        {
+                                          "div": [
+                                            {
+                                              "mul": [
+                                                {
+                                                  "param": "overlap"
+                                                },
+                                                {
+                                                  "param": "n"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "shards"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "mul": [
+                                            {
+                                              "param": "dim"
+                                            },
+                                            4
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    8
+                                  ]
+                                },
+                                {
+                                  "param": "chunk"
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "write": {
+                              "file": {
+                                "ref": "d"
+                              },
+                              "len": {
+                                "mod": [
+                                  {
+                                    "add": [
+                                      {
+                                        "mul": [
+                                          {
+                                            "div": [
+                                              {
+                                                "mul": [
+                                                  {
+                                                    "param": "overlap"
+                                                  },
+                                                  {
+                                                    "param": "n"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "param": "shards"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "mul": [
+                                              {
+                                                "param": "dim"
+                                              },
+                                              4
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      8
+                                    ]
+                                  },
+                                  {
+                                    "param": "chunk"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "d"
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "d"
+                        },
+                        "flags": [
+                          "RDONLY"
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "add": [
+                                {
+                                  "mul": [
+                                    {
+                                      "div": [
+                                        {
+                                          "mul": [
+                                            {
+                                              "param": "overlap"
+                                            },
+                                            {
+                                              "param": "n"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "param": "shards"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "mul": [
+                                        {
+                                          "param": "dim"
+                                        },
+                                        4
+                                      ]
+                                    }
+                                  ]
+                                },
+                                8
+                              ]
+                            },
+                            {
+                              "param": "stream"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "d"
+                              },
+                              "len": {
+                                "param": "stream"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "d"
+                        }
                       }
                     },
                     {
@@ -276,14 +1835,15 @@
                     },
                     {
                       "let": {
-                        "name": "sh",
+                        "name": "g",
                         "value": {
                           "object": {
-                            "namespace": "shard",
+                            "namespace": "tmp",
                             "fields": {
                               "k": {
                                 "index": "k"
-                              }
+                              },
+                              "part": "graph"
                             }
                           }
                         }
@@ -292,7 +1852,7 @@
                     {
                       "open": {
                         "file": {
-                          "ref": "sh"
+                          "ref": "g"
                         },
                         "flags": [
                           "WRONLY",
@@ -305,12 +1865,12 @@
                       "loop": {
                         "index": "rep",
                         "to": {
-                          "ceil_div": [
+                          "div": [
                             {
                               "param": "shard_index_bytes"
                             },
                             {
-                              "param": "xfer"
+                              "param": "chunk"
                             }
                           ]
                         },
@@ -318,10 +1878,48 @@
                           {
                             "write": {
                               "file": {
-                                "ref": "sh"
+                                "ref": "g"
                               },
                               "len": {
-                                "param": "xfer"
+                                "param": "chunk"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "gt": [
+                            {
+                              "mod": [
+                                {
+                                  "param": "shard_index_bytes"
+                                },
+                                {
+                                  "param": "chunk"
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "write": {
+                              "file": {
+                                "ref": "g"
+                              },
+                              "len": {
+                                "mod": [
+                                  {
+                                    "param": "shard_index_bytes"
+                                  },
+                                  {
+                                    "param": "chunk"
+                                  }
+                                ]
                               }
                             }
                           }
@@ -331,7 +1929,207 @@
                     {
                       "close": {
                         "file": {
-                          "ref": "sh"
+                          "ref": "g"
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "r",
+                        "value": {
+                          "object": {
+                            "namespace": "tmp",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              },
+                              "part": "graph.data"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "r"
+                        },
+                        "flags": [
+                          "WRONLY",
+                          "CREAT",
+                          "TRUNC"
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "div": [
+                            {
+                              "add": [
+                                {
+                                  "mul": [
+                                    {
+                                      "div": [
+                                        {
+                                          "mul": [
+                                            {
+                                              "param": "overlap"
+                                            },
+                                            {
+                                              "param": "n"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "param": "shards"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "mul": [
+                                        {
+                                          "param": "dim"
+                                        },
+                                        4
+                                      ]
+                                    }
+                                  ]
+                                },
+                                8
+                              ]
+                            },
+                            {
+                              "param": "chunk"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "write": {
+                              "file": {
+                                "ref": "r"
+                              },
+                              "len": {
+                                "param": "chunk"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "gt": [
+                            {
+                              "mod": [
+                                {
+                                  "add": [
+                                    {
+                                      "mul": [
+                                        {
+                                          "div": [
+                                            {
+                                              "mul": [
+                                                {
+                                                  "param": "overlap"
+                                                },
+                                                {
+                                                  "param": "n"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "shards"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "mul": [
+                                            {
+                                              "param": "dim"
+                                            },
+                                            4
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    8
+                                  ]
+                                },
+                                {
+                                  "param": "chunk"
+                                }
+                              ]
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "write": {
+                              "file": {
+                                "ref": "r"
+                              },
+                              "len": {
+                                "mod": [
+                                  {
+                                    "add": [
+                                      {
+                                        "mul": [
+                                          {
+                                            "div": [
+                                              {
+                                                "mul": [
+                                                  {
+                                                    "param": "overlap"
+                                                  },
+                                                  {
+                                                    "param": "n"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "param": "shards"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "mul": [
+                                              {
+                                                "param": "dim"
+                                              },
+                                              4
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      8
+                                    ]
+                                  },
+                                  {
+                                    "param": "chunk"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "r"
+                        }
+                      }
+                    },
+                    {
+                      "unlink": {
+                        "file": {
+                          "ref": "d"
                         }
                       }
                     }
@@ -354,14 +2152,15 @@
                   "body": [
                     {
                       "let": {
-                        "name": "sh",
+                        "name": "i",
                         "value": {
                           "object": {
-                            "namespace": "shard",
+                            "namespace": "tmp",
                             "fields": {
                               "k": {
                                 "index": "k"
-                              }
+                              },
+                              "part": "ids"
                             }
                           }
                         }
@@ -370,7 +2169,108 @@
                     {
                       "open": {
                         "file": {
-                          "ref": "sh"
+                          "ref": "i"
+                        },
+                        "flags": [
+                          "RDONLY"
+                        ]
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "i"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "rep",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "sub": [
+                                {
+                                  "add": [
+                                    {
+                                      "mul": [
+                                        {
+                                          "div": [
+                                            {
+                                              "mul": [
+                                                {
+                                                  "param": "overlap"
+                                                },
+                                                {
+                                                  "param": "n"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "shards"
+                                            }
+                                          ]
+                                        },
+                                        4
+                                      ]
+                                    },
+                                    8
+                                  ]
+                                },
+                                {
+                                  "param": "stream"
+                                }
+                              ]
+                            },
+                            {
+                              "param": "big"
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "read": {
+                              "file": {
+                                "ref": "i"
+                              },
+                              "len": {
+                                "param": "big"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "i"
+                        }
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "g",
+                        "value": {
+                          "object": {
+                            "namespace": "tmp",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              },
+                              "part": "graph"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "g"
                         },
                         "flags": [
                           "RDONLY"
@@ -386,7 +2286,7 @@
                               "param": "shard_index_bytes"
                             },
                             {
-                              "param": "xfer"
+                              "param": "big"
                             }
                           ]
                         },
@@ -394,10 +2294,10 @@
                           {
                             "read": {
                               "file": {
-                                "ref": "sh"
+                                "ref": "g"
                               },
                               "len": {
-                                "param": "xfer"
+                                "param": "big"
                               }
                             }
                           }
@@ -407,7 +2307,62 @@
                     {
                       "close": {
                         "file": {
-                          "ref": "sh"
+                          "ref": "g"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "k",
+                  "to": {
+                    "param": "shards"
+                  },
+                  "body": [
+                    {
+                      "unlink": {
+                        "file": {
+                          "object": {
+                            "namespace": "tmp",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              },
+                              "part": "ids"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "unlink": {
+                        "file": {
+                          "object": {
+                            "namespace": "tmp",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              },
+                              "part": "graph"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "unlink": {
+                        "file": {
+                          "object": {
+                            "namespace": "tmp",
+                            "fields": {
+                              "k": {
+                                "index": "k"
+                              },
+                              "part": "graph.data"
+                            }
+                          }
                         }
                       }
                     }
@@ -416,12 +2371,12 @@
               },
               {
                 "let": {
-                  "name": "g",
+                  "name": "m",
                   "value": {
                     "object": {
                       "namespace": "out",
                       "fields": {
-                        "name": "merged.index"
+                        "name": "mem.index"
                       }
                     }
                   }
@@ -430,12 +2385,301 @@
               {
                 "open": {
                   "file": {
-                    "ref": "g"
+                    "ref": "m"
                   },
                   "flags": [
                     "WRONLY",
                     "CREAT",
                     "TRUNC"
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "div": [
+                      {
+                        "param": "index_bytes"
+                      },
+                      {
+                        "param": "big"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "m"
+                        },
+                        "len": {
+                          "param": "big"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "cond": {
+                  "if": {
+                    "gt": [
+                      {
+                        "mod": [
+                          {
+                            "param": "index_bytes"
+                          },
+                          {
+                            "param": "big"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  },
+                  "then": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "m"
+                        },
+                        "len": {
+                          "mod": [
+                            {
+                              "param": "index_bytes"
+                            },
+                            {
+                              "param": "big"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "m"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "phase": {
+            "name": "layout",
+            "body": [
+              {
+                "open": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "END"
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "SET"
+                }
+              },
+              {
+                "loop": {
+                  "index": "blk3",
+                  "to": {
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "n"
+                              },
+                              {
+                                "mul": [
+                                  {
+                                    "param": "dim"
+                                  },
+                                  4
+                                ]
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      {
+                        "param": "cache"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "sub": [
+                            {
+                              "param": "cache"
+                            },
+                            {
+                              "param": "stream"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "fill3",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "mod": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "n"
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "cache"
+                          }
+                        ]
+                      },
+                      {
+                        "param": "stream"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "row3",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "param": "stream"
+                            },
+                            {
+                              "mul": [
+                                {
+                                  "param": "dim"
+                                },
+                                4
+                              ]
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "base_f"
+                  }
+                }
+              },
+              {
+                "let": {
+                  "name": "m",
+                  "value": {
+                    "object": {
+                      "namespace": "out",
+                      "fields": {
+                        "name": "mem.index"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "m"
+                  },
+                  "flags": [
+                    "RDONLY"
                   ]
                 }
               },
@@ -448,18 +2692,18 @@
                         "param": "index_bytes"
                       },
                       {
-                        "param": "xfer"
+                        "param": "stream"
                       }
                     ]
                   },
                   "body": [
                     {
-                      "write": {
+                      "read": {
                         "file": {
-                          "ref": "g"
+                          "ref": "m"
                         },
                         "len": {
-                          "param": "xfer"
+                          "param": "stream"
                         }
                       }
                     }
@@ -469,7 +2713,153 @@
               {
                 "close": {
                   "file": {
-                    "ref": "g"
+                    "ref": "m"
+                  }
+                }
+              },
+              {
+                "let": {
+                  "name": "x",
+                  "value": {
+                    "object": {
+                      "namespace": "out",
+                      "fields": {
+                        "name": "disk.index"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "x"
+                  },
+                  "flags": [
+                    "RDWR",
+                    "CREAT",
+                    "TRUNC"
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "div": [
+                      {
+                        "mul": [
+                          {
+                            "param": "sectors"
+                          },
+                          {
+                            "param": "sector"
+                          }
+                        ]
+                      },
+                      {
+                        "add": [
+                          {
+                            "param": "cache"
+                          },
+                          {
+                            "param": "sector"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "x"
+                        },
+                        "len": {
+                          "add": [
+                            {
+                              "param": "cache"
+                            },
+                            {
+                              "param": "sector"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "cond": {
+                  "if": {
+                    "gt": [
+                      {
+                        "mod": [
+                          {
+                            "mul": [
+                              {
+                                "param": "sectors"
+                              },
+                              {
+                                "param": "sector"
+                              }
+                            ]
+                          },
+                          {
+                            "add": [
+                              {
+                                "param": "cache"
+                              },
+                              {
+                                "param": "sector"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  },
+                  "then": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "x"
+                        },
+                        "len": {
+                          "mod": [
+                            {
+                              "mul": [
+                                {
+                                  "param": "sectors"
+                                },
+                                {
+                                  "param": "sector"
+                                }
+                              ]
+                            },
+                            {
+                              "add": [
+                                {
+                                  "param": "cache"
+                                },
+                                {
+                                  "param": "sector"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "x"
                   }
                 }
               }
@@ -478,8 +2868,27 @@
         },
         {
           "phase": {
-            "name": "layout",
+            "name": "sample",
             "body": [
+              {
+                "open": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "flags": [
+                    "RDONLY"
+                  ]
+                }
+              },
+              {
+                "lseek": {
+                  "file": {
+                    "ref": "base_f"
+                  },
+                  "offset": 0,
+                  "whence": "END"
+                }
+              },
               {
                 "lseek": {
                   "file": {
@@ -490,24 +2899,172 @@
                 }
               },
               {
-                "read": {
+                "loop": {
+                  "index": "blk4",
+                  "to": {
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "n"
+                              },
+                              {
+                                "mul": [
+                                  {
+                                    "param": "dim"
+                                  },
+                                  4
+                                ]
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      {
+                        "param": "cache"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "sub": [
+                            {
+                              "param": "cache"
+                            },
+                            {
+                              "param": "stream"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "fill4",
+                  "to": {
+                    "ceil_div": [
+                      {
+                        "mod": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "n"
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "cache"
+                          }
+                        ]
+                      },
+                      {
+                        "param": "stream"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "base_f"
+                        },
+                        "len": {
+                          "param": "stream"
+                        }
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "row4",
+                        "to": {
+                          "ceil_div": [
+                            {
+                              "param": "stream"
+                            },
+                            {
+                              "mul": [
+                                {
+                                  "param": "dim"
+                                },
+                                4
+                              ]
+                            }
+                          ]
+                        },
+                        "body": [
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "base_f"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
                   "file": {
                     "ref": "base_f"
-                  },
-                  "len": {
-                    "param": "xfer"
-                  },
-                  "repeat": "until_eof"
+                  }
                 }
               },
               {
                 "let": {
-                  "name": "d",
+                  "name": "sd",
                   "value": {
                     "object": {
                       "namespace": "out",
                       "fields": {
-                        "name": "index.bin"
+                        "name": "sample_data.bin"
                       }
                     }
                   }
@@ -516,7 +3073,7 @@
               {
                 "open": {
                   "file": {
-                    "ref": "d"
+                    "ref": "sd"
                   },
                   "flags": [
                     "WRONLY",
@@ -529,16 +3086,40 @@
                 "loop": {
                   "index": "rep",
                   "to": {
-                    "param": "sectors"
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "sample_rows"
+                              },
+                              {
+                                "mul": [
+                                  {
+                                    "param": "dim"
+                                  },
+                                  4
+                                ]
+                              }
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      {
+                        "param": "chunk"
+                      }
+                    ]
                   },
                   "body": [
                     {
                       "write": {
                         "file": {
-                          "ref": "d"
+                          "ref": "sd"
                         },
                         "len": {
-                          "param": "sector"
+                          "param": "chunk"
                         }
                       }
                     }
@@ -546,27 +3127,212 @@
                 }
               },
               {
-                "fsync": {
-                  "file": {
-                    "ref": "d"
-                  }
+                "cond": {
+                  "if": {
+                    "gt": [
+                      {
+                        "mod": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "sample_rows"
+                                  },
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "chunk"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  },
+                  "then": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "sd"
+                        },
+                        "len": {
+                          "mod": [
+                            {
+                              "add": [
+                                {
+                                  "mul": [
+                                    {
+                                      "param": "sample_rows"
+                                    },
+                                    {
+                                      "mul": [
+                                        {
+                                          "param": "dim"
+                                        },
+                                        4
+                                      ]
+                                    }
+                                  ]
+                                },
+                                8
+                              ]
+                            },
+                            {
+                              "param": "chunk"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
                 }
               },
               {
                 "close": {
                   "file": {
-                    "ref": "d"
+                    "ref": "sd"
+                  }
+                }
+              },
+              {
+                "let": {
+                  "name": "si",
+                  "value": {
+                    "object": {
+                      "namespace": "out",
+                      "fields": {
+                        "name": "sample_ids.bin"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "open": {
+                  "file": {
+                    "ref": "si"
+                  },
+                  "flags": [
+                    "WRONLY",
+                    "CREAT",
+                    "TRUNC"
+                  ]
+                }
+              },
+              {
+                "loop": {
+                  "index": "rep",
+                  "to": {
+                    "div": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "sample_rows"
+                              },
+                              4
+                            ]
+                          },
+                          8
+                        ]
+                      },
+                      {
+                        "param": "chunk"
+                      }
+                    ]
+                  },
+                  "body": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "si"
+                        },
+                        "len": {
+                          "param": "chunk"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "cond": {
+                  "if": {
+                    "gt": [
+                      {
+                        "mod": [
+                          {
+                            "add": [
+                              {
+                                "mul": [
+                                  {
+                                    "param": "sample_rows"
+                                  },
+                                  4
+                                ]
+                              },
+                              8
+                            ]
+                          },
+                          {
+                            "param": "chunk"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  },
+                  "then": [
+                    {
+                      "write": {
+                        "file": {
+                          "ref": "si"
+                        },
+                        "len": {
+                          "mod": [
+                            {
+                              "add": [
+                                {
+                                  "mul": [
+                                    {
+                                      "param": "sample_rows"
+                                    },
+                                    4
+                                  ]
+                                },
+                                8
+                              ]
+                            },
+                            {
+                              "param": "chunk"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "close": {
+                  "file": {
+                    "ref": "si"
                   }
                 }
               }
             ]
-          }
-        },
-        {
-          "close": {
-            "file": {
-              "ref": "base_f"
-            }
           }
         }
       ]
@@ -575,16 +3341,15 @@
   "provenance": {
     "generator": {
       "script": "vdb_build_diskann.py",
-      "sha256": "e5f3ead99fcb4ab5b61419f43de5fafb0a32fcfbdd0ff621b506d119cad67650",
+      "sha256": "cfc0a42eec954973a006b89337e06cf54c88fcef07fa3ce0f1cfc0ac7e18a267",
       "builder_version": "0.1.0",
-      "git": "32e33f8e9e9b"
+      "git": "8f6a8ed87522-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
-    "built_twice_identical": true,
-    "ast_sha256": "8ec528846e8fae2879901808901cd265f7f557dd941617dff981d682f25b06ac"
+    "ast_sha256": "36fe7582229b21115e1b0bf5f419e93a523b5162466add2768f3ab7f1177f092"
   }
 }
