@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -995,52 +995,102 @@ pub(crate) fn fill(a: &mut ActorState, op: &Op, buf: &mut [u8]) {
 
 // ---------------------------------------------------------------- the sink
 
-/// One `parallel` sub-actor for a pool thread: where the parent stood at the fork, which
-/// sub-actor of the fork this is, and its state (it sees the files the parent had open).
+/// One `parallel` sub-actor for a pool thread: where the parent stood at the fork (one
+/// snapshot and one file table for all the sub-actors of the fork) and which sub-actor of
+/// the fork this is.
 struct Job {
-    snap: Snapshot<'static, 'static>,
+    snap: Arc<Snapshot<'static, 'static>>,
     k: i64,
-    a: ActorState,
-    done: mpsc::Sender<(i64, Result<()>, Stats)>,
+    fds: Arc<FdTable>,
 }
 
-/// An actor's `parallel` sub-actor threads, kept between forks. Sub-actor `k` of a fork
-/// always runs on pool thread `k` (the assignment is positional; there is no shared queue),
-/// and the pool grows to the widest fork the actor has issued. A thread keeps its backend, its
-/// two buffer rings and, when its sub-actors fork in turn, its own pool; the file table is
-/// new for every sub-actor (what the parent had open at that fork). Threads idle in `recv`
-/// between forks and end with the actor that owns the pool.
+/// How the forking actor waits for a fork's sub-actors: a count the pool threads take down,
+/// the last of them waking the parent once (not once per sub-actor), and the errors.
+struct Join {
+    remaining: AtomicUsize,
+    parent: std::thread::Thread,
+    errs: Mutex<Vec<(i64, anyhow::Error)>>,
+}
+
+impl Join {
+    fn done(&self, err: Option<(i64, anyhow::Error)>) {
+        if let Some(e) = err {
+            self.errs.lock().unwrap_or_else(|e| e.into_inner()).push(e);
+        }
+        if self.remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.parent.unpark();
+        }
+    }
+}
+
+/// An actor's `parallel` sub-actor threads, kept between forks. The forking actor runs
+/// sub-actor 0 of a fork on its own thread (it would otherwise sleep until the others end)
+/// and sub-actor `k ≥ 1` always runs on pool thread `k − 1` (the assignment is positional;
+/// there is no shared queue); the pool grows to the widest fork the actor has issued, less
+/// one. A sub-actor run on the forking thread may fork in turn while this pool is busy, so
+/// an actor has one pool per depth of fork it runs itself (`Runner::pools`). A thread keeps what a
+/// sub-actor needs and what it produces: its backend, its two buffer rings, its VM (resumed
+/// from the fork's snapshot in place), its statistics (summed over the sub-actors it ran
+/// and handed to the forking actor when the pool ends, since only the sum is ever
+/// reported) and, when its sub-actors fork in turn, its own pool. Per sub-actor it gets
+/// only the file table (what the parent had open at that fork); what the sub-actor opens
+/// itself ends with it. Threads idle in `recv` between forks and end with the actor that
+/// owns the pool.
 #[derive(Default)]
 struct Pool {
-    workers: Vec<(mpsc::Sender<Job>, JoinHandle<()>)>,
+    workers: Vec<(mpsc::Sender<Job>, JoinHandle<Stats>)>,
+    join: Option<Arc<Join>>,
 }
 
 impl Pool {
-    /// Grow to `width` threads; returns how many were spawned.
-    fn grow(&mut self, width: usize, sh: &Arc<Shared>, inst: &Arc<Instance>, template: &'static str, actor: i64) -> u64 {
+    /// Grow to `threads` threads; returns how many were spawned. Called by the forking actor
+    /// on its own thread, which is the one the pool's threads wake.
+    fn grow(&mut self, threads: usize, sh: &Arc<Shared>, inst: &Arc<Instance>, template: &'static str, actor: i64) -> u64 {
+        let join = self.join.get_or_insert_with(|| Arc::new(Join { remaining: AtomicUsize::new(0), parent: std::thread::current(), errs: Mutex::new(Vec::new()) })).clone();
         let mut spawned = 0;
-        while self.workers.len() < width {
+        while self.workers.len() < threads {
             let (tx, rx) = mpsc::channel::<Job>();
-            let (sh, inst) = (sh.clone(), inst.clone());
+            let (sh, inst, join) = (sh.clone(), inst.clone(), join.clone());
             let h = std::thread::Builder::new()
                 .name(format!("{template}#{actor} sub {}", self.workers.len()))
                 .spawn(move || {
-                    let buf = sh.opts.buffer_bytes;
-                    let (mut be, mut rbuf, mut wbuf, mut pool) = (sh.backend(), Ring::new(buf), Ring::new(buf), Pool::default());
-                    while let Ok(Job { snap, k, a, done }) = rx.recv() {
-                        let mut sink = Runner { sh: sh.clone(), inst: inst.clone(), be, rbuf, wbuf, a, pool };
-                        let mut vm = Vm::resume(snap);
-                        vm.start_sub(k);
-                        let r = drive(&mut vm, &mut sink).and_then(|_| sink.finish());
-                        if r.is_err() {
+                    let mut sink = Runner::new(sh.clone(), inst, template, actor, false, None);
+                    sink.a.st.threads = 0;
+                    let mut vm: Option<Vm<'static, 'static>> = None;
+                    while let Ok(Job { snap, k, fds }) = rx.recv() {
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            sink.a.fds = FdTable { own: HashMap::new(), inherited: Some(fds), closed: HashSet::new() };
+                            sink.a.takes.clear();
+                            let vm = match &mut vm {
+                                Some(vm) => {
+                                    vm.resume_from(&snap);
+                                    vm
+                                }
+                                None => vm.insert(Vm::resume((*snap).clone())),
+                            };
+                            drop(snap);
+                            vm.start_sub(k);
+                            let r = drive(vm, &mut sink);
+                            sink.a.finish_shared(&sh);
+                            // the sub-actor's own files end here, before the parent's join
+                            sink.a.fds = FdTable { own: HashMap::new(), inherited: None, closed: HashSet::new() };
+                            r
+                        }));
+                        let (err, dead) = match r {
+                            Ok(Ok(())) => (None, false),
+                            Ok(Err(e)) => (Some((k, e)), false),
+                            Err(_) => (Some((k, anyhow!("a sub-actor panicked"))), true),
+                        };
+                        if err.is_some() {
                             sh.aborted.store(true, Ordering::Relaxed);
                         }
-                        let st = std::mem::take(&mut sink.a.st);
-                        // the sub-actor's own files end here, before the parent's join
-                        let Runner { be: b, rbuf: rb, wbuf: wb, pool: pl, .. } = sink;
-                        (be, rbuf, wbuf, pool) = (b, rb, wb, pl);
-                        let _ = done.send((k, r, st));
+                        join.done(err);
+                        if dead {
+                            break;
+                        }
                     }
+                    sink.drain_pools();
+                    std::mem::take(&mut sink.a.st)
                 })
                 .expect("spawn");
             self.workers.push((tx, h));
@@ -1048,14 +1098,23 @@ impl Pool {
         }
         spawned
     }
+
+    /// End the threads and return what their sub-actors counted.
+    fn drain(&mut self) -> Stats {
+        let mut st = Stats::default();
+        for (tx, h) in self.workers.drain(..) {
+            drop(tx);
+            if let Ok(s) = h.join() {
+                st.merge(&s);
+            }
+        }
+        st
+    }
 }
 
 impl Drop for Pool {
     fn drop(&mut self) {
-        for (tx, h) in self.workers.drain(..) {
-            drop(tx);
-            let _ = h.join();
-        }
+        self.drain();
     }
 }
 
@@ -1066,7 +1125,12 @@ pub struct Runner {
     rbuf: Ring,
     wbuf: Ring,
     a: ActorState,
-    pool: Pool,
+    /// The sub-actor pools, by the depth of fork this thread is running: `pools[0]` for a
+    /// fork of the actor itself, `pools[1]` for a fork of the sub-actor 0 it runs on its own
+    /// thread, and so on. `subs` are the VMs of those sub-actors, kept between forks.
+    pools: Vec<Pool>,
+    subs: Vec<Option<Vm<'static, 'static>>>,
+    depth: usize,
 }
 
 impl Runner {
@@ -1074,7 +1138,44 @@ impl Runner {
         let be = sh.backend();
         let buf = sh.opts.buffer_bytes;
         let a = ActorState::new(&sh, template, actor, main, inherited, 1);
-        Runner { sh, inst, be, rbuf: Ring::new(buf), wbuf: Ring::new(buf), a, pool: Pool::default() }
+        Runner { sh, inst, be, rbuf: Ring::new(buf), wbuf: Ring::new(buf), a, pools: Vec::new(), subs: Vec::new(), depth: 0 }
+    }
+
+    /// End the pools' threads; what their sub-actors counted is this actor's.
+    fn drain_pools(&mut self) {
+        for p in &mut self.pools {
+            let st = p.drain();
+            self.a.st.merge(&st);
+        }
+    }
+
+    /// Run sub-actor 0 of a fork on this thread, as the sub-actor it is: it sees the files
+    /// open at the fork and its own opens end with it, it is not the main line (no barrier,
+    /// no take record), and a fork inside it uses the next pool.
+    fn run_inline(&mut self, snap: &Snapshot<'static, 'static>, fds: Arc<FdTable>) -> Result<()> {
+        let d = self.depth;
+        if self.subs.len() <= d {
+            self.subs.resize_with(d + 1, || None);
+        }
+        let mut vm = match self.subs[d].take() {
+            Some(mut vm) => {
+                vm.resume_from(snap);
+                vm
+            }
+            None => Vm::resume(snap.clone()),
+        };
+        let table = FdTable { own: HashMap::new(), inherited: Some(fds), closed: HashSet::new() };
+        let (fds, takes, main) = (std::mem::replace(&mut self.a.fds, table), std::mem::take(&mut self.a.takes), self.a.main);
+        self.a.main = false;
+        self.depth += 1;
+        vm.start_sub(0);
+        let r = drive(&mut vm, self);
+        self.depth -= 1;
+        self.a.fds = fds;
+        self.a.takes = takes;
+        self.a.main = main;
+        self.subs[d] = Some(vm);
+        r
     }
 
     fn child(&self) -> Runner {
@@ -1158,22 +1259,36 @@ impl Sink<'static, 'static> for Runner {
         match *kind {
             ForkKind::Parallel { index, width } => {
                 let width = width.max(0) as usize;
-                self.a.st.threads += self.pool.grow(width, &self.sh, &self.inst, self.a.template, self.a.actor);
-                let (done, results) = mpsc::channel();
-                for (k, (tx, _)) in self.pool.workers.iter().take(width).enumerate() {
-                    let job = Job { snap: snap.clone(), k: k as i64, a: self.a.child(&self.sh, 0), done: done.clone() };
-                    tx.send(job).map_err(|_| anyhow!("a `{index}` sub-actor thread has ended (an earlier sub-actor panicked)"))?;
+                if width == 0 {
+                    return Ok(true);
                 }
-                drop(done);
-                let mut errs: Vec<Option<anyhow::Error>> = (0..width).map(|_| None).collect();
-                for _ in 0..width {
-                    // every sender gone before `width` results: a thread died with its job
-                    let (k, r, st) = results.recv().map_err(|_| anyhow!("a `{index}` sub-actor panicked"))?;
-                    self.a.st.merge(&st);
-                    errs[k as usize] = r.err();
+                let d = self.depth;
+                if self.pools.len() <= d {
+                    self.pools.resize_with(d + 1, Pool::default);
                 }
-                match errs.into_iter().flatten().next() {
-                    Some(e) => Err(e),
+                self.a.st.threads += self.pools[d].grow(width - 1, &self.sh, &self.inst, self.a.template, self.a.actor);
+                let join = self.pools[d].join.clone().expect("a grown pool has its join");
+                let (snap, fds) = (Arc::new(snap), self.a.fds.freeze());
+                join.remaining.store(width - 1, Ordering::Release);
+                for (j, (tx, _)) in self.pools[d].workers.iter().take(width - 1).enumerate() {
+                    let k = j as i64 + 1;
+                    if tx.send(Job { snap: snap.clone(), k, fds: fds.clone() }).is_err() {
+                        join.done(Some((k, anyhow!("a `{index}` sub-actor thread has ended (an earlier sub-actor panicked)"))));
+                    }
+                }
+                // sub-actor 0 here, while the others run; then wait for them
+                let first = self.run_inline(&snap, fds);
+                if first.is_err() {
+                    self.sh.aborted.store(true, Ordering::Relaxed);
+                }
+                while join.remaining.load(Ordering::Acquire) != 0 {
+                    std::thread::park();
+                }
+                first?;
+                let mut errs = std::mem::take(&mut *join.errs.lock().unwrap_or_else(|e| e.into_inner()));
+                errs.sort_by_key(|(k, _)| *k);
+                match errs.into_iter().next() {
+                    Some((_, e)) => Err(e),
                     None => Ok(true),
                 }
             }
@@ -1221,6 +1336,8 @@ impl Sink<'static, 'static> for Runner {
 
     fn finish(&mut self) -> Result<()> {
         let mut result = Ok(());
+        // the pool's threads end here; what their sub-actors counted is this actor's
+        self.drain_pools();
         if self.a.main {
             // loaders: close their channels so a worker blocked on a slot exits, then join
             let channels: Vec<(String, Arc<Channel>)> = self.inst.channels.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();

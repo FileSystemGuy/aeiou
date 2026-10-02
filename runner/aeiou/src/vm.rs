@@ -433,6 +433,39 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         }
     }
 
+    /// `resume` into a VM that has already run a sub-actor: the same state, with this VM's
+    /// allocations kept (a pool thread resumes once per fork, `run.rs`).
+    pub fn resume_from(&mut self, snap: &Snapshot<'m, 'a>) {
+        self.model = snap.model;
+        self.template = snap.template;
+        self.actor = snap.actor;
+        self.actor_count = snap.actor_count;
+        self.frames.clone_from(&snap.frames);
+        self.scopes.truncate(snap.scopes.len());
+        for (i, s) in snap.scopes.iter().enumerate() {
+            match self.scopes.get_mut(i) {
+                Some(mine) => {
+                    mine.bindings.clone_from(&s.bindings);
+                    mine.body = s.body;
+                    mine.depth = s.depth;
+                }
+                None => self.scopes.push(s.clone()),
+            }
+        }
+        self.shifts.clear();
+        self.depth = snap.frames.len();
+        self.fields = None;
+        self.open.clone_from(&snap.open);
+        self.written.clone_from(&snap.written);
+        self.phases.clone_from(&snap.phases);
+        self.indices_buf.clear();
+        self.unit_lens.clear();
+        self.sub_body = Some(snap.body);
+        self.stack.clear();
+        self.pending = Pending::empty();
+        self.pending_fork = None;
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn snapshot_of(model: &'m Model<'a>, template: &'a str, actor: i64, actor_count: i64, frames: &[Frame<'a>], scopes: &[ScopeLevel<'a>], phases: &[Arc<str>], open: &HashMap<Arc<str>, FileState>, written: &HashMap<Arc<str>, i64>, body: &'a [Node]) -> Snapshot<'m, 'a> {
         Snapshot {

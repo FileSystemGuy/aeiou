@@ -181,7 +181,7 @@ fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
     assert_eq!(r.stats.fingerprint, fp);
     assert_eq!(r.stats.ops, ops);
     assert_eq!(r.stats.bytes_read, bytes);
-    assert_eq!(r.stats.threads, 1 + 3, "one actor thread plus three slots");
+    assert_eq!(r.stats.threads, 1 + 2, "the actor's thread runs slot 0 itself: two pool threads for three slots");
     assert!(r.stats.expected_errors > 0, "ENOENT lookups and EEXIST mkdirs");
     std::fs::remove_dir_all(&root).unwrap();
 }
@@ -199,11 +199,12 @@ fn regions_dataset_nested_parallel_and_direct_reads() {
     assert_eq!(r.stats.fingerprint, fp);
     assert_eq!(r.stats.ops, ops);
     assert_eq!(r.stats.bytes_read, bytes);
-    // the sub-actor pool: one thread for the instance, `threads` for the outer `parallel`,
-    // and under each of those `beam` kept across every hop of every query, not `beam` per hop
+    // the sub-actor pool: a forking thread runs sub-actor 0 itself and keeps a thread for
+    // each of the others, so the instance's thread and one more are the two search threads,
+    // and each of those has `beam - 1` threads kept across every hop of every query
     let beam: u64 = 4;
     assert!(ops > 2 * 6 * 2 * beam, "several hops per query: {ops} ops");
-    assert_eq!(r.stats.threads, 1 + 2 + 2 * beam);
+    assert_eq!(r.stats.threads, 1 + (2 - 1) + 2 * (beam - 1));
     std::fs::remove_dir_all(&root).unwrap();
 }
 
