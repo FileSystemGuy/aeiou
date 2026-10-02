@@ -223,7 +223,7 @@ def test_check_py_enforces_v12_v13_on_a_hand_written_ast():
     _, check = _load()
     base = emit.load(EXAMPLES / "vdb_search_ivf.ast.json")
     ast = copy.deepcopy(base)
-    ast["actors"]["gpu"]["body"][0]["parallel"]["body"][1]["open"]["flags"] = ["RDWR"]
+    ast["actors"]["gpu"]["body"][5]["open"]["flags"] = ["RDWR"]
     assert any("V12" in e for e in check.Check(ast, "x").run())
     ast = copy.deepcopy(base)
     ast["datasets"]["lists"]["regions"]["file"] = "ivf/.aeiou-lists.bin"

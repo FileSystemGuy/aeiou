@@ -42,7 +42,7 @@ fn hashes_match_check_py() {
         ("train_stream_tfrecord", "bdba2a200488c0a7cf3d3b9269074990d1f54c013be0dd5fd84519469c886784"),
         ("train_stream_parquet", "0e629d8ffd38043367d6bd690f2e7cb10cea8f179bea003c78e30450564b0ec2"),
         ("train_map_hdf5", "4f20c7789667ecca22d3f4b11fcf29a6067eedf5647c83dc84712b9e25b80ccd"),
-        ("vdb_search_ivf", "9d72a58e47fa81a9f6d07c4d8a9e66a9e70859b438417e67e7c7c8634346af5d"),
+        ("vdb_search_ivf", "5e9bf135c59824c2a033a8822eeb1130162fdbc6fe68f824f1b43dada367a9a1"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -63,7 +63,8 @@ fn golden_fingerprints() {
     // same day, rewritten from the trace of `np.load`, §3.44; ckpt_write_dcp from the trace of
     // `dcp.save`, §3.45, and ckpt_restore with it: its default offsets follow the writer; ckpt_restore
     // again the same day, its item loop rewritten from the trace of `dcp.load`, §3.47; model_load with the calls of
-    // `safetensors.safe_open` and the small JSON files, same section).
+    // `safetensors.safe_open` and the small JSON files, same section; vdb_search_ivf from the trace of FAISS
+    // `OnDiskInvertedLists`, §3.49: the index file, the prefetch threads, ids before codes).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         ("train_small_files", 2, &[("steps", "10")], 0x71628bdb4289c4c8, 5120),
         ("train_large_samples", 2, &[("steps", "5")], 0xa2c284c6137f9639, 50451),
@@ -71,7 +72,7 @@ fn golden_fingerprints() {
         ("ckpt_restore", 2, &[], 0x22990a88db4e6d4f, 368),
         ("model_load", 2, &[], 0x2668387c7aa4126b, 24682),
         ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")], 0xc4e18e18bc9bf279, 4232),
-        ("vdb_search_ivf", 1, &[("queries", "100"), ("threads", "2")], 0x1dfd886fe80fd785, 12804),
+        ("vdb_search_ivf", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
         (
             "vdb_build_diskann",
             1,

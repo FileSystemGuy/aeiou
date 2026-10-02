@@ -28,7 +28,7 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("ckpt_restore", 2, &[]),
     ("model_load", 2, &[]),
     ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")]),
-    ("vdb_search_ivf", 1, &[("queries", "100"), ("threads", "2")]),
+    ("vdb_search_ivf", 1, &[("calls", "100"), ("threads", "2")]),
     ("vdb_build_diskann", 1, &[("sectors", "1000"), ("sample", "100"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608")]),
     ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),

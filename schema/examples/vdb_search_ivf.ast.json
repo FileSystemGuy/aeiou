@@ -1,54 +1,108 @@
 {
   "ast": "0.3",
   "name": "vdb_search_ivf",
-  "doc": "Per query, nprobe concurrent reads of whole inverted lists chosen by Zipf popularity.",
+  "doc": "Per search call and OpenMP slice, prefetch threads touch every inverted list the slice's queries probe; lists chosen by popularity.",
+  "backend": "mmap",
   "params": {
     "threads": {
       "default": 32,
-      "unit": "count"
+      "unit": "count",
+      "doc": "[config] OpenMP threads: a search call of n queries runs min(threads, n) slices"
     },
-    "queries": {
+    "calls": {
       "default": 100000,
-      "unit": "count"
+      "unit": "count",
+      "doc": "search calls"
+    },
+    "batch": {
+      "default": 1,
+      "unit": "count",
+      "doc": "[config] queries per slice per call (the call's batch is threads * batch)"
     },
     "nprobe": {
       "default": 64,
       "unit": "count"
     },
+    "prefetch": {
+      "default": 32,
+      "unit": "count",
+      "doc": "prefetch threads per slice: min(32, batch * nprobe) (traced); batch * nprobe is modeled as a multiple of it"
+    },
     "list_pop": {
       "default": {
         "zipf": {
-          "s": 0.8
+          "s": 0.2
         }
       },
-      "doc": "list popularity [measure]"
+      "doc": "list popularity; measured 0.20-0.25 on SIFT1M with its own query set"
     },
     "distance": {
       "default": 400000,
       "unit": "ns",
-      "doc": "[measure]"
+      "doc": "[measure] scan time per query"
     },
     "lists": {
       "default": 1000000,
       "unit": "count",
       "doc": "[config] inverted lists"
+    },
+    "list_bytes": {
+      "default": {
+        "lognormal": {
+          "median": 40960,
+          "sigma": 0.4
+        }
+      },
+      "doc": "[config] codes + ids of one list: vectors per list * (code size + 8); sigma measured 0.39 on SIFT1M"
+    },
+    "code_size": {
+      "default": 32,
+      "unit": "bytes",
+      "doc": "[config] bytes of one vector's code (PQ32); its id is 8 more"
+    },
+    "index_bytes": {
+      "default": 553779476,
+      "unit": "bytes",
+      "doc": "[config] the index file: centroids (lists * dimension * 4 bytes; 128 dimensions here), codebooks, 16 bytes per list"
+    },
+    "index_reads": {
+      "default": [
+        8192,
+        536862720,
+        8192,
+        122880,
+        8192,
+        16769024,
+        8192
+      ],
+      "unit": "bytes",
+      "doc": "[config] read lengths on the index file: stdio fills 8,192 bytes, and reads the bulk of each large array (centroids, codebooks, list table) directly"
     }
   },
   "datasets": {
     "lists": {
       "regions": {
-        "file": "ivf/invlists.bin",
+        "file": "ivf/merged_index.ivfdata",
         "count": {
           "param": "lists"
         },
         "slot": 262144,
         "size": {
-          "lognormal": {
-            "median": 40960,
-            "sigma": 0.9
-          }
+          "param": "list_bytes"
         },
         "seed": 1592646270
+      }
+    },
+    "index": {
+      "files": {
+        "pattern": "index/populated-{id}.index",
+        "count": 1,
+        "size": {
+          "const": {
+            "param": "index_bytes"
+          }
+        },
+        "seed": 1592646271
       }
     }
   },
@@ -56,75 +110,224 @@
     "gpu": {
       "body": [
         {
-          "parallel": {
-            "index": "th",
-            "width": {
-              "param": "threads"
+          "let": {
+            "name": "i",
+            "value": {
+              "file": {
+                "dataset": "index",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "i"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "fstat": {
+            "file": {
+              "ref": "i"
+            }
+          }
+        },
+        {
+          "loop": {
+            "index": "r",
+            "to": {
+              "len": "index_reads"
             },
             "body": [
               {
-                "let": {
-                  "name": "f",
-                  "value": {
-                    "file": {
-                      "dataset": "lists",
-                      "id": 0
+                "read": {
+                  "file": {
+                    "ref": "i"
+                  },
+                  "len": {
+                    "elem": {
+                      "array": "index_reads",
+                      "index": {
+                        "index": "r"
+                      }
                     }
                   }
                 }
-              },
+              }
+            ]
+          }
+        },
+        {
+          "let": {
+            "name": "f",
+            "value": {
+              "file": {
+                "dataset": "lists",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "f"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "i"
+            }
+          }
+        },
+        {
+          "loop": {
+            "index": "q",
+            "to": {
+              "param": "calls"
+            },
+            "body": [
               {
-                "open": {
-                  "file": {
-                    "ref": "f"
-                  },
-                  "flags": [
-                    "RDONLY"
-                  ]
-                }
-              },
-              {
-                "loop": {
-                  "index": "q",
-                  "to": {
-                    "param": "queries"
+                "parallel": {
+                  "index": "th",
+                  "width": {
+                    "param": "threads"
                   },
                   "body": [
                     {
                       "parallel": {
                         "index": "p",
                         "width": {
-                          "param": "nprobe"
+                          "param": "prefetch"
                         },
                         "body": [
                           {
-                            "let": {
-                              "name": "c",
-                              "value": {
-                                "pick": {
-                                  "dataset": "lists",
-                                  "dist": {
-                                    "param": "list_pop"
+                            "loop": {
+                              "index": "k",
+                              "to": {
+                                "div": [
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "batch"
+                                      },
+                                      {
+                                        "param": "nprobe"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "param": "prefetch"
+                                  }
+                                ]
+                              },
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "c",
+                                    "value": {
+                                      "pick": {
+                                        "dataset": "lists",
+                                        "dist": {
+                                          "param": "list_pop"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "let": {
+                                    "name": "ids",
+                                    "value": {
+                                      "div": [
+                                        {
+                                          "mul": [
+                                            {
+                                              "size": {
+                                                "ref": "c"
+                                              }
+                                            },
+                                            8
+                                          ]
+                                        },
+                                        {
+                                          "add": [
+                                            {
+                                              "param": "code_size"
+                                            },
+                                            8
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "ref": "ids"
+                                    },
+                                    "offset": {
+                                      "sub": [
+                                        {
+                                          "add": [
+                                            {
+                                              "offset": {
+                                                "ref": "c"
+                                              }
+                                            },
+                                            {
+                                              "size": {
+                                                "ref": "c"
+                                              }
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "ref": "ids"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "sub": [
+                                        {
+                                          "size": {
+                                            "ref": "c"
+                                          }
+                                        },
+                                        {
+                                          "ref": "ids"
+                                        }
+                                      ]
+                                    },
+                                    "offset": {
+                                      "offset": {
+                                        "ref": "c"
+                                      }
+                                    }
                                   }
                                 }
-                              }
-                            }
-                          },
-                          {
-                            "read": {
-                              "file": {
-                                "ref": "f"
-                              },
-                              "len": {
-                                "size": {
-                                  "ref": "c"
-                                }
-                              },
-                              "offset": {
-                                "offset": {
-                                  "ref": "c"
-                                }
-                              }
+                              ]
                             }
                           }
                         ]
@@ -133,21 +336,28 @@
                     {
                       "compute": {
                         "ns": {
-                          "param": "distance"
+                          "mul": [
+                            {
+                              "param": "distance"
+                            },
+                            {
+                              "param": "batch"
+                            }
+                          ]
                         }
                       }
                     }
                   ]
                 }
-              },
-              {
-                "close": {
-                  "file": {
-                    "ref": "f"
-                  }
-                }
               }
             ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "f"
+            }
           }
         }
       ]
@@ -156,16 +366,15 @@
   "provenance": {
     "generator": {
       "script": "vdb_search_ivf.py",
-      "sha256": "e484d3d6730775c0ae4048c5f45c7d3450bb948d5b811f205447c706a65f0724",
+      "sha256": "3d8b032985e7d0c95f06cefdb7a6bc36f646e9c2f42ea4d71334d5a511320095",
       "builder_version": "0.1.0",
-      "git": "32e33f8e9e9b"
+      "git": "d054c864f010-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
-    "built_twice_identical": true,
-    "ast_sha256": "9d72a58e47fa81a9f6d07c4d8a9e66a9e70859b438417e67e7c7c8634346af5d"
+    "ast_sha256": "5e9bf135c59824c2a033a8822eeb1130162fdbc6fe68f824f1b43dada367a9a1"
   }
 }

@@ -379,3 +379,18 @@ def test_model_load_abstract_matches_the_trace_of_from_pretrained(tmp_path):
         assert t[op] == d[op], op
     assert d["read"] - t["read"] == 2 * 5 + 76   # through the mappings, unseen by strace: 8 bytes and the header per shard, 76 tensors
     assert t["stat"] - d["stat"] == 25           # not modeled: directories (the model's 12 times, the two above each shard), a second stat of two JSON files, the probe for an unsharded model.safetensors
+
+
+def test_ivf_abstract_matches_the_trace_of_faiss_search(tmp_path):
+    """`builder/traces/vdb_search_ivf`: `faiss.read_index` and 20 searches over
+    `OnDiskInvertedLists`, traced 2026-10-01. FAISS maps the lists file and issues no call on
+    it, so the trace has the index file's reads and the two opens, and nothing of the lists
+    (`ABSTRACTS.md` §6)."""
+    kit = BUILDER / "traces" / "vdb_search_ivf"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_search_ivf.ast.json"), "--gpus", "1",
+                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
+    assert {k: v for k, v in d.items() if k != "read"} == {k: v for k, v in t.items() if k != "read"}
+    assert d["read"] - t["read"] == 20 * 64 * 2   # through the mapping, unseen by strace: ids and codes of 64 lists per query
