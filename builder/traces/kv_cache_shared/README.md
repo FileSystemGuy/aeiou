@@ -39,7 +39,13 @@ aeiou-trace metrics reader.txt --root /mnt/nfs -o reader.trace.metrics.json
   loaded (`Inference Engine computed tokens`, `LMCache hit tokens`, `Retrieved`); in all 80
   requests the chunks loaded are the hit chunks less the whole chunks the engine held.
 
+The reader's namespace is declared `same_run` (contract 0.4): `aeiou run` refuses the
+reader unless its `--seed`, `--gpus`, and parameters are the writer's.
+
 `fitted.params.json` and `fitted.reader.params.json` hold the same values, the ones of
 `../kv_cache_serving/fitted.params.json` plus `meta_bytes` and `buf`.
+
+The wire counts in `ABSTRACTS.md` §8 are from a repeat of both runs without `strace`:
+`-yy` adds GETATTRs and WRITEs of its own (`DESIGN_REVIEW.md` §3.53).
 
 `tests/test_trace.py` repeats the dry runs against the committed metrics.

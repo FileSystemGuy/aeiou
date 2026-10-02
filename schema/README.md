@@ -207,6 +207,17 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   manifest (§6), so they must agree on `input`. The runner requires the writer's
   `.aeiou-namespace.json` at the root and never empties an input root. Reasoning in
   `DESIGN_REVIEW.md` §3.24.
+- **V15 `same_run` needs `input`** (added 2026-10-02, contract 0.4). A namespace declared
+  `same_run: true` is read under names that are positional draws of the run that wrote it
+  (a conversation id drawn at a new conversation, say), so only a run with the writer's
+  draws can name its objects. The validator requires `input` beside it. The runner compares
+  this run with the manifest before the gate and refuses when `--seed` or `--gpus` differ
+  from the writer's, or when a parameter that both abstracts declare has another resolved
+  value; the message lists each difference. A parameter only one of them declares is not
+  compared. A namespace without `same_run` is not compared this way: a checkpoint restore
+  may run with any seed. What the rule cannot see is whether the two abstracts place their
+  draws at the same sites; that is the authoring script's job and a run test's
+  (`DESIGN_REVIEW.md` §3.52, §3.54).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -274,7 +285,8 @@ not compared), the abstract's name and hash, seed, `gpus`, the parameters, each 
 and GPU id range, start and finish times, the count of objects created, and the list of
 objects with the GPU id that created each (omitted above 100 000 objects). A run that
 declares a namespace `input` (V14) requires the manifest at its root, refuses on a differing
-definition, reports the write-to-read gap (`--max-gap` makes a long one an error), and counts
+definition (and, for a `same_run` namespace, on a seed, an instance count, or a common
+parameter that differs from the writer's, V15), reports the write-to-read gap (`--max-gap` makes a long one an error), and counts
 the input objects it opens on the host that wrote them (`--require-cold` makes any such read
 an error; `--rank-rotate` is how a read run on the same hosts avoids them). This is the
 checkpoint write-then-restore handoff of `PROJECT_BRIEF.md` §8.
@@ -334,3 +346,7 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
   document). Reasoning in `DESIGN_REVIEW.md` §3.28.
 - **0.3** (2026-10-01): the optional root key `backend` (§1). Every committed AST was
   regenerated; no fingerprint changed. Reasoning in `DESIGN_REVIEW.md` §3.48.
+- **0.4** (2026-10-02): the optional namespace key `same_run` and rule V15 (§4). Every
+  committed AST was regenerated; no fingerprint changed. The namespace manifest's format
+  is unchanged: it has recorded the writer's seed, instance count, and parameters since
+  2026-09-30, and they are now compared. Reasoning in `DESIGN_REVIEW.md` §3.54.

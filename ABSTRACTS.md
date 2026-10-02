@@ -170,7 +170,8 @@ workload train_small_files {
   issuing real `getdents64` per actor and does not reproduce the list's RAM. A pipeline that
   lists on rank 0 and broadcasts is modeled by wrapping the phase in `when (gpu == 0)` (§9.1).
   Whether the walk is part of the CLOSED measurement is a WG policy question (`PROJECT_BRIEF.md` §8); here it is a
-  separately reported phase, off by default.
+  separately reported phase, ~~off by default~~ **on by default since 2026-10-02**: the run stays as close to the
+  metadata load a real job puts on the storage as to its data load (`DESIGN_REVIEW.md` §3.54).
 
 **Trace (2026-10-01).** `builder/traces/train_small_files`: `ImageFolder` + `DataLoader`,
 batch 16, 2 workers, 2 epochs over 3,200 real JPEGs (median 111 KiB) on the loopback NFS
@@ -307,8 +308,13 @@ DLIO's generator writes them; NumPy 2.5.2, Python 3.12.3. Reasoning in `DESIGN_R
   between two seeds of the abstract.
 - **80 % of the calls are `lseek`**, all local. They cost client CPU and no wire op.
 - **On the wire** (140 MiB corpus, `mountstats` delta): 2,260 READs for 2.35 GB, one pass
-  over each file at about 1 MiB per READ; the second epoch came from the page cache. 2,247
-  GETATTRs, about one per READ; the cause was not looked into. 16 OPEN_NOATTR, no CLOSE.
+  over each file at about 1 MiB per READ; the second epoch came from the page cache. ~~2,247
+  GETATTRs, about one per READ; the cause was not looked into.~~ The 2,247 GETATTRs were
+  `strace -yy`'s (2026-10-02, `DESIGN_REVIEW.md` §3.53): the same script untraced sends
+  10 for 561 READs, and the abstract 16 for 2,285. 16 OPEN_NOATTR, no CLOSE.
+- **The listing** (2026-10-02): the script's `glob` is one `open(O_DIRECTORY)`, `fstat`,
+  `getdents64` until empty, and `close` per directory, with no `stat`. It is the optional
+  phase `enumerate` of the abstract, on by default as in §1 (`DESIGN_REVIEW.md` §3.54).
 
 **Cuts.** None specific. The `.npz` may be stored uncompressed (`np.savez`) or deflated
 (`np.savez_compressed`); only the uncompressed layout has this shape, and the reference dataset
@@ -680,7 +686,7 @@ dataset pattern is ~~`model-{id:05}.safetensors`~~ `model/model-{id:05}.safetens
 **Trace (2026-10-01).** `builder/traces/model_load`: `AutoModelForCausalLM.from_pretrained`
 on a local directory of five safetensors shards (GPT-2 shape, random weights, 437 MB) on the
 loopback NFS mount; safetensors 0.8.0, transformers 5.18, torch 2.14.1 on CPU. Reasoning in
-`DESIGN_REVIEW.md` §3.47. **The choices other than the backend are not yet confirmed by the user.**
+`DESIGN_REVIEW.md` §3.47. ~~**The choices other than the backend are not yet confirmed by the user.**~~ **Decided 2026-10-02:** the user confirmed the choices that need no GPU; the tensor table and the copy's thread count wait for one (`DESIGN_REVIEW.md` §3.54).
 
 - **The library issues no `read` on a shard.** `safe_open(framework="pt")` maps the file
   read-only and parses the header from the mapping, then opens it a second time, maps it
@@ -1281,7 +1287,9 @@ reasoning in `DESIGN_REVIEW.md` §3.52.
   request stream, with the store empty (a namespace) or filled (`input`, V14). The reader
   is run with the writer's `--seed`, `--gpus`, and parameters; the conversation ids are
   positional draws at the same sites in both, so the reader names the chunks the writer
-  left. Another seed fails on its first lookup.
+  left. ~~Another seed fails on its first lookup.~~ The namespace is declared `same_run`
+  (contract 0.4, V15): a reader with another seed, instance count, or parameter value is
+  refused before the gate, with the differences named.
 - **Against the traces** at the fitted parameters:
 
   | | writer trace | `kv_cache_shared` | reader trace | `kv_cache_shared_reader` |
@@ -1300,17 +1308,21 @@ reasoning in `DESIGN_REVIEW.md` §3.52.
 
   | | writer, vLLM | writer, abstract | reader, vLLM | reader, abstract |
   |---|---|---|---|---|
-  | WRITE / COMMIT / RENAME | 235 / 47 / 47 | 192 / 48 / 48 | 0 | 0 |
-  | READ | 0 | 0 | 188 | 192 |
-  | OPEN | 47 | 48 | 47 | 0 |
+  | WRITE / COMMIT / RENAME | 188 / 47 / 47 | 192 / 48 / 48 | 0 | 0 |
+  | READ | 4 | 0 | 188 | 192 |
+  | OPEN | 48 | 48 | 0 | 0 |
   | LOOKUP | 40 | 44 | 0 | 0 |
-  | GETATTR | 133 | 51 | 141 | 46 |
+  | GETATTR | 39 | 51 | 37 | 46 |
+
+  (vLLM's columns are from an untraced repeat, 2026-10-02. The first version of this table
+  was taken during the `strace -yy` capture and had 235 WRITEs, 133 and 141 GETATTRs, and
+  47 OPENs for the reader; the tracer adds those, `DESIGN_REVIEW.md` §3.53.)
 
   Four READs per chunk file, each file once: the reader's 91 loads (286 MB asked for)
   cost the server 47 files (148 MB), the client's cache serving a chunk's later loads.
-  Not explained: the server's fifth WRITE per chunk (the abstract sends four), and the
-  GETATTR counts, where vLLM sends about one per `stat` and the runner far fewer. The
-  runner's reader sent no OPEN because the same client still held the writer's
+  ~~Not explained: the server's fifth WRITE per chunk (the abstract sends four), and the
+  GETATTR counts, where vLLM sends about one per `stat` and the runner far fewer.~~ Neither
+  reader sent an OPEN because the same client still held the writer's
   delegations; a reader on another client has none.
 
 **Cuts (stated).**
@@ -1615,6 +1627,10 @@ nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstat
 (2026-10-02: `%desc` does not include `io_setup`, `io_submit`, `io_getevents`, `io_destroy`; name them for an
 application that uses Linux AIO. `--seccomp-bpf` keeps `strace` from stopping a compute-heavy process at
 calls it does not trace.)
+
+(2026-10-02, later: take the wire counts from a repeat without `strace`. `-yy` adds about one GETATTR per
+READ on NFS and changed the WRITE count of one capture; `-y` and no path decoding do not, but an untraced
+repeat needs no such knowledge. `DESIGN_REVIEW.md` §3.53.)
 
 (`%process` added 2026-10-01: `aeiou-trace` follows `clone` to know which threads share
 descriptors and which processes are one instance; `builder/README.md` §7.)

@@ -242,7 +242,9 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   list makes every host read what another host wrote (`DESIGN_REVIEW.md` §3.24). `--ranks`
   above 1 needs `--coordinator` (§6).
 - **Input namespaces** (`input: true`, V14). The run requires `.aeiou-namespace.json` at the
-  root (`schema/README.md` §6), refuses a differing definition, never empties the root,
+  root (`schema/README.md` §6), refuses a differing definition (for a namespace declared
+  `same_run`, V15, also a `--seed`, a `--gpus`, or a parameter common to both abstracts that
+  differs from the writer's, each difference named), never empties the root,
   prints who wrote it and how long ago (`--max-gap` makes a longer gap an error), and counts
   the opens of recorded input objects that hit the host that wrote them; one or more is a
   warning, or an error under `--require-cold`. At the end of a successful run the manifest

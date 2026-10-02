@@ -1899,8 +1899,12 @@ DLIO's `npz_reader.py` (argonne-lcf; qualified 2026-10-01, §3.46), through a `D
 `npz_generator.py` writes them (`np.savez(x=volume, y=labels)`). Kit in
 `builder/traces/train_large_samples`, findings in `ABSTRACTS.md` §2. Unlike §3.43, where
 the draft was one call short, here the draft was wrong in shape. **The choices below were
-made while building. The user confirmed the explicit seeks (decided 2026-10-01); the
-others are not yet confirmed.**
+made while building. The user confirmed the explicit seeks (decided 2026-10-01); ~~the
+others are not yet confirmed.~~** **Reviewed by the user 2026-10-02** (§3.53): `framing`
+stays a parameter and gains a check against the installed NumPy; the listing follows the
+real training script and is now in the abstract; the GETATTRs were the tracer's. ~~The
+remaining items (the two-loop seek count, the two corpora and their tolerances) were not
+commented on.~~ **Decided 2026-10-02:** the user confirmed the remaining choices (§3.54).
 
 - **What the draft had wrong.** Two members of equal size, each found by a read of its
   local header and then read from a re-seeked offset; no read at offset 0 before the tail;
@@ -1941,11 +1945,14 @@ others are not yet confirmed.**
   that (0.040 against a seed-to-seed 0.062). The test allows 0.3 and 0.07 on the reuse
   distance and 0.01 on every other row; counts within 1 %, since the abstract draws its
   sizes and the corpus has its own.
-- **Not modeled.** The `glob` that lists the corpus (two directories). DLIO lists files
-  itself and differently; the walk is not part of this abstract.
-- **Seen and not explained.** About one GETATTR per READ on the wire. Recorded in
+- ~~**Not modeled.** The `glob` that lists the corpus (two directories). DLIO lists files
+  itself and differently; the walk is not part of this abstract.~~ **Modeled 2026-10-02**
+  at the user's direction (follow the real training script, not DLIO): an optional
+  `enumerate` phase (§3.53).
+- ~~**Seen and not explained.** About one GETATTR per READ on the wire. Recorded in
   `ABSTRACTS.md` §2; whether it is the client revalidating during a long buffered read
-  without a delegation is a question for a run with `rpcdebug`, not for the abstract.
+  without a delegation is a question for a run with `rpcdebug`, not for the abstract.~~
+  **Explained 2026-10-02:** they are `strace -yy`'s, not the application's (§3.53).
 
 The lesson for the remaining six rows: the drafts marked **[verify]** are hypotheses. One
 was nearly right and one was not.
@@ -1956,7 +1963,11 @@ Row 3 of the capture plan: `torch.distributed.checkpoint.save` on two ranks over
 dict of `DTensor`s, and `torch.save` on one. Kit in `builder/traces/ckpt_write_dcp`,
 findings in `ABSTRACTS.md` §3. The draft had the right frame (mkdir, shard file, fsync,
 `.metadata` through a rename) and the wrong inside of the item loop. **The choices below
-were made while building and are not yet confirmed by the user.**
+were made while building and are not yet confirmed by the user.** *2026-10-02:* the user
+reviewed this section and confirmed one thing, that `O_DIRECT` checkpointing stays on the
+list to be evaluated at low priority (§3.46, `PROJECT_BRIEF.md` §6 item 19); ~~the other
+choices were not commented on.~~ **Decided 2026-10-02:** the user confirmed the other
+choices (§3.54).
 
 - **The item loop is the traced one; hash and fingerprints changed.** Per item a tell, the
   writes, a tell; an item above the buffer is three writes (704, the item, 873), one
@@ -2028,7 +2039,10 @@ Row 4 of the capture plan, both halves. Kits in `builder/traces/ckpt_restore` an
 the restore had two reads per item and the real reader has six and 34 seeks; the model load
 had header reads and the real library issues no read at all. **The choices below were made
 while building and are not yet confirmed by the user**, except the two put to the user as
-questions, which were decided the same day and are struck here (§3.48).
+questions, which were decided the same day and are struck here (§3.48). *2026-10-02:*
+deferred by the user until a GPU environment is available; the tensor table and the
+copy's thread count cannot be settled without one. **Decided 2026-10-02:** the user
+confirmed the choices that need no GPU (§3.54); those two stay open.
 
 **`ckpt_restore`.**
 
@@ -2243,8 +2257,8 @@ SIFT1M, built in 13 shards on the loopback NFS mount and then searched. Kits in
 `ABSTRACTS.md` §5 and §7. The search draft had the right skeleton and wrong numbers (3 to 8
 rounds where there are 28); the build draft had the wrong skeleton (three reads of the base
 where there are twenty, 4 KiB layout writes where there are 64 MiB ones, an `fsync` that
-does not exist). **The choices below were made while building and are not yet confirmed by
-the user.**
+does not exist). ~~**The choices below were made while building and are not yet confirmed by
+the user.**~~ **Decided 2026-10-02:** the user confirmed the search and the build choices.
 
 **The capture.**
 
@@ -2344,8 +2358,8 @@ Row 8 of the capture plan, the last. Kit in `builder/traces/kv_cache_serving`, f
 `ABSTRACTS.md` §8. The draft's chain of conversations stands; its I/O skeleton was wrong in
 three places (a `stat` per chunk per request, a directory per conversation, writes during
 decode) and missed the fact that decides the read volume: the engine has a cache of its own
-in front of this one. **The choices below were made while building and are not yet confirmed
-by the user.**
+in front of this one. ~~**The choices below were made while building and are not yet confirmed
+by the user.**~~ **Decided 2026-10-02:** the user confirmed the choices.
 
 **What was traced, and what was not.** The call sequence of LMCache's local-disk backend
 under a real vLLM on a GPU, with a synthetic chat load. Not traced: a public chat replay.
@@ -2434,8 +2448,9 @@ sampler compiles kernels at first use and needs the CUDA compiler; the kit turns
 §3.51 ended with a decision: the KV read path is measured with two runs, a writer and then
 a reader over the writer's namespace after `--drop-caches`. The user asked for the reader.
 Building it began, as every row has, with what the application does, and the first thing
-found was that the application traced in §3.51 has no such reader. **The choices below
-were made while building and are not yet confirmed by the user.**
+found was that the application traced in §3.51 has no such reader. ~~**The choices below
+were made while building and are not yet confirmed by the user.**~~ **Decided 2026-10-02:**
+the user confirmed the choices; the items under "Not done" wait.
 
 **What was tried, in order.**
 
@@ -2480,8 +2495,9 @@ one §3.51 traced: its `stat` loop and its rename are here.
   run (a reader with another seed, or built from a script whose prelude moved, fails at
   its first `stat` or `open` with `ENOENT`) and by `tests/run.rs`. The namespace manifest
   compares the namespace's definition, not the seed or the parameters of the run that
-  wrote it; recording those and comparing them at the reader's start would turn the late
-  failure into a refusal before the gate, and is a contract change left for the user.
+  wrote it; ~~recording those and comparing them at the reader's start would turn the late
+  failure into a refusal before the gate, and is a contract change left for the user.~~
+  **Built 2026-10-02** at the user's decision: `same_run`, V15, contract 0.4 (§3.54).
 - **`hit` is the one difference in the chain.** The chunks the store has for a prompt are
   `had` (what earlier turns stored) on an empty store and `stored` (every whole chunk of
   the prompt) on a filled one. Lookups walk `hit` chunks; loads are `hit − held`, where
@@ -2513,14 +2529,138 @@ one §3.51 traced: its `stat` loop and its rename are here.
 **Measured** (tables in `ABSTRACTS.md` §8). Calls: 47 / 48 chunks stored, 47 / 88 and
 91 / 136 loaded (trace / abstract; `local = 8` gives 0 and 32, the traced engine lies
 between as in §3.51). Wire, reader: 188 READs for vLLM, 192 for the abstract, four per
-chunk file, each file once. Not explained: five WRITEs per chunk from vLLM against the
-abstract's four, and three times the GETATTRs. The reader was made cold with `fsync` and
+chunk file, each file once. ~~Not explained: five WRITEs per chunk from vLLM against the
+abstract's four, and three times the GETATTRs.~~ Both were the tracer's: an untraced
+repeat sends four WRITEs per chunk and 39 and 37 GETATTRs (§3.53). The reader was made cold with `fsync` and
 `POSIX_FADV_DONTNEED` per file, since `--drop-caches` needs root; `aeiou run` warned, as
 it should, that the reading host had written the objects.
 
 **Not done.** A reader on a second client (the OPEN and delegation traffic of a client
 that did not write the files); two engines on one store at once; the `O_DIRECT` option;
 the chat replay for the distributions, which is unchanged from §3.51.
+
+### 3.53 The user's review of §3.44 to §3.52; `strace -yy` is on the wire (added 2026-10-02)
+
+The user reviewed the sections that still carried unconfirmed choices. §3.50, §3.51, and
+§3.52 are decided as written. §3.47 waits for a GPU environment. `O_DIRECT` checkpointing
+(§3.45, §3.46) stays on the list at low priority. Three remarks on §3.44 led to work.
+
+**The GETATTRs were ours.** The user asked whether the GETATTR per READ seen under
+`np.load` (§3.44) came from something the benchmark does, while holding that whether a
+client should send them is the file system's business and not the benchmark's. The runner
+does not send them: `train_large_samples` at the fitted parameters on the loopback mount
+is 2,285 READs and 16 GETATTRs, one per file. Neither does NumPy: `np.load` alone, a warm
+second pass, a pass after the attribute timeout, two processes, and the kit's `DataLoader`
+script untraced all give 0 to 10. The same script under `strace`:
+
+| | READ | GETATTR |
+|---|---|---|
+| untraced | 561 | 10 |
+| `strace -f` | 561 | 6 |
+| `strace -f -y` | 561 | 6 |
+| `strace -f -yy` | 561 | 559 |
+
+`-yy` makes the tracer look at every descriptor it prints, and on NFS that revalidates the
+attributes each READ has just invalidated. So a wire count taken during a `-yy` capture
+overstates GETATTR by about one per READ. The §3.44 count was one; so were the two things
+§3.52 could not explain. An untraced repeat of the shared-store pair gives vLLM 188 WRITEs
+(four per chunk, as the abstract) where the traced run had 235, and 39 and 37 GETATTRs
+where it had 133 and 141; READ, COMMIT, RENAME, and LOOKUP are unchanged, and the
+untraced reader sends no OPEN, as the abstract's did not. *Rule from now on:* the call
+sequence comes from the trace, the wire counts from an untraced repeat. Recorded in
+`ABSTRACTS.md` §11. Counts already in the docs that were taken untraced say so (§3, §8
+local disk); the ImageFolder counts of §1 were not re-taken and their GETATTR figure
+should be read with this in mind.
+
+**`framing` can be checked, and now is.** The user agreed it is a parameter and asked how
+one would know it needs another value, a NumPy version for instance. The version is not
+the right key: the number depends on the writer's layout (the `.npy` header padded to 64
+bytes, the zip64 local headers `savez` forces), on the member names, and
+on how many members there are, and it does not depend on the volume's size. What can be
+done is to ask the library: write `np.savez(x=<uint8 volume>, y=[0])` in memory and
+subtract. NumPy 2.2.6 and 2.5.3 both give 498, and 102 for the central directory.
+`builder/tests/test_formats.py` now does this against the abstract's defaults, so a NumPy
+that lays the archive out differently fails the builder's tests when the lock file moves
+to it. That covers the defaults. It does not cover a corpus written by something else
+(more members, other names, `savez_compressed`): for that the number has to come from a
+file of the corpus, which is what `aeiou-params safetensors` does for a model. An
+`aeiou-params npz FILE` that prints `framing` and `cd_len` from a real archive is the
+matching tool; ~~proposed, not built.~~ built the same day at the user's request (§3.54). The runner cannot detect a wrong value at run time
+and must not try: it never interprets sample data, and a generated corpus has no zip
+structure to look at.
+
+**The listing follows the real training script.** §3.44 left the kit's `glob` out with
+the argument that DLIO lists differently. The user's rule is the other way round: what a
+real training job does is the reference, and a job with one file per sample lists its
+corpus before the first step. `glob("…/*/*.npz")` is, per directory, `open(O_DIRECTORY)`,
+`fstat`, `getdents64` until empty, `close`, with no `stat` (ImageFolder's walk has one,
+§3.43). `train_large_samples` gains a parameter `enumerate` and a phase of that name with
+those four ops per directory and actor. Choices made while building, ~~**not yet
+confirmed**~~ the first reversed and the others confirmed by the user the same day (§3.54):
+
+- ~~*Off by default*, as in `train_small_files`, where whether the walk belongs to the
+  measurement was left as WG policy (`ABSTRACTS.md` §1). The user's rule argues for on in
+  both. Left as it is until the user says, because turning it on changes the default
+  fingerprints of two abstracts.~~ **On by default in both, decided 2026-10-02** (§3.54).
+- *Per actor.* Each rank of a distributed job builds its own `Dataset`, as in §1.
+- *The root's own listing is not modeled*, as in §3.43 (no handle for a dataset's root).
+
+The abstract's hash changed (`a614e020…` to `a147556b…`); its fingerprints with the phase
+off did not.
+
+### 3.54 The walk is on by default; `aeiou-params npz`; `same_run` (decided 2026-10-02)
+
+Four answers from the user to the questions §3.53 left, all decided and built the same day.
+
+**The directory walk is part of the workload.** Asked whether real training runs under
+PyTorch walk the tree, the answer is yes with one distinction. `ImageFolder` does, in
+every process that builds the dataset: one `scandir` of every class directory, traced
+from torchvision itself (§3.43). For one-file-per-sample corpora there is no such library
+class; the job's own `Dataset` lists the files with `glob`, `os.listdir`, or `os.walk`,
+and the kit's script is one instance of that, not a trace of a named framework. Any
+map-style dataset needs the list before the first step, so some listing is always there;
+what varies is whether it is read from the file system or from an index file shipped
+with the corpus (a manifest, a CSV), in which case the walk is one file read. The user's
+rule: stay as close to the metadata load the storage sees as to the data load, even though
+the runner needs no list (the Feistel permutation and the name pattern replace it).
+So `enumerate` is **on by default** in `train_small_files` and `train_large_samples`. The
+runner issues the real `getdents64` calls and keeps nothing. *Consequences:* the default
+fingerprints and op counts of both abstracts changed (38,462 directories of five ops per
+actor in the small-files default); `enumerate=false` gives the earlier ones, and both are
+golden cases. The earlier text that left the default to WG policy (`ABSTRACTS.md` §1) is
+struck: whether a division scores the phase is still policy, whether the run issues it is
+not. A corpus with an index file is `enumerate=false` plus that file's read, which no
+abstract models yet.
+
+**`aeiou-params npz AST ARCHIVE…`.** The user does not want to be surprised by a trace
+over a corpus whose archives have another framing. The tool reads `framing` and `cd_len`
+from real files (standard library only: the zip directory and the `.npy` header), prints
+them against the abstract's defaults, exits 2 when they differ, and writes a parameter
+file with `-o`. It refuses what the abstract does not read: archives that disagree with
+each other, a compressed member, the member not first, a zip64 end record, an archive
+comment. `tests/test_params.py` covers the traced writer (498 and 102), a writer with
+three members and longer names (larger numbers, reported and written), and each refusal.
+With the in-memory probe of §3.53 this gives two checks: the defaults against the
+installed NumPy in CI, and any corpus against the abstract by hand before a fit.
+
+**The remaining choices of §3.44, §3.45, and §3.47 are confirmed** (§3.44: the two-loop
+seek count, the two corpora and their tolerances; §3.45: the split of the item loop at
+`buf`, the ten path calls left out, `torch.save` as a variant only; §3.47: everything that
+needs no GPU). Still open in §3.47: the tensor table and the copy's thread count.
+
+**`same_run`: the reader of §3.52 is refused before the gate.** The manifest already held
+the writer's seed, instance count, and resolved parameters; nothing compared them, and
+nothing could by default, because `ckpt_restore` rightly runs under any seed. So the
+abstract declares it: `same_run: true` on an `input` namespace (V15, contract 0.4). The
+runner then refuses, in the check that already compares the namespace's definition, when
+`--seed` or `--gpus` differ or when a parameter both abstracts declare has another
+resolved value, and names each difference. *Choices:* a parameter only one side declares
+is not compared (the reader may have its own); values are compared in canonical form
+after resolution, so a parameter file and a `--param` that say the same thing agree; the
+key is on the namespace and not on the abstract, since an abstract may read one namespace
+by draw and another by formula. *Not covered:* that the two abstracts draw at the same
+sites, which is a property of the script and is tested by running the pair. Every
+committed AST was regenerated for 0.4; no fingerprint changed.
 
 ## 4. Plan changes
 

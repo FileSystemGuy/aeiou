@@ -295,7 +295,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `builder/traces/ckpt_write_dcp`): `dcp.save` on two ranks. The frame was right, the item
     loop was not (704 + item + 873 per item, split at the buffer size, two tells); counts and
     bytes now equal but for 10 path calls the contract cannot express. The traced writes are
-    unaligned, so a direct backend cannot run them. Choices not yet confirmed.
+    unaligned, so a direct backend cannot run them. ~~Choices not yet confirmed.~~ Choices decided 2026-10-02.
     **Fourth, 2026-10-01** (`ABSTRACTS.md` §4 "Trace", `DESIGN_REVIEW.md` §3.47,
     `builder/traces/ckpt_restore`, `builder/traces/model_load`): `dcp.load` on two ranks and
     safetensors `from_pretrained`. The restore's item loop was rewritten (six reads and 34
@@ -307,7 +307,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     (`DESIGN_REVIEW.md` §3.48): the abstract declares its application's backend and the
     runner defaults to it (`mmap` here); the restore mimics the reader exactly, which a
     third trace showed needs the read order (sorted names, not file order) and the buffer
-    carried from item to item. The other §3.47 choices are not yet confirmed. ~~Still
+    carried from item to item. ~~The other §3.47 choices are not yet confirmed.~~ Those that need no GPU were confirmed 2026-10-02. ~~Still
     to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.~~ Still
     to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ a chat replay for row 8 of `ABSTRACTS.md` §11, the tolerances, the `replay` node.
     **Sixth row, 2026-10-01** (`ABSTRACTS.md` §6 "Trace", `DESIGN_REVIEW.md` §3.49,
@@ -323,14 +323,14 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     which a 1 % node cache holds; the abstract declares `libaio` and opens once per process.
     Build: the base file read whole twenty times, 64 MiB layout writes, no `fsync`; the
     abstract was rewritten and agrees with the trace to 0.1 % in calls and bytes, and with
-    the wire in READ, WRITE, and COMMIT counts. Choices not yet confirmed. ~~Row 8 remains.~~
+    the wire in READ, WRITE, and COMMIT counts. ~~Choices not yet confirmed.~~ Choices decided 2026-10-02. ~~Row 8 remains.~~
     **Eighth row, 2026-10-02** (`ABSTRACTS.md` §8 "Trace", `DESIGN_REVIEW.md` §3.51,
     `builder/traces/kv_cache_serving`): vLLM with LMCache's local-disk backend on a GPU. No
     lookup reaches storage; a chunk is one file in one flat directory, one `write`, one
     `read`; only whole chunks of the prompt are stored and nothing during decode; reads
     happen only for what the engine's own GPU cache lost. The abstract lost its `stat`
-    loops, directories, and decode writes and gained `local` and `sys_local`. Choices not
-    yet confirmed. Every row now has a trace; the chat replay for the KV distributions is
+    loops, directories, and decode writes and gained `local` and `sys_local`. ~~Choices not
+    yet confirmed.~~ Choices decided 2026-10-02. Every row now has a trace; the chat replay for the KV distributions is
     still to do.
     Wire counts taken later the same day: three WRITEs, one COMMIT, one OPEN per chunk for
     the server and the abstract alike, and no READ in either, since the client still holds
@@ -343,7 +343,19 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     a temporary name and renamed) and `kv_cache_shared_reader` (the same request stream on
     the filled store: no write, every chunk it does not hold loaded). The reader runs with
     the writer's seed and parameters. 188 READs on the wire for vLLM, 192 for the abstract.
-    Choices not yet confirmed.
+    ~~Choices not yet confirmed.~~ Choices decided 2026-10-02, with those of §3.50 and §3.51.
+    **Review of 2026-10-02** (`DESIGN_REVIEW.md` §3.53): the GETATTR per READ of the second
+    row was `strace -yy`'s, so wire counts are taken from untraced repeats from now on;
+    `train_large_samples` gained the training script's listing as an optional `enumerate`
+    phase; `framing` is checked against the installed NumPy by the builder's tests. §3.47
+    waits for a GPU environment. ~~Open for the user: whether `enumerate` is on by default
+    in both training abstracts, and an `aeiou-params npz FILE` for corpora written by
+    other tools.~~ **Decided and built 2026-10-02** (`DESIGN_REVIEW.md` §3.54): the
+    directory walk is on by default in both training abstracts (the metadata load is part
+    of the workload); `aeiou-params npz` reads the framing from real archives; the
+    remaining §3.44, §3.45 and non-GPU §3.47 choices are confirmed; contract 0.4 adds
+    `same_run` (V15), under which a reader whose seed, instance count, or common parameters
+    differ from the writer's is refused before the gate.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its

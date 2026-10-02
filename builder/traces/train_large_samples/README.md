@@ -27,3 +27,7 @@ aeiou-trace compare trace.metrics.json abstract.metrics.json
 ```
 
 `tests/test_trace.py` repeats the last two steps against the committed metrics.
+
+The script's `glob` (one `scandir` per directory) is the abstract's optional `enumerate`
+phase since 2026-10-02. Wire counts are taken from a run without `strace`: `-yy` adds about
+one GETATTR per READ (`DESIGN_REVIEW.md` §3.53).

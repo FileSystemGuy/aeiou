@@ -174,7 +174,17 @@ the shape is published once and its parameter sets separately. `aeiou-params` is
 uv run aeiou-params defaults ../schema/examples/train_small_files.ast.json -o tsf.params.json --pin
 uv run aeiou-params check ../schema/examples/train_small_files.ast.json tsf.params.json
 uv run aeiou-params safetensors ../schema/examples/model_load.ast.json model-0000?-of-00004.safetensors -o llama.params.json --tp 8
+uv run aeiou-params npz ../schema/examples/train_large_samples.ast.json corpus/train/00000/sample_00000000?.npz [-o corpus.params.json]
 ```
+
+`npz` (2026-10-02) reads `framing` and `cd_len`, the two archive numbers `train_large_samples`
+takes as parameters, from real `.npz` files with the standard library alone, and compares
+them with the abstract's defaults: it prints both, exits 2 when they differ and no `-o` was
+given, and writes them as a parameter file with `-o`. It refuses archives that disagree with
+each other, a compressed member, a member that is not first, and a zip64 end record, since
+the abstract reads none of those shapes. Run it on a few files of any corpus before fitting
+an abstract to a trace over it. `tests/test_formats.py` runs the same comparison against an
+archive written in memory by the installed NumPy (`DESIGN_REVIEW.md` §3.53, §3.54).
 
 `defaults` writes every default as a set to edit or fit; `check` applies the runner's rules
 (declared names, no `gpus`, same kind as the default: scalar, array of the same element kind,
@@ -315,9 +325,9 @@ trace's metrics document. The trace corrected the abstract (a second `lseek` per
 at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reasoning in
 `DESIGN_REVIEW.md` §3.43 (decided 2026-10-01). `traces/train_large_samples` is row 2,
 `np.load(...)["x"]` as upstream DLIO and any NumPy user issues it: that abstract was rewritten from its trace
-(`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44; explicit seeks decided 2026-10-01, the rest not yet confirmed).
+(`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44; explicit seeks decided 2026-10-01; reviewed 2026-10-02, §3.53 and §3.54, all choices decided: the script's `glob` is the phase `enumerate`, on by default, and `tests/test_formats.py` checks `framing` against the installed NumPy).
 `traces/ckpt_write_dcp` is row 3, `torch.distributed.checkpoint.save` on two ranks
-(`ABSTRACTS.md` §3, `DESIGN_REVIEW.md` §3.45, not yet confirmed).
+(`ABSTRACTS.md` §3, `DESIGN_REVIEW.md` §3.45, decided 2026-10-02).
 `traces/ckpt_restore` and `traces/model_load` are row 4: `torch.distributed.checkpoint.load`
 on two ranks, whose trace rewrote the restore's item loop, and safetensors `from_pretrained`,
 which maps the shards and issues no `read` (`ABSTRACTS.md` §4, `DESIGN_REVIEW.md` §3.47, not
@@ -332,16 +342,17 @@ trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, decided 2026-1
 `traces/vdb_build_diskann` and `traces/vdb_search_diskann` are rows 7 and 5: DiskANN through
 `diskannpy`, one index built in 13 shards and then searched; `hops.py` reads the beam search
 (rounds, batch sizes, sector spread) off the `io_submit` lines (`ABSTRACTS.md` §5 and §7,
-`DESIGN_REVIEW.md` §3.50, not yet confirmed).
+`DESIGN_REVIEW.md` §3.50, decided 2026-10-02).
 `traces/kv_cache_serving` is row 8: vLLM with LMCache's local-disk backend on a GPU, with a
 synthetic chat load (`chat.py`); it fixes the call sequence, not the distributions
-(`ABSTRACTS.md` §8, `DESIGN_REVIEW.md` §3.51, not yet confirmed).
+(`ABSTRACTS.md` §8, `DESIGN_REVIEW.md` §3.51, decided 2026-10-02).
 `traces/kv_cache_shared` is the same load on LMCache's `fs://` backend, twice: an engine on
 an empty store, then a restarted engine on the filled one, sent the same requests
 (`chat.py --save`, `--replay`). `abstracts/kv_cache_shared.py` emits both abstracts,
 `kv_cache_shared` and `kv_cache_shared_reader`; the reader takes the writer's namespace as
-`input` and must be run with the writer's `--seed`, `--gpus`, and parameters
-(`DESIGN_REVIEW.md` §3.52, not yet confirmed).
+`input` and `same_run` (contract 0.4: `w.namespace(..., input=True, same_run=True)`), so a run
+without the writer's `--seed`, `--gpus`, and parameters is refused before the gate
+(`DESIGN_REVIEW.md` §3.52, decided 2026-10-02).
 
 **The application's API is declared in the script** (contract 0.3, 2026-10-01):
 `Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`
