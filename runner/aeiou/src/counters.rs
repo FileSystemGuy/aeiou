@@ -36,8 +36,8 @@ pub struct HostCounters {
     /// Peak count of io-wq worker threads (`iou-wrk-*`), sampled; 0 under the `sync` backends.
     pub iowq_workers_peak: u64,
     /// The `SQPOLL` submission threads of the rings: the distinct threads the rings' `fdinfo`
-    /// states (`SqThread:`) once each is built. They live exactly as long as their rings, so
-    /// this is not a sample; 0 without `--sqpoll`.
+    /// states (`SqThread:`) when its loop's work is done and the ring still open. They live
+    /// exactly as long as their rings, so this is not a sample; 0 without `--sqpoll`.
     #[serde(default)]
     pub sqpoll_threads: u64,
     /// CPU time of the process over the run.

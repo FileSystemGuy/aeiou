@@ -81,17 +81,28 @@ pub(crate) fn spread(sh: &Shared, counts: &[(&'static str, i64)], ranges: &[(i64
 }
 
 /// The `SQPOLL` thread of a ring, as the kernel states it in the ring's `fdinfo`
-/// (`SqThread:`, there from the moment `io_uring_setup` returns; the thread's name is not,
-/// since the thread names itself `iou-sqp-*` only when it first runs). `None` without
-/// `SQPOLL`. Rings that share a poll thread state the same one.
-fn sq_thread(ring: RawFd) -> Option<i64> {
-    let s = std::fs::read_to_string(format!("/proc/self/fdinfo/{ring}")).ok()?;
-    let pid: i64 = s.lines().find_map(|l| l.strip_prefix("SqThread:"))?.trim().parse().ok()?;
-    (pid > 0).then_some(pid)
+/// (`SqThread:`); `None` without `SQPOLL`. Rings that share a poll thread state the same one.
+/// Read when the loop's work is done and its ring still open, because two things make an
+/// earlier reading unreliable: the thread names itself `iou-sqp-*` only when it first runs
+/// (so the thread list cannot be trusted just after setup), and kernels up to 6.8 or so
+/// state the pid of the ring's creator until then. By the end of a run the thread has
+/// carried every submission. The kernel fills the field under a trylock of the ring and
+/// states -1 when it loses, hence the few tries.
+fn sq_thread(ring: RawFd, expected: bool) -> Option<i64> {
+    for _ in 0..if expected { 50 } else { 1 } {
+        let s = std::fs::read_to_string(format!("/proc/self/fdinfo/{ring}")).ok()?;
+        let pid: Option<i64> = s.lines().find_map(|l| l.strip_prefix("SqThread:")).and_then(|v| v.trim().parse().ok());
+        match pid {
+            Some(p) if p > 0 => return Some(p),
+            Some(_) => std::thread::yield_now(),
+            None => return None,
+        }
+    }
+    None
 }
 
 /// Run this host's instances over the event loops; returns how many loop threads ran and
-/// what the rings were set up with, and the distinct `SQPOLL` threads the rings stated once built.
+/// what the rings were set up with, and the distinct `SQPOLL` threads the rings stated.
 pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<(UringReport, u64)> {
     sh.opts.uring.check()?;
     let per = spread(sh, counts, ranges);
@@ -137,8 +148,9 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
                             cv.notify_all();
                         }
                         let r = built.and_then(|(mut l, defaults)| {
-                            let sq = sq_thread(l.io.ring.as_raw_fd());
-                            l.run(model, insts).map(|_| (defaults, l.io.in_flight_peak as u64, sq))
+                            l.run(model, insts)?;
+                            let sq = sq_thread(l.io.ring.as_raw_fd(), sh.opts.uring.sqpoll_idle_ms.is_some());
+                            Ok((defaults, l.io.in_flight_peak as u64, sq))
                         });
                         if r.is_err() {
                             sh.aborted.store(true, Ordering::Relaxed);
