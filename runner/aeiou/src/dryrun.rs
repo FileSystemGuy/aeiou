@@ -66,6 +66,8 @@ pub struct DryRun {
     pub instances: u64,
     /// Bytes read and written per instance, for the per-host estimate.
     pub per_instance: Vec<(i64, u64, u64)>,
+    /// The locality metrics, under `--metrics` (`metrics.rs`).
+    pub metrics: Option<Box<crate::metrics::Metrics>>,
     filter: Option<Filter>,
     printed: usize,
     lines: Vec<String>,
@@ -74,6 +76,11 @@ pub struct DryRun {
 impl DryRun {
     pub fn new(filter: Option<Filter>) -> Self {
         DryRun { filter, ..Default::default() }
+    }
+
+    pub fn with_metrics(mut self, opts: Option<crate::metrics::Opts>) -> Self {
+        self.metrics = opts.map(|o| Box::new(crate::metrics::Metrics::new(o)));
+        self
     }
 
     pub fn merge(&mut self, o: &DryRun) {
@@ -90,6 +97,12 @@ impl DryRun {
         self.per_instance.extend_from_slice(&o.per_instance);
         self.printed += o.printed;
         self.lines.extend_from_slice(&o.lines);
+        if let Some(om) = &o.metrics {
+            match &mut self.metrics {
+                Some(m) => m.merge(om),
+                None => self.metrics = Some(om.clone()),
+            }
+        }
     }
 
     pub fn take_lines(&mut self) -> Vec<String> {
@@ -170,6 +183,12 @@ pub struct Report {
 
 /// Run the dry run over every instance of every template with `threads` worker threads.
 pub fn run(model: &Model<'_>, threads: usize, filter: Option<Filter>) -> Result<Report> {
+    run_with(model, threads, filter, None)
+}
+
+/// `run`, with the locality metrics when `metrics` is given: each instance is then walked in
+/// the round-robin order of its sub-actors (`metrics.rs`); counts and fingerprint are the same.
+pub fn run_with(model: &Model<'_>, threads: usize, filter: Option<Filter>, metrics: Option<crate::metrics::Opts>) -> Result<Report> {
     let counts = actor_counts(model)?;
     let mut jobs: Vec<(usize, i64, i64)> = Vec::new();
     for (t, (_, count)) in counts.iter().enumerate() {
@@ -193,8 +212,12 @@ pub fn run(model: &Model<'_>, threads: usize, filter: Option<Filter>) -> Result<
                     }
                     let (t, actor, count) = jobs[j];
                     let (name, _) = counts[t];
-                    let sink = DryRun::new(filter.clone());
-                    match run_actor(model, name, actor, count, sink) {
+                    let sink = DryRun::new(filter.clone()).with_metrics(metrics);
+                    let walked = match metrics {
+                        Some(_) => crate::metrics::walk(model, name, actor, count, sink),
+                        None => run_actor(model, name, actor, count, sink),
+                    };
+                    match walked {
                         Ok(mut r) => {
                             r.instances = 1;
                             r.per_instance = vec![(actor, r.total.bytes_read, r.total.bytes_written)];
@@ -272,6 +295,7 @@ pub fn write_report(out: &mut impl Write, r: &Report, ranks: Option<i64>, gpus: 
     for t in &r.templates {
         writeln!(out, "actor {}: {} instance(s)", t.name, t.count)?;
         write_stats(out, &t.run, "  ")?;
+        crate::metrics::write_text(out, &t.run, "  ")?;
         let mut phases: Vec<_> = t.run.phases.iter().collect();
         phases.sort_by(|a, b| b.1.ops.cmp(&a.1.ops).then(a.0.cmp(b.0)));
         for (name, s) in phases {
@@ -288,6 +312,7 @@ pub fn write_report(out: &mut impl Write, r: &Report, ranks: Option<i64>, gpus: 
     if r.templates.len() > 1 {
         writeln!(out, "total")?;
         write_stats(out, &r.total, "  ")?;
+        crate::metrics::write_text(out, &r.total, "  ")?;
     }
     writeln!(out, "fingerprint {:016x}", r.total.fingerprint)?;
     if let Some(ranks) = ranks {

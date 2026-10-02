@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 
 use aeiou::backend::{BackendKind, MmapConsume, MmapMode};
@@ -200,6 +200,19 @@ struct DryRunArgs {
     /// With --gpu: stop printing after N ops.
     #[arg(long, value_name = "N")]
     limit: Option<usize>,
+    /// Compute the locality metrics of the op stream (reuse distance, sequential runs,
+    /// popularity, request sizes, fan-out and depth, read/write mix); runner/README.md §10.
+    #[arg(long)]
+    metrics: bool,
+    /// With --metrics: the block size of the reuse-distance and popularity units.
+    #[arg(long, value_name = "BYTES", default_value_t = 4096)]
+    metrics_block: u64,
+    /// With --metrics: keep one block and one object in N, chosen by hash, and scale (1: exact).
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    metrics_sample: u64,
+    /// Write the metrics, with their histograms, to FILE as JSON (implies --metrics).
+    #[arg(long, value_name = "FILE")]
+    metrics_json: Option<PathBuf>,
 }
 
 fn main() {
@@ -577,8 +590,29 @@ fn dry_run(a: DryRunArgs) -> Result<()> {
     let threads = a.threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
 
     let started = std::time::Instant::now();
-    let mut report = dryrun::run(&model, threads, filter)?;
+    if a.metrics_block == 0 || a.metrics_sample == 0 {
+        bail!("--metrics-block and --metrics-sample must be at least 1");
+    }
+    let metrics = (a.metrics || a.metrics_json.is_some()).then_some(aeiou::metrics::Opts { block: a.metrics_block, sample: a.metrics_sample });
+    let mut report = dryrun::run_with(&model, threads, filter, metrics)?;
     let elapsed = started.elapsed();
+    if let Some(path) = &a.metrics_json {
+        let templates: std::collections::BTreeMap<&str, _> = report.templates.iter().filter_map(|t| aeiou::metrics::to_json(&t.run).map(|m| (t.name.as_str(), m))).collect();
+        let doc = serde_json::json!({
+            "aeiou_metrics": 1,
+            "abstract": loaded.ast.name,
+            "sha256": loaded.sha256,
+            "seed": cfg.seed,
+            "gpus": cfg.gpus,
+            "fingerprint": format!("{:016x}", report.total.fingerprint),
+            "block": a.metrics_block,
+            "sample": a.metrics_sample,
+            "order": "round-robin",
+            "templates": templates,
+            "total": aeiou::metrics::to_json(&report.total),
+        });
+        std::fs::write(path, serde_json::to_string_pretty(&doc)? + "\n").with_context(|| format!("{}", path.display()))?;
+    }
 
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());

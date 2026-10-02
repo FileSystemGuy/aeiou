@@ -16,6 +16,7 @@ pub mod counters;
 pub mod datagen;
 pub mod dryrun;
 pub mod eval;
+pub mod metrics;
 pub mod pattern;
 pub mod payload;
 pub mod rng;
