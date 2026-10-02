@@ -31,6 +31,10 @@ aeiou dry-run ../../../schema/examples/kv_cache_serving.ast.json --gpus 1 \
 tokens, 197 tokens per user turn, 100 generated, every conversation returning 8 requests
 later). The token counts are the server's `usage` figures that `chat.py` prints.
 
+The wire counts in `ABSTRACTS.md` §8 are from a repeat without `strace`, the mount's block
+of `/proc/self/mountstats` before and after `chat.py`, against the `rpcs` line of `aeiou run
+--params fitted.params.json` on the same mount (datagen first, for the system prompts).
+
 Not captured: a public chat replay (ShareGPT) for the reuse and length distributions, which
 stay **[measure]** in the abstract; `chat.py` is a synthetic load for the call sequence.
 

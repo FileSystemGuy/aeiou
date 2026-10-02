@@ -2393,7 +2393,35 @@ connectors, Mooncake, HiCache, a remote LMCache server) are other traces.
 **Measured.** 40 requests: 47 chunk writes and 47 chunk reads of 3,145,728 bytes in the
 trace; 48 writes and 88 reads in the abstract at the fitted parameters (three more of the
 conversations' own chunks, because some replies ended short of the 100 tokens the fitted
-file gives every reply, and two fewer for the system prompts). The NFS RPC counts were not taken for this row.
+file gives every reply, and two fewer for the system prompts). ~~The NFS RPC counts were not taken for this row.~~
+
+**On the wire (added 2026-10-02, later the same day).** An untraced repeat of the load and
+`aeiou run` at the fitted parameters, both on the loopback mount, `mountstats` delta:
+
+| | vLLM + LMCache | abstract |
+|---|---|---|
+| chunks stored / read back | 47 / 47 | 48 / 88 |
+| WRITE / COMMIT / OPEN | 141 / 47 / 47 | 144 / 48 / 48 |
+| GETATTR | 35 | 46 |
+| READ | 0 | 0 |
+
+Three WRITEs, one COMMIT, and one OPEN per chunk stored, in both. No read of a chunk
+reaches the server in either: the client wrote the chunk minutes earlier and still holds
+its pages. This is a property of the workload on one client with free memory, and the
+abstract reproduces it; it also means that a run of this abstract as traced measures the
+write path and nothing of the read path. The reads become wire reads when the store has
+outgrown the client's memory, or when the reader is not the writer (a second engine, a
+restart; `sys_local = false` is the abstract's piece of that case). Neither case was
+measured, ~~and which of them a scored configuration should be is open for the user:~~ it
+needs either a parameter set whose store exceeds client memory, or two runs (a writer,
+then a reader over an `input` namespace after `--drop-caches`), which is the shape the
+checkpoint pair already has (§3.31).
+
+**Decided 2026-10-02** (the user): the cold reader is two runs. A writer run fills the
+store; a reader run takes it as an `input` namespace after `--drop-caches`. No parameter
+set sized against the client's memory, which would tie the workload to the client's DRAM.
+Not built yet: the reader half is a second abstract over the writer's namespace, as
+`ckpt_restore` is to `ckpt_write_dcp`.
 
 **Capture notes.** vLLM keeps a small chat entirely in GPU memory and LMCache is then never
 read: the kit limits the engine's KV memory (`--kv-cache-memory-bytes`). The flashinfer

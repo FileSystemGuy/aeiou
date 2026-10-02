@@ -1222,6 +1222,19 @@ prompts; kit in `builder/traces/kv_cache_serving`, reasoning in `DESIGN_REVIEW.m
   first two turns loaded nothing, presumably because the GPU memory was not yet full.
 - **A request's chunks are read at once**: four `read`s issued within a millisecond from
   four pool threads. Writes come from two threads, after the prefill.
+- **On the wire** (an untraced repeat on the same day, `mountstats` delta, 47 chunks stored
+  and 47 read back): WRITE 141, COMMIT 47, OPEN 47, GETATTR 35, and **no READ**. Per chunk
+  that is three WRITEs of the mount's 1 MiB, one COMMIT at the close, and one OPEN; the open
+  for the read back adds none, and no CLOSE was sent during the load. The 148 MB the
+  application read never left the client: the chunks were still in its page cache from
+  their own writes. `aeiou run` at the fitted parameters, 48 chunks stored and 88 read
+  back: WRITE 144, COMMIT 48, OPEN 48, GETATTR 46, no READ, the same three numbers per
+  chunk (the GETATTR counts differ by 11, not examined). So this workload on one client
+  with memory to spare measures the write path only. The reads reach the server when the
+  chunks have left the client's cache: a store larger than the client's memory, or a
+  second engine or a restarted one in front of a filled store. Neither was measured.
+  Decided 2026-10-02: the cold reader is a second run over the first run's namespace after
+  `--drop-caches` (`DESIGN_REVIEW.md` §3.51); not built yet.
 
 Notes on the shape:
 - The `warm` prefix of the index space exists so that `conv @ (r − d)` has something to reach

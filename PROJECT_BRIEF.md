@@ -332,6 +332,11 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     loops, directories, and decode writes and gained `local` and `sys_local`. Choices not
     yet confirmed. Every row now has a trace; the chat replay for the KV distributions is
     still to do.
+    Wire counts taken later the same day: three WRITEs, one COMMIT, one OPEN per chunk for
+    the server and the abstract alike, and no READ in either, since the client still holds
+    the chunks it wrote. ~~Which cold-reader configuration to score is open (§3.51).~~
+    **Decided 2026-10-02:** the cold reader is two runs, a writer and then a reader over an
+    `input` namespace after `--drop-caches` (§3.51); the reader abstract is not built yet.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
