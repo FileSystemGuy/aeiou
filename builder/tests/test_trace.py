@@ -271,3 +271,25 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     # reuse distance depends on the order (the real one against the round-robin): close, not equal
     rows = [r for r in compare(t, d) if r[0].startswith("reuse")]
     assert all(r[3] is None or r[3] <= 0.5 for r in rows), rows
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
+    """`builder/traces/train_small_files`: DataLoader + ImageFolder on NFS, traced 2026-10-01.
+    The abstract at the fitted parameters has the application's op mix exactly but for the
+    one listing of the dataset root; the corpus of real JPEGs is near the abstract's size
+    distribution, not equal to it, and the order differs."""
+    kit = BUILDER / "traces" / "train_small_files"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "train_small_files.ast.json"), "--gpus", "1",
+                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    root_listing = {"open": 1, "fstat": 1, "readdir": 1, "close": 1}
+    assert {k: v - root_listing.get(k, 0) for k, v in t["counts"].items()} == d["counts"]
+    assert t["request_size"]["read"]["buckets"] == d["request_size"]["read"]["buckets"]
+    rows = compare(t, d)
+    assert max(r[3] for r in rows if r[3] is not None) <= 0.06, rows
+
+    assert subprocess.run([sys.executable, "-m", "aeiou.trace", "compare", str(tmp_path / "absent.json"), str(dry)],
+                          capture_output=True, text=True, cwd=BUILDER).stderr.startswith("aeiou-trace: ")

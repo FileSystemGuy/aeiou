@@ -1,0 +1,3 @@
+{"params_version": 1, "abstract": "train_small_files",
+ "doc": "Fitted to the 2026-10-01 trace of DataLoader + ImageFolder: 3200 JPEGs, batch 16, 2 workers, 2 epochs.",
+ "params": {"batch": 16, "workers": 2, "prefetch": 2, "steps": 400, "files": 3200, "enumerate": true}}

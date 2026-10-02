@@ -32,7 +32,7 @@
     "hdr_read": {
       "default": 1048576,
       "unit": "bytes",
-      "doc": "[verify] Python BufferedReader request = st_blksize"
+      "doc": "Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01)"
     },
     "enumerate": {
       "default": false,
@@ -96,14 +96,29 @@
                             }
                           },
                           {
+                            "stat": {
+                              "file": {
+                                "ref": "dh"
+                              }
+                            }
+                          },
+                          {
                             "open": {
                               "file": {
                                 "ref": "dh"
                               },
                               "flags": [
                                 "RDONLY",
+                                "CLOEXEC",
                                 "DIRECTORY"
                               ]
+                            }
+                          },
+                          {
+                            "fstat": {
+                              "file": {
+                                "ref": "dh"
+                              }
                             }
                           },
                           {
@@ -199,6 +214,15 @@
                       }
                     },
                     {
+                      "lseek": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "offset": 0,
+                        "whence": "SET"
+                      }
+                    },
+                    {
                       "read": {
                         "file": {
                           "ref": "f"
@@ -283,16 +307,16 @@
   "provenance": {
     "generator": {
       "script": "train_small_files.py",
-      "sha256": "b7e3c34db437a527de8937d88efe2e3e0e94688c68fc5c2aec668696f6c3bb50",
+      "sha256": "f07c38846ea0bef1e259fd394ddc7a11a8ba512ad0e64926284e498a21b076d3",
       "builder_version": "0.1.0",
-      "git": "0aec70405ce1"
+      "git": "d52e0459f44f-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
-      "sha256": "ddae2233f774d27319531008b14a67202c6e43fc1ecae1cbaa0bd5ffb2226395"
+      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "11ccbefefb3efa9a3c2e139c6be0bfa79befdb4c6775872df7beed14b36e0fbe"
+    "ast_sha256": "46a86b0008dc5348ffac1823f90029938393d5a2ae99d27ca38a63721906cdf5"
   }
 }

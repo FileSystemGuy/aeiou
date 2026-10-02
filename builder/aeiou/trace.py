@@ -999,9 +999,12 @@ def main(argv=None) -> int:
 
     docs = []
     for path in (args.a, args.b):
-        with open(path, encoding="utf-8") as f:
-            d = json.load(f)
-        if d.get("aeiou_metrics") != FORMAT:
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"aeiou-trace: {path}: {e}")
+        if not isinstance(d, dict) or d.get("aeiou_metrics") != FORMAT:
             raise SystemExit(f"aeiou-trace: {path}: not an aeiou_metrics: {FORMAT} document")
         docs.append(d)
     if docs[0]["block"] != docs[1]["block"]:

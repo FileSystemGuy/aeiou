@@ -15,7 +15,7 @@ w.param("prefetch", 2, unit="count")
 w.param("steps", 500, unit="count")
 w.param("sync_every", 500, unit="count", doc="1 for DDP; 500 keeps the brief's reference workload")
 w.param("step_time", 105 * ms, unit="ns", doc="[measure] GPU step time on the target accelerator")
-w.param("hdr_read", 1 * MiB, unit="bytes", doc="[verify] Python BufferedReader request = st_blksize")
+w.param("hdr_read", 1 * MiB, unit="bytes", doc="Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01)")
 w.param("enumerate", False, doc="include the startup directory walk (ABSTRACTS.md §9.8)")
 w.param("files", 50_000_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
 
@@ -28,7 +28,9 @@ with w.actor("gpu") as gpu:
     with gpu.when(P.enumerate), gpu.phase("enumerate"):
         with gpu.loop("d", train.dirs) as d:
             dh = gpu.let("dh", train.dir(d))
-            gpu.open(dh, "RDONLY|DIRECTORY")
+            gpu.stat(dh)                                  # make_dataset: os.path.isdir(class dir)
+            gpu.open(dh, "RDONLY|CLOEXEC|DIRECTORY")         # the real call adds O_NONBLOCK, which a directory ignores
+            gpu.fstat(dh)                                 # os.scandir
             gpu.readdir(dh)
             gpu.close(dh)
 
@@ -39,6 +41,7 @@ with w.actor("gpu") as gpu:
             worker.fstat(f)
             worker.ioctl(f, "TCGETS", expect=["ENOTTY"])
             worker.lseek(f, 0, "CUR")
+            worker.lseek(f, 0, "SET")                     # PIL Image.open: fp.seek(0)
             worker.read(f, P.hdr_read, repeat="until_eof")
             worker.close(f)
 

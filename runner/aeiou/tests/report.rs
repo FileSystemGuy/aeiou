@@ -88,7 +88,7 @@ fn one_host_report_matches_the_text_and_failures_are_written() {
         assert!(q("p50_ns") <= q("p90_ns") && q("p90_ns") <= q("p99_ns") && q("p99_ns") <= q("p999_ns") && q("p999_ns") <= q("max_ns"), "{kind}");
         assert!(buckets.iter().any(|b| b.0 == q("p99_ns")), "{kind}");
     }
-    assert_eq!(r["phases"]["enumerate"]["ops"], 6);
+    assert_eq!(r["phases"]["enumerate"]["ops"], 10);   // 2 instances, 1 directory: stat, open, fstat, readdir, close
     // the takes: 12 per instance, the sums of the instances' records
     let t = &r["take_summary"];
     assert_eq!((t["per_instance"].as_u64(), t["instances"].as_u64(), t["takes"].as_u64()), (Some(12), Some(2), Some(24)));
