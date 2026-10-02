@@ -157,8 +157,11 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   live until the actor ends; a `parallel` ~~spawns `width` threads and joins them before the
   node returns~~ runs its `width` sub-actors on threads the forking actor keeps (the
   sub-actor pool, 2026-10-01, `DESIGN_REVIEW.md` §3.36) and returns when all have ended;
-  either may nest. Sub-actor `k` of a fork always runs on pool thread `k`, the pool grows to
-  the widest fork its actor has issued, and its threads idle between forks and end with the
+  either may nest. ~~Sub-actor `k` of a fork always runs on pool thread `k`, the pool grows to
+  the widest fork its actor has issued,~~ The forking thread runs sub-actor 0 itself
+  (it would otherwise sleep until the others end) and sub-actor `k ≥ 1` always runs on pool
+  thread `k − 1`, so the pool grows to the widest fork its actor has issued, less one, and
+  a `parallel` of width 1 makes no thread (2026-10-01, later; `DESIGN_REVIEW.md` §3.38); and its threads idle between forks and end with the
   actor. A pool thread keeps its two buffer rings and, when its sub-actors fork in turn, a
   pool of its own; ~~the backend and the file table are new for every sub-actor~~ the file
   table is new for every sub-actor (what the parent had open at that fork), and the
@@ -313,6 +316,9 @@ fingerprint before and after):
 | `mmap`, a thread per sub-actor | 507,617 | 38.0 s | 420 µs | 16.4 s | 130 s | 1,019,792 | 21 MiB |
 | `mmap`, pool | 41 | 12.0 s | 198 µs | 10.0 s | 48.1 s | 508,669 | 31 MiB |
 | `mmap`, pool, one mapping per open | 41 | 2.1 s | 1 µs | 7.4 s | 13.2 s | 7,267 | 6.11 GiB |
+| `sync`, the fork and join reduced (§3.38) | 32 | 6.0 s | 197 µs | 7.6 s | 23.8 s | | |
+| `mmap`, the same | 32 | 1.55 s | 1 µs | 4.0 s | 9.3 s | | |
+| `io_uring`, one loop, for comparison | 1 | 5.6 s | | 1.5 s | 2.4 s | | |
 
 The resident set under `sync` is the buffer rings: a thread that lived for one read only
 ever touched the first slice of its ring, and a pool thread walks the whole of it, as

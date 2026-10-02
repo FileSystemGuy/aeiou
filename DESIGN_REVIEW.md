@@ -1462,7 +1462,8 @@ there is `width` tasks on the instance's loop).
   was the client's own thread creation getting in the way of the reads beside it.
 - **The pool belongs to the forking actor, and the assignment is positional.** Sub-actor
   `k` of a fork runs on pool thread `k` over that thread's own queue; there is no shared
-  queue for idle threads to race on. Which OS thread runs a sub-actor could not change the
+  queue for idle threads to race on. (Since §3.38 the forking thread runs sub-actor 0
+  and pool thread `k − 1` runs sub-actor `k`; still positional.) Which OS thread runs a sub-actor could not change the
   op multiset in any case (a sub-actor's randomness is keyed on its indices), but the rule
   of `CLAUDE.md` is that no work is distributed based on timing, and a fixed assignment
   keeps that true without an argument. The pool grows to the widest fork the actor issues
@@ -1545,10 +1546,10 @@ sub-actors, and about 15 µs of user and 26 µs of system time per sub-actor (th
 the pool thread, the VM snapshot, the file table and the payload filler made per
 sub-actor). The `sync` rows carry the same cost, about a third of their elapsed time.
 
-**Open.** The per-sub-actor cost above: against roughly 2 µs per op for the VM (§3.33) it
+**Open.** ~~The per-sub-actor cost above: against roughly 2 µs per op for the VM (§3.33) it
 is the next thing to reduce for the `parallel`-heavy abstracts under the blocking
-backends (the event loops fork a task, not a thread, and do not pay the wake). The cold
-DiskANN rows.
+backends (the event loops fork a task, not a thread, and do not pay the wake).~~ Reduced
+the same day, §3.38. The cold DiskANN rows.
 
 ### 3.37 Count what the runner does; sample only what the kernel does (added 2026-10-01)
 
@@ -1599,6 +1600,59 @@ Not done for the blocking backends: an exact count of threads inside a system ca
 be an atomic shared by every actor thread and written twice per op, a contended cache
 line the application does not have (a backend is charged only what its API needs, §3.35). It is
 bounded by the actor count in any case.
+
+### 3.38 The fork and join of a sub-actor, reduced (added 2026-10-01)
+
+§3.36 left the cost of a `parallel` fork under the blocking backends open: with the
+DiskANN read at 1 µs through the shared mapping, the run was the runner's own fork and
+join. The user asked for it to be reduced. What it was made of, and what was done:
+
+- **Statistics per sub-actor.** Each sub-actor had its own `Stats` (a latency histogram
+  allocated per op kind, a phase map) that the parent merged at the join: for a sub-actor
+  of one read, more work than the read's own bookkeeping. A pool thread now keeps one
+  `Stats` over all the sub-actors it runs and hands it to the forking actor when the pool
+  ends. Nothing reported is per sub-actor, only sums, so the report is unchanged.
+- **Copies per sub-actor.** The VM snapshot and the frozen file table were cloned once per
+  sub-actor; they are now made once per fork and shared, and a pool thread resumes its VM
+  from the snapshot in place (`Vm::resume_from`), keeping its allocations.
+- **Wakes of the parent.** Results came back on a channel, which woke the parent once per
+  sub-actor. The join is now a count the pool threads take down, and the last one wakes
+  the parent once.
+- **The forking thread runs sub-actor 0.** It used to sleep for the whole fork. Running
+  one sub-actor itself removes a wake and a sleep per fork, and one thread per pool. The
+  assignment stays positional (sub-actor 0 here, `k` on pool thread `k − 1`). A sub-actor
+  run this way is still a sub-actor: it sees the frozen file table, its own opens end with
+  it, a barrier inside it is refused, and its takes are not the main line's. Because it
+  may fork while its parent's pool is busy, an actor has a pool per depth of fork it runs
+  itself. This changes the thread counts of a run (`parallel` of width W makes W − 1
+  threads, and of width 1 none) and nothing else; it is the convention of the thread
+  libraries the search codes use, where the calling thread is one of the team.
+
+Measured on the run of §3.36 (507,608 sub-actors of one read, warm):
+
+| | elapsed | cpu user | cpu sys | threads |
+|---|---|---|---|---|
+| `mmap`, before | 1.87 s | 6.6 s | 11.6 s | 41 |
+| `mmap`, statistics, copies, one wake | 1.84 s | 4.4 s | 11.4 s | 41 |
+| `mmap`, and sub-actor 0 on the forking thread | 1.55 s | 4.0 s | 9.3 s | 32 |
+| `sync`, before | 6.3 s | 13.2 s | 35.5 s | 41 |
+| `sync`, after | 6.0 s | 7.6 s | 23.8 s | 32 |
+| `io_uring`, one loop | 5.6 s | 1.5 s | 2.4 s | 1 |
+
+User time per sub-actor went from 13 µs to 8 µs, system time from 23 µs to 18 µs, and the
+elapsed time of a hop of four from 118 µs to 98 µs.
+
+**What is left is the wake, and it is not the runner's to remove.** The first three
+changes took a third of the user time and left the elapsed time where it was: a hop is
+three threads woken from sleep and one woken back, and on this host (WSL2, where waking
+an idle virtual CPU is a trip through the hypervisor) a wake and its sleep cost about
+24 µs of system time. A thread per concurrent blocking read is what the blocking
+backends are, so that cost is theirs, and the last row is the evidence: the event loop
+does the same 507,608 direct reads with an eighth of the CPU, because a fork there is a
+task on the loop. Rejected: spinning before sleeping, in the pool threads or the parent.
+It would hide the wake by burning CPU that is then charged to the run, and it would be
+wrong for any read slower than the spin. The figure should be re-taken on bare metal
+before anyone reads much into it.
 
 ## 4. Plan changes
 
