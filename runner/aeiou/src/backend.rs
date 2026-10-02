@@ -15,13 +15,12 @@
 //! as the event loops do. The event-loop backends are `uring.rs` (`io_uring`) and `aio.rs`
 //! (`libaio`, the kernel AIO system calls).
 
-use std::collections::HashMap;
 use std::ffi::CString;
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -178,7 +177,7 @@ impl BackendKind {
         let sync = Sync { direct: self.direct() };
         match self {
             BackendKind::PosixAio | BackendKind::PosixAioDirect => Box::new(PosixAio { sync }),
-            BackendKind::Mmap => Box::new(Mmap { sync, mode: mmap, consume, maps: HashMap::new(), stats: stats.clone() }),
+            BackendKind::Mmap => Box::new(Mmap { sync, mode: mmap, consume, stats: stats.clone() }),
             _ => Box::new(sync),
         }
     }
@@ -194,11 +193,9 @@ pub trait Backend: Send {
     fn positional(&self) -> bool {
         false
     }
-    /// The actor is about to drop its reference to `fd` (`close`): forget what was kept for it.
-    fn release(&mut self, _fd: RawFd) {}
     fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OwnedFd>;
     /// `read(2)` at the file position, or `pread(2)` at `offset`.
-    fn read(&mut self, fd: BorrowedFd, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize>;
+    fn read(&mut self, file: &OpenFile, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize>;
     fn write(&mut self, fd: BorrowedFd, buf: &[u8], offset: Option<i64>) -> io::Result<usize>;
     fn lseek(&mut self, fd: BorrowedFd, offset: i64, whence: Whence) -> io::Result<i64>;
     fn ioctl(&mut self, fd: BorrowedFd, request: IoctlRequest) -> io::Result<()>;
@@ -310,7 +307,8 @@ impl Backend for Sync {
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
-    fn read(&mut self, fd: BorrowedFd, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize> {
+    fn read(&mut self, file: &OpenFile, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize> {
+        let fd = file.as_fd();
         let r = match offset {
             Some(off) => unsafe { libc::pread(fd.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len(), off) },
             None => unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len()) },
@@ -494,8 +492,9 @@ impl Backend for PosixAio {
         self.sync.open(path, flags, mode)
     }
 
-    fn read(&mut self, fd: BorrowedFd, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize> {
-        let Some(off) = offset else { return self.sync.read(fd, buf, None) };
+    fn read(&mut self, file: &OpenFile, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize> {
+        let fd = file.as_fd();
+        let Some(off) = offset else { return self.sync.read(file, buf, None) };
         let mut cb = Self::cb(fd, buf.as_mut_ptr(), buf.len(), off);
         check_int(unsafe { libc::aio_read(&mut cb) })?;
         Self::wait(&mut cb).map(|n| n as usize)
@@ -579,10 +578,53 @@ struct Mapping {
     len: usize,
 }
 
-/// Reads through a mapping: the first read of a descriptor maps the whole file
+/// An open file as the actors hold it: the descriptor and, under the `mmap` backend, the
+/// mapping of it. The mapping belongs to the open file, not to the actor that reads: every
+/// actor that sees the descriptor (the one that opened it and the sub-actors that inherited
+/// it at a fork, which are threads of one address space) reads through the one mapping,
+/// made by whichever of them reads first and unmapped when the last of them lets the
+/// descriptor go, just before it is closed.
+///
+/// Readers find the current mapping without a lock. A file that has grown past it is mapped
+/// again at its new size, under the lock, and the earlier mapping stays until the close,
+/// since another sub-actor may be inside it.
+pub struct OpenFile {
+    fd: OwnedFd,
+    map: AtomicPtr<Mapping>,
+    all: Mutex<Vec<Box<Mapping>>>,
+}
+
+// SAFETY: a `Mapping` is a read-only shared mapping that is not unmapped while the
+// `OpenFile` lives; the list is behind the mutex and the current one behind the atomic
+unsafe impl Send for OpenFile {}
+unsafe impl std::marker::Sync for OpenFile {}
+
+impl From<OwnedFd> for OpenFile {
+    fn from(fd: OwnedFd) -> Self {
+        OpenFile { fd, map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()) }
+    }
+}
+
+impl std::ops::Deref for OpenFile {
+    type Target = OwnedFd;
+    fn deref(&self) -> &OwnedFd {
+        &self.fd
+    }
+}
+
+impl Drop for OpenFile {
+    fn drop(&mut self) {
+        for m in self.all.get_mut().unwrap_or_else(|e| e.into_inner()).drain(..) {
+            unsafe { libc::munmap(m.ptr as *mut libc::c_void, m.len) };
+        }
+    }
+}
+
+/// Reads through a mapping: the first read of an open file maps the whole of it
 /// (`PROT_READ`, `MAP_SHARED`, the size from `fstat`), a read makes its range of the
 /// mapping resident (one byte of every page is read, or under `MmapConsume::Copy` the range
-/// is copied into the actor's buffer), and `close` unmaps. That is the shape of a
+/// is copied into the actor's buffer), and the close unmaps (`OpenFile`: one mapping per
+/// open, shared with the sub-actors that inherit the descriptor). That is the shape of a
 /// safetensors or Arrow load: `open`, `fstat`, `mmap`, the consumer's accesses, `munmap`,
 /// `close`. The read returns only when every page of the range has arrived: a fault does
 /// not return before its page is read, and `MADV_POPULATE_READ` does not return before
@@ -603,49 +645,46 @@ pub struct Mmap {
     sync: Sync,
     mode: MmapMode,
     consume: MmapConsume,
-    maps: HashMap<RawFd, Mapping>,
     stats: Arc<MmapStats>,
 }
 
-// SAFETY: the mappings are only touched through `&mut self`, by the one thread that owns
-// the backend
-unsafe impl Send for Mmap {}
-
 impl Mmap {
     /// The descriptor's mapping, made or remade so it covers `end` when the file does.
-    fn mapping(&mut self, fd: BorrowedFd, end: usize) -> io::Result<(*mut u8, usize)> {
-        let raw = fd.as_raw_fd();
-        if let Some(m) = self.maps.get(&raw) {
-            if end <= m.len {
-                return Ok((m.ptr, m.len));
+    fn mapping(&mut self, file: &OpenFile, end: usize) -> io::Result<(*mut u8, usize)> {
+        // SAFETY: a published mapping lives in `file.all` until the file is dropped
+        let current = |p: *mut Mapping| if p.is_null() { None } else { Some(unsafe { ((*p).ptr, (*p).len) }) };
+        if let Some((ptr, len)) = current(file.map.load(Ordering::Acquire)) {
+            if end <= len {
+                return Ok((ptr, len));
             }
         }
-        let size = self.sync.fstat(fd)? as usize;
-        if let Some(m) = self.maps.get(&raw) {
-            if m.len == size {
-                return Ok((m.ptr, m.len));
+        // no mapping yet, or a read past it: one actor at a time asks the size and maps
+        let mut all = file.all.lock().unwrap_or_else(|e| e.into_inner());
+        let now = current(file.map.load(Ordering::Acquire));
+        if let Some((ptr, len)) = now {
+            if end <= len {
+                return Ok((ptr, len));
             }
         }
-        self.release(raw);
+        let size = self.sync.fstat(file.as_fd())? as usize;
+        if let Some((ptr, len)) = now {
+            if len == size {
+                return Ok((ptr, len));
+            }
+        }
         if size == 0 {
             return Ok((std::ptr::null_mut(), 0));
         }
-        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ, libc::MAP_SHARED, raw, 0) };
+        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
         if ptr == libc::MAP_FAILED {
             return Err(io::Error::last_os_error());
         }
         self.stats.maps.fetch_add(1, Ordering::Relaxed);
         self.stats.mapped_bytes.fetch_add(size as u64, Ordering::Relaxed);
-        self.maps.insert(raw, Mapping { ptr: ptr as *mut u8, len: size });
+        let mut m = Box::new(Mapping { ptr: ptr as *mut u8, len: size });
+        file.map.store(&mut *m, Ordering::Release);
+        all.push(m);
         Ok((ptr as *mut u8, size))
-    }
-}
-
-impl Drop for Mmap {
-    fn drop(&mut self) {
-        for (_, m) in self.maps.drain() {
-            unsafe { libc::munmap(m.ptr as *mut libc::c_void, m.len) };
-        }
     }
 }
 
@@ -658,20 +697,14 @@ impl Backend for Mmap {
         true
     }
 
-    fn release(&mut self, fd: RawFd) {
-        if let Some(m) = self.maps.remove(&fd) {
-            unsafe { libc::munmap(m.ptr as *mut libc::c_void, m.len) };
-        }
-    }
-
     fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OwnedFd> {
         self.sync.open(path, flags, mode)
     }
 
-    fn read(&mut self, fd: BorrowedFd, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize> {
-        let Some(off) = offset else { return self.sync.read(fd, buf, None) };
+    fn read(&mut self, file: &OpenFile, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize> {
+        let Some(off) = offset else { return self.sync.read(file, buf, None) };
         let off = off as usize;
-        let (ptr, len) = self.mapping(fd, off + buf.len())?;
+        let (ptr, len) = self.mapping(file, off + buf.len())?;
         if off >= len {
             return Ok(0);
         }
@@ -772,5 +805,45 @@ impl Backend for Mmap {
 
     fn readdir(&mut self, fd: BorrowedFd) -> io::Result<usize> {
         self.sync.readdir(fd)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn a_mapping_belongs_to_the_open_file_and_a_grown_file_is_mapped_again() {
+        let path = std::env::temp_dir().join(format!("aeiou-openfile-{}", std::process::id()));
+        std::fs::write(&path, vec![7u8; 8192]).unwrap();
+        let stats = Arc::new(MmapStats::default());
+        let make = || BackendKind::Mmap.make(MmapMode::Fault, MmapConsume::Copy, &stats);
+        let (mut a, mut b) = (make(), make());
+        let file = Arc::new(OpenFile::from(a.open(&path, 1 << (OpenFlag::RDONLY as u8), 0).unwrap()));
+        let mut buf = vec![0u8; 4096];
+        // two backends (two actors) read the one open file: one mapping
+        assert_eq!(a.read(&file, &mut buf, Some(0)).unwrap(), 4096);
+        let f2 = file.clone();
+        std::thread::spawn(move || {
+            let mut buf = vec![0u8; 4096];
+            assert_eq!(b.read(&f2, &mut buf, Some(4096)).unwrap(), 4096);
+            assert_eq!(buf[0], 7);
+        })
+        .join()
+        .unwrap();
+        assert_eq!(stats.maps.load(Ordering::Relaxed), 1);
+        // a read at the end asks the size and maps nothing; a grown file is mapped again
+        assert_eq!(a.read(&file, &mut buf, Some(8192)).unwrap(), 0);
+        assert_eq!(stats.maps.load(Ordering::Relaxed), 1);
+        std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(&[9u8; 4096]).unwrap();
+        assert_eq!(a.read(&file, &mut buf, Some(8192)).unwrap(), 4096);
+        assert_eq!(buf[0], 9);
+        assert_eq!((stats.maps.load(Ordering::Relaxed), stats.mapped_bytes.load(Ordering::Relaxed)), (2, 8192 + 12288));
+        // a second open of the same path is its own mapping
+        let other = OpenFile::from(a.open(&path, 1 << (OpenFlag::RDONLY as u8), 0).unwrap());
+        assert_eq!(a.read(&other, &mut buf, Some(0)).unwrap(), 4096);
+        assert_eq!(stats.maps.load(Ordering::Relaxed), 3);
+        std::fs::remove_file(&path).unwrap();
     }
 }

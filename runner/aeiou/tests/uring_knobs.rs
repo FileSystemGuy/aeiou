@@ -114,10 +114,6 @@ fn io_uring_knobs_keep_the_fingerprint() {
         let mut o = opts(&root, BackendKind::Uring);
         o.threads = loops as usize;
         o.uring = k.clone();
-        // the thread counts below come from a 10 ms sampler, which sees a ring's threads only
-        // while the ring exists: scale the steps' compute so a row lasts several periods
-        // (10 steps of 105 ms × 0.05), however fast the host reads 300 small files
-        o.time_scale = 0.05;
         let r = match run::run(model, o, std::collections::HashMap::new()) {
             Ok(r) => r,
             Err(e) if format!("{e:#}").contains("io_uring_setup") => {
@@ -144,10 +140,14 @@ fn io_uring_knobs_keep_the_fingerprint() {
             assert_eq!(k.iowq_max_workers, 0, "`{name}`: a cap without the register call cannot succeed");
         }
         match (k.sqpoll_idle_ms, k.sqpoll_shared) {
-            (Some(_), true) => assert_eq!(c.sqpoll_threads_peak, 1, "`{name}`: {c:?}"),
-            (Some(_), false) => assert_eq!(c.sqpoll_threads_peak, loops, "`{name}`: {c:?}"),
-            (None, _) => assert_eq!(c.sqpoll_threads_peak, 0, "`{name}`: {c:?}"),
+            // counted once every ring is built, not sampled: exact however short the row is
+            (Some(_), true) => assert_eq!(c.sqpoll_threads, 1, "`{name}`: {c:?}"),
+            (Some(_), false) => assert_eq!(c.sqpoll_threads, loops, "`{name}`: {c:?}"),
+            (None, _) => assert_eq!(c.sqpoll_threads, 0, "`{name}`: {c:?}"),
         }
+        // 3 instances × (1 main line + 3 loader workers), one op in flight each at most,
+        // spread over the loops; a loader worker reading is at least one
+        assert!((1..=12).contains(&u.in_flight_peak), "`{name}`: {u:?}");
     }
     // the knobs belong to the rings: the `sync` backends refuse them, and the kernel's
     // exclusions are said before a ring is built

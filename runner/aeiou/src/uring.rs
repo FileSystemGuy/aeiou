@@ -80,17 +80,65 @@ pub(crate) fn spread(sh: &Shared, counts: &[(&'static str, i64)], ranges: &[(i64
     per
 }
 
+/// Where the loops meet once each has built its ring (or failed to), before any of them
+/// runs: the last to arrive counts the process's `SQPOLL` threads, which exist from the
+/// ring's setup to its close, so the count is exact however short the run is.
+struct Built {
+    loops: usize,
+    /// How many loops have arrived, and the count once the last one has taken it.
+    m: Mutex<(usize, Option<u64>)>,
+    cv: Condvar,
+}
+
+/// One loop's arrival at `Built`; dropped without `wait` (an early return, a panic) it still
+/// counts, so the other loops are not left waiting.
+struct Arrival<'a> {
+    built: &'a Built,
+    arrived: bool,
+}
+
+impl Arrival<'_> {
+    fn arrive(&mut self) {
+        if self.arrived {
+            return;
+        }
+        self.arrived = true;
+        let mut g = self.built.m.lock().unwrap_or_else(|e| e.into_inner());
+        g.0 += 1;
+        if g.0 == self.built.loops {
+            g.1 = Some(crate::counters::io_threads().1);
+            self.built.cv.notify_all();
+        }
+    }
+
+    fn wait(&mut self) {
+        self.arrive();
+        let mut g = self.built.m.lock().unwrap_or_else(|e| e.into_inner());
+        while g.1.is_none() {
+            g = self.built.cv.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+impl Drop for Arrival<'_> {
+    fn drop(&mut self) {
+        self.arrive();
+    }
+}
+
 /// Run this host's instances over the event loops; returns how many loop threads ran and
-/// what the rings were set up with.
-pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<UringReport> {
+/// what the rings were set up with, and the `SQPOLL` threads counted once the rings were up.
+pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<(UringReport, u64)> {
     sh.opts.uring.check()?;
     let per = spread(sh, counts, ranges);
     if per.is_empty() {
-        return Ok(UringReport { loops: 0, opts: sh.opts.uring.clone(), iowq_defaults: None });
+        return Ok((UringReport { loops: 0, opts: sh.opts.uring.clone(), iowq_defaults: None, in_flight_peak: 0 }, 0));
     }
     let threads = per.len();
     let shared = sh.opts.uring.sqpoll_shared;
     let gate: Arc<Gate> = Arc::new((Mutex::new(None), Condvar::new()));
+    let built = Built { loops: threads, m: Mutex::new((0, None)), cv: Condvar::new() };
+    let built = &built;
     std::thread::scope(|s| {
         let handles: Vec<_> = per
             .into_iter()
@@ -101,6 +149,7 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
                 std::thread::Builder::new()
                     .name(format!("io_uring loop {i}"))
                     .spawn_scoped(s, move || {
+                        let mut arrival = Arrival { built, arrived: false };
                         // the rings are built on their own threads (SINGLE_ISSUER binds a
                         // ring to the task that built it); under `sqpoll_shared` loops 1.. wait
                         // for loop 0's ring and attach to it
@@ -126,7 +175,9 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
                             *m.lock().unwrap() = Some(built.as_ref().map(|(l, _)| l.io.ring.as_raw_fd()).map_err(|e| format!("{e:#}")));
                             cv.notify_all();
                         }
-                        let r = built.and_then(|(mut l, defaults)| l.run(model, insts).map(|_| defaults));
+                        // every ring is up before any loop runs: the `SQPOLL` threads are counted here
+                        arrival.wait();
+                        let r = built.and_then(|(mut l, defaults)| l.run(model, insts).map(|_| (defaults, l.io.in_flight_peak as u64)));
                         if r.is_err() {
                             sh.aborted.store(true, Ordering::Relaxed);
                         }
@@ -137,12 +188,14 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
             .collect();
         let mut first: Option<anyhow::Error> = None;
         let mut defaults = None;
+        let mut in_flight_peak = 0;
         for (i, h) in handles.into_iter().enumerate() {
             match h.join() {
-                Ok(Ok(d)) => {
+                Ok(Ok((d, peak))) => {
                     if i == 0 {
                         defaults = d;
                     }
+                    in_flight_peak = in_flight_peak.max(peak);
                 }
                 Ok(Err(e)) => {
                     first.get_or_insert(e);
@@ -154,7 +207,10 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
         }
         match first {
             Some(e) => Err(e),
-            None => Ok(UringReport { loops: threads as u64, opts: sh.opts.uring.clone(), iowq_defaults: defaults }),
+            None => {
+                let sqpoll = built.m.lock().unwrap_or_else(|e| e.into_inner()).1.unwrap_or(0);
+                Ok((UringReport { loops: threads as u64, opts: sh.opts.uring.clone(), iowq_defaults: defaults, in_flight_peak }, sqpoll))
+            }
         }
     })
 }
@@ -317,7 +373,7 @@ pub(crate) struct TaskIo {
     cpath2: Option<CString>,
     statx: Box<libc::statx>,
     pub(crate) buf: Option<Chunk>,
-    pub(crate) fd: Option<Arc<OwnedFd>>,
+    pub(crate) fd: Option<Arc<crate::backend::OpenFile>>,
     /// A direct read rounded out: the aligned start it was issued at.
     pub(crate) round: Option<i64>,
     pub(crate) started: Instant,
@@ -372,6 +428,7 @@ struct LoopIo {
     pool: Pool,
     supported: Vec<bool>,
     in_flight: usize,
+    in_flight_peak: usize,
 }
 
 impl LoopIo {
@@ -576,6 +633,7 @@ impl Engine for LoopIo {
         };
         self.push(entry.user_data(t.id as u64))?;
         self.in_flight += 1;
+        self.in_flight_peak = self.in_flight_peak.max(self.in_flight);
         Ok(Issued::Pending)
     }
 
@@ -674,7 +732,7 @@ impl Loop<LoopIo> {
         ring.submitter().register_probe(&mut probe).context("io_uring probe")?;
         let supported: Vec<bool> = (0..=255u8).map(|c| probe.is_supported(c)).collect();
         let buf = sh.opts.buffer_bytes;
-        let io = LoopIo { ring, inline: sh.backend(), rbuf: Ring::new(buf), wbuf: Ring::new(buf), pool: Pool::new(buf), supported, in_flight: 0 };
+        let io = LoopIo { ring, inline: sh.backend(), rbuf: Ring::new(buf), wbuf: Ring::new(buf), pool: Pool::new(buf), supported, in_flight: 0, in_flight_peak: 0 };
         Ok((Loop::with(sh, index, io)?, defaults))
     }
 }

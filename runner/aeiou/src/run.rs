@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -30,7 +30,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{Ast, Node};
-use crate::backend::{errno_name, Backend, BackendKind, MmapConsume, MmapMode, MmapStats, ALIGN};
+use crate::backend::{errno_name, Backend, BackendKind, MmapConsume, MmapMode, MmapStats, OpenFile, ALIGN};
 use crate::coord::{Coordinator, Local};
 use crate::counters::{HostCounters, Sampler};
 use crate::dryrun::{human_bytes, human_ns};
@@ -108,6 +108,12 @@ pub struct UringReport {
     /// `IORING_REGISTER_IOWQ_MAX_WORKERS` returned them to the first loop; `None` when the
     /// kernel lacks the call (before 5.15) and nothing was asked.
     pub iowq_defaults: Option<[u32; 2]>,
+    /// Most ops one loop had on its ring at once (submitted, not yet completed), counted by
+    /// the loop; the largest over the loops, and over the hosts once merged. An actor has
+    /// one op in flight at most, so this is how many of a loop's actors were waiting on I/O
+    /// together.
+    #[serde(default)]
+    pub in_flight_peak: u64,
 }
 
 impl UringReport {
@@ -116,7 +122,7 @@ impl UringReport {
             Some([b, u]) => format!("kernel io-wq caps bounded {b} unbounded {u}{}", if self.opts.sqpoll_shared { " (one io-wq for all loops)" } else { " per loop" }),
             None => "io-wq caps unknown (no IORING_REGISTER_IOWQ_MAX_WORKERS)".into(),
         };
-        format!("loops {}  {}  knobs: {}", self.loops, caps, self.opts.describe())
+        format!("loops {}  in-flight peak {}  {}  knobs: {}", self.loops, self.in_flight_peak, caps, self.opts.describe())
     }
 }
 
@@ -594,7 +600,7 @@ struct Instance {
     loaders: Mutex<Vec<(String, JoinHandle<(Result<()>, Stats)>)>>,
 }
 
-type Fds = HashMap<Arc<str>, Arc<OwnedFd>>;
+type Fds = HashMap<Arc<str>, Arc<OpenFile>>;
 
 /// Files opened by this actor, plus what the parent had open at the fork.
 pub(crate) struct FdTable {
@@ -604,7 +610,7 @@ pub(crate) struct FdTable {
 }
 
 impl FdTable {
-    pub(crate) fn get(&self, path: &str) -> Option<Arc<OwnedFd>> {
+    pub(crate) fn get(&self, path: &str) -> Option<Arc<OpenFile>> {
         if let Some(fd) = self.own.get(path) {
             return Some(fd.clone());
         }
@@ -736,13 +742,13 @@ impl ActorState {
         Ok(())
     }
 
-    pub(crate) fn fd(&self, path: &str) -> std::io::Result<Arc<OwnedFd>> {
+    pub(crate) fn fd(&self, path: &str) -> std::io::Result<Arc<OpenFile>> {
         self.fds.get(path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))
     }
 
     /// After a successful open: own the descriptor, note a creation, count an input open.
     pub(crate) fn opened(&mut self, sh: &Shared, path: &str, aux: u64, fd: OwnedFd) {
-        self.fds.own.insert(Arc::from(path), Arc::new(fd));
+        self.fds.own.insert(Arc::from(path), Arc::new(OpenFile::from(fd)));
         if aux & (1 << (crate::ast::OpenFlag::CREAT as u8)) != 0 {
             self.created.push((path.to_string(), self.actor));
         }
@@ -890,9 +896,6 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
             Ok(0)
         }
         OpKind::Close => {
-            if let Ok(fd) = a.fd(op.path) {
-                be.release(fd.as_raw_fd());
-            }
             a.close(op.path).map(|_| 0)
         }
         OpKind::Read => {
@@ -902,7 +905,7 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
                 // round out; O_DIRECT needs the offset, length, and buffer aligned
                 let (lo, hi) = round_out(op.offset, op.len);
                 let buf = rbuf.slice((hi - lo) as usize);
-                let n = be.read(fd.as_fd(), buf, Some(lo))? as i64;
+                let n = be.read(&fd, buf, Some(lo))? as i64;
                 let got = (n - (op.offset - lo)).clamp(0, op.len);
                 if !op.positioned && !be.positional() {
                     // keep the file position where a plain read would have left it
@@ -912,7 +915,7 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
             }
             let buf = rbuf.slice(op.len as usize);
             let off = if op.positioned || be.positional() { Some(op.offset) } else { None };
-            be.read(fd.as_fd(), buf, off).map(|n| n as i64)
+            be.read(&fd, buf, off).map(|n| n as i64)
         }
         OpKind::Write => {
             let fd = a.fd(op.path)?;
@@ -1003,9 +1006,9 @@ struct Job {
 
 /// An actor's `parallel` sub-actor threads, kept between forks. Sub-actor `k` of a fork
 /// always runs on pool thread `k` (the assignment is positional; there is no shared queue),
-/// and the pool grows to the widest fork the actor has issued. A thread keeps its two buffer
-/// rings and, when its sub-actors fork in turn, its own pool; the backend and the file table
-/// are new for every sub-actor, as they were when the thread was. Threads idle in `recv`
+/// and the pool grows to the widest fork the actor has issued. A thread keeps its backend, its
+/// two buffer rings and, when its sub-actors fork in turn, its own pool; the file table is
+/// new for every sub-actor (what the parent had open at that fork). Threads idle in `recv`
 /// between forks and end with the actor that owns the pool.
 #[derive(Default)]
 struct Pool {
@@ -1023,9 +1026,9 @@ impl Pool {
                 .name(format!("{template}#{actor} sub {}", self.workers.len()))
                 .spawn(move || {
                     let buf = sh.opts.buffer_bytes;
-                    let (mut rbuf, mut wbuf, mut pool) = (Ring::new(buf), Ring::new(buf), Pool::default());
+                    let (mut be, mut rbuf, mut wbuf, mut pool) = (sh.backend(), Ring::new(buf), Ring::new(buf), Pool::default());
                     while let Ok(Job { snap, k, a, done }) = rx.recv() {
-                        let mut sink = Runner { sh: sh.clone(), inst: inst.clone(), be: sh.backend(), rbuf, wbuf, a, pool };
+                        let mut sink = Runner { sh: sh.clone(), inst: inst.clone(), be, rbuf, wbuf, a, pool };
                         let mut vm = Vm::resume(snap);
                         vm.start_sub(k);
                         let r = drive(&mut vm, &mut sink).and_then(|_| sink.finish());
@@ -1033,9 +1036,9 @@ impl Pool {
                             sh.aborted.store(true, Ordering::Relaxed);
                         }
                         let st = std::mem::take(&mut sink.a.st);
-                        // the sub-actor's files and backend end here, before the parent's join
-                        let Runner { rbuf: rb, wbuf: wb, pool: pl, .. } = sink;
-                        (rbuf, wbuf, pool) = (rb, wb, pl);
+                        // the sub-actor's own files end here, before the parent's join
+                        let Runner { be: b, rbuf: rb, wbuf: wb, pool: pl, .. } = sink;
+                        (be, rbuf, wbuf, pool) = (b, rb, wb, pl);
                         let _ = done.send((k, r, st));
                     }
                 })
@@ -1570,6 +1573,9 @@ impl Report {
             }
             m.threads_peak += r.threads_peak;
             m.counters.merge(&r.counters);
+            if let (Some(a), Some(b)) = (&mut m.uring, &r.uring) {
+                a.in_flight_peak = a.in_flight_peak.max(b.in_flight_peak);
+            }
             match (&mut m.aio, &r.aio) {
                 (Some(a), Some(b)) => a.merge(b),
                 (None, Some(b)) => m.aio = Some(b.clone()),
@@ -1651,14 +1657,15 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
     let t0 = Instant::now();
     if sh.opts.backend.event_loop() {
         let loops = if sh.opts.backend.uring() {
-            crate::uring::run(model, &sh, &counts, &ranges).map(|u| (u.loops, Some(u), None))
+            crate::uring::run(model, &sh, &counts, &ranges).map(|(u, sqpoll)| (u.loops, Some(u), None, sqpoll))
         } else {
-            crate::aio::run(model, &sh, &counts, &ranges).map(|a| (a.loops, None, Some(a)))
+            crate::aio::run(model, &sh, &counts, &ranges).map(|a| (a.loops, None, Some(a), 0))
         };
         let elapsed = t0.elapsed();
-        let counters = sampler.finish();
+        let mut counters = sampler.finish();
         return match loops {
-            Ok((n, uring, aio)) => {
+            Ok((n, uring, aio, sqpoll)) => {
+                counters.sqpoll_threads = sqpoll;
                 sh.stats.lock().unwrap().threads += n;
                 assemble(sh, counts, rank_record, elapsed, counters, uring, aio)
             }
@@ -1769,7 +1776,7 @@ fn write_counters(out: &mut impl Write, c: &HostCounters) -> std::io::Result<()>
         "host: tasks peak {}  io-wq workers peak {}{}  cpu user {} sys {}  maxrss {}  faults minor {} major {}",
         c.tasks_peak,
         c.iowq_workers_peak,
-        if c.sqpoll_threads_peak > 0 { format!("  sqpoll threads peak {}", c.sqpoll_threads_peak) } else { String::new() },
+        if c.sqpoll_threads > 0 { format!("  sqpoll threads {}", c.sqpoll_threads) } else { String::new() },
         human_ns(c.cpu_user_ns as i128),
         human_ns(c.cpu_sys_ns as i128),
         human_bytes(c.maxrss_bytes),

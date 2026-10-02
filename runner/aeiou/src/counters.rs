@@ -35,9 +35,11 @@ pub struct HostCounters {
     pub tasks_peak: u64,
     /// Peak count of io-wq worker threads (`iou-wrk-*`), sampled; 0 under the `sync` backends.
     pub iowq_workers_peak: u64,
-    /// Peak count of `SQPOLL` submission threads (`iou-sqp-*`), sampled; 0 without `--sqpoll`.
+    /// The `SQPOLL` submission threads (`iou-sqp-*`) of the process, counted once, when every
+    /// loop has built its ring and before any runs (they live exactly as long as their
+    /// rings, so this is not a sample); 0 without `--sqpoll`.
     #[serde(default)]
-    pub sqpoll_threads_peak: u64,
+    pub sqpoll_threads: u64,
     /// CPU time of the process over the run.
     pub cpu_user_ns: u64,
     pub cpu_sys_ns: u64,
@@ -130,7 +132,7 @@ impl HostCounters {
     pub fn merge(&mut self, o: &HostCounters) {
         self.tasks_peak += o.tasks_peak;
         self.iowq_workers_peak += o.iowq_workers_peak;
-        self.sqpoll_threads_peak += o.sqpoll_threads_peak;
+        self.sqpoll_threads += o.sqpoll_threads;
         self.cpu_user_ns += o.cpu_user_ns;
         self.cpu_sys_ns += o.cpu_sys_ns;
         self.maxrss_bytes += o.maxrss_bytes;
@@ -286,8 +288,10 @@ fn task_count() -> Option<u64> {
 }
 
 /// The io-wq workers (`iou-wrk-*`) and `SQPOLL` threads (`iou-sqp-*`) among the process's
-/// tasks, by thread name.
-fn io_threads() -> (u64, u64) {
+/// tasks, by thread name. The kernel starts and ends the workers on its own schedule, so
+/// their peak can only be sampled; the `SQPOLL` threads are counted by one call of this
+/// once the rings exist (`uring::run`).
+pub(crate) fn io_threads() -> (u64, u64) {
     let Ok(rd) = std::fs::read_dir("/proc/self/task") else {
         return (0, 0);
     };
@@ -307,7 +311,7 @@ fn io_threads() -> (u64, u64) {
 /// after they are joined.
 pub struct Sampler {
     stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<(u64, u64, u64)>>,
+    handle: Option<JoinHandle<(u64, u64)>>,
     ru0: Rusage,
     mount0: Option<MountSnapshot>,
     root: std::path::PathBuf,
@@ -322,24 +326,21 @@ impl Sampler {
             .spawn(move || {
                 let mut tasks_peak = task_count().unwrap_or(0);
                 let mut last = tasks_peak;
-                let (mut iowq_peak, mut sqp_peak) = io_threads();
+                let mut iowq_peak = io_threads().0;
                 while !s.load(Ordering::Relaxed) {
                     std::thread::sleep(SAMPLE);
                     let Some(n) = task_count() else { continue };
                     tasks_peak = tasks_peak.max(n);
                     if n != last {
                         last = n;
-                        let (w, q) = io_threads();
-                        iowq_peak = iowq_peak.max(w);
-                        sqp_peak = sqp_peak.max(q);
+                        iowq_peak = iowq_peak.max(io_threads().0);
                     }
                 }
                 // one last look, so a run shorter than the period is still seen
                 if let Some(n) = task_count() {
                     tasks_peak = tasks_peak.max(n);
                 }
-                let (w, q) = io_threads();
-                (tasks_peak, iowq_peak.max(w), sqp_peak.max(q))
+                (tasks_peak, iowq_peak.max(io_threads().0))
             })
             .ok();
         Sampler {
@@ -353,11 +354,11 @@ impl Sampler {
 
     pub fn finish(mut self) -> HostCounters {
         self.stop.store(true, Ordering::Relaxed);
-        let (tasks_peak, iowq_workers_peak, sqpoll_threads_peak) = self
+        let (tasks_peak, iowq_workers_peak) = self
             .handle
             .take()
             .and_then(|h| h.join().ok())
-            .unwrap_or((0, 0, 0));
+            .unwrap_or((0, 0));
         let ru1 = rusage();
         let read_ahead_kb: Vec<u64> = read_ahead_kb(&self.root).into_iter().collect();
         let mount = match (self.mount0.take(), MountSnapshot::for_path(&self.root)) {
@@ -385,7 +386,7 @@ impl Sampler {
         HostCounters {
             tasks_peak,
             iowq_workers_peak,
-            sqpoll_threads_peak,
+            sqpoll_threads: 0,
             cpu_user_ns: ru1.user_ns.saturating_sub(self.ru0.user_ns),
             cpu_sys_ns: ru1.sys_ns.saturating_sub(self.ru0.sys_ns),
             maxrss_bytes: ru1.maxrss_bytes,

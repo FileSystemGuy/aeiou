@@ -453,7 +453,9 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
                 assert_eq!(r.stats.bytes_read, bytes, "{mode:?} {consume:?}");
                 let m = r.mmap.as_ref().unwrap();
                 assert_eq!((m.mode, m.consume), (mode, consume), "{m:?}");
-                assert!(m.maps >= 1 && m.mapped_bytes > 0, "{m:?}");
+                // one mapping per open, whoever reads: each of the 2 × 2 search threads opens
+                // the index and only its beam sub-actors read it, through the one mapping
+                assert_eq!((m.maps, m.mapped_bytes), (4, 4 * 5000 * 4096), "{m:?}");
                 let reads = r.stats.counts[&aeiou::vm::OpKind::Read];
                 assert_eq!(m.advised, if mode == MmapMode::Fault { 0 } else { reads }, "{m:?}");
                 let (touched, copied) = match (consume, mode) {
