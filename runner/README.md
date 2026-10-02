@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
 | `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits] [--report-json FILE [--report-takes]]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -36,7 +36,7 @@ Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **b
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
 backend-specific counters beyond those come with each backend), `--drop-caches` at the
 start gate with the residency check and the mount options line (decided 2026-10-01,
-`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) a JSON report, ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; the trace-side tool that computes the same numbers from a real trace is not) and the `replay` node. ~~`stream`
+`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; the trace-side tool that computes the same numbers from a real trace is not) and the `replay` node. ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
@@ -71,6 +71,7 @@ aeiou/src/
                `getrusage`, and the `mountstats` delta of the mount `--root` is on (§4)
   limits.rs    the limits before the gate: the estimate of open files and threads from a bounded walk,
                the soft limits raised, the refusal that names the limit (§11)
+  report.rs    `run --report-json`: the run's identity, results, and verdict as JSON (§12)
   payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
   datagen.rs   `aeiou datagen`
   main.rs      the CLI
@@ -83,6 +84,7 @@ aeiou/tests/uring_knobs.rs  the ring and io-wq knobs (§8): same fingerprint, th
 aeiou/tests/metrics.rs  `--metrics` (§10): same op multiset as the inline walk, thread-count independence,
                         the DiskANN structure recovered, sampling against exact
 aeiou/tests/limits.rs   the limit checks (§11): the estimate against the counted peak, a truncated walk, the refusals
+aeiou/tests/report.rs   the JSON report (§12) through the binary: against the text, failed runs, two ranks
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
 aeiou-launch            the ssh loop: one rank per host
 ```
@@ -977,8 +979,11 @@ trace has a real order; the comparison is between distributions, and the per-thr
 unordered here; a server-side cache sees all instances, so its distances are larger than
 these by about the instance count for disjoint work, and smaller for shared hot blocks.
 (3) A run is tracked per path, not per open handle. (4) `--metrics-json` writes format
-`aeiou_metrics: 1` (the histograms in full, per template and in total); the JSON report of
-a run is a separate, later item and may absorb it.
+`aeiou_metrics: 1` (the histograms in full, per template and in total); ~~the JSON report of
+a run is a separate, later item and may absorb it.~~ the JSON report of a run (§12, built
+2026-10-01) does not absorb it: the metrics describe the op stream and come from a dry
+run, the report describes an execution, and the two share `(abstract sha256, seed, gpus,
+params)`, which is how a tool joins them.
 
 ## 11. Limits before the gate (2026-10-01)
 
@@ -1037,3 +1042,80 @@ Observed (ext4, 2026-10-01): `train_small_files`, 4 GPUs: estimate 32 open files
 31 (`sync`) and 32 (`io_uring`); threads estimated 39, `tasks peak` 36.
 `vdb_search_diskann`, 2 GPUs × 4 threads: 8 and 8; threads 35 and 34. With `ulimit -n 40`
 the first refuses (53 needed); with `ulimit -Sn 40` the soft limit is raised and it runs.
+
+## 12. The JSON report (2026-10-01)
+
+`aeiou run … --report-json FILE [--report-takes]` writes what the text report prints as one
+JSON document, format `aeiou_report: 1`, for the tools that compare runs (`report.rs`; the
+reasoning is in `DESIGN_REVIEW.md` §3.41). The text report is unchanged and stays the
+thing a person reads. **The choices below were made while building (2026-10-01) and are
+not yet confirmed by the user.**
+
+```
+{ "aeiou_report": 1, "runner": "0.1.0",
+  "abstract": {"name", "sha256"}, "seed", "gpus", "params": {…resolved…}, "backend",
+  "host", "rank", "ranks", "gpu_ids": [lo, hi],
+  "options": {root, threads, buffer_bytes, write_compress, time_scale, io_uring, aio_depth,
+              mmap_mode, mmap_consume, clean_namespaces, rank_rotate, max_gap, require_cold,
+              drop_caches, ignore_limits},
+  "datasets": [{name, root, id, payload, files}], "input_namespaces": [{names, root, writer_…, gap_s, objects, same_host}],
+  "limits": {"checked": {…§11…}, "ignored": [problems started over]},
+  "started", "finished",                      Unix seconds, the gate and the end of the run
+  "scope": "run" | "host", "result": {…}, "this_host": {…},
+  "verdict": {"ok", "error", "fingerprint", "fingerprint_scope", "expected_fingerprint"} }
+```
+
+`result` is one report:
+
+```
+host, ranks [{rank, host, gpus}], templates {name: instances}, elapsed_ns, fingerprint,
+ops, bytes_read, bytes_written, rates {ops_per_s, read_bytes_per_s, written_bytes_per_s},
+by_kind {open: n, …}, phases {name: {ops, bytes_read, bytes_written, io_ns}},
+latency {kind: {count, sum_ns, mean_ns, p50_ns, p90_ns, p99_ns, p999_ns, max_ns, buckets [[lower_ns, count], …]}},
+compute_ns, io_ns, barriers, barrier_wait_ns, takes, puts, expected_errors, threads, threads_peak,
+input_opens, warm_opens, objects_created, departure_releases {scope: n}, warnings [text],
+counters {…§4…}, io_uring, libaio, mmap (null unless that backend ran), cold [{host, dropped, residency}],
+take_summary {per_instance, instances, takes, stall_ns, compute_ns, stall_mean_ns, stall_p99_ns, stall_max_ns, busy,
+              steps [{from, to, takes, stall_mean_ns, stall_p99_ns, stall_max_ns, busy}]},
+instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_records [[stall_ns, compute_ns], …]}]
+```
+
+- **Which report, on which host.** One host: `result` is the run, `scope` is `run`. Several
+  hosts: rank 0 writes the merged report as `result` (`scope: run`) and its own as
+  `this_host`; every other rank writes its own (`scope: host`). Each rank writes its own
+  `FILE` on its own host; nothing is sent to rank 0 that was not already (§6). The
+  verdict's fingerprint is the run's on every rank (`fingerprint_scope: run`), since rank 0
+  sends it with the result.
+- **A failed run writes the file too.** Any file at `FILE` is removed when the command
+  starts, and the document is written whether the run passed or not: `verdict.ok` false
+  and `verdict.error` the message the command prints. What is known by then is there: the
+  identity from the moment the abstract loads, the checks' results as they pass, `result`
+  only when the run itself finished (a fingerprint mismatch has one; an I/O error or a
+  refused check has `result: null`). A harness never reads an earlier run's file as this
+  run's.
+- **Units and number forms.** Times are integer nanoseconds (`_ns`), sizes bytes, rates
+  per second of `elapsed`; `started`, `finished`, and `gap_s` are seconds. The fingerprint
+  and the hashes are hex strings: a 64-bit value is not exact as a JSON number in most
+  readers. The nanosecond sums and an unlimited `RLIMIT` (2^64 − 1) are plain integers;
+  Python reads them exactly, `jq` before 1.7 and JavaScript round above 2^53.
+- **Histograms in full.** `buckets` lists the non-empty buckets as `[lower bound, count]`,
+  four per octave; a bucket ends where the next bound of that scale begins (`LatHist` in
+  `run.rs`). The quantiles are bucket lower bounds, as in the text report, so a tool that wants
+  other quantiles or merges runs uses the buckets.
+- **Nothing per file.** Created objects are a count; the namespace manifest has the list
+  when the namespace records one. `instances` has one entry per actor instance (the
+  per-instance elapsed time and take sums); `--report-takes` adds every take as
+  `[stall_ns, compute_ns]`, which is steps × instances pairs and is off by default.
+- **Outside the run.** The document is built and written after the verdict, so it costs
+  the run nothing; the option is not in the coordinator's configuration hash (like
+  `--threads`), so one rank may ask for it and another not.
+- **The embedded blocks** (`counters`, `io_uring`, `libaio`, `mmap`, `cold`,
+  `limits.checked`) are the structs of §4, §8, §9, and §11 as serde writes them; their
+  field names are now part of this format.
+- **Not in it:** a JSON Schema for the document, and the metrics of §10 (a dry run's; see
+  the end of §10). A change that removes or renames a field raises `aeiou_report`.
+
+```
+aeiou run schema/examples/train_small_files.ast.json --gpus 2 --seed 7 --root DIR --report-json r.json
+python3 -c 'import json; d = json.load(open("r.json")); print(d["verdict"]["ok"], d["result"]["latency"]["read"]["p99_ns"])'
+```

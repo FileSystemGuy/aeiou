@@ -312,6 +312,11 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     POSIX-to-object mapping table and the validity rule first; first measurement is the same
     fingerprint over `file://` through the library versus the `sync` backend, pricing the
     library before any cloud is involved.
+18. **JSON report (built 2026-10-01, `DESIGN_REVIEW.md` §3.41, `runner/README.md` §12;
+    choices not yet confirmed by the user).** `aeiou run --report-json FILE` writes the
+    run's identity, results (latency histograms in full), and verdict as format
+    `aeiou_report: 1`; written on failure too; rank 0 holds the merged report, every other
+    rank its own; `--report-takes` adds every take. No JSON Schema yet.
 
 ## 7. Environment
 

@@ -1746,6 +1746,44 @@ were made while building and **confirmed by the user the same day (decided 2026-
   was dropped rather than built; on such a kernel the ring setup would fail with `ENOMEM`
   and the error would not name the limit. Item 9 of the brief named it; this records why.
 
+### 3.41 The JSON report: one document per host, written on failure too (added 2026-10-01)
+
+The text report is for a person; comparing runs, plotting latency, and a submission checker
+need the same numbers in a form a tool reads. Built as `report.rs` and
+`aeiou run --report-json FILE` (`runner/README.md` §12, format `aeiou_report: 1`). The
+choices were made while building and are **not yet confirmed by the user**:
+
+- **A document built for the purpose, not the wire `Report` dumped.** The struct the hosts
+  send to the coordinator holds the list of created paths (per file, unbounded), durations
+  as `{secs, nanos}`, a 64-bit fingerprint as a number, and histograms as 256 raw buckets
+  whose bounds only the runner knows. The document gives a count, integer nanoseconds, hex
+  strings, and buckets with their lower bounds. The wire format stays free to change.
+- **The identity of the run is in the file.** Abstract hash, seed, GPUs, resolved
+  parameters, backend and its options, dataset ids, input-namespace writers, the limits.
+  A report without them cannot be compared with another or checked against a published
+  hash; the text report prints them, so the JSON holds them.
+- **The verdict is a field, and a failed run still writes.** A harness that finds last
+  run's file after this run failed reads a pass. So the file is removed at the start and
+  written at the end either way, with `verdict.ok` and the error text. The exit status is
+  unchanged.
+- **Each rank writes its own file; rank 0's holds the merged report.** The alternative,
+  rank 0 writing every host's report, would need the per-host reports kept after the merge
+  and gains little: the merged report is the result, and a host's own file is on that host
+  for whoever wants the split. Rank 0's own part is kept beside the merged one
+  (`this_host`) because it costs nothing.
+- **Takes: sums always, records on request.** Per-instance stall and compute sums are G
+  entries. Every take is steps × G pairs, tens of megabytes for a long run on many GPUs,
+  so `--report-takes` asks for them. Per-op records are not offered at all: that is a
+  trace, and tracing is a different tool.
+- **Quantiles as the text report defines them, plus the buckets.** Bucket lower bounds, so
+  the two reports agree to the digit; anything finer is the reader's computation over
+  `buckets`.
+- **`--metrics-json` is not absorbed** (§3.39 left that open). The metrics come from a dry
+  run and describe the stream; a run does not compute them, and computing them in a scored
+  run would be work the application does not do.
+- **Not done:** a JSON Schema for the document. The format is described in the README and
+  pinned by `tests/report.rs`; a schema is worth writing when a second tool reads it.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -1781,7 +1819,7 @@ were made while building and **confirmed by the user the same day (decided 2026-
   done the same day (§3.35). ~~Next: the per-actor sub-actor pool,~~ The sub-actor pool done
   the same day (§3.36). ~~Next: `--metrics`,~~ `--metrics` built the same day, its
   definitions decided (§3.39). ~~Next: the `RLIMIT`
-  checks,~~ The limit checks built the same day, their choices decided (§3.40). Next: the JSON report, the trace-side metrics tool; the
+  checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices not yet confirmed (§3.41). Next: the trace-side metrics tool; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
   can be traced.
 
