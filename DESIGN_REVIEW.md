@@ -1564,11 +1564,19 @@ depends on how long the task runs. The answer sorts the counters into three kind
   moment, and without privilege the thread list is the only view. `iowq_workers_peak`
   stays on the sampler, as does `tasks_peak` (which includes them and glibc's AIO threads).
 - **Done by the kernel, at a moment the runner knows: counted once.** An `SQPOLL` thread
-  exists from `io_uring_setup` to the ring's close. The loops now meet when each has built
+  exists from `io_uring_setup` to the ring's close. ~~The loops now meet when each has built
   its ring (`uring.rs`, `Built`), the last to arrive reads the thread list once, and then
-  all run. `HostCounters::sqpoll_threads` (was `sqpoll_threads_peak`) is that count: exact
+  all run.~~ That first form failed in CI as well (2 threads seen of 3): the thread list
+  finds them by name, and an `SQPOLL` thread names itself `iou-sqp-*` only when it first
+  runs, which on a two-core host can be after all three rings are built. Each loop now
+  reads its own ring's `fdinfo` once the ring is built, where the kernel states the poll
+  thread from the moment setup returns (`SqThread:`), and the host's count is the number
+  of distinct threads stated; the loops do not wait for each other.
+  `HostCounters::sqpoll_threads` (was `sqpoll_threads_peak`) is that count: exact
   at any run length, still an observation of the kernel (a shared poll thread shows as
   one), and taken before any op is issued. The 50 ms was taken back out of the test.
+  The same naming delay means the sampled counts can miss a thread that has not run yet;
+  for io-wq workers that is harmless, since a worker exists to run.
   Rejected: holding every ring open until all loops end so a last look would see them; a
   finished loop's poll thread would spin on, and its CPU would be charged to the run.
 - **Done by the runner: counted where it happens.** The ops a loop has on its ring are the
