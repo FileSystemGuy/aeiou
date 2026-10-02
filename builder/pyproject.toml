@@ -18,6 +18,7 @@ formats = ["pyarrow>=25", "h5py>=3.16", "numpy>=2", "crc32c>=2.7", "dgen-py==0.3
 aeiou-build = "aeiou.cli:main"
 aeiou-params = "aeiou.params:main"
 aeiou-datagen = "aeiou.datagen:main"
+aeiou-trace = "aeiou.trace:main"
 
 [build-system]
 requires = ["hatchling"]

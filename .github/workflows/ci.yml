@@ -52,3 +52,8 @@ jobs:
       - name: Container datasets written by aeiou-datagen run to the dry-run fingerprint
         working-directory: builder
         run: AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q tests/test_formats.py
+      - name: The metrics of an strace of the runner are its dry run's
+        working-directory: builder
+        run: |
+          command -v strace || sudo apt-get install -y strace
+          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_trace.py

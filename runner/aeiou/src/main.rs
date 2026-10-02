@@ -707,6 +707,7 @@ fn dry_run(a: DryRunArgs) -> Result<()> {
         let templates: std::collections::BTreeMap<&str, _> = report.templates.iter().filter_map(|t| aeiou::metrics::to_json(&t.run).map(|m| (t.name.as_str(), m))).collect();
         let doc = serde_json::json!({
             "aeiou_metrics": 1,
+            "source": "dry-run",
             "abstract": loaded.ast.name,
             "sha256": loaded.sha256,
             "seed": cfg.seed,
