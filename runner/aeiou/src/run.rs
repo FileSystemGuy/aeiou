@@ -1481,6 +1481,31 @@ pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &Path,
                 bail!("input namespace `{name}` at {}: this abstract's definition differs from the writer's (`{}`): \n  {}", dir.display(), m.abstract_name, lines.join("\n  "));
             }
         }
+        // V15: an abstract that reads names the writer drew is the writer's run or it is nothing
+        let same: Vec<&String> = names.iter().filter(|n| ast.namespaces[*n].same_run.unwrap_or(false)).collect();
+        if !same.is_empty() {
+            let what = format!("input namespace(s) {} at {} (`same_run`): the names are draws of the run that wrote them (`{}`)", same.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "), dir.display(), m.abstract_name);
+            let mut lines = Vec::new();
+            if m.seed != cfg.seed {
+                lines.push(format!("--seed {} here, {} in the writer", cfg.seed, m.seed));
+            }
+            if m.gpus != cfg.gpus {
+                lines.push(format!("--gpus {} here, {} in the writer", cfg.gpus, m.gpus));
+            }
+            let mine = payload::params_json(&loaded.doc, cfg, &Params::new(ast, cfg)?)?;
+            if let (Some(mine), Some(theirs)) = (mine.as_object(), m.params.as_object()) {
+                for (k, v) in mine {
+                    if let Some(w) = theirs.get(k) {
+                        if crate::canon::canonical(v) != crate::canon::canonical(w) {
+                            lines.push(format!("parameter `{k}`: {} here, {} in the writer", String::from_utf8_lossy(&crate::canon::canonical(v)), String::from_utf8_lossy(&crate::canon::canonical(w))));
+                        }
+                    }
+                }
+            }
+            if !lines.is_empty() {
+                bail!("{what}; this run differs:\n  {}", lines.join("\n  "));
+            }
+        }
         let gap = unix_now() - m.finished;
         if let Some(max) = opts.max_gap {
             if gap > max {

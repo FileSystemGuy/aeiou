@@ -140,3 +140,45 @@ def test_safetensors_table_matches_committed(tmp_path):
         assert (rows == 1) == (split != "row")
     assert all(off >= 8 + t["hdr_len"][s] for off, s in zip(t["off"], t["shard"]))
     assert t["shard_bytes"] == max(p.stat().st_size for p in shards)
+
+
+# ---- npz ----
+
+def test_npz_framing_is_read_from_real_archives_and_compared_with_the_abstract(tmp_path):
+    """`aeiou-params npz`: the two archive numbers `train_large_samples` takes as parameters,
+    read from files. The traced writer's archives give the defaults; another set of members
+    gives a larger number, which is reported and can be written as a parameter file; archives
+    that disagree, a compressed member, and a member that is not first are refused."""
+    np = pytest.importorskip("numpy")
+    ast = EXAMPLES / "train_large_samples.ast.json"
+    x = np.zeros((64, 64, 40), np.uint8)
+    a, b = tmp_path / "a.npz", tmp_path / "b.npz"
+    np.savez(a, x=x, y=np.array([0]))
+    np.savez(b, x=np.zeros((64, 64, 90), np.uint8), y=np.array([0]))
+    r = _run(["npz", ast, a, b])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "framing 498, cd_len 102" in r.stdout and "defaults describe" in r.stdout
+
+    # another writer: a third member and longer names
+    c = tmp_path / "c.npz"
+    np.savez(c, x=x, label=np.array([0]), spacing=np.array([1.0, 1.0, 2.5]))
+    r = _run(["npz", ast, c])
+    assert r.returncode == 2 and "DIFFERS framing: the abstract's default is 498" in r.stdout, r.stdout + r.stderr
+    got = params.npz_framing(c)
+    assert got["framing"] > 498 and got["cd_len"] > 102 and got["framing"] == c.stat().st_size - x.nbytes
+    out = tmp_path / "c.params.json"
+    r = _run(["npz", ast, c, "-o", out])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert params.load(out)["params"] == {"framing": got["framing"], "cd_len": got["cd_len"]}
+    assert _run(["check", ast, out]).returncode == 0
+
+    r = _run(["npz", ast, a, c])
+    assert r.returncode == 1 and "differs between the archives" in r.stderr
+    z = tmp_path / "z.npz"
+    np.savez_compressed(z, x=x, y=np.array([0]))
+    r = _run(["npz", ast, z])
+    assert r.returncode == 1 and "compressed" in r.stderr
+    s = tmp_path / "s.npz"
+    np.savez(s, y=np.array([0]), x=x)
+    r = _run(["npz", ast, s])
+    assert r.returncode == 1 and "not the first member" in r.stderr

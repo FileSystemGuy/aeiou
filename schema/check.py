@@ -108,6 +108,9 @@ class Check:
             if nroot in nroots and nroots[nroot][1] != inp:
                 self.err(["namespaces", nname], f"shares root `{nroot}/` with namespace `{nroots[nroot][0]}` but `input` differs (V14)")
             nroots.setdefault(nroot, (nname, inp))
+            # V15: `same_run` compares this run with the writer's manifest, which only an input has
+            if n.get("same_run") and not inp:
+                self.err(["namespaces", nname], "`same_run` without `input`: only an input namespace has a writer to compare with (V15)")
         for aname, a in self.ast["actors"].items():
             scope = Scope(self)
             if "count" in a:

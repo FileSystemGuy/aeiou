@@ -170,7 +170,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.3"
+    AST_VERSION = "0.4"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     BACKENDS = ("sync", "sync-direct", "io_uring", "io_uring-direct", "posix-aio", "posix-aio-direct",
@@ -258,11 +258,17 @@ class Workload:
 
     # ---- namespaces ----
     def namespace(self, name: str, *, pattern: str, fields: dict, size, seed: int,
-                  input: bool = False, doc: str | None = None) -> Namespace:
+                  input: bool = False, same_run: bool = False, doc: str | None = None) -> Namespace:
         """Workload-created objects. `size` is an expression over the fields and params, or
         "as_written" (the sum of the writes that create the object; schema/README.md V4).
         `input=True`: a previous run wrote the objects and this abstract only reads them; the
-        runner requires that run's `.aeiou-namespace.json` (schema/README.md V14)."""
+        runner requires that run's `.aeiou-namespace.json` (schema/README.md V14).
+        `same_run=True` (with `input`): the names read are positional draws of the writing run,
+        so the runner refuses a run whose seed, instance count, or common parameters differ from
+        the writer's (schema/README.md V15)."""
+        if same_run and not input:
+            raise BuildError(f"namespace {name}: `same_run` without `input`: only an input namespace has a writer "
+                             f"to compare with (schema/README.md V15)")
         self._declare(name, "namespace")
         fields = {k: ("int" if v in (int, "int") else "str" if v in (str, "str") else v)
                   for k, v in fields.items()}
@@ -289,7 +295,7 @@ class Workload:
                 raise BuildError(f"namespace {name}: shares root {nroot!r}/ with namespace {other.name} but "
                                  f"`input` differs; a root has one manifest (schema/README.md V14)")
         spec = {"pattern": pattern, "fields": fields, "size": size, "seed": _seed(seed, name),
-                "input": True if input else None, "doc": doc}
+                "input": True if input else None, "same_run": True if same_run else None, "doc": doc}
         self._namespaces[name] = ns = Namespace(name, spec, fields, input=bool(input))
         return ns
 

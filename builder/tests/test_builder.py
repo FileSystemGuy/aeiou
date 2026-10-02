@@ -324,3 +324,13 @@ def test_a_workload_may_declare_its_backend():
     examples = pathlib.Path(__file__).resolve().parents[2] / "schema" / "examples"
     assert "backend" not in json.loads((examples / "train_small_files.ast.json").read_text())
     assert json.loads((examples / "model_load.ast.json").read_text())["backend"] == "mmap"
+
+
+def test_same_run_needs_input():
+    """Contract 0.4, V15: `same_run` compares a run with the writer's manifest, which only an
+    input namespace has; with `input` it is emitted on the namespace."""
+    w = Workload("v15")
+    with pytest.raises(BuildError, match="V15"):
+        w.namespace("out", pattern="o/{k:04}", fields={"k": int}, size=4096, seed=1, same_run=True)
+    ns = w.namespace("inp", pattern="i/{k:04}", fields={"k": int}, size=4096, seed=1, input=True, same_run=True)
+    assert ns.spec["input"] is True and ns.spec["same_run"] is True

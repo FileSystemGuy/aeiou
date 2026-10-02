@@ -16,7 +16,7 @@ w.param("steps", 500, unit="count")
 w.param("sync_every", 500, unit="count", doc="1 for DDP; 500 keeps the brief's reference workload")
 w.param("step_time", 105 * ms, unit="ns", doc="[measure] GPU step time on the target accelerator")
 w.param("hdr_read", 1 * MiB, unit="bytes", doc="Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01)")
-w.param("enumerate", False, doc="include the startup directory walk (ABSTRACTS.md §9.8)")
+w.param("enumerate", True, doc="the startup directory walk, as ImageFolder does it in every process (ABSTRACTS.md §9.8); on by default since 2026-10-02")
 w.param("files", 50_000_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
 
 train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg",

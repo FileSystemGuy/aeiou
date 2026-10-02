@@ -222,10 +222,24 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
     assert_eq!(r.stats.counts.get(&aeiou::vm::OpKind::Rename), None);
     assert!(r.stats.counts[&aeiou::vm::OpKind::Open] > wr.stats.counts[&aeiou::vm::OpKind::Open] - renames, "the reader loads the chunks the writer computed");
     assert!(r.stats.input_opens > 0 && r.stats.input_opens == r.stats.warm_opens, "every chunk was written on this host");
-    // another seed draws other conversation ids: the store does not have them
-    let (_, _, other) = leaked_model("kv_cache_shared_reader", config(2, 6, &params));
+    // another seed draws other conversation ids, which the store does not have. The namespace is declared
+    // `same_run` (V15, contract 0.4), so the manifest check refuses before the gate, naming what differs
+    let refusal = |seed: u64, gpus: i64, p: &[(&str, &str)]| {
+        let (l, c, _) = leaked_model("kv_cache_shared_reader", config(gpus, seed, p));
+        run::check_input_namespaces(l, c, &root, &opts(&root, BackendKind::Sync)).unwrap_err().to_string()
+    };
+    let e = refusal(6, 2, &params);
+    assert!(e.contains("same_run") && e.contains("--seed 6 here, 5 in the writer"), "{e}");
+    let e = refusal(5, 1, &params);
+    assert!(e.contains("--gpus 1 here, 2 in the writer"), "{e}");
+    let mut other = params.to_vec();
+    other[7] = ("local", "2");
+    let e = refusal(5, 2, &other);
+    assert!(e.contains("parameter `local`: 2 here, 1 in the writer") && !e.contains("--seed"), "{e}");
+    // without the check the same mismatch fails late, at the first chunk the store does not have
+    let (_, _, late) = leaked_model("kv_cache_shared_reader", config(2, 6, &params));
     let (_, inputs) = run::check_input_namespaces(rl, rcfg, &root, &opts(&root, BackendKind::Sync)).unwrap();
-    assert!(run::run(other, opts(&root, BackendKind::Sync), inputs).is_err());
+    assert!(run::run(late, opts(&root, BackendKind::Sync), inputs).is_err());
     std::fs::remove_dir_all(&root).unwrap();
 }
 

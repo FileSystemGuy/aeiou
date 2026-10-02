@@ -29,23 +29,23 @@ fn dry(text: &str, cfg: &Config, threads: usize) -> dryrun::Report {
 fn hashes_match_check_py() {
     // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day; re-recorded for
     // contract 0.2 and model_load's `full` split the same day; all again 2026-10-01 for contract 0.3, the
-    // optional `backend`).
+    // optional `backend`; all again 2026-10-02 for contract 0.4, the optional `same_run` of a namespace).
     let want = [
-        ("ckpt_restore", "df29f09389b797751926d930e00647a81b02bf09490ca80d0b51250e97b1a33f"),
-        ("ckpt_write_dcp", "9b410bed69fe9b2fd8b0e4742abe3f4b5e6a7da6927164df6fde668ff17b31c3"),
-        ("kv_cache_serving", "3dd9d9e47e9cb3e59084e29496a8e3c49cad6cf33500317e45991fd88c53133c"),
-        ("model_load", "6a22e3b84c3844e46bc4244961006e9add7b18605e9977ab5333d34998d5b111"),
-        ("train_large_samples", "a614e020420787cf55281294508bfc87e72997c16fe4a537b19255d3bd3326e1"),
-        ("train_small_files", "a1f595eebddcd31cd13799f8a10e6f415023924ead93046626103267d5079ac8"),
-        ("vdb_build_diskann", "36fe7582229b21115e1b0bf5f419e93a523b5162466add2768f3ab7f1177f092"),
-        ("vdb_search_diskann", "1493d8de203823aef7740b4e4705fc91e40633086544f4cfc7a93f83ede2b41a"),
-        ("train_stream_tfrecord", "bdba2a200488c0a7cf3d3b9269074990d1f54c013be0dd5fd84519469c886784"),
-        ("train_stream_parquet", "0e629d8ffd38043367d6bd690f2e7cb10cea8f179bea003c78e30450564b0ec2"),
-        ("train_map_hdf5", "4f20c7789667ecca22d3f4b11fcf29a6067eedf5647c83dc84712b9e25b80ccd"),
-        ("vdb_search_ivf", "5e9bf135c59824c2a033a8822eeb1130162fdbc6fe68f824f1b43dada367a9a1"),
+        ("ckpt_restore", "bcf096f4246d1a27163dcceb722e7cbef5a5232bc110f7a8dfd5f117c8509913"),
+        ("ckpt_write_dcp", "962bc54a749e8e4f6e0c330ad9a1ef1fe9c5008bd5e9b445447be22260cfdce1"),
+        ("kv_cache_serving", "461cd53175546c1b36f575dd8152ba42d895ef09548ee606e8eb77a0bf5b5e69"),
+        ("model_load", "74f0499b2ef9695f6b27156ce1aed924c05aadcdf1d7a833332729b3eaa32c78"),
+        ("train_large_samples", "11eeee32824e31e2dbc7b282244eeca347197b39cd6fbd58ee02ea6d8abd5de2"),   // 2026-10-02: the `enumerate` phase, on by default
+        ("train_small_files", "c5869d55ce47593823fe976febe14bdbf545f1867044c42761f220bff13535f6"),   // 2026-10-02: `enumerate` on by default
+        ("vdb_build_diskann", "4b6dfe4a71b555f3d36c50db7d5dfcaf5bf3fdae47ce9efa06a576946b2c3daa"),
+        ("vdb_search_diskann", "756ccaf018abb477600bb6bde7468fe322adbb1b76db5b3e7eb37cd101d3251b"),
+        ("train_stream_tfrecord", "e86490784d2cf5c5df01dac655a4ae6c0fe0d7d65a66c5af534af5bf64e88871"),
+        ("train_stream_parquet", "e4e2246c9e60bf2efcb20a5df07ec13cda85ea8c82ee01554506efdf6f902775"),
+        ("train_map_hdf5", "fa9c9ea4f7b55361141ee1b78912a3ab4a6ad72680aea7aa55ddaebcc2bf0354"),
+        ("vdb_search_ivf", "9e4dc1626dbb06ed987fbad647fcdaa4b75f38462789fe09d7c7a7547c6772fd"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("kv_cache_shared", "5aba8c06612f031b933cacdbcd2f25eb850be07a58755e03278adc30a1f321a0"),
-        ("kv_cache_shared_reader", "c29d7c1db412c25df1d91d3037dc22657c8dbad46620804b9c41c81d1ad8136b"),
+        ("kv_cache_shared", "19759baf9b1561587802a7ca0693e9c6b5a18dde9731c20e7f126afd1d7e1202"),
+        ("kv_cache_shared_reader", "8171a377caf11109ae558e180707b1d247f8609eb6606152f2f9633b16fedcfd"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -73,8 +73,13 @@ fn golden_fingerprints() {
     // kv_cache_serving the same day from the trace of vLLM with LMCache, §3.51: no lookups on storage, one flat
     // directory, whole chunks of the prompt only, reads only for what the engine lost).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
-        ("train_small_files", 2, &[("steps", "10")], 0x71628bdb4289c4c8, 5120),
-        ("train_large_samples", 2, &[("steps", "5")], 0xa2c284c6137f9639, 50451),
+        // the directory walk is on by default since 2026-10-02 (DESIGN_REVIEW §3.54): five ops per class directory and
+        // actor in train_small_files (38,462 directories), four per directory in train_large_samples; with
+        // `enumerate=false` both are what they were
+        ("train_small_files", 2, &[("steps", "10")], 0xfb3215e5607b32ae, 389740),
+        ("train_small_files", 2, &[("steps", "10"), ("enumerate", "false")], 0x71628bdb4289c4c8, 5120),
+        ("train_large_samples", 2, &[("steps", "5")], 0xf755bd4187b75b78, 50491),
+        ("train_large_samples", 2, &[("steps", "5"), ("enumerate", "false")], 0xa2c284c6137f9639, 50451),
         ("ckpt_write_dcp", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
         ("ckpt_restore", 2, &[], 0x22990a88db4e6d4f, 368),
         ("model_load", 2, &[], 0x2668387c7aa4126b, 24682),
@@ -198,7 +203,7 @@ fn collect(text: &str, cfg: &Config, template: &str, count: i64) -> Vec<(i64, Ve
 }
 
 const CONSUME: &str = r#"{
-  "ast": "0.3", "name": "consume_test",
+  "ast": "0.4", "name": "consume_test",
   "params": {"batches": {"default": 24}, "batch": {"default": 4}},
   "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}}},
   "actors": {"gpu": {"body": [
@@ -237,7 +242,7 @@ fn consume_is_a_permutation_per_epoch_across_actors() {
 }
 
 const CHAIN: &str = r#"{
-  "ast": "0.3", "name": "chain_test",
+  "ast": "0.4", "name": "chain_test",
   "params": {"reuse": {"default": {"mixture": [{"weight": 0.4, "dist": null}, {"weight": 0.6, "dist": {"uniform": {"lo": 1, "hi": 5}}}]}}},
   "namespaces": {"kv": {"pattern": "kv/{conv:016x}/d{d}", "fields": {"conv": "int", "d": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
@@ -278,7 +283,7 @@ fn at_chains_reach_the_original_conversation() {
 }
 
 const UNTIL_EOF: &str = r#"{
-  "ast": "0.3", "name": "eof_test",
+  "ast": "0.4", "name": "eof_test",
   "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 1, "body": [
@@ -325,7 +330,7 @@ fn rejects(text: &str, needle: &str) {
 fn validator_rejects_what_check_py_rejects() {
     let base = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.3", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.4", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{{datasets}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )
@@ -380,7 +385,7 @@ fn validator_rejects_what_check_py_rejects() {
 #[test]
 fn a_long_at_chain_is_one_link_per_iteration() {
     let text = r#"{
-  "ast": "0.3", "name": "long_chain",
+  "ast": "0.4", "name": "long_chain",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "k", "to": 200000, "body": [

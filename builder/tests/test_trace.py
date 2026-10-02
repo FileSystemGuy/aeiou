@@ -311,7 +311,7 @@ def test_large_sample_abstract_matches_the_trace_of_np_load(tmp_path, which, reu
                         "--params", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
-    listing = {"open": 2, "fstat": 2, "readdir": 2, "close": 2}       # glob over the two directories
+    listing = {"open": 1, "fstat": 1, "readdir": 1, "close": 1}       # glob lists the root too; the abstract lists the sample directories (one here)
     for k, v in t["counts"].items():
         v -= listing.get(k, 0)
         assert abs(v - d["counts"].get(k, 0)) <= 0.01 * v, k

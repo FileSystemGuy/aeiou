@@ -1,5 +1,5 @@
 {
-  "ast": "0.3",
+  "ast": "0.4",
   "name": "vdb_build_diskann",
   "doc": "Single builder: PQ training and compression, partition into shards, per-shard build, merge, disk layout, sample.",
   "params": {
@@ -3343,13 +3343,14 @@
       "script": "vdb_build_diskann.py",
       "sha256": "cfc0a42eec954973a006b89337e06cf54c88fcef07fa3ce0f1cfc0ac7e18a267",
       "builder_version": "0.1.0",
-      "git": "8f6a8ed87522-dirty"
+      "git": "88cdc5e8957c"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
-    "ast_sha256": "36fe7582229b21115e1b0bf5f419e93a523b5162466add2768f3ab7f1177f092"
+    "built_twice_identical": true,
+    "ast_sha256": "4b6dfe4a71b555f3d36c50db7d5dfcaf5bf3fdae47ce9efa06a576946b2c3daa"
   }
 }

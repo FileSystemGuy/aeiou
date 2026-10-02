@@ -1,5 +1,5 @@
 {
-  "ast": "0.3",
+  "ast": "0.4",
   "name": "train_large_samples",
   "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
   "params": {
@@ -53,6 +53,10 @@
       "unit": "bytes",
       "doc": "archive bytes that are not x's data: x's local header and npy header (183), the y member (191), central directory (102), EOCD (22); np.savez(x=, y=[0]) (traced 2026-10-01)"
     },
+    "enumerate": {
+      "default": true,
+      "doc": "the startup listing: the training script's glob over the corpus, one scandir per directory (traced 2026-10-02); on by default"
+    },
     "files": {
       "default": 50000,
       "unit": "count",
@@ -95,6 +99,79 @@
   "actors": {
     "gpu": {
       "body": [
+        {
+          "cond": {
+            "if": {
+              "param": "enumerate"
+            },
+            "then": [
+              {
+                "phase": {
+                  "name": "enumerate",
+                  "body": [
+                    {
+                      "loop": {
+                        "index": "d",
+                        "to": {
+                          "dirs": "train"
+                        },
+                        "body": [
+                          {
+                            "let": {
+                              "name": "dh",
+                              "value": {
+                                "dir": {
+                                  "dataset": "train",
+                                  "id": {
+                                    "index": "d"
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "open": {
+                              "file": {
+                                "ref": "dh"
+                              },
+                              "flags": [
+                                "RDONLY",
+                                "CLOEXEC",
+                                "DIRECTORY"
+                              ]
+                            }
+                          },
+                          {
+                            "fstat": {
+                              "file": {
+                                "ref": "dh"
+                              }
+                            }
+                          },
+                          {
+                            "readdir": {
+                              "dir": {
+                                "ref": "dh"
+                              },
+                              "repeat": "until_end"
+                            }
+                          },
+                          {
+                            "close": {
+                              "file": {
+                                "ref": "dh"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
         {
           "loader": {
             "name": "batches",
@@ -557,9 +634,9 @@
   "provenance": {
     "generator": {
       "script": "train_large_samples.py",
-      "sha256": "877766ff2d6821f69e8224fa57c5299fca675cb64dd1d14e36dd0065a9e6f4f7",
+      "sha256": "a902322a1b1334be4dcd810c6ed992c347e66be78656013feccb22178f1e767d",
       "builder_version": "0.1.0",
-      "git": "32e33f8e9e9b"
+      "git": "88cdc5e8957c-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -567,6 +644,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "a614e020420787cf55281294508bfc87e72997c16fe4a537b19255d3bd3326e1"
+    "ast_sha256": "11eeee32824e31e2dbc7b282244eeca347197b39cd6fbd58ee02ea6d8abd5de2"
   }
 }

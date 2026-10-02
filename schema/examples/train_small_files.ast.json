@@ -1,5 +1,5 @@
 {
-  "ast": "0.3",
+  "ast": "0.4",
   "name": "train_small_files",
   "doc": "PyTorch DataLoader over an ImageFolder-style corpus; W workers, B files per batch, in-order delivery.",
   "params": {
@@ -35,8 +35,8 @@
       "doc": "Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01)"
     },
     "enumerate": {
-      "default": false,
-      "doc": "include the startup directory walk (ABSTRACTS.md §9.8)"
+      "default": true,
+      "doc": "the startup directory walk, as ImageFolder does it in every process (ABSTRACTS.md §9.8); on by default since 2026-10-02"
     },
     "files": {
       "default": 50000000,
@@ -307,9 +307,9 @@
   "provenance": {
     "generator": {
       "script": "train_small_files.py",
-      "sha256": "f07c38846ea0bef1e259fd394ddc7a11a8ba512ad0e64926284e498a21b076d3",
+      "sha256": "d7010b7d6d36a512362127d4eff03c4e5158bdeac1f9d49ff137401cb01cc6b1",
       "builder_version": "0.1.0",
-      "git": "32e33f8e9e9b"
+      "git": "88cdc5e8957c-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -317,6 +317,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "a1f595eebddcd31cd13799f8a10e6f415023924ead93046626103267d5079ac8"
+    "ast_sha256": "c5869d55ce47593823fe976febe14bdbf545f1867044c42761f220bff13535f6"
   }
 }

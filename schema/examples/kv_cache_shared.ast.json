@@ -1,5 +1,5 @@
 {
-  "ast": "0.3",
+  "ast": "0.4",
   "name": "kv_cache_shared",
   "doc": "One engine per actor in front of a store with no index (LMCache fs://): stat lookups, chunks written to a temporary name and renamed.",
   "params": {
@@ -1182,9 +1182,9 @@
   "provenance": {
     "generator": {
       "script": "kv_cache_shared.py",
-      "sha256": "1994cecdba3ae63d330ac4bb47bbac9e17c2b98331c536494616888e85724135",
+      "sha256": "6c9c53fae26253ecbb6626b434ac63aad4532eee77a58beebb6d5869a5c9fb9e",
       "builder_version": "0.1.0",
-      "git": "0cbbc49608c0-dirty"
+      "git": "88cdc5e8957c-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -1192,6 +1192,6 @@
       "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
     },
     "built_twice_identical": true,
-    "ast_sha256": "5aba8c06612f031b933cacdbcd2f25eb850be07a58755e03278adc30a1f321a0"
+    "ast_sha256": "19759baf9b1561587802a7ca0693e9c6b5a18dde9731c20e7f126afd1d7e1202"
   }
 }

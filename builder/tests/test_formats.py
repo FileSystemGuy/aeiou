@@ -218,7 +218,7 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
 @needs_runner
 def test_size_draws_match_the_runner(tmp_path):
     """The Python `sample_size` port against sizes the Rust datagen wrote."""
-    ast = {"ast": "0.3", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,
+    ast = {"ast": "0.4", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,
            "size": {"mixture": [{"weight": 1, "dist": {"normal": {"mean": 50000, "sd": 20000, "min": 100}}},
                                 {"weight": 1, "dist": {"lognormal": {"median": 30000, "sigma": 0.7, "min": 1, "max": 90000}}},
                                 {"weight": 1, "dist": {"uniform": {"lo": 10, "hi": 5000}}},
@@ -230,3 +230,22 @@ def test_size_draws_match_the_runner(tmp_path):
     assert r.returncode == 0, r.stderr
     for i in range(40):
         assert (tmp_path / "r" / "d" / f"{i:04}").stat().st_size == sample_size(ast["datasets"]["d"]["files"]["size"], 99, i), i
+
+
+def test_npz_framing_of_the_installed_numpy_is_the_abstracts_default():
+    """`train_large_samples` takes `framing` and `cd_len` as parameters whose defaults were read
+    off a trace (498 and 102 for `np.savez(x=<uint8 volume>, y=[0])`). They are facts of NumPy's
+    writer (the padded `.npy` header, the forced zip64 local headers) and of the member names, so
+    this writes such an archive in memory with the installed NumPy and compares. A failure here
+    means the defaults, and any parameter file fitted with them, describe another NumPy."""
+    import io
+    import zipfile
+    np = pytest.importorskip("numpy")
+    ast = json.loads((ROOT / "schema" / "examples" / "train_large_samples.ast.json").read_text())
+    want = {k: ast["params"][k]["default"] for k in ("framing", "cd_len")}
+    for shape in ((256, 256, 16), (256, 256, 300)):          # independent of the volume's size
+        x = np.zeros(shape, np.uint8)
+        b = io.BytesIO()
+        np.savez(b, x=x, y=np.array([0]))
+        size, cd = len(b.getvalue()), zipfile.ZipFile(b).start_dir
+        assert {"framing": size - x.nbytes, "cd_len": size - cd - 22} == want, np.__version__

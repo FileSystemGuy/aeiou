@@ -10,6 +10,7 @@ sets and a fitted set can be reviewed and hashed on its own. The runner applies 
     aeiou-params defaults  AST.json [-o FILE] [--doc TEXT] [--pin]   the defaults as a starting set
     aeiou-params check     AST.json FILE...                          validate sets against an abstract
     aeiou-params safetensors AST.json SHARD... [-o FILE] [--tp N]    model_load's tensor table from real shards
+    aeiou-params npz       AST.json ARCHIVE... [-o FILE] [--member x] train_large_samples' framing from real .npz files
 
 The value rules are the runner's (`runner/aeiou/src/eval.rs`): a name must be declared, `gpus`
 may not appear, and a value replaces a default of the same kind (scalar, array, distribution;
@@ -188,6 +189,63 @@ def _load_ast(path) -> tuple[dict, str]:
     return ast, sha256(ast)
 
 
+# npz: train_large_samples' archive framing from real files (source 1, configuration)
+#
+# The abstract reads one member of an uncompressed .npz front to back and takes two numbers
+# about the archive as parameters: `framing`, the archive's bytes that are not that member's
+# array data, and `cd_len`, the central directory's length. Both are facts of the writer (the
+# library, its version, the member names and their count) and are the same for every file one
+# writer produces. This reads them from the files with the standard library only.
+
+def npz_framing(path, member: str = "x") -> dict:
+    """`framing` and `cd_len` of one archive, or BuildError when it does not have the shape the
+    abstract reads (the member first and stored, no archive comment, no zip64 end record)."""
+    import struct
+    import zipfile
+    path = pathlib.Path(path)
+    size = path.stat().st_size
+    try:
+        z = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError) as e:
+        raise BuildError(f"{path.name}: not a zip archive ({e})") from None
+    with z:
+        names = z.namelist()
+        if f"{member}.npy" not in names:
+            raise BuildError(f"{path.name}: no member `{member}.npy` (members: {', '.join(names)})")
+        info = z.getinfo(f"{member}.npy")
+        if info.compress_type != zipfile.ZIP_STORED:
+            raise BuildError(f"{path.name}: `{member}.npy` is compressed (np.savez_compressed); the abstract models the stored layout only")
+        if info.header_offset != 0:
+            raise BuildError(f"{path.name}: `{member}.npy` is not the first member (local header at {info.header_offset}); the abstract reads the archive from offset 0")
+        if z.comment:
+            raise BuildError(f"{path.name}: the archive has a comment; the abstract places the end record in the last 22 bytes")
+        with z.open(info) as f:                              # the .npy header: magic, version, header length, header
+            head = f.read(12)
+        if head[:6] != b"\x93NUMPY":
+            raise BuildError(f"{path.name}: `{member}.npy` is not an .npy array")
+        hlen = 10 + struct.unpack("<H", head[8:10])[0] if head[6] == 1 else 12 + struct.unpack("<I", head[8:12])[0]
+        cd_len = size - z.start_dir - 22
+        with open(path, "rb") as f:                          # a zip64 end record would sit between the directory and the end record
+            f.seek(size - 22)
+            eocd = f.read(22)
+        if eocd[:4] != b"PK\x05\x06" or struct.unpack("<I", eocd[12:16])[0] != cd_len:
+            raise BuildError(f"{path.name}: the central directory does not end at the end record (a zip64 end record: an archive of 4 GiB or more, or 65,535 members)")
+        return {"framing": size - (info.file_size - hlen), "cd_len": cd_len, "members": names, "bytes": size, "data": info.file_size - hlen}
+
+
+def npz_params(archives: list, member: str = "x") -> tuple[dict, list]:
+    """The parameter values the archives agree on, and one record per archive. Archives that
+    disagree are refused: the abstract has one `framing` for the corpus."""
+    recs = [npz_framing(p, member) for p in archives]
+    for key in ("framing", "cd_len"):
+        seen = sorted({r[key] for r in recs})
+        if len(seen) > 1:
+            which = {v: next(pathlib.Path(p).name for p, r in zip(archives, recs) if r[key] == v) for v in seen}
+            raise BuildError(f"`{key}` differs between the archives: " + ", ".join(f"{v} ({n})" for v, n in which.items())
+                             + "; they were not written by one writer with one set of members")
+    return {"framing": recs[0]["framing"], "cd_len": recs[0]["cd_len"]}, recs
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="aeiou-params", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", action="version", version=f"aeiou-params {__version__}")
@@ -209,6 +267,13 @@ def main(argv=None) -> int:
     s.add_argument("--row", default=ROW_RE, help="regex of row-parallel tensors")
     s.add_argument("--doc")
     s.add_argument("--pin", action="store_true")
+    n = sub.add_parser("npz", help="read train_large_samples' framing and cd_len from real .npz archives and compare them with the abstract's defaults")
+    n.add_argument("ast", type=pathlib.Path, help="the train_large_samples abstract")
+    n.add_argument("archives", nargs="+", type=pathlib.Path, help="archives of the corpus (a few are enough; all must agree)")
+    n.add_argument("-o", "--out", type=pathlib.Path, help="write a parameter file with the two values")
+    n.add_argument("--member", default="x", help="the member the application reads (default x)")
+    n.add_argument("--doc")
+    n.add_argument("--pin", action="store_true")
     a = ap.parse_args(argv)
     try:
         return _main(a)
@@ -257,6 +322,29 @@ def _main(a) -> int:
         a.out.write_text(render(pset, prov))
         print(f"wrote {a.out}  ({len(values['shard'])} tensors in {values['shards']} shard(s))")
         return 0
+    if a.cmd == "npz":
+        values, recs = npz_params(a.archives, a.member)
+        defaults_ = {k: ast["params"][k]["default"] for k in values if k in ast.get("params", {})}
+        print(f"{len(recs)} archive(s), members {', '.join(recs[0]['members'])}: framing {values['framing']}, cd_len {values['cd_len']}")
+        differs = {k: (defaults_.get(k), v) for k, v in values.items() if defaults_.get(k) != v}
+        for k, (was, now) in differs.items():
+            print(f"DIFFERS {k}: the abstract's default is {was}, these archives have {now}")
+        if not differs:
+            print("the abstract's defaults describe these archives")
+        if a.out:
+            pset = {"params_version": PARAMS_VERSION, "abstract": ast["name"]}
+            if a.pin:
+                pset["ast_sha256"] = sha
+            pset["doc"] = a.doc or f"archive framing of {len(recs)} .npz file(s), member {a.member}"
+            pset["params"] = values
+            errors = check(ast, pset, ast_sha256=sha, name=a.out.name)
+            if errors:
+                raise BuildError("\n  ".join(errors))
+            prov = {"tool": f"aeiou-params {__version__}", "command": "npz", "ast_sha256": sha, "member": a.member,
+                    "archives": [{"file": p.name, "bytes": r["bytes"], "members": r["members"]} for p, r in zip(a.archives, recs)]}
+            a.out.write_text(render(pset, prov))
+            print(f"wrote {a.out}")
+        return 2 if differs and not a.out else 0
     return 2
 
 

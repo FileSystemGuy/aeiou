@@ -12,7 +12,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.3",
+      "const": "0.4",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -933,6 +933,10 @@
         "input": {
           "type": "boolean",
           "description": "The objects were written by a previous run (its `.aeiou-namespace.json` is required at the root) and this abstract only reads them: no write-mode op may target the namespace, and namespaces sharing its root must also be inputs (V14)."
+        },
+        "same_run": {
+          "type": "boolean",
+          "description": "Only with `input`: the names this abstract reads are positional draws of the run that wrote them, so the run is refused unless its seed, its instance count, and every parameter both abstracts declare equal the writer's, as recorded in `.aeiou-namespace.json` (V15, contract 0.4)."
         },
         "doc": {
           "type": "string"

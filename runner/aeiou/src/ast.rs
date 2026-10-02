@@ -1,4 +1,4 @@
-//! The AST contract (`schema/abstract-ast.schema.json`, v0.3) as Rust types.
+//! The AST contract (`schema/abstract-ast.schema.json`, v0.4) as Rust types.
 //!
 //! Every node, expression, distribution, and handle is externally tagged: a JSON object with
 //! exactly one key naming its kind. `deny_unknown_fields` on every struct and serde's enum
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.3";
+pub const AST_VERSION: &str = "0.4";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -417,6 +417,10 @@ pub struct Namespace {
     /// Written by a previous run; this abstract only reads it (V14).
     #[serde(default)]
     pub input: Option<bool>,
+    /// The names read are positional draws of the writing run: this run must have the
+    /// writer's seed, instance count, and common parameters (V15, v0.4).
+    #[serde(default)]
+    pub same_run: Option<bool>,
     #[serde(default)]
     pub doc: Option<String>,
 }

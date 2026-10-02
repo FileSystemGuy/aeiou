@@ -1,4 +1,4 @@
-//! The semantic rules of `schema/README.md` §4 (V1–V14), ported from `schema/check.py`. The
+//! The semantic rules of `schema/README.md` §4 (V1–V15), ported from `schema/check.py`. The
 //! runner must reject everything the reference checker rejects; the structural rules the
 //! JSON Schema states and serde cannot (identifier syntax, errno syntax, ranges, uniqueness)
 //! are checked here too. Messages carry the `/`-joined path of the offending node, as
@@ -271,6 +271,10 @@ impl<'a> Checker<'a> {
                 }
             } else {
                 nroots.insert(nroot, (nname.as_str(), inp));
+            }
+            // V15: `same_run` compares this run with the writer's manifest, which only an input has
+            if n.same_run.unwrap_or(false) && !inp {
+                self.err(&path, "`same_run` without `input`: only an input namespace has a writer to compare with (V15)".to_string());
             }
         }
         for (aname, a) in &ast.actors {

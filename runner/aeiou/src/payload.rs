@@ -289,6 +289,7 @@ pub fn resolved_namespace(doc: &Value, name: &str, cfg: &Config) -> Result<Value
     if let Some(o) = v.as_object_mut() {
         o.remove("doc");
         o.remove("input");
+        o.remove("same_run");
         o.remove("size");
     }
     let bytes = canon::canonical(&v);

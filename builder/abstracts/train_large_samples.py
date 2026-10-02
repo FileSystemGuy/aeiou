@@ -21,6 +21,7 @@ w.param("xfer", 1 * MiB, unit="bytes", doc="buffer fill under the member read: t
 w.param("np_chunk", 256 * KiB, unit="bytes", doc="NumPy's read chunk from a zip member (numpy.lib.format BUFFER_SIZE); one tell per chunk")
 w.param("cd_len", 102, unit="bytes", doc="central directory bytes: two entries, \"x.npy\" and \"y.npy\" (traced 2026-10-01)")
 w.param("framing", 498, unit="bytes", doc="archive bytes that are not x's data: x's local header and npy header (183), the y member (191), central directory (102), EOCD (22); np.savez(x=, y=[0]) (traced 2026-10-01)")
+w.param("enumerate", True, doc="the startup listing: the training script's glob over the corpus, one scandir per directory (traced 2026-10-02); on by default")
 w.param("files", 50_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
 w.param("sample_mean", 140 * MiB, unit="bytes", doc="[measure]")
 w.param("sample_sd", 4 * MiB, unit="bytes", doc="[measure]")
@@ -40,6 +41,14 @@ def chunks(f):
 
 
 with w.actor("gpu") as gpu:
+    with gpu.when(P.enumerate), gpu.phase("enumerate"):               # glob("…/*/*.npz"): no stat, unlike ImageFolder's walk
+        with gpu.loop("d", train.dirs) as d:
+            dh = gpu.let("dh", train.dir(d))
+            gpu.open(dh, "RDONLY|CLOEXEC|DIRECTORY")                     # the real call adds O_NONBLOCK, which a directory ignores
+            gpu.fstat(dh)                                                # os.scandir
+            gpu.readdir(dh)
+            gpu.close(dh)
+
     with gpu.loader("batches", workers=P.workers, prefetch=P.prefetch, batches=P.steps) as worker:
         with worker.loop("j", P.batch):
             f = worker.let("f", train.consume())

@@ -61,7 +61,7 @@ def shape(name, reader, doc):
                      chunk=fsize,                                      # ceil(size / chunk) block objects {k}; the last, partial one is never read
                      seed=0x5eed_da80)
     kv = w.namespace("kv", pattern="kv/{conv:016x}-{k:04}.{ext}", fields={"conv": int, "k": int, "ext": str},
-                     size=fsize, seed=0x5eed_da83, input=reader)       # one flat directory (traced)
+                     size=fsize, seed=0x5eed_da83, input=reader, same_run=reader)   # one flat directory (traced); the reader's names are the writer's draws (V15)
 
     def load(a, b):
         """Python's open() and a buffered reader: the header's read fills the buffer, the chunk's read takes the rest."""
