@@ -260,6 +260,7 @@ aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--block BYTE
             [--instance-root PID]… [--chain-gap-us US] [--cwd DIR] -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params fitted.params.json --metrics-json abstract.metrics.json
 aeiou-trace compare trace.metrics.json abstract.metrics.json [--template-b NAME] [--only PREFIX]… [--max-distance X]
+aeiou-trace compare trace.metrics.json abstract.metrics.json --judge [--self other-seed.metrics.json]… [--tolerances FILE]
 ```
 
 What a trace needs: `-f` (threads and children), `-yy` (the path behind every descriptor,
@@ -305,8 +306,57 @@ the document notes `threads_without_clone`). `-ttt -T` are needed only for `--ch
   popularity of the top 0.1/1/10 %), the largest difference between two histograms'
   cumulative shares over the buckets of both (request size, run length, reuse distance),
   the total-variation distance of two exact distributions (fan-out, depth).
-  `--max-distance X` exits 1 when a row exceeds it; there is no default, since the
-  tolerances for accepting an abstract are not set (`PROJECT_BRIEF.md` §6 item 14).
+  `--max-distance X` exits 1 when a row exceeds it; ~~there is no default, since the
+  tolerances for accepting an abstract are not set (`PROJECT_BRIEF.md` §6 item 14).~~ it is
+  one number for every row; the rule by class is `--judge`, below (2026-10-02).
+
+**Tolerances: `compare --judge` (added 2026-10-02; `DESIGN_REVIEW.md` §3.55;
+decided 2026-10-02: the class values and the two thin margins are fine for now).** A is the trace, B the abstract at the fitted parameters. Each row gets a
+verdict, and the comparison exits 0 only when at least one row was judged and none is outside.
+
+- **Allowed distance** = the tolerance of the row's class + the row's largest distance
+  between B and each `--self` document. A `--self` document is the same abstract, same
+  parameters and `--gpus`, at another seed (`aeiou dry-run --seed N --metrics-json`): an
+  abstract is not asked to be nearer the trace than it is to itself. Three other seeds is
+  what the tests use. The tool checks the abstract's hash, `--gpus`, block, and sample of a
+  `--self` document; it cannot check the parameters, which the document does not carry.
+
+  | Class (prefix of the row's name) | Tolerance |
+  |---|---|
+  | `mix`, `ops` (shares of the op mix) | 0.05 |
+  | `request size` | 0.05 |
+  | `run length` (the two histograms and the share of bytes in multi-op runs) | 0.10 |
+  | `reuse` (first touches, and what a block's previous access was) | 0.10 |
+  | `reuse distance` | 0.10 |
+  | `popularity` | 0.05 |
+  | `fan-out`, `depth` | 0.10 |
+
+- **Not judged:** a row with nothing on either side; a popularity row whose top fraction
+  is fewer than 10 units on either side (the top 10 % of 16 files says nothing); `depth`
+  when the trace was read without `--chain-gap-us`.
+- **The tolerance file** (`--tolerances FILE`, `aeiou_tolerances: 1`), kept beside a kit's
+  trace document as `<trace>.tolerances.json`: `tolerances` replaces class values;
+  `unseen` lists rows the trace cannot show (a prefix of the row's name and the reason;
+  not judged); `outside` records rows known to be outside with the reason (judged, still
+  outside, the reason printed). An entry that matches no row, or records as outside a
+  row that is within, is reported.
+- **These are the repository's defaults.** Whoever accepts abstracts for a workload class
+  can publish a file with other values.
+
+The verdicts of the committed pairs (`tests/test_trace.py`, `KIT_PAIRS`; the reasons are in
+each pair's file):
+
+| Pair | Verdict | Outside or unseen |
+|---|---|---|
+| `train_small_files` | accepted | |
+| `train_large_samples`, both corpora | accepted | reuse distance 0.36 on 16 files, where the abstract differs from itself by 0.31 |
+| `ckpt_write_dcp` | accepted | |
+| `ckpt_restore`, three traces | accepted | |
+| `vdb_search_diskann`, with and without the node cache | accepted | depth not judged (no `--chain-gap-us`) |
+| `vdb_build_diskann` | not accepted, 9 rows | run-length histograms (unmodeled small files and headers), write-after-write (a header puts the stream's writes off block boundaries), two reuse distances (cause not isolated) |
+| `kv_cache_serving` | not accepted, 6 rows | read share and the reuse rows: the abstract loads 88 chunks, the traced engine 47; fan-out unseen |
+| `kv_cache_shared`, writer and reader | not accepted, 7 and 4 rows | the same cause; run length and fan-out unseen (a thread pool) |
+| `model_load`, `vdb_search_ivf` | nothing judged | the application reads through a mapping: every row is unseen. The exact call counts of their tests and `faults.py` are the evidence for these two. |
 
 **Checked against the runner (2026-10-01).** The runner under `strace` is an application
 whose abstract is known, so the trace's numbers must be the dry run's wherever order does

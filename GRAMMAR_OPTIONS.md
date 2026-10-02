@@ -590,7 +590,7 @@ but it is a stated fidelity loss and belongs in the workload's documentation.
   run has no global order; popularity, sizes, mix, and fan-out are order-free). ~~The trace
   side and the tolerances are not written.~~ The trace side built 2026-10-01 as
   `aeiou-trace` (`builder/README.md` §7): the same numbers from an `strace`, and a
-  comparison that reports a distance per metric. The tolerances are not set.
+  comparison that reports a distance per metric. ~~The tolerances are not set.~~ Tolerances by class of metric built 2026-10-02 as `aeiou-trace compare --judge` (`builder/README.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now).
 - **Replay mode.** The AST may be a literal captured sequence (a `replay` node holding ops with
   their dependencies). It is bounded to small-scale calibration runs and exists so each workload
   class's abstract can be validated end to end against the real application on the same storage.

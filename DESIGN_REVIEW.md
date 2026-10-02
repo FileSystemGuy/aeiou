@@ -1837,7 +1837,7 @@ side. The choices were made while building and **confirmed by the user the same 
   difference over the shared bucket grid (Kolmogorov–Smirnov on bucketed values), and
   total-variation distance for exact distributions, all in [0, 1]. Tolerances are the
   open part of item 14 and belong to whoever accepts an abstract for a workload class;
-  `--max-distance` is there for when they exist.
+  `--max-distance` is there for when they exist. (Built 2026-10-02 as `--judge`, §3.55.)
 - **The format gains `source`.** `"dry-run"` or `"strace"`; the `total` is the same shape,
   so the format number stays 1. A trace document has no templates and no fingerprint.
 
@@ -2662,6 +2662,86 @@ by draw and another by formula. *Not covered:* that the two abstracts draw at th
 sites, which is a property of the script and is tested by running the pair. Every
 committed AST was regenerated for 0.4; no fingerprint changed.
 
+### 3.55 Tolerances: `aeiou-trace compare --judge` (added and decided 2026-10-02)
+
+The last open part of the locality-metrics check (`PROJECT_BRIEF.md` §6 item 14) besides
+`replay`. Built at the user's request ("#2", the tolerances); the numbers and the rule
+below were chosen while building. **Decided by the user the same day (2026-10-02): the class
+values are fine for now, and so are the two thin margins** (0.364 against 0.409, 0.106
+against 0.107). "For now" is the user's: the values are to be looked at again when more
+pairs exist. The `--self` gap under "Not done" was not commented on and stays open. Definition and the table
+of verdicts: `builder/README.md` §7.
+
+What the fifteen committed pairs said before any rule was written (every trace against its
+abstract at the fitted parameters, and the abstract against itself at seeds 2, 3, 4):
+
+- **One number cannot be the tolerance.** The op mix, request sizes, run lengths, and
+  popularity do not move with the seed at all (spread 0.000 to 0.02) and are equal or
+  within 0.05 on every pair whose abstract was written from its trace. Reuse distance
+  moves with the seed and with the size of the corpus: the abstract differs from itself
+  by 0.027 on 3,200 files, 0.10 on 256, 0.31 on 16, and the traces differ from it by
+  0.048, 0.118, 0.364. A tolerance that passes the 16-file pair passes anything on the
+  3,200-file one.
+- **The noise is measured, not computed.** A Kolmogorov–Smirnov bound needs the number of
+  independent samples, and that is the file for a loader that reads whole files and the
+  read for DiskANN (one file, 108,000 independent sectors); no count in the document is
+  right for both. So a row's allowed distance is its class tolerance plus the abstract's
+  own largest distance to itself at other seeds (`--self`). *Against:* it costs three
+  more dry runs; three seeds are a sample, not a bound (the 16-file pair passes at 0.364
+  against 0.409, the cached DiskANN pair at 0.106 against 0.107); and an abstract with no
+  draws has no spread, so its order differences are held to the class value alone.
+- **The class values.** 0.05 for the op mix, request size, and popularity: the largest
+  such distance on an accepted pair is 0.046 (`ckpt_write_dcp`, the ten path calls the
+  contract cannot express, out of 164 ops). 0.10 for run length, the reuse shares, reuse
+  distance, fan-out, and depth, which depend on the order or on thread scheduling: the
+  runner traced against its own dry run differs by 0.07 to 0.20 in reuse distance on
+  small configurations from the order alone (§3.42); the largest on an accepted real pair
+  after the spread is taken off is 0.10. They are round numbers fitted to nine pairs, and
+  a pair of another size or another application may show they are wrong.
+- **Blindness is declared, not inferred.** `strace` shows no page fault and no thread-pool
+  fork, and a run belongs to a thread. A row the trace cannot show is listed in the pair's
+  file with the reason and is not judged. The tool does not guess: a trace with no fan-out
+  and an abstract with one is outside unless the file says why. Two things are inferred
+  because the document states them: `depth` without `--chain-gap-us`, and a popularity
+  share over fewer than ten units.
+- **A known difference is recorded and still fails.** The pair's file can give the reason
+  for a row that is outside; the row stays outside and the pair is not accepted. A waiver
+  that turns a known difference into a pass would make the verdict mean "someone
+  explained it". The test pins each pair's verdict and fails on an outside row without a
+  reason and on a stale entry.
+- **These are this repository's defaults,** not the WG's. Accepting an abstract for a
+  workload class is the accepting body's decision; it can publish its own file
+  (`PROJECT_BRIEF.md` §8).
+
+What the rule found:
+
+- **Nine pairs accepted:** small files, large samples (two corpora), checkpoint write,
+  restore (three traces), DiskANN search (two).
+- **`vdb_build_diskann`, nine rows outside.** The run-length histograms count runs, and
+  33 of the trace's 106 read runs and 50 of its 107 write runs are small files and file
+  headers the abstract leaves out, while calls and bytes agree to 0.1 %. The traced files
+  begin with a small header, so the stream's 8,192-byte writes start off a block boundary
+  and every write rewrites the last block of the one before (291,000 block rewrites in
+  the trace, none in the abstract). Two reuse distances (0.20 and 0.37) are not
+  explained row by row; shards modeled at one size is the candidate.
+- **The three KV-cache pairs, 6, 7, and 4 rows outside,** one cause: at the fitted
+  parameters the abstract loads 88 (136 for the reader) chunks where the traced engine
+  loaded 47 (91). §3.51 and §3.52 said the synthetic load fixes the call sequence and not
+  the distributions; the tolerance now says so with a verdict. The chat replay is what
+  can change it.
+- **`model_load` and `vdb_search_ivf` cannot be judged this way.** They read through a
+  mapping; with the reads on one side only, every share is of a different total. Their
+  evidence is the exact call counts of their tests and the `mincore` measurements.
+- **A tool limit shown by the shared store:** LMCache issues the two reads of one load
+  from different pool threads on one descriptor, so the trace has two runs where the
+  abstract has one. The sequential context could be the open file description instead of
+  the thread; that is a change to a decided definition (§3.42) and was not made.
+
+Not done: the parameters are not in a metrics document, so a `--self` document of another
+parameter set is not refused; the existing per-pair assertions of `tests/test_trace.py`
+(0.3, 0.07, 0.01, confirmed in §3.54) were left beside the new test; no tolerance on wire
+counts (RPCs), which are compared by hand in `ABSTRACTS.md`.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -2699,7 +2779,7 @@ committed AST was regenerated for 0.4; no fingerprint changed.
   definitions decided (§3.39). ~~Next: the `RLIMIT`
   checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
-  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: a chat replay for the KV distributions, the tolerances, the `replay` node, a GPU engine's touch pattern for `model_load`.
+  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: a chat replay for the KV distributions, ~~the tolerances,~~ (built and decided 2026-10-02, §3.55) the `replay` node, a GPU engine's touch pattern for `model_load`.
 
 ## 5. Things reviewed and left as-is
 
