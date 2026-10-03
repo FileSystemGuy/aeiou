@@ -1207,10 +1207,14 @@ Lines: a header, then one op per line in the order the calls returned.
 refuses it before the gate when its sha256 is not the node's. Open ids must be ordinal; a
 use before its open is refused.
 
-**The run** (`run.rs`): one thread per lane, joined at the node; the lanes' statistics are
-the actor's, their created and removed paths the run's. Each lane walks its lines in order,
-one op in flight; a `submit` fans its members out on one thread each (under a blocking
-backend: what the application's `io_submit` did) and settles them in order. Before each
+**The run** (`run.rs`; `uring.rs` under the event-loop backends, since 2026-10-03): one
+thread per lane under a blocking backend, one task per lane on the event loop that reached
+the node under `io_uring` and `libaio`, joined at the node either way; the lanes'
+statistics are the actor's, their created and removed paths the run's. Each lane walks its
+lines in order, one op in flight; a `submit` puts its members in flight together (one thread
+each under a blocking backend; member tasks on the loop, so they leave in one
+`io_uring_enter` or `io_submit`: what the application's `io_submit` did) and settles them in
+order. Before each
 line the lane issues the **gap** `t − (t_prev + dur_prev)` of its own previous line (its `t`
 for the first: a worker that started late starts late) as `compute`, scaled by
 `--time-scale` and recorded unscaled; `--time-scale 0` is the storage-bound run, `1` the
@@ -1231,10 +1235,12 @@ application). Two orders cross lanes, both the trace's:
   lane had not created yet); the design had only the open table.
 
 Every wait is for something earlier in the trace, so the lanes cannot deadlock; a wait
-checks the run's abort flag every 50 ms. Waiting time is not recorded (it is not I/O and
-not compute). Writes carry the payload of §5 keyed by the path. The event-loop backends
-(`io_uring`, `libaio`) do not run a trace yet and refuse one before the gate; `sync`,
-`sync-direct`, `posix-aio`, and `mmap` do.
+checks the run's abort flag every 50 ms (a thread per lane) or parks the lane on its
+instance's tables until the next change to them (the event loop, where the tables are
+loop-local and lock-free: every lane of an instance is on the loop that reached the node).
+Waiting time is not recorded (it is not I/O and not compute). Writes carry the payload of
+§5 keyed by the path. Every backend of §4 runs a trace; under an event loop the lanes are
+tasks, not threads, and the limits of §11 count them as such.
 
 **The fingerprint and the dry run.** Every op of a trace hashes as every op does (§2), with
 the enclosing indices plus `[lane, ordinal of the line in its lane]` as its indices (the
@@ -1264,5 +1270,6 @@ application's sequence against the same files, not a model of `G` ranks. The lim
 count a trace's lanes as threads and its peak of open ids as files. The JSON report (§12)
 carries `traces: [{file, sha256, lanes, lines, ops, opens, creates, notes}]`.
 
-**Not built.** Traces under the event-loop backends; a recorded wait time per lane; a cap
-on the file (a million lines is about 64 MiB of parsed ops, held in memory).
+**Not built.** ~~Traces under the event-loop backends;~~ (built 2026-10-03) a recorded wait
+time per lane; a cap on the file (a million lines is about 64 MiB of parsed ops, held in
+memory).

@@ -448,7 +448,6 @@ them at the reap, so the reuse-distance histogram of that pair differs within a 
 
 ## 8. Not yet
 
-- Traces under the event-loop backends (`runner/README.md` §13).
 - Format classes for Arrow IPC, MDS, and Megatron `.bin`/`.idx`; the Parquet→Arrow conversion
   abstract (`GRAMMAR_OPTIONS.md` §6.5).
 - The `strace` → parameter fitting tool (`aeiou-fit`, `ABSTRACTS.md` §11), which will write

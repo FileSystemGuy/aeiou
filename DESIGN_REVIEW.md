@@ -3170,9 +3170,20 @@ documents (`runner/README.md` §13, `builder/README.md` §7, schema README).
 - **The runner, not the VM, runs the lanes.** The node is an `Event::Trace` the VM yields
   with the file and the position; the sink does the rest. The thread-per-actor driver gives
   each lane a child `Runner` on a scoped thread, and a `submit` group one thread per member
-  (a fan-out under a blocking backend). The event-loop drivers (`io_uring`, `libaio`)
+  (a fan-out under a blocking backend). ~~The event-loop drivers (`io_uring`, `libaio`)
   refuse a trace before the gate; they are the next step, and until then a trace of a
-  libaio application runs under `sync` with its groups fanned out on threads.
+  libaio application runs under `sync` with its groups fanned out on threads.~~ **Built
+  2026-10-03:** the event loop (`uring.rs`, both engines) runs a lane as a task whose
+  program is a lane of the file instead of a VM (`Prog::Lane`), one op in flight, joined by
+  the task that reached the node as a `parallel` parent joins its sub-actors; a `submit`
+  group puts its members in flight together as member tasks, which the loop submits in one
+  `io_uring_enter` or `io_submit`, the application's own call. The open table and the path
+  order are loop-local and lock-free there (every lane of an instance is on its loop), and
+  a lane that must wait parks on its instance and is woken by every change to its tables
+  (all waiters, every time: simple, and a trace's lanes are tens, not thousands). The
+  three fixture runs of `runner/aeiou/tests/trace.rs` and the three traces of the runner in
+  `builder/tests/test_trace.py` give the dry run's fingerprint under `io_uring` and `libaio`
+  as under the blocking backends.
 - **Three equalities, checked on traces of the runner itself** (`train_small_files`,
   `kv_cache_serving`, `vdb_search_diskann`, in `builder/tests/test_trace.py`):
   `aeiou-trace metrics` of the strace, the same of the exported file, and `aeiou dry-run

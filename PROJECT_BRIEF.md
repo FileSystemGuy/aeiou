@@ -384,7 +384,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     share descriptors, shared positions resolved at export, gaps from
     the timestamps as `compute` under `--time-scale`, two cross-lane orders from the trace (the open table and path order, the second found necessary by the first write-then-read trace); the runner's dry run walks the file in
     line order so that `dry-run --metrics` of a trace node equals `aeiou-trace metrics` of its
-    source, checked on traces of the runner itself; the trace then runs with its dry run's fingerprint under the blocking backends. ~~Still to do: all of it.~~ Still to do: traces under the event-loop backends. **Item 14 is otherwise complete.**
+    source, checked on traces of the runner itself; the trace then runs with its dry run's fingerprint under ~~the blocking backends~~ every backend (the event loops since 2026-10-03). ~~Still to do: all of it.~~ ~~Still to do: traces under the event-loop backends.~~ **Item 14 is complete (2026-10-03).**
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
