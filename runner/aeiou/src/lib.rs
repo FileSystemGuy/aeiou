@@ -24,6 +24,7 @@ pub mod report;
 pub mod rng;
 pub mod run;
 pub mod sites;
+pub mod trace;
 pub mod uring;
 pub mod validate;
 pub mod vm;
@@ -37,11 +38,17 @@ pub struct Loaded {
     pub ops: std::collections::BTreeMap<&'static str, usize>,
     /// The document as parsed, for the resolved dataset definitions of the manifest.
     pub doc: serde_json::Value,
+    /// The files of the `trace` nodes, by the `file` the node names (`trace.rs`); loaded
+    /// relative to the document's directory, so empty for a document loaded from text.
+    pub traces: std::collections::HashMap<String, std::sync::Arc<trace::TraceFile>>,
 }
 
 pub fn load(path: &Path) -> anyhow::Result<Loaded> {
     let text = std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
-    load_str(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))
+    let mut loaded = load_str(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    loaded.traces = trace::load_all(&loaded.ast, &dir).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+    Ok(loaded)
 }
 
 pub fn load_str(text: &str) -> anyhow::Result<Loaded> {
@@ -50,5 +57,5 @@ pub fn load_str(text: &str) -> anyhow::Result<Loaded> {
     let ast = ast::parse(text)?;
     sites::annotate(&ast);
     let ops = validate::check_with_ops(&ast).map_err(|errs| anyhow::anyhow!("invalid abstract:\n  {}", errs.join("\n  ")))?;
-    Ok(Loaded { ast, sha256, ops, doc })
+    Ok(Loaded { ast, sha256, ops, doc, traces: Default::default() })
 }

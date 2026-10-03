@@ -36,7 +36,7 @@ Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **b
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
 backend-specific counters beyond those come with each backend), `--drop-caches` at the
 start gate with the residency check and the mount options line (decided 2026-10-01,
-`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; ~~the trace-side tool that computes the same numbers from a real trace is not~~ the trace side is `aeiou-trace`, built 2026-10-01, `builder/README.md` §7) and the `trace` node (`replay` until 2026-10-02; designed as `DESIGN_REVIEW.md` §3.58). ~~`stream`
+`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; ~~the trace-side tool that computes the same numbers from a real trace is not~~ the trace side is `aeiou-trace`, built 2026-10-01, `builder/README.md` §7) ~~and the `trace` node (`replay` until 2026-10-02; designed as `DESIGN_REVIEW.md` §3.58)~~ (the `trace` node **built 2026-10-02**, §13; not yet under the event-loop backends). ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
@@ -1150,3 +1150,119 @@ instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_recor
 aeiou run schema/examples/train_small_files.ast.json --gpus 2 --seed 7 --root DIR --report-json r.json
 python3 -c 'import json; d = json.load(open("r.json")); print(d["verdict"]["ok"], d["result"]["latency"]["read"]["p99_ns"])'
 ```
+
+## 13. The `trace` node (2026-10-02)
+
+A captured trace of a real application, executed literally: the dynamic half of the
+calibration whose static half is §10 (`DESIGN_REVIEW.md` §3.58; the node was `replay` until
+2026-10-02). The application's call sequence, with its threads and its think time, run
+through this runner, under a backend of §4, against the same storage as its abstract, so
+the two runs' throughput, latencies, and counters compare with the same client program on
+both sides. It is never CLOSED (`PROJECT_BRIEF.md` §8), it declares no dataset and no
+namespace, and it is one process of the application on one host.
+
+```
+strace -f -ttt -T -yy -e trace=%file,%desc,%process -o trace.txt <command>        # the application
+aeiou-trace export trace.txt --root /mnt/data -o app.jsonl                       # prints the sha256
+# in the abstract: w.trace("app.jsonl", "<sha256>") in an actor with count=1
+aeiou dry-run app.ast.json --gpus 1 --metrics-json node.json     # equals `aeiou-trace metrics trace.txt`
+aeiou run app.ast.json --gpus 1 --root /mnt/data --time-scale 0 [--clean-namespaces]
+```
+
+**The file** (`trace.rs`; written by `aeiou-trace export`, `builder/README.md` §7). JSON
+Lines: a header, then one op per line in the order the calls returned.
+
+```
+{"aeiou_trace":1,"source":"strace","root":"/mnt/data","lanes":4,"lines":390,"opens":49,"creates":[],"notes":{}}
+{"lane":0,"t":0,"dur":41200,"op":"open","fd":0,"path":"train/n01/x.JPEG","flags":["RDONLY","CLOEXEC"]}
+{"lane":3,"t":70250,"dur":912300,"op":"read","fd":0,"len":131072,"ret":109383}
+{"lane":3,"t":990100,"dur":18000,"op":"read","fd":0,"len":131072}
+{"lane":0,"t":1011000,"dur":3300,"op":"close","fd":0}
+{"lane":2,"t":1200000,"dur":802000,"op":"submit","ops":[{"op":"read","fd":7,"offset":4096,"len":4096,"ret":4096}, …]}
+{"lane":1,"t":1300000,"dur":2100,"op":"stat","path":"missing","ret":"ENOENT"}
+```
+
+- **A lane is a traced task** (a thread or a process under `strace -f`), numbered in order
+  of first op; a task with no op under the root is not a lane. `t` is nanoseconds from the
+  first exported call, `dur` the call's duration.
+- **`fd` is an open id**: the ordinal of the `open` line, through every `dup` and every
+  inheritance the exporter resolved. A lane may use an open another lane made.
+- **The ops are §2's**, with the schema's field names and enum words (`flags`, `whence`,
+  `advice`, `request`), the path relative to the root, and `ret` the traced result: a count
+  (absent when zero) or an errno name, which becomes the op's `expect`. A `read` or `write`
+  without `offset` is sequential from the open's position, as the application's call was;
+  with one it is positioned. `submit` is an `io_submit`: positioned ops issued together and
+  reaped before the lane's next line. `readdir` is one line per listing and its entries
+  are not checked. A write's count is checked as its length.
+- **The exporter resolves a shared position:** a sequential read or write on an open that
+  more than one lane used is written positioned at the offset the trace shows it used,
+  since the lanes' interleaving decided it; the header's notes count the rewrites
+  (`shared_positions_resolved`). An `mmap` of a file range is one positioned `read` of the
+  range (`mmap_as_read`; the faults inside it are not in an `strace`). Calls the schema has
+  no op for are dropped and counted by name.
+- **`creates`** lists the paths the trace brings into being under the root (an open with
+  `CREAT` of a path not seen before, a `mkdir`, a `rename` destination).
+
+**Loading.** `aeiou load` reads the node's `file` relative to the document's directory and
+refuses it before the gate when its sha256 is not the node's. Open ids must be ordinal; a
+use before its open is refused.
+
+**The run** (`run.rs`): one thread per lane, joined at the node; the lanes' statistics are
+the actor's, their created and removed paths the run's. Each lane walks its lines in order,
+one op in flight; a `submit` fans its members out on one thread each (under a blocking
+backend: what the application's `io_submit` did) and settles them in order. Before each
+line the lane issues the **gap** `t − (t_prev + dur_prev)` of its own previous line (its `t`
+for the first: a worker that started late starts late) as `compute`, scaled by
+`--time-scale` and recorded unscaled; `--time-scale 0` is the storage-bound run, `1` the
+application's think time as `strace` saw it (an upper bound, `strace` slows the
+application). Two orders cross lanes, both the trace's:
+
+- **The open table.** One slot per open id, filled by the lane that executes the `open`. An
+  op waits for the open it names; the last `close` of an id (one close line per descriptor
+  the application held) waits until every use of the id has completed, then drops the
+  descriptor.
+- **Path order.** On a path the trace changes, a changing op (an open with `CREAT` or
+  `TRUNC`, a `write`, `ftruncate`, `fallocate`, a `fsync`, `fdatasync`, or `close` of a
+  writable open, a `rename` on both its paths, `unlink`, `mkdir`, `rmdir`) waits for every
+  earlier op on that path, and a reading op (an open to read, `read`, `fstat`, `stat`,
+  `readdir`, `lseek`, `fadvise`, `ioctl`) waits for every earlier changing op on it. Reads
+  never wait for reads. Ops on a path the trace never changes carry no wait at all. Found
+  necessary by the first write-then-read trace (a KV cache: a lane opened a chunk another
+  lane had not created yet); the design had only the open table.
+
+Every wait is for something earlier in the trace, so the lanes cannot deadlock; a wait
+checks the run's abort flag every 50 ms. Waiting time is not recorded (it is not I/O and
+not compute). Writes carry the payload of §5 keyed by the path. The event-loop backends
+(`io_uring`, `libaio`) do not run a trace yet and refuse one before the gate; `sync`,
+`sync-direct`, `posix-aio`, and `mmap` do.
+
+**The fingerprint and the dry run.** Every op of a trace hashes as every op does (§2), with
+the enclosing indices plus `[lane, ordinal of the line in its lane]` as its indices (the
+members of a `submit` share the line's ordinal), so the fingerprint of a trace node is a
+function of the file and `--expect-fingerprint` holds a run to it. `aeiou dry-run` and
+`--metrics` walk the file **in its line order**, not lane by lane, each op tagged with its
+lane as the metrics' context. So `dry-run --metrics` of an abstract that is one `trace`
+node computes the trace's own metrics, and **equals `aeiou-trace metrics` of the strace it
+was exported from, row for row,** reuse distance included (both are the trace in
+completion order as one instance); no depth is reported (a trace's chains need the
+think-time threshold of `aeiou-trace --chain-gap-us`, which the file does not carry).
+Checked on traces of this runner under `strace` on `train_small_files`, `kv_cache_serving`,
+and `vdb_search_diskann` (`builder/tests/test_trace.py`): exact, except that under libaio
+the strace's metrics count an `io_submit` member when it is reaped and the file counts it
+at submission, so the reuse-distance histogram of that pair differs by the reordering
+within a round. `dry-run --gpu 0` prints the lines as `app#0 [lane,ordinal] op path`.
+
+**Before the gate.** The run prints each trace (lines, lanes, opens, creates, sha256), then
+checks under `--root`: every path the trace reads without creating must exist, a regular
+file with at least the farthest read's end as its size; every path in `creates` must not
+exist. `--clean-namespaces` (rank 0, with the namespaces) removes the `creates` set, last
+first, and nothing else: a trace's root is the application's own data, which the runner
+never empties. **V16:** a trace with a nonempty `creates` in an actor template whose
+resolved instance count exceeds one is refused (the copies would write the same files);
+one with no creates may run in `G` instances, which is `G` clients replaying one
+application's sequence against the same files, not a model of `G` ranks. The limits of §11
+count a trace's lanes as threads and its peak of open ids as files. The JSON report (§12)
+carries `traces: [{file, sha256, lanes, lines, ops, opens, creates, notes}]`.
+
+**Not built.** Traces under the event-loop backends; a recorded wait time per lane; a cap
+on the file (a million lines is about 64 MiB of parsed ops, held in memory).

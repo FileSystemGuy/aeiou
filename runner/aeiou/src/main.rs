@@ -252,7 +252,8 @@ fn datagen_cmd(a: DatagenArgs) -> Result<()> {
     let loaded = aeiou::load(&a.abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
-    let model = build_model(&loaded.ast, &cfg, &params)?;
+    let mut model = build_model(&loaded.ast, &cfg, &params)?;
+    model.traces = loaded.traces.clone();
     let threads = a.threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
     let opts = DatagenOpts { root: a.root.clone(), threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone() };
     let mut out = std::io::stdout();
@@ -337,6 +338,7 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
     let model = Box::leak(Box::new(build_model(&loaded.ast, cfg, params)?));
+    model.traces = loaded.traces.clone();
     // the run's identity first, so the report of a run that fails a check still says which run
     doc.set("abstract", serde_json::json!({"name": loaded.ast.name, "sha256": loaded.sha256}));
     doc.set("seed", serde_json::json!(cfg.seed));
@@ -382,6 +384,25 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
             c.files.map(|n| format!("  ({n} files)")).unwrap_or_default()
         )?;
     }
+    // the `trace` nodes (`DESIGN_REVIEW.md` §3.58): V16 with the resolved counts, and what
+    // each file is, before any host is kept waiting; the paths under --root are checked
+    // with the namespaces below
+    let traces: Vec<&Arc<aeiou::trace::TraceFile>> = {
+        let mut v: Vec<_> = loaded.traces.values().collect();
+        v.sort_by(|x, y| x.name.cmp(&y.name));
+        v
+    };
+    if !traces.is_empty() {
+        let counts = aeiou::vm::actor_counts(model)?;
+        aeiou::trace::check_counts(&loaded.ast, &loaded.traces, &counts)?;
+        for t in &traces {
+            writeln!(out, "trace {}: {} line(s) on {} lane(s), {} open(s), {} path(s) created; sha256 {}; never CLOSED", t.name, t.lines.len(), t.lanes(), t.opens.len(), t.header.creates.len(), &t.sha256[..16])?;
+        }
+        if backend.event_loop() {
+            bail!("--io-backend {}: an event-loop backend does not run traces yet; use sync, sync-direct, posix-aio, or mmap", backend.name());
+        }
+    }
+    doc.set("traces", serde_json::json!(traces.iter().map(|t| serde_json::json!({"file": t.name, "sha256": t.sha256, "lanes": t.lanes(), "lines": t.lines.len(), "ops": t.ops, "opens": t.opens.len(), "creates": t.header.creates.len(), "notes": t.header.notes})).collect::<Vec<_>>()));
     let opts = RunOpts {
         root: a.root.clone(),
         backend,
@@ -534,11 +555,28 @@ fn run_connected(
     }
     // --root is the storage under test, shared by every host: rank 0 prepares the output
     // namespace roots before the start gate; the other hosts never empty anything
+    let traces: Vec<&Arc<aeiou::trace::TraceFile>> = {
+        let mut v: Vec<_> = loaded.traces.values().collect();
+        v.sort_by(|x, y| x.name.cmp(&y.name));
+        v
+    };
     if a.rank == 0 {
         let cleaned = run::prepare_namespaces(&loaded.ast, &a.root, a.clean_namespaces)?;
         for c in &cleaned {
             writeln!(out, "namespace root {c}/ emptied")?;
         }
+        if a.clean_namespaces {
+            for t in traces.iter() {
+                let n = aeiou::trace::clean(t, &a.root)?;
+                if n > 0 {
+                    writeln!(out, "trace {}: {n} created path(s) removed", t.name)?;
+                }
+            }
+        }
+    }
+    for t in traces.iter() {
+        let c = aeiou::trace::check_root(t, &a.root)?;
+        writeln!(out, "trace {}: {} input path(s) present under --root, {} to be created absent", c.file, c.inputs, c.creates)?;
     }
     out.flush()?;
 
@@ -688,7 +726,8 @@ fn dry_run(a: DryRunArgs) -> Result<()> {
     let loaded = aeiou::load(&a.run.abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
-    let model = build_model(&loaded.ast, &cfg, &params)?;
+    let mut model = build_model(&loaded.ast, &cfg, &params)?;
+    model.traces = loaded.traces.clone();
 
     let filter = if a.gpu.is_some() || a.steps.is_some() || a.limit.is_some() {
         let steps = match &a.steps {

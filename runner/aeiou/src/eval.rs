@@ -930,6 +930,8 @@ pub struct Model<'a> {
     pub ns_index: HashMap<&'a str, usize>,
     /// Parameter-default distributions resolved once (their arguments are parameter-only).
     pub param_dists: HashMap<usize, RDist<'a>>,
+    /// The `trace` nodes' files (`Loaded::traces`); set by the caller after `build_model`.
+    pub traces: HashMap<String, std::sync::Arc<crate::trace::TraceFile>>,
 }
 
 impl<'a> Model<'a> {
@@ -971,6 +973,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
         namespaces: Vec::new(),
         ns_index: HashMap::new(),
         param_dists: HashMap::new(),
+        traces: HashMap::new(),
     };
     let mut vm = crate::vm::Vm::new(&stub, "static", 0, cfg.gpus.max(1));
 
@@ -1121,5 +1124,5 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
     }
     drop(vm);
 
-    Ok(Model { ast, cfg, params, datasets, ds_index, namespaces, ns_index, param_dists })
+    Ok(Model { ast, cfg, params, datasets, ds_index, namespaces, ns_index, param_dists, traces: HashMap::new() })
 }

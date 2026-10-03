@@ -168,6 +168,20 @@ impl<'m, 'a> Sink<'m, 'a> for DryRun {
         }
         Ok(())
     }
+
+    /// A `trace` node, walked in the file's line order (`trace.rs`): each op with the lane
+    /// and its ordinal in the lane as its indices, the gaps as compute.
+    fn trace(&mut self, t: &std::sync::Arc<crate::trace::TraceFile>, ctx: &OpCtx) -> Result<()> {
+        let base = crate::trace::OwnedCtx::of(ctx);
+        crate::trace::walk(t, &base.indices, |step| match step {
+            crate::trace::Step::Gap { ns, .. } => {
+                self.compute_ns += ns as i128;
+                Ok(())
+            }
+            crate::trace::Step::Group { .. } => Ok(()),
+            crate::trace::Step::Op { op, indices, .. } => self.op(&op, &base.ctx(indices)),
+        })
+    }
 }
 
 pub struct TemplateReport {

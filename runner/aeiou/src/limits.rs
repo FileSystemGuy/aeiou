@@ -50,6 +50,8 @@ impl Walk {
                 Close,
                 Other,
                 Fork(ForkKind<'a>),
+                /// A `trace` node: its lanes are threads at once, its peak of open descriptors.
+                Trace(u64, u64, u64),
             }
             let step = match vm.next()? {
                 None => Step::End,
@@ -60,9 +62,15 @@ impl Walk {
                 },
                 Some(Event::Control(..)) => continue,
                 Some(Event::Fork(k)) => Step::Fork(k),
+                Some(Event::Trace(t, _)) => Step::Trace(t.lanes() as u64, t.peak_open, t.ops),
             };
             match step {
                 Step::End => break,
+                Step::Trace(lanes, files, ops) => {
+                    self.left = self.left.saturating_sub(ops);
+                    peak.files = peak.files.max(own + beside.files + files);
+                    peak.threads = peak.threads.max(lanes + beside.threads);
+                }
                 Step::Open => {
                     self.left -= 1;
                     own += 1;

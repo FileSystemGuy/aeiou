@@ -278,6 +278,34 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     rows = [r for r in compare(t, d) if r[0].startswith("reuse") and not r[0].startswith("reuse distance")]
     assert rows and all(r[3] is None or r[3] <= 0.5 for r in rows), rows
 
+    # the `trace` node (DESIGN_REVIEW.md §3.58): the strace exported as a trace file, an
+    # abstract that is that one node, and the runner's dry run of it in line order must
+    # compute the strace's own metrics; then the trace runs against the same corpus with
+    # the fingerprint of its dry run. Under libaio the strace's metrics count an io_submit
+    # member when it is reaped and the file counts it at submission, so the reuse-distance
+    # histograms of that pair differ by the reordering within a round; all else is equal.
+    exported = tmp_path / "exported.jsonl"
+    r = subprocess.run([sys.executable, "-m", "aeiou.trace", "export", str(st), "--root", str(root), "--exclude", "*.aeiou-*", "-o", str(exported)], capture_output=True, text=True, cwd=ROOT / "builder")
+    assert r.returncode == 0, r.stderr
+    sha = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("sha256 "))
+    node_ast = tmp_path / "node.ast.json"
+    node_ast.write_text(json.dumps({"ast": "0.5", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
+                                    "actors": {"app": {"count": 1, "body": [{"trace": {"file": exported.name, "sha256": sha}}]}}}))
+    node_dry = tmp_path / "node.dry.json"
+    r = run(RUNNER, "dry-run", node_ast, "--gpus", "1", "--metrics-json", node_dry)
+    assert r.returncode == 0, r.stderr
+    nd = json.loads(node_dry.read_text())["total"]
+    assert trace.main(["metrics", str(exported), "-o", str(tmp_path / "ex.json")]) == 0
+    ex = json.loads((tmp_path / "ex.json").read_text())["total"]
+    assert nd == ex, "the runner's walk of the file and the Python reader's disagree"
+    strip = lambda m: {k: v for k, v in m.items() if k != "reuse_distance_bytes"} if name == "vdb_search_diskann" else m
+    assert strip(t) == strip(nd), "the trace node's dry run is not the strace's metrics"
+    fp = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("fingerprint "))
+    r = run(RUNNER, "run", node_ast, "--gpus", "1", "--root", root, "--time-scale", "0", "--clean-namespaces")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"fingerprint {fp}" in r.stdout, r.stdout
+    assert "never CLOSED" in r.stdout
+
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
@@ -633,3 +661,77 @@ def test_kit_pair_against_the_tolerances(tmp_path, capsys, kit, which, ast, para
     assert not [l for l in out if l.startswith("note: ")], out
     assert not [l for l in out if l.endswith("OUTSIDE")], out          # an outside row without a recorded reason
     assert (verdict == "not accepted") == any(" OUTSIDE (" in l for l in out)
+
+
+# ---------------------------------------------------------------- export: the runner's trace file
+
+WORKERS = """
+100 1700000001.000000 openat(AT_FDCWD</cwd>, "/d/shared", O_RDONLY|O_CLOEXEC) = 3</d/shared> <0.000010>
+100 1700000001.000100 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f) = 200 <0.000050>
+100 1700000001.000200 read(3</d/shared>, "x"..., 4096) = 4096 <0.000010>
+200 1700000001.000300 read(3</d/shared>, "x"..., 4096) = 4096 <0.000010>
+200 1700000001.000400 openat(AT_FDCWD</cwd>, "/d/own", O_RDONLY) = 4</d/own> <0.000010>
+200 1700000001.000500 read(4</d/own>, "x"..., 100) = 100 <0.000010>
+200 1700000001.000600 read(4</d/own>, "x"..., 100) = 100 <0.000010>
+200 1700000001.000700 close(4</d/own>) = 0 <0.000010>
+200 1700000001.000800 close(3</d/shared>) = 0 <0.000010>
+200 1700000001.000900 +++ exited with 0 +++
+100 1700000001.001000 pread64(3</d/shared>, "x"..., 50, 8192) = 50 <0.000010>
+100 1700000001.001100 openat(AT_FDCWD</cwd>, "/d/out/new", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 4</d/out/new> <0.000010>
+100 1700000001.001200 write(4</d/out/new>, "y"..., 1000) = 1000 <0.000010>
+100 1700000001.001300 rename("/d/out/new", "/d/out/final") = 0 <0.000010>
+100 1700000001.001400 close(4</d/out/final>) = 0 <0.000010>
+100 1700000001.001500 close(3</d/shared>) = 0 <0.000010>
+100 1700000001.001600 +++ exited with 0 +++
+"""
+
+
+def _export(text, root="/d"):
+    return trace.export_of(text.strip().splitlines(), root)
+
+
+def test_export_lines_are_the_calls_relative_to_the_root():
+    h, ev = _export(SEQUENTIAL)
+    assert h["aeiou_trace"] == 1 and h["root"] == "/d" and h["lanes"] == 1 and h["lines"] == 11 and h["opens"] == 1 and h["creates"] == []
+    ops = [(e["op"], e.get("path"), e.get("fd"), e.get("offset"), e.get("len"), e.get("ret")) for e in ev]
+    assert ops[0] == ("open", "a", 0, None, None, None) and ev[0]["flags"] == ["RDONLY", "CLOEXEC"]
+    # sequential reads stay sequential (one lane: no shared position); the pread keeps its offset
+    assert ops[2:6] == [("read", None, 0, None, 4096, 4096), ("read", None, 0, None, 4096, 4096), ("read", None, 0, None, 4096, 1808), ("read", None, 0, None, 4096, None)]
+    assert ops[6] == ("lseek", None, 0, 0, None, None) and ev[6]["whence"] == "SET"
+    assert ops[8] == ("read", None, 0, 8192, 200, 200)
+    assert ops[10] == ("stat", "missing", None, None, None, "ENOENT")
+    # time from the first exported call, the call's duration beside it
+    assert ev[0]["t"] == 0 and ev[3]["dur"] == 100136 and ev[10]["t"] == 1100063
+    # a lane outside the root (tid 101) is not a lane
+
+
+def test_export_resolves_shared_positions_and_lists_creates():
+    h, ev = _export(WORKERS)
+    assert h["lanes"] == 2 and h["creates"] == ["out/new", "out/final"]
+    assert h["notes"]["shared_positions_resolved"] == 2
+    reads = [(e["lane"], e["fd"], e.get("offset"), e["len"]) for e in ev if e["op"] == "read"]
+    # the inherited description's reads are positioned at what each actually read; the
+    # child's own file keeps its sequential reads
+    assert reads == [(0, 0, 0, 4096), (1, 0, 4096, 4096), (1, 1, None, 100), (1, 1, None, 100), (0, 0, 8192, 50)]
+    closes = [(e["lane"], e["fd"]) for e in ev if e["op"] == "close"]
+    assert closes == [(1, 1), (1, 0), (0, 2), (0, 0)]
+    w = next(e for e in ev if e["op"] == "write")
+    assert (w["fd"], w["len"], w["ret"]) == (2, 1000, 1000)
+    r = next(e for e in ev if e["op"] == "rename")
+    assert (r["path"], r["to"]) == ("out/new", "out/final")
+
+
+@pytest.mark.parametrize("text", [SEQUENTIAL, WORKERS])
+def test_exported_file_measures_as_the_strace(tmp_path, text):
+    h, ev = _export(text)
+    out = tmp_path / "t.jsonl"
+    sha = trace.write_export(str(out), h, ev)
+    assert len(sha) == 64
+    a = trace.metrics_of(text.strip().splitlines(), ["/d"])
+    b = trace.metrics_of_export(out.read_text().splitlines())
+    assert b["source"] == "trace" and b["contexts"] == h["lanes"]
+    assert a["total"] == b["total"]
+    # and through the command line, which sniffs the header
+    m = tmp_path / "m.json"
+    assert trace.main(["metrics", str(out), "-o", str(m)]) == 0
+    assert json.loads(m.read_text())["total"] == a["total"]

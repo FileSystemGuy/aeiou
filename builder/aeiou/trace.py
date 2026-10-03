@@ -33,12 +33,19 @@ What differs from the dry-run side, because a trace is not an abstract:
 
 Not visible to `strace`, and so not counted: `io_uring` submissions and page faults on a
 mapping. Standard library only; the trace is read once, in a stream.
+
+`aeiou-trace export` writes the same calls as a trace file for the runner's `trace` node
+(`DESIGN_REVIEW.md` §3.58): JSON Lines, a header and one op per line in the order the calls
+returned, each on a lane (a traced task) and naming its open by id, so that
+`aeiou dry-run --metrics` of an abstract that is one `trace` node computes these same
+numbers. `aeiou-trace metrics` reads an exported file too (`TraceReader`).
 """
 
 from __future__ import annotations
 
 import argparse
 import fnmatch
+import itertools
 import json
 import os
 import re
@@ -312,6 +319,7 @@ _PREFIX = re.compile(r"^(?:\[pid\s+(\d+)\]\s+|(\d+)\s+)?(?:(\d+\.\d+|\d\d:\d\d:\
 _RESUMED = re.compile(r"^<\.\.\. (\w+) resumed>\s*(.*)$", re.S)
 _RET = re.compile(r"^(-?\d+|0x[0-9a-f]+|\?)")
 _DUR = re.compile(r"<(\d+\.\d+)>$")
+_ERRNO = re.compile(r"^\s*(E[A-Z0-9]+)")
 _FD = re.compile(r"^(-?\d+|AT_FDCWD)(?:<(.*)>)?$", re.S)
 _IOV_LEN = re.compile(r"iov_len=(\d+)")
 _IOCB = re.compile(r"aio_data=(\w+), aio_lio_opcode=IOCB_CMD_(\w+).*?aio_fildes=(\d+)(?:<(.*?)>)?, .*?aio_nbytes=(\d+), aio_offset=(-?\d+)")
@@ -394,7 +402,7 @@ def _seconds(ts: str) -> float:
 class File:
     """An open file description: descriptors made by `dup` and inherited over `fork` share it."""
 
-    __slots__ = ("path", "pos", "append", "listed")
+    __slots__ = ("path", "pos", "append", "listed", "oid")
 
     def __init__(self, path, pos=0, append=False):
         self.path = path
@@ -402,6 +410,8 @@ class File:
         self.append = append
         # a directory stream being read: its `getdents` calls are one `readdir` op together
         self.listed = False
+        # the exporter's open id, when this description was opened under the root
+        self.oid = None
 
 
 OPENS = {"open", "openat", "openat2", "creat"}
@@ -422,7 +432,7 @@ PATH_OPS = {
     "mkdir": ("mkdir", None, 0), "mkdirat": ("mkdir", 0, 1), "rmdir": ("rmdir", None, 0),
     "rename": ("rename", None, 0), "renameat": ("rename", 0, 1), "renameat2": ("rename", 0, 1),
 }
-HANDLED = OPENS | READS | WRITES | CLONES | DUPS | set(FD_OPS) | set(PATH_OPS) | {"close", "lseek", "io_submit", "io_getevents", "io_pgetevents", "chdir", "fchdir"}
+HANDLED = OPENS | READS | WRITES | CLONES | DUPS | set(FD_OPS) | set(PATH_OPS) | {"close", "lseek", "io_submit", "io_getevents", "io_pgetevents", "chdir", "fchdir", "mmap"}
 
 
 class Tracer:
@@ -451,6 +461,8 @@ class Tracer:
         self.other: Counter = Counter()
         self.tids: set[int] = set()
         self._under: dict[str, str | None] = {}
+        # `aeiou-trace export`: an `Exporter` that gets every counted call
+        self.export: Exporter | None = None
 
     # ---- paths
 
@@ -620,12 +632,14 @@ class Tracer:
         ret = int(rm.group(1), 0)
         ret_path = None
         rest = ret_s[rm.end() :]
+        em = _ERRNO.match(rest) if ret < 0 else None
+        err = em.group(1) if em else None
         if rest.startswith("<"):
             _, ret_path = fd_arg(rm.group(1) + rest.split(" <")[0] if " <" in rest else rm.group(1) + rest)
         d = _DUR.search(ret_s)
         done = ts if r else (issued + float(d.group(1)) if issued is not None and d else issued)
         self.tids.add(tid)
-        self.call(tid, name, split_args(body[i + 1 : k]), ret, ret_path, issued, done)
+        self.call(tid, name, split_args(body[i + 1 : k]), ret, ret_path, issued, done, err)
 
     def _count(self, tid: int, kind: str):
         self.m.op(kind)
@@ -636,8 +650,10 @@ class Tracer:
         if c and self.chain_gap is not None:
             self.m.depth[c[0]] += 1
 
-    def call(self, tid: int, name: str, a: list[str], ret: int, ret_path: str | None, issued: float | None, done: float | None):
+    def call(self, tid: int, name: str, a: list[str], ret: int, ret_path: str | None, issued: float | None, done: float | None, err: str | None = None):
         m = self.m
+        ex = self.export
+        when = (tid, issued, done)
         if name in CLONES:
             if ret > 0:
                 self._child(tid, ret, name in ("clone", "clone3") and "CLONE_FILES" in (a[0] if a else ""))
@@ -658,13 +674,20 @@ class Tracer:
                 return
             path = ret_path if ret >= 0 and ret_path else self.resolve(tid, a[0] if pi else None, c_string(a[pi]))
             flags = a[pi + 1] if len(a) > pi + 1 else ""
+            f = None
             if ret >= 0:
                 known_empty = "O_TRUNC" in flags or "O_EXCL" in flags or name == "creat"
                 if "O_APPEND" in flags and not known_empty:
                     self.notes["append_to_unknown_size"] += 1
-                self.table(tid)[ret] = File(path, 0, "O_APPEND" in flags)
-            if inst is not None and self.under(path):
+                f = self.table(tid)[ret] = File(path, 0, "O_APPEND" in flags)
+            p = self.under(path)
+            if inst is not None and p:
                 self._count(tid, "open")
+                if ex is not None:
+                    mode = a[pi + 2] if len(a) > pi + 2 else None
+                    oid = ex.open(when, p, flags if name != "creat" else "O_WRONLY|O_CREAT|O_TRUNC", mode, err)
+                    if f is not None:
+                        f.oid = oid
             return
         if name == "close":
             fd, path = fd_arg(a[0]) if a else (None, None)
@@ -678,6 +701,8 @@ class Tracer:
             if inst is not None and p:
                 self._count(tid, "close")
                 m.close(tid, p)
+                if ex is not None and f is not None and f.oid is not None:
+                    ex.op(when, "close", f.oid, err)
             return
         if name in DUPS:
             if name == "fcntl" and not (len(a) > 1 and a[1].startswith("F_DUPFD")):
@@ -695,6 +720,8 @@ class Tracer:
                 f.listed = False  # rewinddir
             if inst is not None and self.under(path or (f.path if f else None)):
                 self._count(tid, "lseek")
+                if ex is not None and f is not None and f.oid is not None and len(a) > 2:
+                    ex.op(when, "lseek", f.oid, err, offset=int(a[1], 0), whence=a[2].replace("SEEK_", ""), ret=ret)
             return
         if name in READS or name in WRITES:
             kind = R if name in READS else W
@@ -721,6 +748,21 @@ class Tracer:
                 if offset < 0:
                     self.notes["data_ops_without_offset"] += 1
                 m.data(kind, inst, tid, p, offset, length, max(ret, 0))
+                if ex is not None and f is not None and f.oid is not None and offset >= 0:
+                    ex.data(when, KINDS[kind], f.oid, offset, length, positioned, ret, err)
+            return
+        if name == "mmap":
+            # exported only (the metrics do not count a mapping, `runner/README.md` §10): the
+            # mapped range as one read, since the faults inside it are not in the trace
+            if ex is None or len(a) < 6 or ret < 0:
+                return
+            fd, path = fd_arg(a[4])
+            f = self.file(tid, fd, path)
+            if f is None or f.oid is None or inst is None or not self.under(path or f.path):
+                return
+            length, off = int(a[1], 0), int(a[5], 0)
+            ex.notes["mmap_as_read"] += 1
+            ex.data(when, "read", f.oid, off, length, True, length, None)
             return
         if name == "io_submit":
             got = []
@@ -746,9 +788,18 @@ class Tracer:
             c[1] = done
             m.fan_out[len(got)] += 1
             ctx = a[0]
-            for data, kind, p, off, nbytes in got:
+            members = None
+            if ex is not None:
+                mem = []
+                for data, op, fd, path, nbytes, off in _IOCB.findall(a[2] if len(a) > 2 else ""):
+                    f = self.file(tid, int(fd), path or None)
+                    if op in ("PREAD", "PWRITE") and f is not None and f.oid is not None and self.under(path or f.path):
+                        mem.append(("read" if op == "PREAD" else "write", f.oid, int(off), int(nbytes)))
+                members = ex.submit(when, mem[:ret]) if mem else None
+            for j, (data, kind, p, off, nbytes) in enumerate(got):
                 # counted when its result is reaped (`io_getevents`), with the bytes it moved
-                self.aio.setdefault((ctx, data), []).append((kind, inst, tid, p, off, nbytes))
+                member = members[j] if members is not None and j < len(members) else None
+                self.aio.setdefault((ctx, data), []).append((kind, inst, tid, p, off, nbytes, member))
             return
         if name in ("io_getevents", "io_pgetevents"):
             c = self.chain.get(tid)
@@ -758,10 +809,12 @@ class Tracer:
             for data, res in _EVENT.findall(a[3] if len(a) > 3 else ""):
                 waiting = self.aio.get((ctx, data))
                 if waiting:
-                    kind, i, t, p, off, nbytes = waiting.pop(0)
+                    kind, i, t, p, off, nbytes, member = waiting.pop(0)
                     if not waiting:
                         del self.aio[(ctx, data)]
                     m.data(kind, i, t, p, off, nbytes, max(int(res), 0))
+                    if member is not None:
+                        member["ret"] = int(res) if int(res) >= 0 else _errno_name(-int(res))
             return
         if name in FD_OPS:
             fd, path = fd_arg(a[0]) if a else (None, None)
@@ -776,6 +829,8 @@ class Tracer:
                 f.listed = True
             if inst is not None and self.under(path):
                 self._count(tid, FD_OPS[name])
+                if ex is not None and f is not None and f.oid is not None:
+                    ex.fd_op(when, FD_OPS[name], name, f.oid, a, ret, err)
             return
         if name in PATH_OPS:
             kind, di, pi = PATH_OPS[name]
@@ -789,12 +844,24 @@ class Tracer:
                     f = self.file(tid, fd, None)
                     path = f.path if f else None
                 kind = "fstat"
-            else:
-                path = self.resolve(tid, a[di] if di is not None else None, arg)
-                if name == "unlinkat" and "AT_REMOVEDIR" in a[-1]:
-                    kind = "rmdir"
-            if inst is not None and self.under(path):
+                f = self.file(tid, fd, path)
+                if inst is not None and self.under(path):
+                    self._count(tid, kind)
+                    if ex is not None and f is not None and f.oid is not None:
+                        ex.op(when, "fstat", f.oid, err)
+                return
+            path = self.resolve(tid, a[di] if di is not None else None, arg)
+            if name == "unlinkat" and "AT_REMOVEDIR" in a[-1]:
+                kind = "rmdir"
+            p = self.under(path)
+            if inst is not None and p:
                 self._count(tid, kind)
+                if ex is not None:
+                    to = None
+                    if kind == "rename":
+                        j = pi + 1 if di is None else pi + 2
+                        to = self.under(self.resolve(tid, a[j - 1] if di is not None else None, c_string(a[j]))) if len(a) > j else None
+                    ex.path_op(when, kind, name, p, a, pi, to, err)
             return
 
     def finish(self):
@@ -803,11 +870,316 @@ class Tracer:
         # requests whose results the trace does not show (reaped from the ring in user
         # space, or `io_getevents` not traced): taken as complete
         for waiting in self.aio.values():
-            for kind, i, t, p, off, nbytes in waiting:
+            for kind, i, t, p, off, nbytes, member in waiting:
                 self.notes["aio_results_assumed_complete"] += 1
                 self.m.data(kind, i, t, p, off, nbytes, nbytes)
         self.aio = {}
         self.m.finish()
+
+
+# ---------------------------------------------------------------- export: the runner's trace file
+
+TRACE_FORMAT = 1
+# the open flags the schema knows (`OpenFlag`); anything else strace shows is dropped and counted
+OPEN_FLAGS = {"O_RDONLY": "RDONLY", "O_WRONLY": "WRONLY", "O_RDWR": "RDWR", "O_CREAT": "CREAT", "O_TRUNC": "TRUNC", "O_EXCL": "EXCL",
+              "O_APPEND": "APPEND", "O_CLOEXEC": "CLOEXEC", "O_DIRECTORY": "DIRECTORY", "O_DIRECT": "DIRECT", "O_SYNC": "SYNC",
+              "O_DSYNC": "DSYNC", "O_NOATIME": "NOATIME", "O_NOFOLLOW": "NOFOLLOW"}
+IOCTLS = {"TCGETS", "FIONREAD", "BLKGETSIZE64"}
+ADVICE = {"POSIX_FADV_NORMAL": "NORMAL", "POSIX_FADV_RANDOM": "RANDOM", "POSIX_FADV_SEQUENTIAL": "SEQUENTIAL",
+          "POSIX_FADV_WILLNEED": "WILLNEED", "POSIX_FADV_DONTNEED": "DONTNEED", "POSIX_FADV_NOREUSE": "NOREUSE"}
+_ERRNOS = {2: "ENOENT", 5: "EIO", 9: "EBADF", 13: "EACCES", 17: "EEXIST", 20: "ENOTDIR", 21: "EISDIR", 22: "EINVAL", 28: "ENOSPC", 39: "ENOTEMPTY"}
+
+
+def _errno_name(code: int) -> str:
+    return _ERRNOS.get(code, f"E{code}")
+
+
+class Exporter:
+    """Collects the counted calls of a `Tracer` and writes the runner's trace file
+    (`DESIGN_REVIEW.md` §3.58): a header line, then one op per line in the order the calls
+    returned. A lane is a traced task; an op names its open by id (`fd`), through every
+    `dup` and inheritance the `Tracer` resolved. Two passes: the second decides which
+    sequential reads and writes are written positioned (those on an open that more than one
+    lane used, whose position the lanes' interleaving decided) and which opens created
+    their path."""
+
+    def __init__(self, root: str):
+        self.root = root.rstrip("/") + "/"
+        self.events: list[dict] = []
+        self.lanes: dict[int, int] = {}
+        self.opens: list[dict] = []  # oid -> {"path", "lanes": set, "creat": bool}
+        self.t0: float | None = None
+        self.notes: Counter = Counter()
+
+    def _lane(self, tid: int) -> int:
+        lane = self.lanes.get(tid)
+        if lane is None:
+            lane = self.lanes[tid] = len(self.lanes)
+        return lane
+
+    def _event(self, when, op: str, **fields) -> dict:
+        tid, issued, done = when
+        if issued is None:
+            self.notes["lines_without_timestamps"] += 1
+            t = dur = 0
+        else:
+            if self.t0 is None:
+                self.t0 = issued
+            t = int(round((issued - self.t0) * 1e9))
+            dur = int(round((done - issued) * 1e9)) if done is not None else 0
+        e = {"lane": self._lane(tid), "t": t, "dur": max(dur, 0), "op": op}
+        for k, v in fields.items():
+            if v is None:
+                continue
+            if k in ("path", "to"):
+                v = self.rel(v)
+            e[k] = v
+        self.events.append(e)
+        if "fd" in fields and fields["fd"] is not None:
+            self.opens[fields["fd"]]["lanes"].add(e["lane"])
+        return e
+
+    def rel(self, path: str) -> str:
+        """The path below the root (the root itself is `.`)."""
+        if path.startswith(self.root):
+            return path[len(self.root) :] or "."
+        return "." if path == self.root[:-1] else path
+
+    @staticmethod
+    def _ret(ret, err):
+        if err is not None:
+            return err
+        return ret if ret not in (None, 0) else None
+
+    def open(self, when, path: str, flags: str, mode: str | None, err: str | None) -> int:
+        names, dropped = [], 0
+        for f in flags.split("|"):
+            if f in OPEN_FLAGS:
+                names.append(OPEN_FLAGS[f])
+            elif f and f != "O_LARGEFILE":
+                dropped += 1
+        if dropped:
+            self.notes["open_flags_dropped"] += dropped
+        if not any(n in ("RDONLY", "WRONLY", "RDWR") for n in names):
+            names.insert(0, "RDONLY")  # O_RDONLY is 0 and strace prints it, but be sure
+        oid = len(self.opens)
+        self.opens.append({"path": path, "lanes": set(), "creat": "CREAT" in names and err is None})
+        m = None
+        if mode is not None and mode.isdigit():
+            m = int(mode, 8)
+        self._event(when, "open", fd=oid, path=path, flags=names, mode=m, ret=err)
+        return oid
+
+    def op(self, when, op: str, oid: int, err: str | None, **fields):
+        ret = fields.pop("ret", None)
+        self._event(when, op, fd=oid, ret=self._ret(ret, err), **fields)
+
+    def data(self, when, kind: str, oid: int, offset: int, length: int, positioned: bool, ret: int, err: str | None):
+        e = self._event(when, kind, fd=oid, len=length, ret=self._ret(max(ret, 0), err))
+        e["_off"] = offset
+        if positioned:
+            e["offset"] = offset
+
+    def submit(self, when, members: list) -> list[dict]:
+        ops = []
+        for kind, oid, off, nbytes in members:
+            self.opens[oid]["lanes"].add(self._lane(when[0]))
+            # `ret` is filled when the result is reaped; a result the trace never shows is
+            # taken as complete, as the metrics take it
+            ops.append({"op": kind, "fd": oid, "offset": off, "len": nbytes, "ret": nbytes})
+        self._event(when, "submit", ops=ops)
+        return ops
+
+    def fd_op(self, when, kind: str, call: str, oid: int, a: list[str], ret: int, err: str | None):
+        f = {}
+        try:
+            if kind == "ftruncate":
+                f["len"] = int(a[1], 0)
+            elif kind == "fallocate":
+                f["offset"], f["len"] = int(a[2], 0), int(a[3], 0)
+            elif kind == "fadvise":
+                adv = ADVICE.get(a[3])
+                if adv is None:
+                    self.notes["calls_not_exported"] += 1
+                    self.notes[f"not_exported:{call}:{a[3]}"] += 1
+                    return
+                f["offset"], f["len"], f["advice"] = int(a[1], 0), int(a[2], 0), adv
+            elif kind == "ioctl":
+                req = a[1].split(" ")[0] if len(a) > 1 else ""
+                if req not in IOCTLS:
+                    self.notes["calls_not_exported"] += 1
+                    self.notes[f"not_exported:ioctl:{req or '?'}"] += 1
+                    return
+                f["request"] = req
+        except (IndexError, ValueError):
+            self.notes["calls_not_exported"] += 1
+            self.notes[f"not_exported:{call}:unparsed"] += 1
+            return
+        if kind == "readdir":
+            ret = 0  # the entries are not known from the trace: not checked
+        self.op(when, kind, oid, err, ret=ret if kind != "readdir" else None, **f)
+
+    def path_op(self, when, kind: str, call: str, path: str, a: list[str], pi: int, to: str | None, err: str | None):
+        if call == "truncate":
+            self.notes["calls_not_exported"] += 1
+            self.notes["not_exported:truncate"] += 1
+            return
+        f = {}
+        if kind == "rename":
+            if to is None:
+                self.notes["calls_not_exported"] += 1
+                self.notes["not_exported:rename:destination outside the root"] += 1
+                return
+            f["to"] = to
+        elif kind == "mkdir":
+            m = a[pi + 1] if len(a) > pi + 1 else None
+            if m is not None and m.isdigit():
+                f["mode"] = int(m, 8)
+        self._event(when, kind, path=path, ret=err, **f)
+
+    def finish(self, root: str, source_notes: dict) -> tuple[dict, list[dict]]:
+        """The header and the lines: positions of shared opens resolved, `creates` collected."""
+        shared = 0
+        for e in self.events:
+            if e["op"] in KINDS and "_off" in e:
+                off = e.pop("_off")
+                if "offset" not in e and len(self.opens[e["fd"]]["lanes"]) > 1:
+                    e["offset"] = off
+                    shared += 1
+        if shared:
+            self.notes["shared_positions_resolved"] = shared
+        seen, creates = set(), []
+        for e in self.events:
+            op = e["op"]
+            if op == "open":
+                if self.opens[e["fd"]]["creat"] and e["path"] not in seen and e["path"] not in creates and "ret" not in e:
+                    creates.append(e["path"])
+                seen.add(e["path"])
+            elif op == "mkdir" and "ret" not in e and e["path"] not in creates:
+                creates.append(e["path"])
+            elif op == "rename" and "ret" not in e and e["to"] not in creates:
+                creates.append(e["to"])
+            elif op == "stat":
+                if "ret" not in e:
+                    seen.add(e["path"])
+        notes = dict(sorted(self.notes.items()))
+        for k, v in source_notes.items():
+            notes.setdefault(k, v)
+        header = {"aeiou_trace": TRACE_FORMAT, "source": "strace", "root": root, "lanes": len(self.lanes), "lines": len(self.events),
+                  "opens": len(self.opens), "creates": creates, "notes": notes}
+        return header, self.events
+
+
+def export_of(lines, root: str, **kw) -> tuple[dict, list[dict]]:
+    """Header and op lines of the runner's trace file for an strace given as lines."""
+    m = Metrics()
+    t = Tracer(m, [root], **kw)
+    t.export = Exporter(t.roots[0])
+    t.feed(lines)
+    t.finish()
+    return t.export.finish(t.roots[0], dict(sorted(t.notes.items())))
+
+
+def write_export(path: str, header: dict, events: list[dict]) -> str:
+    """Write the file; returns its sha256 (what the abstract's `trace` node names)."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "wb") as out:
+        for doc in (header, *events):
+            line = (json.dumps(doc, separators=(",", ":")) + "\n").encode()
+            h.update(line)
+            out.write(line)
+    return h.hexdigest()
+
+
+class TraceReader:
+    """The metrics of an exported trace file, with the same definitions as the strace's: a lane
+    is a context, the whole file one instance, positions tracked per open id as the runner
+    tracks them. What `aeiou dry-run --metrics` computes for a `trace` node must equal this."""
+
+    def __init__(self, metrics: Metrics):
+        self.m = metrics
+        self.header: dict | None = None
+        self.pos: dict[int, int] = {}
+        self.paths: dict[int, str] = {}
+        self.lanes: set[int] = set()
+        self.notes: Counter = Counter()
+
+    def feed(self, lines):
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            doc = json.loads(line)
+            if self.header is None:
+                if doc.get("aeiou_trace") != TRACE_FORMAT:
+                    raise SystemExit(f"aeiou-trace: not an aeiou_trace: {TRACE_FORMAT} file")
+                self.header = doc
+                continue
+            self.line(doc)
+
+    def _data(self, lane: int, e: dict):
+        kind = R if e["op"] == "read" else W
+        oid = e["fd"]
+        ret = e.get("ret", 0)
+        n = ret if isinstance(ret, int) else 0
+        if "offset" in e:
+            off = e["offset"]
+        else:
+            off = self.pos.get(oid, 0)
+            self.pos[oid] = off + n
+        self.m.data(kind, 0, lane, self.paths[oid], off, e["len"], n)
+
+    def line(self, e: dict):
+        lane, op = e["lane"], e["op"]
+        self.lanes.add(lane)
+        if op == "open":
+            self.paths[e["fd"]] = e["path"]
+            self.pos[e["fd"]] = 0
+            self.m.op("open")
+        elif op in KINDS:
+            self._data(lane, e)
+        elif op == "submit":
+            self.m.fan_out[len(e["ops"])] += 1
+            for sub in e["ops"]:
+                self._data(lane, sub)
+        elif op == "close":
+            self.m.op("close")
+            self.m.close(lane, self.paths[e["fd"]])
+        elif op == "lseek":
+            self.m.op("lseek")
+            ret = e.get("ret", 0)
+            if isinstance(ret, int):
+                self.pos[e["fd"]] = ret
+        else:
+            self.m.op(op)
+
+    def finish(self):
+        self.m.finish()
+
+
+def metrics_of_export(lines, block=4096, sample=1) -> dict:
+    m = Metrics(block, sample)
+    r = TraceReader(m)
+    r.feed(lines)
+    r.finish()
+    h = r.header or {}
+    total = m.out()
+    total["depth"] = {}
+    return {
+        "aeiou_metrics": FORMAT,
+        "source": "trace",
+        "roots": [h.get("root", "")],
+        "block": m.block,
+        "sample": m.sample,
+        "order": "completion",
+        "instances": 1,
+        "contexts": len(r.lanes),
+        "chain_gap_us": None,
+        "notes": dict(h.get("notes", {})),
+        "total": total,
+    }
 
 
 def metrics_of(lines, roots, block=4096, sample=1, **kw) -> dict:
@@ -1070,7 +1442,7 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     mp = sub.add_parser("metrics", help="compute the metrics of a trace (strace -f -ttt -T -yy -e trace=%%file,%%desc,%%process -o FILE)")
     mp.add_argument("trace", help="the strace output file, or - for stdin")
-    mp.add_argument("--root", action="append", required=True, metavar="DIR", help="count only calls on paths under DIR (repeatable)")
+    mp.add_argument("--root", action="append", default=[], metavar="DIR", help="count only calls on paths under DIR (repeatable; not needed for an exported trace file)")
     mp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
     mp.add_argument("--cwd", metavar="DIR", help="resolve relative paths against DIR when the trace does not say (no -y)")
     mp.add_argument("--block", type=int, default=4096, metavar="BYTES", help="the block size of the reuse-distance and popularity units (default 4096)")
@@ -1078,6 +1450,12 @@ def main(argv=None) -> int:
     mp.add_argument("--instance-root", action="append", type=int, default=[], metavar="PID", help="the process tree under PID is one instance (repeatable; needs clone in the trace); default: the whole trace is one instance")
     mp.add_argument("--chain-gap-us", type=float, metavar="US", help="report depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit")
     mp.add_argument("-o", "--output", metavar="FILE", help="write the JSON document (aeiou_metrics: 1) to FILE instead of stdout")
+    ep = sub.add_parser("export", help="write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root")
+    ep.add_argument("trace", help="the strace output file, or - for stdin")
+    ep.add_argument("--root", required=True, metavar="DIR", help="export only calls on paths under DIR, written relative to it")
+    ep.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
+    ep.add_argument("--cwd", metavar="DIR", help="resolve relative paths against DIR when the trace does not say (no -y)")
+    ep.add_argument("-o", "--output", required=True, metavar="FILE", help="the trace file to write; its sha256 is printed, for the abstract's `trace` node")
     cp = sub.add_parser("compare", help="compare two metrics documents, from a trace or from aeiou dry-run --metrics-json")
     cp.add_argument("a")
     cp.add_argument("b")
@@ -1095,7 +1473,14 @@ def main(argv=None) -> int:
             ap.error("--block and --sample must be at least 1")
         f = sys.stdin if args.trace == "-" else open(args.trace, encoding="utf-8", errors="replace")
         with f:
-            doc = metrics_of(f, [os.path.abspath(r) for r in args.root], args.block, args.sample, exclude=args.exclude, cwd=args.cwd, instance_roots=args.instance_root, chain_gap_us=args.chain_gap_us)
+            first = f.readline()
+            lines = itertools.chain([first], f)
+            if first.startswith('{"aeiou_trace"'):
+                doc = metrics_of_export(lines, args.block, args.sample)
+            elif not args.root:
+                ap.error("--root DIR is required for an strace")
+            else:
+                doc = metrics_of(lines, [os.path.abspath(r) for r in args.root], args.block, args.sample, exclude=args.exclude, cwd=args.cwd, instance_roots=args.instance_root, chain_gap_us=args.chain_gap_us)
         doc["trace"] = args.trace
         text = json.dumps(doc, indent=2) + "\n"
         if args.output:
@@ -1107,6 +1492,17 @@ def main(argv=None) -> int:
                 print(f"note: {k}: {v}")
         else:
             sys.stdout.write(text)
+        return 0
+
+    if args.cmd == "export":
+        f = sys.stdin if args.trace == "-" else open(args.trace, encoding="utf-8", errors="replace")
+        with f:
+            header, events = export_of(f, os.path.abspath(args.root), exclude=args.exclude, cwd=args.cwd)
+        sha = write_export(args.output, header, events)
+        print(f"{header['lines']} line(s) on {header['lanes']} lane(s), {header['opens']} open(s), {len(header['creates'])} path(s) created under {header['root']}; {args.output}")
+        print(f"sha256 {sha}")
+        for k, v in header["notes"].items():
+            print(f"note: {k}: {v}")
         return 0
 
     docs = []

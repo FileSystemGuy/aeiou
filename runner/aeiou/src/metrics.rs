@@ -542,7 +542,15 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
     }
 
     fn own_turn(&mut self, sink: &mut DryRun, m: &mut Metrics) -> Result<bool> {
+        let mut traced: Option<(std::sync::Arc<crate::trace::TraceFile>, crate::trace::OwnedCtx)> = None;
         loop {
+            if let Some((tf, base)) = traced.take() {
+                // a `trace` node: the whole file in its line order, a lane as a context; it
+                // is one turn, since its order is the point
+                trace_walk(&tf, &base, sink, m)?;
+                self.end_chain(m);
+                return Ok(true);
+            }
             if self.par_n > 0 {
                 let n = self.par_n;
                 for i in 0..n {
@@ -578,6 +586,9 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
                     if !matches!(c, Control::Channel { .. }) {
                         self.end_chain(m);
                     }
+                }
+                Some(Event::Trace(tf, ctx)) => {
+                    traced = Some((tf, crate::trace::OwnedCtx::of(&ctx)));
                 }
                 Some(Event::Fork(kind)) => {
                     let snap = self.vm.snapshot();
@@ -618,6 +629,35 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
             }
         }
     }
+}
+
+/// A `trace` node for the metrics: the file in line order (the order the calls returned),
+/// each lane a context with its own runs, a group a fan-out. No depth: a trace's chains
+/// need a think-time threshold the file does not carry (`aeiou-trace --chain-gap-us`), so
+/// the row is empty on both sides and not judged.
+fn trace_walk(tf: &crate::trace::TraceFile, base: &crate::trace::OwnedCtx, sink: &mut DryRun, m: &mut Metrics) -> Result<()> {
+    use crate::trace::Step;
+    let mut runs: Vec<HashMap<(u64, usize), Run>> = (0..tf.lanes()).map(|_| HashMap::new()).collect();
+    crate::trace::walk(tf, &base.indices, |step| match step {
+        Step::Gap { ns, .. } => {
+            sink.compute_ns += ns as i128;
+            Ok(())
+        }
+        Step::Group { n, .. } => {
+            *m.fan_out.entry(n as u64).or_insert(0) += 1;
+            Ok(())
+        }
+        Step::Op { lane, op, indices } => {
+            sink.op(&op, &base.ctx(indices))?;
+            Stream::record(&mut runs[lane], m, &op)
+        }
+    })?;
+    for r in runs.iter_mut() {
+        for ((_, k), run) in r.drain() {
+            m.run_done(k, run.bytes, run.ops);
+        }
+    }
+    Ok(())
 }
 
 /// Walk one actor instance in round-robin order through `sink`, which must carry a

@@ -945,6 +945,9 @@ impl<E: Engine> Loop<E> {
                         self.wake(chan);
                     }
                 }
+                Some(Event::Trace(tf, _)) => {
+                    bail!("trace `{}`: an event-loop backend ({}) does not run traces yet; use sync, sync-direct, posix-aio, or mmap", tf.name, sh.opts.backend.name());
+                }
                 Some(Event::Op(op, ctx)) => {
                     t.io.a.check_align(&sh, &op)?;
                     match self.io.issue(&sh, &mut t.io, &op)? {

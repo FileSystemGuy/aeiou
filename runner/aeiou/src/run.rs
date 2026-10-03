@@ -1272,6 +1272,10 @@ impl Sink<'static, 'static> for Runner {
         Ok(())
     }
 
+    fn trace(&mut self, t: &Arc<crate::trace::TraceFile>, ctx: &OpCtx) -> Result<()> {
+        self.trace_node(t, ctx)
+    }
+
     fn fork(&mut self, kind: &ForkKind<'static>, snapshot: &dyn Fn() -> Snapshot<'static, 'static>) -> Result<bool> {
         let snap = snapshot();
         match *kind {
@@ -2096,4 +2100,335 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
     }
     writeln!(out, "fingerprint {:016x}", s.fingerprint)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------- the `trace` node
+
+/// The open table of one `trace` instance (`trace.rs`): one slot per open id, filled by the
+/// lane that executes the `open`, read by every lane that uses it. The only waits a trace
+/// run has: a use waits for its open; the last close of an id waits for its uses.
+pub(crate) struct OpenTable {
+    slots: Mutex<Vec<Slot>>,
+    cv: Condvar,
+}
+
+struct Slot {
+    fd: Option<Arc<OpenFile>>,
+    /// Set when the open failed in this run (its uses, if any, cannot proceed).
+    failed: bool,
+    uses_left: usize,
+    closes_left: usize,
+}
+
+impl OpenTable {
+    fn new(tf: &crate::trace::TraceFile) -> Self {
+        let slots = tf.opens.iter().map(|o| Slot { fd: None, failed: false, uses_left: o.uses, closes_left: o.closes }).collect();
+        OpenTable { slots: Mutex::new(slots), cv: Condvar::new() }
+    }
+
+    fn publish(&self, oid: usize, fd: Option<Arc<OpenFile>>) {
+        let mut s = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        s[oid].failed = fd.is_none();
+        s[oid].fd = fd;
+        drop(s);
+        self.cv.notify_all();
+    }
+
+    /// Wait for open `oid` to be published; `Err` when it failed or the run was aborted.
+    fn acquire(&self, oid: usize, path: &str, aborted: &AtomicBool) -> Result<Arc<OpenFile>> {
+        let mut s = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(fd) = &s[oid].fd {
+                return Ok(fd.clone());
+            }
+            if s[oid].failed {
+                bail!("open #{oid} of {path} failed in this run; its later uses cannot be issued");
+            }
+            if aborted.load(Ordering::Relaxed) {
+                bail!("run aborted while waiting for open #{oid} of {path}");
+            }
+            s = self.cv.wait_timeout(s, Duration::from_millis(50)).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    fn release(&self, oid: usize) {
+        let mut s = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        s[oid].uses_left = s[oid].uses_left.saturating_sub(1);
+        drop(s);
+        self.cv.notify_all();
+    }
+
+    /// One close line of `oid`: the descriptor closes with the last of them, after every
+    /// use has completed. Returns the reference to drop (the close itself) when this is it.
+    fn close(&self, oid: usize, path: &str, aborted: &AtomicBool) -> Result<Option<Arc<OpenFile>>> {
+        let mut s = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        s[oid].closes_left = s[oid].closes_left.saturating_sub(1);
+        if s[oid].closes_left > 0 {
+            return Ok(None);
+        }
+        loop {
+            if s[oid].uses_left == 0 {
+                return Ok(s[oid].fd.take());
+            }
+            if aborted.load(Ordering::Relaxed) {
+                bail!("run aborted while waiting to close #{oid} of {path}");
+            }
+            s = self.cv.wait_timeout(s, Duration::from_millis(50)).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+}
+
+/// Path order of one `trace` instance (`trace.rs`, module doc): per path the trace changes,
+/// how many of its ops and how many of its changing ops have completed. A changing op at
+/// index `k` among the path's ops waits for `done == k`; a reading op waits for `mdone ==
+/// mk`, the changing ops before it.
+pub(crate) struct PathOrder {
+    done: Mutex<Vec<(usize, usize)>>,
+    cv: Condvar,
+}
+
+impl PathOrder {
+    fn new(tf: &crate::trace::TraceFile) -> Self {
+        PathOrder { done: Mutex::new(vec![(0, 0); tf.changed.len()]), cv: Condvar::new() }
+    }
+
+    fn wait(&self, d: &crate::trace::Dep, path: &str, aborted: &AtomicBool) -> Result<()> {
+        let mut s = self.done.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            let (done, mdone) = s[d.path];
+            if (d.mutating && done >= d.k) || (!d.mutating && mdone >= d.mk) {
+                return Ok(());
+            }
+            if aborted.load(Ordering::Relaxed) {
+                bail!("run aborted while waiting for earlier ops on {path}");
+            }
+            s = self.cv.wait_timeout(s, Duration::from_millis(50)).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    fn complete(&self, d: &crate::trace::Dep) {
+        let mut s = self.done.lock().unwrap_or_else(|e| e.into_inner());
+        s[d.path].0 += 1;
+        if d.mutating {
+            s[d.path].1 += 1;
+        }
+        drop(s);
+        self.cv.notify_all();
+    }
+}
+
+/// The two tables of a `trace` instance.
+pub(crate) struct TraceTables {
+    opens: OpenTable,
+    paths: PathOrder,
+}
+
+impl TraceTables {
+    /// Path order before op `g`: wait for what it depends on.
+    fn before(&self, tf: &crate::trace::TraceFile, g: usize, path: &str, aborted: &AtomicBool) -> Result<()> {
+        if let Some(d) = &tf.deps[g] {
+            self.paths.wait(d, path, aborted)?;
+        }
+        if let Some(d) = tf.deps2.get(&g) {
+            self.paths.wait(d, path, aborted)?;
+        }
+        Ok(())
+    }
+
+    fn after(&self, tf: &crate::trace::TraceFile, g: usize) {
+        if let Some(d) = &tf.deps[g] {
+            self.paths.complete(d);
+        }
+        if let Some(d) = tf.deps2.get(&g) {
+            self.paths.complete(d);
+        }
+    }
+}
+
+impl Runner {
+    /// One op of a lane: the open table in place of the VM's handles, `issue_blocking` for
+    /// the call itself (so `O_DIRECT` rounding, the payload, and the bookkeeping are the
+    /// run's), `settle` for the check and the record.
+    fn trace_op(&mut self, tf: &crate::trace::TraceFile, g: usize, op: &crate::trace::LineOp, tables: &TraceTables, ctx: &OpCtx, pos: &mut HashMap<usize, i64>) -> Result<()> {
+        if self.sh.aborted.load(Ordering::Relaxed) {
+            bail!("run aborted: {}", self.sh.coord.abort_reason().unwrap_or_else(|| "another actor failed".into()));
+        }
+        let b = tf.build(op, |fd| pos.get(&fd).copied().unwrap_or(0));
+        if let (Some(fd), Some(p)) = (b.oid, b.pos_after) {
+            pos.insert(fd, p);
+        }
+        let o = &b.op;
+        self.a.check_align(&self.sh, o)?;
+        let key: Arc<str> = Arc::from(o.path);
+        let table = &tables.opens;
+        tables.before(tf, g, o.path, &self.sh.aborted)?;
+        let r = self.trace_issue(o, b.oid, table, ctx, &key);
+        tables.after(tf, g);
+        r
+    }
+
+    fn trace_issue(&mut self, o: &Op, oid: Option<usize>, table: &OpenTable, ctx: &OpCtx, key: &Arc<str>) -> Result<()> {
+        let b_oid = oid;
+        match o.kind {
+            OpKind::Open => {
+                let oid = b_oid.expect("an open has its id");
+                let t = Instant::now();
+                let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
+                let ns = t.elapsed().as_nanos() as u64;
+                // the descriptor belongs to the table, not to this lane's own files
+                table.publish(oid, self.a.fds.own.remove(key));
+                self.a.settle(o, ctx, r, ns)
+            }
+            OpKind::Close => {
+                let oid = b_oid.expect("a close has its id");
+                let last = table.close(oid, o.path, &self.sh.aborted)?;
+                let t = Instant::now();
+                drop(last);
+                let ns = t.elapsed().as_nanos() as u64;
+                self.a.settle(o, ctx, Ok(0), ns)
+            }
+            _ => match b_oid {
+                Some(oid) => {
+                    let fd = table.acquire(oid, o.path, &self.sh.aborted)?;
+                    self.a.fds.own.insert(key.clone(), fd);
+                    let t = Instant::now();
+                    let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
+                    let ns = t.elapsed().as_nanos() as u64;
+                    self.a.fds.own.remove(key);
+                    table.release(oid);
+                    self.a.settle(o, ctx, r, ns)
+                }
+                None => {
+                    let t = Instant::now();
+                    let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
+                    let ns = t.elapsed().as_nanos() as u64;
+                    self.a.settle(o, ctx, r, ns)
+                }
+            },
+        }
+    }
+
+    /// A `submit` group: its members issued at once, one thread each (what the application's
+    /// `io_submit` did), reaped before the lane goes on; settled in order afterwards.
+    fn trace_group(&mut self, tf: &crate::trace::TraceFile, g0: usize, ops: &[crate::trace::LineOp], tables: &TraceTables, ctx: &OpCtx, pos: &mut HashMap<usize, i64>) -> Result<()> {
+        let table = &tables.opens;
+        let built: Vec<crate::trace::Built> = ops.iter().map(|op| tf.build(op, |fd| pos.get(&fd).copied().unwrap_or(0))).collect();
+        for b in &built {
+            self.a.check_align(&self.sh, &b.op)?;
+        }
+        let sh = self.sh.clone();
+        let (template, actor) = (self.a.template, self.a.actor);
+        let results: Vec<(std::io::Result<i64>, u64)> = std::thread::scope(|s| {
+            let handles: Vec<_> = built
+                .iter()
+                .enumerate()
+                .map(|(j, b)| {
+                    let sh = sh.clone();
+                    s.spawn(move || -> (std::io::Result<i64>, u64) {
+                        let mut be = sh.backend();
+                        let mut a = ActorState::new(&sh, template, actor, false, None, 0);
+                        let (mut rbuf, mut wbuf) = (Ring::new(ALIGN), Ring::new(ALIGN));
+                        let o = &b.op;
+                        let Some(oid) = b.oid else { return (Err(std::io::Error::from_raw_os_error(libc::EINVAL)), 0) };
+                        if tables.before(tf, g0 + j, o.path, &sh.aborted).is_err() {
+                            return (Err(std::io::Error::from_raw_os_error(libc::ECANCELED)), 0);
+                        }
+                        let fd = match table.acquire(oid, o.path, &sh.aborted) {
+                            Ok(fd) => fd,
+                            Err(_) => return (Err(std::io::Error::from_raw_os_error(libc::EBADF)), 0),
+                        };
+                        a.fds.own.insert(Arc::from(o.path), fd);
+                        let t = Instant::now();
+                        let r = issue_blocking(&mut *be, &sh, &mut a, &mut rbuf, &mut wbuf, o);
+                        let ns = t.elapsed().as_nanos() as u64;
+                        table.release(oid);
+                        tables.after(tf, g0 + j);
+                        (r, ns)
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (Err(std::io::Error::from_raw_os_error(libc::EIO)), 0))).collect()
+        });
+        for (b, (r, ns)) in built.iter().zip(results) {
+            self.a.settle(&b.op, ctx, r, ns)?;
+        }
+        Ok(())
+    }
+
+    /// One lane of a `trace`: its lines in order, the gap before each as `compute`.
+    fn trace_lane(&mut self, tf: &crate::trace::TraceFile, lane: usize, tables: &TraceTables, base: &crate::trace::OwnedCtx) -> Result<()> {
+        let n = base.indices.len();
+        let mut idx = base.indices.clone();
+        idx.extend_from_slice(&[lane as i64, 0]);
+        let mut pos: HashMap<usize, i64> = HashMap::new();
+        let (mut begun, mut end) = (false, 0i64);
+        for (ord, &i) in tf.lanes[lane].iter().enumerate() {
+            let line = &tf.lines[i];
+            let gap = if begun { line.t - end } else { line.t };
+            begun = true;
+            end = line.t + line.dur;
+            idx[n + 1] = ord as i64;
+            let ctx = base.ctx(&idx);
+            self.control(Control::Compute { ns: gap.max(0) }, &ctx)?;
+            match &line.op {
+                crate::trace::LineOp::Submit { ops } => self.trace_group(tf, line.g0, ops, tables, &ctx, &mut pos)?,
+                op => self.trace_op(tf, line.g0, op, tables, &ctx, &mut pos)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// A `trace` node: one thread per lane, joined here; the lanes' statistics are this
+    /// actor's, their created and removed paths the run's.
+    fn trace_node(&mut self, tf: &Arc<crate::trace::TraceFile>, ctx: &OpCtx) -> Result<()> {
+        let tables = TraceTables { opens: OpenTable::new(tf), paths: PathOrder::new(tf) };
+        let base = crate::trace::OwnedCtx::of(ctx);
+        let lanes = tf.lanes();
+        if lanes == 0 {
+            return Ok(());
+        }
+        self.a.st.threads += lanes as u64;
+        let sh = self.sh.clone();
+        let mut children: Vec<Runner> = (0..lanes)
+            .map(|_| {
+                let mut c = self.child();
+                c.a.st.threads = 0; // counted above, as lanes
+                c
+            })
+            .collect();
+        let outcome: Vec<Result<()>> = std::thread::scope(|s| {
+            let handles: Vec<_> = children
+                .iter_mut()
+                .enumerate()
+                .map(|(lane, sink)| {
+                    let (tf, tables, base, sh) = (tf.clone(), &tables, &base, sh.clone());
+                    std::thread::Builder::new()
+                        .name(format!("{}#{} trace lane {lane}", base.template, base.actor))
+                        .spawn_scoped(s, move || {
+                            let r = sink.trace_lane(&tf, lane, tables, base);
+                            if r.is_err() {
+                                sh.aborted.store(true, Ordering::Relaxed);
+                            }
+                            sink.a.finish_shared(&sh);
+                            r
+                        })
+                        .expect("spawn")
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(anyhow!("a trace lane panicked")))).collect()
+        });
+        // the cause before the lanes that only saw the abort
+        let mut errs: Vec<(usize, anyhow::Error)> = Vec::new();
+        for (lane, (r, mut sink)) in outcome.into_iter().zip(children).enumerate() {
+            self.a.st.merge(&std::mem::take(&mut sink.a.st));
+            if let Err(e) = r {
+                errs.push((lane, e));
+            }
+        }
+        let cause = errs.iter().position(|(_, e)| !format!("{e:#}").contains("run aborted")).unwrap_or(0);
+        match errs.into_iter().nth(cause) {
+            Some((lane, e)) => Err(e.context(format!("trace `{}` lane {lane}", tf.name))),
+            None => Ok(()),
+        }
+    }
 }

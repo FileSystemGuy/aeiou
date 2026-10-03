@@ -149,6 +149,11 @@ pub trait Sink<'m, 'a>: Sized {
     fn fork(&mut self, _kind: &ForkKind<'a>, _snapshot: &dyn Fn() -> Snapshot<'m, 'a>) -> Result<bool> {
         Ok(false)
     }
+    /// A `trace` node: the captured trace to run at this position (`trace.rs`). The dry run
+    /// walks it in line order; the run gives it one thread per lane.
+    fn trace(&mut self, t: &Arc<crate::trace::TraceFile>, _ctx: &OpCtx) -> Result<()> {
+        bail!("trace `{}`: this driver does not run traces", t.name)
+    }
     /// The actor instance (or sub-actor) has walked its whole body.
     fn finish(&mut self) -> Result<()> {
         Ok(())
@@ -295,6 +300,8 @@ pub enum Event<'e, 'a> {
     Op(Op<'e>, OpCtx<'e>),
     Control(Control<'a>, OpCtx<'e>),
     Fork(ForkKind<'a>),
+    /// A `trace` node at this position.
+    Trace(Arc<crate::trace::TraceFile>, OpCtx<'e>),
 }
 
 /// `Event` before the borrows are taken: what `step` found.
@@ -302,6 +309,7 @@ enum Next<'a> {
     Op,
     Control(Control<'a>),
     Fork(ForkKind<'a>),
+    Trace(Arc<crate::trace::TraceFile>),
 }
 
 /// The op the last `Next::Op` describes; `next` lends it out as an `Op`. A `path` of `None`
@@ -523,6 +531,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             }
             Some(Next::Control(c)) => Some(Event::Control(c, self.ctx())),
             Some(Next::Fork(k)) => Some(Event::Fork(k)),
+            Some(Next::Trace(t)) => Some(Event::Trace(t, self.ctx())),
         })
     }
 
@@ -1374,7 +1383,13 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 self.push_body(body);
                 Ok(None)
             }
-            Node::Trace { file, .. } => other(format!("trace `{file}`: the trace file format is deferred (schema §7)")),
+            Node::Trace { file, .. } => match self.model.traces.get(file.as_str()) {
+                Some(t) => {
+                    self.fill_indices();
+                    Ok(Some(Next::Trace(t.clone())))
+                }
+                None => other(format!("trace `{file}`: not loaded (a document loaded from text has no directory to find it in)")),
+            },
             _ => self.op(node),
         }
     }
@@ -1660,6 +1675,7 @@ pub fn drive<'m, 'a: 'm, S: Sink<'m, 'a>>(vm: &mut Vm<'m, 'a>, sink: &mut S) -> 
             None => return Ok(()),
             Some(Event::Op(op, ctx)) => sink.op(&op, &ctx)?,
             Some(Event::Control(c, ctx)) => sink.control(c, &ctx)?,
+            Some(Event::Trace(t, ctx)) => sink.trace(&t, &ctx)?,
             Some(Event::Fork(kind)) => {
                 let forked = {
                     let snap = || vm.snapshot();
