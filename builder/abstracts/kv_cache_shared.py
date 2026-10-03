@@ -54,12 +54,25 @@ def shape(name, reader, doc):
                 "per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together")
     w.param("retain", 5000, unit="count", doc="older chunks are evicted [config: capacity]")
     w.param("context", 8192, unit="tokens", doc="[config: model] a conversation whose next prompt and reply would not fit starts anew")
+    w.param("turns", const(0), unit="count",
+            doc="[config: load] the requests a conversation has, drawn when it starts; 0 for no limit, the conversation then ends by "
+                "`reuse`'s none arm or the context. A session of many turns and a side call of one are the same slot's conversations "
+                "(measured in the AgentX corpus, §3.59)")
+    w.param("trim", const(0), unit="tokens",
+            doc="[config: load] tokens the client drops from the end of its conversation before a request (an agent editing its context; "
+                "measured in the AgentX corpus, §3.59); the chunks past the kept prefix are stored again under their names, where the "
+                "real store writes new files")
     w.param("turn_in", empirical([1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944]), unit="tokens",
             doc="the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean)")
     w.param("turn_out", empirical([12, 34, 62, 92, 119, 148, 175, 201, 225, 248, 271, 294, 317, 342, 370, 407, 454, 519, 615, 785]), unit="tokens",
             doc="generated tokens (measured: ShareGPT replies, the same way)")
     w.param("prefill_per_token", 40 * us, unit="ns")
     w.param("decode_per_token", 12 * ms, unit="ns")
+    w.param("prefill_step", 8192, unit="tokens",
+            doc="[config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 "
+                "otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens")
+    w.param("think", const(0), unit="ns",
+            doc="[config: load] the client's delay before a request (its user's or its agent's think time); zero sends a slot's requests back to back")
 
     token_bytes = P.chunk_bytes // P.chunk_tokens
     fsize = P.meta_bytes + P.chunk_bytes                               # a chunk file
@@ -90,16 +103,22 @@ def shape(name, reader, doc):
                 inn = slot.draw("inn", P.turn_in)
                 out = slot.draw("out", P.turn_out)
                 kp = slot.draw("kp", P.keep)
+                tr = slot.draw("tr", P.trim)
+                tn = slot.draw("tn", P.turns)
                 back = slot.let("back", (d != None) & (d <= r))        # noqa: E711
+                # the conversation at r − d goes on when it has turns left (or no limit) and the context holds this request
+                more = slot.let("more", back & ((slot.ref("turns").at(r - d) == 0) | (slot.ref("turn").at(r - d) + 1 < slot.ref("turns").at(r - d))))
                 # the conversation's own tokens when its last request ended: that prompt and its reply
-                prior = slot.let("prior", when(back, slot.ref("ptoks").at(r - d) + slot.ref("out").at(r - d), 0))
-                cont = slot.let("cont", back & (when(back, slot.ref("sysblk").at(r - d), 0) * P.chunk_tokens + prior + inn + out <= P.context))
+                prior = slot.let("prior", when(back, max_(slot.ref("ptoks").at(r - d) + slot.ref("out").at(r - d) - tr, 0), 0))
+                cont = slot.let("cont", more & (when(back, slot.ref("sysblk").at(r - d), 0) * P.chunk_tokens + prior + inn + out <= P.context))
                 conv = slot.let("conv", when(cont, slot.ref("conv").at(r - d), draw(uniform64())))
+                turns = slot.let("turns", when(cont, slot.ref("turns").at(r - d), tn))
+                turn = slot.let("turn", when(cont, slot.ref("turn").at(r - d) + 1, 0))
                 sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d), sysp.pick(P.sys_pop)))
                 sysblk = slot.let("sysblk", sp.size // fsize)          # whole chunks inside the system prompt, shared by its conversations
                 ptoks = slot.let("ptoks", when(cont, prior, (sp.size % fsize) // token_bytes) + inn)
                 stored = slot.let("stored", ptoks // P.chunk_tokens)   # whole chunks only
-                had = slot.let("had", when(cont & (d <= P.retain), slot.ref("stored").at(r - d), 0))
+                had = slot.let("had", when(cont & (d <= P.retain), min_(slot.ref("stored").at(r - d), prior // P.chunk_tokens), 0))   # the store's chunks of the kept prefix
                 # what the engine itself still holds of this conversation: what it kept of its last prompt and reply, in whole
                 # chunks; one `keep` draw per round of the d open conversations, made at the last request of the previous round (§3.57)
                 held = slot.let("held", when(cont, min_(prior, slot.ref("kp").at(r - (r % d + 1))) // P.chunk_tokens, 0))
@@ -107,6 +126,7 @@ def shape(name, reader, doc):
                 nload = slot.let("nload", when(hit > held, hit - held, 0))
 
                 with slot.phase(when(r < P.warm, "warm", "serve")):
+                    slot.compute(P.think)
                     with slot.loop("q", sysblk) as q:                  # the lookup: one stat per whole chunk, in order
                         slot.stat(sp.chunk(q))
                     with slot.loop("q", hit) as q:
@@ -120,17 +140,19 @@ def shape(name, reader, doc):
                     with slot.parallel("lk", nload) as rd:             # the chunks the engine does not hold, all at once
                         load(rd, rd.let("b", kv.object(conv=conv, k=held + rd.index, ext="data")))
                     if not reader:
-                        slot.compute(P.prefill_per_token * ((stored - had) * P.chunk_tokens))
-                        with slot.loop("k", stored, start=had) as k:   # the prompt's new whole chunks
-                            t = slot.let("t", kv.object(conv=conv, k=k, ext="tmp"))
-                            slot.open(t, "WRONLY|CREAT|TRUNC|CLOEXEC")
-                            slot.fstat(t)
-                            slot.ioctl(t, "TCGETS", expect=["ENOTTY"])
-                            slot.lseek(t, 0, "CUR")
-                            slot.write(t, P.meta_bytes)
-                            slot.write(t, P.chunk_bytes)
-                            slot.close(t)
-                            slot.rename(t, kv.object(conv=conv, k=k, ext="data"))
+                        cps = P.prefill_step // P.chunk_tokens         # chunks a prefill step completes
+                        with slot.loop("s", ceil_div(stored - had, cps)) as s:   # the prefill, a step at a time; its chunks stored after each
+                            slot.compute(P.prefill_per_token * min_((stored - had - s * cps) * P.chunk_tokens, P.prefill_step))
+                            with slot.loop("k", min_(stored, had + (s + 1) * cps), start=had + s * cps) as k:   # the step's new whole chunks
+                                t = slot.let("t", kv.object(conv=conv, k=k, ext="tmp"))
+                                slot.open(t, "WRONLY|CREAT|TRUNC|CLOEXEC")
+                                slot.fstat(t)
+                                slot.ioctl(t, "TCGETS", expect=["ENOTTY"])
+                                slot.lseek(t, 0, "CUR")
+                                slot.write(t, P.meta_bytes)
+                                slot.write(t, P.chunk_bytes)
+                                slot.close(t)
+                                slot.rename(t, kv.object(conv=conv, k=k, ext="data"))
                     slot.compute(P.decode_per_token * out)
     return w
 

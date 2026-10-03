@@ -4,7 +4,7 @@ comparison's distances, and, when `strace` and the runner binary are there, the 
 `aeiou run` against the same abstract's `aeiou dry-run --metrics-json`: everything that
 does not depend on the order must be equal."""
 import importlib.util
-import json
+import json, re
 import os
 import pathlib
 import random
@@ -526,6 +526,31 @@ def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path
     # uncensored: the sample's own equal shares; a censored observation moves its weight to the larger ones
     assert fit.kept([(10, False), (20, False), (30, False), (40, False)], 4, 99)["empirical"]["values"] == [10, 20, 30, 40]
     assert fit.kept([(10, False), (20, True), (30, False), (40, True)], 4, 100)["empirical"]["values"] == [10, 30, 65, 100]
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_path):
+    """`builder/traces/kv_cache_serving/agentx.py`: the KV abstract fitted to the AgentX corpus
+    (agentic coding sessions, 2026-10-02) against the corpus's own chunk accounting
+    (`agentx.reference.json`: per request, the whole chunks a store that never evicts would
+    hit and would store). The abstract stores 8 % more (the reply counted whole where the
+    model kept less of it) and, at the default `keep` (91 % of returns hold nothing), loads
+    0.91 of its hits, which are within 10 % of the corpus's; the first 10,000 of the 98,827
+    requests, one slot (`DESIGN_REVIEW.md` §3.59)."""
+    kit = BUILDER / "traces" / "kv_cache_serving"
+    ref = json.loads((kit / "agentx.reference.json").read_text())
+    n = 10_000
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
+                        "--params", str(kit / "fitted.agentx.params.json"), "--param", f"requests={n}"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", r.stdout)[1]))
+    stored, loaded = int(kinds["write"]) / n, int(kinds["read"]) / n
+    assert ref["chunks_stored"]["mean"] == 14.41 and ref["chunks_hit"]["mean"] == 840.14 and ref["requests"] == 98827
+    assert 0.95 * ref["chunks_stored"]["mean"] < stored < 1.2 * ref["chunks_stored"]["mean"], stored
+    assert 0.8 * ref["chunks_hit"]["mean"] < loaded / 0.91 < 1.2 * ref["chunks_hit"]["mean"], loaded
+    p = json.loads((kit / "fitted.agentx.params.json").read_text())["params"]
+    assert p["reuse"]["mixture"][0]["weight"] == 0 and p["turns"]["empirical"]["values"][0] == 1 and len(p["turns"]["empirical"]["values"]) == 100
+    assert p["trim"]["mixture"][0]["dist"] == {"const": 0} and 0.03 < p["trim"]["mixture"][1]["weight"] < 0.05
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")

@@ -212,7 +212,10 @@ struct ScopeLevel<'a> {
     depth: usize,
 }
 
-/// Entries `Vm::at_cache` holds before it starts over.
+/// Entries `Vm::at_cache` holds before it sheds the half with the smaller indices: an `x @ i`
+/// chain reaches back from the current index, so the recent entries are the ones that keep
+/// its evaluation shallow (a conversation of a thousand turns recomputed from its start
+/// overflowed the stack, 2026-10-02).
 const AT_CACHE_MAX: usize = 1 << 16;
 
 /// An active `x @ i` evaluation: frame `frame` reads as `idx`, sibling lets of `body` are
@@ -917,7 +920,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         self.shifts.pop();
         if let (Some(k), Ok(v)) = (key, &r) {
             if self.at_cache.len() >= AT_CACHE_MAX {
-                self.at_cache.clear();
+                let mut idx: Vec<i64> = self.at_cache.keys().map(|k| k.1).collect();
+                idx.sort_unstable();
+                let cut = idx[idx.len() / 2];
+                self.at_cache.retain(|k, _| k.1 >= cut);
             }
             self.at_cache.insert(k, v.clone());
         }
