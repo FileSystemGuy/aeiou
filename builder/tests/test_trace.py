@@ -301,10 +301,13 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     strip = lambda m: {k: v for k, v in m.items() if k != "reuse_distance_bytes"} if name == "vdb_search_diskann" else m
     assert strip(t) == strip(nd), "the trace node's dry run is not the strace's metrics"
     fp = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("fingerprint "))
-    r = run(RUNNER, "run", node_ast, "--gpus", "1", "--root", root, "--time-scale", "0", "--clean-namespaces")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert f"fingerprint {fp}" in r.stdout, r.stdout
-    assert "never CLOSED" in r.stdout
+    # one thread per lane under sync; one task per lane on an event loop, a group's members
+    # in flight together, under io_uring and libaio: the same run either way
+    for backend in ("sync", "io_uring", "libaio"):
+        r = run(RUNNER, "run", node_ast, "--gpus", "1", "--root", root, "--time-scale", "0", "--clean-namespaces", "--io-backend", backend)
+        assert r.returncode == 0, backend + "\n" + r.stdout + r.stderr
+        assert f"fingerprint {fp}" in r.stdout, backend + "\n" + r.stdout
+        assert "never CLOSED" in r.stdout
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")

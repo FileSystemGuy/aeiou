@@ -1,8 +1,9 @@
 //! The `trace` node (`DESIGN_REVIEW.md` §3.58): a trace file is loaded against its sha256,
 //! walked in line order by the dry run (lane and ordinal as the indices), run with one
-//! thread per lane under the open table and path order, checked against `--root` before the
-//! gate, cleaned by `--clean-namespaces`, and refused where the design says (V16, an
-//! event-loop backend). The fixtures are written here, as `aeiou-trace export` writes them.
+//! thread per lane (the blocking backends) or one task per lane on an event loop under the
+//! open table and path order, checked against `--root` before the gate, cleaned by
+//! `--clean-namespaces`, and refused where the design says (V16). The fixtures are written
+//! here, as `aeiou-trace export` writes them.
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -166,15 +167,17 @@ fn dry_run_walks_in_line_order_with_lane_and_ordinal_as_indices() {
 }
 
 #[test]
-fn runs_with_the_dry_runs_fingerprint_under_the_blocking_backends() {
+fn runs_with_the_dry_runs_fingerprint_under_every_backend() {
     let d = tmpdir("run");
     let p = abstract_with(&d, FIXTURE, Some(1));
     let (_, model) = leaked(&p, 1);
     let dry = dryrun::run(model, 1, None).unwrap();
     let root = d.join("root");
     populate(&root);
-    for be in [BackendKind::Sync, BackendKind::PosixAio, BackendKind::Mmap] {
-        // what the trace creates must be absent, so the second run cleans
+    // the blocking drivers (one thread per lane) and the event loops (one task per lane,
+    // the group's members in flight together) must give the same run
+    for be in [BackendKind::Sync, BackendKind::PosixAio, BackendKind::Mmap, BackendKind::Uring, BackendKind::LibAio] {
+        // what the trace creates must be absent, so every run but the first cleans up
         for p in ["out/final", "out/new"] {
             let _ = std::fs::remove_file(root.join(p));
         }
@@ -185,10 +188,11 @@ fn runs_with_the_dry_runs_fingerprint_under_the_blocking_backends() {
         assert_eq!(rep.stats.expected_errors, 1);
         assert_eq!(std::fs::metadata(root.join("out/final")).unwrap().len(), 1000);
         assert!(rep.created.iter().any(|(p, _)| p == "out/final"), "{:?}", rep.created);
+        if be.event_loop() {
+            // the lanes are tasks on the loop, not threads
+            assert_eq!(rep.stats.threads, 1, "{}", be.name());
+        }
     }
-    // the event-loop backends refuse a trace, before anything is issued
-    let e = run::run(model, opts(&root, BackendKind::Uring, false), Default::default()).unwrap_err();
-    assert!(format!("{e:#}").contains("does not run traces"), "{e:#}");
 }
 
 #[test]
@@ -211,11 +215,13 @@ fn path_order_makes_a_reader_wait_for_the_writer_whatever_the_lanes_timing() {
     let root = d.join("root");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("other"), b"").unwrap();
-    for _ in 0..5 {
-        let _ = std::fs::remove_file(root.join("f"));
-        let rep = run::run(model, opts(&root, BackendKind::Sync, false), Default::default()).unwrap();
-        assert_eq!(rep.stats.ops, 7);
-        assert_eq!(rep.stats.bytes_read, 8192);
+    for be in [BackendKind::Sync, BackendKind::Uring, BackendKind::LibAio] {
+        for _ in 0..5 {
+            let _ = std::fs::remove_file(root.join("f"));
+            let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap();
+            assert_eq!(rep.stats.ops, 7, "{}", be.name());
+            assert_eq!(rep.stats.bytes_read, 8192, "{}", be.name());
+        }
     }
 }
 

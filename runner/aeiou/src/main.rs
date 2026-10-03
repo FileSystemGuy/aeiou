@@ -398,9 +398,6 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
         for t in &traces {
             writeln!(out, "trace {}: {} line(s) on {} lane(s), {} open(s), {} path(s) created; sha256 {}; never CLOSED", t.name, t.lines.len(), t.lanes(), t.opens.len(), t.header.creates.len(), &t.sha256[..16])?;
         }
-        if backend.event_loop() {
-            bail!("--io-backend {}: an event-loop backend does not run traces yet; use sync, sync-direct, posix-aio, or mmap", backend.name());
-        }
     }
     doc.set("traces", serde_json::json!(traces.iter().map(|t| serde_json::json!({"file": t.name, "sha256": t.sha256, "lanes": t.lanes(), "lines": t.lines.len(), "ops": t.ops, "opens": t.opens.len(), "creates": t.header.creates.len(), "notes": t.header.notes})).collect::<Vec<_>>()));
     let opts = RunOpts {

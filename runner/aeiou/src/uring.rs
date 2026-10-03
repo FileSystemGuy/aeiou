@@ -29,6 +29,14 @@
 //! the loop's eventfd, which every release writes (`NAPKIN_MATH.md` §8.A). Kernel 5.11 or
 //! later: `IORING_ENTER_EXT_ARG` carries the wait timeout.
 //!
+//! A `trace` node (`DESIGN_REVIEW.md` §3.58, `trace.rs`) runs as one task per lane on the
+//! loop that reached it, joined like a `parallel`'s sub-actors: a lane task walks its lane
+//! of the file with one op in flight, and a `submit` group puts its members in flight
+//! together as member tasks, so they leave in one `io_uring_enter` (or `io_submit`) as the
+//! application's did. The open table and the path order of `run.rs` are loop-local here,
+//! without locks, since every lane of an instance is on its loop; a lane that must wait
+//! parks on its instance and is woken by every change to its tables.
+//!
 //! The loop itself (tasks, channels, timers, barriers) is generic over an `Engine`, the part
 //! that carries ops to the kernel and brings completions back: the ring here, an AIO context
 //! in `aio.rs`.
@@ -44,9 +52,10 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use io_uring::{opcode, squeue, types, IoUring, Probe};
 
-use crate::backend::{open_flags, Backend, ALIGN};
+use crate::backend::{open_flags, Backend, OpenFile, ALIGN};
 use crate::eval::Model;
 use crate::run::{fill, issue_blocking, round_out, untaken, ActorState, Ring, Shared, UringReport};
+use crate::trace::{Built, LineOp, OwnedCtx, TraceFile};
 use crate::vm::{Control, Event, ForkKind, Op, OpKind, Vm};
 
 /// `user_data` of the read posted on the loop's eventfd.
@@ -332,10 +341,14 @@ enum Wait {
     Timer,
     Chan { chan: usize, what: ChanWait, since: Instant },
     Barrier { scope: &'static str, generation: u64, since: Instant },
-    /// A `parallel` parent: sub-actors still running.
+    /// A `parallel` parent (or a trace node, or a lane at a `submit` group): sub-actors
+    /// still running.
     JoinParallel { remaining: usize },
     /// A main line that has ended its body: loader workers still running.
     JoinLoaders,
+    /// A trace lane parked on a table of its instance (an open not yet published, a close
+    /// with uses outstanding, path order).
+    Trace,
 }
 
 /// What an op in flight needs kept alive and remembered until its completion.
@@ -352,8 +365,14 @@ pub(crate) struct TaskIo {
     pub(crate) started: Instant,
 }
 
+/// What a task runs: an actor's VM, or a lane of a `trace`.
+enum Prog {
+    Vm(Vm<'static, 'static>),
+    Lane(Lane),
+}
+
 struct Task {
-    vm: Vm<'static, 'static>,
+    prog: Prog,
     io: TaskIo,
     /// The main task of the instance this task belongs to (channels are per instance).
     inst: usize,
@@ -666,6 +685,8 @@ pub(crate) struct Loop<E: Engine> {
     chans: Vec<Chan>,
     chan_names: HashMap<(usize, String), usize>,
     barrier_waiters: Vec<usize>,
+    /// The `trace` instances begun on this loop.
+    traces: Vec<TraceInst>,
     efd: OwnedFd,
     efd_buf: Box<u64>,
     efd_posted: bool,
@@ -729,6 +750,7 @@ impl<E: Engine> Loop<E> {
             chans: Vec::new(),
             chan_names: HashMap::new(),
             barrier_waiters: Vec::new(),
+            traces: Vec::new(),
             efd,
             efd_buf: Box::new(0),
             efd_posted: false,
@@ -736,10 +758,10 @@ impl<E: Engine> Loop<E> {
         })
     }
 
-    fn add_task(&mut self, vm: Vm<'static, 'static>, a: ActorState, inst: Option<usize>, role: Role, active: bool) -> usize {
+    fn add_task(&mut self, prog: Prog, a: ActorState, inst: Option<usize>, role: Role, active: bool) -> usize {
         let id = self.tasks.len();
         self.tasks.push(Task {
-            vm,
+            prog,
             io: TaskIo { id, a, cpath: None, cpath2: None, statx: Box::new(unsafe { std::mem::zeroed() }), buf: None, fd: None, round: None, started: Instant::now() },
             inst: inst.unwrap_or(id),
             role,
@@ -771,11 +793,14 @@ impl<E: Engine> Loop<E> {
     }
 
     fn label(&self, id: usize) -> String {
-        let t = &self.tasks[id];
-        let (op, ctx) = t.vm.current();
-        let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
-        let _ = op;
-        format!("{}#{} [{}]", ctx.template, ctx.actor, idx.join(","))
+        match &self.tasks[id].prog {
+            Prog::Vm(vm) => {
+                let (_, ctx) = vm.current();
+                let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
+                format!("{}#{} [{}]", ctx.template, ctx.actor, idx.join(","))
+            }
+            Prog::Lane(l) => l.label(),
+        }
     }
 
     pub(crate) fn run(&mut self, model: &'static Model<'static>, insts: Vec<(&'static str, i64, i64)>) -> Result<()> {
@@ -783,7 +808,7 @@ impl<E: Engine> Loop<E> {
             let mut vm = Vm::new(model, template, actor, count);
             vm.start(&model.ast.actors[template].body);
             let a = ActorState::new(&self.sh, template, actor, true, None, 0);
-            self.add_task(vm, a, None, Role::Main, true);
+            self.add_task(Prog::Vm(vm), a, None, Role::Main, true);
         }
         let r = self.serve();
         self.sh.coord.unsubscribe(self.efd.as_raw_fd());
@@ -810,7 +835,7 @@ impl<E: Engine> Loop<E> {
             }
             if self.io.in_flight() == 0 && self.timers.is_empty() && !self.efd_posted {
                 let parked: Vec<String> = (0..self.tasks.len()).filter(|i| !self.tasks[*i].done).map(|i| self.label(i)).collect();
-                bail!("event loop {}: {} actor(s) wait on channels nothing will complete: {}", self.index, parked.len(), parked.join(", "));
+                bail!("event loop {}: {} actor(s) wait on channels or trace order nothing will complete: {}", self.index, parked.len(), parked.join(", "));
             }
             let now = Instant::now();
             let timeout = match self.timers.peek() {
@@ -858,11 +883,26 @@ impl<E: Engine> Loop<E> {
     fn complete(&mut self, id: usize, res: i32) -> Result<()> {
         let t = &mut self.tasks[id];
         let ns = t.io.started.elapsed().as_nanos() as u64;
-        let (op, ctx) = t.vm.current();
-        let r = self.io.complete(&self.sh, &mut t.io, &op, res);
-        t.io.a.settle(&op, &ctx, r, ns)?;
-        t.wait = Wait::None;
-        self.ready(id);
+        match &t.prog {
+            Prog::Vm(vm) => {
+                let (op, ctx) = vm.current();
+                let r = self.io.complete(&self.sh, &mut t.io, &op, res);
+                t.io.a.settle(&op, &ctx, r, ns)?;
+                t.wait = Wait::None;
+                self.ready(id);
+            }
+            Prog::Lane(l) => {
+                let r = {
+                    let b = l.built();
+                    self.io.complete(&self.sh, &mut t.io, &b.op, res)
+                };
+                t.wait = Wait::None;
+                match self.lane_finish(id, r, ns)? {
+                    Advance::Ended => self.finished(id)?,
+                    _ => self.ready(id),
+                }
+            }
+        }
         Ok(())
     }
 
@@ -873,7 +913,7 @@ impl<E: Engine> Loop<E> {
             ChanWait::Begin(b) => match self.chans[chan].try_begin(b) {
                 Ok(true) => {
                     let t = &mut self.tasks[id];
-                    t.vm.start_sub(b);
+                    t.vm().start_sub(b);
                     t.active = true;
                 }
                 Ok(false) => {
@@ -912,6 +952,9 @@ impl<E: Engine> Loop<E> {
 
     /// Advance task `id` until it blocks or ends.
     fn step(&mut self, id: usize) -> Result<()> {
+        if matches!(self.tasks[id].prog, Prog::Lane(_)) {
+            return self.step_lane(id);
+        }
         if let Wait::Chan { .. } = self.tasks[id].wait {
             if !self.retry_chan(id)? {
                 return Ok(());
@@ -935,7 +978,8 @@ impl<E: Engine> Loop<E> {
             }
             let sh = self.sh.clone();
             let t = &mut self.tasks[id];
-            match t.vm.next()? {
+            let Prog::Vm(vm) = &mut t.prog else { unreachable!("a lane stepped as a VM") };
+            match vm.next()? {
                 None => {
                     t.active = false;
                     if let Role::Worker { chan, ref mut b, workers, .. } = t.role {
@@ -945,8 +989,11 @@ impl<E: Engine> Loop<E> {
                         self.wake(chan);
                     }
                 }
-                Some(Event::Trace(tf, _)) => {
-                    bail!("trace `{}`: an event-loop backend ({}) does not run traces yet; use sync, sync-direct, posix-aio, or mmap", tf.name, sh.opts.backend.name());
+                Some(Event::Trace(tf, ctx)) => {
+                    let base = OwnedCtx::of(&ctx);
+                    if self.start_trace(id, tf, base) {
+                        return Ok(());
+                    }
                 }
                 Some(Event::Op(op, ctx)) => {
                     t.io.a.check_align(&sh, &op)?;
@@ -1010,8 +1057,8 @@ impl<E: Engine> Loop<E> {
                     }
                 }
                 Some(Event::Fork(kind)) => {
-                    let snap = t.vm.snapshot();
-                    t.vm.accept_fork();
+                    let snap = vm.snapshot();
+                    vm.accept_fork();
                     let inst = t.inst;
                     match kind {
                         ForkKind::Parallel { width, .. } => {
@@ -1019,7 +1066,7 @@ impl<E: Engine> Loop<E> {
                             for (k, a) in children.into_iter().enumerate() {
                                 let mut vm = Vm::resume(snap.clone());
                                 vm.start_sub(k as i64);
-                                self.add_task(vm, a, Some(inst), Role::Parallel { parent: id }, true);
+                                self.add_task(Prog::Vm(vm), a, Some(inst), Role::Parallel { parent: id }, true);
                             }
                             if width > 0 {
                                 self.tasks[id].wait = Wait::JoinParallel { remaining: width as usize };
@@ -1037,7 +1084,7 @@ impl<E: Engine> Loop<E> {
                             for (w, a) in children.into_iter().enumerate() {
                                 let w = w as i64;
                                 let vm = Vm::resume(snap.clone());
-                                self.add_task(vm, a, Some(inst), Role::Worker { parent: id, chan, workers, batches, b: w }, false);
+                                self.add_task(Prog::Vm(vm), a, Some(inst), Role::Worker { parent: id, chan, workers, batches, b: w }, false);
                             }
                             let t = &mut self.tasks[id];
                             t.loaders.push(chan);
@@ -1130,5 +1177,413 @@ impl<E: Engine> Loop<E> {
         }
         t.io.a.finish_shared(&self.sh);
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------- the `trace` node
+
+impl Task {
+    fn vm(&mut self) -> &mut Vm<'static, 'static> {
+        match &mut self.prog {
+            Prog::Vm(vm) => vm,
+            Prog::Lane(_) => unreachable!("a trace lane has no VM"),
+        }
+    }
+}
+
+/// One `trace` instance under way on this loop: the open table and the path order of
+/// `run.rs` (`OpenTable`, `PathOrder`) without their locks, and the lanes parked on them.
+struct TraceInst {
+    slots: Vec<Slot>,
+    /// Per path the trace changes: its ops completed, its changing ops completed.
+    done: Vec<(usize, usize)>,
+    /// Lanes parked on a table of this instance; all woken on every change.
+    waiters: Vec<usize>,
+}
+
+struct Slot {
+    fd: Option<Arc<OpenFile>>,
+    /// The open failed in this run (its uses, if any, cannot proceed).
+    failed: bool,
+    uses_left: usize,
+    closes_left: usize,
+}
+
+impl TraceInst {
+    fn new(tf: &TraceFile) -> Self {
+        TraceInst {
+            slots: tf.opens.iter().map(|o| Slot { fd: None, failed: false, uses_left: o.uses, closes_left: o.closes }).collect(),
+            done: vec![(0, 0); tf.changed.len()],
+            waiters: Vec::new(),
+        }
+    }
+
+    /// Path order: may op `g` go?
+    fn ordered(&self, tf: &TraceFile, g: usize) -> bool {
+        let ok = |d: &crate::trace::Dep| {
+            let (done, mdone) = self.done[d.path];
+            if d.mutating { done >= d.k } else { mdone >= d.mk }
+        };
+        tf.deps[g].as_ref().map_or(true, ok) && tf.deps2.get(&g).map_or(true, ok)
+    }
+
+    fn completed(&mut self, tf: &TraceFile, g: usize) {
+        for d in tf.deps[g].iter().chain(tf.deps2.get(&g)) {
+            self.done[d.path].0 += 1;
+            if d.mutating {
+                self.done[d.path].1 += 1;
+            }
+        }
+    }
+}
+
+/// What a lane task runs.
+enum LaneProg {
+    /// Lane `lane` of the file, its next line `tf.lanes[lane][next]`; `begun` and `end` are
+    /// the gap's bookkeeping (whether a line has gone, and where the last one ended).
+    Lines { lane: usize, next: usize, begun: bool, end: i64 },
+    /// Member `j` of the `submit` on line `line`.
+    Member { line: usize, j: usize },
+}
+
+/// Where a lane task is in its current line.
+#[derive(Clone, Copy, PartialEq)]
+enum Stage {
+    /// Between lines: the next line's gap goes out as `compute`.
+    Next,
+    /// The gap has elapsed: build the op (or fan a group out).
+    Build,
+    /// Built; path order.
+    Order,
+    /// Ordered; the open (or, for a close, its uses), then the engine.
+    Acquire,
+    /// On the engine.
+    InFlight,
+    /// A group's members are running as tasks.
+    Join,
+}
+
+/// The op a lane has under way: enough to build it again at completion (`TraceFile::build`
+/// is a function of the line and the position it was built at).
+#[derive(Clone, Copy)]
+struct Cur {
+    line: usize,
+    member: Option<usize>,
+    /// The op's ordinal in the file (the key of its path order).
+    g: usize,
+    oid: Option<usize>,
+    /// The position a sequential read or write was built at.
+    off: i64,
+    /// A close: counted against its open's closes already.
+    counted: bool,
+}
+
+struct Lane {
+    tf: Arc<TraceFile>,
+    inst: usize,
+    base: Arc<OwnedCtx>,
+    prog: LaneProg,
+    /// The enclosing indices plus `[lane, ordinal of the line]`.
+    idx: Vec<i64>,
+    /// Positions per open id, for the lane's sequential reads and writes.
+    pos: HashMap<usize, i64>,
+    stage: Stage,
+    cur: Option<Cur>,
+}
+
+impl Lane {
+    fn line_op<'c>(tf: &'c TraceFile, c: &Cur) -> &'c LineOp {
+        match (c.member, &tf.lines[c.line].op) {
+            (Some(j), LineOp::Submit { ops }) => &ops[j],
+            (None, op) => op,
+            _ => unreachable!("a member of a line that is not a group"),
+        }
+    }
+
+    fn built_of(&self, c: &Cur) -> Built<'_> {
+        self.tf.build(Self::line_op(&self.tf, c), |_| c.off)
+    }
+
+    /// The op under way, built again.
+    fn built(&self) -> Built<'_> {
+        self.built_of(self.cur.as_ref().expect("a lane with an op under way"))
+    }
+
+    fn lane(&self) -> usize {
+        match self.prog {
+            LaneProg::Lines { lane, .. } => lane,
+            LaneProg::Member { line, .. } => self.tf.lines[line].lane,
+        }
+    }
+
+    fn label(&self) -> String {
+        let idx: Vec<String> = self.idx.iter().map(|i| i.to_string()).collect();
+        format!("{}#{} [{}] trace `{}` lane {}", self.base.template, self.base.actor, idx.join(","), self.tf.name, self.lane())
+    }
+}
+
+/// How a lane's step ended.
+enum Advance {
+    /// On to the next stage.
+    Go,
+    /// Parked: a timer, an op on the engine, a join.
+    Parked,
+    /// Parked on a table of its instance.
+    Blocked,
+    /// The lane (or the member) has walked its program.
+    Ended,
+}
+
+impl<E: Engine> Loop<E> {
+    /// `Event::Trace` from task `id`: the instance's tables and one task per lane, which
+    /// the task joins as a `parallel` parent does. `false` when the trace has no lane.
+    fn start_trace(&mut self, id: usize, tf: Arc<TraceFile>, base: OwnedCtx) -> bool {
+        let lanes = tf.lanes();
+        if lanes == 0 {
+            return false;
+        }
+        let inst = self.traces.len();
+        self.traces.push(TraceInst::new(&tf));
+        let base = Arc::new(base);
+        let sh = self.sh.clone();
+        let parent_inst = self.tasks[id].inst;
+        let children: Vec<ActorState> = (0..lanes).map(|_| self.tasks[id].io.a.child(&sh, 0)).collect();
+        for (lane, a) in children.into_iter().enumerate() {
+            let mut idx = base.indices.clone();
+            idx.extend_from_slice(&[lane as i64, 0]);
+            let l = Lane { tf: tf.clone(), inst, base: base.clone(), prog: LaneProg::Lines { lane, next: 0, begun: false, end: 0 }, idx, pos: HashMap::new(), stage: Stage::Next, cur: None };
+            self.add_task(Prog::Lane(l), a, Some(parent_inst), Role::Parallel { parent: id }, true);
+        }
+        self.tasks[id].wait = Wait::JoinParallel { remaining: lanes };
+        true
+    }
+
+    fn lane(&mut self, id: usize) -> &mut Lane {
+        match &mut self.tasks[id].prog {
+            Prog::Lane(l) => l,
+            Prog::Vm(_) => unreachable!("a VM task stepped as a lane"),
+        }
+    }
+
+    /// Every lane parked on instance `inst` tries again.
+    fn wake_trace(&mut self, inst: usize) {
+        let waiters = std::mem::take(&mut self.traces[inst].waiters);
+        for id in waiters {
+            self.tasks[id].wait = Wait::None;
+            self.ready(id);
+        }
+    }
+
+    /// Advance lane task `id` until it parks or ends.
+    fn step_lane(&mut self, id: usize) -> Result<()> {
+        loop {
+            if !matches!(self.tasks[id].wait, Wait::None) {
+                return Ok(());
+            }
+            match self.lane_advance(id)? {
+                Advance::Go => {}
+                Advance::Parked => return Ok(()),
+                Advance::Blocked => {
+                    let inst = self.lane(id).inst;
+                    self.tasks[id].wait = Wait::Trace;
+                    self.traces[inst].waiters.push(id);
+                    return Ok(());
+                }
+                Advance::Ended => return self.finished(id),
+            }
+        }
+    }
+
+    /// One stage of lane task `id`.
+    fn lane_advance(&mut self, id: usize) -> Result<Advance> {
+        let sh = self.sh.clone();
+        let stage = self.lane(id).stage;
+        match stage {
+            Stage::Next => {
+                let t = &mut self.tasks[id];
+                let Prog::Lane(l) = &mut t.prog else { unreachable!() };
+                match &mut l.prog {
+                    LaneProg::Lines { lane, next, begun, end } => {
+                        let Some(&li) = l.tf.lanes[*lane].get(*next) else { return Ok(Advance::Ended) };
+                        let line = &l.tf.lines[li];
+                        let gap = if *begun { line.t - *end } else { line.t };
+                        *begun = true;
+                        *end = line.t + line.dur;
+                        let n = l.idx.len();
+                        l.idx[n - 1] = *next as i64;
+                        l.stage = Stage::Build;
+                        // the gap before the line, as `compute` (`run.rs` `trace_lane`)
+                        let ns = gap.max(0) as u64;
+                        t.io.a.computed(ns);
+                        let scaled = (ns as f64 * sh.opts.time_scale) as u64;
+                        if scaled > 0 {
+                            t.wait = Wait::Timer;
+                            self.timers.push(Reverse((Instant::now() + Duration::from_nanos(scaled), id)));
+                            return Ok(Advance::Parked);
+                        }
+                        Ok(Advance::Go)
+                    }
+                    LaneProg::Member { .. } => {
+                        l.stage = Stage::Build;
+                        Ok(Advance::Go)
+                    }
+                }
+            }
+            Stage::Build => {
+                let t = &mut self.tasks[id];
+                let Prog::Lane(l) = &mut t.prog else { unreachable!() };
+                let (line_i, member) = match l.prog {
+                    LaneProg::Lines { lane, next, .. } => (l.tf.lanes[lane][next], None),
+                    LaneProg::Member { line, j } => (line, Some(j)),
+                };
+                let line = &l.tf.lines[line_i];
+                if let (None, LineOp::Submit { ops }) = (member, &line.op) {
+                    // a group: its members in flight together as member tasks, joined before
+                    // the lane goes on; built at the lane's positions, which they leave alone
+                    let n = ops.len();
+                    l.stage = Stage::Join;
+                    if n == 0 {
+                        return Ok(Advance::Go);
+                    }
+                    let (tf, inst, base, idx, pos) = (l.tf.clone(), l.inst, l.base.clone(), l.idx.clone(), l.pos.clone());
+                    let children: Vec<ActorState> = (0..n).map(|_| t.io.a.child(&sh, 0)).collect();
+                    let parent_inst = t.inst;
+                    for (j, a) in children.into_iter().enumerate() {
+                        let m = Lane { tf: tf.clone(), inst, base: base.clone(), prog: LaneProg::Member { line: line_i, j }, idx: idx.clone(), pos: pos.clone(), stage: Stage::Next, cur: None };
+                        self.add_task(Prog::Lane(m), a, Some(parent_inst), Role::Parallel { parent: id }, true);
+                    }
+                    self.tasks[id].wait = Wait::JoinParallel { remaining: n };
+                    return Ok(Advance::Parked);
+                }
+                let lop = match (member, &line.op) {
+                    (Some(j), LineOp::Submit { ops }) => &ops[j],
+                    (None, op) => op,
+                    _ => unreachable!(),
+                };
+                // `build` asks for the position of the op's own open id only
+                let off = lop.fd().map(|fd| l.pos.get(&fd).copied().unwrap_or(0)).unwrap_or(0);
+                let b = l.tf.build(lop, |_| off);
+                let g = line.g0 + member.unwrap_or(0);
+                t.io.a.check_align(&sh, &b.op)?;
+                let (oid, pos_after) = (b.oid, b.pos_after);
+                if let (Some(fd), Some(p), None) = (oid, pos_after, member) {
+                    l.pos.insert(fd, p);
+                }
+                l.cur = Some(Cur { line: line_i, member, g, oid, off, counted: false });
+                l.stage = Stage::Order;
+                Ok(Advance::Go)
+            }
+            Stage::Order => {
+                let Prog::Lane(l) = &self.tasks[id].prog else { unreachable!() };
+                let g = l.cur.as_ref().expect("built").g;
+                if !self.traces[l.inst].ordered(&l.tf, g) {
+                    return Ok(Advance::Blocked);
+                }
+                self.lane(id).stage = Stage::Acquire;
+                Ok(Advance::Go)
+            }
+            Stage::Acquire => {
+                let t = &mut self.tasks[id];
+                let Prog::Lane(l) = &mut t.prog else { unreachable!() };
+                let mut c = l.cur.expect("built");
+                let inst = &mut self.traces[l.inst];
+                let b = l.built_of(&c);
+                let kind = b.op.kind;
+                match kind {
+                    OpKind::Close => {
+                        // the descriptor closes with the last close line, after every use
+                        // (`OpenTable::close`); an earlier close line is just a line
+                        let oid = c.oid.expect("a close has its id");
+                        let s = &mut inst.slots[oid];
+                        if !c.counted {
+                            s.closes_left = s.closes_left.saturating_sub(1);
+                            c.counted = true;
+                            l.cur = Some(c);
+                        }
+                        if s.closes_left > 0 {
+                            return self.lane_finish(id, Ok(0), 0);
+                        }
+                        if s.uses_left > 0 {
+                            return Ok(Advance::Blocked);
+                        }
+                        let at = Instant::now();
+                        drop(s.fd.take());
+                        let ns = at.elapsed().as_nanos() as u64;
+                        return self.lane_finish(id, Ok(0), ns);
+                    }
+                    OpKind::Open => {}
+                    _ => {
+                        if let Some(oid) = c.oid {
+                            // the table's descriptor, lent to this task under the op's path
+                            // for the engine's `fd(path)`; given back at completion
+                            let s = &inst.slots[oid];
+                            if s.failed {
+                                bail!("{}: open #{oid} of {} failed in this run; its later uses cannot be issued", l.label(), b.op.path);
+                            }
+                            let Some(fd) = s.fd.clone() else { return Ok(Advance::Blocked) };
+                            t.io.a.fds.own.insert(Arc::from(b.op.path), fd);
+                        }
+                    }
+                }
+                match self.io.issue(&sh, &mut t.io, &b.op)? {
+                    Issued::Done(r, ns) => self.lane_finish(id, r, ns),
+                    Issued::Pending => {
+                        l.stage = Stage::InFlight;
+                        t.wait = Wait::Io;
+                        Ok(Advance::Parked)
+                    }
+                }
+            }
+            Stage::InFlight => unreachable!("a lane stepped with its op on the engine"),
+            Stage::Join => {
+                let l = self.lane(id);
+                let LaneProg::Lines { next, .. } = &mut l.prog else { unreachable!("a member is one op") };
+                *next += 1;
+                l.stage = Stage::Next;
+                Ok(Advance::Go)
+            }
+        }
+    }
+
+    /// The op under way has its result: give the descriptor back to the table, keep the
+    /// tables, settle the op as every op is, and move the lane on.
+    fn lane_finish(&mut self, id: usize, r: std::io::Result<i64>, ns: u64) -> Result<Advance> {
+        let t = &mut self.tasks[id];
+        let Prog::Lane(l) = &mut t.prog else { unreachable!() };
+        let c = l.cur.take().expect("an op under way");
+        let inst = &mut self.traces[l.inst];
+        let b = l.built_of(&c);
+        let key: Arc<str> = Arc::from(b.op.path);
+        match b.op.kind {
+            OpKind::Open => {
+                // the descriptor belongs to the table, not to this task's own files
+                let oid = c.oid.expect("an open has its id");
+                let fd = t.io.a.fds.own.remove(&key);
+                let s = &mut inst.slots[oid];
+                s.failed = fd.is_none();
+                s.fd = fd;
+            }
+            OpKind::Close => {}
+            _ => {
+                if let Some(oid) = c.oid {
+                    t.io.a.fds.own.remove(&key);
+                    inst.slots[oid].uses_left = inst.slots[oid].uses_left.saturating_sub(1);
+                }
+            }
+        }
+        inst.completed(&l.tf, c.g);
+        let ctx = l.base.ctx(&l.idx);
+        t.io.a.settle(&b.op, &ctx, r, ns)?;
+        let ended = match &mut l.prog {
+            LaneProg::Lines { next, .. } => {
+                *next += 1;
+                l.stage = Stage::Next;
+                false
+            }
+            LaneProg::Member { .. } => true,
+        };
+        let inst = l.inst;
+        self.wake_trace(inst);
+        Ok(if ended { Advance::Ended } else { Advance::Go })
     }
 }
