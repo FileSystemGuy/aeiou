@@ -36,7 +36,7 @@ Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **b
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
 backend-specific counters beyond those come with each backend), `--drop-caches` at the
 start gate with the residency check and the mount options line (decided 2026-10-01,
-`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; ~~the trace-side tool that computes the same numbers from a real trace is not~~ the trace side is `aeiou-trace`, built 2026-10-01, `builder/README.md` §7) and the `replay` node. ~~`stream`
+`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; ~~the trace-side tool that computes the same numbers from a real trace is not~~ the trace side is `aeiou-trace`, built 2026-10-01, `builder/README.md` §7) and the `trace` node (`replay` until 2026-10-02; designed as `DESIGN_REVIEW.md` §3.58). ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format

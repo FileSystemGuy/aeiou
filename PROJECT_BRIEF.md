@@ -265,22 +265,22 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     positional names for write-then-read. Cross-actor read-after-write is limited to barrier-separated phases or a
     statistical hit model; state this limit in each such workload's documentation.
     `GRAMMAR_OPTIONS.md` §5.
-14. **Locality-metrics check and replay mode (2026-09-28).** `--dry-run --metrics` computes
+14. **Locality-metrics check and trace mode (2026-09-28; the node was `replay` until 2026-10-02).** `--dry-run --metrics` computes
     reuse-distance, sequential run-length, popularity skew, request-size, dependency depth, and
     read/write mix on the abstract's stream; a trace tool computes the same from a real trace; an
-    abstract is accepted for a workload class only when they match within tolerances. A `replay`
+    abstract is accepted for a workload class only when they match within tolerances. A `trace`
     AST node holds a literal captured sequence for small-scale calibration; never CLOSED.
     **The abstract's side built 2026-10-01** (`aeiou dry-run --metrics`, `runner/README.md`
     §10, `DESIGN_REVIEW.md` §3.39): order-free metrics over the run, order-dependent ones
     per instance in a round-robin order of its sub-actors, block-level stack distance in
     bytes, hash sampling, a JSON form. The definitions were confirmed by the user the same day (**decided 2026-10-01**).
-    ~~Still to do: the trace tool, the tolerances, the `replay` node.~~
+    ~~Still to do: the trace tool, the tolerances, the `trace` node.~~
     **The trace's side built 2026-10-01** (`aeiou-trace`, `builder/README.md` §7,
     `DESIGN_REVIEW.md` §3.42; choices confirmed by the user, **decided 2026-10-01**): the same numbers from
     an `strace` (calls under `--root`, completion order, the trace as one instance, a thread
     as a context, fan-out and depth from `io_submit` only) and `aeiou-trace compare`, a
     distance per metric. Checked against traces of the runner itself. ~~Still to do: a trace
-    of a real application, the tolerances, the `replay` node.~~
+    of a real application, the tolerances, the `trace` node.~~
     **First real application traced 2026-10-01** (`ABSTRACTS.md` §1 "Trace",
     `DESIGN_REVIEW.md` §3.43, `builder/traces/train_small_files`): PyTorch `DataLoader` +
     `ImageFolder` on loopback NFS; the abstract gained the second `lseek` per file and the
@@ -308,8 +308,8 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     runner defaults to it (`mmap` here); the restore mimics the reader exactly, which a
     third trace showed needs the read order (sorted names, not file order) and the buffer
     carried from item to item. ~~The other §3.47 choices are not yet confirmed.~~ Those that need no GPU were confirmed 2026-10-02. ~~Still
-    to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `replay` node.~~ Still
-    to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ ~~a chat replay for row 8 of `ABSTRACTS.md` §11,~~ ~~the tolerances,~~ the `replay` node.
+    to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `trace` node.~~ Still
+    to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ ~~a chat replay for row 8 of `ABSTRACTS.md` §11,~~ ~~the tolerances,~~ the `trace` node.
     **Tolerances built 2026-10-02** (`aeiou-trace compare --judge`, `builder/README.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now): a tolerance per class of metric (0.05 for the op mix, request sizes, and popularity; 0.10 for run lengths, reuse, fan-out, and depth), raised by what the abstract differs from itself by at other seeds; rows the trace cannot show are named per pair and not judged. Of the fifteen committed pairs ~~nine are accepted, four are not (the DiskANN build and the three KV-cache pairs, each row with its recorded reason; the KV pairs' rows are those of the replay since §3.56)~~ eleven are accepted, two are not (the DiskANN build and the KV-cache writer, each row with its recorded reason; since §3.57 and one `keep` draw per round, 2026-10-02), and the two applications that read through a mapping cannot be judged from an `strace` at all.
     **Sixth row, 2026-10-01** (`ABSTRACTS.md` §6 "Trace", `DESIGN_REVIEW.md` §3.49,
     `builder/traces/vdb_search_ivf`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
@@ -378,12 +378,12 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     remaining §3.44, §3.45 and non-GPU §3.47 choices are confirmed; contract 0.4 adds
     `same_run` (V15), under which a reader whose seed, instance count, or common parameters
     differ from the writer's is refused before the gate.
-    **The `replay` node designed 2026-10-02** (`DESIGN_REVIEW.md` §3.58, not built, choices
-    not yet confirmed): a JSON Lines trace file written by `aeiou-trace export` from the same
+    **The `trace` node designed 2026-10-02** (`DESIGN_REVIEW.md` §3.58, not built, choices
+    not yet confirmed; renamed from `replay` the same day at the user's call): a JSON Lines trace file written by `aeiou-trace export` from the same
     `strace` the metrics read, one lane per traced task, opens referenced by id so lanes
     share descriptors and wait only on them, shared positions resolved at export, gaps from
     the timestamps as `compute` under `--time-scale`; the runner's dry run walks the file in
-    line order so that `dry-run --metrics` of a replay equals `aeiou-trace metrics` of its
+    line order so that `dry-run --metrics` of a trace node equals `aeiou-trace metrics` of its
     source. Still to do: all of it.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
@@ -465,7 +465,7 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Topic | Generic fact underneath | WG-specific part | Where |
 |---|---|---|---|
 | Roles | The AST is content-addressed; anyone can author and run one. | The WG authors the reference workloads and publishes their ASTs and hashes; submitters run the published hash and nothing else counts as "official". | `GRAMMAR_OPTIONS.md` Option D "Roles"; `schema/README.md` §0 |
-| Divisions | The backend is part of the application; the interposition test (§5) draws the line between application and solution. | ~~**CLOSED** scores only the backend the real framework uses (`sync` for PyTorch);~~ **CLOSED** means the same operation sequence for every system under test, so it scores only the backend the abstract declares (2026-10-01; buffered and direct are not compared, unlike MLPerf Storage v3.0); other backends are speed-of-light rows; `replay` and wall-clock-bounded phases are never CLOSED. Whether a startup phase (the ImageFolder walk) is inside the measured window. | §4 backends, §5 comparison policy; `DESIGN_REVIEW.md` §3.12–3.13, §3.15; `ABSTRACTS.md` §1, §9.8; `NAPKIN_MATH.md` §8 |
+| Divisions | The backend is part of the application; the interposition test (§5) draws the line between application and solution. | ~~**CLOSED** scores only the backend the real framework uses (`sync` for PyTorch);~~ **CLOSED** means the same operation sequence for every system under test, so it scores only the backend the abstract declares (2026-10-01; buffered and direct are not compared, unlike MLPerf Storage v3.0); other backends are speed-of-light rows; `trace` (`replay` until 2026-10-02) and wall-clock-bounded phases are never CLOSED. Whether a startup phase (the ImageFolder walk) is inside the measured window. | §4 backends, §5 comparison policy; `DESIGN_REVIEW.md` §3.12–3.13, §3.15; `ABSTRACTS.md` §1, §9.8; `NAPKIN_MATH.md` §8 |
 | Data verification and seed privacy | Data is reproducible from (dataset seed, id, offset); the run seed and file order are private to the run. | Motivated by submission fraud under the interposition test; the offline verifier is an audit tool for the WG's review process. | §5; `DESIGN_REVIEW.md` §3.13, §3.16 |
 | Reference parameters | Every workload has parameter slots filled from configuration, measurement, and traces; a parameter file (`schema/README.md` §8) is the published form of one set. | Which values are the reference set (batch sizes, step times, dataset scale relative to client DRAM, the 500-step bound) is a WG decision recorded in the published parameter files. | §5 decisions; `ABSTRACTS.md` `[measure]` slots; `schema/examples/params/` |
 | Acceptance tolerances | `aeiou-trace compare --judge` holds a trace and an abstract to a tolerance per class of metric; the values in the tool are this repository's defaults (`builder/README.md` §7; decided 2026-10-02, for now). | Which values accept an abstract for a workload class, and which recorded differences are tolerated, is a WG decision published as a tolerance file. | §6 item 14; `DESIGN_REVIEW.md` §3.55 |

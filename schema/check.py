@@ -19,7 +19,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text())
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
-           "compute", "cond", "choose", "phase", "replay"}
+           "compute", "cond", "choose", "phase", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
 MUTATING_OPS = {"write", "ftruncate", "fallocate", "unlink"}          # V12 and V14, plus rename and open flags
 WRITE_FLAGS = {"WRONLY", "RDWR", "CREAT", "TRUNC", "APPEND"}
@@ -196,7 +196,7 @@ class Check:
         self.expr(a["name"], p + ["name"], scope)
         self.body(a["body"], p + ["body"], scope)
 
-    def n_replay(self, a, p, scope):
+    def n_trace(self, a, p, scope):
         pass
 
     def n_op(self, a, p, scope):

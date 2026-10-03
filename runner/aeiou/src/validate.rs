@@ -447,7 +447,7 @@ impl<'a> Checker<'a> {
                 self.expr(name, &p(pp, &["name"]), scope, st, None);
                 self.body(body, &p(pp, &["body"]), scope, st);
             }
-            Node::Replay { sha256, .. } => {
+            Node::Trace { sha256, .. } => {
                 if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
                     self.err(&p(pp, &["sha256"]), "not a lowercase hex sha256");
                 }

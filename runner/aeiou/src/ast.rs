@@ -556,7 +556,7 @@ pub enum Node {
     Cond { #[serde(rename = "if")] test: Expr, then: Body, #[serde(default, rename = "else")] otherwise: Option<Body> },
     Choose { arms: Vec<ChooseArm>, #[serde(skip)] site: Site },
     Phase { name: Expr, body: Body },
-    Replay { trace: String, sha256: String },
+    Trace { file: String, sha256: String },
 
     Open { file: Handle, flags: Vec<OpenFlag>, #[serde(default)] mode: Option<u32>, #[serde(default)] expect: Expect },
     Close(FileOp),
@@ -594,7 +594,7 @@ impl Node {
             Node::Cond { .. } => "cond",
             Node::Choose { .. } => "choose",
             Node::Phase { .. } => "phase",
-            Node::Replay { .. } => "replay",
+            Node::Trace { .. } => "trace",
             Node::Open { .. } => "open",
             Node::Close(_) => "close",
             Node::Read { .. } => "read",
@@ -621,7 +621,7 @@ impl Node {
             self,
             Node::Let { .. } | Node::Loop { .. } | Node::Parallel { .. } | Node::Channel { .. } | Node::Put { .. }
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
-                | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Replay { .. }
+                | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Trace { .. }
         )
     }
 }

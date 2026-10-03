@@ -85,7 +85,7 @@ ops (a `let` is the way to use one positional draw twice).
 the loop, for `x @ i` chains), `loop(index, to, start=, step=)` yielding the index,
 `parallel(index, width)` and `loader(name, workers=, prefetch=, batches=, ordered=)` yielding a
 sub-cursor with `.index`, `channel`/`put`/`take`, `barrier(scope)`, `compute(ns)`, `when(test)`
-/ `otherwise()`, `every(n)`, `choose()` with `.arm(weight)`, `phase(name)`, `replay`, and the
+/ `otherwise()`, `every(n)`, `choose()` with `.arm(weight)`, `phase(name)`, `trace(file, sha256)`, and the
 seventeen ops: `open(f, "RDONLY|CLOEXEC", mode=, expect=)`, `close fstat stat fsync fdatasync
 unlink`, `read(f, len, offset=, repeat=, expect=)`, `write`, `lseek(f, off, "SET|CUR|END")`,
 `ioctl(f, "TCGETS")`, `ftruncate`, `fallocate`, `mkdir`, `rmdir`, `rename`, `readdir`.
@@ -415,7 +415,7 @@ and `write`. The runner uses it as the default backend (`runner/README.md` §4).
 
 ## 8. Not yet
 
-- The `replay` trace format (schema §6); `cursor.replay` emits the node only.
+- The `trace` node's file format (schema §7, designed as `DESIGN_REVIEW.md` §3.58); `cursor.trace` emits the node only. The node was `replay` until 2026-10-02.
 - Format classes for Arrow IPC, MDS, and Megatron `.bin`/`.idx`; the Parquet→Arrow conversion
   abstract (`GRAMMAR_OPTIONS.md` §6.5).
 - The `strace` → parameter fitting tool (`aeiou-fit`, `ABSTRACTS.md` §11), which will write

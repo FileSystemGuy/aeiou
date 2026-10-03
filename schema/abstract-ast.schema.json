@@ -1238,15 +1238,15 @@
           },
           "description": "Statistics label for every op inside; no effect on execution or the fingerprint."
         },
-        "replay": {
+        "trace": {
           "type": "object",
           "required": [
-            "trace",
+            "file",
             "sha256"
           ],
           "additionalProperties": false,
           "properties": {
-            "trace": {
+            "file": {
               "type": "string"
             },
             "sha256": {
@@ -1254,7 +1254,7 @@
               "pattern": "^[0-9a-f]{64}$"
             }
           },
-          "description": "A literal captured sequence for small-scale calibration; never CLOSED. Deferred: the trace file format."
+          "description": "A captured trace of a real application, executed literally, for small-scale calibration; never CLOSED. `file` is relative to the document. Deferred: the trace file format (renamed from `replay` 2026-10-02)."
         },
         "open": {
           "type": "object",

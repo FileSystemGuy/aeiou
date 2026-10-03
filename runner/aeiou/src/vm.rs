@@ -1374,7 +1374,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 self.push_body(body);
                 Ok(None)
             }
-            Node::Replay { trace, .. } => other(format!("replay `{trace}`: the trace format is deferred (schema §7)")),
+            Node::Trace { file, .. } => other(format!("trace `{file}`: the trace file format is deferred (schema §7)")),
             _ => self.op(node),
         }
     }

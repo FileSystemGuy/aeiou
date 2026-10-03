@@ -749,10 +749,12 @@ class Cursor:
         with self._push(body, "phase"):
             yield
 
-    def replay(self, trace: str, sha256: str):
+    def trace(self, file: str, sha256: str):
+        """A captured trace of a real application, executed literally (schema: the `trace`
+        node; its file format is deferred). `file` is relative to the AST document."""
         if not re.match(r"^[0-9a-f]{64}$", sha256):
-            raise BuildError("replay sha256 must be 64 hex digits")
-        self._emit({"replay": {"trace": trace, "sha256": sha256}})
+            raise BuildError("trace sha256 must be 64 hex digits")
+        self._emit({"trace": {"file": file, "sha256": sha256}})
 
     # ---- ops ----
     def _op(self, kind: str, args: dict, repeat=None):

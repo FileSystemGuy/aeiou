@@ -255,7 +255,7 @@ fn node(n: &Node, p: &mut Path) {
         }
         Node::Channel { capacity, .. } => p.with(&[k, "capacity"], |p| expr(capacity, p)),
         Node::Put { seq, .. } => p.with(&[k, "seq"], |p| expr(seq, p)),
-        Node::Take { .. } | Node::Barrier { .. } | Node::Replay { .. } => {}
+        Node::Take { .. } | Node::Barrier { .. } | Node::Trace { .. } => {}
         Node::Loader { workers, prefetch, batches, body: b, .. } => {
             p.with(&[k, "workers"], |p| expr(workers, p));
             p.with(&[k, "prefetch"], |p| expr(prefetch, p));

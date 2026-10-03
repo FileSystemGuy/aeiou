@@ -394,7 +394,7 @@ them; the WG can publish one shape with several parameter sets; built 2026-09-30
    no choice of parameters can match is the signal that the shape is missing a construct, for
    example a reuse-distance curve with no `recent` reference to produce it. The loop is: write
    the shape, capture, fit, compare, revise the shape, repeat.
-3. **Replay.** The trace itself as a literal `replay` node, bounded to small-scale calibration
+3. **Trace.** The trace itself as a literal `trace` node (`replay` until 2026-10-02), bounded to small-scale calibration
    (§5.4). Never a CLOSED workload.
 
 Running a *Python model* that performs fake I/O and recording it would be route 2 applied to a
@@ -530,7 +530,7 @@ those that the real workload has, and none that it does not.
 A synthetic stream that matches a real trace on these dimensions is indistinguishable to any
 cache or prefetcher that works on them. Firmware that identified an application by a signature
 outside them would be fooled by every synthetic benchmark (fio and DLIO included); the answer to
-that is end-to-end validation against the real application (R10, and the replay mode in §5.4).
+that is end-to-end validation against the real application (R10, and the trace mode in §5.4).
 
 The asymmetry: the Feistel shuffle deliberately removes *accidental* structure so storage cannot
 get an unfair benefit. Real structure must then be deliberately *added back*, or the benchmark
@@ -576,7 +576,7 @@ Cache capacity and eviction are treated the same way: an input property of the w
 something that emerges from a simulated cache. For a storage benchmark this is the right cut,
 but it is a stated fidelity loss and belongs in the workload's documentation.
 
-### 5.4 Method: locality-metrics check and replay mode
+### 5.4 Method: locality-metrics check and trace mode
 
 - **Locality-metrics check.** From a real trace, compute: reuse-distance distribution,
   sequential run-length distribution, popularity skew (rank–frequency), request-size
@@ -591,7 +591,7 @@ but it is a stated fidelity loss and belongs in the workload's documentation.
   side and the tolerances are not written.~~ The trace side built 2026-10-01 as
   `aeiou-trace` (`builder/README.md` §7): the same numbers from an `strace`, and a
   comparison that reports a distance per metric. ~~The tolerances are not set.~~ Tolerances by class of metric built 2026-10-02 as `aeiou-trace compare --judge` (`builder/README.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now).
-- **Replay mode.** The AST may be a literal captured sequence (a `replay` node holding ops with
+- **Trace mode** (the node was `replay` until 2026-10-02; designed as `DESIGN_REVIEW.md` §3.58). The AST may be a literal captured sequence (a `trace` node holding ops with
   their dependencies). It is bounded to small-scale calibration runs and exists so each workload
   class's abstract can be validated end to end against the real application on the same storage.
   It is never a CLOSED workload.
