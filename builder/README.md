@@ -413,9 +413,36 @@ without the writer's `--seed`, `--gpus`, and parameters is refused before the ga
 `Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`
 and `write`. The runner uses it as the default backend (`runner/README.md` §4).
 
+**`aeiou-trace export`: the trace file of the `trace` node (added 2026-10-02;
+`DESIGN_REVIEW.md` §3.58, `runner/README.md` §13).** The same `strace`, through the same
+resolver (descriptor tables, `clone` and `fork`, `dup`, `cwd`, the paths under the root),
+written as the file the runner executes literally: JSON Lines, a header, one op per line in
+the order the calls returned, a lane per traced task, opens by id, paths relative to the one
+`--root`.
+
+```
+aeiou-trace export trace.txt --root /mnt/data [--exclude GLOB]… [--cwd DIR] -o app.jsonl
+aeiou-trace metrics app.jsonl -o app.metrics.json      # an exported file measures too
+```
+
+`export` prints the file's sha256, which the abstract's `w.trace("app.jsonl", sha256)`
+names; the runner refuses the file when it differs. What differs from `metrics` on the same
+strace, each counted in the header's `notes`: a sequential read or write on an open that
+more than one lane used is written **positioned** at the offset the trace shows it used
+(`shared_positions_resolved`; the lanes' interleaving decided it, and the runner's lanes
+are not that interleaving), an `mmap` of a file range is one positioned `read` of the range
+(`mmap_as_read`; `metrics` does not count a mapping), and a call the schema has no op for
+(`truncate` by path, `sendfile`, an `ioctl` or `fadvise` the schema does not name) is
+dropped by name. `metrics` reads an exported file as it reads an strace (the header is
+sniffed), with a lane as the context and the file as one instance, and **gives the same
+document as the strace it came from** (`tests/test_trace.py`), which is also what `aeiou
+dry-run --metrics` gives for an abstract that is that one node. Under `io_submit` the
+members are placed at the submission (the runner issues them there) where `metrics` counts
+them at the reap, so the reuse-distance histogram of that pair differs within a round.
+
 ## 8. Not yet
 
-- The `trace` node's file format (schema §7, designed as `DESIGN_REVIEW.md` §3.58); `cursor.trace` emits the node only. The node was `replay` until 2026-10-02.
+- Traces under the event-loop backends (`runner/README.md` §13).
 - Format classes for Arrow IPC, MDS, and Megatron `.bin`/`.idx`; the Parquet→Arrow conversion
   abstract (`GRAMMAR_OPTIONS.md` §6.5).
 - The `strace` → parameter fitting tool (`aeiou-fit`, `ABSTRACTS.md` §11), which will write

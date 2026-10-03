@@ -68,7 +68,7 @@ python3 schema/check.py path/to/x.ast.json   # one file
 | `cond {if, then, else}` | Statement conditional over indices, parameters, bindings, and the actor id. |
 | `choose {arms: [{weight, body}]}` | Run one arm, chosen positionally by weight (the original *selection*). |
 | `phase {name, body}` | Statistics label; no effect on execution or the fingerprint. `name` may be an expression. |
-| `trace {file, sha256}` | A captured trace of a real application, executed literally, for calibration; never CLOSED. `file` is relative to the document. Trace file format deferred (`DESIGN_REVIEW.md` §3.58; the node was `replay` until 2026-10-02). |
+| `trace {file, sha256}` | A captured trace of a real application, executed literally, for calibration; never CLOSED. `file` is relative to the document, JSON Lines as `aeiou-trace export` writes it and `runner/README.md` §13 defines it (`DESIGN_REVIEW.md` §3.58; the node was `replay` until 2026-10-02). |
 | `open {file, flags, mode, expect}` | Flags from the enum in the schema. `DIRECTORY` for `readdir` handles. |
 | `close`, `fstat`, `stat`, `fsync`, `fdatasync`, `unlink` `{file, expect}` | |
 | `read {file, len, offset, repeat, expect}` | With `offset`: positioned (`pread`), file position unchanged. Without: sequential from the current position. `repeat: until_eof` issues reads of `len` until the known size is exhausted, including the terminating short or zero-length read; each returned count is checked against the computed size. |
@@ -340,7 +340,7 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
 
 ## 7. Deferred (each is a version bump)
 
-- The `trace` node's file format (designed 2026-10-02, `DESIGN_REVIEW.md` §3.58, not built).
+- ~~The `trace` node's file format~~ (built 2026-10-02: `runner/README.md` §13; not on this contract, since it is the exporter's output, pinned by the node's sha256).
 - ~~Runner-facing container layout fields beyond `samples_per_file`~~ (0.2, §2 *Container layout*).
 - ~~A records-per-batch knob on `loader` for `stream` access~~ (not needed: under `stream` the
   loader's unit of work is the shard, and a step loop takes one every `records_per_shard /

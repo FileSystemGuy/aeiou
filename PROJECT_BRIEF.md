@@ -378,13 +378,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     remaining §3.44, §3.45 and non-GPU §3.47 choices are confirmed; contract 0.4 adds
     `same_run` (V15), under which a reader whose seed, instance count, or common parameters
     differ from the writer's is refused before the gate.
-    **The `trace` node designed 2026-10-02** (`DESIGN_REVIEW.md` §3.58, not built, choices
-    not yet confirmed; renamed from `replay` the same day at the user's call): a JSON Lines trace file written by `aeiou-trace export` from the same
+    **The `trace` node designed, built, and decided 2026-10-02** (`DESIGN_REVIEW.md` §3.58,
+    `runner/README.md` §13, `builder/README.md` §7; renamed from `replay` the same day at the user's call): a JSON Lines trace file written by `aeiou-trace export` from the same
     `strace` the metrics read, one lane per traced task, opens referenced by id so lanes
-    share descriptors and wait only on them, shared positions resolved at export, gaps from
-    the timestamps as `compute` under `--time-scale`; the runner's dry run walks the file in
+    share descriptors, shared positions resolved at export, gaps from
+    the timestamps as `compute` under `--time-scale`, two cross-lane orders from the trace (the open table and path order, the second found necessary by the first write-then-read trace); the runner's dry run walks the file in
     line order so that `dry-run --metrics` of a trace node equals `aeiou-trace metrics` of its
-    source. Still to do: all of it.
+    source, checked on traces of the runner itself; the trace then runs with its dry run's fingerprint under the blocking backends. ~~Still to do: all of it.~~ Still to do: traces under the event-loop backends. **Item 14 is otherwise complete.**
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its

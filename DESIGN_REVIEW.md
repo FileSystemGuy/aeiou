@@ -2968,12 +2968,14 @@ are not, and two cannot be judged.
 
 **Not done.** `max` and `mul` as forms. The rest of §3.56's list.
 
-### 3.58 The `trace` node: a trace's lanes, its descriptors, and its gaps (designed 2026-10-02, not built; renamed from `replay` the same day)
+### 3.58 The `trace` node: a trace's lanes, its descriptors, and its gaps (designed, renamed from `replay`, built, and decided 2026-10-02)
 
 The last open piece of brief item 14. The schema carried `replay {trace, sha256}` from 0.1
 with the trace format deferred (schema §7), the builder emitted the node, and the runner
-refused it ("the trace format is deferred"). What follows is the design; the user's
-decisions are listed at the end. Nothing is built.
+refused it ("the trace format is deferred"). What follows is the design as written in the
+morning; the user confirmed every choice ("the rest of §3.58 is fine, build it") and it was
+built the same day. **"As built"** at the end says where the build departed from the text,
+one of them a rule the design was missing.
 
 **The name (decided 2026-10-02).** The node is `trace {file, sha256}`. "Replay" had come to
 mean two things: this node, which runs a captured *trace* through the runner, and the chat
@@ -3075,10 +3077,12 @@ new in the VM:
   not yet in the table parks until it is (the VM is already parked per actor, §3.29; this is
   one more reason to park, resumed when the `open` completes), and the `close` of a shared
   open is executed by the lane the trace closed it in, after the table shows every other
-  lane's last use of that id has completed (the exporter writes the count of users per open
-  into the `open` line as `users`, so the close knows how many to wait for). No lane waits
-  for anything else: the only cross-lane order a trace run keeps is the one its descriptors
-  force. Everything else about the lanes' relative timing is the storage's and the gaps'.
+  lane's last use of that id has completed (~~the exporter writes the count of users per open
+  into the `open` line as `users`, so the close knows how many to wait for~~ the runner
+  counts the uses and the closes of each id from the file itself at load, as built). ~~No
+  lane waits for anything else: the only cross-lane order a trace run keeps is the one its
+  descriptors force.~~ **Wrong, found by the first write-then-read trace: see "As built".**
+  Everything else about the lanes' relative timing is the storage's and the gaps'.
 - **The gaps.** Before each line a lane emits `compute` of `t − (t_prev + dur_prev)` of its
   own previous line (for its first line, `t` itself: a worker that started late in the trace
   starts late in the run), scaled by `--time-scale` like every `compute` and recorded
@@ -3142,12 +3146,58 @@ which calibration never reaches; there is no cap and no streaming.
 - ~~The name `replay` kept, with the two meanings told apart in the text.~~ Renamed `trace`
   (decided 2026-10-02, above).
 
-**Not done.** Any of it. The order when built: the exporter and its equality test
-(`aeiou-trace metrics` of the strace against the exported file), the runner's loader and
-dry run (the second equality), the lanes in the VM, the checks, the report field, the
-schema README's §7 entry and the `trace` row, a kit's trace exported and run on the
-loopback mount against its abstract. The train_small_files kit is the first candidate: one
-process, workers after a `fork`, so every rule above is exercised.
+~~**Not done.** Any of it.~~ Built 2026-10-02, in the order listed: the exporter and its
+equality test, the loader and the dry run, the lanes, the checks, the report field, the
+documents (`runner/README.md` §13, `builder/README.md` §7, schema README).
+
+**As built (2026-10-02).**
+
+- **Path order, the rule the design lacked.** The design kept one cross-lane order, the
+  descriptors'. The first write-then-read trace (the runner itself under `strace` on
+  `kv_cache_serving`) failed at once: a lane opened a chunk file that another lane had not
+  created yet, since nothing ordered an open by *path* after the `creat` of that path by
+  another lane. The rule added: on a path the trace changes, a changing op (an open with
+  `CREAT` or `TRUNC`, a write, a truncate, an allocate, a sync or close of a writable open,
+  a rename on both its paths, an unlink, a mkdir, a rmdir) waits for every earlier op on
+  that path, and a reading op waits for every earlier changing op on it; reads never wait
+  for reads, and a path the trace never changes carries no wait. It is the usual
+  read-after-write, write-after-write, write-after-read dependency, computed per op at
+  load (`Dep {path, k, mk, mutating}`: the op's index among the path's ops and the changing
+  ops before it) and kept at run time as two counters per path under one lock. With it the
+  KV trace runs every time with its dry run's fingerprint. Both orders are the trace's own:
+  every wait is for an event earlier in the trace, so the earliest unfinished op never
+  waits and the lanes cannot deadlock.
+- **The runner, not the VM, runs the lanes.** The node is an `Event::Trace` the VM yields
+  with the file and the position; the sink does the rest. The thread-per-actor driver gives
+  each lane a child `Runner` on a scoped thread, and a `submit` group one thread per member
+  (a fan-out under a blocking backend). The event-loop drivers (`io_uring`, `libaio`)
+  refuse a trace before the gate; they are the next step, and until then a trace of a
+  libaio application runs under `sync` with its groups fanned out on threads.
+- **Three equalities, checked on traces of the runner itself** (`train_small_files`,
+  `kv_cache_serving`, `vdb_search_diskann`, in `builder/tests/test_trace.py`):
+  `aeiou-trace metrics` of the strace, the same of the exported file, and `aeiou dry-run
+  --metrics` of an abstract that is one `trace` node give the same document, row for row,
+  with one exception: under libaio the strace's metrics count an `io_submit` member when it
+  is reaped and the file places the group at submission (where the runner issues it), so
+  the reuse-distance histogram differs by the reordering within a round. Then the trace
+  runs against the same corpus with its dry run's fingerprint, under `sync`, `sync-direct`,
+  `posix-aio`, and `mmap`.
+- **Smaller departures.** The exporter writes the ops on the lane the call was made on and
+  the header's `creates`; the runner recomputes uses, closes, read extents, inputs, and the
+  peak of open descriptors from the lines (nothing in the header is trusted for
+  correctness). A write's count is checked as its length (a short write in a trace would
+  not reproduce anyway); `readdir` is one line per listing with the entries unchecked
+  (the trace does not say how many). Waiting time in the two orders is not recorded. V16 is
+  checked in `aeiou run` with the resolved counts (`count` is an expression; `--gpus`
+  decides it), not by the validator. The limits of §3.40 count a trace's lanes as threads
+  and its peak of open ids as files. `aeiou-trace metrics` reads an exported file as well
+  as an strace. The runner's dry run reports the gaps as its compute total.
+
+**Choices made while building (decided with the rest, 2026-10-02):** path order as the
+second cross-lane rule, with reads free among themselves; the event-loop backends deferred;
+the uses and closes counted by the runner from the file; the strace-side placement
+difference under libaio documented rather than changed (the metrics' definition of §3.42,
+completion order, stands).
 
 ## 4. Plan changes
 
@@ -3186,7 +3236,7 @@ process, workers after a `fork`, so every rule above is exercised.
   definitions decided (§3.39). ~~Next: the `RLIMIT`
   checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
-  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: ~~a chat replay for the KV distributions,~~ (run 2026-10-02, §3.56, decided) ~~the tolerances,~~ (built and decided 2026-10-02, §3.55) the `trace` node (designed 2026-10-02, §3.58, not built), a GPU engine's touch pattern for `model_load`.
+  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: ~~a chat replay for the KV distributions,~~ (run 2026-10-02, §3.56, decided) ~~the tolerances,~~ (built and decided 2026-10-02, §3.55) ~~the `trace` node~~ (designed and built 2026-10-02, §3.58; traces under the event-loop backends remain), a GPU engine's touch pattern for `model_load`.
 
 ## 5. Things reviewed and left as-is
 
