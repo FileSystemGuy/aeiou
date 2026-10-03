@@ -353,7 +353,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     within in all three pairs: `kv_cache_serving` and the reader are **accepted**, the writer
     keeps one row (the trace's two store threads). The runner also judges V3 again on the
     parameter values in effect (a `--param` distribution with minimum 0 was a stack overflow).
-    Choices of §3.57 not yet confirmed. The wire counts were not taken again under the replay.
+    ~~Choices of §3.57 not yet confirmed.~~ §3.57 decided 2026-10-02. The wire counts were not taken again under the replay.
     Wire counts taken later the same day: three WRITEs, one COMMIT, one OPEN per chunk for
     the server and the abstract alike, and no READ in either, since the client still holds
     the chunks it wrote. ~~Which cold-reader configuration to score is open (§3.51).~~

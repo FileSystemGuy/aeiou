@@ -2875,7 +2875,7 @@ change.~~ (Done, §3.57, contract 0.5.) The wire counts under the replay (the ta
 (`--concurrency`), a second engine on the store at the same time, a model with a longer
 context, and a `keep` measured at another ratio of GPU memory to open conversations.
 
-### 3.57 One `keep` draw per round: the `at` offset as an expression (contract 0.5, built 2026-10-02)
+### 3.57 One `keep` draw per round: the `at` offset as an expression (contract 0.5, built and decided 2026-10-02)
 
 The user agreed in §3.56 to widen rule V3 so that the per-round draw can be written. Built
 the same day: contract 0.5, the three KV-cache abstracts changed under it, two of the three
@@ -2955,7 +2955,7 @@ after read` entries (the judge reports an entry recorded as outside that is with
 Eleven of the fifteen committed pairs are now accepted, the DiskANN build and the KV writer
 are not, and two cannot be judged.
 
-**Choices made here, for the user to confirm:**
+**Choices made here** (~~for the user to confirm~~ **decided 2026-10-02**, the user confirmed all four):
 
 - The rule binds every `let` of the same loop body (the runner's reading, documented now),
   not only self and forward references.
