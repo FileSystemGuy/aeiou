@@ -3127,7 +3127,7 @@ order inside a mapping (above). The GPU side of anything. A trace longer than me
 runner holds the file's lines as parsed ops (about 64 bytes each; a million lines is 64 MiB),
 which calibration never reaches; there is no cap and no streaming.
 
-**Choices made here (for the user to confirm):**
+**Choices made here (~~for the user to confirm~~ confirmed 2026-10-03):**
 
 - JSON Lines for the trace file, the first line a header, one op per line in issue order;
   the file is not the AST and not on the AST contract, but it is JSON.
@@ -3208,9 +3208,13 @@ documents (`runner/README.md` §13, `builder/README.md` §7, schema README).
 second cross-lane rule, with reads free among themselves; the event-loop backends deferred;
 the uses and closes counted by the runner from the file; the strace-side placement
 difference under libaio documented rather than changed (the metrics' definition of §3.42,
-completion order, stands).
+completion order, stands). **Choices made building the event-loop lanes (2026-10-03,
+confirmed by the user the same day):** a lane is a task on the loop, not a thread, and the
+report and the limits count it as such; a `submit` group's members are member tasks with
+their own actor state, merged into the lane when they end; every lane parked on an
+instance is woken on every change to its tables rather than keyed by what it waits for.
 
-### 3.59 The agentic load: the AgentX corpus, and what fitting it changed in the KV abstracts (added 2026-10-02)
+### 3.59 The agentic load: the AgentX corpus, and what fitting it changed in the KV abstracts (added 2026-10-02, decided 2026-10-03)
 
 The user had access to a set of LMCache captures taken by the SNIA AIWD TWG (private, not in
 this repo, and nothing here is derived from them) and asked whether they would help validate
@@ -3224,8 +3228,8 @@ request, and, in place of text, the prompt's 64-token KV blocks as hash ids, so 
 structure of every request is in the file. The user's decision: fit from the corpus, keep
 the captures out of the repo. Kit: `builder/traces/kv_cache_serving/agentx.py` (`fit`,
 `reference`), `fitted.agentx.params.json`, `agentx.reference.json`, and `replay_agentx.py`
-for the GPU box. **The choices below were made while building and are not yet confirmed by
-the user.**
+for the GPU box. ~~**The choices below were made while building and are not yet confirmed by
+the user.**~~ **Confirmed by the user 2026-10-03.**
 
 **Is this the end-to-end workflow the user asked about?** Mostly. The corpus gives the
 distributions (step 2 of the user's description) and a chunk-level reference to validate the
@@ -3304,7 +3308,7 @@ abstract's longest conversations reach the 990k-token cap and are cut. A growth 
 depends on the chain's length is not drawn here. The fit at 100 shares is within 10 % on
 hits and 9 % on stores; `tests/test_trace.py` repeats it on 10,000 requests.
 
-**Choices, for the user to confirm.**
+**Choices (~~for the user to confirm~~ decided 2026-10-03).**
 
 - Four new parameters on the three KV abstracts (`turns`, `prefill_step`, `trim`, `think`)
   with defaults that leave the ShareGPT fits' op counts as they were (the fingerprints
