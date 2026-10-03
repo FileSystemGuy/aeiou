@@ -2968,6 +2968,172 @@ are not, and two cannot be judged.
 
 **Not done.** `max` and `mul` as forms. The rest of §3.56's list.
 
+### 3.58 The `replay` node: a trace's lanes, its descriptors, and its gaps (designed 2026-10-02, not built)
+
+The last open piece of brief item 14. The schema has carried `replay {trace, sha256}` since
+0.1 with the trace format deferred (schema §7), the builder emits the node, and the runner
+refuses it ("the trace format is deferred"). What follows is the design; the user's
+decisions are listed at the end. Nothing is built. (Two things are called a replay in these
+documents: the `replay` node replays a *trace* through the runner; the chat replay of §3.56
+replays *requests* through a server. The documents say which.)
+
+**What it is for.** The metrics (§3.39, §3.42, §3.55) compare the abstract's op stream with
+the application's statically: the same numbers from both sides, within tolerances. They say
+nothing about what the storage sees in time: the concurrency of the application's threads,
+the think time between its calls, the order in which its descriptors are opened and closed.
+The `replay` node is the dynamic half: the application's literal call sequence, with its
+lanes and its gaps, run through the same runner, the same backend, and the same
+instrumentation as the abstract, on the same storage. Throughput, latencies, the host
+counters, and the per-phase totals of the two runs are then comparable in a way a run of the
+application itself never is, because the client side is the same program. It is bounded to
+calibration: a trace is a materialized op list (the one place where "never materialize" is
+the point), it is one process on one host, and it is never CLOSED (`PROJECT_BRIEF.md` §8).
+
+**The trace file.** Written by a new subcommand, `aeiou-trace export TRACE --root DIR -o
+FILE`, from the same `strace -f -ttt -T` an `aeiou-trace metrics` reads, through the same
+`Tracer`: the descriptor tables per task, the inheritance across `clone` and `fork`, the
+`cwd`, the paths under `--root`, the positions kept per open file. The file is JSON Lines,
+since a trace of an epoch over 100,000 files is 400,000 ops and a single document of that
+size is read all at once for no reason. The first line is the header, every other line one
+op, in the trace's issue order:
+
+```
+{"aeiou_trace": 1, "source": "strace", "root": "data", "lanes": 9, "opens": 100012,
+ "creates": ["ckpt/step-100/__0_0.distcp", …], "notes": {"calls_not_exported": {"sendfile": 2}, "shared_positions_resolved": 14}}
+{"lane": 0, "t": 0, "dur": 41200, "op": "open", "fd": 0, "path": "train/n01440764/x.JPEG", "flags": ["RDONLY","CLOEXEC"], "ret": 0}
+{"lane": 0, "t": 61900, "dur": 2100, "op": "fstat", "fd": 0, "ret": 0}
+{"lane": 3, "t": 70250, "dur": 912300, "op": "read", "fd": 0, "len": 131072, "ret": 109383}
+{"lane": 3, "t": 990100, "dur": 18000, "op": "read", "fd": 0, "len": 131072, "ret": 0}
+{"lane": 0, "t": 1011000, "dur": 3300, "op": "close", "fd": 0, "ret": 0}
+{"lane": 2, "t": 1200000, "dur": 802000, "op": "submit", "ops": [{"op": "read", "fd": 7, "offset": 4096, "len": 4096, "ret": 4096}, …]}
+```
+
+- **A lane is a traced task** (a thread or a process under `strace -f`): the trace's
+  "context" of §3.42. A lane that issues no op under the root is not exported. Lanes are
+  numbered in order of first op. `t` is nanoseconds from the trace's first exported op,
+  `dur` the call's duration (`-T`); both are facts of the trace, kept so that the file can
+  be re-measured, and the runner derives the gaps from them (below).
+- **`fd` is an open id**, not a descriptor number: the ordinal of the `open` in the file.
+  An op names the open that produced its descriptor, through every `dup`, `fcntl(F_DUPFD)`,
+  inheritance across a `fork`, and shared table across a `clone(CLONE_FILES)` the `Tracer`
+  resolved. A lane may use an open another lane made (the main thread opens, the workers
+  read): that is the dependency a replay has to keep, and it is in the file.
+- **The op vocabulary is the schema's**, with the same names and fields (`open`, `close`,
+  `read`, `write`, `lseek` with `whence`, `fstat`, `stat`, `fsync`, `fdatasync`, `unlink`,
+  `mkdir`, `rmdir`, `rename`, `readdir`, `ioctl`, `fadvise`, `ftruncate`, `fallocate`), the
+  paths relative to `--root`, and `ret` the traced result: a byte count, `0`, or an errno
+  name, which is what the runner checks against (a traced `ENOENT` on a `stat` is expected,
+  any other result is a run failure, as `expect` works today). A `read` without `offset` is
+  the traced `read`; with one it is the traced `pread`. `lseek` stays an op (the abstract is
+  the application's call stream, §3.44). Three translations, each counted in the header's
+  notes: **`io_submit` becomes `submit`**, a group of positioned ops issued together and
+  reaped before the lane's next line, which is what the libaio backend does with a
+  `parallel` today and what the metrics count as a fan-out; **an `mmap` of a file range
+  becomes a `read` of that range** with the mapping's offset and length, because the page
+  faults inside it are not in an `strace` (the same limit the metrics have, §3.47), so the
+  touch pattern is the backend's (`--mmap-mode`), not the application's; and **a call the
+  schema has no op for** (`sendfile`, `splice`, `copy_file_range`, `getxattr`) is dropped
+  and counted by name. `aeiou-trace metrics` of the strace and of the exported file must
+  agree, which is a test the exporter carries.
+- **A shared position is resolved at export.** A `read` or `write` without an offset on a
+  descriptor that more than one lane uses (an inherited open file description; the DataLoader
+  workers after a `fork`, a thread pool over one `fd`) reads from a position the lanes'
+  interleaving decides, and the replay cannot reproduce that interleaving without
+  serializing the lanes. The exporter knows the offset each such call actually used (the
+  `Tracer` tracks it) and writes the call **positioned**, at that offset, counting the
+  rewrites in the header (`shared_positions_resolved`). A lane-local sequential `read`
+  stays a `read`. This changes the call (`read` to `pread`) in exactly the cases where the
+  traced call's meaning depended on another thread; the count says how often.
+- **`creates`** lists the paths the trace brought into being under the root (an `open` with
+  `O_CREAT` of a path not seen before, a `mkdir`, the destination of a `rename`), the
+  replay's output set; see the checks below.
+
+**The runner.** `Node::Replay` loads the file named by `trace` (a path relative to the AST
+document's directory; every host of a multi-host run reads its own copy), checks its
+`sha256` against the node's and refuses on a mismatch before the gate, and executes it as
+one fork of `lanes` sub-actors, which is what the sub-actor pool (§3.36) already runs: a
+lane is a sub-actor walking its lines in order, one op in flight (a `submit` is the lane's
+one op until its last member completes, as a `parallel` under libaio is). Three things are
+new in the VM:
+
+- **An open table per replay instance**, open id → the lane's `OpenFile`, filled by whichever
+  lane executes the `open` line, and **a wait**: a lane whose next line names an open id
+  not yet in the table parks until it is (the VM is already parked per actor, §3.29; this is
+  one more reason to park, resumed when the `open` completes), and the `close` of a shared
+  open is executed by the lane the trace closed it in, after the table shows every other
+  lane's last use of that id has completed (the exporter writes the count of users per open
+  into the `open` line as `users`, so the close knows how many to wait for). No lane waits
+  for anything else: the only cross-lane order a replay keeps is the one its descriptors
+  force. Everything else about the lanes' relative timing is the storage's and the gaps'.
+- **The gaps.** Before each line a lane emits `compute` of `t − (t_prev + dur_prev)` of its
+  own previous line (for its first line, `t` itself: a worker that started late in the trace
+  starts late in the replay), scaled by `--time-scale` like every `compute` and recorded
+  unscaled. `--time-scale 1` replays the application's think time as `strace` saw it, which
+  is an upper bound (`strace` slows the application; the kit says by how much for each
+  trace); `--time-scale 0` is the storage-bound replay, every lane issuing as fast as the
+  storage answers, the usual mode. The gaps are the per-step compute of §3.5's stall
+  model, so the stall and busy fractions of a replay mean what they mean elsewhere.
+- **Writes carry the runner's payload** (§3.23: a function of the seed, the path's hash in
+  place of a file id, and the offset, at the run's `--write-compress`), since a trace has no
+  data. Reads are checked structurally against `ret`, as every op is.
+
+**The fingerprint and the dry run.** Every replay op hashes like any op (`op_hash`: kind,
+actor, indices, offset, length, path), with the lane index and the line's ordinal in the
+lane as its indices, so the fingerprint of a replay is a function of the file, the sum is
+order-independent as always, `--expect-fingerprint` works, and two hosts holding different
+files are caught. `aeiou dry-run` walks the file **in its line order**, not lane by lane:
+each op tagged with its lane as the metrics' context. So `dry-run --metrics` of an AST that
+is one `replay` node computes the trace's own metrics, and must equal `aeiou-trace metrics`
+of the strace it was exported from, row for row, the reuse distance included (both are the
+trace in completion order as one instance). That equality is the test that the exporter,
+the loader, and the two metric implementations agree, and it is the first check of any new
+trace. The report (§3.41) carries `replay: {trace, sha256, lanes, ops}` on the run and the
+comparison policy says such a run is never CLOSED.
+
+**Checks before the gate** (§3.40's place). Every path the trace reads without creating must
+exist under `--root` with a size of at least the largest offset plus length the trace read
+from it (so the `ret` checks can hold), and every path in `creates` must not exist, both
+checked in trace order (a file created and then read is fine). `--clean-namespaces` removes
+the `creates` set and nothing else, since a replay's root is the application's own data,
+which the runner never empties: the user put it there (the kit's `mkcorpus.py`, or a copy
+of what the application ran over). V12 to V15 are untouched: a replay declares no dataset
+and no namespace. **V16:** a `replay` node in an actor template whose instance count can
+exceed one is refused when the trace has a nonempty `creates` (G copies would write the same
+files); with no creates it is allowed, and G instances replay the trace against the same
+files, which is a load test with the application's sequence, not a model of G ranks (whose
+shards differ), and the report says so.
+
+**Not in a replay.** `io_uring` submissions (not in an `strace`; a trace of such an
+application is its control calls only, and the exporter says so in the notes). The touch
+order inside a mapping (above). The GPU side of anything. A trace longer than memory: the
+runner holds the file's lines as parsed ops (about 64 bytes each; a million lines is 64 MiB),
+which calibration never reaches; there is no cap and no streaming.
+
+**Choices made here (for the user to confirm):**
+
+- JSON Lines for the trace file, the first line a header, one op per line in issue order;
+  the file is not the AST and not on the AST contract, but it is JSON.
+- A lane is a traced task; opens are referenced by id so lanes share descriptors; the only
+  cross-lane waits are on opens and on the close of a shared open.
+- Shared positions resolved to positioned calls at export, counted; lane-local sequential
+  reads kept as traced.
+- `io_submit` as a `submit` group; `mmap` as one `read` of the range; unknown calls dropped
+  and counted.
+- Gaps from the trace's timestamps, as `compute` under `--time-scale`, the first gap being
+  the lane's start.
+- The dry run walks the file in line order so that `dry-run --metrics` equals `aeiou-trace
+  metrics` of the source; this is the acceptance test of an exported trace.
+- `trace` is relative to the AST's directory; the pre-gate existence checks; `creates` as
+  the only thing `--clean-namespaces` touches; V16.
+- The name `replay` kept, with the two meanings told apart in the text.
+
+**Not done.** Any of it. The order when built: the exporter and its equality test
+(`aeiou-trace metrics` of the strace against the exported file), the runner's loader and
+dry run (the second equality), the lanes in the VM, the checks, the report field, the
+schema README's §7 entry and the `replay` row, a kit's trace exported and run on the
+loopback mount against its abstract. The train_small_files kit is the first candidate: one
+process, workers after a `fork`, so every rule above is exercised.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
@@ -3005,7 +3171,7 @@ are not, and two cannot be judged.
   definitions decided (§3.39). ~~Next: the `RLIMIT`
   checks,~~ The limit checks built the same day, their choices decided (§3.40). ~~Next: the JSON report,~~ The JSON report built the same day, its choices decided (§3.41). ~~Next: the trace-side metrics tool;~~ `aeiou-trace` built the same day, its choices decided (§3.42). ~~Next: a trace of a real application through it (the capture plan of `ABSTRACTS.md` §11),~~ Rows 1 to 4 of the capture plan traced the same day (§3.43, §3.44, §3.45, §3.47); CLOSED defined as the same operation sequence, the backend declared by the abstract (contract 0.3), and the restore's buffer chain, the same day (§3.48). Next: row 6 (FAISS IVF), then the heavier rows (DiskANN, vLLM + LMCache), `gds`/`nixl-posix`/`libnfs`, the object backends; the
   remaining classes (Arrow IPC, MDS, Megatron) and the tenth abstract when their readers
-  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: ~~a chat replay for the KV distributions,~~ (run 2026-10-02, §3.56, decided) ~~the tolerances,~~ (built and decided 2026-10-02, §3.55) the `replay` node, a GPU engine's touch pattern for `model_load`.
+  can be traced. Row 6 (FAISS IVF) traced the same day (§3.49); ~~rows 5, 7, and 8 remain.~~ rows 5 and 7 (DiskANN search and build) traced 2026-10-02 (§3.50); ~~row 8 (vLLM + LMCache) remains.~~ row 8 (vLLM + LMCache) traced the same day (§3.51), and its shared-store pair (a writer, and the cold reader decided in §3.51) traced and built the same day (§3.52). Every row of the capture plan has a trace; open: ~~a chat replay for the KV distributions,~~ (run 2026-10-02, §3.56, decided) ~~the tolerances,~~ (built and decided 2026-10-02, §3.55) the `replay` node (designed 2026-10-02, §3.58, not built), a GPU engine's touch pattern for `model_load`.
 
 ## 5. Things reviewed and left as-is
 

@@ -378,6 +378,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     remaining §3.44, §3.45 and non-GPU §3.47 choices are confirmed; contract 0.4 adds
     `same_run` (V15), under which a reader whose seed, instance count, or common parameters
     differ from the writer's is refused before the gate.
+    **The `replay` node designed 2026-10-02** (`DESIGN_REVIEW.md` §3.58, not built, choices
+    not yet confirmed): a JSON Lines trace file written by `aeiou-trace export` from the same
+    `strace` the metrics read, one lane per traced task, opens referenced by id so lanes
+    share descriptors and wait only on them, shared positions resolved at export, gaps from
+    the timestamps as `compute` under `--time-scale`; the runner's dry run walks the file in
+    line order so that `dry-run --metrics` of a replay equals `aeiou-trace metrics` of its
+    source. Still to do: all of it.
 
 15. **Container formats (2026-09-29).** Write the format classes (Parquet/pyarrow, TFRecord,
     HDF5/h5py, Arrow IPC, WebDataset tar, MDS, Megatron `.bin`/`.idx`), each from a trace of its
