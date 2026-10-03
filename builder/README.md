@@ -400,7 +400,13 @@ synthetic chat load (`chat.py`) fixed the call sequence (`ABSTRACTS.md` §8,
 (`replay.py`: the dataset's turns and reply lengths, eight conversations open and served
 in turn), and `fit.py` writes `fitted.params.json` from the two logs of that run, the
 load's and LMCache's, both in the kit (§3.56, decided 2026-10-02). It is a kit
-script and not `aeiou-fit`: it reads no `strace`.
+script and not `aeiou-fit`: it reads no `strace`. `agentx.py` is a second fit of the same
+abstracts from a public corpus of agentic coding sessions (SemiAnalysis's InferenceX AgentX
+traces on HuggingFace: timestamps, think times, and the prompts' KV blocks as hash ids),
+writing `fitted.agentx.params.json`, and its `reference` is the corpus's own chunk
+accounting (`agentx.reference.json`), which `tests/test_trace.py` checks a dry run against;
+`replay_agentx.py` replays the corpus through a server for the trace and `keep` the corpus
+cannot give (`DESIGN_REVIEW.md` §3.59, 2026-10-02, not yet run on a GPU).
 `traces/kv_cache_shared` is the same load on LMCache's `fs://` backend, twice: an engine on
 an empty store, then a restarted engine on the filled one, sent the same requests
 (`replay.py --save`, `--replay`). `abstracts/kv_cache_shared.py` emits both abstracts,

@@ -434,6 +434,20 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     application that checkpoints with `O_DIRECT` and write its abstract. Not from DLIO
     (decided 2026-10-01: DLIO is an emulator and is not traced), and no pad-and-coalesce
     behaviour in the runner.
+20. **Tensor-parallel sharding of a KV chunk (2026-10-02, `DESIGN_REVIEW.md` §3.59).** LMCache
+    under TP stores one logical chunk as one shard file per rank, all under one key, the
+    ranks' writes and reads balanced. The runner's positional draws are keyed on the GPU id,
+    so `--gpus 8` is eight independent engines, not one TP group. A TP group needs a shared
+    draw (the group's request stream) and a per-rank name; not designed.
+21. **The agentic load on a GPU (2026-10-02, `DESIGN_REVIEW.md` §3.59).** The AgentX corpus
+    is fitted (`agentx.py`) and checked against its own chunk accounting; what it cannot
+    give needs a run of `replay_agentx.py` through vLLM and LMCache on the trace box: `keep`
+    at a chosen KV memory, the `strace` for `aeiou-trace compare --judge`, and the store's
+    view of the prefill-step write bursts. Also from that box, when convenient: the
+    local-disk backend's `O_DIRECT` option, which LMCache's source shows to be the same one
+    write and one read per chunk through `os.open` with `O_DIRECT` (buffered when the chunk
+    is not a multiple of the file system's block size), so that `sync-direct` can be the
+    declared backend of a traced configuration rather than another workload.
 
 ## 7. Environment
 

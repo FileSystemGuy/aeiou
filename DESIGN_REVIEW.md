@@ -3199,6 +3199,126 @@ the uses and closes counted by the runner from the file; the strace-side placeme
 difference under libaio documented rather than changed (the metrics' definition of §3.42,
 completion order, stands).
 
+### 3.59 The agentic load: the AgentX corpus, and what fitting it changed in the KV abstracts (added 2026-10-02)
+
+The user had access to a set of LMCache captures taken by the SNIA AIWD TWG (private, not in
+this repo, and nothing here is derived from them) and asked whether they would help validate
+the KV abstracts. Their value was that they pointed at a load the kit did not have: agentic
+coding sessions replayed through vLLM and LMCache, where a request's prefix is tens to
+hundreds of thousands of tokens and every turn appends a few thousand. The load they replay
+is public: SemiAnalysis's InferenceX AgentX corpus (`semianalysisai/cc-traces-weka-062126`
+on HuggingFace, Apache-2.0; 393 Claude Code sessions, 98,827 requests, 21.6 G prompt
+tokens), with what §3.56 said no public dataset had: a timestamp and a think time per
+request, and, in place of text, the prompt's 64-token KV blocks as hash ids, so the reuse
+structure of every request is in the file. The user's decision: fit from the corpus, keep
+the captures out of the repo. Kit: `builder/traces/kv_cache_serving/agentx.py` (`fit`,
+`reference`), `fitted.agentx.params.json`, `agentx.reference.json`, and `replay_agentx.py`
+for the GPU box. **The choices below were made while building and are not yet confirmed by
+the user.**
+
+**Is this the end-to-end workflow the user asked about?** Mostly. The corpus gives the
+distributions (step 2 of the user's description) and a chunk-level reference to validate the
+abstract against here, with no GPU: `agentx.py reference` walks the corpus with a store that
+never evicts and counts, per request, the whole 256-token chunks the store would hit and
+those it would store; `aeiou dry-run` at the fitted parameters gives the abstract's. What it
+cannot give is the call sequence (fixed by the kit's own `strace`s, §3.51, and unchanged
+here), `keep` (the engine's memory against its open sessions; the proxy that recorded the
+corpus saw no engine), and a judged `aeiou-trace compare`, which needs the corpus replayed
+through vLLM and LMCache under `strace` on the GPU box: `replay_agentx.py`, written and not
+yet run.
+
+**What the corpus showed, in order of what it changed.**
+
+1. **A conversation's length is a property of the conversation.** The abstracts ended a
+   conversation by a per-request draw (`reuse`'s none arm), so chain lengths were geometric.
+   The corpus has 8,138 chains of one request (side calls of a few hundred tokens between an
+   agent's turns) beside sessions of hundreds of turns (median 65 main-agent turns, longest
+   1,190), and the long sessions hold nearly all the prefix hits: at the fitted lengths with
+   the none arm the abstract read a seventh of the corpus's chunks. **`turns`**, a draw at a
+   conversation's start of the requests it will have (0 for no limit, the default: the
+   ShareGPT fits are unchanged), with `reuse`'s none arm at 0 in the agentic file.
+2. **Writes come per prefill step.** vLLM prefills `max_num_batched_tokens` tokens per
+   step (8,192 for an API server on a large GPU, 2,048 otherwise, from its source) and
+   LMCache stores the chunks each step completes, so a 117k-token prompt's writes are 58
+   bursts of eight chunks over the prefill. At 4k context the kit's traces could not show
+   it. **`prefill_step`**: the chunk writes sit in a loop over steps, each after its
+   `compute`. The op multiset is the same; the writes carry one more loop index, so the two
+   writers' fingerprints changed.
+3. **An agent edits its context.** 3.7 % of continuing requests keep a shorter prefix of the
+   chain's last prompt than the whole (a rewrite of the end of the context), dropping a mean
+   of 32k tokens and storing what they add past the kept prefix: a quarter of all chunk
+   writes. The chain could not shrink. **`trim`**, a draw of the tokens dropped before a
+   request (`prior = max(ptoks + out − trim, 0)`), and the store's hit for the request is
+   `min(stored @ (r − d), prior div chunk_tokens)`. *The infidelity:* the chunks past the
+   kept prefix are written again under their names (a `trunc` of an existing file), where
+   the real store writes new files under new hashes; a per-chunk generation would be a
+   per-file structure (`GRAMMAR_OPTIONS.md` §5.3).
+4. **The client waits.** `think_time` per request, median 4.8 s, p90 121 s, p99 51 min
+   (users leave). **`think`**, a draw slept before each request, default 0. Its tail makes
+   a slot idle for an hour at a time; the fit does not cap it, and a parameter file may.
+5. **The reply is not all kept.** `out` counts generated tokens, and in 22 % of turns the
+   next prompt grew by less than the reply (thinking is not retained), so `turn_in`, fitted
+   as growth less the reply and at least 0, makes the chain grow by 108 % of the corpus's.
+   Left as a stated bias; a `turn_out` for the decode and another for the chain is a
+   change not made.
+6. **Sub-agents are chains of their own.** 43 % of requests are sub-agents', run while the
+   parent waits; their first prompt shares a median of 27,648 tokens with what the session
+   stored (the system prompt and the tool definitions), which is the abstract's `sysp`
+   dataset, so `sys_tokens` is that median and `sys_prompts` the session count. The
+   parent's think time spans the sub-agents' run.
+7. **The hash of a partial block changes when it fills.** `in` is a count of 64-token
+   blocks; the last one is partial as often as not and its id differs once the prompt has
+   grown. Read naively, 6.5 % of turns "rewrote" one block. A request keeping all but the
+   last block extends its chain, and the block is left out of the chunk accounting.
+8. **The VM's cache of `x @ i` values emptied itself when full** (65,536 entries), after
+   which a chain's history was recomputed recursively from its start: fine for chains of
+   40 turns, a stack overflow for 1,190. It now sheds the half with the smaller indices
+   (`vm.rs`), which keeps the recent entries that an `at` chain reaches.
+
+**Against the corpus** (`agentx.reference.json` against `aeiou dry-run` at
+`fitted.agentx.params.json`, one slot, the corpus's 98,827 requests; reads at the default
+`keep`, 91 % of returns holding nothing, so the abstract's loads are 0.91 of its hits):
+
+| per request | corpus | abstract, seeds 1 and 2 |
+|---|---|---|
+| chunks stored | 14.41 | 15.6, 15.4 (the 108 % above) |
+| chunks hit | 840 | 784, 850 (loads 713, 773 at 0.91) |
+| prompt tokens, mean | 218,922 | — |
+
+The hit count depends on how finely `turns` resolves its tail (`--turn-bins`, 100 by
+default): with 50 shares the abstract hits 890 to 920, with 200 it hits 715. The cause is
+the context: the abstract draws every turn's growth independently of the session's length,
+and the corpus's long sessions grow more slowly per turn (and are compacted), so the
+abstract's longest conversations reach the 990k-token cap and are cut. A growth that
+depends on the chain's length is not drawn here. The fit at 100 shares is within 10 % on
+hits and 9 % on stores; `tests/test_trace.py` repeats it on 10,000 requests.
+
+**Choices, for the user to confirm.**
+
+- Four new parameters on the three KV abstracts (`turns`, `prefill_step`, `trim`, `think`)
+  with defaults that leave the ShareGPT fits' op counts as they were (the fingerprints
+  changed: the writes under the step loop's index, and the draws before the conversation
+  and system-prompt picks moved those picks' sites, so a seed draws other prompts where the
+  system prompts vary in size; `golden.rs` re-recorded with the reason).
+- `fit.py` (ShareGPT) is unchanged: it keeps the none arm, which is the right model for a
+  dataset whose conversations are short and bounded by the context. `agentx.py` is a second
+  fit, not a mode of the first: it reads a corpus, not a replay's logs.
+- The rewrite as a `trunc` of existing names (item 3), rather than new names.
+- `turns` resolved in 100 shares against 20 for the lengths, and the dependence of the hit
+  count on that choice stated rather than removed.
+- `agentx.reference.json` is committed (the corpus's accounting, 2 KB); the corpus is not
+  (1.8 GB, public, fetched by the command in the kit's docstring).
+
+**Not done.** The replay on the GPU box (`replay_agentx.py`: `keep` for an agentic load at a
+chosen KV memory, the `strace` for the judge, and the store's view of the prefill-step
+bursts); a growth that depends on the conversation's length; the chunk-level reference's
+loads (it has the hits; the loads need `keep`); tensor-parallel sharding (brief item 20:
+a TP group writes one chunk as one shard file per rank under one key, and the runner's
+positional draws keyed on the GPU id would make the ranks independent engines); the
+`O_DIRECT` option of the local-disk backend, which from LMCache's source is the same one
+write and one read per chunk through `os.open` with `O_DIRECT`, falling back to buffered
+I/O when the chunk is not a multiple of the file system's block size (brief item 21).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

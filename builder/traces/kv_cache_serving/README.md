@@ -54,3 +54,26 @@ their times), so the number of open conversations is a load parameter; and syste
 which ShareGPT does not have.
 
 `tests/test_trace.py` repeats the dry run and the judgement against the committed metrics.
+
+## The agentic load: AgentX (2026-10-02)
+
+A second fit of the same abstracts, from a public corpus and not a replay: SemiAnalysis's
+InferenceX AgentX traces (`semianalysisai/cc-traces-weka-062126` on HuggingFace, Apache-2.0,
+1.8 GB, not committed), 393 Claude Code sessions whose requests carry a timestamp, a think
+time, the reply's length, and the prompt's 64-token KV blocks as hash ids. `agentx.py`'s
+docstring says how each parameter is read off it; `DESIGN_REVIEW.md` §3.59 what changed in
+the abstracts because of it (`turns`, `prefill_step`, `trim`, `think`).
+
+```
+curl -L -o traces.jsonl https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126/resolve/main/traces.jsonl
+python agentx.py fit traces.jsonl --set chunk_bytes=33554432 -o fitted.agentx.params.json
+python agentx.py reference traces.jsonl -o agentx.reference.json      # the corpus's chunk accounting
+aeiou dry-run ../../../schema/examples/kv_cache_serving.ast.json --gpus 1 --seed 1 --params fitted.agentx.params.json
+```
+
+The dry run's `write` count against the reference's `chunks_stored` and its `read` count
+against 0.91 × `chunks_hit` (the default `keep`) is the check `tests/test_trace.py` makes.
+What the corpus lacks is `keep` and the call sequence under this load: `replay_agentx.py`
+sends the corpus's requests to a vLLM server (a block's tokens generated from its hash id, so
+the prefix structure is the corpus's) for the `strace` and LMCache's log, as `replay.py` does
+for ShareGPT. Written for the trace box; not run yet.

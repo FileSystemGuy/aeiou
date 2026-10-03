@@ -1165,6 +1165,10 @@ workload kv_cache_serving {
   param turn_in      = empirical(1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944)      # new prompt tokens, measured (ShareGPT)
   param turn_out     = empirical(12, 34, 62, 92, 119, 148, 175, 201, 225, 248, 271, 294, 317, 342, 370, 407, 454, 519, 615, 785)   # generated tokens, measured
   param prefill_per_token = 40us, decode_per_token = 12ms       # [measure]
+  param prefill_step = 8192                     # tokens per prefill step (vLLM's max_num_batched_tokens); the chunks a step completes are stored after it [config: engine]
+  param think        = const(0)                 # ns the client waits before a request [config: load]; AgentX: median 4.8 s, p99 51 min
+  param trim         = const(0)                 # tokens the client drops from the end of its conversation before a request [config: load]; AgentX: 3.7 % of turns, mean 32k
+  param turns        = const(0)                 # requests a conversation has, drawn at its start; 0: no limit, it ends by `reuse`'s none arm or the context
 
   dataset  sysp = files("kv/sys/{id:04}/blk_{k:04}", count = $sys_prompts,
                         size = lognormal($sys_tokens × bytes per token, 0.3), chunk = $chunk_bytes,
@@ -1290,6 +1294,29 @@ what the engine keeps were waiting for; reasoning in `DESIGN_REVIEW.md` §3.56.
   of eight spread as the trace's do (standard deviation 13.1 against 13.9; 9.8 with a draw
   per request). `aeiou-trace compare --judge`: **accepted**, no row outside (one before,
   the reuse distance of the reads, 0.274 against 0.271 allowed; six before the replay).
+
+**AgentX (2026-10-02).** A second load, agentic coding sessions, fitted from a public corpus
+rather than a replay: SemiAnalysis's InferenceX AgentX traces (`semianalysisai/cc-traces-
+weka-062126` on HuggingFace, Apache-2.0; `agentx.py` in the kit; reasoning in
+`DESIGN_REVIEW.md` §3.59). 393 Claude Code sessions, 98,827 requests, each with a timestamp,
+a think time, the reply's length, and the prompt's 64-token KV blocks as hash ids, so the
+reuse structure is in the file and the fit needs no server.
+
+- **What it gives.** A prompt of 219k tokens on average (p90 651k; the corpus caps it at
+  990,016), growing by a median 1,728 tokens per turn; 10,391 chains, 8,138 of them one side
+  call and the sessions of hundreds of turns (median 65, longest 1,190); 3.7 % of continuing
+  turns edit the end of the context (a mean of 32k tokens dropped); 43 % of requests are
+  sub-agents', sharing 27,648 tokens of system prompt and tools with their session; a
+  think time of median 4.8 s and p99 51 minutes. Four parameters came of it: `turns`,
+  `prefill_step`, `trim`, `think`.
+- **What it does not give.** `keep` (no engine behind the proxy) and the call sequence,
+  which is the kit's `strace` of §3.51; `replay_agentx.py` is the replay for both, not run
+  yet. The reply's tokens are not all kept (thinking), so the chain grows by 108 % of the
+  corpus's.
+- **Against the corpus's own chunk accounting** (`agentx.reference.json`, a store that never
+  evicts): 14.4 chunks stored per request against the abstract's 15.4 to 15.6; 840 hit
+  against 784 to 850 (seeds 1 and 2), at `--turn-bins 100`; the hit count moves with that
+  resolution because the abstract's longest conversations reach the context and are cut.
 
 Notes on the shape:
 - The `warm` prefix of the index space exists so that `conv @ (r − d)` has something to reach
