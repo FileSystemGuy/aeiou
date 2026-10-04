@@ -93,8 +93,9 @@ impl ConfigFile {
                     path.display()
                 );
             }
-            if !v.is_table() {
-                bail!("config {}: [{k}] must be a table", path.display());
+            let Some(t) = v.as_table() else { bail!("config {}: [{k}] must be a table", path.display()) };
+            if let Some(n) = t.keys().find(|n| n.starts_with("no-")) {
+                bail!("config {}: [{k}] {n}: a boolean is written as its name with true or false (`{} = false`); `--no-x` is the command line's negation", path.display(), &n[3..]);
             }
         }
         Ok(ConfigFile { path: path.to_path_buf(), sha256, tables })
@@ -359,6 +360,12 @@ impl Layers {
             if RESERVED_ENV.contains(&k.as_str()) || self.env_used.contains(k) {
                 continue;
             }
+            if let Some(rest) = k.strip_prefix("AEIOU_NO_") {
+                let option = rest.to_ascii_lowercase().replace('_', "-");
+                if ALL_OPTIONS.contains(&option.as_str()) {
+                    bail!("{k}: a boolean is set in the environment as {}=true or false; `--no-x` is the command line's negation", env_name(&option));
+                }
+            }
             let as_option = k.trim_start_matches(ENV_PREFIX).to_ascii_lowercase().replace('_', "-");
             if !ALL_OPTIONS.contains(&as_option.as_str()) {
                 self.warnings.push(format!("{k} is set and is no option of any subcommand; ignored"));
@@ -511,6 +518,13 @@ mod tests {
         let cfg = write(&d, "[nope]\nthreads = 3\n");
         let e = Layers::with_env("run", Some(&cfg), env(&[])).unwrap_err().to_string();
         assert!(e.contains("`nope`"), "{e}");
+        // the negation is the command line's: the file and the environment say false
+        let cfg = write(&d, "[run]\nno-require-cold = true\n");
+        let e = Layers::with_env("run", Some(&cfg), env(&[])).unwrap_err().to_string();
+        assert!(e.contains("no-require-cold") && e.contains("`require-cold = false`"), "{e}");
+        let mut l = Layers::with_env("run", None, env(&[("AEIOU_NO_REQUIRE_COLD", "1")])).unwrap();
+        let e = l.finish().unwrap_err().to_string();
+        assert!(e.contains("AEIOU_REQUIRE_COLD=true or false"), "{e}");
         let mut l = Layers::with_env("run", None, env(&[("AEIOU_BOGUS", "1"), ("AEIOU_ROOT", "/x"), ("AEIOU_SCHEMA_DIR", "/s")])).unwrap();
         l.layered::<usize>("threads", None, None).unwrap();
         l.finish().unwrap();

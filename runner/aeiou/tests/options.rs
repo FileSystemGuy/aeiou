@@ -2,7 +2,9 @@
 //! subcommand prints, the environment and config layers, the refusal of a fixed option from a
 //! lower layer, the negation of a flag the file turned on, the report's `layers`, and, over two
 //! ranks, every host's block in rank 0's report with the options that differ printed, and the
-//! identity refusal naming the field.
+//! identity refusal naming the field; and the `--[no-]x` notation: the help shows one row per
+//! boolean, aligned, `--x`/`--no-x` parse with the last one winning, the brackets typed
+//! literally are explained.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -107,7 +109,7 @@ fn every_subcommand_prints_the_block_with_sources() {
     // again; the report records the layers
     let json = root.join("report.json");
     let (ok, text, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL)
-        .args(["--gpus", "2", "--time-scale", "0", "--require-cold=false"])
+        .args(["--gpus", "2", "--time-scale", "0", "--require-cold", "--no-require-cold"])
         .arg("--report-json")
         .arg(&json)
         .env("AEIOU_ROOT", &root)
@@ -219,4 +221,75 @@ fn two_ranks_record_every_host_and_print_the_differences_and_a_mismatch_names_th
     assert!(outs.iter().all(|(ok, _, _)| !ok));
     assert!(outs.iter().any(|(_, _, e)| e.contains("not the same run: seed 2 differs from rank 0's 1")), "{outs:?}");
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn every_boolean_reads_no_x_in_the_help_and_parses_both_ways() {
+    let help = |sub: &str| {
+        let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).arg(sub).arg("--help"));
+        assert!(ok, "{err}");
+        text
+    };
+    let run = help("run");
+    for flag in ["sqpoll-shared", "defer-taskrun", "coop-taskrun", "require-cold", "drop-caches", "clean-namespaces", "ignore-limits", "report-takes"] {
+        assert!(run.contains(&format!("--[no-]{flag} ")), "{flag} not shown as --[no-]{flag}:\n{run}");
+        assert!(!run.contains(&format!("--no-{flag}")), "the twin --no-{flag} is shown:\n{run}");
+    }
+    assert!(run.contains("Every boolean reads --[no-]x: --x turns it on, --no-x turns it off, the last one on the line wins."), "{run}");
+    assert!(help("dry-run").contains("--[no-]metrics "));
+    // every row of a heading group starts its description in the same column: the longest
+    // name sets it, and a --[no-] name is never the longest in its group (the test fails when
+    // a flag is added that makes it so, and the README §14 note then needs the next-line layout)
+    // the column the description starts in: past the name and the padding after it
+    let column = |line: &str| {
+        let indent = line.len() - line.trim_start().len();
+        let body = line.trim_start();
+        let gap = body.find("  ")?;
+        let desc = body[gap..].len() - body[gap..].trim_start().len();
+        Some(indent + gap + desc)
+    };
+    let mut group: Vec<(String, usize)> = Vec::new();
+    let mut groups = Vec::new();
+    for line in run.lines() {
+        if line.starts_with("      --") {
+            if let Some(c) = column(line) {
+                group.push((line.to_string(), c));
+            }
+        } else if !line.starts_with(' ') && !group.is_empty() {
+            groups.push(std::mem::take(&mut group));
+        }
+    }
+    groups.push(group);
+    for g in groups.iter().filter(|g| g.len() > 1) {
+        let cols: std::collections::BTreeSet<usize> = g.iter().map(|(_, c)| *c).collect();
+        // names longer than the column wrap their description to the next line; those rows
+        // have no two-space gap after the name and are not counted
+        let names_only: Vec<&(String, usize)> = g.iter().filter(|(l, c)| l.len() > *c).collect();
+        let cols2: std::collections::BTreeSet<usize> = names_only.iter().map(|(_, c)| *c).collect();
+        assert!(cols2.len() <= 1, "descriptions start in different columns {cols:?}:\n{}", g.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>().join("\n"));
+    }
+    // --x then --no-x is off, --no-x then --x is on, and the notation typed literally is explained
+    let metrics = |flags: &[&str]| {
+        let (ok, text, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "1"]).args(flags));
+        assert!(ok, "{err}");
+        row(&block(&text), "metrics").clone()
+    };
+    assert_eq!(metrics(&["--metrics", "--no-metrics"]), ("metrics".into(), "false".into(), "cli".into()));
+    assert_eq!(metrics(&["--no-metrics", "--metrics"]), ("metrics".into(), "true".into(), "cli".into()));
+    assert_eq!(metrics(&["--no-metrics"]), ("metrics".into(), "false".into(), "cli".into()));
+    assert_eq!(metrics(&[]), ("metrics".into(), "false".into(), "default".into()));
+    let (ok, _, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "1", "--[no-]metrics"]));
+    assert!(!ok);
+    assert!(err.contains("type --metrics to turn it on or --no-metrics to turn it off"), "{err}");
+    // the file and the environment say false, never no-
+    let d = tmpdir("neg");
+    let cfg = d.join("aeiou.toml");
+    std::fs::write(&cfg, "[run]\nno-drop-caches = true\n").unwrap();
+    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
+    assert!(!ok);
+    assert!(err.contains("[run] no-drop-caches") && err.contains("`drop-caches = false`"), "{err}");
+    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).env("AEIOU_NO_DROP_CACHES", "1"));
+    assert!(!ok);
+    assert!(err.contains("AEIOU_DROP_CACHES=true or false"), "{err}");
+    std::fs::remove_dir_all(&d).unwrap();
 }

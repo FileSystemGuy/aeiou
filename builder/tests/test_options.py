@@ -75,6 +75,13 @@ def test_fixed_refusals_unknown_keys_and_warnings(tmp_path):
     l.layered("threads", None, int)
     l.finish()
     assert l.warnings == ["AEIOU_BOGUS is set and is no option of any subcommand; ignored"]
+    # the negation is the command line's: the file and the environment say false
+    cfg.write_text("[run]\nno-require-cold = true\n")
+    with pytest.raises(BuildError, match=r"no-require-cold: a boolean is written as its name with true or false \(`require-cold = false`\)"):
+        options.Layers("run", cfg, env={})
+    l = options.Layers("run", None, env={"AEIOU_NO_REQUIRE_COLD": "1"})
+    with pytest.raises(BuildError, match="AEIOU_REQUIRE_COLD=true or false"):
+        l.finish()
 
 
 def test_the_block_is_the_runners(tmp_path, capsys):

@@ -111,6 +111,10 @@ class ConfigFile:
                                  f"([run], [dry-run], [datagen], [check]), spelled as the long flags")
             if not isinstance(v, dict):
                 raise BuildError(f"config {path}: [{k}] must be a table")
+            for n in v:
+                if n.startswith("no-"):
+                    raise BuildError(f"config {path}: [{k}] {n}: a boolean is written as its name with true or false "
+                                     f"(`{n[3:]} = false`); `--no-x` is the command line's negation")
 
     def table(self, sub: str) -> dict:
         return self.tables.get(sub, {})
@@ -187,6 +191,9 @@ class Layers:
         for k in sorted(self.env):
             if k in RESERVED_ENV or k in self.env_used:
                 continue
+            if k.startswith("AEIOU_NO_") and k[len("AEIOU_NO_"):].lower().replace("_", "-") in ALL_OPTIONS:
+                raise BuildError(f"{k}: a boolean is set in the environment as {env_name(k[len('AEIOU_NO_'):].lower().replace('_', '-'))}=true or false; "
+                                 f"`--no-x` is the command line's negation")
             if k[len(ENV_PREFIX):].lower().replace("_", "-") not in ALL_OPTIONS:
                 self.warnings.append(f"{k} is set and is no option of any subcommand; ignored")
         if self.config is not None:

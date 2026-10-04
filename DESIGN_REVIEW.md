@@ -3381,9 +3381,20 @@ file is named by `--config` or `AEIOU_CONFIG`, never found in the working direct
 an XDG path, because two hosts with different hidden files is the classic way a benchmark
 site gets unexplainable results); **the report records the provenance** (`layers`: the
 file's path and sha256, the variables that contributed, every option's value and source);
-**every layered boolean has a negation** (built as `--flag=false` rather than a `--no-flag`
+**every layered boolean has a negation** (~~built as `--flag=false` rather than a `--no-flag`
 twin: one flag per option in the help, the form mirrors the file's `flag = false`, and `=`
-is required so a bare value is never taken for the abstract); and, instead of a
+is required so a bare value is never taken for the abstract~~ built first as `--flag=false`;
+replaced the same day, at the user's preference, by the `--no-flag` twin shown in the help as
+one row `--[no-]flag`: the notation git's documentation uses, so a Linux audience reads it at
+once, one row per boolean, the regularity visible, and `--no-x` reads as English in a shell
+history where `--x=false` reads as a config value that wandered onto the command line. The
+UX assessment extended it to every boolean, the fixed ones included, since a convention with
+exceptions has to be checked and one without is learned once; dropped the `=false` spelling,
+one way to do a thing; kept `true`/`false` as the file's and the environment's form, with
+`no-x` keys and `AEIOU_NO_X` refused so the double negative cannot be written; and stated the
+notation once at the foot of the help, with the brackets typed literally explained rather
+than parsed. Clap renders it from a long name spelled `[no-]x` with `x` as alias and a hidden
+twin, so alignment is clap's own; a test pins it); and, instead of a
 `--show-config`, **every invocation prints the block** of options with their sources (the
 user's choice: the information is wanted every time, not on request). The merge rule for
 repeated values is *replace*, so a command-line value can always displace a file value; as

@@ -21,7 +21,7 @@ use aeiou::payload;
 use aeiou::run::{self, Report, RunOpts, UringOpts};
 
 #[derive(Parser)]
-#[command(name = "aeiou", version, about = "Abstract-driven I/O workload runner")]
+#[command(name = "aeiou", version, about = "Abstract-driven I/O workload runner", after_help = NEGATION)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -40,11 +40,27 @@ enum Cmd {
         files: Vec<PathBuf>,
     },
     /// Compute every actor's op stream and the workload fingerprint without doing any I/O.
+    #[command(after_help = NEGATION)]
     DryRun(DryRunArgs),
     /// Write the datasets an abstract declares under --root, with a manifest per dataset root.
     Datagen(DatagenArgs),
     /// Execute the abstract against --root with a blocking I/O backend (several hosts: --ranks R --rank r --coordinator HOST:PORT on each).
+    #[command(after_help = NEGATION)]
     Run(RunCmd),
+}
+
+/// Every boolean has a negation, shown as `--[no-]x` (runner/README.md §14).
+const NEGATION: &str = "Every boolean reads --[no-]x: --x turns it on, --no-x turns it off, the last one on the line wins.";
+
+/// What the command line said about a boolean: `--x` (true), `--no-x` (false), or nothing.
+fn neg(on: bool, off: bool) -> Option<bool> {
+    if on {
+        Some(true)
+    } else if off {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// The shape and its parameters: what every subcommand that takes an abstract takes.
@@ -136,14 +152,20 @@ struct RunCmd {
     sqpoll: Option<u32>,
     /// One submission thread, and one io-wq, shared by every loop
     /// (IORING_SETUP_ATTACH_WQ) instead of one per loop; needs --sqpoll.
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "io_uring")]
-    sqpoll_shared: Option<bool>,
+    #[arg(long = "[no-]sqpoll-shared", alias = "sqpoll-shared", overrides_with = "no_sqpoll_shared", help_heading = "io_uring")]
+    sqpoll_shared: bool,
+    #[arg(long = "no-sqpoll-shared", hide = true, overrides_with = "sqpoll_shared")]
+    no_sqpoll_shared: bool,
     /// IORING_SETUP_SINGLE_ISSUER with IORING_SETUP_DEFER_TASKRUN (not with --sqpoll).
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "io_uring")]
-    defer_taskrun: Option<bool>,
+    #[arg(long = "[no-]defer-taskrun", alias = "defer-taskrun", overrides_with = "no_defer_taskrun", help_heading = "io_uring")]
+    defer_taskrun: bool,
+    #[arg(long = "no-defer-taskrun", hide = true, overrides_with = "defer_taskrun")]
+    no_defer_taskrun: bool,
     /// IORING_SETUP_COOP_TASKRUN.
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "io_uring")]
-    coop_taskrun: Option<bool>,
+    #[arg(long = "[no-]coop-taskrun", alias = "coop-taskrun", overrides_with = "no_coop_taskrun", help_heading = "io_uring")]
+    coop_taskrun: bool,
+    #[arg(long = "no-coop-taskrun", hide = true, overrides_with = "coop_taskrun")]
+    no_coop_taskrun: bool,
     /// Requests each loop's AIO context holds (io_setup's nr_events; the host's total is
     /// bounded by fs.aio-max-nr). Default 256.
     #[arg(long, value_name = "N", help_heading = "libaio")]
@@ -180,20 +202,28 @@ struct RunCmd {
     max_gap: Option<f64>,
     /// Fail if this host would read input objects it wrote itself, or if dataset pages are
     /// in its page cache at the start (mincore over 256 sampled files per dataset).
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "Checks")]
-    require_cold: Option<bool>,
+    #[arg(long = "[no-]require-cold", alias = "require-cold", overrides_with = "no_require_cold", help_heading = "Checks")]
+    require_cold: bool,
+    #[arg(long = "no-require-cold", hide = true, overrides_with = "require_cold")]
+    no_require_cold: bool,
     /// On every host, before the start gate: sync, then drop the page cache, dentries, and
     /// inodes (3 into /proc/sys/vm/drop_caches), then sample the datasets' residency. Needs
     /// root; the run refuses when it fails.
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "Checks")]
-    drop_caches: Option<bool>,
+    #[arg(long = "[no-]drop-caches", alias = "drop-caches", overrides_with = "no_drop_caches", help_heading = "Checks")]
+    drop_caches: bool,
+    #[arg(long = "no-drop-caches", hide = true, overrides_with = "drop_caches")]
+    no_drop_caches: bool,
     /// Empty the namespace roots before starting instead of refusing.
-    #[arg(long, help_heading = "Checks")]
+    #[arg(long = "[no-]clean-namespaces", alias = "clean-namespaces", overrides_with = "no_clean_namespaces", help_heading = "Checks")]
     clean_namespaces: bool,
+    #[arg(long = "no-clean-namespaces", hide = true, overrides_with = "clean_namespaces")]
+    no_clean_namespaces: bool,
     /// Start even when the estimated open files, threads, or mappings exceed this host's
     /// limits (RLIMIT_NOFILE, RLIMIT_NPROC, kernel.threads-max, vm.max_map_count).
-    #[arg(long, help_heading = "Checks")]
+    #[arg(long = "[no-]ignore-limits", alias = "ignore-limits", overrides_with = "no_ignore_limits", help_heading = "Checks")]
     ignore_limits: bool,
+    #[arg(long = "no-ignore-limits", hide = true, overrides_with = "ignore_limits")]
+    no_ignore_limits: bool,
     /// Write the run's report to FILE as JSON (runner/README.md §12): the configuration, the
     /// results the text report prints with the latency histograms in full, and the verdict.
     /// Written when the run fails too, with the error; rank 0 of several hosts writes the
@@ -201,8 +231,10 @@ struct RunCmd {
     #[arg(long, value_name = "FILE", help_heading = "Report")]
     report_json: Option<PathBuf>,
     /// With --report-json: every take of every instance (stall and compute), not only the sums.
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "Report")]
-    report_takes: Option<bool>,
+    #[arg(long = "[no-]report-takes", alias = "report-takes", overrides_with = "no_report_takes", help_heading = "Report")]
+    report_takes: bool,
+    #[arg(long = "no-report-takes", hide = true, overrides_with = "report_takes")]
+    no_report_takes: bool,
 }
 
 /// `aeiou run`'s options as resolved through the layers (`options.rs`): the command line's
@@ -254,8 +286,8 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     l.fixed("io-backend", &a.backend.clone().unwrap_or_else(|| "the abstract's".into()), a.backend.is_some())?;
     l.fixed("expect-fingerprint", &a.expect_fingerprint, a.expect_fingerprint.is_some())?;
     l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
-    l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces)?;
-    l.fixed("ignore-limits", &a.ignore_limits, a.ignore_limits)?;
+    l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces || a.no_clean_namespaces)?;
+    l.fixed("ignore-limits", &a.ignore_limits, a.ignore_limits || a.no_ignore_limits)?;
     let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required (the command line, $AEIOU_ROOT, or [run] root in the config file)"))?;
     let o = RunOptions {
         root,
@@ -265,9 +297,9 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         time_scale: l.layered("time-scale", a.time_scale, Some(1.0))?.unwrap_or(1.0),
         iowq_max_workers: l.layered("iowq-max-workers", a.iowq_max_workers, None)?,
         sqpoll: l.layered("sqpoll", a.sqpoll, None)?,
-        sqpoll_shared: l.flag("sqpoll-shared", a.sqpoll_shared, false)?,
-        defer_taskrun: l.flag("defer-taskrun", a.defer_taskrun, false)?,
-        coop_taskrun: l.flag("coop-taskrun", a.coop_taskrun, false)?,
+        sqpoll_shared: l.flag("sqpoll-shared", neg(a.sqpoll_shared, a.no_sqpoll_shared), false)?,
+        defer_taskrun: l.flag("defer-taskrun", neg(a.defer_taskrun, a.no_defer_taskrun), false)?,
+        coop_taskrun: l.flag("coop-taskrun", neg(a.coop_taskrun, a.no_coop_taskrun), false)?,
         aio_depth: l.layered("aio-depth", a.aio_depth, None)?,
         mmap_mode: l.layered("mmap-mode", a.mmap_mode, None)?,
         mmap_consume: l.layered("mmap-consume", a.mmap_consume, None)?,
@@ -276,10 +308,10 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         coordinator: l.layered("coordinator", a.coordinator, None)?,
         rank_rotate: l.layered("rank-rotate", a.rank_rotate, Some(0))?.unwrap_or(0),
         max_gap: l.layered("max-gap", a.max_gap, None)?,
-        require_cold: l.flag("require-cold", a.require_cold, false)?,
-        drop_caches: l.flag("drop-caches", a.drop_caches, false)?,
+        require_cold: l.flag("require-cold", neg(a.require_cold, a.no_require_cold), false)?,
+        drop_caches: l.flag("drop-caches", neg(a.drop_caches, a.no_drop_caches), false)?,
         report_json: l.layered("report-json", a.report_json, None)?,
-        report_takes: l.flag("report-takes", a.report_takes, false)?,
+        report_takes: l.flag("report-takes", neg(a.report_takes, a.no_report_takes), false)?,
         run: a.run,
         backend: a.backend,
         expect_fingerprint: a.expect_fingerprint,
@@ -321,8 +353,10 @@ struct DryRunArgs {
     limit: Option<usize>,
     /// Compute the locality metrics of the op stream (reuse distance, sequential runs,
     /// popularity, request sizes, fan-out and depth, read/write mix); runner/README.md §10.
-    #[arg(long, help_heading = "Metrics")]
+    #[arg(long = "[no-]metrics", alias = "metrics", overrides_with = "no_metrics", help_heading = "Metrics")]
     metrics: bool,
+    #[arg(long = "no-metrics", hide = true, overrides_with = "metrics")]
+    no_metrics: bool,
     /// With --metrics: the block size of the reuse-distance and popularity units.
     #[arg(long, value_name = "BYTES", default_value_t = 4096, help_heading = "Metrics")]
     metrics_block: u64,
@@ -342,6 +376,9 @@ fn main() {
 }
 
 fn real_main() -> Result<()> {
+    if let Some(a) = std::env::args().skip(1).find(|a| a.starts_with("--[no-]")) {
+        bail!("{a}: `--[no-]x` is the help's notation for a boolean and its negation; type --{0} to turn it on or --no-{0} to turn it off", &a["--[no-]".len()..]);
+    }
     let cli = Cli::parse();
     let config = cli.config.as_deref();
     match cli.cmd {
@@ -863,7 +900,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("gpu", &a.gpu, a.gpu.is_some())?;
     l.fixed("steps", &a.steps, a.steps.is_some())?;
     l.fixed("limit", &a.limit, a.limit.is_some())?;
-    l.fixed("metrics", &(a.metrics || a.metrics_json.is_some()), a.metrics)?;
+    l.fixed("metrics", &(a.metrics || a.metrics_json.is_some()), a.metrics || a.no_metrics)?;
     l.fixed("metrics-block", &a.metrics_block, a.metrics_block != 4096)?;
     l.fixed("metrics-sample", &a.metrics_sample, a.metrics_sample != 1)?;
     l.fixed("metrics-json", &a.metrics_json, a.metrics_json.is_some())?;
@@ -952,7 +989,11 @@ mod tests {
                     continue;
                 }
                 names.insert(match a.get_long() {
-                    Some(l) => l.to_string(),
+                    Some(l) if l.starts_with("no-") => {
+                        assert!(a.is_hide_set(), "--{l} is a negation twin and should be hidden");
+                        continue;
+                    }
+                    Some(l) => l.trim_start_matches("[no-]").to_string(),
                     None => a.get_id().as_str().trim_end_matches("_path").to_string(),
                 });
             }

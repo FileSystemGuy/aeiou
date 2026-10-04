@@ -25,9 +25,9 @@ cargo test --release
 | Command | What it does |
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
-| `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
+| `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
 | `aeiou datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params-file FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap (default: the backend the abstract declares, `sync` when it declares none)] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits] [--report-json FILE [--report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params-file FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap (default: the backend the abstract declares, `sync` when it declares none)] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -1081,7 +1081,7 @@ the first refuses (53 needed); with `ulimit -Sn 40` the soft limit is raised and
 
 ## 12. The JSON report (2026-10-01)
 
-`aeiou run … --report-json FILE [--report-takes]` writes what the text report prints as one
+`aeiou run … --report-json FILE [--[no-]report-takes]` writes what the text report prints as one
 JSON document, format `aeiou_report: 1`, for the tools that compare runs (`report.rs`; the
 reasoning is in `DESIGN_REVIEW.md` §3.41). The text report is unchanged and stays the
 thing a person reads. **The choices below were made while building and confirmed by the user
@@ -1177,7 +1177,7 @@ strace -f -ttt -T -yy -e trace=%file,%desc,%process -o trace.txt <command>      
 aeiou-trace export trace.txt --root /mnt/data -o app.jsonl                       # prints the sha256
 # in the abstract: w.trace("app.jsonl", "<sha256>") in an actor with count=1
 aeiou dry-run app.ast.json --gpus 1 --metrics-json node.json     # equals `aeiou-trace metrics trace.txt`
-aeiou run app.ast.json --gpus 1 --root /mnt/data --time-scale 0 [--clean-namespaces]
+aeiou run app.ast.json --gpus 1 --root /mnt/data --time-scale 0 [--[no-]clean-namespaces]
 ```
 
 **The file** (`trace.rs`; written by `aeiou-trace export`, `builder/README.md` §7). JSON
@@ -1329,13 +1329,25 @@ the case the layers exist for: a launcher sets `AEIOU_RANK` from its own rank va
 the same command line runs on every host. (No layered option is a list, so "replace" is the
 only merge rule in play.) `--root` is required from some layer.
 
-**Negation.** Every layered boolean takes `--flag` (true) or `--flag=false`, so the command
-line can turn off what the file turned on; `=` is required, so a bare value is never taken
-for the abstract. The same six are `true`/`false` in the environment and the file:
-`--sqpoll-shared`, `--defer-taskrun`, `--coop-taskrun`, `--require-cold`, `--drop-caches`,
-`--report-takes`. Their cross-checks (`--sqpoll-shared` needs `--sqpoll`, `--defer-taskrun`
-excludes it, `--report-takes` needs `--report-json`) are made on the resolved values, since
-the two sides may come from different layers.
+**Negation: `--[no-]x`.** Every boolean of every subcommand has a negation: `--x` turns it
+on, `--no-x` turns it off, the last one on the line wins, so the command line can turn off
+what the file turned on, and a wrapper script can append to a line it did not write. The
+help shows the pair as one row, `--[no-]x`, the notation git's documentation uses, and says
+so once at its foot; the brackets typed literally are explained rather than parsed. (Built
+first the same day as `--x`/`--x=false`, replaced with the twin form at the user's
+preference: one spelling, one row, and the regularity visible.) In the environment and the
+file a boolean is a value, `true` or `false` under its own name; a `no-x` key or an
+`AEIOU_NO_X` variable is refused with the spelling to use, so the double negative
+`no-require-cold = true` cannot be written. The layered booleans are `--sqpoll-shared`,
+`--defer-taskrun`, `--coop-taskrun`, `--require-cold`, `--drop-caches`, `--report-takes`;
+the fixed ones, `--clean-namespaces`, `--ignore-limits`, and dry-run's `--metrics`, have the
+negation too, for the regularity (nothing below the command line can turn them on). Their
+cross-checks (`--sqpoll-shared` needs `--sqpoll`, `--defer-taskrun` excludes it,
+`--report-takes` needs `--report-json`) are made on the resolved values, since the two sides
+may come from different layers. Clap renders the row from a long name spelled `[no-]x` with
+`x` as its alias and a hidden `--no-x` twin that overrides it, so the column alignment is
+clap's own; `tests/options.rs` checks that every group's descriptions start in one column,
+which holds while no `--[no-]` name is the longest of its group.
 
 **The block.** Every invocation prints, after the `abstract` line, one line per option with
 its value in effect and its source, fixed options first, the config file last, then any
@@ -1379,5 +1391,6 @@ prefix, and the differences table shows the rest.
 **Tests.** `options.rs` (precedence, the negation, the refusals, typed values, the
 differences), `tests/options.rs` through the binary (every subcommand's block, the layers,
 the refusals, the report's `layers`, two ranks with a differing `--buffer-mib` and the named
-identity refusal), and `main.rs`'s check that `options::ALL_OPTIONS` is the set of clap
+identity refusal, the `--[no-]x` help rows and their alignment, `--x --no-x` both ways, the
+notation typed literally), and `main.rs`'s check that `options::ALL_OPTIONS` is the set of clap
 definitions; `builder/tests/test_options.py` for the Python mirror and `aeiou-datagen`.
