@@ -200,9 +200,10 @@ def write_manifest(dir_: pathlib.Path, m: dict) -> pathlib.Path:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="aeiou-datagen", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="aeiou-datagen", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 usage="aeiou-datagen [OPTIONS] --root DIR AST\n       (--root may also come from $AEIOU_ROOT or `root` in the [datagen] table of the config file)")
     ap.add_argument("ast", type=pathlib.Path)
-    ap.add_argument("--root", type=pathlib.Path, help="directory the abstract's paths are relative to (or $AEIOU_ROOT, or [datagen] root in --config)")
+    ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="required: directory the abstract's paths are relative to; from the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
     ap.add_argument("--params-file", action="append", default=[], type=pathlib.Path, metavar="FILE")
     ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--gpus", type=int, default=1)
@@ -234,7 +235,7 @@ def resolve(a) -> options.Layers:
     layers.fixed("dataset", a.dataset, bool(a.dataset))
     a.root = layers.layered("root", a.root, pathlib.Path)
     if a.root is None:
-        raise BuildError("--root DIR is required (the command line, $AEIOU_ROOT, or [datagen] root in the config file)")
+        raise BuildError("--root DIR is required: give it on the command line, as $AEIOU_ROOT, or as `root` in the [datagen] table of the TOML file --config or $AEIOU_CONFIG names")
     a.threads = layers.layered("threads", a.threads, int)
     if a.threads is None:
         a.threads = os.cpu_count() or 1

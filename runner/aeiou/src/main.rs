@@ -43,9 +43,10 @@ enum Cmd {
     #[command(after_help = NEGATION)]
     DryRun(DryRunArgs),
     /// Write the datasets an abstract declares under --root, with a manifest per dataset root.
+    #[command(override_usage = "aeiou datagen [OPTIONS] --root <DIR> <ABSTRACT_PATH>\n       (--root may also come from $AEIOU_ROOT or `root` in the [datagen] table of the config file)")]
     Datagen(DatagenArgs),
     /// Execute the abstract against --root with a blocking I/O backend (several hosts: --ranks R --rank r --coordinator HOST:PORT on each).
-    #[command(after_help = NEGATION)]
+    #[command(after_help = NEGATION, override_usage = "aeiou run [OPTIONS] --gpus <GPUS> --root <DIR> <ABSTRACT_PATH>\n       (--root may also come from $AEIOU_ROOT or `root` in the [run] table of the config file)")]
     Run(RunCmd),
 }
 
@@ -96,8 +97,9 @@ struct DatagenArgs {
     /// Instance count, for dataset definitions that reference `gpus`.
     #[arg(long, default_value_t = 1, help_heading = "Workload")]
     gpus: i64,
-    /// Directory the abstract's paths are relative to.
-    #[arg(long, help_heading = "Writer")]
+    /// Required: directory the abstract's paths are relative to. From the command line, else
+    /// $AEIOU_ROOT, else `root` in the [datagen] table of the config file.
+    #[arg(long, value_name = "DIR", help_heading = "Writer")]
     root: Option<PathBuf>,
     /// Writer threads (default: all cores).
     #[arg(long, help_heading = "Writer")]
@@ -126,8 +128,10 @@ struct RunCmd {
     /// different workload on the storage, and the run says so.
     #[arg(long = "io-backend", help_heading = "Backend")]
     backend: Option<String>,
-    /// Directory the abstract's paths are relative to (datasets and namespaces live under it).
-    #[arg(long, help_heading = "Backend")]
+    /// Required: directory the abstract's paths are relative to (datasets and namespaces live
+    /// under it). From the command line, else $AEIOU_ROOT, else `root` in the [run] table of
+    /// the config file.
+    #[arg(long, value_name = "DIR", help_heading = "Backend")]
     root: Option<PathBuf>,
     /// Event-loop threads for the io_uring and libaio backends (default: one per core, at most one
     /// per actor instance). The other backends run one thread per actor and refuse it.
@@ -288,7 +292,7 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
     l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces || a.no_clean_namespaces)?;
     l.fixed("ignore-limits", &a.ignore_limits, a.ignore_limits || a.no_ignore_limits)?;
-    let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required (the command line, $AEIOU_ROOT, or [run] root in the config file)"))?;
+    let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required: give it on the command line, as $AEIOU_ROOT, or as `root` in the [run] table of the TOML file --config or $AEIOU_CONFIG names"))?;
     let o = RunOptions {
         root,
         threads: l.layered("threads", a.threads, None)?,
@@ -396,7 +400,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("dedupe", &a.dedupe, a.dedupe != 1)?;
     l.fixed("compress", &a.compress, a.compress != 1)?;
     l.fixed("dataset", &a.datasets, !a.datasets.is_empty())?;
-    let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required (the command line, $AEIOU_ROOT, or [datagen] root in the config file)"))?;
+    let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required: give it on the command line, as $AEIOU_ROOT, or as `root` in the [datagen] table of the TOML file --config or $AEIOU_CONFIG names"))?;
     let threads = l.layered::<usize>("threads", a.threads, None)?;
     l.finish()?;
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
