@@ -25,7 +25,7 @@ aeiou-trace metrics trace.mixed.txt --root /mnt/nfs/out \
     --instance-root <pid of rank 0> --instance-root <pid of rank 1> -o trace.mixed.metrics.json
 python params.py /mnt/nfs/out/ckpt/step_000200 200 "what this is" > fitted.mixed.params.json
 aeiou dry-run ../../../schema/examples/ckpt_restore.ast.json --gpus 2 \
-    --params fitted.mixed.params.json --metrics-json abstract.metrics.json
+    --params-file fitted.mixed.params.json --metrics-json abstract.metrics.json
 aeiou-trace compare trace.mixed.metrics.json abstract.metrics.json
 ```
 

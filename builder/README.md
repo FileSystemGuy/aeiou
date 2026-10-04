@@ -192,7 +192,7 @@ or distribution); `safetensors` reads real shard headers and emits `model_load`'
 table (`shard`, `off`, `bytes`, `split`, `rows`, `row_bytes`, `hdr_len`, `shards`,
 `shard_bytes`, `tp`), deciding column- or row-parallel by tensor name (`--column`, `--row`,
 Llama-shaped defaults) and marking the rest replicated. The runner takes the file with
-`aeiou run --params FILE` (repeatable; `--param` still wins). `python -m aeiou.params` is the
+`aeiou run --params-file FILE` (repeatable; `--param` still wins). `python -m aeiou.params` is the
 same program.
 
 ## 6. Format classes and `aeiou-datagen` (2026-09-30)
@@ -233,7 +233,7 @@ probes write a one-row file in memory with the library; the libraries are the `f
 extra and are pre-imported by the hermetic child. Arrow IPC, MDS, and Megatron are not
 written yet (`DESIGN_REVIEW.md` §3.28 says why).
 
-**`aeiou-datagen AST --root DIR [--params FILE]… [--param k=v]… [--gpus G] [--dedupe D]
+**`aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G] [--dedupe D]
 [--compress C] [--threads N] [--dataset NAME]…** writes every dataset that has a format class:
 names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
 bytes from `dgen-py` 0.3.0 under the `aeiou-positional/1` wrapper (bit-identical to the Rust
@@ -256,9 +256,9 @@ and confirmed by the user the same day (decided 2026-10-01).**
 
 ```
 strace -f -ttt -T -yy -e trace=%file,%desc,%process -o trace.txt <command>
-aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--block BYTES] [--sample N]
+aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--metrics-block BYTES] [--metrics-sample N]
             [--instance-root PID]… [--chain-gap-us US] [--cwd DIR] -o trace.metrics.json
-aeiou dry-run x.ast.json --gpus 1 --params fitted.params.json --metrics-json abstract.metrics.json
+aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --metrics-json abstract.metrics.json
 aeiou-trace compare trace.metrics.json abstract.metrics.json [--template-b NAME] [--only PREFIX]… [--max-distance X]
 aeiou-trace compare trace.metrics.json abstract.metrics.json --judge [--self other-seed.metrics.json]… [--tolerances FILE]
 ```

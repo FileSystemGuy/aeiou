@@ -74,7 +74,7 @@ def main():
     ap.add_argument("--block", type=int, default=16, help="tokens in a block of the engine's own cache")
     ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--doc", default="")
-    ap.add_argument("-o", "--output", required=True)
+    ap.add_argument("-o", "--out", required=True)
     a = ap.parse_args()
 
     ansi = re.compile(r"\x1b\[[0-9;]*m")
@@ -123,7 +123,7 @@ def main():
     for s in a.set:
         k, v = s.split("=", 1)
         params[k] = json.loads(v)
-    with open(a.output, "w") as f:                    # a parameter to a line
+    with open(a.out, "w") as f:                    # a parameter to a line
         f.write('{"params_version": 1, "abstract": %s,\n "doc": %s,\n "params": {\n%s}}\n' % (
             json.dumps(a.abstract), json.dumps(a.doc), ",\n".join("  %s: %s" % (json.dumps(k), json.dumps(v)) for k, v in params.items())))
     print("requests %d, open conversations %d, begun after an ended one %d, tokens in %d out %d (mean %.1f, %.1f), returning conversations held whole %d of %d" % (

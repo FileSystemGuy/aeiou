@@ -5,7 +5,7 @@ reference set. A parameter file (`<abstract>.<set>.params.json`, `schema/params.
 `schema/README.md` §8) fills the slots from the three sources of `GRAMMAR_OPTIONS.md` Option D
 (configuration, measurement, a trace), so one published shape can carry several parameter
 sets and a fitted set can be reviewed and hashed on its own. The runner applies it with
-`aeiou run --params FILE`, over the defaults and under `--param`.
+`aeiou run --params-file FILE`, over the defaults and under `--param`.
 
     aeiou-params defaults  AST.json [-o FILE] [--doc TEXT] [--pin]   the defaults as a starting set
     aeiou-params check     AST.json FILE...                          validate sets against an abstract

@@ -18,7 +18,7 @@ aeiou-trace metrics trace.nocache.txt --root /mnt/nfs -o trace.nocache.metrics.j
 python hops.py trace.nocache.txt /mnt/nfs/index                  # rounds, batch sizes, sector spread
 python hops.py trace.nocache.txt /mnt/nfs/index --params "…" > fitted.nocache.params.json
 aeiou dry-run ../../../schema/examples/vdb_search_diskann.ast.json --gpus 1 \
-    --params fitted.nocache.params.json --metrics-json abstract.metrics.json
+    --params-file fitted.nocache.params.json --metrics-json abstract.metrics.json
 ```
 
 Three things about the capture:

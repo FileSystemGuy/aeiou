@@ -22,7 +22,7 @@ strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt \
     python train.py /mnt/nfs/corpus/train 2 2 2 x             # or: … 4 2 2 x
 aeiou-trace metrics trace.txt --root /mnt/nfs/corpus -o trace.metrics.json
 aeiou dry-run ../../../schema/examples/train_large_samples.ast.json --gpus 1 \
-    --params fitted.140MiB.params.json --metrics-json abstract.metrics.json
+    --params-file fitted.140MiB.params.json --metrics-json abstract.metrics.json
 aeiou-trace compare trace.metrics.json abstract.metrics.json
 ```
 

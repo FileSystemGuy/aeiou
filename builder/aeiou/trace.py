@@ -249,7 +249,7 @@ class Metrics:
             else:
                 self.reuse[hit[1]][kind].add(hit[0] * n * b, n)
         if len(inst.last) > MAX_ENTRIES:
-            raise SystemExit(f"aeiou-trace: more than {MAX_ENTRIES} distinct blocks in one instance; use --sample N or a larger --block")
+            raise SystemExit(f"aeiou-trace: more than {MAX_ENTRIES} distinct blocks in one instance; use --metrics-sample N or a larger --metrics-block")
         runs = self.runs.setdefault(context, {})
         run = runs.get((pid, kind))
         if run is not None and run[0] != offset:
@@ -1445,17 +1445,17 @@ def main(argv=None) -> int:
     mp.add_argument("--root", action="append", default=[], metavar="DIR", help="count only calls on paths under DIR (repeatable; not needed for an exported trace file)")
     mp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
     mp.add_argument("--cwd", metavar="DIR", help="resolve relative paths against DIR when the trace does not say (no -y)")
-    mp.add_argument("--block", type=int, default=4096, metavar="BYTES", help="the block size of the reuse-distance and popularity units (default 4096)")
-    mp.add_argument("--sample", type=int, default=1, metavar="N", help="keep one block and one object in N, chosen by hash, and scale (default 1: exact)")
+    mp.add_argument("--metrics-block", type=int, default=4096, metavar="BYTES", help="the block size of the reuse-distance and popularity units (default 4096)")
+    mp.add_argument("--metrics-sample", type=int, default=1, metavar="N", help="keep one block and one object in N, chosen by hash, and scale (default 1: exact)")
     mp.add_argument("--instance-root", action="append", type=int, default=[], metavar="PID", help="the process tree under PID is one instance (repeatable; needs clone in the trace); default: the whole trace is one instance")
     mp.add_argument("--chain-gap-us", type=float, metavar="US", help="report depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit")
-    mp.add_argument("-o", "--output", metavar="FILE", help="write the JSON document (aeiou_metrics: 1) to FILE instead of stdout")
+    mp.add_argument("-o", "--out", metavar="FILE", help="write the JSON document (aeiou_metrics: 1) to FILE instead of stdout")
     ep = sub.add_parser("export", help="write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root")
     ep.add_argument("trace", help="the strace output file, or - for stdin")
     ep.add_argument("--root", required=True, metavar="DIR", help="export only calls on paths under DIR, written relative to it")
     ep.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
     ep.add_argument("--cwd", metavar="DIR", help="resolve relative paths against DIR when the trace does not say (no -y)")
-    ep.add_argument("-o", "--output", required=True, metavar="FILE", help="the trace file to write; its sha256 is printed, for the abstract's `trace` node")
+    ep.add_argument("-o", "--out", required=True, metavar="FILE", help="the trace file to write; its sha256 is printed, for the abstract's `trace` node")
     cp = sub.add_parser("compare", help="compare two metrics documents, from a trace or from aeiou dry-run --metrics-json")
     cp.add_argument("a")
     cp.add_argument("b")
@@ -1469,25 +1469,25 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.cmd == "metrics":
-        if args.block < 1 or args.sample < 1:
-            ap.error("--block and --sample must be at least 1")
+        if args.metrics_block < 1 or args.metrics_sample < 1:
+            ap.error("--metrics-block and --metrics-sample must be at least 1")
         f = sys.stdin if args.trace == "-" else open(args.trace, encoding="utf-8", errors="replace")
         with f:
             first = f.readline()
             lines = itertools.chain([first], f)
             if first.startswith('{"aeiou_trace"'):
-                doc = metrics_of_export(lines, args.block, args.sample)
+                doc = metrics_of_export(lines, args.metrics_block, args.metrics_sample)
             elif not args.root:
                 ap.error("--root DIR is required for an strace")
             else:
-                doc = metrics_of(lines, [os.path.abspath(r) for r in args.root], args.block, args.sample, exclude=args.exclude, cwd=args.cwd, instance_roots=args.instance_root, chain_gap_us=args.chain_gap_us)
+                doc = metrics_of(lines, [os.path.abspath(r) for r in args.root], args.metrics_block, args.metrics_sample, exclude=args.exclude, cwd=args.cwd, instance_roots=args.instance_root, chain_gap_us=args.chain_gap_us)
         doc["trace"] = args.trace
         text = json.dumps(doc, indent=2) + "\n"
-        if args.output:
-            with open(args.output, "w", encoding="utf-8") as out:
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as out:
                 out.write(text)
             t = doc["total"]
-            print(f"{t['ops']} ops under {', '.join(doc['roots'])}: read {t['bytes_read']} bytes, wrote {t['bytes_written']} bytes; {doc['contexts']} thread(s); {args.output}")
+            print(f"{t['ops']} ops under {', '.join(doc['roots'])}: read {t['bytes_read']} bytes, wrote {t['bytes_written']} bytes; {doc['contexts']} thread(s); {args.out}")
             for k, v in doc["notes"].items():
                 print(f"note: {k}: {v}")
         else:
@@ -1498,8 +1498,8 @@ def main(argv=None) -> int:
         f = sys.stdin if args.trace == "-" else open(args.trace, encoding="utf-8", errors="replace")
         with f:
             header, events = export_of(f, os.path.abspath(args.root), exclude=args.exclude, cwd=args.cwd)
-        sha = write_export(args.output, header, events)
-        print(f"{header['lines']} line(s) on {header['lanes']} lane(s), {header['opens']} open(s), {len(header['creates'])} path(s) created under {header['root']}; {args.output}")
+        sha = write_export(args.out, header, events)
+        print(f"{header['lines']} line(s) on {header['lanes']} lane(s), {header['opens']} open(s), {len(header['creates'])} path(s) created under {header['root']}; {args.out}")
         print(f"sha256 {sha}")
         for k, v in header["notes"].items():
             print(f"note: {k}: {v}")

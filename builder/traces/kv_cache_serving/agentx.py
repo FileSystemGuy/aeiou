@@ -195,7 +195,7 @@ def fit(a):
                     "less of it); sys_tokens the median prefix a sub-agent's first prompt shares with its session; keep not measured "
                     "(the proxy saw no engine)." % (
                         a.corpus.rsplit("/", 1)[-1], params["sys_prompts"], n, len({r["chain"] for r in rows}), 100 * rewrite, 100 * over))
-    with open(a.output, "w") as f:                    # a parameter to a line
+    with open(a.out, "w") as f:                    # a parameter to a line
         f.write('{"params_version": 1, "abstract": %s,\n "doc": %s,\n "params": {\n%s}}\n' % (
             json.dumps(a.abstract), json.dumps(doc), ",\n".join("  %s: %s" % (json.dumps(k), json.dumps(v)) for k, v in params.items())))
     print("requests %d, chains %d (one request: %d, longest %d), rewrites %.4f of continuations (trim mean %.0f), sys_tokens %d, tokens in %d "
@@ -217,7 +217,7 @@ def reference(a):
            "prompt_tokens": {"mean": round(sum(inp) / n), "shares": shares(inp, a.bins)["empirical"]["values"]},
            "out_tokens": {"total": sum(r["out"] for r in rows), "mean": round(sum(r["out"] for r in rows) / n, 1)},
            "subagent_shared_prefix_tokens": {"median": int(statistics.median(shared)) if shared else 0, "n": len(shared)}}
-    with open(a.output, "w") as f:
+    with open(a.out, "w") as f:
         json.dump(ref, f, indent=1)
         f.write("\n")
     print("requests %d, chains %d, chunks stored %d (%.2f per request), hit %d (%.1f per request), prompt tokens mean %d" % (
@@ -236,7 +236,7 @@ def main():
     ap.add_argument("--context", type=int, default=990_016, help="requests with longer prompts are skipped (the corpus's own cap)")
     ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--doc", default="")
-    ap.add_argument("-o", "--output", required=True)
+    ap.add_argument("-o", "--out", required=True)
     a = ap.parse_args()
     (fit if a.what == "fit" else reference)(a)
 

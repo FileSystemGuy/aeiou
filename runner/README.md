@@ -17,7 +17,7 @@ cargo test --release
 ./target/release/aeiou run ../schema/examples/train_small_files.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50 --io-backend sync
 ./target/release/aeiou dry-run ../schema/examples/model_load.ast.json --gpus 8 \
-    --params ../schema/examples/params/model_load.synthetic.params.json      # a parameter file (§4)
+    --params-file ../schema/examples/params/model_load.synthetic.params.json      # a parameter file (§4)
 ```
 
 ## 1. What exists (2026-09-30)
@@ -25,9 +25,9 @@ cargo test --release
 | Command | What it does |
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
-| `aeiou dry-run AST --gpus G [--seed S] [--params FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
-| `aeiou datagen AST --root DIR [--params FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap (default: the backend the abstract declares, `sync` when it declares none)] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits] [--report-json FILE [--report-takes]]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). |
+| `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
+| `aeiou datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params-file FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap (default: the backend the abstract declares, `sync` when it declares none)] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits] [--report-json FILE [--report-takes]]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -231,7 +231,7 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   directory (`.aeiou*` entries not counted); a failing op's errno must be in the statement's
   `expect` list. Anything else aborts the run with the actor, position, and op. The runner
   never looks at the bytes (`PROJECT_BRIEF.md` §5, *Data verification*).
-- **Parameter files** (2026-09-30, `schema/README.md` §8). `--params FILE` applies a
+- **Parameter files** (2026-09-30, `schema/README.md` §8). `--params-file FILE` applies a
   `.params.json` set over the defaults; several apply in order and `--param` applies last.
   The file must name this abstract (and this AST's hash, if it names one); every value must
   be a declared parameter of the same kind as its default (`--param` is held to the kind too).
@@ -540,7 +540,8 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   the `sync` sink call `drive`, which feeds the events to a `Sink` as before; the fork
   protocol (snapshot, `start_sub`) is unchanged, and no golden fingerprint moved.
 - **Tasks and loops.** `--threads N` event-loop threads (default: one per core, at most one
-  per actor instance); instances go round-robin over the loops, and an instance's
+  per actor instance; the thread-per-actor backends refuse the flag, 2026-10-04, as they
+  refuse the ring knobs); instances go round-robin over the loops, and an instance's
   sub-actors (`parallel` sub-actors, loader workers) run on its loop, so channels are
   loop-local and lock-free. A task is a VM plus its `ActorState` (files, payload filler,
   statistics, created and removed paths), the type the thread-per-actor sink uses too, so

@@ -836,7 +836,7 @@ Option D's "three sources" paragraph promised that shape and fitted parameters w
 separate artifacts, and §3.19 named the case that makes it necessary: `model_load`'s tensor
 table, four parallel parameter arrays that read fine at four tensors and will not at four
 hundred, and that no author should type by hand. Built as `schema/params.schema.json`, the
-runner's `--params FILE`, and the `aeiou-params` helper (`schema/README.md` §8). Decisions
+runner's `--params-file FILE`, and the `aeiou-params` helper (`schema/README.md` §8). Decisions
 taken on the way:
 
 - **The identity of a run does not change.** A result was already (AST hash, parameters in

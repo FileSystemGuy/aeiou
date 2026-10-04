@@ -15,7 +15,7 @@ strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt \
 aeiou-trace metrics trace.txt --root /mnt/nfs -o trace.metrics.json
 python params.py /mnt/nfs/out sift/sift_query.fvecs trace.txt "…" > fitted.params.json
 aeiou dry-run ../../../schema/examples/vdb_search_ivf.ast.json --gpus 1 \
-    --params fitted.params.json --metrics-json abstract.metrics.json
+    --params-file fitted.params.json --metrics-json abstract.metrics.json
 python faults.py /mnt/nfs/out sift/sift_query.fvecs --queries 1 --threads 1
 ```
 

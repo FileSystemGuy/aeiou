@@ -19,7 +19,7 @@ pub struct Config {
     pub gpus: i64,
     /// `--param name=value`, value as JSON (a bare word that is not JSON is a string).
     pub overrides: Vec<(String, String)>,
-    /// `--params FILE`, in command-line order: applied over the defaults, under `overrides`.
+    /// `--params-file FILE`, in command-line order: applied over the defaults, under `overrides`.
     pub sets: Vec<ParamSet>,
 }
 
@@ -105,7 +105,7 @@ impl ParamSet {
     }
 }
 
-/// Parameters in effect: the defaults, then every `--params` file in order, then `--param`.
+/// Parameters in effect: the defaults, then every `--params-file` file in order, then `--param`.
 /// Owned, so `Value` can borrow it.
 pub struct Params {
     pub values: BTreeMap<String, PValue>,

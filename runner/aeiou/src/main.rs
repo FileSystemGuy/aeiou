@@ -41,33 +41,53 @@ enum Cmd {
     Run(RunCmd),
 }
 
+/// The shape and its parameters: what every subcommand that takes an abstract takes.
 #[derive(Args)]
-struct DatagenArgs {
+struct ShapeArgs {
     /// The abstract (`.ast.json`).
     abstract_path: PathBuf,
-    /// Directory the abstract's paths are relative to.
-    #[arg(long)]
-    root: PathBuf,
-    /// Instance count, for dataset definitions that reference `gpus`.
-    #[arg(long, default_value_t = 1)]
-    gpus: i64,
-    /// Override a parameter: `--param name=value` (only those the datasets reference matter).
-    #[arg(long = "param", value_name = "NAME=VALUE")]
+    /// Override a parameter: `--param name=value` (JSON; a bare word is a string).
+    #[arg(long = "param", value_name = "NAME=VALUE", help_heading = "Workload")]
     params: Vec<String>,
-    /// A parameter file (`.params.json`), applied over the defaults and under --param; repeatable, in order.
-    #[arg(long = "params", value_name = "FILE")]
+    /// A parameter file (`.params.json`, schema/README.md §8), applied over the defaults and under --param; repeatable, in order.
+    #[arg(long = "params-file", value_name = "FILE", help_heading = "Workload")]
     param_files: Vec<PathBuf>,
+}
+
+/// The shape, its parameters, and the run's identity: `run` and `dry-run`.
+#[derive(Args)]
+struct RunArgs {
+    #[command(flatten)]
+    shape: ShapeArgs,
+    /// Number of instances of every actor template whose count is `gpus` (global ids 0..G).
+    #[arg(long, help_heading = "Workload")]
+    gpus: i64,
+    /// The run seed. The dataset seed is separate and lives in the abstract.
+    #[arg(long, default_value_t = 0, help_heading = "Workload")]
+    seed: u64,
+}
+
+#[derive(Args)]
+struct DatagenArgs {
+    #[command(flatten)]
+    shape: ShapeArgs,
+    /// Instance count, for dataset definitions that reference `gpus`.
+    #[arg(long, default_value_t = 1, help_heading = "Workload")]
+    gpus: i64,
+    /// Directory the abstract's paths are relative to.
+    #[arg(long, help_heading = "Writer")]
+    root: PathBuf,
     /// Writer threads (default: all cores).
-    #[arg(long)]
+    #[arg(long, help_heading = "Writer")]
     threads: Option<usize>,
     /// Dedupe ratio: every `dedupe` files (or 1 MiB blocks of a regions file) share content.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 1, help_heading = "Writer")]
     dedupe: u64,
     /// Compression ratio: the last (C−1)/C of every 1 MiB block is zeros.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 1, help_heading = "Writer")]
     compress: u64,
     /// Only these datasets (default: all).
-    #[arg(long = "dataset", value_name = "NAME")]
+    #[arg(long = "dataset", value_name = "NAME", help_heading = "Writer")]
     datasets: Vec<String>,
 }
 
@@ -75,9 +95,6 @@ struct DatagenArgs {
 struct RunCmd {
     #[command(flatten)]
     run: RunArgs,
-    /// Directory the abstract's paths are relative to (datasets and namespaces live under it).
-    #[arg(long)]
-    root: PathBuf,
     /// `sync` (buffered POSIX on one thread per actor), `sync-direct` (the same with O_DIRECT),
     /// `io_uring` (an event loop per thread multiplexing the actors over one ring), `io_uring-direct`,
     /// `posix-aio` (glibc aio_read/aio_write on one thread per actor), `posix-aio-direct`,
@@ -85,115 +102,101 @@ struct RunCmd {
     /// `mmap` (reads are copies out of a mapping of the file).
     /// Default: the backend the abstract declares (`sync` when it declares none). Any other is a
     /// different workload on the storage, and the run says so.
-    #[arg(long = "io-backend")]
+    #[arg(long = "io-backend", help_heading = "Backend")]
     backend: Option<String>,
+    /// Directory the abstract's paths are relative to (datasets and namespaces live under it).
+    #[arg(long, help_heading = "Backend")]
+    root: PathBuf,
     /// Event-loop threads for the io_uring and libaio backends (default: one per core, at most one
-    /// per actor instance). The other backends run one thread per actor and ignore it.
-    #[arg(long)]
+    /// per actor instance). The other backends run one thread per actor and refuse it.
+    #[arg(long, help_heading = "Backend")]
     threads: Option<usize>,
     /// Per-thread read and write buffer ring, MiB.
-    #[arg(long, default_value_t = 8)]
+    #[arg(long, default_value_t = 8, help_heading = "Backend")]
     buffer_mib: usize,
     /// Compression ratio of the bytes written to namespaces.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 1, help_heading = "Backend")]
     write_compress: u64,
     /// Multiply every `compute` sleep (0 runs the I/O back to back).
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.0, help_heading = "Backend")]
     time_scale: f64,
-    /// Start even when the estimated open files, threads, or mappings exceed this host's
-    /// limits (RLIMIT_NOFILE, RLIMIT_NPROC, kernel.threads-max, vm.max_map_count).
-    #[arg(long)]
-    ignore_limits: bool,
-    /// io_uring: cap each loop's bounded io-wq workers (IORING_REGISTER_IOWQ_MAX_WORKERS); the
+    /// Cap each loop's bounded io-wq workers (IORING_REGISTER_IOWQ_MAX_WORKERS); the
     /// report shows the kernel's default either way.
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", help_heading = "io_uring")]
     iowq_max_workers: Option<u32>,
-    /// io_uring: a kernel submission thread per loop (IORING_SETUP_SQPOLL) that sleeps after
+    /// A kernel submission thread per loop (IORING_SETUP_SQPOLL) that sleeps after
     /// this many idle milliseconds.
-    #[arg(long, value_name = "IDLE_MS")]
+    #[arg(long, value_name = "IDLE_MS", help_heading = "io_uring")]
     sqpoll: Option<u32>,
-    /// io_uring: one submission thread, and one io-wq, shared by every loop
+    /// One submission thread, and one io-wq, shared by every loop
     /// (IORING_SETUP_ATTACH_WQ) instead of one per loop.
-    #[arg(long, requires = "sqpoll")]
+    #[arg(long, requires = "sqpoll", help_heading = "io_uring")]
     sqpoll_shared: bool,
-    /// io_uring: IORING_SETUP_SINGLE_ISSUER with IORING_SETUP_DEFER_TASKRUN (not with --sqpoll).
-    #[arg(long, conflicts_with = "sqpoll")]
+    /// IORING_SETUP_SINGLE_ISSUER with IORING_SETUP_DEFER_TASKRUN (not with --sqpoll).
+    #[arg(long, conflicts_with = "sqpoll", help_heading = "io_uring")]
     defer_taskrun: bool,
-    /// io_uring: IORING_SETUP_COOP_TASKRUN.
-    #[arg(long)]
+    /// IORING_SETUP_COOP_TASKRUN.
+    #[arg(long, help_heading = "io_uring")]
     coop_taskrun: bool,
-    /// libaio: requests each loop's AIO context holds (io_setup's nr_events; the host's total is
+    /// Requests each loop's AIO context holds (io_setup's nr_events; the host's total is
     /// bounded by fs.aio-max-nr). Default 256.
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", help_heading = "libaio")]
     aio_depth: Option<u32>,
-    /// mmap: the prefetch before a read's range is consumed: `fault` (none: the touch faults
+    /// The prefetch before a read's range is consumed: `fault` (none: the touch faults
     /// the pages in), `populate` (MADV_POPULATE_READ over the range), `willneed` (MADV_WILLNEED).
-    #[arg(long, value_name = "MODE")]
+    #[arg(long, value_name = "MODE", help_heading = "mmap")]
     mmap_mode: Option<String>,
-    /// mmap: how a read's range is consumed: `touch` (one byte of every page is read, so each
+    /// How a read's range is consumed: `touch` (one byte of every page is read, so each
     /// page is resident and mapped; nothing under `populate`, which has done that) or `copy`
     /// (the range is copied into the actor's buffer). Default touch.
-    #[arg(long, value_name = "HOW")]
+    #[arg(long, value_name = "HOW", help_heading = "mmap")]
     mmap_consume: Option<String>,
-    /// Empty the namespace roots before starting instead of refusing.
-    #[arg(long)]
-    clean_namespaces: bool,
-    /// Fail unless the run's fingerprint is this (hex, from `aeiou dry-run`).
-    #[arg(long, value_name = "HEX")]
-    expect_fingerprint: Option<String>,
-    /// Fail unless every dataset id is among these.
-    #[arg(long = "expect-dataset-id", value_name = "SHA256")]
-    expect_dataset_ids: Vec<String>,
     /// This host's index among --ranks hosts.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help_heading = "Several hosts")]
     rank: i64,
-    #[arg(long, default_value_t = 1)]
+    /// Hosts the run is spread over; each runs the GPU id range of its --rank.
+    #[arg(long, default_value_t = 1, help_heading = "Several hosts")]
     ranks: i64,
     /// With --ranks above 1: the coordinator's address. Rank 0 listens on it (in-process); every rank connects to it.
-    #[arg(long, value_name = "HOST:PORT")]
+    #[arg(long, value_name = "HOST:PORT", help_heading = "Several hosts")]
     coordinator: Option<String>,
     /// Run the GPU range of rank (rank + k) mod ranks, so each host reads what another wrote.
-    #[arg(long, default_value_t = 0, value_name = "K")]
+    #[arg(long, default_value_t = 0, value_name = "K", help_heading = "Several hosts")]
     rank_rotate: i64,
+    /// Fail unless the run's fingerprint is this (hex, from `aeiou dry-run`).
+    #[arg(long, value_name = "HEX", help_heading = "Checks")]
+    expect_fingerprint: Option<String>,
+    /// Fail unless every dataset id is among these.
+    #[arg(long = "expect-dataset-id", value_name = "SHA256", help_heading = "Checks")]
+    expect_dataset_ids: Vec<String>,
     /// Fail if an input namespace was finished more than this many seconds ago.
-    #[arg(long, value_name = "SECS")]
+    #[arg(long, value_name = "SECS", help_heading = "Checks")]
     max_gap: Option<f64>,
     /// Fail if this host would read input objects it wrote itself, or if dataset pages are
     /// in its page cache at the start (mincore over 256 sampled files per dataset).
-    #[arg(long)]
+    #[arg(long, help_heading = "Checks")]
     require_cold: bool,
     /// On every host, before the start gate: sync, then drop the page cache, dentries, and
     /// inodes (3 into /proc/sys/vm/drop_caches), then sample the datasets' residency. Needs
     /// root; the run refuses when it fails.
-    #[arg(long)]
+    #[arg(long, help_heading = "Checks")]
     drop_caches: bool,
+    /// Empty the namespace roots before starting instead of refusing.
+    #[arg(long, help_heading = "Checks")]
+    clean_namespaces: bool,
+    /// Start even when the estimated open files, threads, or mappings exceed this host's
+    /// limits (RLIMIT_NOFILE, RLIMIT_NPROC, kernel.threads-max, vm.max_map_count).
+    #[arg(long, help_heading = "Checks")]
+    ignore_limits: bool,
     /// Write the run's report to FILE as JSON (runner/README.md §12): the configuration, the
     /// results the text report prints with the latency histograms in full, and the verdict.
     /// Written when the run fails too, with the error; rank 0 of several hosts writes the
     /// merged report, every other rank its own.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", help_heading = "Report")]
     report_json: Option<PathBuf>,
     /// With --report-json: every take of every instance (stall and compute), not only the sums.
-    #[arg(long, requires = "report_json")]
+    #[arg(long, requires = "report_json", help_heading = "Report")]
     report_takes: bool,
-}
-
-#[derive(Args)]
-struct RunArgs {
-    /// The abstract (`.ast.json`).
-    abstract_path: PathBuf,
-    /// Number of instances of every actor template whose count is `gpus` (global ids 0..G).
-    #[arg(long)]
-    gpus: i64,
-    /// The run seed. The dataset seed is separate and lives in the abstract.
-    #[arg(long, default_value_t = 0)]
-    seed: u64,
-    /// Override a parameter: `--param name=value` (JSON; a bare word is a string).
-    #[arg(long = "param", value_name = "NAME=VALUE")]
-    params: Vec<String>,
-    /// A parameter file (`.params.json`, schema/README.md §8), applied over the defaults and under --param; repeatable, in order.
-    #[arg(long = "params", value_name = "FILE")]
-    param_files: Vec<PathBuf>,
 }
 
 #[derive(Args)]
@@ -201,32 +204,32 @@ struct DryRunArgs {
     #[command(flatten)]
     run: RunArgs,
     /// Hosts the run would be spread over, for the bytes-per-host estimate.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     ranks: Option<i64>,
     /// Worker threads (default: all cores).
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     threads: Option<usize>,
     /// Print the op stream of actor instance G (one thread, in order).
-    #[arg(long, value_name = "G")]
+    #[arg(long, value_name = "G", help_heading = "Output")]
     gpu: Option<i64>,
     /// With --gpu: only ops whose outermost loop index is in [A, B).
-    #[arg(long, value_name = "A..B")]
+    #[arg(long, value_name = "A..B", help_heading = "Output")]
     steps: Option<String>,
     /// With --gpu: stop printing after N ops.
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", help_heading = "Output")]
     limit: Option<usize>,
     /// Compute the locality metrics of the op stream (reuse distance, sequential runs,
     /// popularity, request sizes, fan-out and depth, read/write mix); runner/README.md §10.
-    #[arg(long)]
+    #[arg(long, help_heading = "Metrics")]
     metrics: bool,
     /// With --metrics: the block size of the reuse-distance and popularity units.
-    #[arg(long, value_name = "BYTES", default_value_t = 4096)]
+    #[arg(long, value_name = "BYTES", default_value_t = 4096, help_heading = "Metrics")]
     metrics_block: u64,
     /// With --metrics: keep one block and one object in N, chosen by hash, and scale (1: exact).
-    #[arg(long, value_name = "N", default_value_t = 1)]
+    #[arg(long, value_name = "N", default_value_t = 1, help_heading = "Metrics")]
     metrics_sample: u64,
     /// Write the metrics, with their histograms, to FILE as JSON (implies --metrics).
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", help_heading = "Metrics")]
     metrics_json: Option<PathBuf>,
 }
 
@@ -248,8 +251,8 @@ fn real_main() -> Result<()> {
 }
 
 fn datagen_cmd(a: DatagenArgs) -> Result<()> {
-    let cfg = parse_config(&RunArgs { abstract_path: a.abstract_path.clone(), gpus: a.gpus, seed: 0, params: a.params.clone(), param_files: a.param_files.clone() })?;
-    let loaded = aeiou::load(&a.abstract_path)?;
+    let cfg = parse_config(&a.shape, a.gpus, 0)?;
+    let loaded = aeiou::load(&a.shape.abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
@@ -297,9 +300,9 @@ fn run_cmd(a: RunCmd) -> Result<()> {
 }
 
 fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
-    let cfg = parse_config(&a.run)?;
+    let cfg = parse_config(&a.run.shape, a.run.gpus, a.run.seed)?;
     // the run is the process: the abstract and the model live for the threads' lifetime
-    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.abstract_path)?));
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.shape.abstract_path)?));
     let declared = loaded.ast.backend.as_deref().unwrap_or("sync");
     let backend_name = a.backend.as_deref().unwrap_or(declared);
     let backend = BackendKind::parse(backend_name).ok_or_else(|| anyhow::anyhow!("--io-backend {}: not one of {}", backend_name, aeiou::backend::NAMES))?;
@@ -323,6 +326,9 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
     }
     if a.aio_depth == Some(0) {
         bail!("--aio-depth 0: a context needs room for a request");
+    }
+    if a.threads.is_some() && !backend.event_loop() {
+        bail!("--threads sets the event-loop threads of io_uring and libaio; --io-backend {} runs one thread per actor", backend.name());
     }
     let mmap = match &a.mmap_mode {
         None => MmapMode::default(),
@@ -690,8 +696,8 @@ fn check(files: Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn parse_config(a: &RunArgs) -> Result<Config> {
-    if a.gpus < 1 {
+fn parse_config(a: &ShapeArgs, gpus: i64, seed: u64) -> Result<Config> {
+    if gpus < 1 {
         bail!("--gpus must be at least 1");
     }
     let mut overrides = Vec::new();
@@ -703,7 +709,7 @@ fn parse_config(a: &RunArgs) -> Result<Config> {
     for p in &a.param_files {
         sets.push(ParamSet::load(p)?);
     }
-    Ok(Config { seed: a.seed, gpus: a.gpus, overrides, sets })
+    Ok(Config { seed, gpus, overrides, sets })
 }
 
 /// The parameters in effect, as the header line prints them: the files (with their hashes)
@@ -719,8 +725,8 @@ fn params_line(cfg: &Config) -> String {
 }
 
 fn dry_run(a: DryRunArgs) -> Result<()> {
-    let cfg = parse_config(&a.run)?;
-    let loaded = aeiou::load(&a.run.abstract_path)?;
+    let cfg = parse_config(&a.run.shape, a.run.gpus, a.run.seed)?;
+    let loaded = aeiou::load(&a.run.shape.abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;

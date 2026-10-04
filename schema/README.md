@@ -324,7 +324,7 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
   distribution is drawn, an array is indexed), so a change of kind would not be a change of
   value. `cli: false` restricts `--param`, not parameter files: the file *is* the published
   set. `--param` now keeps the kind too.
-- **Precedence.** `aeiou run AST --params A --params B --param k=v`: the defaults, then `A`,
+- **Precedence.** `aeiou run AST --params-file A --params-file B --param k=v`: the defaults, then `A`,
   then `B`, then `--param`. What a result reports is still the parameters in effect (§6: a
   result is the AST hash, the parameters in effect, and the dataset ids); the file names and
   their SHA-256 are printed in the header line and recorded in the dataset manifest's

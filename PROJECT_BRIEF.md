@@ -174,7 +174,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    that rebuilds every abstract hermetically twice and fails on drift from the committed ASTs.
    Still to do here: the format-class reader protocols (item 15) ~~and the parameter-file
    split~~ (**the split done 2026-09-30**: `schema/README.md` §8, `DESIGN_REVIEW.md` §3.27,
-   `aeiou-params`, `aeiou run --params FILE`).
+   `aeiou-params`, `aeiou run --params-file FILE`).
 3. Build the VM with `--dry-run` and the fingerprint; test against ext4 and a loopback NFS mount
    on WSL2 (see §7). Golden-test the fingerprint in CI. **`aeiou dry-run` done 2026-09-30**
    (`runner/`, `DESIGN_REVIEW.md` §3.22): the loader, the canonical hash, the validator (CI

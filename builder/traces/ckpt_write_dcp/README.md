@@ -16,7 +16,7 @@ strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt \
 aeiou-trace metrics trace.txt --root /mnt/nfs/out \
     --instance-root <pid of rank 0> --instance-root <pid of rank 1> -o trace.metrics.json
 aeiou dry-run ../../../schema/examples/ckpt_write_dcp.ast.json --gpus 2 \
-    --params fitted.params.json --metrics-json abstract.metrics.json
+    --params-file fitted.params.json --metrics-json abstract.metrics.json
 aeiou-trace compare trace.metrics.json abstract.metrics.json
 ```
 

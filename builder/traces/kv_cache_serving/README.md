@@ -20,7 +20,7 @@ aeiou-trace metrics trace.txt --root /mnt/nfs -o trace.metrics.json
 grep "Inference Engine computed" serve.log > lmcache.log           # the server's output, colors stripped
 python fit.py replay.log lmcache.log --set chunk_bytes=3145728 -o fitted.params.json
 aeiou dry-run ../../../schema/examples/kv_cache_serving.ast.json --gpus 1 \
-    --params fitted.params.json --metrics-json abstract.metrics.json
+    --params-file fitted.params.json --metrics-json abstract.metrics.json
 ```
 
 - `replay.py` sends the users' turns of ShareGPT (the file vLLM's own benchmarks use,
@@ -68,7 +68,7 @@ the abstracts because of it (`turns`, `prefill_step`, `trim`, `think`).
 curl -L -o traces.jsonl https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126/resolve/main/traces.jsonl
 python agentx.py fit traces.jsonl --set chunk_bytes=33554432 -o fitted.agentx.params.json
 python agentx.py reference traces.jsonl -o agentx.reference.json      # the corpus's chunk accounting
-aeiou dry-run ../../../schema/examples/kv_cache_serving.ast.json --gpus 1 --seed 1 --params fitted.agentx.params.json
+aeiou dry-run ../../../schema/examples/kv_cache_serving.ast.json --gpus 1 --seed 1 --params-file fitted.agentx.params.json
 ```
 
 The dry run's `write` count against the reference's `chunks_stored` and its `read` count

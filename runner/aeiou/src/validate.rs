@@ -28,7 +28,7 @@ pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<St
 }
 
 /// The rules again with the parameters in effect in place of the defaults (§3.57): rule V3
-/// judges a `param` by its distribution's minimum, and a `--params` file or `--param` may
+/// judges a `param` by its distribution's minimum, and a `--params-file` file or `--param` may
 /// replace that distribution with one whose minimum is lower. Without this an `at` offset
 /// of zero is a loop in the VM. Called from `Params::new`, so every subcommand gets it.
 pub fn check_given(ast: &Ast, given: &BTreeMap<String, PValue>) -> Vec<String> {

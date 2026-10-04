@@ -2,7 +2,7 @@
 classes, with the runner's payload (`runner/README.md` §5: `aeiou-positional/1` over
 `dgen-data` 0.3.0), and the manifest `aeiou run` checks (`schema/README.md` §6).
 
-    aeiou-datagen AST --root DIR [--params FILE]… [--param k=v]… [--gpus G]
+    aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G]
                       [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…
 
 Datasets without a format class are `aeiou datagen`'s (the Rust writer); this tool skips
@@ -198,7 +198,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="aeiou-datagen", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("ast", type=pathlib.Path)
     ap.add_argument("--root", type=pathlib.Path, required=True)
-    ap.add_argument("--params", action="append", default=[], type=pathlib.Path, metavar="FILE")
+    ap.add_argument("--params-file", action="append", default=[], type=pathlib.Path, metavar="FILE")
     ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--gpus", type=int, default=1)
     ap.add_argument("--dedupe", type=int, default=1)
@@ -220,7 +220,7 @@ def _main(a) -> int:
     validate(ast)
     sha = emit.sha256(ast)
     sets = []
-    for p in a.params:
+    for p in a.params_file:
         pset = params_mod.load(p)
         errors = params_mod.check(ast, pset, ast_sha256=sha, name=p.name)
         if errors:
@@ -237,7 +237,7 @@ def _main(a) -> int:
     values = param_values(ast, sets, overrides, a.gpus)
     print(f"abstract {ast['name']}  sha256 {sha}")
     provenance = {"abstract": ast["name"], "ast_sha256": sha, "params": values,
-                  "param_files": [{"path": str(p), "sha256": params_mod.file_sha256(p)} for p in a.params]}
+                  "param_files": [{"path": str(p), "sha256": params_mod.file_sha256(p)} for p in a.params_file]}
     wanted = set(a.dataset)
     done = 0
     for name, d in ast.get("datasets", {}).items():

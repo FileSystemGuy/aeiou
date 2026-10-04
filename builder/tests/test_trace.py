@@ -319,7 +319,7 @@ def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
     kit = BUILDER / "traces" / "train_small_files"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "train_small_files.ast.json"), "--gpus", "1",
-                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     root_listing = {"open": 1, "fstat": 1, "readdir": 1, "close": 1}
@@ -342,7 +342,7 @@ def test_large_sample_abstract_matches_the_trace_of_np_load(tmp_path, which, reu
     kit = BUILDER / "traces" / "train_large_samples"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "train_large_samples.ast.json"), "--gpus", "1",
-                        "--params", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     listing = {"open": 1, "fstat": 1, "readdir": 1, "close": 1}       # glob lists the root too; the abstract lists the sample directories (one here)
@@ -362,7 +362,7 @@ def test_checkpoint_write_abstract_matches_the_trace_of_dcp_save(tmp_path):
     kit = BUILDER / "traces" / "ckpt_write_dcp"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "ckpt_write_dcp.ast.json"), "--gpus", "2",
-                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     not_modeled = {
@@ -387,7 +387,7 @@ def test_checkpoint_restore_abstract_matches_the_trace_of_dcp_load(tmp_path, whi
     kit = BUILDER / "traces" / "ckpt_restore"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "ckpt_restore.ast.json"), "--gpus", "2",
-                        "--params", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     not_modeled = {"stat": 2}   # per rank, the parent of the checkpoint directory (and an `access`, which the trace metrics do not count)
@@ -406,7 +406,7 @@ def test_model_load_abstract_matches_the_trace_of_from_pretrained(tmp_path):
     kit = BUILDER / "traces" / "model_load"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "model_load.ast.json"), "--gpus", "1",
-                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
     for op in ("open", "close", "fstat", "ioctl", "lseek", "fadvise"):
@@ -424,7 +424,7 @@ def test_ivf_abstract_matches_the_trace_of_faiss_search(tmp_path):
     kit = BUILDER / "traces" / "vdb_search_ivf"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_search_ivf.ast.json"), "--gpus", "1",
-                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
     assert {k: v for k, v in d.items() if k != "read"} == {k: v for k, v in t.items() if k != "read"}
@@ -442,7 +442,7 @@ def test_diskann_search_abstract_matches_the_trace(tmp_path, which, reads_off):
     kit = BUILDER / "traces" / "vdb_search_diskann"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_search_diskann.ast.json"), "--gpus", "1",
-                        "--params", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
@@ -465,7 +465,7 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
     kit = BUILDER / "traces" / "vdb_build_diskann"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_build_diskann.ast.json"), "--gpus", "1",
-                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     for k in ("read", "write", "lseek"):
@@ -493,7 +493,7 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     kit = BUILDER / "traces" / "kv_cache_serving"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
-                        "--params", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
@@ -544,7 +544,7 @@ def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_p
     ref = json.loads((kit / "agentx.reference.json").read_text())
     n = 10_000
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
-                        "--params", str(kit / "fitted.agentx.params.json"), "--param", f"requests={n}"], capture_output=True, text=True)
+                        "--params-file", str(kit / "fitted.agentx.params.json"), "--param", f"requests={n}"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", r.stdout)[1]))
     stored, loaded = int(kinds["write"]) / n, int(kinds["read"]) / n
@@ -569,7 +569,7 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     for who, ast, params in (("writer", "kv_cache_shared", "fitted.params.json"), ("reader", "kv_cache_shared_reader", "fitted.reader.params.json")):
         dry = tmp_path / f"{who}.json"
         r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", "1", "--seed", "1",
-                            "--params", str(kit / params), "--metrics-json", str(dry)], capture_output=True, text=True)
+                            "--params-file", str(kit / params), "--metrics-json", str(dry)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         t, d = json.loads((kit / f"{who}.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
         got[who] = (t["counts"], d["counts"])
@@ -678,7 +678,7 @@ def test_kit_pair_against_the_tolerances(tmp_path, capsys, kit, which, ast, para
     for seed in (1, 2, 3, 4):
         docs.append(tmp_path / f"dry.{seed}.json")
         r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", str(gpus), "--seed", str(seed),
-                            "--params", str(kit / params), "--metrics-json", str(docs[-1])], capture_output=True, text=True)
+                            "--params-file", str(kit / params), "--metrics-json", str(docs[-1])], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
     spec = kit / f"{which}.tolerances.json"
     args = ["compare", str(kit / f"{which}.metrics.json"), str(docs[0]), *[x for d in docs[1:] for x in ("--self", str(d))]]

@@ -17,7 +17,7 @@ strace -f --seccomp-bpf -ttt -T -yy -e trace=%file,%desc,%network,%process -o tr
 aeiou-trace metrics trace.txt --root /mnt/nfs -o trace.metrics.json
 python params.py trace.txt /mnt/nfs/base/base.fbin /mnt/nfs/index "…" > fitted.params.json
 aeiou dry-run ../../../schema/examples/vdb_build_diskann.ast.json --gpus 1 \
-    --params fitted.params.json --metrics-json abstract.metrics.json
+    --params-file fitted.params.json --metrics-json abstract.metrics.json
 ```
 
 `--seccomp-bpf` is not optional here. Without it `strace` stops the build's 20 threads at

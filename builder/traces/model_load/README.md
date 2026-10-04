@@ -16,7 +16,7 @@ aeiou-trace metrics trace.txt --root /mnt/nfs/out -o trace.metrics.json
 aeiou-params safetensors ../../../schema/examples/model_load.ast.json \
     /mnt/nfs/out/model/model-0000?-of-00005.safetensors --tp 1 -o fitted.params.json
 aeiou dry-run ../../../schema/examples/model_load.ast.json --gpus 1 \
-    --params fitted.params.json --metrics-json abstract.metrics.json
+    --params-file fitted.params.json --metrics-json abstract.metrics.json
 ```
 
 The library issues no `read` on a shard: it maps the file, and `strace` does not see page
@@ -27,7 +27,7 @@ abstract's header and tensor reads have no counterpart in `trace.metrics.json`.
 What the mapping costs on the wire was measured with `/proc/self/mountstats` deltas, cold
 (without root: `posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)` on each file after an `fsync`):
 `loadmodel.py --notouch`, `loadmodel.py --touch`, `touch.py` with and without `ONE=1`, and
-`aeiou run … --params fitted.params.json --io-backend mmap` over a dataset `aeiou datagen`
+`aeiou run … --params-file fitted.params.json --io-backend mmap` over a dataset `aeiou datagen`
 wrote behind the server. The numbers are in `DESIGN_REVIEW.md` §3.47.
 
 `tests/test_trace.py` repeats the dry run against the committed metrics.

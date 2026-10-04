@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/FileSystemGuy/aeiou/schema/params.schema.json",
   "title": "aeiou parameter file",
-  "description": "A named set of values for the parameter slots of one abstract (schema/README.md §8): the second artifact of the shape/parameters split. Values have the form of the AST's parameter defaults (a scalar, a distribution, or an array of these) and must have the same kind as the default they replace. `aeiou run --params FILE` applies it over the defaults and under `--param`; several files apply in order.",
+  "description": "A named set of values for the parameter slots of one abstract (schema/README.md §8): the second artifact of the shape/parameters split. Values have the form of the AST's parameter defaults (a scalar, a distribution, or an array of these) and must have the same kind as the default they replace. `aeiou run --params-file FILE` applies it over the defaults and under `--param`; several files apply in order.",
   "type": "object",
   "required": ["params_version", "abstract", "params"],
   "additionalProperties": false,
