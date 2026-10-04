@@ -325,13 +325,13 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     };
     l.finish()?;
     if o.report_takes && o.report_json.is_none() {
-        bail!("--report-takes needs --report-json FILE");
+        bail!("--report-takes needs --report-json FILE{}", l.from(&["report-takes"]));
     }
     if o.sqpoll_shared && o.sqpoll.is_none() {
-        bail!("--sqpoll-shared needs --sqpoll IDLE_MS");
+        bail!("--sqpoll-shared needs --sqpoll IDLE_MS{}", l.from(&["sqpoll-shared"]));
     }
     if o.defer_taskrun && o.sqpoll.is_some() {
-        bail!("--defer-taskrun and --sqpoll exclude each other");
+        bail!("--defer-taskrun and --sqpoll exclude each other{}", l.from(&["defer-taskrun", "sqpoll"]));
     }
     Ok((o, l))
 }
@@ -465,34 +465,34 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| anyhow::anyhow!("--expect-fingerprint {h}: not hex"))?),
     };
     if a.ranks < 1 || a.rank < 0 || a.rank >= a.ranks {
-        bail!("--rank {} of --ranks {}: rank must be in [0, ranks)", a.rank, a.ranks);
+        bail!("--rank {} of --ranks {}: rank must be in [0, ranks){}", a.rank, a.ranks, layers.from(&["rank", "ranks"]));
     }
     if a.ranks > 1 && a.coordinator.is_none() {
-        bail!("--ranks {}: several hosts need --coordinator HOST:PORT (rank 0 listens there, every rank connects to it)", a.ranks);
+        bail!("--ranks {}: several hosts need --coordinator HOST:PORT (rank 0 listens there, every rank connects to it){}", a.ranks, layers.from(&["ranks"]));
     }
     let uring = UringOpts { iowq_max_workers: a.iowq_max_workers.unwrap_or(0), sqpoll_idle_ms: a.sqpoll, sqpoll_shared: a.sqpoll_shared, defer_taskrun: a.defer_taskrun, coop_taskrun: a.coop_taskrun };
     if uring.any() && !backend.uring() {
-        bail!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-backend {} has no ring", backend.name());
+        bail!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-backend {} has no ring{}", backend.name(), layers.from(&["iowq-max-workers", "sqpoll", "defer-taskrun", "coop-taskrun"]));
     }
-    uring.check()?;
+    uring.check().map_err(|e| anyhow!("{e}{}", layers.from(&["sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "iowq-max-workers"])))?;
     if a.aio_depth.is_some() && !backend.libaio() {
-        bail!("--aio-depth is a libaio knob; --io-backend {} has no AIO context", backend.name());
+        bail!("--aio-depth is a libaio knob; --io-backend {} has no AIO context{}", backend.name(), layers.from(&["aio-depth"]));
     }
     if a.aio_depth == Some(0) {
-        bail!("--aio-depth 0: a context needs room for a request");
+        bail!("--aio-depth 0: a context needs room for a request{}", layers.from(&["aio-depth"]));
     }
     if a.threads.is_some() && !backend.event_loop() {
-        bail!("--threads sets the event-loop threads of io_uring and libaio; --io-backend {} runs one thread per actor", backend.name());
+        bail!("--threads sets the event-loop threads of io_uring and libaio; --io-backend {} runs one thread per actor{}", backend.name(), layers.from(&["threads"]));
     }
     let mmap = match &a.mmap_mode {
         None => MmapMode::default(),
-        Some(_) if backend != BackendKind::Mmap => bail!("--mmap-mode is an mmap knob; --io-backend {} maps nothing", backend.name()),
-        Some(m) => MmapMode::parse(m).ok_or_else(|| anyhow::anyhow!("--mmap-mode {m}: not one of fault, populate, willneed"))?,
+        Some(_) if backend != BackendKind::Mmap => bail!("--mmap-mode is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-mode"])),
+        Some(m) => MmapMode::parse(m).ok_or_else(|| anyhow::anyhow!("--mmap-mode {m}: not one of fault, populate, willneed{}", layers.from(&["mmap-mode"])))?,
     };
     let mmap_consume = match &a.mmap_consume {
         None => MmapConsume::default(),
-        Some(_) if backend != BackendKind::Mmap => bail!("--mmap-consume is an mmap knob; --io-backend {} maps nothing", backend.name()),
-        Some(c) => MmapConsume::parse(c).ok_or_else(|| anyhow::anyhow!("--mmap-consume {c}: not one of touch, copy"))?,
+        Some(_) if backend != BackendKind::Mmap => bail!("--mmap-consume is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-consume"])),
+        Some(c) => MmapConsume::parse(c).ok_or_else(|| anyhow::anyhow!("--mmap-consume {c}: not one of touch, copy{}", layers.from(&["mmap-consume"])))?,
     };
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let cfg: &'static Config = Box::leak(Box::new(cfg));

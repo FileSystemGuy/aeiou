@@ -3447,7 +3447,15 @@ subcommand, `--config` as a global flag), `coord.rs` (`Hello { identity, layers 
 `hosts` are header keys), `builder/aeiou/options.py` and `aeiou-datagen` for the Python
 writer (`root` and `threads` layered; the same block), CI's checker diff skipping the block.
 `runner/README.md` §14 describes it; `PROJECT_BRIEF.md` §8 records the `AEIOU_` prefix in
-the naming convention.
+the naming convention. Later the same day, from the user's testing of the help: the name's
+expansion "Author Execute I/O" as the `about` line (recorded in the brief's naming
+convention), help text wrapped by clap at the terminal's width up to 120 columns, `--root`
+shown as required in the usage of `run`, `datagen`, and `aeiou-datagen` with its help and
+its missing-value message naming the three layers it may come from, and an audit of every
+error message of every tool: all flag names current after the renames; every refusal or
+cross-check of a layered option made where the resolver is in hand now says which layer set
+the value (`Layers::from`), while the checks made during the run name the flag only, its
+source being in the block above.
 
 ## 4. Plan changes
 

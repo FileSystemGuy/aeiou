@@ -1372,7 +1372,14 @@ options (cli > env > config > default)
   WARNING: AEIOU_BOGUS is set and is no option of any subcommand; ignored
 ```
 
-An `AEIOU_*` that is no option of any subcommand warns (`AEIOU_CONFIG`, `AEIOU_SCHEMA_DIR`,
+A refusal or cross-check of a layered option says which layer set it when that was not the
+command line: `--aio-depth is a libaio knob; --io-backend sync has no AIO context (--aio-depth
+from config /etc/aeiou.toml)`, `--threads … (--threads from env AEIOU_THREADS)`; a value the
+user typed gets no suffix. `--root` missing from every layer names the three places it may be
+given, and the usage lines of `run` and `datagen` show it as required. The checks made during
+the run (`--max-gap` exceeded, `--require-cold` refusing a warm host, the limits that
+`--ignore-limits` would start over) name the flag only; its source is in the block printed
+above them. An `AEIOU_*` that is no option of any subcommand warns (`AEIOU_CONFIG`, `AEIOU_SCHEMA_DIR`,
 `AEIOU_RUNNER`, and `AEIOU_RSH` are the family's own and do not); one that is another
 subcommand's option is left alone. `aeiou check` prints the block too (its files and the
 config file), so CI's diff of its output against `schema/check.py` skips past the first

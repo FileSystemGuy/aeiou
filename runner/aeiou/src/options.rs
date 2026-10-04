@@ -379,6 +379,31 @@ impl Layers {
         Ok(())
     }
 
+    /// For a message that refuses or cross-checks the named options: where the ones that did
+    /// not come from the command line came from, as ` (from env AEIOU_X, config PATH)`, or
+    /// nothing when the user typed them all (`default` is named too: a default the backend
+    /// cannot take is the program's business, and the message says so).
+    pub fn from(&self, names: &[&str]) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for n in names {
+            if let Some(e) = self.entries.iter().find(|e| e.name == *n) {
+                let d = match &e.source {
+                    Source::Cli => continue,
+                    Source::Default => format!("--{n} by default"),
+                    other => format!("--{n} from {}", other.describe()),
+                };
+                if !parts.contains(&d) {
+                    parts.push(d);
+                }
+            }
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", parts.join(", "))
+        }
+    }
+
     /// The block every invocation prints: one line per option, its value and its source, the
     /// warnings last, then an empty line.
     pub fn print(&self, out: &mut dyn Write) -> std::io::Result<()> {
@@ -546,6 +571,22 @@ mod tests {
         let mut l = Layers::with_env("run", None, env(&[("AEIOU_REQUIRE_COLD", "yes"), ("AEIOU_MAX_GAP", "30")])).unwrap();
         assert!(l.flag("require-cold", None, false).unwrap());
         assert_eq!(l.layered::<f64>("max-gap", None, None).unwrap(), Some(30.0));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn from_names_the_layers_that_were_not_the_command_line() {
+        let d = tmp();
+        let cfg = write(&d, "[run]\naio-depth = 64\n");
+        let mut l = Layers::with_env("run", Some(&cfg), env(&[("AEIOU_THREADS", "5")])).unwrap();
+        l.layered::<u32>("aio-depth", None, None).unwrap();
+        l.layered::<usize>("threads", None, None).unwrap();
+        l.layered::<u32>("sqpoll", Some(10), None).unwrap();
+        l.layered::<i64>("rank", None, Some(0)).unwrap();
+        assert_eq!(l.from(&["sqpoll"]), "");
+        assert_eq!(l.from(&["aio-depth", "sqpoll"]), format!(" (--aio-depth from config {})", cfg.display()));
+        assert_eq!(l.from(&["threads", "aio-depth"]), format!(" (--threads from env AEIOU_THREADS, --aio-depth from config {})", cfg.display()));
+        assert_eq!(l.from(&["rank"]), " (--rank by default)");
         std::fs::remove_dir_all(&d).unwrap();
     }
 

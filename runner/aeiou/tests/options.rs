@@ -160,6 +160,18 @@ fn fixed_options_are_refused_from_the_environment_and_the_file() {
     let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
     assert!(!ok);
     assert!(err.contains("top level"), "{err}");
+    // a knob the backend cannot take says which layer set it
+    std::fs::write(&cfg, "[run]\naio-depth = 64\n").unwrap();
+    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
+    assert!(!ok);
+    assert!(err.contains(&format!("--aio-depth is a libaio knob; --io-backend sync has no AIO context (--aio-depth from config {})", cfg.display())), "{err}");
+    std::fs::write(&cfg, "[run]\n").unwrap();
+    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
+    assert!(!ok);
+    assert!(err.contains("runs one thread per actor (--threads from env AEIOU_THREADS)"), "{err}");
+    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2", "--threads", "4"]).arg("--root").arg(&d));
+    assert!(!ok);
+    assert!(err.trim_end().ends_with("runs one thread per actor"), "{err}");
     // --root is required, from any layer
     let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]));
     assert!(!ok);
