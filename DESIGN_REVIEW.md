@@ -3334,6 +3334,110 @@ positional draws keyed on the GPU id would make the ranks independent engines); 
 write and one read per chunk through `os.open` with `O_DIRECT`, falling back to buffered
 I/O when the chunk is not a multiple of the file system's block size (brief item 21).
 
+### 3.60 The option layers: CLI > environment > config file > default, with provenance (designed, built, and decided 2026-10-04)
+
+**The review.** With `aeiou run` at about thirty flags, the user asked for a UX pass over the
+command-line structure and an opinion on environment variables and a config file for the
+options that change rarely, under a strict precedence: the command line, then the
+environment, then the file, then the compiled default.
+
+**The structure as found.** Sound: one binary, four subcommands in lifecycle order, the
+abstract as the one positional, long flags only, prefix-grouped families (`expect-`,
+`metrics-`, `report-`, `mmap-`), verb-phrased booleans, and knobs of one backend refused
+under another. Irregularities, all fixed the same day: the flat thirty-flag help (grouped
+with headings: Workload, Backend, io_uring, libaio, mmap, Several hosts, Checks, Report);
+`--params FILE` one letter from `--param NAME=VALUE` with a different kind of value
+(`--params-file`); the trace tool spelling the runner's `--metrics-block`/`--metrics-sample`
+as `--block`/`--sample` although the two outputs are compared with each other (the runner's
+spelling); `-o/--output` in `aeiou-trace` against `-o/--out` in the other helpers (`--out`);
+`--threads` accepted and ignored under the thread-per-actor backends (refused, as the ring
+knobs are); the shared core hand-copied into `datagen` instead of flattened (one `ShapeArgs`
+for the abstract, `--param`, `--params-file`, with `--gpus` declared per subcommand and
+`--seed` only where it means something); `--ranks` without a doc comment.
+
+**The layers (decided).** The precedence the user proposed is the conventional one (git,
+Cargo, Docker, kubectl, pip) and the right one here: the environment above the file because
+the environment is per process and per host, which is what a launcher sets, while a file is
+per site. It simplifies the usage model for exactly one bucket of flags, so the flags were
+sorted by how often they change, and the sorting became a rule:
+
+- **Fixed (the command line's alone):** the workload's identity (the abstract, `--gpus`,
+  `--seed`, `--param`, `--params-file`, `--io-backend`), the checks that pin it
+  (`--expect-fingerprint`, `--expect-dataset-id`), the unsafe overrides
+  (`--clean-namespaces`, `--ignore-limits`), and `datagen`'s payload (`--dedupe`,
+  `--compress`, `--dataset`). The environment and the file are refused when they name one.
+  In one sentence: nothing the fingerprint, a dataset id, or a safety check depends on may
+  come from a layer the command line does not show. This matches the builder, whose hermetic
+  harness scrubs the environment so that it can never shape an AST (§3.3): the layers affect
+  how a run is executed, never what the workload is.
+- **Layered:** site and host tuning (`--root`, `--threads`, `--buffer-mib`,
+  `--write-compress`, `--time-scale`, the io_uring, libaio, and mmap knobs, `--max-gap`,
+  `--require-cold`, `--drop-caches`, `--report-json`, `--report-takes`) and the multi-host
+  wiring (`--rank`, `--ranks`, `--coordinator`, `--rank-rotate`). `AEIOU_RANK` set by a
+  launcher from its own rank variable is the strongest case for the environment layer.
+
+Three conditions were set and accepted, and a fourth replaced: **no implicit discovery** (the
+file is named by `--config` or `AEIOU_CONFIG`, never found in the working directory, home, or
+an XDG path, because two hosts with different hidden files is the classic way a benchmark
+site gets unexplainable results); **the report records the provenance** (`layers`: the
+file's path and sha256, the variables that contributed, every option's value and source);
+**every layered boolean has a negation** (built as `--flag=false` rather than a `--no-flag`
+twin: one flag per option in the help, the form mirrors the file's `flag = false`, and `=`
+is required so a bare value is never taken for the abstract); and, instead of a
+`--show-config`, **every invocation prints the block** of options with their sources (the
+user's choice: the information is wanted every time, not on request). The merge rule for
+repeated values is *replace*, so a command-line value can always displace a file value; as
+built no layered option is a list, so the rule is trivially met. Workload parameters stay out
+of the layers entirely: they have their own layered file format with pinning (§3.27), and
+nesting one layering scheme inside another is where users lose track. The honest summary
+given and accepted: the keystroke savings are modest, since operators write wrapper scripts
+anyway; the value of a built-in layer is that the report can then say where every option
+came from, which a wrapper never does.
+
+**TOML (decided).** The file is TOML, keyed by subcommand, keys spelled as the long flags,
+because a site file needs comments and JSON has none. JSON stays the only format on the
+contract; the config file is not on the contract, it is a convenience for the operator, and
+this is the one conscious departure (a `toml` crate dependency, parse only).
+
+**Two proposals declined, and what replaced them.** The user raised the concern that the
+effective options of the non-rank-0 processes might not match the invocation's, and proposed
+(a) a leading positional "client" argument that honors only the command line, or (b)
+clients taking their argument set from a message of rank 0. Both were assessed against what
+the coordinator already does: `Hello` carried a hash over the identity (the abstract, seed,
+G, parameters, dataset ids, backend, rotation, time scale, write compression), so a host
+whose identity differs was already refused before any I/O; what the hash did not cover was
+exactly the layered bucket. (a) was declined because it creates the mismatch it wants to
+prevent: rank 0 would run with all four layers and the clients with one, and `aeiou-launch`
+forwards one command line to every host, so the clients would systematically lack what rank
+0 got from its file; and a leading positional that changes how the rest of the line is
+parsed is the irregularity just removed elsewhere. (b) was declined because the goal is
+already met for the identity, and for the rest several options legitimately differ per host
+(`--rank` by definition, `--threads` with the cores, the ring knobs with the kernel,
+`--root` as a mount point), so pushing rank 0's values would break those hosts or need a
+per-rank override mechanism; a client assigned its rank by connection order would also make
+host placement timing-dependent (the fingerprint survives, the manifest's host-to-GPU map
+does not); and it breaks the stated symmetry that rank is only a host index and every host
+runs the same binary with the same arguments. What was built instead, all accepted: `Hello`
+carries the identity document and the host's options block; the identity refusal names the
+differing field (`seed 2 differs from rank 0's 1`, `params.files …`) instead of two hash
+prefixes; rank 0 records every host's block in its report (`hosts`) and prints, after the
+gate, the options whose values differ between hosts (only those, so a few lines on a
+healthy run: rank, and whatever is each host's own). A strictness check that refuses
+differing layered options was considered and not built: the table and the report give the
+operator the facts, and a WG rule can decide later whether differing thread counts are a
+comparability problem. The most likely way a layer goes wrong across hosts is noted in the
+README: ssh's non-interactive shell does not read the profile the operator's terminal did.
+
+**As built.** `runner/aeiou/src/options.rs` (`Layers`: `fixed`, `layered`, `flag`, `finish`,
+`print`, `json`, `differences`; `ALL_OPTIONS` kept equal to the clap definitions by a test),
+`main.rs` (a `RunOptions` resolved once, the block after the `abstract` line in every
+subcommand, `--config` as a global flag), `coord.rs` (`Hello { identity, layers }`,
+`identity_differences`, `Server::hosts`), `report.rs` unchanged in shape (`layers` and
+`hosts` are header keys), `builder/aeiou/options.py` and `aeiou-datagen` for the Python
+writer (`root` and `threads` layered; the same block), CI's checker diff skipping the block.
+`runner/README.md` §14 describes it; `PROJECT_BRIEF.md` §8 records the `AEIOU_` prefix in
+the naming convention.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

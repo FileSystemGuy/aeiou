@@ -448,6 +448,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     write and one read per chunk through `os.open` with `O_DIRECT` (buffered when the chunk
     is not a multiple of the file system's block size), so that `sync-direct` can be the
     declared backend of a traced configuration rather than another workload.
+22. **The option layers (designed, built, and decided 2026-10-04, `DESIGN_REVIEW.md` §3.60,
+    `runner/README.md` §14).** Command line, then `AEIOU_<FLAG>`, then the TOML file
+    `--config`/`AEIOU_CONFIG` names, then the default; the workload's identity, the checks
+    that pin it, and the unsafe overrides are the command line's alone; every invocation
+    prints its options with their sources; `aeiou run` records them in the report and the
+    coordinator compares them across hosts, naming what differs. Not built, on purpose: a
+    check that refuses differing layered options across hosts (a WG rule, if ever).
 
 ## 7. Environment
 
@@ -500,5 +507,9 @@ types or imports:
   `aeiou-verify` (the offline content verifier) and `aeiou-fit` (trace fitting). Dash-suffixed because they live in
   a separate install from the runner and must not fight it for one `aeiou` command.
 - The Python package is `aeiou`; Rust crates are `aeiou` and `aeiou-<part>`.
+- Environment variables are `AEIOU_<FLAG>` (the long flag upper-cased, `_` for `-`), the
+  config file is TOML named by `--config FILE` or `AEIOU_CONFIG` and never searched for, and
+  the precedence is command line, environment, file, default; the workload's identity is the
+  command line's alone (2026-10-04, `runner/README.md` §14, `DESIGN_REVIEW.md` §3.60).
 - Nothing is named after MLPerf; the package was renamed from `mlps_abstract` on 2026-09-30
   for this reason.

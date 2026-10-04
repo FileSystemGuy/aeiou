@@ -234,7 +234,7 @@ extra and are pre-imported by the hermetic child. Arrow IPC, MDS, and Megatron a
 written yet (`DESIGN_REVIEW.md` §3.28 says why).
 
 **`aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G] [--dedupe D]
-[--compress C] [--threads N] [--dataset NAME]…** writes every dataset that has a format class:
+[--compress C] [--threads N] [--dataset NAME]… [--config FILE]** writes every dataset that has a format class:
 names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
 bytes from `dgen-py` 0.3.0 under the `aeiou-positional/1` wrapper (bit-identical to the Rust
 writer's), each file checked against the geometry its layout predicts (`layout.py`), then the
@@ -242,7 +242,12 @@ manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names 
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
 ones with a class. `tests/test_formats.py` reads the files back with pyarrow and h5py and,
 when the runner is built, runs the three container abstracts over them under the `sync`
-and `io_uring` backends.
+and `io_uring` backends. `--root` and `--threads` come through the runner's option layers
+(`aeiou/options.py` mirrors `runner/aeiou/src/options.rs`, `runner/README.md` §14: the
+command line, else `AEIOU_ROOT`/`AEIOU_THREADS`, else the `[datagen]` table of the TOML file
+`--config` or `AEIOU_CONFIG` names, else the default), the rest is the command line's alone,
+and the block of what was resolved, with each value's source, is printed as `aeiou datagen`
+prints it (`tests/test_options.py`; 2026-10-04).
 
 ## 7. `aeiou-trace`: the metrics of a real trace (2026-10-01)
 

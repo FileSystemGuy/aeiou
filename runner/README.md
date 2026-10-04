@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
 | `aeiou datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id, then the manifest `.aeiou-dataset.json` at each dataset root. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params-file FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap (default: the backend the abstract declares, `sync` when it declares none)] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits] [--report-json FILE [--report-takes]]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params-file FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap (default: the backend the abstract declares, `sync` when it declares none)] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--sqpoll-shared]] [--defer-taskrun] [--coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--require-cold] [--drop-caches] [--ignore-limits] [--report-json FILE [--report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -409,11 +409,18 @@ building it is `DESIGN_REVIEW.md` §3.25.
   thread per socket, frames of a big-endian `u32` length and a JSON body. Hosts may take up
   to 120 s to connect; a peer silent for 30 s is dead (heartbeats every 5 s while idle) and
   the run aborts on every host.
-- **Configuration check.** `Hello` carries a SHA-256 over the abstract's hash, seed, G, the
-  resolved parameters, the dataset ids, the backend, the rotation, the time scale, and the
-  write compression, plus this host's barrier scopes with their instance counts. A host whose
-  hash differs from the first host's is refused with the reason, and the run stops on every
-  host before any I/O.
+- **Configuration check.** `Hello` carries ~~a SHA-256 over~~ the run's identity document
+  (the abstract's hash, seed, G, the resolved parameters, the dataset ids, the backend, the
+  mmap mode, the rotation, the time scale, the write compression, `--drop-caches`), compared
+  by its canonical SHA-256 and, when that differs, field by field, so the refusal names what
+  differs (`seed 2 differs from rank 0's 1`, a parameter as `params.name`; 2026-10-04,
+  `DESIGN_REVIEW.md` §3.60); the host's options block (§14) with every option's value and
+  source, recorded per rank; and this host's barrier scopes with their instance counts. A
+  host whose identity differs from the first host's is refused with the reason, and the run
+  stops on every host before any I/O. After the gate rank 0 prints the options whose values
+  differ between hosts (rank always does; the layered options are each host's own, so
+  `threads` or `root` may legitimately differ) and records every host's block in its report
+  as `hosts`.
 - **Startup order.** Each host checks its datasets, connects, and checks its input
   namespaces; rank 0 alone prepares the output namespace roots (`--root` is the storage under
   test, shared by every host, so only one host may empty anything); every host then sends
@@ -1087,6 +1094,9 @@ the same day (decided 2026-10-01).**
   "options": {root, threads, buffer_bytes, write_compress, time_scale, io_uring, aio_depth,
               mmap_mode, mmap_consume, clean_namespaces, rank_rotate, max_gap, require_cold,
               drop_caches, ignore_limits},
+  "layers": {config: {path, sha256} | null, env: [names that contributed],
+             options: {flag: {value, source: "cli" | "env AEIOU_X" | "config PATH" | "default"}}, warnings},   §14 (2026-10-04)
+  "hosts": [{rank, host, layers}],           rank 0 of several: every host's block, from its Hello
   "datasets": [{name, root, id, payload, files}], "input_namespaces": [{names, root, writer_…, gap_s, objects, same_host}],
   "limits": {"checked": {…§11…}, "ignored": [problems started over]},
   "started", "finished",                      Unix seconds, the gate and the end of the run
@@ -1274,3 +1284,100 @@ carries `traces: [{file, sha256, lanes, lines, ops, opens, creates, notes}]`.
 **Not built.** ~~Traces under the event-loop backends;~~ (built 2026-10-03) a recorded wait
 time per lane; a cap on the file (a million lines is about 64 MiB of parsed ops, held in
 memory).
+
+## 14. The option layers (2026-10-04)
+
+Every option of every subcommand is resolved through four layers, a higher one replacing a
+lower one's value (`options.rs`; the reasoning is `DESIGN_REVIEW.md` §3.60):
+
+1. the command line;
+2. the environment: `AEIOU_<FLAG>`, the long flag upper-cased with `_` for `-`
+   (`AEIOU_RANK`, `AEIOU_BUFFER_MIB`); booleans take `true`/`false` (also `1`/`0`,
+   `yes`/`no`, `on`/`off`);
+3. the config file: TOML, named by `--config FILE` or `$AEIOU_CONFIG`, **never searched for**
+   (no working directory, home, or XDG path: a file nobody remembers is how two hosts of one
+   run come to differ); one table per subcommand, keys spelled as the long flags:
+
+   ```toml
+   [run]
+   root = "/mnt/sut"
+   threads = 8
+   buffer-mib = 16
+   require-cold = true
+
+   [datagen]
+   root = "/mnt/sut"
+   ```
+
+   A key at the top level, an unknown key, or a key that is another subcommand's option is
+   refused.
+4. the compiled default.
+
+**Two kinds of option.** A *fixed* option is the command line's alone, and the environment
+and the file are refused when they name it: nothing the fingerprint, a dataset id, or a safety
+check depends on may come from a layer the command line does not show. For `run` these are
+the abstract, `--gpus`, `--seed`, `--param`, `--params-file`, `--io-backend`,
+`--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`, `--ignore-limits`; for
+`datagen` the abstract, `--gpus`, `--param`, `--params-file`, `--dedupe`, `--compress`,
+`--dataset` (the payload is part of what the run compares); for `dry-run` the identity and
+the output and metrics flags. A *layered* option may come from any layer: for `run` `--root`,
+`--threads`, `--buffer-mib`, `--write-compress`, `--time-scale`, the io_uring, libaio, and
+mmap knobs, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`,
+`--require-cold`, `--drop-caches`, `--report-json`, `--report-takes`; for `datagen` `--root`
+and `--threads`; for `dry-run` `--threads` and `--ranks`. `--rank` from the environment is
+the case the layers exist for: a launcher sets `AEIOU_RANK` from its own rank variable and
+the same command line runs on every host. (No layered option is a list, so "replace" is the
+only merge rule in play.) `--root` is required from some layer.
+
+**Negation.** Every layered boolean takes `--flag` (true) or `--flag=false`, so the command
+line can turn off what the file turned on; `=` is required, so a bare value is never taken
+for the abstract. The same six are `true`/`false` in the environment and the file:
+`--sqpoll-shared`, `--defer-taskrun`, `--coop-taskrun`, `--require-cold`, `--drop-caches`,
+`--report-takes`. Their cross-checks (`--sqpoll-shared` needs `--sqpoll`, `--defer-taskrun`
+excludes it, `--report-takes` needs `--report-json`) are made on the resolved values, since
+the two sides may come from different layers.
+
+**The block.** Every invocation prints, after the `abstract` line, one line per option with
+its value in effect and its source, fixed options first, the config file last, then any
+warning, then an empty line (there is no `--show-config`: the block is always there):
+
+```
+options (cli > env > config > default)
+  abstract = ../schema/examples/train_small_files.ast.json   [cli]
+  param = files=4000 steps=50                                [cli]
+  params-file = none                                         [default]
+  gpus = 8                                                   [cli]
+  seed = 1                                                   [cli]
+  io-backend = the abstract's                                [default]
+  …
+  root = /mnt/sut                                            [config /etc/aeiou.toml]
+  threads = 8                                                [env AEIOU_THREADS]
+  buffer-mib = 16                                            [config /etc/aeiou.toml]
+  …
+  rank = 2                                                   [env AEIOU_RANK]
+  …
+  config = /etc/aeiou.toml (sha256 68468a873b884760…)       [env AEIOU_CONFIG]
+  WARNING: AEIOU_BOGUS is set and is no option of any subcommand; ignored
+```
+
+An `AEIOU_*` that is no option of any subcommand warns (`AEIOU_CONFIG`, `AEIOU_SCHEMA_DIR`,
+`AEIOU_RUNNER`, and `AEIOU_RSH` are the family's own and do not); one that is another
+subcommand's option is left alone. `aeiou check` prints the block too (its files and the
+config file), so CI's diff of its output against `schema/check.py` skips past the first
+empty line. `aeiou-datagen` resolves `--root` and `--threads` through the same layers
+(`builder/aeiou/options.py`, the `[datagen]` table) and prints the same block.
+
+**The record.** `aeiou run` writes the block to the report as `layers` (§12: the config
+file's path and sha256, the environment variables that contributed, every option with its
+value and source), sends it in `Hello`, and, on rank 0 of several hosts, records every host's
+as `hosts` and prints the options whose values differ between them after the gate (§6). The
+most likely way a layer goes wrong across hosts is ssh itself: a non-interactive shell does
+not read the profile an interactive one does, so a variable set in the operator's terminal is
+absent on the remote hosts. Under `aeiou-launch` every host's block arrives with its rank
+prefix, and the differences table shows the rest.
+
+**Tests.** `options.rs` (precedence, the negation, the refusals, typed values, the
+differences), `tests/options.rs` through the binary (every subcommand's block, the layers,
+the refusals, the report's `layers`, two ranks with a differing `--buffer-mib` and the named
+identity refusal), and `main.rs`'s check that `options::ALL_OPTIONS` is the set of clap
+definitions; `builder/tests/test_options.py` for the Python mirror and `aeiou-datagen`.
