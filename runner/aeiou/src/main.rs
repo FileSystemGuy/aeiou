@@ -21,7 +21,7 @@ use aeiou::payload;
 use aeiou::run::{self, Report, RunOpts, UringOpts};
 
 #[derive(Parser)]
-#[command(name = "aeiou", version, about = "Abstract-driven I/O workload runner", after_help = NEGATION)]
+#[command(name = "aeiou", version, about = "Author Execute I/O workload runner: author a workload, then execute it", after_help = NEGATION, max_term_width = 120)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,

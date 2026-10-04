@@ -1,7 +1,7 @@
 [project]
 name = "aeiou"
 version = "0.1.0"
-description = "Python builder for abstract-driven I/O benchmark workloads: emits the AST the Rust runner executes"
+description = "Author Execute I/O (aeiou): the Python builder of the workloads the Rust runner executes"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"

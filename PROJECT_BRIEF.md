@@ -495,7 +495,9 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Checkpoint write and restore | A write run leaves a namespace manifest; a restore run declares the namespace `input`, reads it, and reports the gap and the warm reads (§5, *Checkpoint restore inputs*). | The benchmark runs them as two invocations of the same host list, the restore with `--rank-rotate 1` so no host reads its own shards; the gap between the end of the write and the start of the restore is capped at 30 s (`--max-gap 30`); a failed DP=N job restarts as DP=N (no resharding, `replicas` stays 1 for fully sharded state); `readback` stays off in a scored write. | `DESIGN_REVIEW.md` §3.24; `ABSTRACTS.md` §3–§4 |
 
 **Naming convention (decided 2026-09-30).** One name family, `aeiou`, for everything a user
-types or imports:
+types or imports. The name expands to **Author Execute I/O** (2026-10-04): an I/O benchmark
+where one *authors* a workload and then *executes* it, which is what the binary's `about`
+line says:
 
 - The Rust runner is the binary `aeiou`, with subcommands for its modes: `aeiou run`,
   `aeiou dry-run` (`--metrics`), `aeiou datagen`, `aeiou check`, and the coordinator/launch
