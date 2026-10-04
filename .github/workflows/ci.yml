@@ -47,7 +47,7 @@ jobs:
       - name: Rust checker agrees with the reference checker on every committed AST
         run: |
           builder/.venv/bin/python schema/check.py > /tmp/check.py.out
-          runner/target/release/aeiou check schema/examples/*.ast.json > /tmp/check.rs.out
+          runner/target/release/aeiou check schema/examples/*.ast.json | sed '1,/^$/d' > /tmp/check.rs.out   # past the options block
           diff /tmp/check.py.out /tmp/check.rs.out
       - name: Container datasets written by aeiou-datagen run to the dry-run fingerprint
         working-directory: builder

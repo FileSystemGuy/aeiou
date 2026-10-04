@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::run::{unix_now, Report};
 
@@ -174,10 +175,12 @@ const MAX_FRAME: usize = 256 << 20;
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Msg {
-    /// Client → server, first. `config` is the hash of everything that shapes the run (the
-    /// abstract, seed, G, parameters, dataset ids, backend, rotation); `participants` are this
-    /// host's barrier scopes with its instance counts.
-    Hello { rank: i64, ranks: i64, host: String, config: String, participants: Vec<(String, usize)> },
+    /// Client → server, first. `identity` is everything that shapes the run (the abstract,
+    /// seed, G, parameters, dataset ids, backend, rotation), compared by its canonical hash
+    /// and, when it differs, field by field; `layers` is the host's options block
+    /// (`options::Layers::json`), recorded per rank and compared after the gate;
+    /// `participants` are this host's barrier scopes with its instance counts.
+    Hello { rank: i64, ranks: i64, host: String, identity: Value, layers: Value, participants: Vec<(String, usize)> },
     Welcome,
     /// Client → server once its startup checks are done.
     Ready,
@@ -325,8 +328,9 @@ pub struct Tcp {
 
 impl Tcp {
     /// Connect (retrying for `CONNECT_WINDOW`), send `Hello`, and wait for the server's
-    /// `Welcome`, which it sends once the configuration hash matches the first host's.
-    pub fn connect(addr: &str, rank: i64, ranks: i64, host: &str, config: &str, participants: &[(String, usize)], aborted: Arc<AtomicBool>) -> Result<Tcp> {
+    /// `Welcome`, which it sends once the identity matches the first host's.
+    #[allow(clippy::too_many_arguments)]
+    pub fn connect(addr: &str, rank: i64, ranks: i64, host: &str, identity: &Value, layers: &Value, participants: &[(String, usize)], aborted: Arc<AtomicBool>) -> Result<Tcp> {
         let sock = resolve(addr)?;
         let deadline = Instant::now() + CONNECT_WINDOW;
         let stream = loop {
@@ -356,7 +360,7 @@ impl Tcp {
             reason: Mutex::new(None),
             efds: Eventfds::default(),
         });
-        send(&writer, &Msg::Hello { rank, ranks, host: host.to_string(), config: config.to_string(), participants: participants.to_vec() })?;
+        send(&writer, &Msg::Hello { rank, ranks, host: host.to_string(), identity: identity.clone(), layers: layers.clone(), participants: participants.to_vec() })?;
         let reader = {
             let st = st.clone();
             let mut stream = stream;
@@ -519,8 +523,11 @@ struct SBar {
 #[derive(Default)]
 struct SState {
     conns: BTreeMap<i64, Arc<Mutex<TcpStream>>>,
-    config: Option<(i64, String)>,
+    /// The first host's identity (its rank, the canonical hash, the document).
+    identity: Option<(i64, String, Value)>,
     hosts: BTreeMap<i64, String>,
+    /// Each host's options block, from its `Hello`.
+    layers: BTreeMap<i64, Value>,
     ready: HashSet<i64>,
     started: Option<f64>,
     bars: BTreeMap<String, SBar>,
@@ -590,6 +597,13 @@ impl Server {
                 .expect("spawn coordinator accept thread");
         }
         Ok(Server { st, addr: bound })
+    }
+
+    /// Every host's rank, name, and options block (`Hello`), by rank; complete once the start
+    /// gate has opened.
+    pub fn hosts(&self) -> Vec<(i64, String, Value)> {
+        let s = self.st.m.lock().unwrap();
+        s.hosts.iter().map(|(r, h)| (*r, h.clone(), s.layers.get(r).cloned().unwrap_or(Value::Null))).collect()
     }
 
     /// Host-level departure releases (a host whose participants all left completed a
@@ -707,25 +721,49 @@ fn serve(st: Arc<ServerState>, stream: TcpStream, peer: SocketAddr) {
     st.cv.notify_all();
 }
 
+/// The fields of `mine` that differ from rank `r0`'s `theirs`, one line each; `params` is
+/// compared parameter by parameter.
+fn identity_differences(mine: &Value, theirs: &Value, r0: i64) -> Vec<String> {
+    let mut out = Vec::new();
+    let keys: std::collections::BTreeSet<&String> = mine.as_object().into_iter().chain(theirs.as_object()).flat_map(|o| o.keys()).collect();
+    for k in keys {
+        let (a, b) = (&mine[k], &theirs[k]);
+        if a == b {
+            continue;
+        }
+        if k == "params" && a.is_object() && b.is_object() {
+            let names: std::collections::BTreeSet<&String> = a.as_object().into_iter().chain(b.as_object()).flat_map(|o| o.keys()).collect();
+            for n in names {
+                if a[n] != b[n] {
+                    out.push(format!("params.{n} {} differs from rank {r0}'s {}", a[n], b[n]));
+                }
+            }
+        } else {
+            out.push(format!("{k} {a} differs from rank {r0}'s {b}"));
+        }
+    }
+    if out.is_empty() {
+        out.push(format!("identity differs from rank {r0}'s"));
+    }
+    out
+}
+
 fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpStream>>, live: &mut Liveness, who: &mut String) -> Result<()> {
     let rank = {
         let mut idle = || live.idle();
         let m = recv(stream, &mut idle)?;
         live.seen();
-        let Msg::Hello { rank, ranks, host, config, participants } = m else { bail!("expected Hello, got {m:?}") };
+        let Msg::Hello { rank, ranks, host, identity, layers, participants } = m else { bail!("expected Hello, got {m:?}") };
         *who = format!("rank {rank} ({host})");
+        let hash = crate::canon::sha256_hex(&identity);
         let mut s = st.m.lock().unwrap();
         let refusal = if ranks != st.ranks {
             Some(format!("{who}: --ranks {ranks}, the coordinator was started for {}", st.ranks))
         } else if rank < 0 || rank >= st.ranks || s.conns.contains_key(&rank) {
             Some(format!("{who}: rank {rank} is out of range or already connected"))
         } else {
-            match &s.config {
-                Some((r0, c0)) if *c0 != config => Some(format!(
-                    "{who}: configuration hash {}… differs from rank {r0}'s {}…: not the same run (abstract, seed, gpus, params, dataset ids, backend, rotation)",
-                    &config[..12.min(config.len())],
-                    &c0[..12.min(c0.len())]
-                )),
+            match &s.identity {
+                Some((r0, h0, id0)) if *h0 != hash => Some(format!("{who}: not the same run: {}", identity_differences(&identity, &id0.clone(), *r0).join("; "))),
                 _ => None,
             }
         };
@@ -735,9 +773,10 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
             st.fail(&mut s, e.clone());
             bail!("{e}");
         }
-        if s.config.is_none() {
-            s.config = Some((rank, config));
+        if s.identity.is_none() {
+            s.identity = Some((rank, hash, identity));
         }
+        s.layers.insert(rank, layers);
         s.conns.insert(rank, writer.clone());
         s.hosts.insert(rank, host);
         for (scope, n) in participants {

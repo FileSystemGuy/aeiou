@@ -4,7 +4,7 @@
 //! with a blocking backend, on one host or on several through the TCP coordinator).
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -16,6 +16,7 @@ use aeiou::coord::{Coordinator, Local, Server, Tcp};
 use aeiou::datagen::{self, DatagenOpts};
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, ParamSet, Params};
+use aeiou::options::{self, Layers};
 use aeiou::payload;
 use aeiou::run::{self, Report, RunOpts, UringOpts};
 
@@ -24,6 +25,11 @@ use aeiou::run::{self, Report, RunOpts, UringOpts};
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// A TOML config file (else $AEIOU_CONFIG, else none; never searched for): one table per
+    /// subcommand, keys spelled as the long flags. Under the command line and the environment
+    /// (runner/README.md §14); every subcommand prints what it resolved and from where.
+    #[arg(long, global = true, value_name = "FILE")]
+    config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -76,7 +82,7 @@ struct DatagenArgs {
     gpus: i64,
     /// Directory the abstract's paths are relative to.
     #[arg(long, help_heading = "Writer")]
-    root: PathBuf,
+    root: Option<PathBuf>,
     /// Writer threads (default: all cores).
     #[arg(long, help_heading = "Writer")]
     threads: Option<usize>,
@@ -106,20 +112,20 @@ struct RunCmd {
     backend: Option<String>,
     /// Directory the abstract's paths are relative to (datasets and namespaces live under it).
     #[arg(long, help_heading = "Backend")]
-    root: PathBuf,
+    root: Option<PathBuf>,
     /// Event-loop threads for the io_uring and libaio backends (default: one per core, at most one
     /// per actor instance). The other backends run one thread per actor and refuse it.
     #[arg(long, help_heading = "Backend")]
     threads: Option<usize>,
-    /// Per-thread read and write buffer ring, MiB.
-    #[arg(long, default_value_t = 8, help_heading = "Backend")]
-    buffer_mib: usize,
-    /// Compression ratio of the bytes written to namespaces.
-    #[arg(long, default_value_t = 1, help_heading = "Backend")]
-    write_compress: u64,
-    /// Multiply every `compute` sleep (0 runs the I/O back to back).
-    #[arg(long, default_value_t = 1.0, help_heading = "Backend")]
-    time_scale: f64,
+    /// Per-thread read and write buffer ring, MiB. Default 8.
+    #[arg(long, value_name = "MIB", help_heading = "Backend")]
+    buffer_mib: Option<usize>,
+    /// Compression ratio of the bytes written to namespaces. Default 1.
+    #[arg(long, value_name = "C", help_heading = "Backend")]
+    write_compress: Option<u64>,
+    /// Multiply every `compute` sleep (0 runs the I/O back to back). Default 1.
+    #[arg(long, value_name = "X", help_heading = "Backend")]
+    time_scale: Option<f64>,
     /// Cap each loop's bounded io-wq workers (IORING_REGISTER_IOWQ_MAX_WORKERS); the
     /// report shows the kernel's default either way.
     #[arg(long, value_name = "N", help_heading = "io_uring")]
@@ -129,15 +135,15 @@ struct RunCmd {
     #[arg(long, value_name = "IDLE_MS", help_heading = "io_uring")]
     sqpoll: Option<u32>,
     /// One submission thread, and one io-wq, shared by every loop
-    /// (IORING_SETUP_ATTACH_WQ) instead of one per loop.
-    #[arg(long, requires = "sqpoll", help_heading = "io_uring")]
-    sqpoll_shared: bool,
+    /// (IORING_SETUP_ATTACH_WQ) instead of one per loop; needs --sqpoll.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "io_uring")]
+    sqpoll_shared: Option<bool>,
     /// IORING_SETUP_SINGLE_ISSUER with IORING_SETUP_DEFER_TASKRUN (not with --sqpoll).
-    #[arg(long, conflicts_with = "sqpoll", help_heading = "io_uring")]
-    defer_taskrun: bool,
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "io_uring")]
+    defer_taskrun: Option<bool>,
     /// IORING_SETUP_COOP_TASKRUN.
-    #[arg(long, help_heading = "io_uring")]
-    coop_taskrun: bool,
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "io_uring")]
+    coop_taskrun: Option<bool>,
     /// Requests each loop's AIO context holds (io_setup's nr_events; the host's total is
     /// bounded by fs.aio-max-nr). Default 256.
     #[arg(long, value_name = "N", help_heading = "libaio")]
@@ -151,18 +157,18 @@ struct RunCmd {
     /// (the range is copied into the actor's buffer). Default touch.
     #[arg(long, value_name = "HOW", help_heading = "mmap")]
     mmap_consume: Option<String>,
-    /// This host's index among --ranks hosts.
-    #[arg(long, default_value_t = 0, help_heading = "Several hosts")]
-    rank: i64,
-    /// Hosts the run is spread over; each runs the GPU id range of its --rank.
-    #[arg(long, default_value_t = 1, help_heading = "Several hosts")]
-    ranks: i64,
+    /// This host's index among --ranks hosts. Default 0.
+    #[arg(long, value_name = "R", help_heading = "Several hosts")]
+    rank: Option<i64>,
+    /// Hosts the run is spread over; each runs the GPU id range of its --rank. Default 1.
+    #[arg(long, value_name = "N", help_heading = "Several hosts")]
+    ranks: Option<i64>,
     /// With --ranks above 1: the coordinator's address. Rank 0 listens on it (in-process); every rank connects to it.
     #[arg(long, value_name = "HOST:PORT", help_heading = "Several hosts")]
     coordinator: Option<String>,
-    /// Run the GPU range of rank (rank + k) mod ranks, so each host reads what another wrote.
-    #[arg(long, default_value_t = 0, value_name = "K", help_heading = "Several hosts")]
-    rank_rotate: i64,
+    /// Run the GPU range of rank (rank + k) mod ranks, so each host reads what another wrote. Default 0.
+    #[arg(long, value_name = "K", help_heading = "Several hosts")]
+    rank_rotate: Option<i64>,
     /// Fail unless the run's fingerprint is this (hex, from `aeiou dry-run`).
     #[arg(long, value_name = "HEX", help_heading = "Checks")]
     expect_fingerprint: Option<String>,
@@ -174,13 +180,13 @@ struct RunCmd {
     max_gap: Option<f64>,
     /// Fail if this host would read input objects it wrote itself, or if dataset pages are
     /// in its page cache at the start (mincore over 256 sampled files per dataset).
-    #[arg(long, help_heading = "Checks")]
-    require_cold: bool,
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "Checks")]
+    require_cold: Option<bool>,
     /// On every host, before the start gate: sync, then drop the page cache, dentries, and
     /// inodes (3 into /proc/sys/vm/drop_caches), then sample the datasets' residency. Needs
     /// root; the run refuses when it fails.
-    #[arg(long, help_heading = "Checks")]
-    drop_caches: bool,
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "Checks")]
+    drop_caches: Option<bool>,
     /// Empty the namespace roots before starting instead of refusing.
     #[arg(long, help_heading = "Checks")]
     clean_namespaces: bool,
@@ -195,8 +201,103 @@ struct RunCmd {
     #[arg(long, value_name = "FILE", help_heading = "Report")]
     report_json: Option<PathBuf>,
     /// With --report-json: every take of every instance (stall and compute), not only the sums.
-    #[arg(long, requires = "report_json", help_heading = "Report")]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_name = "BOOL", help_heading = "Report")]
+    report_takes: Option<bool>,
+}
+
+/// `aeiou run`'s options as resolved through the layers (`options.rs`): the command line's
+/// identity, and every layered option with its value in effect.
+struct RunOptions {
+    run: RunArgs,
+    backend: Option<String>,
+    root: PathBuf,
+    threads: Option<usize>,
+    buffer_mib: usize,
+    write_compress: u64,
+    time_scale: f64,
+    iowq_max_workers: Option<u32>,
+    sqpoll: Option<u32>,
+    sqpoll_shared: bool,
+    defer_taskrun: bool,
+    coop_taskrun: bool,
+    aio_depth: Option<u32>,
+    mmap_mode: Option<String>,
+    mmap_consume: Option<String>,
+    rank: i64,
+    ranks: i64,
+    coordinator: Option<String>,
+    rank_rotate: i64,
+    expect_fingerprint: Option<String>,
+    expect_dataset_ids: Vec<String>,
+    max_gap: Option<f64>,
+    require_cold: bool,
+    drop_caches: bool,
+    clean_namespaces: bool,
+    ignore_limits: bool,
+    report_json: Option<PathBuf>,
     report_takes: bool,
+}
+
+/// The identity of the run as the command line fixes it: the abstract, its parameters, and
+/// the run's `--gpus`, in every subcommand's block first.
+fn fix_shape(l: &mut Layers, shape: &ShapeArgs) -> Result<()> {
+    l.fixed("abstract", &shape.abstract_path, true)?;
+    l.fixed("param", &shape.params, !shape.params.is_empty())?;
+    l.fixed("params-file", &shape.param_files, !shape.param_files.is_empty())
+}
+
+fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)> {
+    let mut l = Layers::new("run", config)?;
+    fix_shape(&mut l, &a.run.shape)?;
+    l.fixed("gpus", &a.run.gpus, true)?;
+    l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
+    l.fixed("io-backend", &a.backend.clone().unwrap_or_else(|| "the abstract's".into()), a.backend.is_some())?;
+    l.fixed("expect-fingerprint", &a.expect_fingerprint, a.expect_fingerprint.is_some())?;
+    l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
+    l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces)?;
+    l.fixed("ignore-limits", &a.ignore_limits, a.ignore_limits)?;
+    let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required (the command line, $AEIOU_ROOT, or [run] root in the config file)"))?;
+    let o = RunOptions {
+        root,
+        threads: l.layered("threads", a.threads, None)?,
+        buffer_mib: l.layered("buffer-mib", a.buffer_mib, Some(8))?.unwrap_or(8),
+        write_compress: l.layered("write-compress", a.write_compress, Some(1))?.unwrap_or(1),
+        time_scale: l.layered("time-scale", a.time_scale, Some(1.0))?.unwrap_or(1.0),
+        iowq_max_workers: l.layered("iowq-max-workers", a.iowq_max_workers, None)?,
+        sqpoll: l.layered("sqpoll", a.sqpoll, None)?,
+        sqpoll_shared: l.flag("sqpoll-shared", a.sqpoll_shared, false)?,
+        defer_taskrun: l.flag("defer-taskrun", a.defer_taskrun, false)?,
+        coop_taskrun: l.flag("coop-taskrun", a.coop_taskrun, false)?,
+        aio_depth: l.layered("aio-depth", a.aio_depth, None)?,
+        mmap_mode: l.layered("mmap-mode", a.mmap_mode, None)?,
+        mmap_consume: l.layered("mmap-consume", a.mmap_consume, None)?,
+        rank: l.layered("rank", a.rank, Some(0))?.unwrap_or(0),
+        ranks: l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1),
+        coordinator: l.layered("coordinator", a.coordinator, None)?,
+        rank_rotate: l.layered("rank-rotate", a.rank_rotate, Some(0))?.unwrap_or(0),
+        max_gap: l.layered("max-gap", a.max_gap, None)?,
+        require_cold: l.flag("require-cold", a.require_cold, false)?,
+        drop_caches: l.flag("drop-caches", a.drop_caches, false)?,
+        report_json: l.layered("report-json", a.report_json, None)?,
+        report_takes: l.flag("report-takes", a.report_takes, false)?,
+        run: a.run,
+        backend: a.backend,
+        expect_fingerprint: a.expect_fingerprint,
+        expect_dataset_ids: a.expect_dataset_ids,
+        clean_namespaces: a.clean_namespaces,
+        ignore_limits: a.ignore_limits,
+    };
+    l.finish()?;
+    if o.report_takes && o.report_json.is_none() {
+        bail!("--report-takes needs --report-json FILE");
+    }
+    if o.sqpoll_shared && o.sqpoll.is_none() {
+        bail!("--sqpoll-shared needs --sqpoll IDLE_MS");
+    }
+    if o.defer_taskrun && o.sqpoll.is_some() {
+        bail!("--defer-taskrun and --sqpoll exclude each other");
+    }
+    Ok((o, l))
 }
 
 #[derive(Args)]
@@ -242,25 +343,36 @@ fn main() {
 
 fn real_main() -> Result<()> {
     let cli = Cli::parse();
+    let config = cli.config.as_deref();
     match cli.cmd {
-        Cmd::Check { files } => check(files),
-        Cmd::DryRun(a) => dry_run(a),
-        Cmd::Datagen(a) => datagen_cmd(a),
-        Cmd::Run(a) => run_cmd(a),
+        Cmd::Check { files } => check(files, config),
+        Cmd::DryRun(a) => dry_run(a, config),
+        Cmd::Datagen(a) => datagen_cmd(a, config),
+        Cmd::Run(a) => run_cmd(a, config),
     }
 }
 
-fn datagen_cmd(a: DatagenArgs) -> Result<()> {
+fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
+    let mut l = Layers::new("datagen", config)?;
+    fix_shape(&mut l, &a.shape)?;
+    l.fixed("gpus", &a.gpus, a.gpus != 1)?;
+    l.fixed("dedupe", &a.dedupe, a.dedupe != 1)?;
+    l.fixed("compress", &a.compress, a.compress != 1)?;
+    l.fixed("dataset", &a.datasets, !a.datasets.is_empty())?;
+    let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required (the command line, $AEIOU_ROOT, or [datagen] root in the config file)"))?;
+    let threads = l.layered::<usize>("threads", a.threads, None)?;
+    l.finish()?;
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
     let loaded = aeiou::load(&a.shape.abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
-    let threads = a.threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root: a.root.clone(), threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone() };
+    let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+    let opts = DatagenOpts { root, threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone() };
     let mut out = std::io::stdout();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+    l.print(&mut out)?;
     writeln!(out, "gpus {}  params: {}", cfg.gpus, params_line(&cfg))?;
     let results = datagen::datagen(&loaded, &cfg, &params, &model, &opts, &mut out)?;
     for r in &results {
@@ -278,7 +390,8 @@ fn datagen_cmd(a: DatagenArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_cmd(a: RunCmd) -> Result<()> {
+fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
+    let (a, layers) = resolve_run(a, config)?;
     let mut doc = aeiou::report::Doc { full_takes: a.report_takes, ..Default::default() };
     if let Some(path) = &a.report_json {
         // never leave an earlier run's report where this run's is expected
@@ -287,7 +400,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
             _ => {}
         }
     }
-    let r = run_checked(&a, &mut doc);
+    let r = run_checked(&a, &layers, &mut doc);
     if let Some(path) = &a.report_json {
         let error = r.as_ref().err().map(|e| format!("{e:#}"));
         match (doc.write(path, error.as_deref()), &r) {
@@ -299,7 +412,7 @@ fn run_cmd(a: RunCmd) -> Result<()> {
     r
 }
 
-fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
+fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
     let cfg = parse_config(&a.run.shape, a.run.gpus, a.run.seed)?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.shape.abstract_path)?));
@@ -355,11 +468,13 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
     doc.set("host", serde_json::json!(run::hostname()));
     doc.set("rank", serde_json::json!(a.rank));
     doc.set("ranks", serde_json::json!(a.ranks));
+    doc.set("layers", layers.json());
     doc.expected_fingerprint = expect_fingerprint;
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+    layers.print(&mut out)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
     if backend.name() != declared {
         writeln!(out, "backend {} is not the abstract's ({declared}): the storage sees another workload, and this run is not comparable with runs of the abstract as declared", backend.name())?;
@@ -482,7 +597,7 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
     let (coord, tcp): (Arc<dyn Coordinator>, Option<Arc<Tcp>>) = match &a.coordinator {
         Some(addr) if a.ranks > 1 => {
             let dataset_ids: Vec<&str> = checks.iter().map(|c| c.id.as_str()).collect();
-            let config = serde_json::json!({
+            let identity = serde_json::json!({
                 "ast_sha256": loaded.sha256,
                 "seed": cfg.seed,
                 "gpus": cfg.gpus,
@@ -496,9 +611,9 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
                 "write_compress": a.write_compress,
                 "drop_caches": a.drop_caches,
             });
-            let config = aeiou::canon::sha256_hex(&config);
-            let t = Arc::new(Tcp::connect(addr, a.rank, a.ranks, &run::hostname(), &config, &participants, aborted.clone())?);
-            writeln!(out, "coordinator {}: connected as rank {} of {}  config {}…", t.addr, a.rank, a.ranks, &config[..16])?;
+            let hash = aeiou::canon::sha256_hex(&identity);
+            let t = Arc::new(Tcp::connect(addr, a.rank, a.ranks, &run::hostname(), &identity, &layers.json(), &participants, aborted.clone())?);
+            writeln!(out, "coordinator {}: connected as rank {} of {}  identity {}…", t.addr, a.rank, a.ranks, &hash[..16])?;
             (t.clone(), Some(t))
         }
         _ => (Arc::new(Local::new(&participants)), None),
@@ -513,7 +628,7 @@ fn run_checked(a: &RunCmd, doc: &mut aeiou::report::Doc) -> Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 fn run_connected(
-    a: &RunCmd,
+    a: &RunOptions,
     loaded: &'static aeiou::Loaded,
     cfg: &'static Config,
     model: &'static aeiou::eval::Model<'static>,
@@ -593,6 +708,18 @@ fn run_connected(
         let (t0, hosts) = t.ready().map_err(|e| anyhow!("start gate: {e:#}"))?;
         started = t0;
         writeln!(out, "start gate: {} host(s) ready: {}", hosts.len(), hosts.join(", "))?;
+        if let Some(s) = server {
+            // every host's options block came with its Hello: the report records them all,
+            // and the options that differ between hosts are printed (rank always does)
+            let all = s.hosts();
+            doc.set("hosts", serde_json::json!(all.iter().map(|(r, h, l)| serde_json::json!({"rank": r, "host": h, "layers": l})).collect::<Vec<_>>()));
+            let refs: Vec<(i64, &serde_json::Value)> = all.iter().map(|(r, _, l)| (*r, l)).collect();
+            let rows = options::differences(&refs);
+            writeln!(out, "options differing between hosts ({}; rank always does):", if rows.len() > 1 { "layered values are each host's own" } else { "none but rank" })?;
+            for (name, values) in &rows {
+                writeln!(out, "  {name}: {}", values.iter().map(|(r, v)| format!("rank {r} = {v}")).collect::<Vec<_>>().join(", "))?;
+            }
+        }
         out.flush()?;
     }
     let mut report = run::run_with(model, opts.clone(), input_objects, coord, aborted)?;
@@ -669,10 +796,14 @@ fn run_connected(
     }
 }
 
-fn check(files: Vec<PathBuf>) -> Result<()> {
+fn check(files: Vec<PathBuf>, config: Option<&Path>) -> Result<()> {
     if files.is_empty() {
         bail!("no files given");
     }
+    let mut l = Layers::new("check", config)?;
+    l.fixed("files", &files, true)?;
+    l.finish()?;
+    l.print(&mut std::io::stdout())?;
     let mut failed = 0;
     for f in &files {
         let name = f.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -724,7 +855,21 @@ fn params_line(cfg: &Config) -> String {
     }
 }
 
-fn dry_run(a: DryRunArgs) -> Result<()> {
+fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
+    let mut l = Layers::new("dry-run", config)?;
+    fix_shape(&mut l, &a.run.shape)?;
+    l.fixed("gpus", &a.run.gpus, true)?;
+    l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
+    l.fixed("gpu", &a.gpu, a.gpu.is_some())?;
+    l.fixed("steps", &a.steps, a.steps.is_some())?;
+    l.fixed("limit", &a.limit, a.limit.is_some())?;
+    l.fixed("metrics", &(a.metrics || a.metrics_json.is_some()), a.metrics)?;
+    l.fixed("metrics-block", &a.metrics_block, a.metrics_block != 4096)?;
+    l.fixed("metrics-sample", &a.metrics_sample, a.metrics_sample != 1)?;
+    l.fixed("metrics-json", &a.metrics_json, a.metrics_json.is_some())?;
+    let ranks = l.layered::<i64>("ranks", a.ranks, None)?;
+    let threads = l.layered::<usize>("threads", a.threads, None)?;
+    l.finish()?;
     let cfg = parse_config(&a.run.shape, a.run.gpus, a.run.seed)?;
     let loaded = aeiou::load(&a.run.shape.abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
@@ -744,7 +889,7 @@ fn dry_run(a: DryRunArgs) -> Result<()> {
     } else {
         None
     };
-    let threads = a.threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+    let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
 
     let started = std::time::Instant::now();
     if a.metrics_block == 0 || a.metrics_sample == 0 {
@@ -775,6 +920,7 @@ fn dry_run(a: DryRunArgs) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+    l.print(&mut out)?;
     if let Some(b) = &loaded.ast.backend {
         writeln!(out, "declared backend {b}")?;
     }
@@ -785,7 +931,37 @@ fn dry_run(a: DryRunArgs) -> Result<()> {
     for t in &mut report.templates {
         t.run.take_lines();
     }
-    dryrun::write_report(&mut out, &report, a.ranks, cfg.gpus)?;
+    dryrun::write_report(&mut out, &report, ranks, cfg.gpus)?;
     writeln!(out, "dry-run took {:.2?} on {} thread(s)", elapsed, threads)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// `options::ALL_OPTIONS` is the set of long flags (and positionals) of every subcommand.
+    #[test]
+    fn all_options_lists_every_flag() {
+        let cmd = Cli::command();
+        let mut names = std::collections::BTreeSet::new();
+        let mut collect = |c: &clap::Command| {
+            for a in c.get_arguments() {
+                if a.get_id() == "help" || a.get_id() == "version" {
+                    continue;
+                }
+                names.insert(match a.get_long() {
+                    Some(l) => l.to_string(),
+                    None => a.get_id().as_str().trim_end_matches("_path").to_string(),
+                });
+            }
+        };
+        collect(&cmd);
+        for sub in cmd.get_subcommands() {
+            collect(sub);
+        }
+        let listed: std::collections::BTreeSet<String> = options::ALL_OPTIONS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(names, listed);
+    }
 }

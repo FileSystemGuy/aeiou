@@ -67,7 +67,7 @@ fn opts(root: &PathBuf, rank: i64, ranks: i64) -> RunOpts {
 }
 
 fn connect(server: &Server, rank: i64, ranks: i64, config: &str, participants: &[(String, usize)]) -> anyhow::Result<Arc<Tcp>> {
-    Ok(Arc::new(Tcp::connect(&server.addr.to_string(), rank, ranks, &format!("host{rank}"), config, participants, Arc::new(AtomicBool::new(false)))?))
+    Ok(Arc::new(Tcp::connect(&server.addr.to_string(), rank, ranks, &format!("host{rank}"), &serde_json::json!({"cfg": config}), &serde_json::json!({}), participants, Arc::new(AtomicBool::new(false)))?))
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn barriers_across_hosts_with_a_departure() {
     let scope1 = vec![("sync".to_string(), 1usize)];
     let s0 = server.addr.to_string();
     let h0 = std::thread::spawn(move || {
-        let t = Arc::new(Tcp::connect(&s0, 0, 2, "host0", "cfg", &scope, Arc::new(AtomicBool::new(false))).unwrap());
+        let t = Arc::new(Tcp::connect(&s0, 0, 2, "host0", &serde_json::json!({"cfg": "cfg"}), &serde_json::json!({}), &scope, Arc::new(AtomicBool::new(false))).unwrap());
         let (t0, hosts) = t.ready().unwrap();
         assert!(t0 > 0.0);
         assert_eq!(hosts, vec!["host0".to_string(), "host1".to_string()]);
@@ -122,7 +122,7 @@ fn barriers_across_hosts_with_a_departure() {
     });
     let s1 = server.addr.to_string();
     let h1 = std::thread::spawn(move || {
-        let t = Tcp::connect(&s1, 1, 2, "host1", "cfg", &scope1, Arc::new(AtomicBool::new(false))).unwrap();
+        let t = Tcp::connect(&s1, 1, 2, "host1", &serde_json::json!({"cfg": "cfg"}), &serde_json::json!({}), &scope1, Arc::new(AtomicBool::new(false))).unwrap();
         t.ready().unwrap();
         let ab = AtomicBool::new(false);
         for _ in 0..3 {
@@ -151,7 +151,7 @@ fn configuration_mismatch_is_refused_before_the_start() {
     let server = Server::start("127.0.0.1:0", 2).unwrap();
     let t0 = connect(&server, 0, 2, "cfg-a", &[]).unwrap();
     let e = connect(&server, 1, 2, "cfg-b", &[]).err().expect("refused");
-    assert!(format!("{e:#}").contains("differs from rank 0"), "{e:#}");
+    assert!(format!("{e:#}").contains("cfg \"cfg-b\" differs from rank 0's \"cfg-a\""), "{e:#}");
     // rank 0 is told, and its start gate fails
     let e = t0.ready().unwrap_err();
     assert!(format!("{e:#}").contains("differs from rank 0"), "{e:#}");
@@ -198,7 +198,7 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
         hs.push(std::thread::spawn(move || {
             let p = run::participants(model, &o).unwrap();
             let aborted = Arc::new(AtomicBool::new(false));
-            let t = Arc::new(Tcp::connect(&addr, rank, 2, &format!("host{rank}"), "cfg", &p, aborted.clone()).unwrap());
+            let t = Arc::new(Tcp::connect(&addr, rank, 2, &format!("host{rank}"), &serde_json::json!({"cfg": "cfg"}), &serde_json::json!({}), &p, aborted.clone()).unwrap());
             t.ready().unwrap();
             let r = run::run_with(model, o, HashMap::new(), t.clone(), aborted).unwrap();
             t.report(&r).unwrap();
@@ -303,7 +303,7 @@ fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
     // a differing configuration on one rank is refused on every rank before any I/O
     let outs = run_ranks_mixed(&root);
     assert!(outs.iter().all(|(ok, _, _)| !ok));
-    assert!(outs.iter().any(|(_, _, e)| e.contains("differs from rank")), "{outs:?}");
+    assert!(outs.iter().any(|(_, _, e)| e.contains("seed 2 differs from rank 0's 1") || e.contains("seed 1 differs from rank 1's 2")), "{outs:?}");
     std::fs::remove_dir_all(&root).unwrap();
 }
 
