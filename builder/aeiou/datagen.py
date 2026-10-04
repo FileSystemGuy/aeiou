@@ -3,7 +3,12 @@ classes, with the runner's payload (`runner/README.md` §5: `aeiou-positional/1`
 `dgen-data` 0.3.0), and the manifest `aeiou run` checks (`schema/README.md` §6).
 
     aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G]
-                      [--dedupe D] [--compress C] [--threads N] [--dataset NAME]…
+                      [--dedupe D] [--compress C] [--threads N] [--dataset NAME]… [--config FILE]
+
+`--root` and `--threads` come through the runner's option layers (`options.py`: the command
+line, else `AEIOU_ROOT`/`AEIOU_THREADS`, else the `[datagen]` table of the TOML file `--config`
+or `AEIOU_CONFIG` names, else the default); the rest is the command line's alone, and the
+block of what was resolved, with each value's source, is printed as `aeiou datagen` prints it.
 
 Datasets without a format class are `aeiou datagen`'s (the Rust writer); this tool skips
 them, and `aeiou datagen` refuses the ones with a class, so a corpus is written by both, each
@@ -26,7 +31,7 @@ import sys
 import tempfile
 import time
 
-from . import __version__, emit, params as params_mod
+from . import __version__, emit, options, params as params_mod
 from .formats import FormatClass
 from .layout import FileGeometry, Layout
 from .nodes import BuildError
@@ -197,14 +202,15 @@ def write_manifest(dir_: pathlib.Path, m: dict) -> pathlib.Path:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="aeiou-datagen", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("ast", type=pathlib.Path)
-    ap.add_argument("--root", type=pathlib.Path, required=True)
+    ap.add_argument("--root", type=pathlib.Path, help="directory the abstract's paths are relative to (or $AEIOU_ROOT, or [datagen] root in --config)")
     ap.add_argument("--params-file", action="append", default=[], type=pathlib.Path, metavar="FILE")
     ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--gpus", type=int, default=1)
     ap.add_argument("--dedupe", type=int, default=1)
     ap.add_argument("--compress", type=int, default=1)
-    ap.add_argument("--threads", type=int, default=os.cpu_count() or 1)
+    ap.add_argument("--threads", type=int, help="writer threads (default: all cores; or $AEIOU_THREADS, or [datagen] threads in --config)")
     ap.add_argument("--dataset", action="append", default=[], metavar="NAME")
+    ap.add_argument("--config", type=pathlib.Path, metavar="FILE", help="a TOML config file (else $AEIOU_CONFIG, else none; never searched for)")
     ap.add_argument("--version", action="version", version=f"aeiou-datagen {__version__}")
     a = ap.parse_args(argv)
     try:
@@ -214,8 +220,31 @@ def main(argv=None) -> int:
         return 1
 
 
+def resolve(a) -> options.Layers:
+    """`aeiou datagen`'s layers (main.rs `datagen_cmd`): the shape and the writer's fixed
+    options first, then `root` and `threads` through the layers. Sets `a.root` and
+    `a.threads` to the values in effect."""
+    layers = options.Layers("datagen", a.config)
+    layers.fixed("abstract", a.ast, True)
+    layers.fixed("param", a.param, bool(a.param))
+    layers.fixed("params-file", a.params_file, bool(a.params_file))
+    layers.fixed("gpus", a.gpus, a.gpus != 1)
+    layers.fixed("dedupe", a.dedupe, a.dedupe != 1)
+    layers.fixed("compress", a.compress, a.compress != 1)
+    layers.fixed("dataset", a.dataset, bool(a.dataset))
+    a.root = layers.layered("root", a.root, pathlib.Path)
+    if a.root is None:
+        raise BuildError("--root DIR is required (the command line, $AEIOU_ROOT, or [datagen] root in the config file)")
+    a.threads = layers.layered("threads", a.threads, int)
+    if a.threads is None:
+        a.threads = os.cpu_count() or 1
+    layers.finish()
+    return layers
+
+
 def _main(a) -> int:
     from .validate import validate
+    layers = resolve(a)
     ast = emit.load(a.ast)
     validate(ast)
     sha = emit.sha256(ast)
@@ -236,6 +265,7 @@ def _main(a) -> int:
         overrides.append((k, v))
     values = param_values(ast, sets, overrides, a.gpus)
     print(f"abstract {ast['name']}  sha256 {sha}")
+    layers.print()
     provenance = {"abstract": ast["name"], "ast_sha256": sha, "params": values,
                   "param_files": [{"path": str(p), "sha256": params_mod.file_sha256(p)} for p in a.params_file]}
     wanted = set(a.dataset)
