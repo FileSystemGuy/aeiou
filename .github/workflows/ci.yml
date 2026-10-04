@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Three jobs on three runners (4 cores each). `abstracts` needs no Rust. The runner's own
+# tests and the Python tests that drive the built binary each build on their own runner from
+# one shared Rust cache: the test binaries are compiled only where they are run, and the
+# integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers.
 jobs:
   abstracts:
     runs-on: ubuntu-latest
@@ -17,7 +21,7 @@ jobs:
         run: builder/.venv/bin/python schema/check.py
       - name: Builder tests
         working-directory: builder
-        run: .venv/bin/pytest -q
+        run: .venv/bin/pytest -q -n 4
       - name: Hermetic build-twice of every abstract, compared with the committed ASTs
         working-directory: builder
         run: .venv/bin/aeiou-build --hermetic --twice --check -o ../schema/examples abstracts/*.py
@@ -29,7 +33,7 @@ jobs:
             .venv/bin/aeiou-params check "../schema/examples/$a.ast.json" "$f" || exit 1
           done
 
-  runner:
+  runner-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,9 +41,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: runner
+          shared-key: runner
       - name: Build and test
         working-directory: runner
         run: cargo test --release
+
+  runner-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runner
+          shared-key: runner
+      - name: Build the binary
+        working-directory: runner
+        run: cargo build --release --bin aeiou
       - uses: astral-sh/setup-uv@v5
       - name: Builder with the format classes' libraries
         working-directory: builder
@@ -51,9 +69,9 @@ jobs:
           diff /tmp/check.py.out /tmp/check.rs.out
       - name: Container datasets written by aeiou-datagen run to the dry-run fingerprint
         working-directory: builder
-        run: AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q tests/test_formats.py
+        run: AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 tests/test_formats.py
       - name: The metrics of an strace of the runner are its dry run's
         working-directory: builder
         run: |
           command -v strace || sudo apt-get install -y strace
-          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_trace.py
+          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs tests/test_trace.py
