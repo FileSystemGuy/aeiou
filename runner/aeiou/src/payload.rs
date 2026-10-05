@@ -5,11 +5,14 @@
 //! cut into 1 MiB blocks; block `b` of unit `u` is the prefix of a 1 MiB `dgen-data` stream
 //! seeded `labeled_key(seed, "payload", [u, b])`, with dgen's compression layout (the last
 //! `(C−1)/C` of the block zero-filled for ratio `C`) and no dgen dedupe: dedupe is this
-//! wrapper's, by seed reuse across units (`aeiou-positional/1`):
-//! - a `files` dataset: `u = id mod ceil(count / D)`, `b` = logical offset in the file ÷ 1 MiB
-//!   (a chunked file is the logical file cut at `chunk`), so file `id` and file `id + count/D`
-//!   carry the same bytes block for block;
-//! - a `regions` dataset (one file): `u = 0`, `b = (offset ÷ 1 MiB) mod ceil(blocks / D)`;
+//! wrapper's, by seed reuse across units (`aeiou-positional/2`, 2026-10-04; `/1` grouped by
+//! `id mod ceil(count / D)`, which made the groups depend on the count, so that a prefix of
+//! the ids had a lower ratio and a dataset could not grow; `DESIGN_REVIEW.md` §3.62):
+//! - a `files` dataset: `u = id div D`, `b` = logical offset in the file ÷ 1 MiB (a chunked
+//!   file is the logical file cut at `chunk`), so every run of `D` consecutive files carries
+//!   the same bytes block for block, whatever the count;
+//! - a `regions` dataset (one file): `u = 0`, `b = (offset ÷ 1 MiB) div D`, so every run of
+//!   `D` consecutive blocks is one block repeated;
 //! - a namespace object written by `aeiou run`: `seed = labeled_key(namespace seed, "object",
 //!   [xxh3(path)])`, `u = 0`, `b` = offset ÷ 1 MiB, ratio from `--write-compress`, no dedupe.
 //!
@@ -31,7 +34,7 @@ use crate::pattern::Pattern;
 use crate::rng::labeled_key;
 
 pub const BLOCK: u64 = 1 << 20;
-pub const WRAPPER: &str = "aeiou-positional/1";
+pub const WRAPPER: &str = "aeiou-positional/2";
 pub const GENERATOR: &str = "dgen-data";
 pub const GENERATOR_VERSION: &str = "0.3.0";
 pub const MANIFEST_NAME: &str = ".aeiou-dataset.json";
@@ -81,6 +84,18 @@ impl PayloadSpec {
 /// The seed of block `block` of unit `unit` under `seed`.
 pub fn block_seed(seed: u64, unit: u64, block: u64) -> u64 {
     labeled_key(seed, "payload", &[unit, block])
+}
+
+/// The seed of logical block `block` of file `id` of a `files` dataset under dedupe ratio
+/// `dedupe`: `D` consecutive files share a unit (`aeiou-positional/2`).
+pub fn file_block_seed(seed: u64, id: u64, block: u64, dedupe: u64) -> u64 {
+    block_seed(seed, id / dedupe.max(1), block)
+}
+
+/// The seed of block `block` of a `regions` dataset's one file under dedupe ratio `dedupe`:
+/// `D` consecutive blocks are one block repeated (`aeiou-positional/2`).
+pub fn regions_block_seed(seed: u64, block: u64, dedupe: u64) -> u64 {
+    block_seed(seed, 0, block / dedupe.max(1))
 }
 
 /// The seed of a namespace object's content.

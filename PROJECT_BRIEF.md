@@ -228,7 +228,12 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    §6, `DESIGN_REVIEW.md` §3.28): real Parquet, TFRecord, HDF5, and tar files with the same
    payload (the `dgen-py` wheel reproduces the Rust crate's bytes), sizes, names, and manifest;
    `aeiou datagen` refuses datasets with a format class. The Python `aeiou-verify` tool is
-   still to come.
+   still to come. **Extended 2026-10-04 (`DESIGN_REVIEW.md` §3.62):** `aeiou datagen` runs
+   across hosts with the same `--ranks`/`--rank`/`--coordinator` as `run` (each rank its
+   contiguous slice of the ids, a `regions` file by one rank, the manifest by rank 0 once
+   every rank has reported), always with `O_DIRECT`, and the payload wrapper is
+   `aeiou-positional/2` (dedupe groups `D` consecutive files, so a prefix of the ids has the
+   ratio and a corpus can grow). `aeiou-launch` takes `-f FILE` and `pdsh` bracket ranges.
 9. Startup checks: `kernel.io_uring_disabled`, `RLIMIT_MEMLOCK`, and `RLIMIT_NOFILE` computed
    from G, W, and the abstract. (Since 2026-10-01 a disabled `io_uring` shows up as the ring
    setup failing, with the sysctl named in the error; ~~the limit computations are not done.~~)
@@ -455,6 +460,17 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     prints its options with their sources; `aeiou run` records them in the report and the
     coordinator compares them across hosts, naming what differs. Not built, on purpose: a
     check that refuses differing layered options across hosts (a WG rule, if ever).
+
+23. **Datagen resume, growth, and subset runs (planned 2026-10-04, `DESIGN_REVIEW.md` §3.62).**
+    A submitter pre-generates one very large corpus on the fleet it will run on, then spends
+    days running ever larger workloads against it to find the SUT's saturation point; it must
+    not regenerate per step. Three operations, one arithmetic: `--resume` walks the ids in
+    scope (a formula over `--ranks`/`--rank` at resume time, nothing persisted, so the host
+    count may change) and rewrites in full every file that is missing or not of its size (a
+    crashed `O_DIRECT` writer leaves a strict prefix; allocated block counts are not evidence
+    on reducing storage); growth is a resume under a larger count; a run over the first *S*
+    ids of a larger corpus relaxes the manifest's `count` comparison to "at least". Names,
+    sizes, directories, and payload groups are already functions of the id alone. Not built.
 
 ## 7. Environment
 

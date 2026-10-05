@@ -72,11 +72,22 @@ application through **aeiou-trace**(1).
 Writes every `files` and `regions` dataset the abstract declares under `--root`: names from
 the pattern, sizes from the dataset seed, content from the positional payload generator
 (1 MiB blocks of a `dgen-data` stream keyed by dataset seed, unit, and block, with the
-dedupe and compression ratios given), in parallel by id. The manifest
+dedupe and compression ratios given), in parallel by id, with `O_DIRECT` (datagen never
+reads what it writes, and the client's page cache is what a benchmark must not have warm; a
+root that refuses `O_DIRECT` falls back to the page cache, said once). The manifest
 `.aeiou-dataset.json` is written last, atomically, at each dataset root, and its id is
 printed. A non-empty root is refused: datasets are read-only. A dataset that declares a
 container format class (Parquet, HDF5, TFRecord, tar) is refused here and written by
 **aeiou-datagen**(1).
+
+On several hosts (`--ranks`, `--rank`, `--coordinator`, as for `run`; **aeiou-launch**(1)
+starts them) rank *r* writes its contiguous slice of every `files` dataset's ids, and each
+`regions` dataset is written whole by one rank (the *i*-th by rank *i* mod *R*: several
+hosts writing one file serialize on the server). Every rank checks the roots are empty
+before the start gate, writes after it, and sends its counts; rank 0 writes the manifests
+once every rank has reported, so a manifest means the whole corpus is there, and records
+every rank's host and counts in the provenance. The coordinator refuses a host whose
+abstract, parameters, `--gpus`, `--dedupe`, `--compress`, or `--dataset` list differ.
 
 ### run
 
@@ -215,8 +226,9 @@ turns it off, and the last one on the line wins.
   Writer threads; default all cores. *Layered.*
 - **--dedupe** *DEDUPE*
 
-  Dedupe ratio: every *DEDUPE* files (or 1 MiB blocks of a `regions` file) share content.
-  Default 1. Part of the payload the manifest records.
+  Dedupe ratio: every *DEDUPE* consecutive files (or 1 MiB blocks of a `regions` file) share
+  content, whatever the count, so a prefix of the ids has the ratio too. Default 1. Part of
+  the payload the manifest records.
 - **--compress** *COMPRESS*
 
   Compression ratio: the last (C-1)/C of every 1 MiB block is zeros. Default 1. Part of the
@@ -224,6 +236,20 @@ turns it off, and the last one on the line wins.
 - **--dataset** *NAME*
 
   Write only these datasets; repeatable. Default all.
+
+**Several hosts**
+
+- **--rank** *R*
+
+  This host's index among `--ranks` hosts. Default 0. *Layered.*
+- **--ranks** *N*
+
+  Hosts the datagen is spread over: each writes its slice of every `files` dataset's ids, and
+  each `regions` file is written by one of them. Default 1. *Layered.*
+- **--coordinator** *HOST:PORT*
+
+  With `--ranks` above 1, required: the coordinator's address. Rank 0 listens on it
+  (in-process); every rank connects to it. *Layered.*
 
 ### aeiou run
 

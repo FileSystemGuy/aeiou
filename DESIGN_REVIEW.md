@@ -3503,6 +3503,92 @@ hints are identical and tested so (`tests/usage.rs`, `builder/tests/test_usage.p
 latter comparing `aeiou datagen` and `aeiou-datagen` byte for byte when the binary is
 built); the parsers' own one-line wordings differ in a few words and were left alone.
 
+### 3.62 Datagen across hosts, `O_DIRECT`, and prefix-stable dedupe (designed, built, and decided 2026-10-04)
+
+**The requirement.** The reference corpus must be created as fast as the storage system can
+take it, and one host cannot saturate a modern system; submitters will use the same 50 hosts
+for datagen as for the runs, and 200 or more must work. `aeiou datagen` therefore runs across
+hosts through the same coordinator and launcher as `aeiou run`.
+
+**What the user's framing changed.** Two parts of the first framing were corrected in the
+design discussion: the Feistel permutation is not what keeps hosts apart (datagen walks a
+dense id range, and the contiguous split `run` already uses for GPU ids applies to file ids;
+the permutation is read order), and `--gpus` on `datagen` cannot be the parallelism knob,
+because it is the instance count the dataset definition may reference and must equal the
+run's or the manifest will not match. Per-host parallelism is `--threads`; across hosts it
+is `--ranks`. Several processes per host buy nothing over threads, because the ceilings are
+per directory (the VFS lock) and per mount (the NFS session), not per process.
+
+**Decided.**
+
+- *Slices.* Rank `r` writes the files of every `files` dataset whose ids fall in
+  `gpu_range(files, R, r, 0)`, a contiguous slice, so under `{id div N}` a host's files sit
+  in its own directories and two hosts share at most a boundary directory. Within a rank, ids
+  go to threads in directory-aligned runs: Linux takes the parent's `i_rwsem` exclusively for
+  every create and NFS issues the `OPEN` under it, so threads creating in one directory
+  serialize at one create per round trip. A flat pattern is bounded that way on the server
+  whatever the host count; the docs say so.
+- *Regions files belong to one rank.* The user's observation: several NFSv4.2 clients
+  writing offsets of one file serialize on the server, so a range split would still be one
+  host's bandwidth. The `i`-th regions dataset is written whole by rank `i mod R`, its
+  threads on 64 MiB pieces (parallel on the client with `O_DIRECT`; the server may still
+  serialize). A regions corpus is bounded by one stream, a few GB/s, and that is accepted.
+- *The manifest is the completeness token, so rank 0 writes it last.* Every rank checks the
+  roots are empty before the start gate (no rank sees another's files), writes after it,
+  `syncfs`es, and sends `Done` with its counts; rank 0 writes the manifests once
+  `Server::gathered` has every rank's document, and the provenance records `ranks`, every
+  rank's host and counts, the totals, and `direct`. A failed rank sends `Stop` and no
+  manifest appears. The identity check covers the abstract's hash, `--gpus`, the parameters,
+  `--dedupe`, `--compress`, and the `--dataset` list.
+- *`O_DIRECT`, always.* The user's rule, with the reason: Linux's page cache near full makes
+  choosing a victim page cost more than linearly, clean pages included, so datagen must never
+  fill it. Datagen also never reads what it writes, and the client's cache is exactly what a
+  benchmark must not have warm, since in the common case the SUT is an appliance that runs no
+  user process, the corpus goes through the mount, and `--drop-caches` on the clients is the
+  only cold start there is (DRAM inside the SUT is the SUT's to use). Writes are 1 MiB from
+  4 KiB-aligned buffers; an unaligned tail is tried as is (NFS accepts it) and, on `EINVAL`,
+  padded and the file truncated, learned once per datagen. A root that refuses `O_DIRECT`
+  falls back to the page cache, said once (tmpfs before Linux 6.6). A side effect that
+  matters later: each direct write completes before the next, so a crash leaves a strict
+  prefix of every file, and a file of the right size is a whole file.
+- *Prefix-stable dedupe: `aeiou-positional/2`.* The user wants one very large corpus
+  generated once and then runs over ever larger subsets of it, and one day a corpus grown in
+  place. Names, sizes, and directories were already functions of the id alone; dedupe was
+  not: `u = id mod ceil(files / D)` made the groups depend on the count, so a prefix of the
+  ids had a ratio below `D` (down to 1 when the prefix is at most `files / D`) and growing
+  the count would have changed what existing files should contain. The wrapper now groups
+  `D` consecutive files (`u = id div D`) and `D` consecutive blocks of a regions file; every
+  prefix and every extension has ratio `D`. No dataset id had been published, so the version
+  bump cost nothing; with `D = 1` the bytes are unchanged. The Python writer and the Rust
+  writer moved together.
+- *The launcher.* `aeiou-launch` already passed the command verbatim; it now says `run` or
+  `datagen`, takes `-f FILE` (one or more hosts per line, `#` comments), and expands one
+  `pdsh`-style bracket range per name (`n[1-4]`, `n[01-10]` zero-padded, `n[1,3,5-7]`,
+  `n[1-4]-ib`) in the script itself, so a usage error exits once. `n{1..4}` is the shell's
+  and worked already. Two hundred hosts are one argument or a file.
+- *No aggregate rate.* Datagen is a tool that makes the corpus, not a benchmark; each rank
+  prints its counts and rank 0 the totals, and that is all.
+
+**Deferred, and kept cheap (`PROJECT_BRIEF.md` item 23).** `--resume` walks the ids in scope
+and rewrites in full every file that is missing or not of its size; the scope is a formula
+over `--ranks`/`--rank` at resume time, nothing is persisted, so the host count may differ
+from the first attempt. Size is the test, not allocated blocks: appliances that dedupe or
+compress report reduced allocation, and the compressible payload is explicit zeros, so
+`st_blocks` is advisory at best. Growth is a resume under a larger count. A run over the
+first `S` ids relaxes the manifest's `count` comparison to "at least" (the Feistel over
+`[0, S)` reads only that prefix). The inner loop is already "for each id in scope: write",
+which is the shape resume needs.
+
+**Considered and not done.** Work stealing across hosts (static slices assume similar hosts;
+`run` makes the same assumption, and a resume pass fills what a slow host left). Several
+`aeiou` processes per host (threads reach the same ceilings). A range split of a regions file
+(serialized on the server). An `st_blocks` completeness check (unreliable on the targets).
+An aggregate progress line at rank 0 (not required; every rank's log is prefixed by the
+launcher). Generating behind the server (not possible on an appliance; the loopback-NFS
+practice in `runner/REFERENCE.md` §7 remains a development convenience). Buffered writes with
+`posix_fadvise(DONTNEED)` instead of `O_DIRECT` (the eviction cost the user described is
+paid before the advice runs).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

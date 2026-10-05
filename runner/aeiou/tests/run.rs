@@ -43,9 +43,9 @@ fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Co
 
 fn gen(loaded: &aeiou::Loaded, cfg: &Config, model: &Model<'_>, root: &PathBuf) {
     let params = Params::new(&loaded.ast, cfg).unwrap();
-    let opts = DatagenOpts { root: root.clone(), threads: 4, dedupe: 1, compress: 1, datasets: vec![] };
+    let opts = DatagenOpts { root: root.clone(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
     let mut log = Vec::new();
-    datagen(loaded, cfg, &params, model, &opts, &mut log).unwrap();
+    datagen(loaded, cfg, &params, model, &opts, None, &mut log).unwrap();
 }
 
 fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
@@ -132,9 +132,9 @@ fn manifest_mismatch_and_missing_are_refused() {
     // datagen refuses a non-empty root
     let (loaded3, cfg3, model3) = leaked_model("train_small_files", config(1, 1, &[("files", "50")]));
     let params = Params::new(&loaded3.ast, cfg3).unwrap();
-    let o = DatagenOpts { root: root.clone(), threads: 1, dedupe: 1, compress: 1, datasets: vec![] };
+    let o = DatagenOpts { root: root.clone(), threads: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
     let mut log = Vec::new();
-    assert!(datagen(loaded3, cfg3, &params, model3, &o, &mut log).is_err());
+    assert!(datagen(loaded3, cfg3, &params, model3, &o, None, &mut log).is_err());
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -591,22 +591,40 @@ fn evict(dir: &std::path::Path) {
     }
 }
 
+/// Read every file under `dir` through the page cache.
+fn warm(dir: &std::path::Path) {
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            warm(&p);
+        } else {
+            std::fs::read(&p).unwrap();
+        }
+    }
+}
+
 #[test]
 fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     // The cold start (`cold.rs`): a formula picks at most 256 files per dataset and `mincore`
-    // counts their resident pages. Just generated, every page is resident and
-    // `--require-cold` refuses; once evicted, none is and the start passes. A plain run
-    // (neither flag) does not sample at all. A tmpfs is its
-    // own page cache, so there the pages stay.
+    // counts their resident pages. Just generated (`O_DIRECT`), no page is resident; once
+    // read, every page is and `--require-cold` refuses; once evicted, none is and the start
+    // passes. A plain run (neither flag) does not sample at all. A tmpfs is its own page
+    // cache, so there the pages stay.
     use aeiou::cold;
     let root = tmpdir("cold");
     let (loaded, cfg, model) = leaked_model("train_small_files", config(1, 3, &[("files", "300")]));
     gen(loaded, cfg, model, &root);
+    let fstype = aeiou::counters::MountSnapshot::for_path(&root).map(|m| m.fstype).unwrap_or_default();
     let r = cold::residency(model, &root).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!((r[0].dataset.as_str(), r[0].files, r[0].of), ("train", 256, 300));
     assert!(r[0].pages > 256, "{r:?}");
-    assert_eq!(r[0].resident, r[0].pages, "just written: {r:?}");
+    if fstype != "tmpfs" {
+        assert_eq!(r[0].resident, 0, "datagen writes with O_DIRECT, so the client's cache stays cold on {fstype}: {r:?}");
+    }
+    warm(&root);
+    let r = cold::residency(model, &root).unwrap();
+    assert_eq!(r[0].resident, r[0].pages, "just read: {r:?}");
     let mut o = opts(&root, BackendKind::Sync);
     let plain = cold::start(model, &o).unwrap();
     assert!(plain.residency.is_empty() && plain.dropped.is_none(), "neither flag: no drop, no sample, no opens");
@@ -619,7 +637,6 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
 
     evict(&root);
     let r2 = cold::residency(model, &root).unwrap();
-    let fstype = aeiou::counters::MountSnapshot::for_path(&root).map(|m| m.fstype).unwrap_or_default();
     if fstype == "tmpfs" {
         assert_eq!(r2[0].resident, r2[0].pages);
     } else {
@@ -635,4 +652,36 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     let m = aeiou::counters::MountSnapshot::for_path(&root).unwrap();
     assert!(m.opts.as_deref().map(|o| o.starts_with("rw") || o.starts_with("ro")).unwrap_or(false), "{m:?}");
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
+    // aeiou-positional/2: `dedupe` consecutive files share a unit, so a prefix of the ids has
+    // the full ratio and a dataset can grow; file `id`'s bytes are the same under any count
+    let six = tmpdir("dd6");
+    let four = tmpdir("dd4");
+    let (l6, c6, m6) = leaked_model("train_small_files", config(1, 1, &[("files", "6")]));
+    let (l4, c4, m4) = leaked_model("train_small_files", config(1, 1, &[("files", "4")]));
+    for (l, c, m, root) in [(l6, c6, m6, &six), (l4, c4, m4, &four)] {
+        let params = Params::new(&l.ast, c).unwrap();
+        let opts = DatagenOpts { root: root.clone(), threads: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
+        datagen(l, c, &params, m, &opts, None, &mut Vec::new()).unwrap();
+    }
+    let file = |root: &PathBuf, id: i64| std::fs::read(root.join(m6.datasets[0].file_path(id, None).unwrap().as_ref())).unwrap();
+    let prefix_equal = |a: &[u8], b: &[u8]| {
+        let n = a.len().min(b.len());
+        a[..n] == b[..n]
+    };
+    assert!(prefix_equal(&file(&six, 0), &file(&six, 1)), "files 0 and 1 share a unit");
+    assert!(prefix_equal(&file(&six, 2), &file(&six, 3)));
+    assert!(prefix_equal(&file(&six, 4), &file(&six, 5)));
+    assert!(!prefix_equal(&file(&six, 1), &file(&six, 2)), "files 1 and 2 do not");
+    for id in 0..4 {
+        assert_eq!(file(&six, id), file(&four, id), "file {id} under count 6 and count 4");
+    }
+    let m = aeiou::payload::Manifest::read(&six.join("train")).unwrap();
+    assert_eq!(m.payload.wrapper, "aeiou-positional/2");
+    assert_eq!(m.payload.dedupe, 2);
+    std::fs::remove_dir_all(&six).unwrap();
+    std::fs::remove_dir_all(&four).unwrap();
 }

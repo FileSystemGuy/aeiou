@@ -115,7 +115,7 @@ An abstract goes through five stages, each a tool of the suite.
 | `aeiou-params` | Python | parameter files: defaults, check, from real shards and archives | [aeiou-params(1)](man/aeiou-params.1.md) |
 | `aeiou-datagen` | Python | container datasets through their format classes | [aeiou-datagen(1)](man/aeiou-datagen.1.md) |
 | `aeiou-trace` | Python | metrics of an strace, comparison, the `trace` node's file | [aeiou-trace(1)](man/aeiou-trace.1.md) |
-| `aeiou-launch` | sh | one `aeiou run` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
+| `aeiou-launch` | sh | one `aeiou run` or `aeiou datagen` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
 
 The option layers and the config file are [aeiou-config(5)](man/aeiou-config.5.md); the
 abstract, its JSON form, its rules, parameter files, and manifests are
@@ -199,7 +199,9 @@ A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 m
 one development box. Built and tested: everything described above, the nine backends, the
 multi-host coordinator (two ranks on `localhost`), the limit checks, the cold-start
 controls, the JSON report, the locality metrics on both sides with tolerances, the `trace`
-node under every backend, the option layers, and the usage-error frame.
+node under every backend, the option layers, the usage-error frame, and `datagen` across
+hosts with `O_DIRECT` (each host its slice of the ids, one manifest once every host has
+reported; the launcher takes host files and `pdsh`-style ranges).
 
 Not built, in rough order of interest:
 
@@ -217,6 +219,9 @@ Not built, in rough order of interest:
 - An `O_DIRECT` checkpoint writer to trace (item 19); a recorded wait time per lane and a
   cap on the file for the `trace` node; `RLIMIT_MEMLOCK` in the limit checks;
   wall-clock-bounded phases (a contract change).
+- `datagen --resume` (rewrite what is missing or short, by size alone), growing a corpus
+  in place, and a run over the first *S* ids of a larger corpus (item 23): one long datagen
+  on a fleet, then a series of runs growing toward the saturation point.
 
 ## License
 

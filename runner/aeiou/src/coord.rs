@@ -190,6 +190,9 @@ enum Msg {
     Leave { scope: String },
     Release { scope: String, generation: u64 },
     Report(Box<Report>),
+    /// Client → server: this host's part of a `datagen` is written (its counts and host); the
+    /// reduction of a datagen, which has no report.
+    Done(Value),
     /// Server → all after the reduction: the verdict rank 0 reached on the merged report.
     Result { ok: bool, fingerprint: u64, error: Option<String> },
     Stop { reason: String },
@@ -390,6 +393,11 @@ impl Tcp {
         send(&self.st.writer, &Msg::Report(Box::new(r.clone())))
     }
 
+    /// Send this host's `Done` document (a datagen's counts) for rank 0 to gather.
+    pub fn done(&self, doc: &Value) -> Result<()> {
+        send(&self.st.writer, &Msg::Done(doc.clone()))
+    }
+
     /// Wait for rank 0's verdict on the merged report: `(ok, fingerprint, error)`.
     pub fn result(&self) -> Result<(bool, u64, Option<String>)> {
         self.st.wait_event(|e| e.result.clone())
@@ -532,6 +540,8 @@ struct SState {
     started: Option<f64>,
     bars: BTreeMap<String, SBar>,
     reports: BTreeMap<i64, Report>,
+    /// Each host's `Done` document, by rank.
+    done: BTreeMap<i64, Value>,
     failed: Option<String>,
     finished: bool,
     /// Connections that have gone away.
@@ -631,6 +641,20 @@ impl Server {
                 }
                 merged.departure_releases.sort();
                 return Ok(merged);
+            }
+            s = self.st.cv.wait_timeout(s, Duration::from_millis(50)).unwrap().0;
+        }
+    }
+
+    /// Wait for every host's `Done` document, by rank; a host's failure ends the wait.
+    pub fn gathered(&self) -> Result<BTreeMap<i64, Value>> {
+        let mut s = self.st.m.lock().unwrap();
+        loop {
+            if let Some(r) = &s.failed {
+                bail!("{r}");
+            }
+            if s.done.len() as i64 == self.st.ranks {
+                return Ok(std::mem::take(&mut s.done));
             }
             s = self.st.cv.wait_timeout(s, Duration::from_millis(50)).unwrap().0;
         }
@@ -820,6 +844,10 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
             }
             Msg::Report(r) => {
                 s.reports.insert(rank, *r);
+                st.cv.notify_all();
+            }
+            Msg::Done(d) => {
+                s.done.insert(rank, d);
                 st.cv.notify_all();
             }
             Msg::Stop { reason } => {

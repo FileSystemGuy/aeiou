@@ -236,7 +236,7 @@ written yet (`DESIGN_REVIEW.md` §3.28 says why).
 **`aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G] [--dedupe D]
 [--compress C] [--threads N] [--dataset NAME]… [--config FILE]** writes every dataset that has a format class:
 names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
-bytes from `dgen-py` 0.3.0 under the `aeiou-positional/1` wrapper (bit-identical to the Rust
+bytes from `dgen-py` 0.3.0 under the `aeiou-positional/2` wrapper (bit-identical to the Rust
 writer's), each file checked against the geometry its layout predicts (`layout.py`), then the
 manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names the writer
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the

@@ -270,15 +270,22 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
   version, layout fields) when the dataset has a format class, and `manifest_version`.
 - **Provenance**, recorded and printed but never compared: the abstract's `name` and
   `ast_sha256`, the full parameter values at datagen time, the datagen version, host, start
-  and end time, and the count of files or regions actually written.
+  and end time, and the count of files or regions actually written; since 2026-10-04 also
+  `ranks`, `hosts` (each rank's host, files, bytes, start and end), and `direct` (written with
+  `O_DIRECT` everywhere).
 - **Identity.** The SHA-256 of the canonical form of the normative content is the dataset id.
   `aeiou run` prints it with every result, next to the AST hash and the parameters in effect;
   a result is those three things.
 - **Atomicity.** Written last, to a temporary name and renamed, so a datagen that did not
-  finish leaves no manifest and a run refuses.
+  finish leaves no manifest and a run refuses. On several hosts rank 0 writes it once every
+  rank has reported its part, so it means the whole corpus.
 - **Exact match, no relaxation.** A larger dataset is not accepted for a smaller declared
   count: `dirs` and `readdir` would see extra entries, and `zipf`/`hotset` rank orders are
   permutations over the declared count. Any mismatch is a refusal with a field-by-field diff.
+  (Planned, 2026-10-04, `DESIGN_REVIEW.md` §3.62: a run over the first *S* ids of a larger
+  corpus, so one long datagen serves a series of runs that grow toward the SUT's saturation
+  point; names, sizes, and payload groups are already functions of the id alone, so only this
+  comparison changes.)
 - **Namespaces are the mirror image.** They have no manifest, but stale contents change the
   workload (`stat` with `expect: [ENOENT]`, `CREAT|TRUNC` semantics, the KV-cache hit model),
   so `aeiou run` refuses a non-empty namespace directory unless `--clean-namespaces` is given,

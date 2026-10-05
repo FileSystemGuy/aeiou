@@ -186,7 +186,7 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let (loaded, cfg, model) = leaked_model("train_small_files", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
-    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), threads: 4, dedupe: 1, compress: 1, datasets: vec![] }, &mut log).unwrap();
+    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 }, None, &mut log).unwrap();
     let dry = dryrun::run(model, 2, None).unwrap();
 
     let server = Server::start("127.0.0.1:0", 2).unwrap();
@@ -325,4 +325,141 @@ fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
         let o = c.wait_with_output().unwrap();
         (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
     }).collect()
+}
+
+// ---------------------------------------------------------------- datagen on several hosts
+
+fn dopts(root: &PathBuf, rank: i64, ranks: i64) -> DatagenOpts {
+    DatagenOpts { root: root.clone(), threads: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks }
+}
+
+/// Every data file under `root` (the `.aeiou*` metadata left out), by relative path.
+fn tree(root: &PathBuf) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, root, out);
+            } else if !p.file_name().unwrap().to_string_lossy().starts_with(".aeiou") {
+                out.insert(p.strip_prefix(root).unwrap().to_string_lossy().into_owned(), std::fs::read(&p).unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
+#[test]
+fn datagen_on_two_ranks_writes_the_one_host_corpus() {
+    // a files dataset (120 files, one directory: both ranks create in it) and a corpus with a
+    // regions file above one 64 MiB piece plus a one-file dataset (rank 1's slice is empty)
+    for (ast, gpus, params) in [("train_small_files", 2, vec![("files", "120")]), ("vdb_search_ivf", 1, vec![("lists", "280"), ("index_bytes", "1048576")])] {
+        let one = tmpdir("dg-one");
+        let two = tmpdir("dg-two");
+        let (loaded, cfg, model) = leaked_model(ast, config(gpus, 7, &params));
+        let dparams = Params::new(&loaded.ast, cfg).unwrap();
+        let mut log = Vec::new();
+        let alone = aeiou::datagen::datagen(loaded, cfg, &dparams, model, &dopts(&one, 0, 1), None, &mut log).unwrap();
+        assert!(alone.iter().all(|r| r.wrote_manifest && r.owner.is_none()));
+
+        let server = Server::start("127.0.0.1:0", 2).unwrap();
+        let addr = server.addr.to_string();
+        let results: Vec<Vec<aeiou::datagen::DatasetResult>> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..2)
+                .map(|rank| {
+                    let (addr, two, server) = (addr.clone(), two.clone(), &server);
+                    s.spawn(move || {
+                        let t = Tcp::connect(&addr, rank, 2, &format!("host{rank}"), &serde_json::json!({"cfg": "dg"}), &serde_json::json!({}), &[], Arc::new(AtomicBool::new(false))).unwrap();
+                        let hosts = aeiou::datagen::Hosts { tcp: &t, server: if rank == 0 { Some(server) } else { None } };
+                        let dparams = Params::new(&loaded.ast, cfg).unwrap();
+                        let mut log = Vec::new();
+                        let r = aeiou::datagen::datagen(loaded, cfg, &dparams, model, &dopts(&two, rank, 2), Some(&hosts), &mut log).unwrap();
+                        let text = String::from_utf8(log).unwrap();
+                        assert!(text.contains("start gate: 2 host(s) ready (host0, host1)"), "{text}");
+                        r
+                    })
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let (r0, r1) = (&results[0], &results[1]);
+        assert_eq!(r0.len(), alone.len());
+        for (i, a) in alone.iter().enumerate() {
+            assert_eq!(r0[i].id, a.id, "{ast}: the dataset id is the definition's, not the hosts'");
+            assert_eq!(r1[i].id, a.id);
+            assert!(r0[i].wrote_manifest && !r1[i].wrote_manifest);
+            assert_eq!(r0[i].total_files, a.files, "{ast} {}", a.name);
+            assert_eq!(r0[i].total_bytes, a.bytes);
+            assert_eq!(r0[i].files + r1[i].files, a.files, "{ast} {}: the slices cover the ids once", a.name);
+            assert_eq!(r0[i].bytes + r1[i].bytes, a.bytes);
+            let m = aeiou::payload::Manifest::read(&two.join(&a.root.strip_prefix(&one).unwrap())).unwrap();
+            assert_eq!(m.provenance["ranks"], 2);
+            assert_eq!(m.provenance["hosts"].as_array().unwrap().len(), 2, "{}", m.provenance);
+            assert_eq!(m.provenance["hosts"][1]["rank"], 1);
+            assert_eq!(m.provenance["files_written"].as_u64().unwrap(), a.files);
+            assert_eq!(m.id(), a.id);
+        }
+        if ast == "vdb_search_ivf" {
+            let lists = r0.iter().position(|r| r.name == "lists").unwrap();
+            assert!(r0[lists].owner.is_none() && r1[lists].owner == Some(0), "the first regions dataset is rank 0's");
+            assert_eq!(r1[lists].files, 0);
+            let index = r0.iter().position(|r| r.name == "index").unwrap();
+            assert_eq!((r0[index].files, r1[index].files), (1, 0), "one file: rank 0's slice is [0, 1), rank 1's is empty");
+            assert!(std::fs::metadata(two.join("ivf/merged_index.ivfdata")).unwrap().len() > 64 << 20, "several pieces");
+        }
+        assert_eq!(tree(&one), tree(&two), "{ast}: byte for byte the same corpus");
+        // a run accepts the corpus two hosts wrote
+        run::check_datasets(loaded, cfg, &two).unwrap();
+        std::fs::remove_dir_all(&one).unwrap();
+        std::fs::remove_dir_all(&two).unwrap();
+    }
+}
+
+fn datagen_ranks(root: &PathBuf, params: &[&str], ranks: i64, extra: impl Fn(i64) -> Vec<String>) -> Vec<(bool, String, String)> {
+    let port = free_port();
+    let mut children = Vec::new();
+    for rank in 0..ranks {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.arg("datagen").arg(examples().join("train_small_files.ast.json")).arg("--root").arg(root).arg("--threads").arg("2");
+        c.arg("--ranks").arg(ranks.to_string()).arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}"));
+        for p in params {
+            c.arg("--param").arg(p);
+        }
+        c.args(extra(rank));
+        children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap());
+        if rank == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    children.into_iter().map(|c| {
+        let o = c.wait_with_output().unwrap();
+        (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+    }).collect()
+}
+
+#[test]
+fn datagen_on_two_processes_end_to_end() {
+    let root = tmpdir("dg-e2e");
+    let outs = datagen_ranks(&root, &["files=100"], 2, |_| vec![]);
+    for (ok, stdout, stderr) in &outs {
+        assert!(*ok, "stdout:\n{stdout}\nstderr:\n{stderr}");
+        assert!(stdout.contains("start gate: 2 host(s) ready"), "{stdout}");
+    }
+    assert!(outs[0].1.contains("files [0, 50) of 100 on this rank"), "{}", outs[0].1);
+    assert!(outs[1].1.contains("files [50, 100) of 100 on this rank"), "{}", outs[1].1);
+    assert!(outs[0].1.contains("all 2 hosts 100 file(s)") && outs[0].1.contains("manifest written"), "{}", outs[0].1);
+    assert!(outs[1].1.contains("(manifest by rank 0)"), "{}", outs[1].1);
+    let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+    assert_eq!(m.provenance["ranks"], 2);
+    assert_eq!(m.provenance["files_written"], 100);
+    // a differing payload on one rank is refused on every rank before anything is written
+    let root2 = tmpdir("dg-mixed");
+    let outs = datagen_ranks(&root2, &["files=100"], 2, |rank| if rank == 1 { vec!["--dedupe".into(), "2".into()] } else { vec![] });
+    assert!(outs.iter().all(|(ok, _, _)| !ok), "{outs:?}");
+    assert!(outs.iter().any(|(_, _, e)| e.contains("dedupe 2 differs from rank 0's 1") || e.contains("dedupe 1 differs from rank 1's 2")), "{outs:?}");
+    assert!(aeiou::payload::Manifest::read(&root2.join("train")).is_err(), "no manifest");
+    assert!(tree(&root2).is_empty(), "nothing written: {:?}", tree(&root2).keys().collect::<Vec<_>>());
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&root2).unwrap();
 }

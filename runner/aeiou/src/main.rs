@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
 
 use aeiou::backend::{BackendKind, MmapConsume, MmapMode};
 use aeiou::coord::{Coordinator, Local, Server, Tcp};
-use aeiou::datagen::{self, DatagenOpts};
+use aeiou::datagen::{self, DatagenOpts, Hosts};
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, ParamSet, Params};
 use aeiou::options::{self, Layers};
@@ -106,7 +106,7 @@ struct DatagenArgs {
     /// Writer threads (default: all cores).
     #[arg(long, help_heading = "Writer")]
     threads: Option<usize>,
-    /// Dedupe ratio: every `dedupe` files (or 1 MiB blocks of a regions file) share content.
+    /// Dedupe ratio: every `dedupe` consecutive files (or 1 MiB blocks of a regions file) share content.
     #[arg(long, default_value_t = 1, help_heading = "Writer")]
     dedupe: u64,
     /// Compression ratio: the last (C−1)/C of every 1 MiB block is zeros.
@@ -115,6 +115,15 @@ struct DatagenArgs {
     /// Only these datasets (default: all).
     #[arg(long = "dataset", value_name = "NAME", help_heading = "Writer")]
     datasets: Vec<String>,
+    /// This host's index among --ranks hosts. Default 0.
+    #[arg(long, value_name = "R", help_heading = "Several hosts")]
+    rank: Option<i64>,
+    /// Hosts the datagen is spread over: each writes its slice of every `files` dataset's ids, and each `regions` file is written by one of them. Default 1.
+    #[arg(long, value_name = "N", help_heading = "Several hosts")]
+    ranks: Option<i64>,
+    /// With --ranks above 1: the coordinator's address. Rank 0 listens on it (in-process); every rank connects to it.
+    #[arg(long, value_name = "HOST:PORT", help_heading = "Several hosts")]
+    coordinator: Option<String>,
 }
 
 #[derive(Args)]
@@ -459,8 +468,24 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let r = usage::root("datagen");
     let root = miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2));
     let threads = l.layered::<usize>("threads", a.threads, None)?;
+    let rank = l.layered("rank", a.rank, Some(0))?.unwrap_or(0);
+    let ranks = l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1);
+    let coordinator = l.layered::<String>("coordinator", a.coordinator, None)?;
+    let because = |what: &str, names: &[&str]| -> String {
+        let from = l.from_plain(names);
+        if from.is_empty() { what.to_string() } else { format!("{what}, {from}") }
+    };
+    miss.need(
+        !(ranks > 1 && coordinator.is_none()),
+        "--coordinator <HOST:PORT>",
+        "the coordinator's address: rank 0 listens on it, every rank connects to it",
+        Some(&because(&format!("needed with --ranks {ranks}"), &["ranks"])),
+    );
     miss.check()?;
     l.finish()?;
+    if ranks < 1 || rank < 0 || rank >= ranks {
+        aeiou::usage!("--rank {rank} of --ranks {ranks}: rank must be in [0, ranks){}", l.from(&["rank", "ranks"]));
+    }
     let (abstract_path, root) = (abstract_path.expect("checked"), root.expect("checked"));
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
     let loaded = aeiou::load(&abstract_path)?;
@@ -469,23 +494,68 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone() };
+    let opts = DatagenOpts { root, threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks };
     let mut out = std::io::stdout();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     l.print(&mut out)?;
     writeln!(out, "gpus {}  params: {}", cfg.gpus, params_line(&cfg))?;
-    let results = datagen::datagen(&loaded, &cfg, &params, &model, &opts, &mut out)?;
+    writeln!(out, "host {}  rank {} of {}  threads {}", aeiou::run::hostname(), rank, ranks, threads)?;
+    out.flush()?;
+
+    // several hosts: rank 0 listens, every rank connects and has its configuration checked
+    // before anything is written; a host that fails tells the others through it
+    let server = match &coordinator {
+        Some(addr) if ranks > 1 && rank == 0 => {
+            let s = Server::start(addr, ranks)?;
+            writeln!(out, "coordinator listening on {}", s.addr)?;
+            out.flush()?;
+            Some(s)
+        }
+        _ => None,
+    };
+    let tcp = match &coordinator {
+        Some(addr) if ranks > 1 => {
+            let identity = serde_json::json!({
+                "ast_sha256": loaded.sha256,
+                "gpus": cfg.gpus,
+                "params": aeiou::payload::params_json(&loaded.doc, &cfg, &params)?,
+                "dedupe": a.dedupe,
+                "compress": a.compress,
+                "datasets": a.datasets,
+            });
+            let hash = aeiou::canon::sha256_hex(&identity);
+            let t = Tcp::connect(addr, rank, ranks, &aeiou::run::hostname(), &identity, &l.json(), &[], Arc::new(AtomicBool::new(false)))?;
+            writeln!(out, "coordinator {}: connected as rank {} of {}  identity {}…", t.addr, rank, ranks, &hash[..16])?;
+            out.flush()?;
+            Some(t)
+        }
+        _ => None,
+    };
+    let hosts = tcp.as_ref().map(|t| Hosts { tcp: t, server: server.as_ref() });
+    let results = match datagen::datagen(&loaded, &cfg, &params, &model, &opts, hosts.as_ref(), &mut out) {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(t) = &tcp {
+                // the coordinator relays a failure here to every other host (a no-op after a Stop)
+                t.stop(&format!("{e:#}"));
+            }
+            return Err(e);
+        }
+    };
     for r in &results {
-        writeln!(
-            out,
-            "dataset {}: {} file(s), {} in {:.2?} at {}  id {}",
-            r.name,
-            r.files,
-            dryrun::human_bytes(r.bytes),
-            r.elapsed,
-            r.root.display(),
-            r.id
-        )?;
+        if ranks == 1 {
+            writeln!(out, "dataset {}: {} file(s), {} in {:.2?} at {}  id {}", r.name, r.files, dryrun::human_bytes(r.bytes), r.elapsed, r.root.display(), r.id)?;
+            continue;
+        }
+        let mine = match r.owner {
+            Some(o) => format!("written by rank {o}"),
+            None => format!("this rank {} file(s), {} in {:.2?}", r.files, dryrun::human_bytes(r.bytes), r.elapsed),
+        };
+        if r.wrote_manifest {
+            writeln!(out, "dataset {}: {mine}; all {ranks} hosts {} file(s), {} at {}  id {}  manifest written", r.name, r.total_files, dryrun::human_bytes(r.total_bytes), r.root.display(), r.id)?;
+        } else {
+            writeln!(out, "dataset {}: {mine} at {}  id {}  (manifest by rank 0)", r.name, r.root.display(), r.id)?;
+        }
     }
     Ok(())
 }

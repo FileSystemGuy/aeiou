@@ -1,5 +1,5 @@
 """`aeiou-datagen`: write the container datasets an abstract declares, through their format
-classes, with the runner's payload (`runner/REFERENCE.md` §5: `aeiou-positional/1` over
+classes, with the runner's payload (`runner/REFERENCE.md` §5: `aeiou-positional/2` over
 `dgen-data` 0.3.0), and the manifest `aeiou run` checks (`schema/README.md` §6).
 
     aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G]
@@ -40,7 +40,7 @@ from .rng import block_seed, sample_size
 MANIFEST_NAME = ".aeiou-dataset.json"
 MANIFEST_VERSION = 1
 BLOCK = 1 << 20
-GENERATOR, GENERATOR_VERSION, WRAPPER = "dgen-data", "0.3.0", "aeiou-positional/1"
+GENERATOR, GENERATOR_VERSION, WRAPPER = "dgen-data", "0.3.0", "aeiou-positional/2"
 
 
 # ---- parameters and the resolved definition (payload.rs: param_values, substitute, resolved_dataset) ----
@@ -154,7 +154,6 @@ class Job:
         self.pattern = Pattern(body["pattern"])
         self.rel_root = self.pattern.root()
         self.dedupe, self.compress = max(1, dedupe), max(1, compress)
-        self.units_dedupe = max(1, -(-self.files // self.dedupe))
 
     def sizes(self, file: int) -> list:
         first = file * self.spf
@@ -167,7 +166,8 @@ class Job:
         rel = self.pattern.format(id=file)
         path = self.root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = Payload(self.seed, file % self.units_dedupe, self.compress)
+        # `aeiou-positional/2`: `dedupe` consecutive files share a unit, whatever the count
+        payload = Payload(self.seed, file // self.dedupe, self.compress)
         self.klass.write_file(str(path), file * self.spf, sizes, payload, geo)
         self.klass.check_file(str(path), sizes, geo)
         return len(sizes), geo.file_size
@@ -207,7 +207,7 @@ def parser() -> usage.Parser:
     ap.add_argument("--gpus", type=int, default=1, help="Instance count, for dataset definitions that reference `gpus` [default: 1]")
     ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="Required: directory the abstract's paths are relative to. From the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
     ap.add_argument("--threads", type=int, help="Writer threads (default: all cores)")
-    ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` files share content [default: 1]")
+    ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` consecutive files share content [default: 1]")
     ap.add_argument("--compress", type=int, default=1, help="Compression ratio: the last (C−1)/C of every 1 MiB block is zeros [default: 1]")
     ap.add_argument("--dataset", action="append", default=[], metavar="NAME", help="Only these datasets (default: all)")
     ap.add_argument("--config", type=pathlib.Path, metavar="FILE", help="A TOML config file (else $AEIOU_CONFIG, else none; never searched for): one table per subcommand, keys spelled as the long flags (runner/REFERENCE.md §14)")

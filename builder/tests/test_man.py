@@ -93,7 +93,9 @@ def test_launch_options_are_the_pages():
     r = subprocess.run([str(ROOT / "runner" / "aeiou-launch"), "--help"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert help_flags(r.stdout) == set() == defined_flat(read("aeiou-launch.1.md"))
-    assert re.search(r"^- \*\*-p\*\* \*PORT\*", read("aeiou-launch.1.md"), re.M), "the one option, -p PORT"
+    for short, meta in [("-p", "PORT"), ("-f", "FILE")]:
+        assert re.search(rf"^- \*\*{short}\*\* \*{meta}\*", read("aeiou-launch.1.md"), re.M), f"the option {short} {meta}"
+        assert re.search(rf"^  {short} <{meta}>", r.stdout, re.M), f"--help lists {short} <{meta}>"
 
 
 def runner_flags():

@@ -1,62 +1,128 @@
 #!/bin/sh
-# aeiou-launch: start one `aeiou run` rank per host over ssh (the `pdsh`/ssh loop of
-# `NAPKIN_MATH.md` §8.A), rank 0 first, with --ranks, --rank, and --coordinator appended.
+# aeiou-launch: start one `aeiou run` or `aeiou datagen` rank per host over ssh (the `pdsh`/ssh
+# loop of `NAPKIN_MATH.md` §8.A), rank 0 first, with --ranks, --rank, and --coordinator appended.
 #
-#   aeiou-launch [-p PORT] HOST... -- aeiou run ABSTRACT --gpus G --root DIR [ARGS...]
+#   aeiou-launch [-p PORT] [-f FILE] [HOST...] -- aeiou run|datagen ABSTRACT --root DIR [ARGS...]
 #
-# The i-th host is rank i; HOST0:PORT (default 7311) is the coordinator address rank 0
-# listens on and every rank connects to, so HOST0 must be reachable from the others under
-# that name. Each host's output is prefixed with its rank; the exit status is non-zero if
-# any rank's is. AEIOU_RSH replaces `ssh` (it is called as `$AEIOU_RSH HOST COMMAND`).
+# The hosts are the command line's, then the file's (one or more per line, `#` comments); a
+# name may carry one pdsh-style bracket range, `n[1-4]`, `n[01-10]` (zero-padded to the width
+# written), `n[1,3,5-7]`, `n[1-4]-ib` (the shell's own `n{1..4}` works too, expanded before this
+# script runs). The i-th host is rank i; HOST0:PORT (default 7311) is the coordinator address
+# rank 0 listens on and every rank connects to, so HOST0 must be reachable from the others
+# under that name. Each host's output is prefixed with its rank; the exit status is non-zero
+# if any rank's is. AEIOU_RSH replaces `ssh` (it is called as `$AEIOU_RSH HOST COMMAND`).
 #
 # Usage errors are printed in the suite's frame (runner/REFERENCE.md §15): the command, what is
 # missing, the usage line, the pointer to the help; exit status 2.
 set -u
-USAGE="Usage: aeiou-launch [OPTIONS] <HOSTS>... -- aeiou run <ARGS>..."
+USAGE="Usage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen <ARGS>..."
 usage_error() {
     printf '%s\n\n%s\n\nFor more information, try '"'"'aeiou-launch --help'"'"'.\n' "aeiou-launch: $1" "$USAGE" >&2
     exit 2
 }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-    cat <<EOF
-Start one \`aeiou run\` rank per host over ssh, rank 0 first, with --ranks, --rank, and --coordinator appended
+    cat <<EOT
+Start one \`aeiou run\` or \`aeiou datagen\` rank per host over ssh, rank 0 first, with --ranks, --rank, and
+--coordinator appended
 
 $USAGE
 
 Arguments:
-  <HOSTS>...  The hosts, one rank each; the first is rank 0 and the coordinator (HOST0:PORT), so it must be reachable
-              from the others under that name
-  <ARGS>...   After --: the \`aeiou run\` command line every host runs (--ranks, --rank, --coordinator are appended)
+  [HOSTS]...  The hosts, one rank each, the command line's then the file's; the first is rank 0 and the
+              coordinator (HOST0:PORT), so it must be reachable from the others under that name. A name may
+              carry one bracket range as pdsh writes it: n[1-4], n[01-10] (zero-padded), n[1,3,5-7], n[1-4]-ib
+  <ARGS>...   After --: the \`aeiou run\` or \`aeiou datagen\` command line every host runs (--ranks, --rank,
+              --coordinator are appended)
 
 Options:
   -p <PORT>   The coordinator's port [default: 7311]
+  -f <FILE>   Hosts from a file too, one or more per line, # comments, bracket ranges as above
   -h, --help  Print help
 
 Each host's output is prefixed with its rank; the exit status is non-zero if any rank's is. AEIOU_RSH replaces
 \`ssh\` (it is called as \$AEIOU_RSH HOST COMMAND).
-EOF
+EOT
     exit 0
 fi
+
+# append the hosts of one name to $hosts, one per line: `pre[spec]post` with spec a comma
+# list of n or lo-hi (in this shell, not a subshell, so a usage error exits the script)
+expand_host() {
+    case $1 in
+    *\[*\]*) ;;
+    *) hosts="$hosts
+$1"; return ;;
+    esac
+    name=$1
+    pre=${name%%\[*}
+    rest=${name#*\[}
+    spec=${rest%%\]*}
+    post=${rest#*\]}
+    oldifs=$IFS
+    IFS=,
+    set -- $spec
+    IFS=$oldifs
+    [ $# -gt 0 ] || usage_error "empty bracket range in host '$name'"
+    for item do
+        case $item in
+        *-*) lo=${item%%-*}; hi=${item#*-} ;;
+        *) lo=$item; hi=$item ;;
+        esac
+        case "$lo$hi" in
+        "" | *[!0-9]*) usage_error "bad bracket range '$item' in host '$name': want N or LO-HI, digits only" ;;
+        esac
+        width=${#lo}
+        # decimal, whatever the leading zeros (the shell would read 08 as octal)
+        n=${lo#"${lo%%[!0]*}"}; n=${n:-0}
+        last=${hi#"${hi%%[!0]*}"}; last=${last:-0}
+        [ "$n" -le "$last" ] || usage_error "bad bracket range '$item' in host '$name': $lo is above $hi"
+        while [ "$n" -le "$last" ]; do
+            hosts="$hosts
+$(printf "%s%0${width}d%s" "$pre" "$n" "$post")"
+            n=$((n + 1))
+        done
+    done
+}
+
 port=7311
-if [ "${1:-}" = "-p" ]; then
-    if [ $# -lt 2 ]; then
-        usage_error "a value is required for '-p <PORT>' but none was supplied"
-    fi
-    port=$2
-    shift 2
-fi
+hostfile=
 hosts=
-while [ $# -gt 0 ] && [ "$1" != "--" ]; do
-    hosts="$hosts $1"
+while [ $# -gt 0 ]; do
+    case $1 in
+    --) break ;;
+    -p)
+        [ $# -ge 2 ] || usage_error "a value is required for '-p <PORT>' but none was supplied"
+        port=$2
+        shift 2
+        continue
+        ;;
+    -f)
+        [ $# -ge 2 ] || usage_error "a value is required for '-f <FILE>' but none was supplied"
+        hostfile=$2
+        shift 2
+        continue
+        ;;
+    -*) usage_error "unexpected argument '$1' found" ;;
+    *) expand_host "$1" ;;
+    esac
     shift
 done
+if [ -n "$hostfile" ]; then
+    [ -r "$hostfile" ] || usage_error "cannot read the host file '$hostfile'"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%%#*}
+        for w in $line; do
+            expand_host "$w"
+        done
+    done < "$hostfile"
+fi
 missing=
-if [ -z "$hosts" ]; then
-    missing="  <HOSTS>...  the hosts, one rank each; the first is rank 0 and the coordinator"
+if [ -z "$(printf '%s' "$hosts" | tr -d '\n')" ]; then
+    missing="  [HOSTS]...  the hosts (on the command line or in -f FILE), one rank each; the first is rank 0 and the coordinator"
 fi
 if [ $# -lt 2 ]; then
     missing="$missing${missing:+
-}  <ARGS>...   after --: the \`aeiou run\` command line every host runs"
+}  <ARGS>...   after --: the \`aeiou run\` or \`aeiou datagen\` command line every host runs"
 fi
 if [ -n "$missing" ]; then
     usage_error "the following required arguments were not provided:

@@ -226,8 +226,8 @@ fn fadvise_runs_and_is_fingerprinted() {
     let cfg: &'static Config = Box::leak(Box::new(config(1)));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
-    let opts = DatagenOpts { root: root.clone(), threads: 2, dedupe: 1, compress: 1, datasets: vec![] };
-    datagen(loaded, cfg, params, model, &opts, &mut Vec::new()).unwrap();
+    let opts = DatagenOpts { root: root.clone(), threads: 2, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
+    datagen(loaded, cfg, params, model, &opts, None, &mut Vec::new()).unwrap();
     let dry = dryrun::run(model, 1, None).unwrap();
     assert_eq!(dry.total.total.ops, 4 * 6);
     let r = run::run(

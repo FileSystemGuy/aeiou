@@ -14,7 +14,7 @@ until its page follows, and a flag named in any page must exist in some tool.
 | [aeiou-params(1)](aeiou-params.1.md) | 1 | Parameter files: defaults, check, from safetensors shards, from `.npz` archives |
 | [aeiou-datagen(1)](aeiou-datagen.1.md) | 1 | Container datasets through their format classes |
 | [aeiou-trace(1)](aeiou-trace.1.md) | 1 | The metrics of an strace, their comparison with an abstract's, the `trace` node's file |
-| [aeiou-launch(1)](aeiou-launch.1.md) | 1 | One `aeiou run` rank per host over ssh |
+| [aeiou-launch(1)](aeiou-launch.1.md) | 1 | One `aeiou run` or `aeiou datagen` rank per host over ssh |
 | [aeiou-config(5)](aeiou-config.5.md) | 5 | The option layers: command line, `AEIOU_*`, the TOML file, default |
 | [aeiou-abstract(7)](aeiou-abstract.7.md) | 7 | The workload abstract: model, JSON form, rules, parameter files, manifests |
 
