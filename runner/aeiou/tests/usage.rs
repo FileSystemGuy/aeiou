@@ -1,4 +1,4 @@
-//! The usage-error frame (`usage.rs`, `runner/README.md` §15): every wrong command line, the
+//! The usage-error frame (`usage.rs`, `runner/REFERENCE.md` §15): every wrong command line, the
 //! parser's own mistakes included, is printed as the command's name, the message, the usage
 //! line, and the pointer to the help, with exit status 2; every missing requirement is listed
 //! at once, from any layer, and the list shrinks by exactly what the next attempt supplies;

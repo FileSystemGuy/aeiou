@@ -389,7 +389,7 @@ forced the choices that the prose had left open, listed here so they are visible
 
 ### 3.19 The builder package, and what building the eight abstracts changed (added 2026-09-30)
 
-`builder/aeiou` implements Option D (`builder/README.md`). Every `ABSTRACTS.md`
+`builder/aeiou` implements Option D (`builder/REFERENCE.md`). Every `ABSTRACTS.md`
 workload is now an authoring script, and the three ASTs hand-written against the schema
 regenerate hash-identical from their scripts, which is the test that the builder emits exactly
 the contract and nothing else. Decisions taken while writing it, each small, listed so they are
@@ -533,13 +533,13 @@ offline verifier, whose input the manifest now is.
 
 ### 3.22 The runner's first half: the VM, `aeiou dry-run`, and the definitions it fixed (added 2026-09-30)
 
-`runner/` holds the Rust crate `aeiou` (`runner/README.md`): the AST loader, the canonical
+`runner/` holds the Rust crate `aeiou` (`runner/REFERENCE.md`): the AST loader, the canonical
 hash, the validator, the positional VM, and `aeiou dry-run`, which walks every actor
 instance of an AST without I/O and prints op counts, bytes, and the fingerprint. All nine
 committed ASTs run; `aeiou check` prints byte-identical output to `schema/check.py` over
 them and CI diffs the two. Building it forced the choices the schema had left to the runner
 (`schema/README.md` §5, "its exact definition belongs to the runner"). Each is listed in
-`runner/README.md` §2 and pinned by a golden test; the reasoning behind the ones that were
+`runner/REFERENCE.md` §2 and pinned by a golden test; the reasoning behind the ones that were
 not obvious:
 
 - **One hash family.** xxh3-64 for every key (draw sites, per-id dataset draws, permutation
@@ -589,7 +589,7 @@ obvious fix and is not done.
 
 ### 3.23 The runner's second half: `aeiou run` with the `sync` backends, `aeiou datagen`, and the payload wrapper (added 2026-09-30)
 
-`runner/README.md` §4–§5 state what exists; this is why it is shaped that way.
+`runner/REFERENCE.md` §4–§5 state what exists; this is why it is shaped that way.
 
 - **A thread per actor and sub-actor, the VM's tree walk on it.** The alternative was to
   make the VM resumable (a state machine an event loop can park at every blocking call) and
@@ -727,7 +727,7 @@ namespace it reads. Decisions and reasoning:
 ### 3.25 The TCP coordinator: several hosts, one run (added 2026-09-30)
 
 `NAPKIN_MATH.md` §8.A fixed the design on 2026-09-28 (§3.7); building it
-(`runner/aeiou/src/coord.rs`, `runner/README.md` §6) changed four details and settled four
+(`runner/aeiou/src/coord.rs`, `runner/REFERENCE.md` §6) changed four details and settled four
 questions the design had not asked.
 
 - **JSON frames, not `postcard`.** The coordinator exchanges a few dozen messages per run
@@ -781,7 +781,7 @@ questions the design had not asked.
 ### 3.26 The loopback NFS run: what a real NFS client does with the abstracts (added 2026-09-30)
 
 The loopback mount of `PROJECT_BRIEF.md` §7 came up (sequence and the full table in
-`runner/README.md` §7). It was a correctness exercise: the same kernel on both sides, tmpfs
+`runner/REFERENCE.md` §7). It was a correctness exercise: the same kernel on both sides, tmpfs
 behind the server, so only RPC overhead is measured. Every committed abstract reproduced its
 dry-run fingerprint under `sync` cold, `sync` warm, and `sync-direct`, and the two-rank
 tests pass with their roots on the mount. Six things the NFS client's counters showed, and
@@ -819,7 +819,7 @@ what each settles:
 - **Generating data behind the server interacts with the lookup cache.** A tree removed
   through the mount and recreated on the export was invisible for up to `acdirmax` (60 s):
   the client's negative dentries made `aeiou run` report no manifest and the namespace
-  `mkdir` fail with `EEXIST`. Two practices are recorded in `runner/README.md` §7: generate
+  `mkdir` fail with `EEXIST`. Two practices are recorded in `runner/REFERENCE.md` §7: generate
   behind the server (so the client's cache starts cold, which is the only way a first
   buffered run shows what reaches the server) and under a name the client has never looked
   up. On a real deployment the same applies to a dataset regenerated under a name a client
@@ -936,7 +936,7 @@ vocabulary without it would model the right bytes with the wrong RPC timing. The
 hashed like any other argument.
 
 **What the traces showed** (loopback NFS, 2026-09-30; the scratch scripts were run through
-the mount after writing behind the server, as `runner/README.md` §7 prescribes):
+the mount after writing behind the server, as `runner/REFERENCE.md` §7 prescribes):
 
 | Library | Protocol as traced |
 |---|---|
@@ -974,7 +974,7 @@ implemented (`read_all(columns=[…])`) and traced but no committed abstract use
 
 ### 3.29 The resumable VM and the `io_uring` backends as built (added 2026-10-01)
 
-`runner/README.md` §8 states what exists; this is why it is shaped that way.
+`runner/REFERENCE.md` §8 states what exists; this is why it is shaped that way.
 
 - **Three ways to park a tree walk, and the one taken.** §3.23 left the VM recursive (the
   walk on the actor's thread) and promised a resumable VM for `io_uring`. The options were
@@ -1006,7 +1006,7 @@ implemented (`read_all(columns=[…])`) and traced but no committed abstract use
 - **Sub-actors stay on their instance's loop.** Channels then need no lock and a wake is a
   push onto the run queue; a `parallel` fan-out is `width` tasks on the same loop, not
   threads (the DiskANN search no longer spawns 923 threads for 924 reads, the complaint of
-  `runner/README.md` §4). The price is that one instance's sub-actors share one core; a
+  `runner/REFERENCE.md` §4). The price is that one instance's sub-actors share one core; a
   PyTorch rank's loader workers do not, so if a workload ever needs the parallelism inside
   one instance, instances are the unit to spread and `--threads` already spreads them.
 - **Explicit offsets, not the kernel's file position.** The first run of the checkpoint
@@ -1037,7 +1037,7 @@ implemented (`read_all(columns=[…])`) and traced but no committed abstract use
   until the pool holds `--buffer-mib`.
 - **What the first numbers say, and do not.** Four loops did the 64-GPU small-file run from
   the page cache in the time of 320 threads with a third of the client CPU; 20 loops were
-  faster still but used as much CPU as the threads (`runner/README.md` §8). On the loopback
+  faster still but used as much CPU as the threads (`runner/REFERENCE.md` §8). On the loopback
   NFS mount the RPC counts are identical between `sync` and `io_uring`, which is the
   correctness statement (the NFS client sees the same calls), and the io-wq worker count
   peaked at ~~the core count~~ 20 for buffered and direct reads alike, because `openat` punts
@@ -1062,7 +1062,7 @@ the next person and cannot be merged across hosts.
 
 **Decision.** A `counters` module with one `HostCounters` per host in `Report`, summed by
 `merge_all` like the rest (each host is its own process, so peaks add), printed after the
-totals (`runner/README.md` §4). Three sources, each optional where the kernel lacks it: a
+totals (`runner/REFERENCE.md` §4). Three sources, each optional where the kernel lacks it: a
 10 ms sampler of the process's task count that scans thread names for `iou-wrk-*` whenever
 the count changes (io-wq workers linger idle for seconds, so the peak survives the sampling
 rate; a 100 Hz scan of `/proc/self/task` only on change costs nothing under `sync`, where the
@@ -1085,7 +1085,7 @@ the server-side bytes are the comparable number.
 hand-measured ones (§3.29); the only surprise was a warm `GETATTR` per open under `sync`
 and not under `io_uring`, which cross-running the backends on each other's directories
 showed to be the attribute-cache timeout and the gap between runs, not the backend
-(`runner/README.md` §8). That is the kind of finding the fields exist for: without them the
+(`runner/REFERENCE.md` §8). That is the kind of finding the fields exist for: without them the
 difference would have been read as a backend property.
 
 **Backend-specific counters beyond these** (libaio context depth, `cufile_stats`, NIXL plugin,
@@ -1138,7 +1138,7 @@ GETATTR finding showed the counters often make a drop unnecessary. The full rese
 (`fscache`, delegations, session) is unmount and mount, which belongs in `aeiou-launch` as
 `--remount` before `aeiou run`; the runner never unmounts the storage under test.
 
-**Built 2026-10-01** (`runner/aeiou/src/cold.rs`, `runner/README.md` §4), as decided, with
+**Built 2026-10-01** (`runner/aeiou/src/cold.rs`, `runner/REFERENCE.md` §4), as decided, with
 these points settled in the building:
 
 - The drop file is opened before the `sync`, so the refusal costs nothing, and the error
@@ -1239,7 +1239,7 @@ DRAM traffic, and io-wq as the `io_uring` lever rather than loop count.
 **What was open.** §3.29 left the A/B knobs of `NAPKIN_MATH.md` §8.5 unbuilt, and §3.33
 named the io-wq cap as the first one a big node needs. Built: `--iowq-max-workers`,
 `--sqpoll` with `--sqpoll-shared`, `--defer-taskrun`, `--coop-taskrun`
-(`runner/README.md` §8, `RunOpts::uring`, `tests/uring_knobs.rs`).
+(`runner/REFERENCE.md` §8, `RunOpts::uring`, `tests/uring_knobs.rs`).
 
 **Choices, and why.**
 
@@ -1268,7 +1268,7 @@ named the io-wq cap as the first one a big node needs. Built: `--iowq-max-worker
 actors (4 GPUs × 5), each with one op in flight, on a 20-core box. With 72 actors the peak
 was 30 to 46.
 
-**What the first runs showed (loopback, `runner/README.md` §8 table).** Capping the workers
+**What the first runs showed (loopback, `runner/REFERENCE.md` §8 table).** Capping the workers
 at one per loop (four in all) ran the 72-actor small-file mix in the same time as the
 default's 30 to 46, with the same RPCs and a little less CPU. `SQPOLL` per loop cost a third
 more CPU for nothing; one shared poll thread halved the rate. `DEFER_TASKRUN` and
@@ -1286,7 +1286,7 @@ unaffected. The knob test lives in its own file, hence its own process, for the 
 
 **What was open.** The brief's §4 lists nine backends; four existed. §3.29 left the three
 that need nothing but the VM as the next step. Built: `posix-aio`, `posix-aio-direct`,
-`libaio`, `libaio-direct`, `mmap` (`runner/README.md` §9, `backend.rs`, `aio.rs`,
+`libaio`, `libaio-direct`, `mmap` (`runner/REFERENCE.md` §9, `backend.rs`, `aio.rs`,
 `tests/run.rs`). None changes the op stream; all reproduce the dry-run fingerprint.
 
 **Choices made while building, and why.** None of these was discussed first; each is
@@ -1349,7 +1349,7 @@ open to revision.
   living in the `mmap` block: they are a process-wide figure and say something under
   `sync` too (the buffer rings).
 
-**What the loopback showed** (`runner/README.md` §9 has the tables): `posix-aio` sends the
+**What the loopback showed** (`runner/REFERENCE.md` §9 has the tables): `posix-aio` sends the
 RPCs of `sync` for 2.5 to 3 times the CPU; buffered `libaio` on four loops was the cheapest
 row in CPU and tasks because nothing is handed off, and would be the first to suffer from
 real latency; `libaio-direct` spent a seventh of its loop time inside `io_submit` and
@@ -1412,7 +1412,7 @@ fault stalls only the faulting thread, the fault path gives up the lock before i
 on I/O, and `mmap` runs on one thread per actor, not on an event loop (where a fault
 would stall every actor on the loop, which is why it was never put there).
 
-**What the loopback showed after the change** (`runner/README.md` §9): warm, `mmap` with
+**What the loopback showed after the change** (`runner/REFERENCE.md` §9): warm, `mmap` with
 `touch` costs 20 to 35 % more CPU than `sync` (16.2 s against 13.4 s, and 15.1 s against
 11.2 s in the delegation regime) with no copy at all against `sync`'s copy of every byte,
 so the map, unmap, flush, and fault overhead is larger than the copy `read(2)` makes on
@@ -1429,7 +1429,7 @@ of about 660 KiB, and took 1.9 s against 1.2 s; consistent with the mount's
 
 **Open.** The real target. ~~`read_ahead_kb` of the mount in the host counters, and~~ ~~A run
 with `read_ahead_kb` raised, to confirm what sets the size of a fault's READ~~ Confirmed
-the same day (user, as root; `runner/README.md` §9): at 1024 the cold fault path sent
+the same day (user, as root; `runner/REFERENCE.md` §9): at 1024 the cold fault path sent
 5,376 to 6,587 READs where it had sent 36,981, in 0.85 to 1.04 s where it had taken 1.93 s,
 and `sync` did not change (6,120 READs, 1.38 s), so cold `mmap` went from the slowest row
 to the fastest on a setting of the NFS client that defaults to 128 KiB whatever `rsize`
@@ -1446,7 +1446,7 @@ still only the `-direct` suffix.
 
 ### 3.36 The sub-actor pool (added 2026-10-01)
 
-`runner/README.md` §4 states what exists; this is why it is shaped that way. It was the
+`runner/REFERENCE.md` §4 states what exists; this is why it is shaped that way. It was the
 planned fix of §3.23's follow-ups for the blocking backends (`sync`, `posix-aio`, `mmap`
 and their `-direct` forms); the event loops never had the problem (§3.29: a `parallel`
 there is `width` tasks on the instance's loop).
@@ -1656,7 +1656,7 @@ before anyone reads much into it.
 
 ### 3.39 `--metrics`: what can be measured on a stream with no global order (added 2026-10-01)
 
-Built as the next item in the recorded order (`runner/README.md` §10, `metrics.rs`,
+Built as the next item in the recorded order (`runner/REFERENCE.md` §10, `metrics.rs`,
 `tests/metrics.rs`). The user asked for the work to resume; the definitions were chosen
 while building and **confirmed by the user the same day (decided 2026-10-01)**. The choices and what
 argues against each:
@@ -1710,7 +1710,7 @@ the `replay` node (`trace` since 2026-10-02).
 
 §3.8 and R8 asked for a startup probe that computes the needed descriptors "from G, W,
 and the abstract", raises the soft limit, fails early with the limit named, and reports
-the open-file high-water mark. Built as `limits.rs` (`runner/README.md` §11). The choices
+the open-file high-water mark. Built as `limits.rs` (`runner/REFERENCE.md` §11). The choices
 were made while building and **confirmed by the user the same day (decided 2026-10-01)**:
 
 - **A bounded walk, not a formula.** G and W do not determine the count: the DiskANN
@@ -1750,7 +1750,7 @@ were made while building and **confirmed by the user the same day (decided 2026-
 
 The text report is for a person; comparing runs, plotting latency, and a submission checker
 need the same numbers in a form a tool reads. Built as `report.rs` and
-`aeiou run --report-json FILE` (`runner/README.md` §12, format `aeiou_report: 1`). The
+`aeiou run --report-json FILE` (`runner/REFERENCE.md` §12, format `aeiou_report: 1`). The
 choices were made while building and **confirmed by the user the same day (decided
 2026-10-01)**:
 
@@ -1788,7 +1788,7 @@ choices were made while building and **confirmed by the user the same day (decid
 ### 3.42 The trace side of the metrics: what a trace has that an abstract does not (added 2026-10-01)
 
 §3.39 defined the numbers on the abstract's stream and left the trace side unwritten.
-Built as `aeiou-trace` (`builder/aeiou/trace.py`, `builder/README.md` §7): `metrics` turns
+Built as `aeiou-trace` (`builder/aeiou/trace.py`, `builder/REFERENCE.md` §7): `metrics` turns
 an `strace` into the same `aeiou_metrics: 1` document, `compare` puts two documents side by
 side. The choices were made while building and **confirmed by the user the same day
 (decided 2026-10-01)**:
@@ -2489,7 +2489,7 @@ one §3.51 traced: its `stat` loop and its rename are here.
 - **One script, two ASTs, and the draws at the same sites.** The reader has to name the
   chunks the writer left, and the names are positional draws (`conv` is a `uniform64` at
   a new conversation). A draw's key is its actor, its site (the JSON pointer of its node),
-  and the loop indices (`runner/README.md` §2), so two abstracts draw the same values when
+  and the loop indices (`runner/REFERENCE.md` §2), so two abstracts draw the same values when
   the draws stand at the same places and the run has the same `--seed`, `--gpus`, and
   parameters. `shape(name, reader)` emits the chain's statements first and identically,
   then the ops. Nothing in the contract or the runner changed. *Against:* the coupling is
@@ -2672,7 +2672,7 @@ below were chosen while building. **Decided by the user the same day (2026-10-02
 values are fine for now, and so are the two thin margins** (0.364 against 0.409, 0.106
 against 0.107). "For now" is the user's: the values are to be looked at again when more
 pairs exist. The `--self` gap under "Not done" was not commented on and stays open. Definition and the table
-of verdicts: `builder/README.md` §7.
+of verdicts: `builder/REFERENCE.md` §7.
 
 What the fifteen committed pairs said before any rule was written (every trace against its
 abstract at the fitted parameters, and the abstract against itself at seeds 2, 3, 4):
@@ -3148,7 +3148,7 @@ which calibration never reaches; there is no cap and no streaming.
 
 ~~**Not done.** Any of it.~~ Built 2026-10-02, in the order listed: the exporter and its
 equality test, the loader and the dry run, the lanes, the checks, the report field, the
-documents (`runner/README.md` §13, `builder/README.md` §7, schema README).
+documents (`runner/REFERENCE.md` §13, `builder/REFERENCE.md` §7, schema README).
 
 **As built (2026-10-02).**
 
@@ -3446,7 +3446,7 @@ subcommand, `--config` as a global flag), `coord.rs` (`Hello { identity, layers 
 `identity_differences`, `Server::hosts`), `report.rs` unchanged in shape (`layers` and
 `hosts` are header keys), `builder/aeiou/options.py` and `aeiou-datagen` for the Python
 writer (`root` and `threads` layered; the same block), CI's checker diff skipping the block.
-`runner/README.md` §14 describes it; `PROJECT_BRIEF.md` §8 records the `AEIOU_` prefix in
+`runner/REFERENCE.md` §14 describes it; `PROJECT_BRIEF.md` §8 records the `AEIOU_` prefix in
 the naming convention. Later the same day, from the user's testing of the help: the name's
 expansion "Author Execute I/O" as the `about` line (recorded in the brief's naming
 convention), help text wrapped by clap at the terminal's width up to 120 columns, `--root`
@@ -3475,7 +3475,7 @@ the command builds (`usage::Missing`); nothing is declared required to clap or a
 more, so the parsers cannot speak first. One frame for every usage error, the parser's own
 included: the command as typed, the message, the usage line, the pointer to the help naming
 the command, exit status 2; a failure of the work is `command: message`, exit 1
-(`runner/README.md` §15). The wording is the parsers' own (`the following required
+(`runner/REFERENCE.md` §15). The wording is the parsers' own (`the following required
 arguments were not provided:`), because it is what every other tool says and because clap's
 and argparse's own errors then read as the same voice once reframed. The Python tools get
 `usage.Parser`, argparse dressed in clap's look (`Usage:`, `Arguments:`/`Options:`,

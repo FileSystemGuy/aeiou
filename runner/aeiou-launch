@@ -9,7 +9,7 @@
 # that name. Each host's output is prefixed with its rank; the exit status is non-zero if
 # any rank's is. AEIOU_RSH replaces `ssh` (it is called as `$AEIOU_RSH HOST COMMAND`).
 #
-# Usage errors are printed in the suite's frame (runner/README.md §15): the command, what is
+# Usage errors are printed in the suite's frame (runner/REFERENCE.md §15): the command, what is
 # missing, the usage line, the pointer to the help; exit status 2.
 set -u
 USAGE="Usage: aeiou-launch [OPTIONS] <HOSTS>... -- aeiou run <ARGS>..."

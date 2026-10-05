@@ -180,7 +180,7 @@ uv run aeiou-params npz ../schema/examples/train_large_samples.ast.json corpus/t
 `npz` (2026-10-02) reads `framing` and `cd_len`, the two archive numbers `train_large_samples`
 takes as parameters, from real `.npz` files with the standard library alone, and compares
 them with the abstract's defaults: it prints both, ~~exits 2~~ exits 1 (2026-10-04; 2 is the
-suite's usage-error status, `runner/README.md` §15) when they differ and no `-o` was given, and writes them as a parameter file with `-o`. It refuses archives that disagree with
+suite's usage-error status, `runner/REFERENCE.md` §15) when they differ and no `-o` was given, and writes them as a parameter file with `-o`. It refuses archives that disagree with
 each other, a compressed member, a member that is not first, and a zip64 end record, since
 the abstract reads none of those shapes. Run it on a few files of any corpus before fitting
 an abstract to a trace over it. `tests/test_formats.py` runs the same comparison against an
@@ -243,7 +243,7 @@ library). Datasets without a class are left to `aeiou datagen`, which in turn re
 ones with a class. `tests/test_formats.py` reads the files back with pyarrow and h5py and,
 when the runner is built, runs the three container abstracts over them under the `sync`
 and `io_uring` backends. `--root` and `--threads` come through the runner's option layers
-(`aeiou/options.py` mirrors `runner/aeiou/src/options.rs`, `runner/README.md` §14: the
+(`aeiou/options.py` mirrors `runner/aeiou/src/options.rs`, `runner/REFERENCE.md` §14: the
 command line, else `AEIOU_ROOT`/`AEIOU_THREADS`, else the `[datagen]` table of the TOML file
 `--config` or `AEIOU_CONFIG` names, else the default), the rest is the command line's alone,
 and the block of what was resolved, with each value's source, is printed as `aeiou datagen`
@@ -251,7 +251,7 @@ prints it (`tests/test_options.py`; 2026-10-04).
 
 **Usage errors (2026-10-04).** The four Python tools report a wrong command line in the
 suite's one frame (`aeiou/usage.py`, the mirror of `runner/aeiou/src/usage.rs`;
-`runner/README.md` §15): the command as typed, the message, the usage line, the pointer to
+`runner/REFERENCE.md` §15): the command as typed, the message, the usage line, the pointer to
 the help, exit status 2; every argument the command still lacks is listed at once, from any
 layer, and a builder script or a missing file given as the abstract says what an abstract is.
 `usage.Parser` is argparse in the runner's look, so `--help` reads the same as `aeiou
@@ -262,7 +262,7 @@ built, that `aeiou datagen` and `aeiou-datagen` print the same bytes for the sam
 
 The trace side of the locality-metrics check (`GRAMMAR_OPTIONS.md` §5.4, `PROJECT_BRIEF.md`
 §6 item 14). `aeiou dry-run --metrics-json` gives an abstract's numbers; this gives the same
-numbers, by the definitions of `runner/README.md` §10 and in the same document
+numbers, by the definitions of `runner/REFERENCE.md` §10 and in the same document
 (`aeiou_metrics: 1`, with `"source": "strace"`), from an `strace` of the application the
 abstract models, and compares two such documents. Standard library only (`aeiou/trace.py`);
 the reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made while building
@@ -431,10 +431,10 @@ without the writer's `--seed`, `--gpus`, and parameters is refused before the ga
 
 **The application's API is declared in the script** (contract 0.3, 2026-10-01):
 `Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`
-and `write`. The runner uses it as the default backend (`runner/README.md` §4).
+and `write`. The runner uses it as the default backend (`runner/REFERENCE.md` §4).
 
 **`aeiou-trace export`: the trace file of the `trace` node (added 2026-10-02;
-`DESIGN_REVIEW.md` §3.58, `runner/README.md` §13).** The same `strace`, through the same
+`DESIGN_REVIEW.md` §3.58, `runner/REFERENCE.md` §13).** The same `strace`, through the same
 resolver (descriptor tables, `clone` and `fork`, `dup`, `cwd`, the paths under the root),
 written as the file the runner executes literally: JSON Lines, a header, one op per line in
 the order the calls returned, a lane per traced task, opens by id, paths relative to the one

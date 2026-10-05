@@ -1,5 +1,5 @@
 """The option layers of the runner, for the Python tools that share them (`aeiou-datagen`;
-`runner/aeiou/src/options.rs` is the definition, `runner/README.md` §14 the description).
+`runner/aeiou/src/options.rs` is the definition, `runner/REFERENCE.md` §14 the description).
 
 A value comes from the command line, else from the environment (`AEIOU_<FLAG>`, the long flag
 upper-cased with underscores), else from the config file (TOML, named by `--config FILE` or

@@ -1,4 +1,4 @@
-//! Resource limits before the start gate (`NAPKIN_MATH.md` R8, `runner/README.md` §11): an
+//! Resource limits before the start gate (`NAPKIN_MATH.md` R8, `runner/REFERENCE.md` §11): an
 //! estimate of the files a host will hold open and the threads it will run, compared with
 //! `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `kernel.threads-max`, and `vm.max_map_count`, so that a
 //! run that cannot fit is refused with the limit named instead of failing at hour two with

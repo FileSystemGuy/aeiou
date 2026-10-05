@@ -1,4 +1,4 @@
-//! The option layers through the binary (`options.rs`, `runner/README.md` §14): the block every
+//! The option layers through the binary (`options.rs`, `runner/REFERENCE.md` §14): the block every
 //! subcommand prints, the environment and config layers, the refusal of a fixed option from a
 //! lower layer, the negation of a flag the file turned on, the report's `layers`, and, over two
 //! ranks, every host's block in rank 0's report with the options that differ printed, and the
@@ -251,7 +251,7 @@ fn every_boolean_reads_no_x_in_the_help_and_parses_both_ways() {
     assert!(help("dry-run").contains("--[no-]metrics "));
     // every row of a heading group starts its description in the same column: the longest
     // name sets it, and a --[no-] name is never the longest in its group (the test fails when
-    // a flag is added that makes it so, and the README §14 note then needs the next-line layout)
+    // a flag is added that makes it so, and the REFERENCE.md §14 note then needs the next-line layout)
     // the column the description starts in: past the name and the padding after it
     let column = |line: &str| {
         let indent = line.len() - line.trim_start().len();

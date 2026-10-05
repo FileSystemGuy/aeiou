@@ -1,7 +1,7 @@
 # Trace of the real server behind `kv_cache_serving` (2026-10-02)
 
 `ABSTRACTS.md` §11, row 8: vLLM with LMCache's local-disk backend on the loopback NFS mount
-of `runner/README.md` §7, under a replay of public chat conversations (`replay.py`, ShareGPT).
+of `runner/REFERENCE.md` §7, under a replay of public chat conversations (`replay.py`, ShareGPT).
 What was read off the trace is in `ABSTRACTS.md` §8 and `DESIGN_REVIEW.md` §3.51 (the call
 sequence, from the synthetic load of `chat.py`) and §3.56 (the replay and the distributions).
 

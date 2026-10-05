@@ -1,5 +1,5 @@
 """The usage-error frame of the suite (`aeiou/usage.py`, `runner/aeiou/src/usage.rs`,
-`runner/README.md` §15): every Python tool prints a wrong command line the same way, lists
+`runner/REFERENCE.md` §15): every Python tool prints a wrong command line the same way, lists
 every missing requirement at once, and the list shrinks by exactly what the next attempt
 supplies; the Rust runner prints the same bytes for the same mistake (when its binary is
 built); a wrong file for the abstract says what an abstract is; the help has the runner's

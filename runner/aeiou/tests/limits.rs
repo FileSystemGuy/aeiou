@@ -1,4 +1,4 @@
-//! The limit checks before the gate (`limits.rs`, `runner/README.md` §11). A file of its own,
+//! The limit checks before the gate (`limits.rs`, `runner/REFERENCE.md` §11). A file of its own,
 //! so a process of its own: the open-file peak is counted per process, and the checks raise
 //! this process's soft limits.
 

@@ -225,7 +225,7 @@ end
 
 ### Option D — Full Python as the authoring language, building Option B's AST (added 2026-09-28)
 
-**Implemented 2026-09-30** as `builder/aeiou` (`builder/README.md`); the sketches below are
+**Implemented 2026-09-30** as `builder/aeiou` (`builder/REFERENCE.md`); the sketches below are
 the design, and where they differ from the package the package is current (`let` takes the binding's
 name; `parallel`/`loader` yield a sub-cursor; `every` and integer `repeat` are sugar; see
 `DESIGN_REVIEW.md` §3.19).
@@ -584,13 +584,13 @@ but it is a stated fidelity loss and belongs in the workload's documentation.
   metrics on the abstract's op stream. An abstract is accepted for a workload class only when the
   two match within stated tolerances. This sits next to the fingerprint: the fingerprint proves
   *which* stream ran, the metrics prove it is the *right* stream.
-  **The dry-run side built 2026-10-01** as `aeiou dry-run --metrics` (`runner/README.md` §10
+  **The dry-run side built 2026-10-01** as `aeiou dry-run --metrics` (`runner/REFERENCE.md` §10
   has the definitions, decided 2026-10-01: reuse distance is a per-instance
   block-level stack distance in a round-robin order of the instance's sub-actors, since a
   run has no global order; popularity, sizes, mix, and fan-out are order-free). ~~The trace
   side and the tolerances are not written.~~ The trace side built 2026-10-01 as
-  `aeiou-trace` (`builder/README.md` §7): the same numbers from an `strace`, and a
-  comparison that reports a distance per metric. ~~The tolerances are not set.~~ Tolerances by class of metric built 2026-10-02 as `aeiou-trace compare --judge` (`builder/README.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now).
+  `aeiou-trace` (`builder/REFERENCE.md` §7): the same numbers from an `strace`, and a
+  comparison that reports a distance per metric. ~~The tolerances are not set.~~ Tolerances by class of metric built 2026-10-02 as `aeiou-trace compare --judge` (`builder/REFERENCE.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now).
 - **Trace mode** (the node was `replay` until 2026-10-02; designed as `DESIGN_REVIEW.md` §3.58). The AST may be a literal captured sequence (a `trace` node holding ops with
   their dependencies). It is bounded to small-scale calibration runs and exists so each workload
   class's abstract can be validated end to end against the real application on the same storage.

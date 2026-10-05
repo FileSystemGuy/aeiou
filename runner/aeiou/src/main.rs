@@ -28,7 +28,7 @@ struct Cli {
     cmd: Cmd,
     /// A TOML config file (else $AEIOU_CONFIG, else none; never searched for): one table per
     /// subcommand, keys spelled as the long flags. Under the command line and the environment
-    /// (runner/README.md §14); every subcommand prints what it resolved and from where.
+    /// (runner/REFERENCE.md §14); every subcommand prints what it resolved and from where.
     #[arg(long, global = true, value_name = "FILE")]
     config: Option<PathBuf>,
 }
@@ -52,7 +52,7 @@ enum Cmd {
     Run(RunCmd),
 }
 
-/// Every boolean has a negation, shown as `--[no-]x` (runner/README.md §14).
+/// Every boolean has a negation, shown as `--[no-]x` (runner/REFERENCE.md §14).
 const NEGATION: &str = "Every boolean reads --[no-]x: --x turns it on, --no-x turns it off, the last one on the line wins.";
 
 /// What the command line said about a boolean: `--x` (true), `--no-x` (false), or nothing.
@@ -230,7 +230,7 @@ struct RunCmd {
     ignore_limits: bool,
     #[arg(long = "no-ignore-limits", hide = true, overrides_with = "ignore_limits")]
     no_ignore_limits: bool,
-    /// Write the run's report to FILE as JSON (runner/README.md §12): the configuration, the
+    /// Write the run's report to FILE as JSON (runner/REFERENCE.md §12): the configuration, the
     /// results the text report prints with the latency histograms in full, and the verdict.
     /// Written when the run fails too, with the error; rank 0 of several hosts writes the
     /// merged report, every other rank its own.
@@ -377,7 +377,7 @@ struct DryRunArgs {
     #[arg(long, value_name = "N", help_heading = "Output")]
     limit: Option<usize>,
     /// Compute the locality metrics of the op stream (reuse distance, sequential runs,
-    /// popularity, request sizes, fan-out and depth, read/write mix); runner/README.md §10.
+    /// popularity, request sizes, fan-out and depth, read/write mix); runner/REFERENCE.md §10.
     #[arg(long = "[no-]metrics", alias = "metrics", overrides_with = "no_metrics", help_heading = "Metrics")]
     metrics: bool,
     #[arg(long = "no-metrics", hide = true, overrides_with = "metrics")]

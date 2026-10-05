@@ -15,7 +15,7 @@ offset, a Parquet footer's growth per row group) are probed at build time by wri
 one-row file in memory with the installed library, so the AST records the version the layout
 was derived for, and the writer checks every file it produces against the formula. The
 protocols were read off `strace` of the libraries on the loopback NFS mount of
-`runner/README.md` §7 (2026-09-30, pyarrow 25.0.1, h5py 3.16 / HDF5 2.0, CPython 3.12's
+`runner/REFERENCE.md` §7 (2026-09-30, pyarrow 25.0.1, h5py 3.16 / HDF5 2.0, CPython 3.12's
 `tarfile`); TFRecord's is from TensorFlow's source and is tagged [verify].
 
     from aeiou.formats import tfrecord, parquet, hdf5, webdataset

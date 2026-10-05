@@ -1,4 +1,4 @@
-//! Usage errors: the command line is wrong, and nothing has run (`runner/README.md` §15,
+//! Usage errors: the command line is wrong, and nothing has run (`runner/REFERENCE.md` §15,
 //! `DESIGN_REVIEW.md` §3.61). Every tool of the suite, Rust or Python, prints them in one
 //! frame, so a new user meets the same message whichever tool spoke:
 //!

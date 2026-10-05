@@ -1,4 +1,4 @@
-//! `aeiou run --report-json` (`report.rs`, `runner/README.md` §12), through the binary: the
+//! `aeiou run --report-json` (`report.rs`, `runner/REFERENCE.md` §12), through the binary: the
 //! document of a passing run against its text report, of a failed verdict and of a run that
 //! never started, and of two ranks (rank 0 holds the merged report and its own, rank 1 its
 //! own with the run's fingerprint).

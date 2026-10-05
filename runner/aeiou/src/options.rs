@@ -1,4 +1,4 @@
-//! The option layers (`runner/README.md` §14, `DESIGN_REVIEW.md` §3.60): a value comes from the
+//! The option layers (`runner/REFERENCE.md` §14, `DESIGN_REVIEW.md` §3.60): a value comes from the
 //! command line, else from the environment (`AEIOU_<FLAG>`, the long flag upper-cased with
 //! underscores), else from the config file (TOML, named by `--config FILE` or `AEIOU_CONFIG`,
 //! one table per subcommand, keys spelled as the long flags), else from the compiled default.

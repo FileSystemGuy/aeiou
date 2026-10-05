@@ -1,4 +1,4 @@
-//! `aeiou dry-run --metrics` (`runner/README.md` §10): the round-robin walk issues the same op
+//! `aeiou dry-run --metrics` (`runner/REFERENCE.md` §10): the round-robin walk issues the same op
 //! multiset as the inline walk, and the metrics recover the structure the abstracts put in.
 
 use std::path::PathBuf;

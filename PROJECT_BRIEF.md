@@ -99,9 +99,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   |---|---|---|
   | `sync` | blocking `pread`/`pwrite` on a thread pool, buffered | fidelity reference: what PyTorch does |
   | `sync-direct` | same, `O_DIRECT` | |
-  | `posix-aio` | glibc `aio_read`/`lio_listio` | user-space thread pool inside glibc; included for completeness, expect it to track `sync`. **Built 2026-10-01** (`runner/README.md` §9, also `posix-aio-direct`): it tracks `sync` in RPCs and costs 2.5 to 3 times the CPU on the loopback |
+  | `posix-aio` | glibc `aio_read`/`lio_listio` | user-space thread pool inside glibc; included for completeness, expect it to track `sync`. **Built 2026-10-01** (`runner/REFERENCE.md` §9, also `posix-aio-direct`): it tracks `sync` in RPCs and costs 2.5 to 3 times the CPU on the loopback |
   | `libaio` | `io_submit`/`io_getevents` | the kernel AIO path; truly async only with `O_DIRECT`; what fio and vendors mean by "AIO". **Built 2026-10-01** as `libaio` and `libaio-direct` on the event loop (the system calls directly, `--aio-depth`; `DESIGN_REVIEW.md` §3.35); the report gives the time inside `io_submit` |
-  | `io_uring` | `io-uring` crate | feature knobs (SQPOLL, fixed files/buffers, linking) are options, not backends; **built 2026-10-01** (`runner/README.md` §8); ~~the knobs not yet~~ the ring and io-wq knobs the same day (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`, `--defer-taskrun`, `--coop-taskrun`; `DESIGN_REVIEW.md` §3.34), fixed files/buffers and linking not |
+  | `io_uring` | `io-uring` crate | feature knobs (SQPOLL, fixed files/buffers, linking) are options, not backends; **built 2026-10-01** (`runner/REFERENCE.md` §8); ~~the knobs not yet~~ the ring and io-wq knobs the same day (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`, `--defer-taskrun`, `--coop-taskrun`; `DESIGN_REVIEW.md` §3.34), fixed files/buffers and linking not |
   | `mmap` | `mmap` + page touch, or `MADV_POPULATE_READ` / `MADV_WILLNEED` as prefetch variants | how safetensors, Arrow/HF datasets, and llama.cpp load; runs on the thread pool. The abstract's `read(f, off, len)` maps to populating that range. **Built 2026-10-01**: the file is mapped on first read and unmapped at `close` (one mapping per open, shared by the sub-actors that inherit the descriptor, since the same day: `DESIGN_REVIEW.md` §3.36 Revised), ~~a read is a copy out of the mapping,~~ a read touches one byte of every page of its range (`--mmap-consume touch`, the default since later the same day; `copy` is the option), and `--mmap-mode fault\|populate\|willneed` picks the prefetch before it. The map, unmap, flush, and fault costs are counted against the backend (`DESIGN_REVIEW.md` §3.35, Revised) |
   | `gds` | cuFile: `cuFileRead` (sync), batch API, stream-ordered | needs a CUDA device on the client. **Must detect and report compat mode** (POSIX bounce buffer fallback), which is the common case on NFS |
   | `nixl-posix` | NIXL with its POSIX plugin (`nixl-sys` Rust bindings) | needs a CUDA device; per-transfer descriptor setup will dominate small reads, which is a valid result |
@@ -119,7 +119,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   `mountstats` RPC counts. fio's engine list is the cross-check for this set, and fio itself is
   used to validate each backend's raw numbers before ours are trusted. (The common set is in
   the report since 2026-10-01: task, io-wq worker, and `SQPOLL` thread peaks, CPU, RSS, the mount's options and NFS byte
-  and RPC deltas; `runner/README.md` §4, `DESIGN_REVIEW.md` §3.30.)
+  and RPC deltas; `runner/REFERENCE.md` §4, `DESIGN_REVIEW.md` §3.30.)
 
 ## 5. Decisions so far
 
@@ -131,7 +131,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Page cache | The main concern: Linux gets non-linearly slower at finding pages to evict as memory fills, even with clean pages. This motivates O_DIRECT / io_uring / DONTCACHE. |
 | Reproducibility | **Exact** run-to-run reproducibility of each GPU's op stream is required; training-style randomness across runs is not needed. Plan: positional RNG keyed on `(seed, gpu, site, loop indices)` with no per-actor counters; consumer position by formula `g + G·(b·B + j)` with `drop_last` epochs; finite producers; an **order-independent** fingerprint (sum of per-op hashes, summed by the coordinator), since issue order within a GPU's workers is timing-dependent. `--dry-run` computes the fingerprint and can print any GPU's op stream for any step range. |
 | Dataset identity | The dataset definition has its own seed, separate from `--seed`. `datagen` writes a manifest at the corpus root (pattern, count, size distribution, dataset seed, generator version); the runner validates the abstract against it before starting. **Extended 2026-09-30 (reasoning in `DESIGN_REVIEW.md` §3.21; contract in `schema/README.md` §6):** the manifest is `.aeiou-dataset.json` at each dataset's root, and its normative part is the *resolved dataset definition*, the dataset's `datasets` entry with every referenced parameter substituted, in canonical JSON, plus what the abstract does not know (payload generator and version, dedupe/compression settings, block size, format-class writer version). `aeiou run` resolves the same closure from its own abstract and the parameters in effect and requires an exact match; it never compares the whole parameter set (most parameters do not shape the dataset) nor the abstract hash (one corpus legitimately serves several abstracts). The abstract's hash and name and the full parameter values at datagen time are recorded as provenance, not compared. The manifest's canonical hash is the dataset id, printed with every result next to the AST hash and the parameters in effect. The seed alone is not the identity: it fixes the bytes given a definition, not the definition. |
-| Backend order | The blocking thread pool (one OS thread per worker actor) is the **fidelity reference** and is built first. io_uring is the scaling lever. Both sit behind one trait. Spike 1 tests the hypothesis that O_DIRECT reads on NFS complete asynchronously and so keep the io-wq worker count bounded, while opens/closes still punt. **Built 2026-09-30:** `sync` and `sync-direct` as `aeiou run` (`runner/README.md` §4, `DESIGN_REVIEW.md` §3.23); ~~the asynchronous backends need a resumable VM, which comes with `io_uring`.~~ **Built 2026-10-01:** the resumable VM and `io_uring` / `io_uring-direct` as one event loop per thread (`runner/README.md` §8, `DESIGN_REVIEW.md` §3.29); the Spike 1 measurement itself still waits for the real target. |
+| Backend order | The blocking thread pool (one OS thread per worker actor) is the **fidelity reference** and is built first. io_uring is the scaling lever. Both sit behind one trait. Spike 1 tests the hypothesis that O_DIRECT reads on NFS complete asynchronously and so keep the io-wq worker count bounded, while opens/closes still punt. **Built 2026-09-30:** `sync` and `sync-direct` as `aeiou run` (`runner/REFERENCE.md` §4, `DESIGN_REVIEW.md` §3.23); ~~the asynchronous backends need a resumable VM, which comes with `io_uring`.~~ **Built 2026-10-01:** the resumable VM and `io_uring` / `io_uring-direct` as one event loop per thread (`runner/REFERENCE.md` §8, `DESIGN_REVIEW.md` §3.29); the Spike 1 measurement itself still waits for the real target. |
 | Measurement | Per-step stall time per GPU (not per-op logs); histograms bucketed by step range so steady state is selected after the run; `--dry-run` prints total bytes per host against host DRAM. Read sink buffers are sized larger than L3 so copies cost what a real loader's do. |
 | Divisions and comparison policy | **Decided 2026-09-28.** The backend is part of the application, so the line between "must be the same" and "may vary" is the backend's call boundary: the backend implementation is benchmark code; everything it calls (libc, kernel, NFS client, libnfs, cuFile, drivers, network, server) is the solution under test. **CLOSED** (an MLPerf division; §8) fixes the application-level I/O interface to what the real framework uses: for PyTorch that is buffered POSIX with PyTorch's concurrency structure, i.e. the `sync` backend. The other backends are for speed-of-light measurement of the SUT and for advising implementors; results from them are reported separately and never compared against CLOSED results as if they were storage differences. Compare storage solutions with the backend fixed; compare backends with the storage fixed. **Refined 2026-10-01** (`DESIGN_REVIEW.md` §3.48): the user's definition is that CLOSED means every system under test sees exactly the same operation sequence, which is what makes results comparable, and OPEN is what a stated change to the application buys, comparable with nothing. So the interface is fixed per abstract, not per framework: the abstract declares the backend its traced application uses (contract 0.3; `sync` when it declares none, `mmap` for `model_load`), `aeiou run` defaults to it, and a run under any other backend says so and is not comparable. Buffered and `O_DIRECT` are two workloads here; MLPerf Storage v3.0 let a submitter choose either and stay CLOSED, which this work does not repeat. **The boundary is stated as an interposition test (decided 2026-09-28):** the solution may do anything that a dynamic-linker shim (`LD_PRELOAD`) placed under the *unmodified* application could do, provided the application's dependency graph of operations, the buffers they target, their data, and their semantics are preserved. What a shim cannot do is therefore application: the concurrency structure (workers, prefetch depth, in-order delivery), the memory target (host vs. GPU), and the choice of the next file. What a shim can do is solution: user-space clients (libnfs, vendor clients), O_DIRECT or io_uring or libaio underneath buffered calls, kernel and mount configuration, transport, and the server. A vendor-supplied shim under CLOSED is legal by this test, which is why the two requirements below (data verification, seed privacy) exist. Below the line, an optimization counts only if the real workload would get it too: no benefit from the synthetic data, no cache warmth from a previous run, no re-reads within a run, no relaxed semantics the customer would not run. RPC counts, client CPU, and client DRAM are reported as audit data and cost, not as a score. |
 | Data verification | ~~**Required (2026-09-28).** Because a shim or client may return anything, the application must be able to check what it read. `datagen` writes verifiable content: every 4 KiB block starts with a small header `(magic, dataset seed, file id, block offset)` followed by non-dedupable PRNG fill derived from the same tuple. The runner verifies headers on a sampled fraction of reads (`--verify-sample`, default 1 in 64 blocks; 100% in a `--verify` run) at negligible CPU cost, and counts mismatches as run failures.~~ **Revised 2026-09-29: data is reproducible, not self-describing.** A per-block header makes every block unique and defeats any dedupe control, so there are no headers. Instead the expected bytes at `(dataset seed, file id, offset)` are a pure function that a verifier can regenerate, at block granularity, with dedupe and compression ratios as generator parameters (§6 item 12). The **runner does structural checks only**: byte counts, sizes, short reads, and that index bytes it reads (footers, chunk indexes) match the computed layout. **Content verification is a separate Python `verify` tool** next to `datagen`, run after generation and by reviewers on request, never in a scored run. Rationale: the realistic failure is a wrong corpus (old generator, partial regeneration, wrong seed, wrong dedupe setting), which invalidates the result through data reduction; a fabricating shim is fraud and is handled by rules and review, and a warm cache from a previous run has correct content and is not detectable by any content check (it is handled by fresh seeds and dataset sizing). Checkpoint read-back remains as a workload phase (the restore shape), not a content check. The benchmark never interprets sample data; it moves the bytes into the destination memory (copy, or page-fault under `mmap`) and stops. Reasoning in `DESIGN_REVIEW.md` §3.16. |
@@ -139,7 +139,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Format classes | **Decided 2026-09-29.** Each container format is a built-in library with **two contracts**. The *format* contract carries only what a trace of the reader library shows regardless of application: the layout writer for `datagen`, locate formulas (sample → file, unit, offset, length), the reader's fixed protocol emitted as ordinary POSIX nodes (Parquet: 8 bytes at EOF−8 then the footer; HDF5: superblock and chunk index; TFRecord: none), the access modes it supports, and compute slots for decode and index parsing. The *loader* contract stays with the abstract: access mode, interleave, prefetch, column projection. The class is tied to a reader library and version (`parquet(reader="pyarrow")`) and is validated against a trace like any abstract. It lives in the Python builder; **the Rust runner stays POSIX-only and format-ignorant**, and index bytes are read as I/O but not parsed. `GRAMMAR_OPTIONS.md` §6. |
 | Payload generator | **Decided 2026-09-29; check resolved the same day.** `datagen` is the term for writing the synthetic corpus (as in MLPerf Storage). Use **dgen-py / the `dgen-data` Rust crate** (Russ Fellows, MIT or Apache-2.0) as the payload engine behind our own positional wrapper. Investigation of `dgen-data` 0.3.0 source plus a test of the wheel (`DESIGN_REVIEW.md` §3.17): there is no seek API, but content is positional by construction. Block `i` (1 MiB) is the Xoshiro256++ keystream seeded with `seed + (i mod unique_blocks)`, with the last `(N−1)/N` of the block zero-filled for compression ratio N, so block `i` of a stream equals block 0 of a 1 MiB generator seeded `seed + (i mod unique_blocks)`; verified byte-for-byte, including the dedupe case. Consequences: (1) **dedupe is scoped to one generator's stream**, so corpus-wide dedupe must be our layer: the seed of a file (or of a 1 MiB block of a large file) is `hash(dataset seed, index mod (total / D))`, so that D units share content; a small-file corpus otherwise has a dedupe ratio of 1 whatever is requested. (2) Ratios that do not divide 1 MiB (3, 5) are off by one byte at the random/zero boundary under seed arithmetic; exact for 2, 4, 8. (3) Compression is bimodal per 4 KiB (pure keystream or pure zeros), the DLIO convention; stated in the manifest. (4) The fill algorithm changed once (back-references → zero fill, January 2026), so the manifest pins the `dgen-data` version and the verifier uses the same one. (5) Always seed; the library's default is unseeded. The Rust crate is called directly from `datagen` and the verifier. **Upstream request:** a public `fill_block(seed, block_index, ratios)` or `seek(offset)` would remove the seed-arithmetic workaround; the author and the user are both on the MLPerf Storage leadership team, and the request will be made once this code shows it is what the WG needs. |
 | Seed privacy | **Required (2026-09-28).** The run seed, the abstract, and the resulting file order are application-private. The solution (anything below the interposition line) may not use knowledge of them, for example to prefetch the next file. A submission review may re-run with a fresh seed; the results must match within noise. The dataset seed is not secret (it is in the manifest) because it determines content, not order. |
-| Coordinator | Star topology over plain TCP with blocking `std::net` (~~on one coordinator thread~~ a reader thread per socket, built 2026-09-30); length-prefixed ~~`postcard`~~ JSON messages (`Hello` with a config hash, `Ready`/`Start`, `Arrive`/`Leave`/`Release`, `Report`/`Result`, `Stop`, `Heartbeat`). No tokio, no tonic/gRPC. Sits behind a `Coordinator` trait; single-host runs use an in-process implementation; rank 0 runs the server in-process and is the only host that empties namespace roots and writes manifests. See `NAPKIN_MATH.md` §8.A, `runner/README.md` §6, `DESIGN_REVIEW.md` §3.25. |
+| Coordinator | Star topology over plain TCP with blocking `std::net` (~~on one coordinator thread~~ a reader thread per socket, built 2026-09-30); length-prefixed ~~`postcard`~~ JSON messages (`Hello` with a config hash, `Ready`/`Start`, `Arrive`/`Leave`/`Release`, `Report`/`Result`, `Stop`, `Heartbeat`). No tokio, no tonic/gRPC. Sits behind a `Coordinator` trait; single-host runs use an in-process implementation; rank 0 runs the server in-process and is the only host that empties namespace roots and writes manifests. See `NAPKIN_MATH.md` §8.A, `runner/REFERENCE.md` §6, `DESIGN_REVIEW.md` §3.25. |
 | Deployment | Bare Linux on the client nodes, **no containers**. |
 | I/O crate | `io-uring` (Rust). |
 | A/B testing | Agreed. Backend × cache mode × io_uring features × NFS mount options (`NAPKIN_MATH.md` §8.5). The key metric is client CPU per op. |
@@ -181,29 +181,29 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    diffs it against `check.py`), the positional VM over all nine committed ASTs, and the
    fingerprint, with golden tests. The definitions the schema left to the runner (key, words,
    permutation, `consume` position, `x @ i`, `until_eof`, fingerprint) are in
-   `runner/README.md` §2. ~~Still to do: the I/O backends (`aeiou run`) and the ext4 / loopback
-   NFS test,~~ **`aeiou run` with `sync` / `sync-direct` done 2026-09-30** (`runner/README.md`
+   `runner/REFERENCE.md` §2. ~~Still to do: the I/O backends (`aeiou run`) and the ext4 / loopback
+   NFS test,~~ **`aeiou run` with `sync` / `sync-direct` done 2026-09-30** (`runner/REFERENCE.md`
    §4, `DESIGN_REVIEW.md` §3.23) and run against ext4: every committed abstract with inputs
    reproduces its dry-run fingerprint; `runner/aeiou/tests/run.rs` covers the round trips,
    including the checkpoint write-then-restore handoff through the namespace manifest
    (`DESIGN_REVIEW.md` §3.24).
    ~~Still to do: the loopback NFS run (needs root on the development box),~~ **The loopback
-   NFS run done 2026-09-30** (`runner/README.md` §7, `DESIGN_REVIEW.md` §3.26): every
+   NFS run done 2026-09-30** (`runner/REFERENCE.md` §7, `DESIGN_REVIEW.md` §3.26): every
    abstract reproduces its fingerprint on the NFS v4.2 mount under `sync` cold, `sync` warm,
    and `sync-direct`, the two-rank tests pass with their roots on it, and the NFS client's
    RPC counts per backend are tabulated (a same-host restore issues zero READ RPCs; O_DIRECT
    sends one per application read). Still to do: ~~`--metrics` (item 14),~~ (built 2026-10-01, item 14) ~~`stream` access~~
    (contract 0.2, 2026-09-30), and the per-op cost (150–350 ns; caching a bound handle's
    path is the first fix). **The resumable VM and the `io_uring` backends done 2026-10-01**
-   (`runner/README.md` §8, `DESIGN_REVIEW.md` §3.29): every committed abstract reproduces its
+   (`runner/REFERENCE.md` §8, `DESIGN_REVIEW.md` §3.29): every committed abstract reproduces its
    fingerprint on the event loop, on ext4 and on the loopback mount. **`posix-aio`,
-   `libaio`, and `mmap` done the same day** (`runner/README.md` §9, `DESIGN_REVIEW.md`
+   `libaio`, and `mmap` done the same day** (`runner/REFERENCE.md` §9, `DESIGN_REVIEW.md`
    §3.35); of the brief's list `gds`, `nixl-posix`, and `libnfs` remain.
 4. **Spike 1:** blocking thread pool first, then io_uring; buffered vs. O_DIRECT, for
    `open → read → close` against the real NFS target, measuring `iou-wrk` count separately for
    open-heavy and read-heavy phases. It decides the I/O backend and the cache strategy. The
    thread-pool half exists as `aeiou run --io-backend sync|sync-direct` (2026-09-30), **the
-   io_uring half as `io_uring|io_uring-direct` (2026-10-01, `runner/README.md` §8)**; the
+   io_uring half as `io_uring|io_uring-direct` (2026-10-01, `runner/REFERENCE.md` §8)**; the
    measurements wait for the real target. On the loopback mount the io-wq worker count peaks
    ~~at the core count~~ at the count of actors with a punted op (20 with 20 actors, 30 to 46
    with 72; the kernel's cap is 80 per loop) for buffered and direct reads alike, because
@@ -222,9 +222,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
    (real Parquet/HDF5/TFRecord/Arrow files, uncompressed, PLAIN encoding, payload from the
    generator); containers mean thousands of files, so a Python `datagen` for them is acceptable.
    **Done 2026-09-30 for `files` and `regions` datasets** as `aeiou datagen` in Rust
-   (`runner/README.md` §5): the positional wrapper over `dgen-data` 0.3.0, corpus-wide dedupe
+   (`runner/REFERENCE.md` §5): the positional wrapper over `dgen-data` 0.3.0, corpus-wide dedupe
    by seed reuse, the manifest with the resolved definition and the id, parallel by id. **The
-   format-class writers done the same day** as `aeiou-datagen` in Python (`builder/README.md`
+   format-class writers done the same day** as `aeiou-datagen` in Python (`builder/REFERENCE.md`
    §6, `DESIGN_REVIEW.md` §3.28): real Parquet, TFRecord, HDF5, and tar files with the same
    payload (the `dgen-py` wheel reproduces the Rust crate's bytes), sizes, names, and manifest;
    `aeiou datagen` refuses datasets with a format class. The Python `aeiou-verify` tool is
@@ -232,13 +232,13 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 9. Startup checks: `kernel.io_uring_disabled`, `RLIMIT_MEMLOCK`, and `RLIMIT_NOFILE` computed
    from G, W, and the abstract. (Since 2026-10-01 a disabled `io_uring` shows up as the ring
    setup failing, with the sysctl named in the error; ~~the limit computations are not done.~~)
-   **Built 2026-10-01** (`runner/README.md` §11, `DESIGN_REVIEW.md` §3.40; the choices
+   **Built 2026-10-01** (`runner/REFERENCE.md` §11, `DESIGN_REVIEW.md` §3.40; the choices
    decided 2026-10-01): open files and threads estimated from a bounded walk of one instance
    per template, soft limits raised, a refusal naming `RLIMIT_NOFILE`, `RLIMIT_NPROC`,
    `kernel.threads-max`, or `vm.max_map_count` (`--ignore-limits` overrides), and the counted
    open-file peak in the report. `RLIMIT_MEMLOCK` is not computed (pre-5.12 kernels only).
 10. ~~Coordinator protocol and launch script (`pdsh`/ssh loop); test it on WSL2 with several
-    ranks on `localhost`.~~ **Done 2026-09-30** (`runner/README.md` §6, `DESIGN_REVIEW.md`
+    ranks on `localhost`.~~ **Done 2026-09-30** (`runner/REFERENCE.md` §6, `DESIGN_REVIEW.md`
     §3.25): `aeiou run --ranks R --rank r --coordinator HOST:PORT`, rank 0 serving
     in-process, the configuration hash in `Hello`, the start gate, two-level barriers with
     departures, the merged report and manifests, one verdict on every host;
@@ -270,12 +270,12 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     read/write mix on the abstract's stream; a trace tool computes the same from a real trace; an
     abstract is accepted for a workload class only when they match within tolerances. A `trace`
     AST node holds a literal captured sequence for small-scale calibration; never CLOSED.
-    **The abstract's side built 2026-10-01** (`aeiou dry-run --metrics`, `runner/README.md`
+    **The abstract's side built 2026-10-01** (`aeiou dry-run --metrics`, `runner/REFERENCE.md`
     §10, `DESIGN_REVIEW.md` §3.39): order-free metrics over the run, order-dependent ones
     per instance in a round-robin order of its sub-actors, block-level stack distance in
     bytes, hash sampling, a JSON form. The definitions were confirmed by the user the same day (**decided 2026-10-01**).
     ~~Still to do: the trace tool, the tolerances, the `trace` node.~~
-    **The trace's side built 2026-10-01** (`aeiou-trace`, `builder/README.md` §7,
+    **The trace's side built 2026-10-01** (`aeiou-trace`, `builder/REFERENCE.md` §7,
     `DESIGN_REVIEW.md` §3.42; choices confirmed by the user, **decided 2026-10-01**): the same numbers from
     an `strace` (calls under `--root`, completion order, the trace as one instance, a thread
     as a context, fan-out and depth from `io_submit` only) and `aeiou-trace compare`, a
@@ -310,7 +310,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     carried from item to item. ~~The other §3.47 choices are not yet confirmed.~~ Those that need no GPU were confirmed 2026-10-02. ~~Still
     to do: the other five rows of `ABSTRACTS.md` §11, the tolerances, the `trace` node.~~ Still
     to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ ~~a chat replay for row 8 of `ABSTRACTS.md` §11,~~ ~~the tolerances,~~ the `trace` node.
-    **Tolerances built 2026-10-02** (`aeiou-trace compare --judge`, `builder/README.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now): a tolerance per class of metric (0.05 for the op mix, request sizes, and popularity; 0.10 for run lengths, reuse, fan-out, and depth), raised by what the abstract differs from itself by at other seeds; rows the trace cannot show are named per pair and not judged. Of the fifteen committed pairs ~~nine are accepted, four are not (the DiskANN build and the three KV-cache pairs, each row with its recorded reason; the KV pairs' rows are those of the replay since §3.56)~~ eleven are accepted, two are not (the DiskANN build and the KV-cache writer, each row with its recorded reason; since §3.57 and one `keep` draw per round, 2026-10-02), and the two applications that read through a mapping cannot be judged from an `strace` at all.
+    **Tolerances built 2026-10-02** (`aeiou-trace compare --judge`, `builder/REFERENCE.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now): a tolerance per class of metric (0.05 for the op mix, request sizes, and popularity; 0.10 for run lengths, reuse, fan-out, and depth), raised by what the abstract differs from itself by at other seeds; rows the trace cannot show are named per pair and not judged. Of the fifteen committed pairs ~~nine are accepted, four are not (the DiskANN build and the three KV-cache pairs, each row with its recorded reason; the KV pairs' rows are those of the replay since §3.56)~~ eleven are accepted, two are not (the DiskANN build and the KV-cache writer, each row with its recorded reason; since §3.57 and one `keep` draw per round, 2026-10-02), and the two applications that read through a mapping cannot be judged from an `strace` at all.
     **Sixth row, 2026-10-01** (`ABSTRACTS.md` §6 "Trace", `DESIGN_REVIEW.md` §3.49,
     `builder/traces/vdb_search_ivf`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
     FAISS maps the lists file and issues no call on it; 32 prefetch threads per search slice
@@ -379,7 +379,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     `same_run` (V15), under which a reader whose seed, instance count, or common parameters
     differ from the writer's is refused before the gate.
     **The `trace` node designed, built, and decided 2026-10-02** (`DESIGN_REVIEW.md` §3.58,
-    `runner/README.md` §13, `builder/README.md` §7; renamed from `replay` the same day at the user's call): a JSON Lines trace file written by `aeiou-trace export` from the same
+    `runner/REFERENCE.md` §13, `builder/REFERENCE.md` §7; renamed from `replay` the same day at the user's call): a JSON Lines trace file written by `aeiou-trace export` from the same
     `strace` the metrics read, one lane per traced task, opens referenced by id so lanes
     share descriptors, shared positions resolved at export, gaps from
     the timestamps as `compute` under `--time-scale`, two cross-lane orders from the trace (the open table and path order, the second found necessary by the first write-then-read trace); the runner's dry run walks the file in
@@ -400,7 +400,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     the loader needs no new knob (under `stream` its unit of work is the shard). Still to do:
     Arrow IPC, MDS, and Megatron classes, and the tenth abstract.
 16. **Cold start: `--drop-caches` (decided and built 2026-10-01, `DESIGN_REVIEW.md` §3.31,
-    `runner/README.md` §4; the drop verified as root on the loopback mount the same day, `--remount` not built).** One run
+    `runner/REFERENCE.md` §4; the drop verified as root on the loopback mount the same day, `--remount` not built).** One run
     option, applied on every host after the dataset and namespace checks and immediately
     before the host arrives at the start gate: `sync`, then `3` into `/proc/sys/vm/drop_caches`
     (page cache, dentries, inodes; evicting an NFS inode drops its attribute and access
@@ -423,7 +423,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     fingerprint over `file://` through the library versus the `sync` backend, pricing the
     library before any cloud is involved.
 18. **JSON report (built and decided 2026-10-01, `DESIGN_REVIEW.md` §3.41,
-    `runner/README.md` §12).** `aeiou run --report-json FILE` writes the
+    `runner/REFERENCE.md` §12).** `aeiou run --report-json FILE` writes the
     run's identity, results (latency histograms in full), and verdict as format
     `aeiou_report: 1`; written on failure too; rank 0 holds the merged report, every other
     rank its own; `--report-takes` adds every take. No JSON Schema yet.
@@ -449,7 +449,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     is not a multiple of the file system's block size), so that `sync-direct` can be the
     declared backend of a traced configuration rather than another workload.
 22. **The option layers (designed, built, and decided 2026-10-04, `DESIGN_REVIEW.md` §3.60,
-    `runner/README.md` §14).** Command line, then `AEIOU_<FLAG>`, then the TOML file
+    `runner/REFERENCE.md` §14).** Command line, then `AEIOU_<FLAG>`, then the TOML file
     `--config`/`AEIOU_CONFIG` names, then the default; the workload's identity, the checks
     that pin it, and the unsafe overrides are the command line's alone; every invocation
     prints its options with their sources; `aeiou run` records them in the report and the
@@ -461,7 +461,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS
 target. A loopback NFS mount (`nfs-kernel-server` exporting a tmpfs directory, mounted from
 `localhost`) exercises the real NFS client code paths for correctness; set up 2026-09-30, the
-sequence and what it showed are `runner/README.md` §7 (the tmpfs and the mount must be
+sequence and what it showed are `runner/REFERENCE.md` §7 (the tmpfs and the mount must be
 redone after a WSL restart). All performance work must run on real Linux client nodes.
 
 ## 8. MLPerf Storage use (added 2026-09-30)
@@ -489,7 +489,7 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Divisions | The backend is part of the application; the interposition test (§5) draws the line between application and solution. | ~~**CLOSED** scores only the backend the real framework uses (`sync` for PyTorch);~~ **CLOSED** means the same operation sequence for every system under test, so it scores only the backend the abstract declares (2026-10-01; buffered and direct are not compared, unlike MLPerf Storage v3.0); other backends are speed-of-light rows; `trace` (`replay` until 2026-10-02) and wall-clock-bounded phases are never CLOSED. Whether a startup phase (the ImageFolder walk) is inside the measured window. | §4 backends, §5 comparison policy; `DESIGN_REVIEW.md` §3.12–3.13, §3.15; `ABSTRACTS.md` §1, §9.8; `NAPKIN_MATH.md` §8 |
 | Data verification and seed privacy | Data is reproducible from (dataset seed, id, offset); the run seed and file order are private to the run. | Motivated by submission fraud under the interposition test; the offline verifier is an audit tool for the WG's review process. | §5; `DESIGN_REVIEW.md` §3.13, §3.16 |
 | Reference parameters | Every workload has parameter slots filled from configuration, measurement, and traces; a parameter file (`schema/README.md` §8) is the published form of one set. | Which values are the reference set (batch sizes, step times, dataset scale relative to client DRAM, the 500-step bound) is a WG decision recorded in the published parameter files. | §5 decisions; `ABSTRACTS.md` `[measure]` slots; `schema/examples/params/` |
-| Acceptance tolerances | `aeiou-trace compare --judge` holds a trace and an abstract to a tolerance per class of metric; the values in the tool are this repository's defaults (`builder/README.md` §7; decided 2026-10-02, for now). | Which values accept an abstract for a workload class, and which recorded differences are tolerated, is a WG decision published as a tolerance file. | §6 item 14; `DESIGN_REVIEW.md` §3.55 |
+| Acceptance tolerances | `aeiou-trace compare --judge` holds a trace and an abstract to a tolerance per class of metric; the values in the tool are this repository's defaults (`builder/REFERENCE.md` §7; decided 2026-10-02, for now). | Which values accept an abstract for a workload class, and which recorded differences are tolerated, is a WG decision published as a tolerance file. | §6 item 14; `DESIGN_REVIEW.md` §3.55 |
 | Workload selection | The builder can express any POSIX-shaped skeleton. | The ninth and tenth abstracts follow the MLPerf Storage ResNet50/CosmoFlow and Parquet→Arrow shapes because those are what the WG submits (`train_stream_tfrecord` / `train_stream_parquet` done 2026-09-30; the tenth pending). | §6 item 15; `GRAMMAR_OPTIONS.md` §6.5 |
 | Upstream requests | dgen-py's API is what it is. | The `fill_block`/`seek` request goes through the WG leadership channel. | `DESIGN_REVIEW.md` §3.17 |
 | Checkpoint write and restore | A write run leaves a namespace manifest; a restore run declares the namespace `input`, reads it, and reports the gap and the warm reads (§5, *Checkpoint restore inputs*). | The benchmark runs them as two invocations of the same host list, the restore with `--rank-rotate 1` so no host reads its own shards; the gap between the end of the write and the start of the restore is capped at 30 s (`--max-gap 30`); a failed DP=N job restarts as DP=N (no resharding, `replicas` stays 1 for fully sharded state); `readback` stays off in a scored write. | `DESIGN_REVIEW.md` §3.24; `ABSTRACTS.md` §3–§4 |
@@ -502,7 +502,7 @@ line says:
 - The Rust runner is the binary `aeiou`, with subcommands for its modes: `aeiou run`,
   `aeiou dry-run` (`--metrics`), `aeiou datagen`, `aeiou check`, and the coordinator/launch
   helper when it exists. This is the command a submitter, or anyone else, runs. (`check` and
-  `dry-run` exist since 2026-09-30; `runner/README.md`.)
+  `dry-run` exist since 2026-09-30; `runner/REFERENCE.md`.)
 - The Python authoring tools are dash-suffixed helpers in the same family, one per job:
   `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
   2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01), and later
@@ -512,6 +512,6 @@ line says:
 - Environment variables are `AEIOU_<FLAG>` (the long flag upper-cased, `_` for `-`), the
   config file is TOML named by `--config FILE` or `AEIOU_CONFIG` and never searched for, and
   the precedence is command line, environment, file, default; the workload's identity is the
-  command line's alone (2026-10-04, `runner/README.md` §14, `DESIGN_REVIEW.md` §3.60).
+  command line's alone (2026-10-04, `runner/REFERENCE.md` §14, `DESIGN_REVIEW.md` §3.60).
 - Nothing is named after MLPerf; the package was renamed from `mlps_abstract` on 2026-09-30
   for this reason.

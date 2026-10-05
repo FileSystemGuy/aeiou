@@ -1,7 +1,7 @@
 {
   "params_version": 1,
   "abstract": "train_small_files",
-  "doc": "A laptop-sized run of the shape: the smoke parameters of runner/README.md (4000 files, 50 steps). Not a reference set.",
+  "doc": "A laptop-sized run of the shape: the smoke parameters of runner/REFERENCE.md (4000 files, 50 steps). Not a reference set.",
   "params": {
     "files": 4000,
     "steps": 50

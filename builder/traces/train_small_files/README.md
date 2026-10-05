@@ -1,7 +1,7 @@
 # Trace of the real loader behind `train_small_files` (2026-10-01)
 
 `ABSTRACTS.md` §11, row 1: PyTorch `DataLoader` over `torchvision.datasets.ImageFolder`,
-two workers, taken on the loopback NFS mount of `runner/README.md` §7 (v4.2, rsize 1 MiB).
+two workers, taken on the loopback NFS mount of `runner/REFERENCE.md` §7 (v4.2, rsize 1 MiB).
 What was read off it is in `ABSTRACTS.md` §1 and `DESIGN_REVIEW.md` §3.43.
 
 Versions: Python 3.12.3, torch 2.14.1+cpu, torchvision 0.29.1+cpu, Pillow 12.3.0, Linux 6.18.

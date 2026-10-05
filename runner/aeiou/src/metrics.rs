@@ -1,5 +1,5 @@
 //! `aeiou dry-run --metrics`: the locality metrics of the abstract's op stream
-//! (`GRAMMAR_OPTIONS.md` §5.4, `runner/README.md` §10). The fingerprint says which stream
+//! (`GRAMMAR_OPTIONS.md` §5.4, `runner/REFERENCE.md` §10). The fingerprint says which stream
 //! ran; these say whether it is the right one, by comparison with the same numbers taken
 //! from a trace of the real application.
 //!

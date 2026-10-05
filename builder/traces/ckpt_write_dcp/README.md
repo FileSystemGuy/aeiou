@@ -3,7 +3,7 @@
 `ABSTRACTS.md` §11, row 3: `torch.distributed.checkpoint.save` on two ranks (gloo, CPU), a
 state dict of six `DTensor`s sharded over the ranks (the FSDP2 shape: one write item per
 parameter, half of it on each rank), two checkpoints, written through the loopback NFS mount
-of `runner/README.md` §7. `save.py --torch-save` writes the same tensors with `torch.save`
+of `runner/REFERENCE.md` §7. `save.py --torch-save` writes the same tensors with `torch.save`
 on one rank, the variant of `ABSTRACTS.md` §3. What was read off the traces is in
 `ABSTRACTS.md` §3 and `DESIGN_REVIEW.md` §3.45.
 

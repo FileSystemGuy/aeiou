@@ -1,6 +1,6 @@
 # Traces behind `kv_cache_shared` and `kv_cache_shared_reader` (2026-10-02)
 
-vLLM with LMCache's `fs://` remote backend on the loopback NFS mount of `runner/README.md`
+vLLM with LMCache's `fs://` remote backend on the loopback NFS mount of `runner/REFERENCE.md`
 §7: one engine that fills an empty store, then a restarted engine in front of the filled
 store, sent the same requests. What was read off the traces is in `ABSTRACTS.md` §8
 ("The shared store") and `DESIGN_REVIEW.md` §3.52; the committed traces are of the ShareGPT

@@ -2,7 +2,7 @@
 
 `ABSTRACTS.md` §11, row 5: DiskANN's `PQFlashIndex` through `diskannpy.StaticDiskIndex`, over
 SIFT1M (graph degree 64, 13 build shards, 200,001 sectors of 4 KiB, five nodes to a sector),
-search list 100, beam 4, on the loopback NFS mount of `runner/README.md` §7. The index is the
+search list 100, beam 4, on the loopback NFS mount of `runner/REFERENCE.md` §7. The index is the
 one `../vdb_build_diskann/build.py` wrote. What was read off the traces is in `ABSTRACTS.md`
 §5 and `DESIGN_REVIEW.md` §3.50.
 

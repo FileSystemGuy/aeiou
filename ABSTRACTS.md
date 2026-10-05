@@ -605,7 +605,7 @@ longer than the buffer. Reasoning in `DESIGN_REVIEW.md` §3.47 and §3.48.
 - **The application reads 19 % more bytes than the files hold** (`mixed`): each large item's
   head is read four times and its tail fill runs into the next item. Cold, the server sent
   each byte once: 159 READs for 153 MB, about 1 MiB each, and 1 GETATTR. Warm (the client
-  that wrote it): no READ at all, as `runner/README.md` §7 found for the draft.
+  that wrote it): no READ at all, as `runner/REFERENCE.md` §7 found for the draft.
 - **Not modeled, 2 calls per rank:** a `stat` and an `access` of the checkpoint directory's
   parent (no `access` op; no handle for a namespace's parent), as in §3.
 - **Not exact:** a small item at the end of the file has its zip records up to 48 bytes
@@ -1743,7 +1743,7 @@ READ on NFS and changed the WRITE count of one capture; `-y` and no path decodin
 repeat needs no such knowledge. `DESIGN_REVIEW.md` §3.53.)
 
 (`%process` added 2026-10-01: `aeiou-trace` follows `clone` to know which threads share
-descriptors and which processes are one instance; `builder/README.md` §7.)
+descriptors and which processes are one instance; `builder/REFERENCE.md` §7.)
 
 For each: fit the distributions into the parameter file, run `--dry-run --metrics`, and compare
 reuse distance, run length, popularity, request size, dependency depth, and read/write mix with

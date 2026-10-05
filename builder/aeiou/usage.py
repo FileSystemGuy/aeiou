@@ -1,4 +1,4 @@
-"""Usage errors: the command line is wrong, and nothing has run (`runner/README.md` §15,
+"""Usage errors: the command line is wrong, and nothing has run (`runner/REFERENCE.md` §15,
 `DESIGN_REVIEW.md` §3.61; the definition is `runner/aeiou/src/usage.rs`, this is its mirror
 for the Python tools). Every tool of the suite prints them in one frame, so a new user meets
 the same message whichever tool spoke:

@@ -2,7 +2,7 @@
 
 `ABSTRACTS.md` §11, row 6: FAISS `IndexIVFPQ` with `OnDiskInvertedLists`, `nprobe = 64`, over
 SIFT1M (`IVF1024,PQ32`: 1,024 lists, 40 bytes per vector, a 40 MB lists file) on the loopback
-NFS mount of `runner/README.md` §7. What was read off the trace is in `ABSTRACTS.md` §6 and
+NFS mount of `runner/REFERENCE.md` §7. What was read off the trace is in `ABSTRACTS.md` §6 and
 `DESIGN_REVIEW.md` §3.49.
 
 Versions: Python 3.12.3, faiss-cpu 1.15.1, numpy 2.5.3, Linux 6.18. The corpus is

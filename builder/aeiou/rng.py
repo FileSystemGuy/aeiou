@@ -1,4 +1,4 @@
-"""The runner's positional definitions, ported exactly (`runner/README.md` §2,
+"""The runner's positional definitions, ported exactly (`runner/REFERENCE.md` §2,
 `runner/aeiou/src/rng.rs`, `eval.rs`): keys, the SplitMix64 word sequence, the dataset size
 draw, and the payload block seed. The Python side needs them to write a container dataset
 (`aeiou-datagen`) and to verify one; everything here is a pure function of its arguments.

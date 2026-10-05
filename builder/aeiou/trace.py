@@ -2,7 +2,7 @@
 
 `aeiou dry-run --metrics` computes reuse distance, sequential runs, popularity, request
 sizes, fan-out, depth, and the read/write mix on an abstract's op stream
-(`runner/README.md` §10). This computes the same numbers, with the same definitions and in
+(`runner/REFERENCE.md` §10). This computes the same numbers, with the same definitions and in
 the same JSON form (`aeiou_metrics: 1`), from a trace of the application the abstract
 models, so the two can be compared (`GRAMMAR_OPTIONS.md` §5.4):
 
@@ -12,7 +12,7 @@ models, so the two can be compared (`GRAMMAR_OPTIONS.md` §5.4):
     aeiou-trace compare trace.metrics.json abstract.metrics.json
     aeiou-trace compare trace.metrics.json abstract.metrics.json --judge --self other-seed.metrics.json
 
-`--judge` holds each row to the tolerance of its class (`TOLERANCES` below, `builder/README.md`
+`--judge` holds each row to the tolerance of its class (`TOLERANCES` below, `builder/REFERENCE.md`
 §7), raised by what the abstract differs from itself by at other seeds.
 
 What differs from the dry-run side, because a trace is not an abstract:
@@ -193,7 +193,7 @@ def popularity(counts: dict[int, int], sample: int) -> dict:
 
 
 class Metrics:
-    """The accumulated metrics of a trace; the definitions are `runner/README.md` §10's."""
+    """The accumulated metrics of a trace; the definitions are `runner/REFERENCE.md` §10's."""
 
     def __init__(self, block: int = 4096, sample: int = 1):
         self.block = max(block, 1)
@@ -754,7 +754,7 @@ class Tracer:
                     ex.data(when, KINDS[kind], f.oid, offset, length, positioned, ret, err)
             return
         if name == "mmap":
-            # exported only (the metrics do not count a mapping, `runner/README.md` §10): the
+            # exported only (the metrics do not count a mapping, `runner/REFERENCE.md` §10): the
             # mapped range as one read, since the faults inside it are not in the trace
             if ex is None or len(a) < 6 or ret < 0:
                 return

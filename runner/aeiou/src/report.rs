@@ -1,4 +1,4 @@
-//! The JSON report of `aeiou run --report-json FILE` (`runner/README.md` §12): what the text
+//! The JSON report of `aeiou run --report-json FILE` (`runner/REFERENCE.md` §12): what the text
 //! report prints, for a tool. Format `aeiou_report: 1`.
 //!
 //! Built after the run and its verdict, outside `elapsed`. Times are integer nanoseconds,

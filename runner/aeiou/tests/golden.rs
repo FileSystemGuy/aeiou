@@ -1,6 +1,6 @@
 //! Golden tests: the Rust loader agrees with `schema/check.py` on every committed AST, the
 //! fingerprints of the nine workloads at fixed small configurations are pinned (a change
-//! here is a change of the runner's definitions, `runner/README.md` §2), and the positional
+//! here is a change of the runner's definitions, `runner/REFERENCE.md` §2), and the positional
 //! semantics behave as specified.
 
 use std::collections::{BTreeMap, BTreeSet};

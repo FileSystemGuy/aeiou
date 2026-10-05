@@ -1,4 +1,4 @@
-"""`aeiou-trace`: the metrics of an `strace` against their definitions (`runner/README.md`
+"""`aeiou-trace`: the metrics of an `strace` against their definitions (`runner/REFERENCE.md`
 §10) on hand-written traces, the ports of the runner's histogram and stack distance, the
 comparison's distances, and, when `strace` and the runner binary are there, the trace of
 `aeiou run` against the same abstract's `aeiou dry-run --metrics-json`: everything that

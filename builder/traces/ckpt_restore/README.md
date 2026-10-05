@@ -2,7 +2,7 @@
 
 `ABSTRACTS.md` §11, row 4a: `torch.distributed.checkpoint.load` on two ranks (gloo, CPU) into
 a state dict of `DTensor`s sharded over the ranks, each rank reading its own shard file,
-through the loopback NFS mount of `runner/README.md` §7. Three checkpoints were read:
+through the loopback NFS mount of `runner/REFERENCE.md` §7. Three checkpoints were read:
 
 - `small-last`: the one `../ckpt_write_dcp/save.py` writes (six items, the last two below the
   1 MiB buffer, so the file ends in a small item);

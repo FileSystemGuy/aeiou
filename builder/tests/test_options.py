@@ -1,5 +1,5 @@
 """The option layers in Python (`aeiou/options.py`), the mirror of the runner's `options.rs`
-(`runner/README.md` §14): precedence, the negation, the refusals, the block, and
+(`runner/REFERENCE.md` §14): precedence, the negation, the refusals, the block, and
 `aeiou-datagen` through them."""
 import os
 import pathlib

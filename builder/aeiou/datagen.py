@@ -1,5 +1,5 @@
 """`aeiou-datagen`: write the container datasets an abstract declares, through their format
-classes, with the runner's payload (`runner/README.md` §5: `aeiou-positional/1` over
+classes, with the runner's payload (`runner/REFERENCE.md` §5: `aeiou-positional/1` over
 `dgen-data` 0.3.0), and the manifest `aeiou run` checks (`schema/README.md` §6).
 
     aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G]
@@ -210,7 +210,7 @@ def parser() -> usage.Parser:
     ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` files share content [default: 1]")
     ap.add_argument("--compress", type=int, default=1, help="Compression ratio: the last (C−1)/C of every 1 MiB block is zeros [default: 1]")
     ap.add_argument("--dataset", action="append", default=[], metavar="NAME", help="Only these datasets (default: all)")
-    ap.add_argument("--config", type=pathlib.Path, metavar="FILE", help="A TOML config file (else $AEIOU_CONFIG, else none; never searched for): one table per subcommand, keys spelled as the long flags (runner/README.md §14)")
+    ap.add_argument("--config", type=pathlib.Path, metavar="FILE", help="A TOML config file (else $AEIOU_CONFIG, else none; never searched for): one table per subcommand, keys spelled as the long flags (runner/REFERENCE.md §14)")
     ap.version(f"aeiou-datagen {__version__}")
     return ap
 

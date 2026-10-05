@@ -36,11 +36,11 @@ Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **b
 **built 2026-10-01**, §4: task and io-wq worker peaks, CPU, RSS, the mount's NFS RPCs;
 backend-specific counters beyond those come with each backend), `--drop-caches` at the
 start gate with the residency check and the mount options line (decided 2026-10-01,
-`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; ~~the trace-side tool that computes the same numbers from a real trace is not~~ the trace side is `aeiou-trace`, built 2026-10-01, `builder/README.md` §7) ~~and the `trace` node (`replay` until 2026-10-02; designed as `DESIGN_REVIEW.md` §3.58)~~ (the `trace` node **built 2026-10-02**, §13; not yet under the event-loop backends). ~~`stream`
+`PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; ~~the trace-side tool that computes the same numbers from a real trace is not~~ the trace side is `aeiou-trace`, built 2026-10-01, `builder/REFERENCE.md` §7) ~~and the `trace` node (`replay` until 2026-10-02; designed as `DESIGN_REVIEW.md` §3.58)~~ (the `trace` node **built 2026-10-02**, §13; not yet under the event-loop backends). ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
-classes is the Python side (`aeiou-datagen`, `builder/README.md`); `aeiou datagen` refuses a
+classes is the Python side (`aeiou-datagen`, `builder/REFERENCE.md`); `aeiou datagen` refuses a
 dataset that has a format class.
 
 ```
@@ -388,7 +388,7 @@ as root). The same runs on the loopback NFS mount are §7.
   compares `dataset` field by field against what it resolves and prints the id; the payload
   block is recorded and printed, not derivable from the abstract, so a published id is what
   pins it (`--expect-dataset-id`).
-- **Containers** are written by the Python side: `aeiou-datagen` (`builder/README.md` §6)
+- **Containers** are written by the Python side: `aeiou-datagen` (`builder/REFERENCE.md` §6)
   writes every dataset that has a format class, with the same names, sizes, payload, and
   manifest form (its `format` block records the class and writer library); `aeiou datagen`
   refuses such a dataset. A corpus with both kinds is written by both tools, each dataset by
@@ -933,7 +933,7 @@ the fingerprint proves which stream ran, these numbers are for proving it is the
 by comparison with the same numbers taken from a trace of the real application. This
 section defines the numbers; the reasoning is in `DESIGN_REVIEW.md` §3.39. ~~The trace-side
 tool is not written, so nothing has been compared yet.~~ The trace side is `aeiou-trace`
-(`builder/README.md` §7, built 2026-10-01): the same definitions over an `strace`, and
+(`builder/REFERENCE.md` §7, built 2026-10-01): the same definitions over an `strace`, and
 `aeiou-trace compare`; checked so far only against traces of the runner itself, no real
 application yet. The JSON form carries `"source": "dry-run"` here and `"strace"` there. **The definitions below were chosen
 while building and confirmed by the user the same day (decided 2026-10-01).**
@@ -1180,7 +1180,7 @@ aeiou dry-run app.ast.json --gpus 1 --metrics-json node.json     # equals `aeiou
 aeiou run app.ast.json --gpus 1 --root /mnt/data --time-scale 0 [--[no-]clean-namespaces]
 ```
 
-**The file** (`trace.rs`; written by `aeiou-trace export`, `builder/README.md` §7). JSON
+**The file** (`trace.rs`; written by `aeiou-trace export`, `builder/REFERENCE.md` §7). JSON
 Lines: a header, then one op per line in the order the calls returned.
 
 ```

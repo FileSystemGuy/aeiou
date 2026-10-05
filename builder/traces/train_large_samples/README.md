@@ -2,7 +2,7 @@
 
 `ABSTRACTS.md` §11, row 2: `np.load(path, allow_pickle=True)["x"]` per sample, as upstream
 DLIO's `npz_reader.py` (argonne-lcf) issues it and as any NumPy user does, through a PyTorch `DataLoader` with two workers, on the loopback
-NFS mount of `runner/README.md` §7 (v4.2, rsize 1 MiB). The MLCommons fork of DLIO reads `.npz` differently
+NFS mount of `runner/REFERENCE.md` §7 (v4.2, rsize 1 MiB). The MLCommons fork of DLIO reads `.npz` differently
 (`DESIGN_REVIEW.md` §3.46) and is not what this models. The corpus is what DLIO's
 `npz_generator.py` writes: `np.savez(path, x=<uint8 volume>, y=<labels>)`. What was read off
 the trace is in `ABSTRACTS.md` §2 and `DESIGN_REVIEW.md` §3.44.

@@ -3,7 +3,7 @@
 `ABSTRACTS.md` §11, row 7: DiskANN's `build_disk_index` through diskannpy, over SIFT1M
 (graph degree 64, build list 100), with a build memory budget of 0.25 GB so that the builder
 partitions the base into shards (13 here), builds each, and merges them: the path a corpus
-larger than memory takes. On the loopback NFS mount of `runner/README.md` §7. What was read
+larger than memory takes. On the loopback NFS mount of `runner/REFERENCE.md` §7. What was read
 off the trace is in `ABSTRACTS.md` §7 and `DESIGN_REVIEW.md` §3.50. The index it leaves is
 the one `../vdb_search_diskann` searches.
 
