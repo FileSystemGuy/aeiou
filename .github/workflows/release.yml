@@ -3,7 +3,7 @@ name: release
 # A tag `vX.Y.Z` builds one tarball for x86_64 Linux and attaches it to a GitHub Release:
 # the runner binary and `aeiou-launch`, the manual pages as roff and as Markdown, the
 # committed abstracts with their example parameter files, the builder's wheel, and
-# QUICKSTART.md. Built on ubuntu-22.04 so the binary runs on glibc 2.35 and later (RHEL 9,
+# QUICKSTART.md. Built on ubuntu-22.04 so the binary runs on glibc 2.34 and later (RHEL 9,
 # Ubuntu 22.04, Debian 12 and newer); the runner links nothing but libc. Nothing is
 # published to a registry. The tag must equal the version in runner/Cargo.toml and
 # builder/pyproject.toml.
