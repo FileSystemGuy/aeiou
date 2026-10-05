@@ -1,0 +1,86 @@
+name: release
+
+# A tag `vX.Y.Z` builds one tarball for x86_64 Linux and attaches it to a GitHub Release:
+# the runner binary and `aeiou-launch`, the manual pages as roff and as Markdown, the
+# committed abstracts with their example parameter files, the builder's wheel, and
+# QUICKSTART.md. Built on ubuntu-22.04 so the binary runs on glibc 2.35 and later (RHEL 9,
+# Ubuntu 22.04, Debian 12 and newer); the runner links nothing but libc. Nothing is
+# published to a registry. The tag must equal the version in runner/Cargo.toml and
+# builder/pyproject.toml.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  tarball:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runner
+          shared-key: release
+      - uses: astral-sh/setup-uv@v5
+
+      - name: The tag is the version
+        run: |
+          ver=${GITHUB_REF_NAME#v}
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' runner/Cargo.toml)
+          py=$(sed -n 's/^version = "\(.*\)"/\1/p' builder/pyproject.toml)
+          echo "tag=$ver cargo=$cargo pyproject=$py"
+          [ "$ver" = "$cargo" ] && [ "$ver" = "$py" ] || { echo "version mismatch" >&2; exit 1; }
+          echo "VER=$ver" >> "$GITHUB_ENV"
+          echo "DIST=aeiou-$ver-x86_64-linux" >> "$GITHUB_ENV"
+
+      - name: Build the runner
+        working-directory: runner
+        run: cargo build --release --bin aeiou
+
+      - name: Build the builder's wheel
+        working-directory: builder
+        run: uv build --wheel -o ../wheel
+
+      - name: Assemble the tarball
+        run: |
+          command -v pandoc >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q pandoc; }
+          d="$DIST"
+          mkdir -p "$d/bin" "$d/share/man/man1" "$d/share/man/man5" "$d/share/man/man7" \
+                   "$d/man" "$d/examples/params" "$d/wheel"
+          cp runner/target/release/aeiou runner/aeiou-launch "$d/bin/"
+          for p in man/*.[157].md; do
+            page=$(basename "${p%.md}")        # aeiou.1
+            sec=${page##*.}                     # 1
+            pandoc -s -t man --shift-heading-level-by=-1 \
+              -V header="aeiou manual" -V footer="aeiou $VER" -V date="$(date -u +%Y-%m-%d)" \
+              "$p" -o "$d/share/man/man$sec/$page"
+          done
+          cp man/*.md "$d/man/"
+          cp schema/examples/*.ast.json "$d/examples/"
+          cp schema/examples/params/*.params.json "$d/examples/params/"
+          cp wheel/*.whl "$d/wheel/"
+          cp QUICKSTART.md LICENSE "$d/"
+          tar czf "$d.tar.gz" "$d"
+          sha256sum "$d.tar.gz" > "$d.tar.gz.sha256"
+          ls -l "$d.tar.gz"; tar tzf "$d.tar.gz" | sed 's,^[^/]*/,,' | sort
+
+      - name: Smoke-test the tarball
+        run: |
+          mkdir smoke && tar xzf "$DIST.tar.gz" -C smoke && cd "smoke/$DIST"
+          bin/aeiou --version
+          bin/aeiou check examples/*.ast.json
+          bin/aeiou dry-run examples/train_small_files.ast.json --gpus 2 --seed 1 \
+            --params-file examples/params/train_small_files.smoke.params.json | tail -3
+          man -l share/man/man1/aeiou.1 | head -5
+          uv venv -q .venv && uv pip install -q --python .venv/bin/python "aeiou[formats] @ $(ls wheel/*.whl)"
+          .venv/bin/aeiou-build --help | head -2
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "aeiou $GITHUB_REF_NAME" --generate-notes \
+            "$DIST.tar.gz" "$DIST.tar.gz.sha256"

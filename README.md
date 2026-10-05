@@ -130,6 +130,7 @@ one frame, listing every missing argument at once, and exits 2.
 | `schema/` | The AST contract: the JSON Schema, the reference validator `check.py`, the parameter-file schema, and `examples/`, the committed abstracts (generated, never edited by hand) with example parameter sets. [README](schema/README.md). |
 | `runner/` | The Rust workspace: the `aeiou` binary and `aeiou-launch`. [README](runner/README.md), [reference](runner/REFERENCE.md). |
 | `man/` | The manual pages, in Markdown with man-page sections; the test suites hold them to the tools' `--help`. [index](man/README.md). |
+| `QUICKSTART.md` | The guide shipped in the release tarball: first run, first bug report. |
 | `PROJECT_BRIEF.md` | Requirements, decisions, open items (§6), and the one list of what is MLPerf-specific (§8). |
 | `NAPKIN_MATH.md` | Memory and IOPS estimates, the risk register, the spikes. |
 | `GRAMMAR_OPTIONS.md` | The semantic model and the authoring options; Option D, the Python builder over a JSON AST, is what was built. |
@@ -164,9 +165,14 @@ NumPy, `torch.distributed.checkpoint`, safetensors, DiskANN, FAISS, vLLM with LM
 abstract against the committed ASTs and every parameter file against its abstract; the
 runner's `cargo test`; and the integration job that diffs the Rust checker against the
 reference checker, runs the container datasets to their fingerprints, and holds the metrics
-of an strace of the runner to its own dry run.
+of an strace of the runner to its own dry run. A tag `vX.Y.Z` runs a fourth workflow that
+builds the release tarball and attaches it to a GitHub Release (`.github/workflows/release.yml`).
 
 ## Quick start
+
+A release tarball (the runner, `aeiou-launch`, the manual pages, the abstracts, and the
+builder's wheel, for x86_64 Linux) is attached to every tag; [QUICKSTART.md](QUICKSTART.md)
+is the guide for it. From source:
 
 ```
 # the runner
