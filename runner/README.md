@@ -1327,7 +1327,8 @@ mmap knobs, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`,
 and `--threads`; for `dry-run` `--threads` and `--ranks`. `--rank` from the environment is
 the case the layers exist for: a launcher sets `AEIOU_RANK` from its own rank variable and
 the same command line runs on every host. (No layered option is a list, so "replace" is the
-only merge rule in play.) `--root` is required from some layer.
+only merge rule in play.) `--root` is required from some layer; what no layer supplies is
+listed with everything else the command lacks, in one message (§15).
 
 **Negation: `--[no-]x`.** Every boolean of every subcommand has a negation: `--x` turns it
 on, `--no-x` turns it off, the last one on the line wins, so the command line can turn off
@@ -1401,3 +1402,76 @@ the refusals, the report's `layers`, two ranks with a differing `--buffer-mib` a
 identity refusal, the `--[no-]x` help rows and their alignment, `--x --no-x` both ways, the
 notation typed literally), and `main.rs`'s check that `options::ALL_OPTIONS` is the set of clap
 definitions; `builder/tests/test_options.py` for the Python mirror and `aeiou-datagen`.
+
+## 15. Usage errors: one frame for the suite (2026-10-04)
+
+A wrong command line is reported the same way by every tool of the suite, the four
+subcommands of `aeiou`, `aeiou-build`, `aeiou-params`, `aeiou-datagen`, `aeiou-trace`, and
+`aeiou-launch`, whether the mistake was found by the Rust parser, the Python parser, or the
+tool itself (`usage.rs`; `builder/aeiou/usage.py` is its mirror; the reasoning is
+`DESIGN_REVIEW.md` §3.61):
+
+```
+$ aeiou datagen
+aeiou datagen: the following required arguments were not provided:
+  <ABSTRACT_PATH>  the abstract (`.ast.json`, written by aeiou-build from a builder script)
+  --root <DIR>     directory the abstract's paths are relative to
+                   (also $AEIOU_ROOT, or `root` in the [datagen] table of the config file)
+
+Usage: aeiou datagen [OPTIONS] --root <DIR> <ABSTRACT_PATH>
+       (--root may also come from $AEIOU_ROOT or `root` in the [datagen] table of the config file)
+
+For more information, try 'aeiou datagen --help'.
+```
+
+**The frame.** The command as typed (`aeiou datagen`, `aeiou-params npz`), a colon, the
+message; an empty line; the usage line, the same one `--help` shows; an empty line; the
+pointer to the help, naming the command. The exit status is 2, the parsers' own convention.
+A failure during the work, after the command line was accepted (a dataset manifest that does
+not match, a namespace that is not empty, an abstract that is JSON but invalid), is one line,
+`aeiou run: message`, with status 1; the commands that work through a list (`aeiou check`,
+`aeiou-build`, `aeiou-params check`) print `ok`/`FAIL` per item and exit 1 if any failed.
+`aeiou-params npz` exits 1, not 2, when the archives differ from the abstract's defaults, so
+that 2 means a usage error everywhere (changed from 2 the same day).
+
+**Everything missing, at once.** A requirement is never reported alone. The command collects
+every argument it still lacks and lists them together, so the next attempt is the last one;
+give one of them and the list shrinks by exactly that line. The list is made after the
+option layers resolve (§14), so `--root` supplied by `AEIOU_ROOT` or the config file is not
+missing; an item that may come from a lower layer says so on its second line. What the
+options in effect make required joins the list with the reason, and the layer that set the
+condition when it was not the command line: `--coordinator <HOST:PORT>` with `--ranks` above
+1, `--report-json <FILE>` with `--report-takes`, `--sqpoll <IDLE_MS>` with
+`--sqpoll-shared`; `aeiou-trace metrics` lists `--root <DIR>` once it has read the first
+line and found an strace rather than an exported trace file. At the parsers' level nothing is
+required any more: the positionals and `--gpus` are optional to clap and argparse, and the
+usage lines say what is required (`override_usage`, an explicit `usage=`), so the parsers
+never report one requirement ahead of the others.
+
+**What is a usage error.** The parser's own: an unknown flag, a value that does not parse, a
+missing value (clap's text, reframed: `error:` becomes the command's name, the pointer names
+the command, and the usage line is put in where clap leaves it out; argparse's text, through
+`usage.Parser.error`). A missing requirement. Options that exclude each other or that the
+backend in effect cannot take (the `run` checks of §8, §9, with the layer that set them). A
+value the environment or the config file supplies that is refused or does not parse (§14). A
+path given for the abstract that is not one: a builder script (`x.py: a builder script, not
+an abstract; aeiou-build x.py writes the abstracts it authors ... and those are what the
+runner takes`), a file that does not exist (with `an abstract is the .ast.json file
+aeiou-build writes from a builder script` when the path does not end in `.json`), a file that
+is not JSON (`not an abstract (expected value at line 1 column 1)`). An abstract that is JSON
+and fails validation is a failure of the work. `aeiou-build` given an `.ast.json` says the
+converse per script, as a `FAIL` line.
+
+**The help, too.** `usage.Parser` dresses argparse in the runner's look so `--help` reads the
+same across the suite: the description first, then `Usage:`, `Arguments:` and `Options:`,
+every value as `<METAVAR>`, an option's names before its value (`-o, --out <FILE>`),
+`-h, --help  Print help` and `-V, --version  Print version` last, at most 120 columns. A
+subcommand's one-line help is also its own `--help`'s description, as clap's `about` is both.
+`aeiou-launch`, a shell script, prints the same frame and a help page by hand.
+
+**Tests.** `tests/usage.rs`: the frame of every subcommand and of the parser's own errors,
+the list shrinking as arguments are given, `--root` from a layer not missing, the conditional
+items with their reasons and layers, the three wrong-file messages, and a failure of the work
+with status 1. `builder/tests/test_usage.py`: the same for the four Python tools, the help's
+look, and, when the runner binary is built, that `aeiou datagen` and `aeiou-datagen` print
+the same bytes for the same mistake but for the command's name.

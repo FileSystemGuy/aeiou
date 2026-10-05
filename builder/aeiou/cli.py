@@ -1,7 +1,5 @@
 """`aeiou-build`: run an authoring script and write its workloads as AST JSON.
 
-    aeiou-build script.py [script.py ...] [-o DIR] [--hermetic] [--twice] [--check]
-
 Default: run each script in this process and write `<name>.ast.json` per Workload into DIR
 (default: the script's directory) with a provenance block.
 
@@ -23,7 +21,7 @@ import runpy
 import subprocess
 import sys
 
-from . import __version__
+from . import __version__, usage
 from .nodes import BuildError
 
 
@@ -75,22 +73,37 @@ def _spawn_child(script: pathlib.Path, hermetic: bool, hashseed: int) -> dict:
     return json.loads(r.stdout)
 
 
+def parser() -> usage.Parser:
+    ap = usage.Parser(prog="aeiou-build", description="Run a builder script and write the abstracts it authors (`<name>.ast.json`, one per Workload) next to it or under -o",
+                      usage="aeiou-build [OPTIONS] <SCRIPTS>...")
+    ap.add_argument("scripts", nargs="*", type=pathlib.Path, metavar="SCRIPTS", help="Builder scripts (`.py`), each constructing one or more Workloads")
+    ap.add_argument("-o", "--out", type=pathlib.Path, metavar="DIR", help="Output directory (default: the script's)")
+    ap.add_argument("--hermetic", action="store_true", help="Build each script in a fresh, isolated child (scrubbed environment, audit hooks, stubbed clocks and entropy)")
+    ap.add_argument("--twice", action="store_true", help="Build in two children with different PYTHONHASHSEED values and refuse to write unless the canonical hashes agree")
+    ap.add_argument("--check", action="store_true", help="Do not write; compare the canonical hash with the existing file's and exit 1 on a difference")
+    ap.add_argument("--no-provenance", action="store_true", help="Write the abstract without its provenance block")
+    ap.version(f"aeiou-build {__version__}")
+    return ap
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="aeiou-build", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("scripts", nargs="+", type=pathlib.Path)
-    ap.add_argument("-o", "--out", type=pathlib.Path, help="output directory (default: the script's)")
-    ap.add_argument("--hermetic", action="store_true")
-    ap.add_argument("--twice", action="store_true")
-    ap.add_argument("--check", action="store_true")
-    ap.add_argument("--no-provenance", action="store_true")
-    ap.add_argument("--version", action="version", version=f"aeiou-build {__version__}")
-    a = ap.parse_args(argv)
+    ap = parser()
+    try:
+        a = ap.parse_args(argv)
+        missing = usage.Missing(ap)
+        missing.want(a.scripts, "<SCRIPTS>...", "builder scripts (`.py`), each constructing one or more Workloads")
+        missing.check()
+    except usage.UsageError as e:
+        return usage.fail(e, ap)
 
     from . import emit
     status = 0
     for script in a.scripts:
         script = script.resolve()
+        if script.suffix == ".json":
+            print(f"FAIL {script.name}: an abstract, not a builder script; aeiou-build takes the `.py` that authors it (`aeiou check` validates an abstract)", file=sys.stderr)
+            status = 1
+            continue
         try:
             asts = _build_one(script, a, emit)
         except BuildError as e:

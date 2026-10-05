@@ -139,11 +139,12 @@ def test_aeiou_datagen_through_the_layers(tmp_path):
     assert "[env AEIOU_CONFIG]" in r.stdout
     assert "WARNING: AEIOU_BOGUS" in r.stdout
     assert (root / "shards").exists() or any(root.iterdir())
-    # a fixed option from the environment is refused before anything is written
+    # a fixed option from the environment is refused before anything is written, as a usage
+    # error in the suite's frame (test_usage.py has the frame itself)
     r = _datagen([ast, "--root", tmp_path / "other"], {"AEIOU_GPUS": "4"})
-    assert r.returncode == 1
-    assert "AEIOU_GPUS is set, but --gpus is the command line's alone" in r.stderr
+    assert r.returncode == 2
+    assert r.stderr.startswith("aeiou-datagen: AEIOU_GPUS is set, but --gpus is the command line's alone")
     assert not (tmp_path / "other").exists()
-    # --root from no layer
+    # --root from no layer: listed as missing
     r = _datagen([ast], {})
-    assert r.returncode == 1 and "--root DIR is required" in r.stderr
+    assert r.returncode == 2 and "the following required arguments were not provided:\n  --root <DIR>  directory the abstract's paths are relative to\n" in r.stderr

@@ -2637,7 +2637,7 @@ abstract models yet.
 **`aeiou-params npz AST ARCHIVE…`.** The user does not want to be surprised by a trace
 over a corpus whose archives have another framing. The tool reads `framing` and `cd_len`
 from real files (standard library only: the zip directory and the `.npy` header), prints
-them against the abstract's defaults, exits 2 when they differ, and writes a parameter
+them against the abstract's defaults, ~~exits 2~~ exits 1 (2026-10-04, §3.61: 2 is the suite's usage-error status) when they differ, and writes a parameter
 file with `-o`. It refuses what the abstract does not read: archives that disagree with
 each other, a compressed member, the member not first, a zip64 end record, an archive
 comment. `tests/test_params.py` covers the traced writer (498 and 102), a writer with
@@ -3456,6 +3456,52 @@ error message of every tool: all flag names current after the renames; every ref
 cross-check of a layered option made where the resolver is in hand now says which layer set
 the value (`Layers::from`), while the checks made during the run name the flag only, its
 source being in the block above.
+
+### 3.61 Usage errors: one frame for the suite, every missing argument at once (designed, built, and decided 2026-10-04)
+
+**The observation.** With the option layers in (§3.60) the user tried the tools as a new
+user would and read the transcript back: `aeiou datagen` with nothing said only
+`<ABSTRACT_PATH>` was missing, in clap's voice with a usage line and a `--help` pointer;
+with the abstract given it said `--root DIR is required`, in the runner's own voice, with
+neither; a builder script passed as the abstract produced `trailing characters at line 1
+column 3`, a JSON parser's complaint with no word about what was expected. Two checkers
+decided what was required, each stopped at the first failure, each in its own format, and
+the Python tools had the same split with argparse. The user's requirement: every tool of the
+suite, Rust or Python, lists every argument the command still lacks, at once, on every
+attempt, and the whole suite reads as one tool, for a user who has never seen any of them.
+
+**Decided.** One required-argument check per command, after the layers resolve, over a list
+the command builds (`usage::Missing`); nothing is declared required to clap or argparse any
+more, so the parsers cannot speak first. One frame for every usage error, the parser's own
+included: the command as typed, the message, the usage line, the pointer to the help naming
+the command, exit status 2; a failure of the work is `command: message`, exit 1
+(`runner/README.md` §15). The wording is the parsers' own (`the following required
+arguments were not provided:`), because it is what every other tool says and because clap's
+and argparse's own errors then read as the same voice once reframed. The Python tools get
+`usage.Parser`, argparse dressed in clap's look (`Usage:`, `Arguments:`/`Options:`,
+`<METAVAR>`, `-o, --out <FILE>`, help and version last, description above the usage), so
+`--help` reads the same across the suite too; `aeiou-trace`'s `SystemExit` strings and the
+tools' `FAIL message` lines became `BuildError`s named by the command. A requirement that
+holds only for some options or inputs (`--coordinator` with several ranks, `--report-json`
+with `--report-takes`, `--sqpoll` with `--sqpoll-shared`, `aeiou-trace metrics --root` for an
+strace) joins the same list with the reason and, when a lower layer set the condition, the
+layer. A path given for the abstract that is not one is a usage error that says what an
+abstract is and which tool writes one; an abstract that is JSON and invalid is a failure of
+the work. `aeiou-params npz` exits 1 when the archives differ (was 2, §3.27), so that 2
+means a usage error everywhere. `aeiou-launch` prints the frame by hand.
+
+**Considered and not done.** Declaring `--root` required to clap and reading the lower layers
+in a value parser: clap would then list it with the positional, but the config layer needs
+the file, which needs `--config`, which is another argument, and the provenance the block
+prints would be lost; the list after the layers is the general mechanism, and it covers the
+conditional requirements the parsers cannot know about. Keeping the runner's `aeiou: message`
+voice for everything, the parsers reframed into it: the user wanted one look, and the
+parsers' voice is the one the rest of the world speaks. Making every parser message identical
+between clap and argparse (an unknown flag is `unexpected argument '--x' found` in one and
+`unrecognized arguments: --x` in the other): the frame, the lists, the exit codes, and the
+hints are identical and tested so (`tests/usage.rs`, `builder/tests/test_usage.py`, the
+latter comparing `aeiou datagen` and `aeiou-datagen` byte for byte when the binary is
+built); the parsers' own one-line wordings differ in a few words and were left alone.
 
 ## 4. Plan changes
 

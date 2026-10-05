@@ -171,11 +171,11 @@ fn fixed_options_are_refused_from_the_environment_and_the_file() {
     assert!(err.contains("runs one thread per actor (--threads from env AEIOU_THREADS)"), "{err}");
     let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2", "--threads", "4"]).arg("--root").arg(&d));
     assert!(!ok);
-    assert!(err.trim_end().ends_with("runs one thread per actor"), "{err}");
-    // --root is required, from any layer
+    assert!(err.lines().next().unwrap().ends_with("runs one thread per actor"), "{err}");
+    // --root is required, from any layer: listed as missing (tests/usage.rs has the frame)
     let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]));
     assert!(!ok);
-    assert!(err.contains("--root DIR is required"), "{err}");
+    assert!(err.contains("the following required arguments were not provided:\n  --root <DIR>  directory the abstract's paths are relative to\n"), "{err}");
     // a typed value that does not parse names the layer and the key
     let (ok, _, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_THREADS", "many"));
     assert!(!ok);

@@ -12,12 +12,17 @@
 //!
 //! The file is never searched for: no working directory, home, or XDG path. A config file
 //! nobody remembers is how two hosts of one run come to differ.
+//!
+//! Every refusal here is a usage error (`usage.rs`): the invocation is wrong and nothing has
+//! run, so it is printed in the suite's frame and exits 2.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
+
+use crate::usage::err;
 use serde_json::{json, Value};
 
 pub const ENV_PREFIX: &str = "AEIOU_";
@@ -79,23 +84,23 @@ pub struct ConfigFile {
 
 impl ConfigFile {
     pub fn load(path: &Path) -> Result<ConfigFile> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("config {}", path.display()))?;
+        let text = std::fs::read_to_string(path).map_err(|e| err(format!("config {}: {e}", path.display())))?;
         let sha256 = {
             use sha2::Digest;
             let d = sha2::Sha256::digest(text.as_bytes());
             d.iter().map(|b| format!("{b:02x}")).collect::<String>()
         };
-        let tables: toml::Table = text.parse().with_context(|| format!("config {}", path.display()))?;
+        let tables: toml::Table = text.parse::<toml::Table>().map_err(|e| err(format!("config {}: {e}", path.display())))?;
         for (k, v) in &tables {
             if !SUBCOMMANDS.contains(&k.as_str()) {
-                bail!(
+                crate::usage!(
                     "config {}: `{k}` at the top level; options live in a subcommand's table ([run], [dry-run], [datagen], [check]), spelled as the long flags",
                     path.display()
                 );
             }
-            let Some(t) = v.as_table() else { bail!("config {}: [{k}] must be a table", path.display()) };
+            let Some(t) = v.as_table() else { crate::usage!("config {}: [{k}] must be a table", path.display()) };
             if let Some(n) = t.keys().find(|n| n.starts_with("no-")) {
-                bail!("config {}: [{k}] {n}: a boolean is written as its name with true or false (`{} = false`); `--no-x` is the command line's negation", path.display(), &n[3..]);
+                crate::usage!("config {}: [{k}] {n}: a boolean is written as its name with true or false (`{} = false`); `--no-x` is the command line's negation", path.display(), &n[3..]);
             }
         }
         Ok(ConfigFile { path: path.to_path_buf(), sha256, tables })
@@ -151,7 +156,7 @@ impl Layered for f64 {
         match v {
             toml::Value::Float(f) => Ok(*f),
             toml::Value::Integer(i) => Ok(*i as f64),
-            _ => bail!("expected a number, got {v:?}"),
+            _ => crate::usage!("expected a number, got {v:?}"),
         }
     }
 }
@@ -169,7 +174,7 @@ impl Layered for bool {
         match s.trim() {
             "true" | "1" | "yes" | "on" => Ok(true),
             "false" | "0" | "no" | "off" => Ok(false),
-            other => bail!("{other:?}: expected true or false"),
+            other => crate::usage!("{other:?}: expected true or false"),
         }
     }
     fn from_toml(v: &toml::Value) -> Result<Self> {
@@ -268,7 +273,7 @@ impl Layers {
     /// `new`, over a given environment (the tests').
     pub fn with_env(sub: &str, config_cli: Option<&Path>, env: BTreeMap<String, String>) -> Result<Layers> {
         if !SUBCOMMANDS.contains(&sub) {
-            bail!("no subcommand `{sub}`");
+            crate::usage!("no subcommand `{sub}`");
         }
         let mut env_used = BTreeSet::new();
         let (config_path, config_source) = match config_cli {
@@ -301,10 +306,10 @@ impl Layers {
     pub fn fixed<T: Show>(&mut self, name: &str, value: &T, given: bool) -> Result<()> {
         let env = env_name(name);
         if self.env.contains_key(&env) {
-            bail!("{env} is set, but --{name} is the command line's alone: nothing the fingerprint, a dataset id, or a safety check depends on may come from the environment or the config file");
+            crate::usage!("{env} is set, but --{name} is the command line's alone: nothing the fingerprint, a dataset id, or a safety check depends on may come from the environment or the config file");
         }
         if self.table_value(name).is_some() {
-            bail!(
+            crate::usage!(
                 "config {}: [{}] {name} is set, but --{name} is the command line's alone: nothing the fingerprint, a dataset id, or a safety check depends on may come from the environment or the config file",
                 self.config_path().display(),
                 self.sub
@@ -323,10 +328,10 @@ impl Layers {
             (Some(v), Source::Cli)
         } else if let Some(s) = self.env.get(&env) {
             self.env_used.insert(env.clone());
-            (Some(T::from_env(s).with_context(|| format!("{env}"))?), Source::Env(env))
+            (Some(T::from_env(s).map_err(|e| err(format!("{env}: {e:#}")))?), Source::Env(env))
         } else if let Some(v) = self.table_value(name) {
             let path = self.config_path();
-            (Some(T::from_toml(v).with_context(|| format!("config {}: [{}] {name}", path.display(), self.sub))?), Source::Config(path))
+            (Some(T::from_toml(v).map_err(|e| err(format!("config {}: [{}] {name}: {e:#}", path.display(), self.sub)))?), Source::Config(path))
         } else {
             (default, Source::Default)
         };
@@ -349,9 +354,9 @@ impl Layers {
                 for k in t.keys() {
                     if !self.keys_used.contains(k) {
                         if ALL_OPTIONS.contains(&k.as_str()) {
-                            bail!("config {}: [{}] {k}: not an option of `aeiou {}` (or the command line's alone)", c.path.display(), self.sub, self.sub);
+                            crate::usage!("config {}: [{}] {k}: not an option of `aeiou {}` (or the command line's alone)", c.path.display(), self.sub, self.sub);
                         }
-                        bail!("config {}: [{}] {k}: unknown option (keys are spelled as the long flags)", c.path.display(), self.sub);
+                        crate::usage!("config {}: [{}] {k}: unknown option (keys are spelled as the long flags)", c.path.display(), self.sub);
                     }
                 }
             }
@@ -363,7 +368,7 @@ impl Layers {
             if let Some(rest) = k.strip_prefix("AEIOU_NO_") {
                 let option = rest.to_ascii_lowercase().replace('_', "-");
                 if ALL_OPTIONS.contains(&option.as_str()) {
-                    bail!("{k}: a boolean is set in the environment as {}=true or false; `--no-x` is the command line's negation", env_name(&option));
+                    crate::usage!("{k}: a boolean is set in the environment as {}=true or false; `--no-x` is the command line's negation", env_name(&option));
                 }
             }
             let as_option = k.trim_start_matches(ENV_PREFIX).to_ascii_lowercase().replace('_', "-");
@@ -384,6 +389,16 @@ impl Layers {
     /// nothing when the user typed them all (`default` is named too: a default the backend
     /// cannot take is the program's business, and the message says so).
     pub fn from(&self, names: &[&str]) -> String {
+        let plain = self.from_plain(names);
+        if plain.is_empty() {
+            String::new()
+        } else {
+            format!(" ({plain})")
+        }
+    }
+
+    /// `from` without the parentheses: `--x from env AEIOU_X, --y by default`, or nothing.
+    pub fn from_plain(&self, names: &[&str]) -> String {
         let mut parts: Vec<String> = Vec::new();
         for n in names {
             if let Some(e) = self.entries.iter().find(|e| e.name == *n) {
@@ -397,11 +412,7 @@ impl Layers {
                 }
             }
         }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", parts.join(", "))
-        }
+        parts.join(", ")
     }
 
     /// The block every invocation prints: one line per option, its value and its source, the

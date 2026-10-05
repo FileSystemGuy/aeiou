@@ -17,6 +17,7 @@ use aeiou::datagen::{self, DatagenOpts};
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, ParamSet, Params};
 use aeiou::options::{self, Layers};
+use aeiou::usage::{self, Missing, UsageError};
 use aeiou::payload;
 use aeiou::run::{self, Report, RunOpts, UringOpts};
 
@@ -35,12 +36,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Validate abstracts and print their canonical hashes and op counts.
+    #[command(override_usage = "aeiou check [OPTIONS] <FILES>...")]
     Check {
         /// `.ast.json` files.
         files: Vec<PathBuf>,
     },
     /// Compute every actor's op stream and the workload fingerprint without doing any I/O.
-    #[command(after_help = NEGATION)]
+    #[command(after_help = NEGATION, override_usage = "aeiou dry-run [OPTIONS] --gpus <GPUS> <ABSTRACT_PATH>")]
     DryRun(DryRunArgs),
     /// Write the datasets an abstract declares under --root, with a manifest per dataset root.
     #[command(override_usage = "aeiou datagen [OPTIONS] --root <DIR> <ABSTRACT_PATH>\n       (--root may also come from $AEIOU_ROOT or `root` in the [datagen] table of the config file)")]
@@ -68,7 +70,7 @@ fn neg(on: bool, off: bool) -> Option<bool> {
 #[derive(Args)]
 struct ShapeArgs {
     /// The abstract (`.ast.json`).
-    abstract_path: PathBuf,
+    abstract_path: Option<PathBuf>,
     /// Override a parameter: `--param name=value` (JSON; a bare word is a string).
     #[arg(long = "param", value_name = "NAME=VALUE", help_heading = "Workload")]
     params: Vec<String>,
@@ -82,9 +84,9 @@ struct ShapeArgs {
 struct RunArgs {
     #[command(flatten)]
     shape: ShapeArgs,
-    /// Number of instances of every actor template whose count is `gpus` (global ids 0..G).
+    /// Required: number of instances of every actor template whose count is `gpus` (global ids 0..G).
     #[arg(long, help_heading = "Workload")]
-    gpus: i64,
+    gpus: Option<i64>,
     /// The run seed. The dataset seed is separate and lives in the abstract.
     #[arg(long, default_value_t = 0, help_heading = "Workload")]
     seed: u64,
@@ -245,6 +247,8 @@ struct RunCmd {
 /// identity, and every layered option with its value in effect.
 struct RunOptions {
     run: RunArgs,
+    abstract_path: PathBuf,
+    gpus: i64,
     backend: Option<String>,
     root: PathBuf,
     threads: Option<usize>,
@@ -277,24 +281,30 @@ struct RunOptions {
 /// The identity of the run as the command line fixes it: the abstract, its parameters, and
 /// the run's `--gpus`, in every subcommand's block first.
 fn fix_shape(l: &mut Layers, shape: &ShapeArgs) -> Result<()> {
-    l.fixed("abstract", &shape.abstract_path, true)?;
+    l.fixed("abstract", &shape.abstract_path, shape.abstract_path.is_some())?;
     l.fixed("param", &shape.params, !shape.params.is_empty())?;
     l.fixed("params-file", &shape.param_files, !shape.param_files.is_empty())
 }
 
 fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)> {
     let mut l = Layers::new("run", config)?;
+    let mut miss = Missing::new();
+    let abstract_path = miss.want(a.run.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None);
+    let gpus = miss.want(a.run.gpus, usage::GPUS.0, usage::GPUS.1, None);
     fix_shape(&mut l, &a.run.shape)?;
-    l.fixed("gpus", &a.run.gpus, true)?;
+    l.fixed("gpus", &a.run.gpus, a.run.gpus.is_some())?;
     l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
     l.fixed("io-backend", &a.backend.clone().unwrap_or_else(|| "the abstract's".into()), a.backend.is_some())?;
     l.fixed("expect-fingerprint", &a.expect_fingerprint, a.expect_fingerprint.is_some())?;
     l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
     l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces || a.no_clean_namespaces)?;
     l.fixed("ignore-limits", &a.ignore_limits, a.ignore_limits || a.no_ignore_limits)?;
-    let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required: give it on the command line, as $AEIOU_ROOT, or as `root` in the [run] table of the TOML file --config or $AEIOU_CONFIG names"))?;
+    let r = usage::root("run");
+    let root = miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2));
     let o = RunOptions {
-        root,
+        root: root.unwrap_or_default(),
+        abstract_path: abstract_path.unwrap_or_default(),
+        gpus: gpus.unwrap_or(0),
         threads: l.layered("threads", a.threads, None)?,
         buffer_mib: l.layered("buffer-mib", a.buffer_mib, Some(8))?.unwrap_or(8),
         write_compress: l.layered("write-compress", a.write_compress, Some(1))?.unwrap_or(1),
@@ -323,15 +333,26 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         clean_namespaces: a.clean_namespaces,
         ignore_limits: a.ignore_limits,
     };
+    // what the options in effect make required, listed with what is missing outright
+    let because = |what: &str, names: &[&str]| -> String {
+        let from = l.from_plain(names);
+        if from.is_empty() { what.to_string() } else { format!("{what}, {from}") }
+    };
+    miss.need(
+        !(o.ranks > 1 && o.coordinator.is_none()),
+        "--coordinator <HOST:PORT>",
+        "the coordinator's address: rank 0 listens on it, every rank connects to it",
+        Some(&because(&format!("needed with --ranks {}", o.ranks), &["ranks"])),
+    );
+    miss.need(!(o.report_takes && o.report_json.is_none()), "--report-json <FILE>", "the file the run's report is written to as JSON", Some(&because("needed by --report-takes", &["report-takes"])));
+    miss.need(!(o.sqpoll_shared && o.sqpoll.is_none()), "--sqpoll <IDLE_MS>", "a kernel submission thread per loop", Some(&because("needed by --sqpoll-shared", &["sqpoll-shared"])));
+    miss.check()?;
     l.finish()?;
-    if o.report_takes && o.report_json.is_none() {
-        bail!("--report-takes needs --report-json FILE{}", l.from(&["report-takes"]));
-    }
-    if o.sqpoll_shared && o.sqpoll.is_none() {
-        bail!("--sqpoll-shared needs --sqpoll IDLE_MS{}", l.from(&["sqpoll-shared"]));
-    }
     if o.defer_taskrun && o.sqpoll.is_some() {
-        bail!("--defer-taskrun and --sqpoll exclude each other{}", l.from(&["defer-taskrun", "sqpoll"]));
+        aeiou::usage!("--defer-taskrun and --sqpoll exclude each other{}", l.from(&["defer-taskrun", "sqpoll"]));
+    }
+    if o.ranks < 1 || o.rank < 0 || o.rank >= o.ranks {
+        aeiou::usage!("--rank {} of --ranks {}: rank must be in [0, ranks){}", o.rank, o.ranks, l.from(&["rank", "ranks"]));
     }
     Ok((o, l))
 }
@@ -373,17 +394,50 @@ struct DryRunArgs {
 }
 
 fn main() {
-    if let Err(e) = real_main() {
-        eprintln!("aeiou: {e:#}");
+    use clap::CommandFactory;
+    let args: Vec<String> = std::env::args().collect();
+    // the subcommand named on the line, for the frame of a usage error (`usage.rs`): the
+    // command as typed and its usage line
+    let sub = args.iter().skip(1).map(String::as_str).find(|a| options::SUBCOMMANDS.contains(a)).map(str::to_string);
+    let prog = match &sub {
+        Some(s) => format!("aeiou {s}"),
+        None => "aeiou".to_string(),
+    };
+    let usage_text = || {
+        let mut cmd = Cli::command();
+        match &sub {
+            Some(s) => cmd.find_subcommand_mut(s.as_str()).expect("a subcommand of the parser").render_usage().to_string(),
+            None => cmd.render_usage().to_string(),
+        }
+    };
+    let usage_exit = |message: &str| -> ! {
+        eprint!("{}", usage::render(&prog, message, &usage_text()));
+        std::process::exit(2)
+    };
+    if let Some(a) = args.iter().skip(1).find(|a| a.starts_with("--[no-]")) {
+        usage_exit(&format!("{a}: `--[no-]x` is the help's notation for a boolean and its negation; type --{0} to turn it on or --no-{0} to turn it off", &a["--[no-]".len()..]));
+    }
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            use clap::error::ErrorKind;
+            if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
+                e.exit();
+            }
+            eprint!("{}", usage::reframe(&e.render().to_string(), &prog, &usage_text()));
+            std::process::exit(2);
+        }
+    };
+    if let Err(e) = real_main(cli) {
+        if e.downcast_ref::<UsageError>().is_some() {
+            usage_exit(&format!("{e:#}"));
+        }
+        eprintln!("{prog}: {e:#}");
         std::process::exit(1);
     }
 }
 
-fn real_main() -> Result<()> {
-    if let Some(a) = std::env::args().skip(1).find(|a| a.starts_with("--[no-]")) {
-        bail!("{a}: `--[no-]x` is the help's notation for a boolean and its negation; type --{0} to turn it on or --no-{0} to turn it off", &a["--[no-]".len()..]);
-    }
-    let cli = Cli::parse();
+fn real_main(cli: Cli) -> Result<()> {
     let config = cli.config.as_deref();
     match cli.cmd {
         Cmd::Check { files } => check(files, config),
@@ -395,16 +449,21 @@ fn real_main() -> Result<()> {
 
 fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut l = Layers::new("datagen", config)?;
+    let mut miss = Missing::new();
+    let abstract_path = miss.want(a.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None);
     fix_shape(&mut l, &a.shape)?;
     l.fixed("gpus", &a.gpus, a.gpus != 1)?;
     l.fixed("dedupe", &a.dedupe, a.dedupe != 1)?;
     l.fixed("compress", &a.compress, a.compress != 1)?;
     l.fixed("dataset", &a.datasets, !a.datasets.is_empty())?;
-    let root = l.layered::<PathBuf>("root", a.root, None)?.ok_or_else(|| anyhow!("--root DIR is required: give it on the command line, as $AEIOU_ROOT, or as `root` in the [datagen] table of the TOML file --config or $AEIOU_CONFIG names"))?;
+    let r = usage::root("datagen");
+    let root = miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2));
     let threads = l.layered::<usize>("threads", a.threads, None)?;
+    miss.check()?;
     l.finish()?;
+    let (abstract_path, root) = (abstract_path.expect("checked"), root.expect("checked"));
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
-    let loaded = aeiou::load(&a.shape.abstract_path)?;
+    let loaded = aeiou::load(&abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
@@ -447,52 +506,46 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
         match (doc.write(path, error.as_deref()), &r) {
             (Ok(()), _) => println!("report {}", path.display()),
             (Err(e), Ok(())) => return Err(e),
-            (Err(e), Err(_)) => eprintln!("aeiou: {e:#}"),
+            (Err(e), Err(_)) => eprintln!("aeiou run: {e:#}"),
         }
     }
     r
 }
 
 fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
-    let cfg = parse_config(&a.run.shape, a.run.gpus, a.run.seed)?;
+    let cfg = parse_config(&a.run.shape, a.gpus, a.run.seed)?;
     // the run is the process: the abstract and the model live for the threads' lifetime
-    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.run.shape.abstract_path)?));
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
     let declared = loaded.ast.backend.as_deref().unwrap_or("sync");
     let backend_name = a.backend.as_deref().unwrap_or(declared);
-    let backend = BackendKind::parse(backend_name).ok_or_else(|| anyhow::anyhow!("--io-backend {}: not one of {}", backend_name, aeiou::backend::NAMES))?;
+    let backend = BackendKind::parse(backend_name).ok_or_else(|| usage::err(format!("--io-backend {}: not one of {}", backend_name, aeiou::backend::NAMES)))?;
     let expect_fingerprint = match &a.expect_fingerprint {
         None => None,
-        Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| anyhow::anyhow!("--expect-fingerprint {h}: not hex"))?),
+        Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| usage::err(format!("--expect-fingerprint {h}: not hex")))?),
     };
-    if a.ranks < 1 || a.rank < 0 || a.rank >= a.ranks {
-        bail!("--rank {} of --ranks {}: rank must be in [0, ranks){}", a.rank, a.ranks, layers.from(&["rank", "ranks"]));
-    }
-    if a.ranks > 1 && a.coordinator.is_none() {
-        bail!("--ranks {}: several hosts need --coordinator HOST:PORT (rank 0 listens there, every rank connects to it){}", a.ranks, layers.from(&["ranks"]));
-    }
     let uring = UringOpts { iowq_max_workers: a.iowq_max_workers.unwrap_or(0), sqpoll_idle_ms: a.sqpoll, sqpoll_shared: a.sqpoll_shared, defer_taskrun: a.defer_taskrun, coop_taskrun: a.coop_taskrun };
     if uring.any() && !backend.uring() {
-        bail!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-backend {} has no ring{}", backend.name(), layers.from(&["iowq-max-workers", "sqpoll", "defer-taskrun", "coop-taskrun"]));
+        aeiou::usage!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-backend {} has no ring{}", backend.name(), layers.from(&["iowq-max-workers", "sqpoll", "defer-taskrun", "coop-taskrun"]));
     }
-    uring.check().map_err(|e| anyhow!("{e}{}", layers.from(&["sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "iowq-max-workers"])))?;
+    uring.check().map_err(|e| usage::err(format!("{e}{}", layers.from(&["sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "iowq-max-workers"]))))?;
     if a.aio_depth.is_some() && !backend.libaio() {
-        bail!("--aio-depth is a libaio knob; --io-backend {} has no AIO context{}", backend.name(), layers.from(&["aio-depth"]));
+        aeiou::usage!("--aio-depth is a libaio knob; --io-backend {} has no AIO context{}", backend.name(), layers.from(&["aio-depth"]));
     }
     if a.aio_depth == Some(0) {
-        bail!("--aio-depth 0: a context needs room for a request{}", layers.from(&["aio-depth"]));
+        aeiou::usage!("--aio-depth 0: a context needs room for a request{}", layers.from(&["aio-depth"]));
     }
     if a.threads.is_some() && !backend.event_loop() {
-        bail!("--threads sets the event-loop threads of io_uring and libaio; --io-backend {} runs one thread per actor{}", backend.name(), layers.from(&["threads"]));
+        aeiou::usage!("--threads sets the event-loop threads of io_uring and libaio; --io-backend {} runs one thread per actor{}", backend.name(), layers.from(&["threads"]));
     }
     let mmap = match &a.mmap_mode {
         None => MmapMode::default(),
-        Some(_) if backend != BackendKind::Mmap => bail!("--mmap-mode is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-mode"])),
-        Some(m) => MmapMode::parse(m).ok_or_else(|| anyhow::anyhow!("--mmap-mode {m}: not one of fault, populate, willneed{}", layers.from(&["mmap-mode"])))?,
+        Some(_) if backend != BackendKind::Mmap => aeiou::usage!("--mmap-mode is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-mode"])),
+        Some(m) => MmapMode::parse(m).ok_or_else(|| usage::err(format!("--mmap-mode {m}: not one of fault, populate, willneed{}", layers.from(&["mmap-mode"]))))?,
     };
     let mmap_consume = match &a.mmap_consume {
         None => MmapConsume::default(),
-        Some(_) if backend != BackendKind::Mmap => bail!("--mmap-consume is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-consume"])),
-        Some(c) => MmapConsume::parse(c).ok_or_else(|| anyhow::anyhow!("--mmap-consume {c}: not one of touch, copy{}", layers.from(&["mmap-consume"])))?,
+        Some(_) if backend != BackendKind::Mmap => aeiou::usage!("--mmap-consume is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-consume"])),
+        Some(c) => MmapConsume::parse(c).ok_or_else(|| usage::err(format!("--mmap-consume {c}: not one of touch, copy{}", layers.from(&["mmap-consume"]))))?,
     };
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let cfg: &'static Config = Box::leak(Box::new(cfg));
@@ -838,9 +891,9 @@ fn run_connected(
 }
 
 fn check(files: Vec<PathBuf>, config: Option<&Path>) -> Result<()> {
-    if files.is_empty() {
-        bail!("no files given");
-    }
+    let mut miss = Missing::new();
+    miss.need(!files.is_empty(), "<FILES>...", "the abstracts to validate (`.ast.json`, written by aeiou-build from builder scripts)", None);
+    miss.check()?;
     let mut l = Layers::new("check", config)?;
     l.fixed("files", &files, true)?;
     l.finish()?;
@@ -870,11 +923,11 @@ fn check(files: Vec<PathBuf>, config: Option<&Path>) -> Result<()> {
 
 fn parse_config(a: &ShapeArgs, gpus: i64, seed: u64) -> Result<Config> {
     if gpus < 1 {
-        bail!("--gpus must be at least 1");
+        aeiou::usage!("--gpus {gpus}: must be at least 1");
     }
     let mut overrides = Vec::new();
     for p in &a.params {
-        let Some((k, v)) = p.split_once('=') else { bail!("--param {p}: expected NAME=VALUE") };
+        let Some((k, v)) = p.split_once('=') else { aeiou::usage!("--param {p}: expected NAME=VALUE") };
         overrides.push((k.to_string(), v.to_string()));
     }
     let mut sets = Vec::new();
@@ -898,8 +951,11 @@ fn params_line(cfg: &Config) -> String {
 
 fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     let mut l = Layers::new("dry-run", config)?;
+    let mut miss = Missing::new();
+    let abstract_path = miss.want(a.run.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None);
+    let gpus = miss.want(a.run.gpus, usage::GPUS.0, usage::GPUS.1, None);
     fix_shape(&mut l, &a.run.shape)?;
-    l.fixed("gpus", &a.run.gpus, true)?;
+    l.fixed("gpus", &a.run.gpus, a.run.gpus.is_some())?;
     l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
     l.fixed("gpu", &a.gpu, a.gpu.is_some())?;
     l.fixed("steps", &a.steps, a.steps.is_some())?;
@@ -910,9 +966,11 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("metrics-json", &a.metrics_json, a.metrics_json.is_some())?;
     let ranks = l.layered::<i64>("ranks", a.ranks, None)?;
     let threads = l.layered::<usize>("threads", a.threads, None)?;
+    miss.check()?;
     l.finish()?;
-    let cfg = parse_config(&a.run.shape, a.run.gpus, a.run.seed)?;
-    let loaded = aeiou::load(&a.run.shape.abstract_path)?;
+    let (abstract_path, gpus) = (abstract_path.expect("checked"), gpus.expect("checked"));
+    let cfg = parse_config(&a.run.shape, gpus, a.run.seed)?;
+    let loaded = aeiou::load(&abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
@@ -922,7 +980,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         let steps = match &a.steps {
             None => None,
             Some(s) => {
-                let Some((lo, hi)) = s.split_once("..") else { bail!("--steps {s}: expected A..B") };
+                let Some((lo, hi)) = s.split_once("..") else { aeiou::usage!("--steps {s}: expected A..B") };
                 Some((lo.parse::<i64>()?, hi.parse::<i64>()?))
             }
         };

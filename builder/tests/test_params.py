@@ -163,7 +163,7 @@ def test_npz_framing_is_read_from_real_archives_and_compared_with_the_abstract(t
     c = tmp_path / "c.npz"
     np.savez(c, x=x, label=np.array([0]), spacing=np.array([1.0, 1.0, 2.5]))
     r = _run(["npz", ast, c])
-    assert r.returncode == 2 and "DIFFERS framing: the abstract's default is 498" in r.stdout, r.stdout + r.stderr
+    assert r.returncode == 1 and "DIFFERS framing: the abstract's default is 498" in r.stdout, r.stdout + r.stderr
     got = params.npz_framing(c)
     assert got["framing"] > 498 and got["cd_len"] > 102 and got["framing"] == c.stat().st_size - x.nbytes
     out = tmp_path / "c.params.json"

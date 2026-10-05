@@ -7,7 +7,9 @@ upper-cased with underscores), else from the config file (TOML, named by `--conf
 else from the compiled default; a higher layer replaces a lower one's value. A *fixed* option
 is the command line's alone, and the environment and the file are refused when they name it.
 Every invocation prints the block of what it resolved and where each value came from, in the
-runner's format, so the two writers of one corpus read alike.
+runner's format, so the two writers of one corpus read alike. Every refusal here is a usage
+error (`usage.py`): the invocation is wrong and nothing has run, so it is printed in the
+suite's frame and exits 2.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ import pathlib
 import sys
 import tomllib
 
-from .nodes import BuildError
+from .usage import UsageError
 
 ENV_PREFIX = "AEIOU_"
 ENV_CONFIG = "AEIOU_CONFIG"
@@ -99,21 +101,21 @@ class ConfigFile:
         try:
             data = path.read_bytes()
         except OSError as e:
-            raise BuildError(f"config {path}: {e.strerror}") from None
+            raise UsageError(f"config {path}: {e.strerror}") from None
         self.sha256 = hashlib.sha256(data).hexdigest()
         try:
             self.tables = tomllib.loads(data.decode("utf-8"))
         except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
-            raise BuildError(f"config {path}: {e}") from None
+            raise UsageError(f"config {path}: {e}") from None
         for k, v in self.tables.items():
             if k not in SUBCOMMANDS:
-                raise BuildError(f"config {path}: `{k}` at the top level; options live in a subcommand's table "
+                raise UsageError(f"config {path}: `{k}` at the top level; options live in a subcommand's table "
                                  f"([run], [dry-run], [datagen], [check]), spelled as the long flags")
             if not isinstance(v, dict):
-                raise BuildError(f"config {path}: [{k}] must be a table")
+                raise UsageError(f"config {path}: [{k}] must be a table")
             for n in v:
                 if n.startswith("no-"):
-                    raise BuildError(f"config {path}: [{k}] {n}: a boolean is written as its name with true or false "
+                    raise UsageError(f"config {path}: [{k}] {n}: a boolean is written as its name with true or false "
                                      f"(`{n[3:]} = false`); `--no-x` is the command line's negation")
 
     def table(self, sub: str) -> dict:
@@ -125,7 +127,7 @@ class Layers:
 
     def __init__(self, sub: str, config_cli: pathlib.Path | None, env: dict | None = None):
         if sub not in SUBCOMMANDS:
-            raise BuildError(f"no subcommand `{sub}`")
+            raise UsageError(f"no subcommand `{sub}`")
         self.sub = sub
         self.env = {k: v for k, v in (os.environ if env is None else env).items() if k.startswith(ENV_PREFIX)}
         self.entries: list[tuple[str, str, object, str]] = []   # name, shown, json value, source
@@ -149,9 +151,9 @@ class Layers:
     def fixed(self, name: str, value, given: bool) -> None:
         env = env_name(name)
         if env in self.env:
-            raise BuildError(f"{env} is set, but --{name} is the command line's alone: {FIXED_RULE}")
+            raise UsageError(f"{env} is set, but --{name} is the command line's alone: {FIXED_RULE}")
         if self._table_value(name) is not None:
-            raise BuildError(f"config {self.config.path}: [{self.sub}] {name} is set, but --{name} is the command line's alone: {FIXED_RULE}")
+            raise UsageError(f"config {self.config.path}: [{self.sub}] {name} is set, but --{name} is the command line's alone: {FIXED_RULE}")
         self.entries.append((name, _shown(value), _json(value), "cli" if given else "default"))
 
     def layered(self, name: str, cli, kind, default=None):
@@ -164,13 +166,13 @@ class Layers:
             try:
                 value = _from_env(self.env[env], kind)
             except ValueError as e:
-                raise BuildError(f"{env}: {e}") from None
+                raise UsageError(f"{env}: {e}") from None
             source = f"env {env}"
         elif self._table_value(name) is not None:
             try:
                 value = _from_toml(self._table_value(name), kind)
             except ValueError as e:
-                raise BuildError(f"config {self.config.path}: [{self.sub}] {name}: {e}") from None
+                raise UsageError(f"config {self.config.path}: [{self.sub}] {name}: {e}") from None
             source = f"config {self.config.path}"
         else:
             value, source = default, "default"
@@ -186,13 +188,13 @@ class Layers:
             for k in self.config.table(self.sub):
                 if k not in self.keys_used:
                     if k in ALL_OPTIONS:
-                        raise BuildError(f"config {self.config.path}: [{self.sub}] {k}: not an option of `aeiou {self.sub}` (or the command line's alone)")
-                    raise BuildError(f"config {self.config.path}: [{self.sub}] {k}: unknown option (keys are spelled as the long flags)")
+                        raise UsageError(f"config {self.config.path}: [{self.sub}] {k}: not an option of `aeiou {self.sub}` (or the command line's alone)")
+                    raise UsageError(f"config {self.config.path}: [{self.sub}] {k}: unknown option (keys are spelled as the long flags)")
         for k in sorted(self.env):
             if k in RESERVED_ENV or k in self.env_used:
                 continue
             if k.startswith("AEIOU_NO_") and k[len("AEIOU_NO_"):].lower().replace("_", "-") in ALL_OPTIONS:
-                raise BuildError(f"{k}: a boolean is set in the environment as {env_name(k[len('AEIOU_NO_'):].lower().replace('_', '-'))}=true or false; "
+                raise UsageError(f"{k}: a boolean is set in the environment as {env_name(k[len('AEIOU_NO_'):].lower().replace('_', '-'))}=true or false; "
                                  f"`--no-x` is the command line's negation")
             if k[len(ENV_PREFIX):].lower().replace("_", "-") not in ALL_OPTIONS:
                 self.warnings.append(f"{k} is set and is no option of any subcommand; ignored")

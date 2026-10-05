@@ -19,14 +19,13 @@ builder decided at build time how each slot is consumed.
 """
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import pathlib
 import re
 import sys
 
-from . import __version__
+from . import __version__, usage
 from .nodes import BuildError
 
 PARAMS_VERSION = 1
@@ -246,40 +245,64 @@ def npz_params(archives: list, member: str = "x") -> tuple[dict, list]:
     return {"framing": recs[0]["framing"], "cd_len": recs[0]["cd_len"]}, recs
 
 
+def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
+    """The parser and its subcommands' parsers by name (the usage a `Missing` list shows)."""
+    ap = usage.Parser(prog="aeiou-params", description="Parameter files of an abstract (schema/README.md §8): write its defaults as a set, validate sets against it, build a set from real files",
+                      usage="aeiou-params <COMMAND> [ARGS]...")
+    ap.version(f"aeiou-params {__version__}")
+    sub = ap.add_subparsers(dest="cmd")
+    abstract = dict(nargs="?", type=pathlib.Path, metavar="ABSTRACT_PATH")
+    d = sub.add_parser("defaults", help="Write the abstract's defaults as a parameter set", usage="aeiou-params defaults [OPTIONS] <ABSTRACT_PATH>")
+    d.add_argument("ast", **abstract, help="The abstract (`.ast.json`)")
+    d.add_argument("-o", "--out", type=pathlib.Path, metavar="FILE", help="Output file (default: <abstract>.defaults.params.json)")
+    d.add_argument("--doc", metavar="TEXT", help="The set's `doc` line")
+    d.add_argument("--pin", action="store_true", help="Record the AST hash so the set is for this exact shape")
+    c = sub.add_parser("check", help="Validate parameter files against an abstract", usage="aeiou-params check <ABSTRACT_PATH> <FILES>...")
+    c.add_argument("ast", **abstract, help="The abstract (`.ast.json`)")
+    c.add_argument("files", nargs="*", type=pathlib.Path, metavar="FILES", help="Parameter files (`.params.json`)")
+    s = sub.add_parser("safetensors", help="Build model_load's tensor table from safetensors shards", usage="aeiou-params safetensors [OPTIONS] -o <FILE> <ABSTRACT_PATH> <SHARDS>...")
+    s.add_argument("ast", **abstract, help="The model_load abstract (its parameter names are checked)")
+    s.add_argument("shards", nargs="*", type=pathlib.Path, metavar="SHARDS", help="Shard files in dataset id order")
+    s.add_argument("-o", "--out", type=pathlib.Path, metavar="FILE", help="Required: the parameter file to write")
+    s.add_argument("--tp", type=int, default=8, help="Tensor-parallel degree [default: 8]")
+    s.add_argument("--column", default=COLUMN_RE, metavar="REGEX", help="Regex of column-parallel tensors")
+    s.add_argument("--row", default=ROW_RE, metavar="REGEX", help="Regex of row-parallel tensors")
+    s.add_argument("--doc", metavar="TEXT", help="The set's `doc` line")
+    s.add_argument("--pin", action="store_true", help="Record the AST hash so the set is for this exact shape")
+    n = sub.add_parser("npz", help="Read train_large_samples' framing and cd_len from real .npz archives and compare them with the abstract's defaults", usage="aeiou-params npz [OPTIONS] <ABSTRACT_PATH> <ARCHIVES>...")
+    n.add_argument("ast", **abstract, help="The train_large_samples abstract")
+    n.add_argument("archives", nargs="*", type=pathlib.Path, metavar="ARCHIVES", help="Archives of the corpus (a few are enough; all must agree)")
+    n.add_argument("-o", "--out", type=pathlib.Path, metavar="FILE", help="Write a parameter file with the two values")
+    n.add_argument("--member", default="x", metavar="NAME", help="The member the application reads [default: x]")
+    n.add_argument("--doc", metavar="TEXT", help="The set's `doc` line")
+    n.add_argument("--pin", action="store_true", help="Record the AST hash so the set is for this exact shape")
+    return ap, {"defaults": d, "check": c, "safetensors": s, "npz": n}
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="aeiou-params", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--version", action="version", version=f"aeiou-params {__version__}")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    d = sub.add_parser("defaults", help="write the abstract's defaults as a parameter set")
-    d.add_argument("ast", type=pathlib.Path)
-    d.add_argument("-o", "--out", type=pathlib.Path, help="output file (default: <abstract>.defaults.params.json)")
-    d.add_argument("--doc")
-    d.add_argument("--pin", action="store_true", help="record the AST hash so the set is for this exact shape")
-    c = sub.add_parser("check", help="validate parameter files against an abstract")
-    c.add_argument("ast", type=pathlib.Path)
-    c.add_argument("files", nargs="+", type=pathlib.Path)
-    s = sub.add_parser("safetensors", help="build model_load's tensor table from safetensors shards")
-    s.add_argument("ast", type=pathlib.Path, help="the model_load abstract (its parameter names are checked)")
-    s.add_argument("shards", nargs="+", type=pathlib.Path, help="shard files in dataset id order")
-    s.add_argument("-o", "--out", type=pathlib.Path, required=True)
-    s.add_argument("--tp", type=int, default=8)
-    s.add_argument("--column", default=COLUMN_RE, help="regex of column-parallel tensors")
-    s.add_argument("--row", default=ROW_RE, help="regex of row-parallel tensors")
-    s.add_argument("--doc")
-    s.add_argument("--pin", action="store_true")
-    n = sub.add_parser("npz", help="read train_large_samples' framing and cd_len from real .npz archives and compare them with the abstract's defaults")
-    n.add_argument("ast", type=pathlib.Path, help="the train_large_samples abstract")
-    n.add_argument("archives", nargs="+", type=pathlib.Path, help="archives of the corpus (a few are enough; all must agree)")
-    n.add_argument("-o", "--out", type=pathlib.Path, help="write a parameter file with the two values")
-    n.add_argument("--member", default="x", help="the member the application reads (default x)")
-    n.add_argument("--doc")
-    n.add_argument("--pin", action="store_true")
-    a = ap.parse_args(argv)
+    ap, subs = parser()
+    sp = ap
     try:
+        a = ap.parse_args(argv)
+        missing = usage.Missing(ap)
+        missing.want(a.cmd, "<COMMAND>", "one of defaults, check, safetensors, npz")
+        missing.check()
+        sp = subs[a.cmd]
+        missing = usage.Missing(sp)
+        missing.want(a.ast, *usage.ABSTRACT)
+        if a.cmd == "check":
+            missing.want(a.files, "<FILES>...", "the parameter files (`.params.json`) to validate against the abstract")
+        if a.cmd == "safetensors":
+            missing.want(a.shards, "<SHARDS>...", "the safetensors shard files, in dataset id order")
+            missing.want(a.out, "-o <FILE>", "the parameter file to write")
+        if a.cmd == "npz":
+            missing.want(a.archives, "<ARCHIVES>...", "archives of the corpus (a few are enough; all must agree)")
+        missing.check()
         return _main(a)
+    except usage.UsageError as e:
+        return usage.fail(e, sp)
     except BuildError as e:
-        print(f"FAIL {e}", file=sys.stderr)
-        return 1
+        return usage.failed(sp.prog, e)
 
 
 def _main(a) -> int:
@@ -344,8 +367,8 @@ def _main(a) -> int:
                     "archives": [{"file": p.name, "bytes": r["bytes"], "members": r["members"]} for p, r in zip(a.archives, recs)]}
             a.out.write_text(render(pset, prov))
             print(f"wrote {a.out}")
-        return 2 if differs and not a.out else 0
-    return 2
+        return 1 if differs and not a.out else 0
+    return 1
 
 
 if __name__ == "__main__":

@@ -43,7 +43,6 @@ numbers. `aeiou-trace metrics` reads an exported file too (`TraceReader`).
 
 from __future__ import annotations
 
-import argparse
 import fnmatch
 import itertools
 import json
@@ -51,6 +50,9 @@ import os
 import re
 import sys
 from collections import Counter
+
+from . import usage
+from .nodes import BuildError
 
 FORMAT = 1
 MASK = (1 << 64) - 1
@@ -249,7 +251,7 @@ class Metrics:
             else:
                 self.reuse[hit[1]][kind].add(hit[0] * n * b, n)
         if len(inst.last) > MAX_ENTRIES:
-            raise SystemExit(f"aeiou-trace: more than {MAX_ENTRIES} distinct blocks in one instance; use --metrics-sample N or a larger --metrics-block")
+            raise BuildError(f"more than {MAX_ENTRIES} distinct blocks in one instance; use --metrics-sample N or a larger --metrics-block")
         runs = self.runs.setdefault(context, {})
         run = runs.get((pid, kind))
         if run is not None and run[0] != offset:
@@ -1114,7 +1116,7 @@ class TraceReader:
             doc = json.loads(line)
             if self.header is None:
                 if doc.get("aeiou_trace") != TRACE_FORMAT:
-                    raise SystemExit(f"aeiou-trace: not an aeiou_trace: {TRACE_FORMAT} file")
+                    raise BuildError(f"not an aeiou_trace: {TRACE_FORMAT} file")
                 self.header = doc
                 continue
             self.line(doc)
@@ -1260,7 +1262,7 @@ def select(doc: dict, template: str | None) -> dict:
     try:
         return doc["templates"][template]
     except KeyError:
-        raise SystemExit(f"aeiou-trace: no template `{template}` in the document (it has: {', '.join(doc.get('templates', {})) or 'none'})")
+        raise BuildError(f"no template `{template}` in the document (it has: {', '.join(doc.get('templates', {})) or 'none'})")
 
 
 def compare(a: dict, b: dict) -> list[tuple[str, str, str, float | None]]:
@@ -1349,6 +1351,13 @@ def tolerance_class(metric: str) -> str:
     return max((c for c in TOLERANCES if metric.startswith(c)), key=len)
 
 
+def _cause(e: BaseException) -> str:
+    """An OSError as the runner prints one (`No such file or directory (os error 2)`)."""
+    if isinstance(e, OSError) and e.strerror:
+        return f"{e.strerror} (os error {e.errno})"
+    return str(e)
+
+
 def load_tolerances(path: str) -> dict:
     """A tolerance file: `{"aeiou_tolerances": 1, "tolerances": {class: x},
     "unseen": [{"metric": prefix, "reason": text}], "outside": [the same]}`. `unseen` names
@@ -1358,19 +1367,19 @@ def load_tolerances(path: str) -> dict:
         with open(path, encoding="utf-8") as f:
             spec = json.load(f)
     except (OSError, ValueError) as e:
-        raise SystemExit(f"aeiou-trace: {path}: {e}")
+        raise BuildError(f"{path}: {_cause(e)}")
     if not isinstance(spec, dict) or spec.get("aeiou_tolerances") != TOLERANCES_FORMAT:
-        raise SystemExit(f"aeiou-trace: {path}: not an aeiou_tolerances: {TOLERANCES_FORMAT} document")
+        raise BuildError(f"{path}: not an aeiou_tolerances: {TOLERANCES_FORMAT} document")
     extra = set(spec) - {"aeiou_tolerances", "tolerances", "unseen", "outside", "comment"}
     if extra:
-        raise SystemExit(f"aeiou-trace: {path}: unknown key(s) {', '.join(sorted(extra))}")
+        raise BuildError(f"{path}: unknown key(s) {', '.join(sorted(extra))}")
     for c, x in spec.get("tolerances", {}).items():
         if c not in TOLERANCES or not isinstance(x, (int, float)) or isinstance(x, bool) or not 0 <= x <= 1:
-            raise SystemExit(f"aeiou-trace: {path}: tolerances: `{c}` must be one of {', '.join(TOLERANCES)} with a value in [0, 1]")
+            raise BuildError(f"{path}: tolerances: `{c}` must be one of {', '.join(TOLERANCES)} with a value in [0, 1]")
     for key in ("unseen", "outside"):
         for e in spec.get(key, []):
             if not isinstance(e, dict) or set(e) != {"metric", "reason"} or not all(isinstance(v, str) and v for v in e.values()):
-                raise SystemExit(f"aeiou-trace: {path}: {key}: each entry is {{\"metric\": prefix, \"reason\": text}}")
+                raise BuildError(f"{path}: {key}: each entry is {{\"metric\": prefix, \"reason\": text}}")
     return spec
 
 
@@ -1437,40 +1446,71 @@ def _describe(doc: dict) -> str:
     return f"{src} of {doc.get('abstract')} seed {doc.get('seed')} gpus {doc.get('gpus')} (order: {doc.get('order')})"
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="aeiou-trace", description="Locality metrics of a real application from an strace of it, and their comparison with an abstract's (aeiou dry-run --metrics-json).")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    mp = sub.add_parser("metrics", help="compute the metrics of a trace (strace -f -ttt -T -yy -e trace=%%file,%%desc,%%process -o FILE)")
-    mp.add_argument("trace", help="the strace output file, or - for stdin")
-    mp.add_argument("--root", action="append", default=[], metavar="DIR", help="count only calls on paths under DIR (repeatable; not needed for an exported trace file)")
-    mp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
-    mp.add_argument("--cwd", metavar="DIR", help="resolve relative paths against DIR when the trace does not say (no -y)")
-    mp.add_argument("--metrics-block", type=int, default=4096, metavar="BYTES", help="the block size of the reuse-distance and popularity units (default 4096)")
-    mp.add_argument("--metrics-sample", type=int, default=1, metavar="N", help="keep one block and one object in N, chosen by hash, and scale (default 1: exact)")
-    mp.add_argument("--instance-root", action="append", type=int, default=[], metavar="PID", help="the process tree under PID is one instance (repeatable; needs clone in the trace); default: the whole trace is one instance")
-    mp.add_argument("--chain-gap-us", type=float, metavar="US", help="report depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit")
-    mp.add_argument("-o", "--out", metavar="FILE", help="write the JSON document (aeiou_metrics: 1) to FILE instead of stdout")
-    ep = sub.add_parser("export", help="write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root")
-    ep.add_argument("trace", help="the strace output file, or - for stdin")
-    ep.add_argument("--root", required=True, metavar="DIR", help="export only calls on paths under DIR, written relative to it")
-    ep.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
-    ep.add_argument("--cwd", metavar="DIR", help="resolve relative paths against DIR when the trace does not say (no -y)")
-    ep.add_argument("-o", "--out", required=True, metavar="FILE", help="the trace file to write; its sha256 is printed, for the abstract's `trace` node")
-    cp = sub.add_parser("compare", help="compare two metrics documents, from a trace or from aeiou dry-run --metrics-json")
-    cp.add_argument("a")
-    cp.add_argument("b")
-    cp.add_argument("--template-a", metavar="NAME", help="use this actor template's metrics of A instead of its total")
-    cp.add_argument("--template-b", metavar="NAME", help="use this actor template's metrics of B instead of its total")
-    cp.add_argument("--max-distance", type=float, metavar="X", help="exit 1 if any distance exceeds X (one number for every row; --judge is the rule by class)")
-    cp.add_argument("--judge", action="store_true", help="judge each row against the tolerance of its class (A the trace, B the abstract) and exit 1 if any is outside")
-    cp.add_argument("--tolerances", metavar="FILE", help="a tolerance file (aeiou_tolerances: 1): class tolerances that replace the defaults, the rows the trace cannot show, the rows recorded as outside; implies --judge")
-    cp.add_argument("--self", dest="selfs", action="append", default=[], metavar="FILE", help="a metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge")
-    cp.add_argument("--only", action="append", default=[], metavar="PREFIX", help="only the rows whose metric starts with PREFIX (repeatable)")
-    args = ap.parse_args(argv)
+def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
+    """The parser and its subcommands' parsers by name (the usage a `Missing` list shows)."""
+    ap = usage.Parser(prog="aeiou-trace", description="Locality metrics of a real application from an strace of it, and their comparison with an abstract's (aeiou dry-run --metrics-json)",
+                      usage="aeiou-trace <COMMAND> [ARGS]...")
+    sub = ap.add_subparsers(dest="cmd")
+    mp = sub.add_parser("metrics", help="Compute the metrics of a trace (strace -f -ttt -T -yy -e trace=%%file,%%desc,%%process -o FILE)", usage="aeiou-trace metrics [OPTIONS] <TRACE>")
+    mp.add_argument("trace", nargs="?", help="The strace output file, or - for stdin")
+    mp.add_argument("--root", action="append", default=[], metavar="DIR", help="Count only calls on paths under DIR (repeatable; required for an strace, not for an exported trace file)")
+    mp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
+    mp.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
+    mp.add_argument("--metrics-block", type=int, default=4096, metavar="BYTES", help="The block size of the reuse-distance and popularity units [default: 4096]")
+    mp.add_argument("--metrics-sample", type=int, default=1, metavar="N", help="Keep one block and one object in N, chosen by hash, and scale [default: 1, exact]")
+    mp.add_argument("--instance-root", action="append", type=int, default=[], metavar="PID", help="The process tree under PID is one instance (repeatable; needs clone in the trace); default: the whole trace is one instance")
+    mp.add_argument("--chain-gap-us", type=float, metavar="US", help="Report depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit")
+    mp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_metrics: 1) to FILE instead of stdout")
+    ep = sub.add_parser("export", help="Write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root", usage="aeiou-trace export [OPTIONS] --root <DIR> -o <FILE> <TRACE>")
+    ep.add_argument("trace", nargs="?", help="The strace output file, or - for stdin")
+    ep.add_argument("--root", metavar="DIR", help="Required: export only calls on paths under DIR, written relative to it")
+    ep.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
+    ep.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
+    ep.add_argument("-o", "--out", metavar="FILE", help="Required: the trace file to write; its sha256 is printed, for the abstract's `trace` node")
+    cp = sub.add_parser("compare", help="Compare two metrics documents, from a trace or from aeiou dry-run --metrics-json", usage="aeiou-trace compare [OPTIONS] <A> <B>")
+    cp.add_argument("a", nargs="?", help="A metrics document (aeiou_metrics: 1), the trace's")
+    cp.add_argument("b", nargs="?", help="The metrics document A is compared with, the abstract's")
+    cp.add_argument("--template-a", metavar="NAME", help="Use this actor template's metrics of A instead of its total")
+    cp.add_argument("--template-b", metavar="NAME", help="Use this actor template's metrics of B instead of its total")
+    cp.add_argument("--max-distance", type=float, metavar="X", help="Exit 1 if any distance exceeds X (one number for every row; --judge is the rule by class)")
+    cp.add_argument("--judge", action="store_true", help="Judge each row against the tolerance of its class (A the trace, B the abstract) and exit 1 if any is outside")
+    cp.add_argument("--tolerances", metavar="FILE", help="A tolerance file (aeiou_tolerances: 1): class tolerances that replace the defaults, the rows the trace cannot show, the rows recorded as outside; implies --judge")
+    cp.add_argument("--self", dest="selfs", action="append", default=[], metavar="FILE", help="A metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge")
+    cp.add_argument("--only", action="append", default=[], metavar="PREFIX", help="Only the rows whose metric starts with PREFIX (repeatable)")
+    return ap, {"metrics": mp, "export": ep, "compare": cp}
 
+
+def main(argv=None) -> int:
+    ap, subs = parser()
+    sp = ap
+    try:
+        args = ap.parse_args(argv)
+        missing = usage.Missing(ap)
+        missing.want(args.cmd, "<COMMAND>", "one of metrics, export, compare")
+        missing.check()
+        sp = subs[args.cmd]
+        missing = usage.Missing(sp)
+        if args.cmd in ("metrics", "export"):
+            missing.want(args.trace, "<TRACE>", "the strace output file, or - for stdin")
+        if args.cmd == "export":
+            missing.want(args.root, "--root <DIR>", "the directory the traced application's paths are under; the export is relative to it")
+            missing.want(args.out, "-o <FILE>", "the trace file to write")
+        if args.cmd == "compare":
+            missing.want(args.a, "<A>", "a metrics document (aeiou_metrics: 1), the trace's")
+            missing.want(args.b, "<B>", "the metrics document A is compared with, the abstract's")
+        missing.check()
+        return _main(args, subs)
+    except usage.UsageError as e:
+        return usage.fail(e, sp)
+    except BuildError as e:
+        return usage.failed(sp.prog, e)
+
+
+def _main(args, subs: dict[str, usage.Parser]) -> int:
+    mp = subs["metrics"]
     if args.cmd == "metrics":
         if args.metrics_block < 1 or args.metrics_sample < 1:
-            ap.error("--metrics-block and --metrics-sample must be at least 1")
+            mp.error("--metrics-block and --metrics-sample must be at least 1")
         f = sys.stdin if args.trace == "-" else open(args.trace, encoding="utf-8", errors="replace")
         with f:
             first = f.readline()
@@ -1478,7 +1518,9 @@ def main(argv=None) -> int:
             if first.startswith('{"aeiou_trace"'):
                 doc = metrics_of_export(lines, args.metrics_block, args.metrics_sample)
             elif not args.root:
-                ap.error("--root DIR is required for an strace")
+                missing = usage.Missing(mp)
+                missing.need(False, "--root <DIR>", "count only calls on paths under DIR (repeatable)", "needed for an strace; an exported trace file carries its root")
+                missing.check()
             else:
                 doc = metrics_of(lines, [os.path.abspath(r) for r in args.root], args.metrics_block, args.metrics_sample, exclude=args.exclude, cwd=args.cwd, instance_roots=args.instance_root, chain_gap_us=args.chain_gap_us)
         doc["trace"] = args.trace
@@ -1511,12 +1553,12 @@ def main(argv=None) -> int:
             with open(path, encoding="utf-8") as f:
                 d = json.load(f)
         except (OSError, ValueError) as e:
-            raise SystemExit(f"aeiou-trace: {path}: {e}")
+            raise BuildError(f"{path}: {_cause(e)}")
         if not isinstance(d, dict) or d.get("aeiou_metrics") != FORMAT:
-            raise SystemExit(f"aeiou-trace: {path}: not an aeiou_metrics: {FORMAT} document")
+            raise BuildError(f"{path}: not an aeiou_metrics: {FORMAT} document")
         docs.append(d)
     if docs[0]["block"] != docs[1]["block"]:
-        raise SystemExit(f"aeiou-trace: block sizes differ ({docs[0]['block']} and {docs[1]['block']}): reuse distance and block popularity are not comparable")
+        raise BuildError(f"block sizes differ ({docs[0]['block']} and {docs[1]['block']}): reuse distance and block popularity are not comparable")
     a, b = select(docs[0], args.template_a), select(docs[1], args.template_b)
     rows = compare(a, b)
     if args.only:
@@ -1534,28 +1576,28 @@ def main(argv=None) -> int:
         print(f"{name:<{w[0]}}  {va:>{w[1]}}  {vb:>{w[2]}}  {'-' if dist is None else f'{dist:.3f}'}{flag}")
     print(f"largest distance {worst:.3f}")
     if args.max_distance is not None and worst > args.max_distance:
-        print(f"aeiou-trace: exceeds --max-distance {args.max_distance}", file=sys.stderr)
+        print(f"aeiou-trace compare: exceeds --max-distance {args.max_distance}", file=sys.stderr)
         return 1
     return 0
 
 
 def _judged(args, rows, a, b, docs) -> int:
     if args.max_distance is not None:
-        raise SystemExit("aeiou-trace: --max-distance and --judge are two rules; give one")
+        raise BuildError("--max-distance and --judge are two rules; give one")
     selfs = []
     for path in args.selfs:
         try:
             with open(path, encoding="utf-8") as f:
                 d = json.load(f)
         except (OSError, ValueError) as e:
-            raise SystemExit(f"aeiou-trace: {path}: {e}")
+            raise BuildError(f"{path}: {_cause(e)}")
         if not isinstance(d, dict) or d.get("aeiou_metrics") != FORMAT:
-            raise SystemExit(f"aeiou-trace: {path}: not an aeiou_metrics: {FORMAT} document")
+            raise BuildError(f"{path}: not an aeiou_metrics: {FORMAT} document")
         for key in ("source", "sha256", "gpus", "block", "sample"):
             if d.get(key) != docs[1].get(key):
-                raise SystemExit(f"aeiou-trace: {path}: --self is B's abstract at another seed, and its `{key}` is not B's ({d.get(key)} and {docs[1].get(key)})")
+                raise BuildError(f"{path}: --self is B's abstract at another seed, and its `{key}` is not B's ({d.get(key)} and {docs[1].get(key)})")
         if d.get("seed") == docs[1].get("seed"):
-            raise SystemExit(f"aeiou-trace: {path}: --self has B's seed ({d.get('seed')}); another seed is the point")
+            raise BuildError(f"{path}: --self has B's seed ({d.get('seed')}); another seed is the point")
         print(f"self: {path}: seed {d.get('seed')}")
         selfs.append(select(d, args.template_b))
     spec = load_tolerances(args.tolerances) if args.tolerances else None

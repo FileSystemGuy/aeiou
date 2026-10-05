@@ -179,8 +179,8 @@ uv run aeiou-params npz ../schema/examples/train_large_samples.ast.json corpus/t
 
 `npz` (2026-10-02) reads `framing` and `cd_len`, the two archive numbers `train_large_samples`
 takes as parameters, from real `.npz` files with the standard library alone, and compares
-them with the abstract's defaults: it prints both, exits 2 when they differ and no `-o` was
-given, and writes them as a parameter file with `-o`. It refuses archives that disagree with
+them with the abstract's defaults: it prints both, ~~exits 2~~ exits 1 (2026-10-04; 2 is the
+suite's usage-error status, `runner/README.md` §15) when they differ and no `-o` was given, and writes them as a parameter file with `-o`. It refuses archives that disagree with
 each other, a compressed member, a member that is not first, and a zip64 end record, since
 the abstract reads none of those shapes. Run it on a few files of any corpus before fitting
 an abstract to a trace over it. `tests/test_formats.py` runs the same comparison against an
@@ -248,6 +248,15 @@ command line, else `AEIOU_ROOT`/`AEIOU_THREADS`, else the `[datagen]` table of t
 `--config` or `AEIOU_CONFIG` names, else the default), the rest is the command line's alone,
 and the block of what was resolved, with each value's source, is printed as `aeiou datagen`
 prints it (`tests/test_options.py`; 2026-10-04).
+
+**Usage errors (2026-10-04).** The four Python tools report a wrong command line in the
+suite's one frame (`aeiou/usage.py`, the mirror of `runner/aeiou/src/usage.rs`;
+`runner/README.md` §15): the command as typed, the message, the usage line, the pointer to
+the help, exit status 2; every argument the command still lacks is listed at once, from any
+layer, and a builder script or a missing file given as the abstract says what an abstract is.
+`usage.Parser` is argparse in the runner's look, so `--help` reads the same as `aeiou
+run --help`. `tests/test_usage.py` covers the frame of every tool and, when the runner is
+built, that `aeiou datagen` and `aeiou-datagen` print the same bytes for the same mistake.
 
 ## 7. `aeiou-trace`: the metrics of a real trace (2026-10-01)
 

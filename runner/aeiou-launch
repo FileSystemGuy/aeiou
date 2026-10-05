@@ -8,9 +8,40 @@
 # listens on and every rank connects to, so HOST0 must be reachable from the others under
 # that name. Each host's output is prefixed with its rank; the exit status is non-zero if
 # any rank's is. AEIOU_RSH replaces `ssh` (it is called as `$AEIOU_RSH HOST COMMAND`).
+#
+# Usage errors are printed in the suite's frame (runner/README.md §15): the command, what is
+# missing, the usage line, the pointer to the help; exit status 2.
 set -u
+USAGE="Usage: aeiou-launch [OPTIONS] <HOSTS>... -- aeiou run <ARGS>..."
+usage_error() {
+    printf '%s\n\n%s\n\nFor more information, try '"'"'aeiou-launch --help'"'"'.\n' "aeiou-launch: $1" "$USAGE" >&2
+    exit 2
+}
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    cat <<EOF
+Start one \`aeiou run\` rank per host over ssh, rank 0 first, with --ranks, --rank, and --coordinator appended
+
+$USAGE
+
+Arguments:
+  <HOSTS>...  The hosts, one rank each; the first is rank 0 and the coordinator (HOST0:PORT), so it must be reachable
+              from the others under that name
+  <ARGS>...   After --: the \`aeiou run\` command line every host runs (--ranks, --rank, --coordinator are appended)
+
+Options:
+  -p <PORT>   The coordinator's port [default: 7311]
+  -h, --help  Print help
+
+Each host's output is prefixed with its rank; the exit status is non-zero if any rank's is. AEIOU_RSH replaces
+\`ssh\` (it is called as \$AEIOU_RSH HOST COMMAND).
+EOF
+    exit 0
+fi
 port=7311
 if [ "${1:-}" = "-p" ]; then
+    if [ $# -lt 2 ]; then
+        usage_error "a value is required for '-p <PORT>' but none was supplied"
+    fi
     port=$2
     shift 2
 fi
@@ -19,9 +50,17 @@ while [ $# -gt 0 ] && [ "$1" != "--" ]; do
     hosts="$hosts $1"
     shift
 done
-if [ $# -lt 2 ] || [ -z "$hosts" ]; then
-    echo "usage: aeiou-launch [-p PORT] HOST... -- aeiou run ARGS..." >&2
-    exit 2
+missing=
+if [ -z "$hosts" ]; then
+    missing="  <HOSTS>...  the hosts, one rank each; the first is rank 0 and the coordinator"
+fi
+if [ $# -lt 2 ]; then
+    missing="$missing${missing:+
+}  <ARGS>...   after --: the \`aeiou run\` command line every host runs"
+fi
+if [ -n "$missing" ]; then
+    usage_error "the following required arguments were not provided:
+$missing"
 fi
 shift
 # the remote command, every argument single-quoted for the remote shell

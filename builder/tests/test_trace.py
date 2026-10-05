@@ -20,6 +20,7 @@ ROOT = BUILDER.parent
 sys.path.insert(0, str(BUILDER))
 
 from aeiou import trace  # noqa: E402
+from aeiou.nodes import BuildError  # noqa: E402
 from aeiou.trace import Instance, LogHist, compare, metrics_of, split_args  # noqa: E402
 
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
@@ -329,7 +330,7 @@ def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
     assert max(r[3] for r in rows if r[3] is not None) <= 0.06, rows
 
     assert subprocess.run([sys.executable, "-m", "aeiou.trace", "compare", str(tmp_path / "absent.json"), str(dry)],
-                          capture_output=True, text=True, cwd=BUILDER).stderr.startswith("aeiou-trace: ")
+                          capture_output=True, text=True, cwd=BUILDER).stderr.startswith("aeiou-trace compare: ")
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
@@ -630,7 +631,7 @@ def test_judge_classes_spread_and_the_tolerance_file(tmp_path):
     assert trace.load_tolerances(str(f)) == spec
     for bad in ({"aeiou_tolerances": 2}, {**spec, "waive": []}, {**spec, "tolerances": {"sizes": 0.1}}, {**spec, "unseen": [{"metric": "x"}]}):
         f.write_text(json.dumps(bad))
-        with pytest.raises(SystemExit):
+        with pytest.raises(BuildError):
             trace.load_tolerances(str(f))
 
 

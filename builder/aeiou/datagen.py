@@ -18,7 +18,6 @@ the geometry its layout predicts before the manifest is written.
 """
 from __future__ import annotations
 
-import argparse
 import concurrent.futures
 import copy
 import hashlib
@@ -31,7 +30,7 @@ import sys
 import tempfile
 import time
 
-from . import __version__, emit, options, params as params_mod
+from . import __version__, emit, options, params as params_mod, usage
 from .formats import FormatClass
 from .layout import FileGeometry, Layout
 from .nodes import BuildError
@@ -199,53 +198,61 @@ def write_manifest(dir_: pathlib.Path, m: dict) -> pathlib.Path:
     return path
 
 
+def parser() -> usage.Parser:
+    ap = usage.Parser(prog="aeiou-datagen", description="Write the container datasets an abstract declares under --root, through their format classes, with a manifest per dataset root (the Python twin of `aeiou datagen`)",
+                      usage="aeiou-datagen [OPTIONS] --root <DIR> <ABSTRACT_PATH>\n       (--root may also come from $AEIOU_ROOT or `root` in the [datagen] table of the config file)")
+    ap.add_argument("ast", nargs="?", type=pathlib.Path, metavar="ABSTRACT_PATH", help="The abstract (`.ast.json`)")
+    ap.add_argument("--params-file", action="append", default=[], type=pathlib.Path, metavar="FILE", help="A parameter file (`.params.json`, schema/README.md §8), applied over the defaults and under --param; repeatable, in order")
+    ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE", help="Override a parameter: `--param name=value` (JSON; a bare word is a string)")
+    ap.add_argument("--gpus", type=int, default=1, help="Instance count, for dataset definitions that reference `gpus` [default: 1]")
+    ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="Required: directory the abstract's paths are relative to. From the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
+    ap.add_argument("--threads", type=int, help="Writer threads (default: all cores)")
+    ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` files share content [default: 1]")
+    ap.add_argument("--compress", type=int, default=1, help="Compression ratio: the last (C−1)/C of every 1 MiB block is zeros [default: 1]")
+    ap.add_argument("--dataset", action="append", default=[], metavar="NAME", help="Only these datasets (default: all)")
+    ap.add_argument("--config", type=pathlib.Path, metavar="FILE", help="A TOML config file (else $AEIOU_CONFIG, else none; never searched for): one table per subcommand, keys spelled as the long flags (runner/README.md §14)")
+    ap.version(f"aeiou-datagen {__version__}")
+    return ap
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="aeiou-datagen", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-                                 usage="aeiou-datagen [OPTIONS] --root DIR AST\n       (--root may also come from $AEIOU_ROOT or `root` in the [datagen] table of the config file)")
-    ap.add_argument("ast", type=pathlib.Path)
-    ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="required: directory the abstract's paths are relative to; from the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
-    ap.add_argument("--params-file", action="append", default=[], type=pathlib.Path, metavar="FILE")
-    ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
-    ap.add_argument("--gpus", type=int, default=1)
-    ap.add_argument("--dedupe", type=int, default=1)
-    ap.add_argument("--compress", type=int, default=1)
-    ap.add_argument("--threads", type=int, help="writer threads (default: all cores; or $AEIOU_THREADS, or [datagen] threads in --config)")
-    ap.add_argument("--dataset", action="append", default=[], metavar="NAME")
-    ap.add_argument("--config", type=pathlib.Path, metavar="FILE", help="a TOML config file (else $AEIOU_CONFIG, else none; never searched for)")
-    ap.add_argument("--version", action="version", version=f"aeiou-datagen {__version__}")
-    a = ap.parse_args(argv)
+    ap = parser()
     try:
-        return _main(a)
+        a = ap.parse_args(argv)
+        return _main(a, ap)
+    except usage.UsageError as e:
+        return usage.fail(e, ap)
     except BuildError as e:
-        print(f"FAIL {e}", file=sys.stderr)
-        return 1
+        return usage.failed(ap.prog, e)
 
 
-def resolve(a) -> options.Layers:
+def resolve(a, ap: usage.Parser | None = None) -> options.Layers:
     """`aeiou datagen`'s layers (main.rs `datagen_cmd`): the shape and the writer's fixed
-    options first, then `root` and `threads` through the layers. Sets `a.root` and
-    `a.threads` to the values in effect."""
+    options first, then `root` and `threads` through the layers; what is missing from every
+    layer is listed in one usage error (`usage.Missing`). Sets `a.root` and `a.threads` to
+    the values in effect."""
+    missing = usage.Missing(ap or parser())
+    missing.want(a.ast, *usage.ABSTRACT)
     layers = options.Layers("datagen", a.config)
-    layers.fixed("abstract", a.ast, True)
+    layers.fixed("abstract", a.ast, a.ast is not None)
     layers.fixed("param", a.param, bool(a.param))
     layers.fixed("params-file", a.params_file, bool(a.params_file))
     layers.fixed("gpus", a.gpus, a.gpus != 1)
     layers.fixed("dedupe", a.dedupe, a.dedupe != 1)
     layers.fixed("compress", a.compress, a.compress != 1)
     layers.fixed("dataset", a.dataset, bool(a.dataset))
-    a.root = layers.layered("root", a.root, pathlib.Path)
-    if a.root is None:
-        raise BuildError("--root DIR is required: give it on the command line, as $AEIOU_ROOT, or as `root` in the [datagen] table of the TOML file --config or $AEIOU_CONFIG names")
+    a.root = missing.want(layers.layered("root", a.root, pathlib.Path), *usage.root("datagen"))
     a.threads = layers.layered("threads", a.threads, int)
     if a.threads is None:
         a.threads = os.cpu_count() or 1
+    missing.check()
     layers.finish()
     return layers
 
 
-def _main(a) -> int:
+def _main(a, ap: usage.Parser) -> int:
     from .validate import validate
-    layers = resolve(a)
+    layers = resolve(a, ap)
     ast = emit.load(a.ast)
     validate(ast)
     sha = emit.sha256(ast)
@@ -259,10 +266,10 @@ def _main(a) -> int:
     overrides = []
     for s in a.param:
         if "=" not in s:
-            raise BuildError(f"--param {s}: expected NAME=VALUE")
+            raise usage.UsageError(f"--param {s}: expected NAME=VALUE")
         k, v = s.split("=", 1)
         if k not in ast.get("params", {}):
-            raise BuildError(f"--param {k}: no such parameter")
+            raise usage.UsageError(f"--param {k}: no such parameter")
         overrides.append((k, v))
     values = param_values(ast, sets, overrides, a.gpus)
     print(f"abstract {ast['name']}  sha256 {sha}")

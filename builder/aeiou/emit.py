@@ -93,7 +93,23 @@ def render(ast: dict, prov: dict | None = None) -> str:
 
 
 def load(path) -> dict:
-    return json.loads(pathlib.Path(path).read_text())
+    """An abstract from its `.ast.json`. A path that is no abstract is a usage error
+    (`usage.py`, as the runner's `aeiou::load`): a builder script, a file that does not
+    exist, a file that is not JSON; each message says what an abstract is."""
+    from .usage import UsageError, WHAT_AN_ABSTRACT
+    path = pathlib.Path(path)
+    if path.suffix == ".py":
+        raise UsageError(f"{path}: a builder script, not an abstract; `aeiou-build {path}` writes the abstracts it authors "
+                         f"(`<name>.ast.json`) next to it, and those are what this tool takes")
+    try:
+        text = path.read_text()
+    except OSError as e:
+        hint = "" if path.suffix == ".json" else f"; {WHAT_AN_ABSTRACT}"
+        raise UsageError(f"{path}: {e.strerror} (os error {e.errno}){hint}") from None
+    try:
+        return json.loads(text)
+    except ValueError as e:
+        raise UsageError(f"{path}: not an abstract ({e}); {WHAT_AN_ABSTRACT}") from None
 
 
 def write(wl, path=None, *, provenance: bool = True, built_twice: bool | None = None):
