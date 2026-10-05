@@ -620,7 +620,16 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     assert_eq!((r[0].dataset.as_str(), r[0].files, r[0].of), ("train", 256, 300));
     assert!(r[0].pages > 256, "{r:?}");
     if fstype != "tmpfs" {
-        assert_eq!(r[0].resident, 0, "datagen writes with O_DIRECT, so the client's cache stays cold on {fstype}: {r:?}");
+        // Datagen writes with `O_DIRECT`, so the client's cache stays cold, except that where
+        // an unaligned tail is padded and truncated the truncate zeroes the end of the last
+        // block through the page cache, and on some kernels that folio stays resident after
+        // write-back: on Linux 6.17 (ext4, `data=writeback`, CI) the last page or two of 2
+        // to 6 files in 256, never on 6.18 locally, stable over time, gone after a
+        // sync-and-DONTNEED pass. At most one folio of two pages per sampled file, then.
+        assert!(r[0].resident <= 2 * r[0].files, "more than a tail folio per file resident after datagen on {fstype}: {r:?}");
+        if r[0].resident > 0 {
+            eprintln!("note: {} tail page(s) resident after datagen on {fstype} (this kernel keeps the truncated tail folio)", r[0].resident);
+        }
     }
     warm(&root);
     let r = cold::residency(model, &root).unwrap();

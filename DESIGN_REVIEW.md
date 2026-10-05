@@ -3547,8 +3547,15 @@ per directory (the VFS lock) and per mount (the NFS session), not per process.
   user process, the corpus goes through the mount, and `--drop-caches` on the clients is the
   only cold start there is (DRAM inside the SUT is the SUT's to use). Writes are 1 MiB from
   4 KiB-aligned buffers; an unaligned tail is tried as is (NFS accepts it) and, on `EINVAL`,
-  padded and the file truncated, learned once per datagen. A root that refuses `O_DIRECT`
-  falls back to the page cache, said once (tmpfs before Linux 6.6). A side effect that
+  padded and the file truncated, learned once per datagen. (Seen 2026-10-05, on CI: the
+  truncate zeroes the rest of the last block through the page cache, and on Linux 6.17 with
+  ext4 `data=writeback` that folio stays resident after write-back in 2 to 6 files of 256,
+  the last page or two of each, stable over time and gone after an fsync-and-`DONTNEED`
+  pass; never on 6.18 locally. An eviction right after the truncate, `sync_file_range` then
+  `POSIX_FADV_DONTNEED`, did not clear it, so datagen is left as is, the residency test
+  allows one folio per padded file, and `--drop-caches` is the documented way to a fully
+  cold padded root; NFS accepts the unaligned tail and pads nothing.) A root that refuses
+  `O_DIRECT` falls back to the page cache, said once (tmpfs before Linux 6.6). A side effect that
   matters later: each direct write completes before the next, so a crash leaves a strict
   prefix of every file, and a file of the right size is a whole file.
 - *Prefix-stable dedupe: `aeiou-positional/2`.* The user wants one very large corpus

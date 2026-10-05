@@ -398,8 +398,11 @@ as root). The same runs on the loopback NFS mount are §7.
   near full makes every eviction dearer, clean pages included. So every file is opened
   `O_DIRECT` and written in 1 MiB blocks from 4 KiB-aligned buffers; a tail that is not a
   multiple of 4 KiB is written as is where the filesystem allows (NFS does) and otherwise,
-  learned once from `EINVAL`, padded and the file truncated to length. A root that refuses
-  `O_DIRECT` at open (tmpfs before Linux 6.6) falls back to the page cache, said once, and
+  learned once from `EINVAL`, padded and the file truncated to length (the truncate zeroes
+  the end of the last block through the page cache, and some kernels keep that folio: on
+  Linux 6.17 with ext4 the last page or two of a few files in a hundred stay resident, so a
+  padded root is made fully cold by `--drop-caches`, and `--require-cold` says when it is
+  not). A root that refuses `O_DIRECT` at open (tmpfs before Linux 6.6) falls back to the page cache, said once, and
   the manifest records `direct`. Each direct write completes before the next, so a crash
   leaves a strict prefix of every file: a file of the right size is a whole file, which is
   what a `--resume` (planned, `DESIGN_REVIEW.md` §3.62) will test, size alone; allocated
