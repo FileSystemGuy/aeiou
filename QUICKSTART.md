@@ -7,7 +7,7 @@ and, for the runner alone, no Python.
 
 | Path | What |
 |---|---|
-| `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 Linux, glibc 2.35 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. |
+| `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 Linux, glibc 2.34 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. |
 | `bin/aeiou-launch` | One `aeiou run` or `aeiou datagen` rank per host over ssh. A POSIX shell script. |
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
 | `man/` | The same pages as Markdown. |
