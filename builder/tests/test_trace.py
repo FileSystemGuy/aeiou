@@ -584,7 +584,8 @@ def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
     kit = BUILDER / "traces" / "kv_cache_serving"
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(kit / "fitted.agentx-odirect-replay.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(kit / "fitted.agentx-odirect-replay.params.json"), "--metrics-json", str(dry),
+                        "--metrics-sample", "64"], capture_output=True, text=True)       # the counts only, which sampling leaves exact
     assert r.returncode == 0, r.stderr
     t, d = json.loads((kit / "agentx-odirect.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
@@ -715,12 +716,13 @@ def test_kit_pair_against_the_tolerances(tmp_path, capsys, kit, which, ast, para
     the recorded one, every row outside has its reason in the pair's file, and the file
     has no entry that matches nothing."""
     kit = BUILDER / "traces" / kit
-    docs = []
-    for seed in (1, 2, 3, 4):
-        docs.append(tmp_path / f"dry.{seed}.json")
-        r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", str(gpus), "--seed", str(seed),
-                            "--params-file", str(kit / params), "--metrics-json", str(docs[-1])], capture_output=True, text=True)
-        assert r.returncode == 0, r.stderr
+    docs = [tmp_path / f"dry.{seed}.json" for seed in (1, 2, 3, 4)]
+    runs = [subprocess.Popen([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", str(gpus), "--seed", str(seed),
+                              "--params-file", str(kit / params), "--metrics-json", str(doc)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            for seed, doc in zip((1, 2, 3, 4), docs)]               # the seeds at once: a dry run's metrics take one core
+    for p in runs:
+        _, err = p.communicate()
+        assert p.returncode == 0, err
     spec = kit / f"{which}.tolerances.json"
     args = ["compare", str(kit / f"{which}.metrics.json"), str(docs[0]), *[x for d in docs[1:] for x in ("--self", str(d))]]
     rc = trace.main(args + (["--tolerances", str(spec)] if spec.exists() else ["--judge"]))

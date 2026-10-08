@@ -7,7 +7,9 @@ on:
 # Three jobs on three runners (4 cores each). `abstracts` needs no Rust. The runner's own
 # tests and the Python tests that drive the built binary each build on their own runner from
 # one shared Rust cache: the test binaries are compiled only where they are run, and the
-# integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers.
+# integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers, the
+# runner's test binaries under cargo-nextest (every test its own process, 4 at a time; there
+# are no doctests for it to miss), and a kit pair's four seeds as four processes.
 jobs:
   abstracts:
     runs-on: ubuntu-latest
@@ -42,9 +44,10 @@ jobs:
         with:
           workspaces: runner
           shared-key: runner
+      - uses: taiki-e/install-action@nextest
       - name: Build and test
         working-directory: runner
-        run: cargo test --release
+        run: cargo nextest run --release
 
   runner-integration:
     runs-on: ubuntu-latest
@@ -67,11 +70,8 @@ jobs:
           builder/.venv/bin/python schema/check.py > /tmp/check.py.out
           runner/target/release/aeiou check schema/examples/*.ast.json | sed '1,/^$/d' > /tmp/check.rs.out   # past the options block
           diff /tmp/check.py.out /tmp/check.rs.out
-      - name: Container datasets written by aeiou-datagen run to the dry-run fingerprint
-        working-directory: builder
-        run: AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 tests/test_formats.py
-      - name: The metrics of an strace of the runner are its dry run's
+      - name: Container datasets run to the dry-run fingerprint; traces and kit pairs against the binary
         working-directory: builder
         run: |
           command -v strace || sudo apt-get install -y strace
-          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs tests/test_trace.py
+          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs tests/test_formats.py tests/test_trace.py
