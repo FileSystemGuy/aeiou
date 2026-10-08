@@ -17,8 +17,10 @@ What the corpus gives, and how the abstracts take it:
 
   A chain is built by continuity within one agent (the main agent, or a sub-agent group)
   and one model: a request joins the open chain whose last prompt it keeps the most of,
-  past the session's shared prefix (the system prompt and the tool definitions, which every
-  agent of the session begins with: the abstract's system prompt, never written by a run),
+  past the session's shared prefix (the system prompt and the tool definitions ~~which every
+  agent of the session begins with~~ its sub-agents and side calls begin with; the main
+  agent's prompts begin with their own, 2026-10-08: the abstract's system prompt, never
+  written by a run),
   and starts a chain when it keeps no more than that of any (a session's first request, a
   sub-agent, a side call of a few hundred tokens between an agent's turns, a restart after
   the context was replaced). A request extends its chain when its blocks begin with the
@@ -41,7 +43,12 @@ What the corpus gives, and how the abstracts take it:
   think      the client's delay before a request, in nanoseconds
   sys_tokens the prefix a sub-agent's first prompt shares with what its session already
              stored (the system prompt and the tool definitions), its median; every chain
-             starts past it
+             starts past it. The abstract's system prompt is the prefix a chain opens with:
+             for a sub-agent, the one its session's sub-agents share; for the main agent,
+             whose prompts never begin with that one, its own opening prompt, which
+             `turn_in` (one distribution for every turn) could not place at a chain's start
+             (a share of chains without the prefix, tried 2026-10-08, fitted the replay
+             worse: DESIGN_REVIEW.md §3.63)
   context    the corpus's cap on a prompt (the 990,016-token filter of the 062126 build;
              262,144 in the 256k variant), rounded up to the next chunk
   requests   the chains' requests, all of them; concurrency 1 (one slot), warm 0
@@ -98,6 +105,29 @@ def flatten(requests, out, own=-1, counter=None):
             out.append((own, r))
     if own == -1:
         out.sort(key=lambda gr: gr[1]["t"])
+
+
+def shared_prefix(flat, per):
+    """The hash ids of a session's shared prefix (the system prompt and the tool definitions):
+    the longest prefix a sub-agent group's first prompt found stored, by `walk`'s rule over
+    all the session's requests; empty for a session without sub-agents."""
+    store, seen, best = set(), set(), []
+    for g, r in flat:
+        h = r["hash_ids"]
+        whole = h[:-1]
+        ch = [tuple(whole[i:i + per]) for i in range(0, len(whole) - per + 1, per)]
+        hit = 0
+        for c in ch:
+            if c in store:
+                hit += 1
+            else:
+                break
+        if g >= 0 and g not in seen:
+            seen.add(g)
+            if hit * per > len(best):
+                best = h[:hit * per]
+        store.update(ch)
+    return best
 
 
 def walk(path, traces, chunk_tokens, context, played=None):

@@ -81,7 +81,11 @@ for ShareGPT. ~~Written for the trace box; not run yet.~~ Run 2026-10-07 (below)
 ## The AgentX replay on a GPU (2026-10-07)
 
 `DESIGN_REVIEW.md` §3.63. Qwen2.5-0.5B at 128k context (YaRN), 2 GiB of engine KV, the first
-8 sessions at once, 300 requests (225 sent; 75 over the context are skipped), back to back.
+8 sessions at once, 300 requests (220 sent; the rest over the context are skipped), back to back.
+~~(225 sent; 75 over the context are skipped)~~ The buffered run was made again 2026-10-08
+with each session's own tokens: the first run's sessions shared chunks by accident (the
+corpus's ids are local to a session, and the replay seeded a block's tokens by its id alone).
+The `O_DIRECT` run (`agentx-odirect.*`) is still the first replay's.
 LMCache's store must not evict (the corpus reference assumes it): 18 GB of chunks, so the
 export is a directory on disk, not the 8 GB tmpfs of `runner/REFERENCE.md` §7.
 
@@ -110,7 +114,8 @@ python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context
   only the top-0.1 % row turns "not judged", as the objects' already was), and the pair's dry
   runs take the trace's block, a fraction of a second against twelve.
 - The kit's pair (`agentx.trace`, `fitted.agentx-replay.params.json`) is judged in
-  `tests/test_trace.py` and accepted; the corpus is not committed, so the fit is repeated by
+  `tests/test_trace.py` and ~~accepted~~ not accepted since the corrected run (one row outside,
+  read-after-read reuse distance, its reason in `agentx.trace.tolerances.json`); the corpus is not committed, so the fit is repeated by
   the command above, not by the tests.
 - `lmcache.agentx.odirect.yaml` is the same with LMCache's `use_odirect`, the second run
   (`agentx-odirect.*`, fitted with `--set direct=true` added): its calls are the abstract's

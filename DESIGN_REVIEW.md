@@ -3597,7 +3597,7 @@ practice in `runner/REFERENCE.md` §7 remains a development convenience). Buffer
 `posix_fadvise(DONTNEED)` instead of `O_DIRECT` (the eviction cost the user described is
 paid before the advice runs).
 
-### 3.63 The AgentX replay on a GPU: `keep`, the system prompt as a prefix, and LMCache's `O_DIRECT` path (run, decided, and built 2026-10-07)
+### 3.63 The AgentX replay on a GPU: `keep`, the system prompt as a prefix, and LMCache's `O_DIRECT` path (run, decided, and built 2026-10-07; the replay corrected and run again 2026-10-08)
 
 **The runs.** Brief item 21: `replay_agentx.py` through vLLM 0.30.0 and LMCache 0.5.5 on the
 development box's 8 GB GPU (RTX 2000 Ada), local-disk backend on the loopback NFS mount, under
@@ -3649,7 +3649,7 @@ system prompt was read by *every* request, and the conversations drew their syst
    `sys_pop`.
 
 At the replay's parameters (`fitted.agentx-replay.params.json`: `sys_local` false,
-`sys_per_slot` true) the abstract reads 31,549 to 41,235 and is **accepted**: 33 rows within,
+`sys_per_slot` true) the abstract reads 31,549 to 41,235 and is ~~**accepted**~~ (not since the replay was corrected, 2026-10-08, below): 33 rows within,
 none outside, fan-out unseen as before. A new pair in `KIT_PAIRS`. The pick now sits inside
 `sys_per_slot`'s `when`, which moves its draw site: a seed draws other system prompts, so the
 fingerprints and the op counts at the goldens' parameters change (1,578 to 1,590 for
@@ -3694,6 +3694,63 @@ has the same mechanism and its row is within (0.274 of 0.392). Recorded as outsi
 `agentx-odirect.trace.tolerances.json`; the pair is **not accepted**, as the shared store's
 writer is (§3.52). Modelling the admission queue would need the engine's memory as state
 across slots, which `GRAMMAR_OPTIONS.md` §5.3 rules out as it does for `retain`.
+
+**The replay corrected (2026-10-08).** The runs above shared chunks between sessions by
+accident. The corpus's hash ids are local to a session (every session numbers its blocks
+from 0), and `replay_agentx.py` generated a block's tokens from its id alone, so sessions
+whose ids lined up sent the same tokens: in the first 60 requests of the eight sessions,
+729 of 9,039 chunks were shared by two sessions, sessions 0 and 2 (and 1 and 6) sharing
+whole conversations up to 328 chunks deep. The engine and LMCache then served one session
+from another's chunks. Everything measured on the 2026-10-07 runs (the held counts, `keep`,
+the pairs) carries that.
+
+The replay now generates a block's tokens from its session and its id, except the blocks of
+the session's shared prefix (`agentx.shared_prefix`: the longest prefix a sub-agent's first
+prompt found stored), whose tokens come from their position in it, so the sessions share
+one system prompt as far as the shorter prefix goes. That they share one is not in the
+corpus; it is in a public corpus with the text, `sammshen/lmcache-agentic-traces` (CC-BY,
+787 agentic sessions): three system prompts serve 756 of its 767 distinct sessions (552,
+110, 94), and the first prompts of the 552 share about 35k characters. Offline, only the
+shared prefix's chunks are now shared (134 of 9,457, by two to five sessions).
+
+The buffered run again, same setup (`agentx.*` in the kit replaced): 220 requests sent of
+the 300 counted (80 over the context skipped, 75 before: which 300 the sessions' threads
+reach first is timing), 6,406 chunks written, 45,707 read. The engine
+held nothing at admission for 157 of the 220, and for the other 63 part or all of the shared
+prefix and never more: `keep` past the system prompt is now 0 in 18 of 20 shares (16
+before; the conversations it held before were the ones another session had sent).
+
+*What the shared prefix is.* `agentx.py`'s `sys_tokens` is the prefix a sub-agent's first
+prompt shares with what its session stored: the prefix of the session's sub-agents and side
+calls. The main agent's prompts never begin with it (in all eight sessions their common
+prefix with it is 0); they begin with the main agent's own opening prompt. So "every chain
+starts past it" is not what the corpus says. **Tried and rejected (the user chose to try it,
+2026-10-08):** a parameter `sys_starts`, the share of new conversations that begin with the
+system prompt (fitted 10 of 45 chains), in both KV abstracts. Against the new trace it is
+worse, five rows outside (reads 23k to 29k against 45.7k, too many writes), and with
+`sys_local` true seven: `turn_in` is one distribution for every turn, so the main agent's
+opening prompt, once it is not the system prompt, is spread over turns instead of standing
+at the chain's start and being read back when the engine has lost it. The abstract's system
+prompt is the prefix a chain opens with (the sub-agents' shared one, or the main agent's
+own), and the model of §3.63 A stands; `sys_starts` was removed before it was committed.
+
+*The pair.* At A's settings (`sys_local` false, `sys_per_slot` true, eight prompts) the
+abstract writes 5,615 to 6,527 (6,406) and reads 35,076 to 43,920 (45,707), and the judge
+finds one row outside: read-after-read reuse distance, p50 3 GiB against 5 (p90 5 against
+7). Recorded with that reason in `agentx.trace.tolerances.json`; the pair is **not
+accepted**. Why the abstract's re-reads come sooner is not established; the candidate is the
+server's admission order, the cause of the `O_DIRECT` pair's row. Next: examine it.
+
+*Not redone yet:* the `O_DIRECT` run and its pair (`agentx-odirect.*`) are still the
+2026-10-07 replay's, with the shared chunks.
+
+*Checked against the device.* The SNIA AI workloads TWG's block traces of LMCache with a
+CPU tier serving the public agentic corpus above (the TWG's, private: read for insight only,
+never quoted here) agree with A's first rule and say more: no chunk is read the thousands of times a
+system prompt shared by most sessions would be, so in a large engine the shared prompt stays
+in memory (`sys_local` true), while each conversation's own chunks are read back turn after
+turn. They also say every write reaches the device when a CPU tier absorbs reads, which is
+for the CPU tier's design (next after this).
 
 ## 4. Plan changes
 

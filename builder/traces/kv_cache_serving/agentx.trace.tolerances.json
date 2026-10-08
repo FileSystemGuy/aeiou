@@ -6,5 +6,10 @@
       "reason": "the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)"
     }
   ],
-  "outside": []
+  "outside": [
+    {
+      "metric": "reuse distance, read after read",
+      "reason": "the replay re-reads a chunk after more of the other sessions' traffic than the dry run's slots in turn do: p50 5 GiB against 3, p90 7 against 5 (the corrected replay of 2026-10-08, DESIGN_REVIEW.md \u00a73.63). Cause not yet established; the candidate is the server's admission order, which puts the O_DIRECT pair's read-after-write row outside"
+    }
+  ]
 }
