@@ -1,5 +1,6 @@
 [package]
 name = "aeiou"
+autotests = false
 description = "Author Execute I/O workload runner (aeiou): loads, validates, and executes the AST contract"
 version.workspace = true
 edition.workspace = true
@@ -21,3 +22,15 @@ libc = "0.2"
 dgen-data = { version = "=0.3.0", default-features = false }
 io-uring = "0.7"
 toml = { version = "1.1.6", default-features = false, features = ["parse", "serde"] }
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
+
+[[test]]
+name = "limits"
+path = "tests/limits.rs"
+
+[[test]]
+name = "uring_knobs"
+path = "tests/uring_knobs.rs"
