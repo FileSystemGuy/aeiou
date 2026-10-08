@@ -21,8 +21,8 @@ request whose prompt exceeds `--max-context` is skipped. A reply is asked for wi
 `max_tokens` = the corpus's `out` (at most `--max-reply`) and `ignore_eos`.
 
 Prints one line per request: request, session, the request's index in it, prompt tokens,
-cached tokens when the server reports them, completion tokens, seconds. Not run yet on a
-GPU (2026-10-02): written beside `agentx.py` for the trace box.
+cached tokens when the server reports them, completion tokens, seconds. Run 2026-10-07 on an
+8 GB GPU at 128k context (the kit's README, `DESIGN_REVIEW.md` §3.63).
 """
 import argparse, json, random, threading, time, urllib.request
 

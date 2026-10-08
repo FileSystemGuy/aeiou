@@ -63,7 +63,11 @@
     },
     "sys_local": {
       "default": true,
-      "doc": "[config] the engine holds the system prompts in GPU memory and never loads their chunks; false loads them for every new conversation"
+      "doc": "[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63)"
+    },
+    "sys_per_slot": {
+      "default": false,
+      "doc": "[config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop`"
     },
     "reuse": {
       "default": {
@@ -781,10 +785,37 @@
                               }
                             },
                             "else": {
-                              "pick": {
-                                "dataset": "sysp",
-                                "dist": {
-                                  "param": "sys_pop"
+                              "cond": {
+                                "if": {
+                                  "eq": [
+                                    {
+                                      "param": "sys_per_slot"
+                                    },
+                                    true
+                                  ]
+                                },
+                                "then": {
+                                  "file": {
+                                    "dataset": "sysp",
+                                    "id": {
+                                      "mod": [
+                                        {
+                                          "index": "slot"
+                                        },
+                                        {
+                                          "param": "sys_prompts"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "else": {
+                                  "pick": {
+                                    "dataset": "sysp",
+                                    "dist": {
+                                      "param": "sys_pop"
+                                    }
+                                  }
                                 }
                               }
                             }
@@ -1117,11 +1148,23 @@
                           {
                             "cond": {
                               "if": {
-                                "eq": [
+                                "and": [
                                   {
-                                    "param": "sys_local"
+                                    "eq": [
+                                      {
+                                        "param": "sys_local"
+                                      },
+                                      false
+                                    ]
                                   },
-                                  false
+                                  {
+                                    "eq": [
+                                      {
+                                        "ref": "held"
+                                      },
+                                      0
+                                    ]
+                                  }
                                 ]
                               },
                               "then": [
@@ -1422,16 +1465,16 @@
   "provenance": {
     "generator": {
       "script": "kv_cache_shared.py",
-      "sha256": "e8240008eea9f6c4fcd2567474e132334da9890d61c0699977a9663172fa542e",
+      "sha256": "2effe41b96ad007f6b419e9ed4bd9f13a0fe0c4c8e4c608896f84df8ffb50810",
       "builder_version": "0.1.0",
-      "git": "28ced89fbd7e-dirty"
+      "git": "e941470c8734-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
-      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
+      "sha256": "f58ab2f23f8662236112836645f4d863a3a44858a5ea36281605f35ea08e77bd"
     },
     "built_twice_identical": true,
-    "ast_sha256": "e478bb6da2e6265764c77cd3e4f1830646dfbedfd5ee5e00dc55da54dde98183"
+    "ast_sha256": "da99eec7857167300ddfa3e56feeff836090d9e8938cebb2929db99c51302c82"
   }
 }

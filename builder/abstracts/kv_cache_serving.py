@@ -33,7 +33,8 @@ w.param("sys_tokens", 1500, unit="tokens", doc="median system prompt length [mea
 w.param("sys_tokens_min", 1, unit="tokens", doc="bounds of the system prompt length; equal bounds give every prompt that length")
 w.param("sys_tokens_max", 100_000, unit="tokens")
 w.param("sys_pop", zipf(s=1.1), doc="[measure]")
-w.param("sys_local", True, doc="[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false for an engine that starts cold beside a filled cache")
+w.param("sys_local", True, doc="[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63)")
+w.param("sys_per_slot", False, doc="[config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop`")
 w.param("reuse", mixture((0.15, none), (0.85, const(40))),
         doc="none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations "
             "a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one")
@@ -100,7 +101,8 @@ with w.actor("gpu") as gpu:
             conv = slot.let("conv", when(cont, slot.ref("conv").at(r - d), draw(uniform64())))
             turns = slot.let("turns", when(cont, slot.ref("turns").at(r - d), tn))
             turn = slot.let("turn", when(cont, slot.ref("turn").at(r - d) + 1, 0))
-            sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d), sysp.pick(P.sys_pop)))
+            sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d),
+                                     when(P.sys_per_slot == True, sysp.file(slot.index % P.sys_prompts), sysp.pick(P.sys_pop))))   # noqa: E712
             sysblk = slot.let("sysblk", sp.size // P.chunk_bytes)      # whole chunks inside the system prompt, shared by its conversations
             # the conversation's own tokens in this request's prompt; a new conversation starts with the system prompt's tokens past its last whole chunk
             ptoks = slot.let("ptoks", when(cont, prior, (sp.size % P.chunk_bytes) // token_bytes) + inn)
@@ -113,7 +115,7 @@ with w.actor("gpu") as gpu:
 
             with slot.phase(when(r < P.warm, "warm", "serve")):
                 slot.compute(P.think)
-                with slot.when(P.sys_local == False):                 # noqa: E712
+                with slot.when((P.sys_local == False) & (held == 0)):                 # noqa: E712
                     with slot.parallel("sk", sysblk) as rd:
                         b = rd.let("b", sp.chunk(rd.index))
                         opened(rd, b, "RDONLY|CLOEXEC")

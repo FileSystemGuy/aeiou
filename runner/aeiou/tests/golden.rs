@@ -31,11 +31,12 @@ fn hashes_match_check_py() {
     // contract 0.2 and model_load's `full` split the same day; all again 2026-10-01 for contract 0.3, the
     // optional `backend`; all again 2026-10-02 for contract 0.4, the optional `same_run` of a namespace, and
     // for contract 0.5, the wider `at` rule V3, with kv_cache_serving and kv_cache_shared changed under it;
-    // the three KV abstracts again 2026-10-02 for `prefill_step`, `think`, `trim`, and `turns`, DESIGN_REVIEW §3.59).
+    // the three KV abstracts again 2026-10-02 for `prefill_step`, `think`, `trim`, and `turns`, DESIGN_REVIEW §3.59,
+    // and 2026-10-07 for `sys_per_slot` and the system prompt read only when the engine holds none of the conversation, §3.63).
     let want = [
         ("ckpt_restore", "ed1b8905fb5f96a3892c0e895f27c172fb06fa2571568ae4d362ff344ae547d0"),
         ("ckpt_write_dcp", "f67dbd42462fd8ce7d0d0d9c92312f49cf4567a5cdd36a240d0cf446e2ed88a9"),
-        ("kv_cache_serving", "8399ce7f67a5128ae3539c55407465584a4c872e999f23cc39e7647587a96984"),
+        ("kv_cache_serving", "72c97a35b6e67bea274555f1c87ebc737f4146a2462cd5c7bf6117617864027f"),
         ("model_load", "df63f75a22b063b44421e87c787d29d5d7f820cd4e96b0a8797876806ca496ae"),
         ("train_large_samples", "2fd904f665b70711797d9d588a94d5d660eabc68fe9a8b6ece876ae2a079c75a"),   // 2026-10-02: the `enumerate` phase, on by default
         ("train_small_files", "3f93512e6fe335abedd6e49421980af009984df1b35b7238b17c180a206cee65"),   // 2026-10-02: `enumerate` on by default
@@ -46,8 +47,8 @@ fn hashes_match_check_py() {
         ("train_map_hdf5", "48f8b14822e4c02f55d948e61d48bf93cdad84e8042580d7b23769edf9bd4f63"),
         ("vdb_search_ivf", "3abb616e11a0b57ba594737d9e3dc05fe5caa591232fbf9b34903c423a440327"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("kv_cache_shared", "ba51e79a098553a22a13f98f5c56cb74c73336d84bd9e064ab45a1403f1beb10"),
-        ("kv_cache_shared_reader", "e478bb6da2e6265764c77cd3e4f1830646dfbedfd5ee5e00dc55da54dde98183"),
+        ("kv_cache_shared", "b15d7ff6354c45778fab3b72acf76bb079d59866cb958f73b8b76b0ff87e3176"),
+        ("kv_cache_shared_reader", "da99eec7857167300ddfa3e56feeff836090d9e8938cebb2929db99c51302c82"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -99,11 +100,12 @@ fn golden_fingerprints() {
         ),
         // re-recorded 2026-10-02 (§3.59): the writes under the prefill-step loop's index, and the `trim` and `turns` draws
         // before the conversation and system-prompt picks move their sites, so a seed draws other prompts (the fitted
-        // files, whose system prompts have one size, keep their counts)
-        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xf1acfb608bd6ba4f, 1578),
+        // files, whose system prompts have one size, keep their counts); re-recorded 2026-10-07 (§3.63): the pick inside
+        // `sys_per_slot`'s `when` moves its site again, the same way (with one prompt size the op counts are unchanged)
+        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x9f7017e7011639d5, 1590),
         // the same request stream on LMCache's fs:// backend, and the cold engine on the store it leaves (2026-10-02, §3.52)
-        ("kv_cache_shared", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x6ebbf8ba41e76f60, 3390),
-        ("kv_cache_shared_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x2cb651843961a419, 2947),
+        ("kv_cache_shared", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc7d83399ee6948bc, 3417),
+        ("kv_cache_shared_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x382dba518a89c85f, 2986),
         // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations
         ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
         ("train_stream_parquet", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),

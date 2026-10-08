@@ -2395,7 +2395,8 @@ connectors, Mooncake, HiCache, a remote LMCache server) are other traces.
   by `keep`, a draw of the tokens the engine still holds (§3.56).
 - **`sys_local`.** The system prompts' whole chunks are never read while the engine holds
   them, which on one engine is always. `false` is the cold engine beside a filled cache
-  (a restart, or a second engine), where they are read by every new conversation.
+  (a restart, or a second engine), where they are read by every new conversation. *2026-10-07:* under `false` they are read when the engine holds none of the
+  conversation, a continuing one included, as the AgentX replay showed (§3.63).
 - **A request's chunk reads are a `parallel` as wide as the chunks.** The trace shows four
   at once from a pool of four or five threads; a request that loads more than the pool is
   wide would queue, which is not modeled.
@@ -3595,6 +3596,85 @@ launcher). Generating behind the server (not possible on an appliance; the loopb
 practice in `runner/REFERENCE.md` §7 remains a development convenience). Buffered writes with
 `posix_fadvise(DONTNEED)` instead of `O_DIRECT` (the eviction cost the user described is
 paid before the advice runs).
+
+### 3.63 The AgentX replay on a GPU: `keep`, the system prompt as a prefix, and LMCache's `O_DIRECT` path (run 2026-10-07; A decided and built, B decided 2026-10-07)
+
+**The runs.** Brief item 21: `replay_agentx.py` through vLLM 0.30.0 and LMCache 0.5.5 on the
+development box's 8 GB GPU (RTX 2000 Ada), local-disk backend on the loopback NFS mount, under
+the kit's `strace`. Qwen2.5-0.5B served at 131,072 tokens with YaRN (factor 4; vLLM 0.30 reads
+`rope_parameters` and wants `max_position_embeddings` already scaled): 10 % of the corpus's
+requests fit its native 32k, 47 % fit 128k, and the replay skips the rest as it was written
+to. Engine KV 2 GiB (174,752 tokens, 1.33 sequences of the maximum length), vLLM's default
+prefill step on this GPU (2,048 tokens, eight chunks), the first 8 sessions played at once,
+300 requests in all (225 sent, 75 over the context), back to back. LMCache's disk limit was
+raised to 30 GB and the export moved from the 8 GB tmpfs to the ext4 root, so the store never
+evicts, as the corpus reference assumes (18 GB stored). Raw traces and logs stay outside the
+repo (`~/MLPerfStorage/agentx/`); the kit has the replay's log, a reduced LMCache log, the
+trace metrics, and the fitted file. Two runs, identical but for LMCache's `use_odirect`.
+
+**What the buffered run showed.**
+
+- *The call sequence holds under the agentic load*: every chunk is the six calls of a Python
+  `open` around one 3 MiB `read` or `write` (§3.51); no chunk is written twice. 6,042 chunks
+  written, 41,763 read: LMCache's own log retrieves exactly that many, 183 requests loading
+  once each, a mean of 58k tokens.
+- *LMCache logs a lookup at every step a request waits for KV memory*, its held prefix
+  falling as the running requests evict it (one request: 53,088 tokens held at its first
+  lookup, then a block of 16 tokens fewer every few steps). What the engine held is taken at admission: the last
+  lookup before the request's first load or store. `agentx.py fit --replay` does that, fits
+  only the requests the replay sent (its sessions as as many slots), and takes `keep` the
+  way `fit.py` does: 16 of 20 shares are 0, the whole kept prefix held in 8 of 180.
+- *The engine holds the system prompt and some of the conversation, or neither*: of 180
+  continuing requests, 141 held nothing, 36 the system prompt and more, 3 part of the system
+  prompt, none the system prompt alone. The engine loses a prompt from its end, the system
+  prompt last. In the replay the session's shared prefix is chunks like the rest of the
+  chain, stored by its first request and loaded whenever the engine lost it.
+
+**Against the abstract.** At the parameters fitted from the run the abstract writes 5,570 to
+6,414 chunks over four seeds (6,042). With `sys_local` true it reads 13,713 to 23,854 (41,763):
+the system prompt is never read. With `sys_local` false, as it was, it reads 34k to 44k, and
+the judge finds three rows outside, all saying the reads are too concentrated (the top 10 % of
+blocks take 51 % of the reads against 36 %; read-after-read reuse median 2 GiB against 5): the
+system prompt was read by *every* request, and the conversations drew their system prompts by
+`sys_pop` (Zipf over the eight) where each session has its own.
+
+**A (decided by the user 2026-10-07, built).** Two changes to the three KV abstracts:
+
+1. Under `sys_local = false` the system prompt's whole chunks are read when the engine holds
+   none of the conversation (`held == 0`: a new conversation, or one whose round's `keep`
+   draw is under a chunk), not on every request. 177 of the 180 continuing requests above
+   are that rule. With `sys_local = true` (every committed fit but this one) nothing changes.
+2. `sys_per_slot` (default false): a slot's conversations all start with the system prompt
+   of its own index, for sessions of an agent, each with its own. False keeps the pick by
+   `sys_pop`.
+
+At the replay's parameters (`fitted.agentx-replay.params.json`: `sys_local` false,
+`sys_per_slot` true) the abstract reads 31,549 to 41,235 and is **accepted**: 33 rows within,
+none outside, fan-out unseen as before. A new pair in `KIT_PAIRS`. The pick now sits inside
+`sys_per_slot`'s `when`, which moves its draw site: a seed draws other system prompts, so the
+fingerprints and the op counts at the goldens' parameters change (1,578 to 1,590 for
+`kv_cache_serving`); with one prompt size the op counts are unchanged (1,764 both), which is
+how the fitted files run. Goldens re-recorded.
+
+*Stated, not changed.* The first request of a session writes the system prompt's chunks in
+the replay, where the abstract's system prompts are a dataset (datagen's, never written by a
+run: eight times 91 writes here). A conversation in the abstract counts its reply against the
+context, as vLLM does, and starts anew sooner than the replay, which skips a request over
+the context and carries on (lifting the cap raises the abstract's chain loads from 14k to 16k
+to 22k); at the fitted context the loads are within the judge's tolerance.
+
+**What the `O_DIRECT` run showed.** `extra_config: {use_odirect: true}`. LMCache 0.5.5's
+local-disk backend takes the direct path when the chunk is a multiple of `statvfs`'s
+`f_bsize` (1 MiB on the NFS mount; the chunk is 3 MiB), and every chunk took it. The calls are
+not Python `open`'s six: a write is `openat(O_WRONLY|O_CREAT|O_DIRECT)`, `write`, `close`
+(`os.open` and `os.write`); a read is `openat(O_RDONLY|O_DIRECT|O_CLOEXEC)`, `fstat`, `read`,
+`close` (`os.fdopen(fd, buffering=0).readinto`). The same replay: 5,994 chunks written,
+41,004 read (within 1 to 2 % of the buffered run); 182,001 calls under the root against
+286,833.
+
+**B (decided by the user 2026-10-07, not yet built).** A parameter of the KV abstracts that
+selects the direct path's calls, so that a configuration with `use_odirect` declares
+`sync-direct` and is a traced configuration (brief item 21), not another workload.
 
 ## 4. Plan changes
 

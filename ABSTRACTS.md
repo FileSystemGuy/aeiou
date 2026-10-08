@@ -1156,7 +1156,8 @@ workload kv_cache_serving {
   param sys_prompts  = 50                       # hot set, pre-populated by datagen
   param sys_pop      = zipf(s = 1.1)            # [measure]
   param sys_tokens   = 1500                     # median, log-normal sigma 0.3 [measure]
-  param sys_local    = true                     # the engine holds the system prompts in GPU memory [config]
+  param sys_local    = true                     # the engine holds the system prompts in GPU memory [config]; false: read when it holds none of the conversation (§3.63)
+  param sys_per_slot = false                    # a slot's conversations share the system prompt of its index (an agent's sessions) [config: load]
   param reuse        = mixture(0.15: none,      # new conversation: the share of first turns, measured (ShareGPT 0.148)
                                0.85: const(40))                 # requests ago: the conversations a slot has open [config: load]
   param keep         = empirical(0: 91, 1_000_000: 9)           # tokens of a returning conversation still in the engine, one draw per round [config: GPU KV memory]
@@ -1184,7 +1185,7 @@ workload kv_cache_serving {
         let prior  = when (back) { ptoks @ (r - d) + out @ (r - d) } else { 0 }    # its own tokens when its last request ended
         let cont   = back && sysblk @ (r - d) * $chunk_tokens + prior + inn + out <= $context
         let conv   = when (cont) { conv @ (r - d) } else { draw(uniform64) }      # chain
-        let sp     = when (cont) { sp @ (r - d) } else { pick(sysp, dist = $sys_pop) }
+        let sp     = when (cont) { sp @ (r - d) } else when ($sys_per_slot) { file(sysp, slot) } else { pick(sysp, dist = $sys_pop) }
         let sysblk = size(sp) / $chunk_bytes                        # whole chunks inside the system prompt
         let ptoks  = when (cont) { prior }                          # the conversation's own prompt tokens
                      else { size(sp) % $chunk_bytes / bytes per token } + inn
@@ -1195,7 +1196,7 @@ workload kv_cache_serving {
         let load   = max(had - held, 0)
 
         phase(when (r < $warm) { "warm" } else { "serve" }) {
-          when (!$sys_local) { parallel(sysblk) { chunk_read(file(sp, k)) } }
+          when (!$sys_local && held == 0) { parallel(sysblk) { chunk_read(file(sp, k)) } }   # the engine lost the system prompt too (§3.63)
           parallel(load)     { chunk_read(file("kv/{conv:016x}-{held + k:04}.pt")) }   # all at once
           compute($prefill_per_token * (stored - had) * $chunk_tokens)
           for k in had .. stored { chunk_write(file("kv/{conv:016x}-{k:04}.pt")) }
@@ -1443,7 +1444,9 @@ reasoning in `DESIGN_REVIEW.md` §3.52.
   same round. The round's draw is `kp @ (r − (r mod d + 1))`, the draw at the last request
   of the previous round, under the `at` rule as widened in contract 0.5. The system
   prompts' chunks are read only with `sys_local = false` (the traced engine lost them in 8
-  of 220 returns).
+  of 220 returns), and then only when the engine holds none of the conversation (2026-10-07,
+  the AgentX replay: it held the system prompt and some of the conversation, or neither;
+  `DESIGN_REVIEW.md` §3.63).
 - **Conversations are served in turn** (one `reuse` distance). Real users return after
   lags of every length; a second distance forks conversations ("Replay", above).
 - **The system prompts are a dataset** with a directory to itself (V13), where LMCache keeps

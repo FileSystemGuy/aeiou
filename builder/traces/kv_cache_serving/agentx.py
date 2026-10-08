@@ -4,6 +4,7 @@ InferenceX AgentX sessions (Claude Code through a proxy, published on HuggingFac
 
     curl -L -o traces.jsonl https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126/resolve/main/traces.jsonl
     python agentx.py fit traces.jsonl [--traces N] [--bins 20] [--turn-bins 100] [--set name=value]... [--doc TEXT] -o fitted.agentx.params.json
+    python agentx.py fit traces.jsonl --replay replay.log serve.log [--context TOKENS] [--set name=value]... -o fitted.PARAMS.json
     python agentx.py reference traces.jsonl [--traces N] [--context TOKENS] -o agentx.reference.json
 
 One line of the file is one session: `requests` in time order, each with `t` (seconds), `in`
@@ -46,15 +47,23 @@ What the corpus gives, and how the abstracts take it:
   requests   the chains' requests, all of them; concurrency 1 (one slot), warm 0
 
   keep       is not in the corpus: what an engine holds is the engine's memory against its
-             open sessions, and the proxy saw none. The abstract's default stands until a
-             replay on a GPU measures it (`replay.py`).
+             open sessions, and the proxy saw none. The abstract's default stands in a fit
+             of the corpus. `--replay` fits what `replay_agentx.py` sent instead (its log:
+             the requests, the first `sessions` of the file as as many slots) and takes
+             keep from the server's, as `fit.py` does: per continuing request, the tokens
+             the engine held of the chain's kept prefix past the system prompt's whole
+             chunks, a prefix held whole being a lower bound. The engine can never hold
+             the reply (its blocks are not the next prompt's), so the bound is the kept
+             prompt, not the prompt and the reply the abstract's `prior` counts.
 
 `reference` is the corpus's own chunk accounting, the thing a dry run at the fitted
 parameters is compared with: per request, the whole 256-token chunks its prompt holds, how
 many of them the session had stored before (the prefix the store would hit), and how many
 are new (stored now), with totals, means, and equal shares.
 """
-import argparse, collections, json, statistics
+import argparse, collections, json, re, statistics
+
+from fit import kept
 
 BLOCK = 64                                            # tokens per hash id
 
@@ -91,15 +100,16 @@ def flatten(requests, out, own=-1, counter=None):
         out.sort(key=lambda gr: gr[1]["t"])
 
 
-def walk(path, traces, chunk_tokens, context):
-    """Per request: its chain, whether it starts one, in, out, the blocks it keeps of the chain's
+def walk(path, traces, chunk_tokens, context, played=None):
+    """Per request: its session and its index among the session's requests (`ti`, `fi`), its chain, whether it starts one, in, out, the blocks it keeps of the chain's
     last prompt, think time, and its chunks stored and hit under a store that never evicts;
     and the prefix of each sub-agent group's first prompt that the session had stored.
 
     Chains as the module doc says. `in` is a count of 64-token blocks and the last block of
     a prompt is partial as often as not, so its hash differs once the prompt has grown: a
     request that keeps all but that block extends the chain, and the block is left out of
-    the chunk accounting."""
+    the chunk accounting. With `played` (a set of (session, index) pairs, `replay_agentx.py`'s),
+    only the requests a replay sent: the store and the chains are the server's."""
     per = max(1, chunk_tokens // BLOCK)                # hash ids per chunk
     rows, shared = [], []
     nchain = 0
@@ -113,8 +123,8 @@ def walk(path, traces, chunk_tokens, context):
             sys_blocks = 0                             # the session's shared prefix, in blocks: the longest a sub-agent's first prompt found stored
             last = {}                                  # chain -> its last request; chains are keyed by (group, model) and continuity
             seen_group = set()
-            for g, r in flat:
-                if r["in"] > context:
+            for fi, (g, r) in enumerate(flat):
+                if r["in"] > context or played is not None and (ti, fi) not in played:
                     continue
                 h = r["hash_ids"]
                 whole = h[:-1]
@@ -145,7 +155,7 @@ def walk(path, traces, chunk_tokens, context):
                     if kept >= len(prev["hash_ids"]) - 1:
                         kept = len(prev["hash_ids"])
                 key = best
-                rows.append(dict(chain=key[1], first=prev is None, inp=r["in"], out=r["out"], kept=kept * BLOCK,
+                rows.append(dict(ti=ti, fi=fi, chain=key[1], first=prev is None, inp=r["in"], out=r["out"], kept=kept * BLOCK,
                                  prev_in=prev["in"] if prev else 0, prev_out=prev["out"] if prev else 0,
                                  think=r.get("think_time"), stored=len(ch) - hit, hit=hit))
                 store.update(ch)
@@ -153,8 +163,48 @@ def walk(path, traces, chunk_tokens, context):
     return rows, shared
 
 
+def replayed(log, server_log):
+    """What `replay_agentx.py` sent: its sessions, and per request sent (session, index) ->
+    (prompt tokens, the tokens the engine held of it when it was admitted). LMCache logs a
+    lookup (`Reqid: ID, Total tokens T, Inference Engine computed tokens: H`) at every step a
+    request waits for KV memory, H falling as the running requests evict its prefix, so a
+    request's H is its last lookup before its first load or store (`[req_id=ID] Retrieved`,
+    `Stored`). LMCache logs in schedule order and the replay in completion order: a request
+    is matched by its prompt length, in order of first lookup among equals."""
+    lines = open(log).read().splitlines()
+    sessions = int(re.match(r"sessions (\d+)", lines[0])[1])
+    ansi = re.compile(r"\x1b\[[0-9;]*m")
+    total, held, admitted = {}, {}, set()
+    for l in open(server_log, errors="replace"):
+        l = ansi.sub("", l)
+        m = re.search(r"Reqid: (\S+), Total tokens (\d+), Inference Engine computed tokens: (\d+)", l)
+        if m:
+            total.setdefault(m[1], int(m[2]))
+            if m[1] not in admitted:
+                held[m[1]] = int(m[3])
+            continue
+        m = re.search(r"\[req_id=(\S+)\] (Retrieved|Stored)", l)
+        if m:
+            admitted.add(m[1])
+    by_prompt = collections.defaultdict(collections.deque)
+    for rid, t in total.items():                   # dicts keep first-lookup order
+        by_prompt[t].append(held[rid])
+    sent = {}
+    for l in lines[1:]:
+        m = re.match(r"req \d+ session (\d+) index (\d+) prompt (\d+)", l)
+        if m:
+            prompt = int(m[3])
+            assert by_prompt[prompt], "the server's log has no request of %d prompt tokens: the two logs are not of one run" % prompt
+            sent[(int(m[1]), int(m[2]))] = (prompt, by_prompt[prompt].popleft())
+    assert not any(by_prompt.values()), "the server's log has requests the replay's does not"
+    return sessions, sent
+
+
 def fit(a):
-    rows, shared = walk(a.corpus, a.traces, a.chunk_tokens, a.context)
+    sent = None
+    if a.replay:
+        a.traces, sent = replayed(*a.replay)
+    rows, shared = walk(a.corpus, a.traces, a.chunk_tokens, a.context, None if sent is None else set(sent))
     sys_tokens = int(statistics.median(shared)) if shared else 0
     sys_whole = sys_tokens // a.chunk_tokens * a.chunk_tokens
     inn, out, think, growth, trim = [], [], [], [], []
@@ -186,6 +236,16 @@ def fit(a):
               "turns": shares(list(lengths.values()), a.turn_bins), "retain": n,
               "turn_in": shares(inn, a.bins), "turn_out": shares(out, a.bins), "think": shares(think, a.bins),
               "trim": {"mixture": [{"weight": round(1 - rewrite, 4), "dist": {"const": 0}}, {"weight": round(rewrite, 4), "dist": shares(trim, a.bins)}]}}
+    if sent is not None:                           # the replay's sessions are its slots, served back to back; keep is the engine's
+        keep = []
+        for r in rows:
+            if not r["first"]:
+                prompt, held = sent[(r["ti"], r["fi"])]
+                avail = min(r["kept"], prompt)         # the engine can hold the kept prefix only: the reply's blocks are not the next prompt's
+                got = min(held, avail)
+                keep.append((max(0, got - sys_whole), got + a.block > avail))   # the engine counts whole blocks
+        params.update(concurrency=a.traces, requests=round(n / a.traces), keep=kept(keep, a.bins, context),
+                      think={"const": 0} if not a.time_scale else shares([t * a.time_scale for t in think], a.bins))
     for s in a.set:
         k, v = s.split("=", 1)
         params[k] = json.loads(v)
@@ -195,6 +255,10 @@ def fit(a):
                     "less of it); sys_tokens the median prefix a sub-agent's first prompt shares with its session; keep not measured "
                     "(the proxy saw no engine)." % (
                         a.corpus.rsplit("/", 1)[-1], params["sys_prompts"], n, len({r["chain"] for r in rows}), 100 * rewrite, 100 * over))
+    if sent is not None and not a.doc:
+        doc = doc.replace("keep not measured (the proxy saw no engine).", "the requests replay_agentx.py sent (%d sessions as %d slots, %d "
+                          "requests each, back to back), and keep from the server's log: of %d continuing requests the engine held the "
+                          "whole kept prefix in %d." % (a.traces, a.traces, params["requests"], len(keep), sum(w for _, w in keep)))
     with open(a.out, "w") as f:                    # a parameter to a line
         f.write('{"params_version": 1, "abstract": %s,\n "doc": %s,\n "params": {\n%s}}\n' % (
             json.dumps(a.abstract), json.dumps(doc), ",\n".join("  %s: %s" % (json.dumps(k), json.dumps(v)) for k, v in params.items())))
@@ -234,6 +298,10 @@ def main():
     ap.add_argument("--turn-bins", type=int, default=100, help="shares of `turns`: the long sessions hold the prefix hits, so its tail needs resolving")
     ap.add_argument("--chunk-tokens", type=int, default=256)
     ap.add_argument("--context", type=int, default=990_016, help="requests with longer prompts are skipped (the corpus's own cap)")
+    ap.add_argument("--replay", nargs=2, metavar=("LOG", "SERVER_LOG"),
+                    help="fit: the requests replay_agentx.py sent (its log), and keep from the server's (LMCache's line per request)")
+    ap.add_argument("--time-scale", type=float, default=0.0, help="--replay: the replay's own (0: think 0)")
+    ap.add_argument("--block", type=int, default=16, help="--replay: tokens in a block of the engine's own cache")
     ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--doc", default="")
     ap.add_argument("-o", "--out", required=True)

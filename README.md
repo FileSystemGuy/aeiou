@@ -199,10 +199,11 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-04)
+## Status (2026-10-07)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
-one development box. Built and tested: everything described above, the nine backends, the
+one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
+LMCache (item 21: `keep` measured, the pair accepted, buffered and `O_DIRECT` both traced). Built and tested: everything described above, the nine backends, the
 multi-host coordinator (two ranks on `localhost`), the limit checks, the cold-start
 controls, the JSON report, the locality metrics on both sides with tolerances, the `trace`
 node under every backend, the option layers, the usage-error frame, and `datagen` across
@@ -212,9 +213,10 @@ reported; the launcher takes host files and `pdsh`-style ranges).
 Not built, in rough order of interest:
 
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only
-  met `localhost`), and the measurements of `PROJECT_BRIEF.md` §6 that need a GPU box: the
-  agentic KV-cache load replayed through vLLM (item 21), and tensor-parallel sharding of a
-  KV chunk, where `--gpus` is today independent engines rather than one TP group (item 20).
+  met `localhost`), and tensor-parallel sharding of a KV chunk, where `--gpus` is today
+  independent engines rather than one TP group (`PROJECT_BRIEF.md` §6 item 20).
+- The KV abstracts' calls for LMCache's `O_DIRECT` path, so that its trace becomes a pair
+  under `sync-direct` (item 21, decided).
 - Backends from the brief's list that are not written: `gds`, `nixl-posix`, `libnfs`; object
   storage through `s3dlio` behind a feature flag (item 17).
 - `aeiou-verify`, the offline content verifier that takes a dataset manifest and

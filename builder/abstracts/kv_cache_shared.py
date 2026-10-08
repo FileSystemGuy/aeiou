@@ -44,7 +44,8 @@ def shape(name, reader, doc):
     w.param("sys_tokens_min", 1, unit="tokens", doc="bounds of the system prompt length; equal bounds give every prompt that length")
     w.param("sys_tokens_max", 100_000, unit="tokens")
     w.param("sys_pop", zipf(s=1.1), doc="[measure]")
-    w.param("sys_local", True, doc="[config] the engine holds the system prompts in GPU memory and never loads their chunks; false loads them for every new conversation")
+    w.param("sys_local", True, doc="[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63)")
+    w.param("sys_per_slot", False, doc="[config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop`")
     w.param("reuse", mixture((0.15, none), (0.85, const(40))),
             doc="none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations "
                 "a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one")
@@ -114,7 +115,8 @@ def shape(name, reader, doc):
                 conv = slot.let("conv", when(cont, slot.ref("conv").at(r - d), draw(uniform64())))
                 turns = slot.let("turns", when(cont, slot.ref("turns").at(r - d), tn))
                 turn = slot.let("turn", when(cont, slot.ref("turn").at(r - d) + 1, 0))
-                sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d), sysp.pick(P.sys_pop)))
+                sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d),
+                                         when(P.sys_per_slot == True, sysp.file(slot.index % P.sys_prompts), sysp.pick(P.sys_pop))))   # noqa: E712
                 sysblk = slot.let("sysblk", sp.size // fsize)          # whole chunks inside the system prompt, shared by its conversations
                 ptoks = slot.let("ptoks", when(cont, prior, (sp.size % fsize) // token_bytes) + inn)
                 stored = slot.let("stored", ptoks // P.chunk_tokens)   # whole chunks only
@@ -134,7 +136,7 @@ def shape(name, reader, doc):
                     if not reader:
                         with slot.when(stored > had):                  # the lookup ends at the first chunk that is not there
                             slot.stat(kv.object(conv=conv, k=had, ext="data"), expect=["ENOENT"])
-                    with slot.when(P.sys_local == False):             # noqa: E712
+                    with slot.when((P.sys_local == False) & (held == 0)):             # noqa: E712
                         with slot.parallel("sk", sysblk) as rd:
                             load(rd, rd.let("b", sp.chunk(rd.index)))
                     with slot.parallel("lk", nload) as rd:             # the chunks the engine does not hold, all at once

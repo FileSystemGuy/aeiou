@@ -558,6 +558,24 @@ def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_p
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted(monkeypatch):
+    """`builder/traces/kv_cache_serving`: the AgentX replay through vLLM and LMCache (2026-10-07,
+    DESIGN_REVIEW.md §3.63): 8 sessions at 128k context, 2 GiB of engine KV. LMCache logs a lookup
+    at every step a request waits for KV memory, the held prefix falling as the running requests
+    evict it; a request's is its last lookup before its first load or store. The kit's LMCache
+    log keeps those two lines per request. `fitted.agentx-replay.params.json` is `agentx.py fit
+    --replay` on these logs and the corpus (not committed; the kit's README has the command)."""
+    kit = BUILDER / "traces" / "kv_cache_serving"
+    monkeypatch.syspath_prepend(str(kit))
+    agentx = importlib.import_module("agentx")
+    sessions, sent = agentx.replayed(kit / "agentx.replay.log", kit / "agentx.lmcache.log")
+    assert sessions == 8 and len(sent) == 225
+    assert sum(1 for _, held in sent.values() if held == 0) == 178          # the engine held nothing, the system prompt included
+    p = json.loads((kit / "fitted.agentx-replay.params.json").read_text())["params"]
+    assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_per_slot"]) == (8, 28, 131072, False, True)
+    assert p["keep"]["empirical"]["values"].count(0) == 16                  # of 20 shares: nothing held past the system prompt
+
+
 def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     """`builder/traces/kv_cache_shared`: vLLM with LMCache's `fs://` backend, the 300 requests of
     the row above sent to an engine on an empty store and then to a restarted engine on the
@@ -655,6 +673,8 @@ KIT_PAIRS = [
     # the three KV-cache pairs are the ShareGPT replay (DESIGN_REVIEW.md §3.56); with one `keep` draw per round of
     # conversations (§3.57) the reuse distance is within, and only the writer's store order (two threads) stays outside
     ("kv_cache_serving", "trace", "kv_cache_serving", "fitted.params.json", 1, "accepted"),
+    # the AgentX replay (§3.63): the system prompt read when the engine holds none of the conversation, one per slot
+    ("kv_cache_serving", "agentx.trace", "kv_cache_serving", "fitted.agentx-replay.params.json", 1, "accepted"),
     ("kv_cache_shared", "writer.trace", "kv_cache_shared", "fitted.params.json", 1, "not accepted"),
     ("kv_cache_shared", "reader.trace", "kv_cache_shared_reader", "fitted.reader.params.json", 1, "accepted"),
 ]

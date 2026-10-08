@@ -76,4 +76,38 @@ against 0.91 × `chunks_hit` (the default `keep`) is the check `tests/test_trace
 What the corpus lacks is `keep` and the call sequence under this load: `replay_agentx.py`
 sends the corpus's requests to a vLLM server (a block's tokens generated from its hash id, so
 the prefix structure is the corpus's) for the `strace` and LMCache's log, as `replay.py` does
-for ShareGPT. Written for the trace box; not run yet.
+for ShareGPT. ~~Written for the trace box; not run yet.~~ Run 2026-10-07 (below).
+
+## The AgentX replay on a GPU (2026-10-07)
+
+`DESIGN_REVIEW.md` §3.63. Qwen2.5-0.5B at 128k context (YaRN), 2 GiB of engine KV, the first
+8 sessions at once, 300 requests (225 sent; 75 over the context are skipped), back to back.
+LMCache's store must not evict (the corpus reference assumes it): 18 GB of chunks, so the
+export is a directory on disk, not the 8 GB tmpfs of `runner/REFERENCE.md` §7.
+
+```
+export PYTHONHASHSEED=0 KV_BYTES=2147483648 MAX_MODEL_LEN=131072 LMCACHE_CONFIG_FILE=lmcache.agentx.yaml
+export VLLM_ARGS='--hf-overrides {"max_position_embeddings":131072,"rope_parameters":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
+strace -f --seccomp-bpf -ttt -T -yy \
+    -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy,io_uring_setup,io_uring_enter \
+    -o trace.txt sh serve.sh > serve.log 2>&1 &
+python replay_agentx.py traces.jsonl --sessions 8 --requests 300 --max-context 131072 > agentx.replay.log   # once /health answers
+aeiou-trace metrics trace.txt --root /mnt/nfs -o agentx.trace.metrics.json
+python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context 131072 \
+    --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false --set sys_per_slot=true \
+    -o fitted.agentx-replay.params.json
+```
+
+- vLLM 0.30 reads `rope_parameters` (Transformers 5) and wants `max_position_embeddings`
+  already scaled for YaRN; the text the model generates past 32k does not matter here (the
+  prompts are tokens drawn from hash ids, the replies `ignore_eos`).
+- LMCache logs a lookup at every step a request waits for KV memory, its held prefix falling
+  as the running requests evict it. `agentx.py fit --replay` takes the last lookup before the
+  request's first load or store. `agentx.lmcache.log` keeps just those two lines per request
+  (441 lines of the server's 32 MB; `agentx.replayed` parses both the same).
+- The kit's pair (`agentx.trace`, `fitted.agentx-replay.params.json`) is judged in
+  `tests/test_trace.py` and accepted; the corpus is not committed, so the fit is repeated by
+  the command above, not by the tests.
+- `lmcache.agentx.odirect.yaml` is the same with LMCache's `use_odirect`: the second run, whose
+  calls differ (§3.63) and wait for the abstract's direct path (brief item 21).
+
