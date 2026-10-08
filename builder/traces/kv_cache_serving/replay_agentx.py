@@ -10,12 +10,13 @@ The corpus has no text: a request is its prompt's 64-token blocks as hash ids, l
 the session (every session numbers its blocks from 0). A block's tokens are generated from
 its session and its id (64 ids drawn from the vocabulary by a generator seeded with both),
 so two requests of a session that share a prefix of blocks send the same prefix of tokens,
-and the server's prefix cache and LMCache see the corpus's reuse structure. A block of the
-session's shared prefix (`agentx.shared_prefix`: the system prompt and the tool
-definitions) is generated from its position in that prefix instead, so the sessions share
-one system prompt, as far as the shorter of two prefixes goes: the corpus cannot say what
-its sessions share, and a public corpus with the text can (`sammshen/lmcache-agentic-traces`:
-three system prompts serve 756 of its 767 sessions). The replay of 2026-10-07 seeded by the
+and the server's prefix cache and LMCache see the corpus's reuse structure. A block of one
+of the session's two prefixes is generated from its position in that prefix instead (the
+main agent's, `agentx.main_prefix`, and its sub-agents', `agentx.shared_prefix`: each its
+tools and system prompt), so the sessions share both, each as far as the shorter of two
+goes: the corpus cannot say what its sessions share, and a public corpus with the text can
+(`sammshen/lmcache-agentic-traces`: three system prompts serve 756 of its 767 sessions);
+~~one system prompt, the sub-agents'~~ (2026-10-08). The replay of 2026-10-07 seeded by the
 id alone, and sessions whose ids happened to line up shared whole conversations
 (`DESIGN_REVIEW.md` §3.63). The
 reply a request got is not what the next prompt holds (its blocks have their own ids), so
@@ -34,7 +35,7 @@ cached tokens when the server reports them, completion tokens, seconds. Run 2026
 """
 import argparse, json, random, threading, time, urllib.request
 
-from agentx import BLOCK, flatten, shared_prefix
+from agentx import BLOCK, flatten, main_blocks, main_prefix, shared_prefix
 
 
 def tokens_of(key, vocab, lo=1000):
@@ -53,7 +54,7 @@ def main():
     ap.add_argument("--max-context", type=int, default=131072)
     ap.add_argument("--max-reply", type=int, default=4096)
     ap.add_argument("--time-scale", type=float, default=0.0)
-    ap.add_argument("--chunk-tokens", type=int, default=256, help="LMCache's chunk, for the session's shared prefix (agentx.shared_prefix)")
+    ap.add_argument("--chunk-tokens", type=int, default=256, help="LMCache's chunk, for the sub-agents' prefix (agentx.shared_prefix)")
     ap.add_argument("--vocab", type=int, default=151643, help="token ids are drawn below it (Qwen2.5's; the server refuses ids past its vocabulary)")
     a = ap.parse_args()
 
@@ -63,6 +64,7 @@ def main():
 
     limit = post("/tokenize", {"prompt": "x"})["max_model_len"]
     vocab = a.vocab
+    mb = main_blocks(a.corpus)                     # the main agent's prefix, a property of the corpus
     sessions = []
     with open(a.corpus) as f:
         for i, line in enumerate(f):
@@ -72,16 +74,18 @@ def main():
                 break
             flat = []
             flatten(json.loads(line)["requests"], flat)
-            sys_at = {b: p for p, b in enumerate(shared_prefix(flat, max(1, a.chunk_tokens // BLOCK)))}
-            sessions.append(([r for _, r in flat], i, sys_at))
-    print("sessions %d context %d (server %d) vocab %d shared prefix %s" % (
-        len(sessions), a.max_context, limit, vocab, ",".join(str(len(s[2]) * BLOCK) for s in sessions)), flush=True)
+            at = {b: "sub %d" % p for p, b in enumerate(shared_prefix(flat, max(1, a.chunk_tokens // BLOCK)))}
+            at.update({b: "main %d" % p for p, b in enumerate(main_prefix(flat, mb))})
+            sessions.append(([r for _, r in flat], i, at))
+    print("sessions %d context %d (server %d) vocab %d prefixes (main, sub) %s" % (
+        len(sessions), a.max_context, limit, vocab, " ".join("%d,%d" % (sum(v.startswith("main") for v in s[2].values()) * BLOCK,
+                                                                       sum(v.startswith("sub") for v in s[2].values()) * BLOCK) for s in sessions)), flush=True)
 
     lock = threading.Lock()
     count = [0]
 
     def play(si, session):
-        reqs, ti, sys_at = session
+        reqs, ti, at = session
         for ri, r in enumerate(reqs):
             with lock:
                 if count[0] >= a.requests:
@@ -92,7 +96,7 @@ def main():
                 continue
             if a.time_scale and r.get("think_time"):
                 time.sleep(r["think_time"] * a.time_scale)
-            ids = [t for b in r["hash_ids"] for t in tokens_of("sys %d" % sys_at[b] if b in sys_at else "%d %d" % (ti, b), vocab)]
+            ids = [t for b in r["hash_ids"] for t in tokens_of(at.get(b, "%d %d" % (ti, b)), vocab)]
             want = max(1, min(a.max_reply, r["out"], limit - len(ids)))
             t0 = time.monotonic()
             out = post("/v1/completions", {"prompt": ids, "max_tokens": want, "ignore_eos": True, "temperature": 0})

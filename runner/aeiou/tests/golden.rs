@@ -33,11 +33,13 @@ fn hashes_match_check_py() {
     // for contract 0.5, the wider `at` rule V3, with kv_cache_serving and kv_cache_shared changed under it;
     // the three KV abstracts again 2026-10-02 for `prefill_step`, `think`, `trim`, and `turns`, DESIGN_REVIEW §3.59,
     // and 2026-10-07 for `sys_per_slot` and the system prompt read only when the engine holds none of the conversation,
-    // then kv_cache_serving for `direct`, LMCache's O_DIRECT calls (its fingerprints at `direct` false unchanged), §3.63).
+    // then kv_cache_serving for `direct`, LMCache's O_DIRECT calls (its fingerprints at `direct` false unchanged), §3.63;
+    // the three again 2026-10-08 for the sub-agent prefix, `kind`, `first_in`, `sys_held`, and `sub_held`, whose defaults
+    // leave every fingerprint unchanged).
     let want = [
         ("ckpt_restore", "ed1b8905fb5f96a3892c0e895f27c172fb06fa2571568ae4d362ff344ae547d0"),
         ("ckpt_write_dcp", "f67dbd42462fd8ce7d0d0d9c92312f49cf4567a5cdd36a240d0cf446e2ed88a9"),
-        ("kv_cache_serving", "0e6c074d05526875fc771c3aa5146dc2031b2829a05c821eb0041b093704e9d3"),
+        ("kv_cache_serving", "c8c5033cca684f807505571ff85fd991dbd7cb46a0125874c0093122bc9aa00e"),
         ("model_load", "df63f75a22b063b44421e87c787d29d5d7f820cd4e96b0a8797876806ca496ae"),
         ("train_large_samples", "2fd904f665b70711797d9d588a94d5d660eabc68fe9a8b6ece876ae2a079c75a"),   // 2026-10-02: the `enumerate` phase, on by default
         ("train_small_files", "3f93512e6fe335abedd6e49421980af009984df1b35b7238b17c180a206cee65"),   // 2026-10-02: `enumerate` on by default
@@ -48,8 +50,8 @@ fn hashes_match_check_py() {
         ("train_map_hdf5", "48f8b14822e4c02f55d948e61d48bf93cdad84e8042580d7b23769edf9bd4f63"),
         ("vdb_search_ivf", "3abb616e11a0b57ba594737d9e3dc05fe5caa591232fbf9b34903c423a440327"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("kv_cache_shared", "b15d7ff6354c45778fab3b72acf76bb079d59866cb958f73b8b76b0ff87e3176"),
-        ("kv_cache_shared_reader", "da99eec7857167300ddfa3e56feeff836090d9e8938cebb2929db99c51302c82"),
+        ("kv_cache_shared", "c49ff0120cdbb9f4ef0f66934ecd9b5e0746c553bf5f00230be341a26fa0d31b"),
+        ("kv_cache_shared_reader", "2606e1d055348d815bb6b35f57d91a32939e74c5c7ff4ef95090a184d2fdba59"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();

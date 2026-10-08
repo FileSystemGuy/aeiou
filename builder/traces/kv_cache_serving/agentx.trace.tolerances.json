@@ -8,8 +8,20 @@
   ],
   "outside": [
     {
+      "metric": "mix: reads / data ops",
+      "reason": "the abstract reads fewer conversation chunks than the replay (13.5k to 24.4k reads against 33.8k, spread wide over seeds: the long main-agent chains a slot draws carry most of the reads); lifting the context cap brings it within (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+    },
+    {
+      "metric": "mix: read bytes / data bytes",
+      "reason": "the same as the reads' share of data ops: every access is one whole chunk (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+    },
+    {
       "metric": "reuse distance, read after read",
-      "reason": "the replay re-reads a chunk after more of the other sessions' traffic than the dry run's slots in turn do: p50 5 GiB against 3, p90 7 against 5 (the corrected replay of 2026-10-08, DESIGN_REVIEW.md \u00a73.63). Cause not yet established; the candidate is the server's admission order, which puts the O_DIRECT pair's read-after-write row outside"
+      "reason": "the abstract's re-reads come sooner (p50 2.5 GiB against 4); the system prompt is no longer the cause (its reads now follow sys_held), and the conversation reads are short of the replay's (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
+    },
+    {
+      "metric": "reuse distance, read after write",
+      "reason": "as read after read: p50 2 GiB against 4 (the two-prefix model, built 2026-10-08, DESIGN_REVIEW.md \u00a73.63; a checkpoint, not yet examined)"
     }
   ]
 }

@@ -85,7 +85,9 @@ for ShareGPT. ~~Written for the trace box; not run yet.~~ Run 2026-10-07 (below)
 ~~(225 sent; 75 over the context are skipped)~~ The buffered run was made again 2026-10-08
 with each session's own tokens: the first run's sessions shared chunks by accident (the
 corpus's ids are local to a session, and the replay seeded a block's tokens by its id alone).
-The `O_DIRECT` run (`agentx-odirect.*`) is still the first replay's.
+The `O_DIRECT` run (`agentx-odirect.*`) is still the first replay's. Run again the same day
+with both prefixes, the main agent's and the sub-agents', shared by the sessions (219 sent;
+`DESIGN_REVIEW.md` §3.63, "Two prefixes").
 LMCache's store must not evict (the corpus reference assumes it): 18 GB of chunks, so the
 export is a directory on disk, not the 8 GB tmpfs of `runner/REFERENCE.md` §7.
 
@@ -98,7 +100,7 @@ strace -f --seccomp-bpf -ttt -T -yy \
 python replay_agentx.py traces.jsonl --sessions 8 --requests 300 --max-context 131072 > agentx.replay.log   # once /health answers
 aeiou-trace metrics trace.txt --root /mnt/nfs --metrics-block 3145728 -o agentx.trace.metrics.json   # a block per chunk
 python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context 131072 \
-    --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false --set sys_per_slot=true \
+    --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false \
     -o fitted.agentx-replay.params.json
 ```
 

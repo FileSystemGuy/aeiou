@@ -3752,6 +3752,123 @@ in memory (`sys_local` true), while each conversation's own chunks are read back
 turn. They also say every write reaches the device when a CPU tier absorbs reads, which is
 for the CPU tier's design (next after this).
 
+**Why the abstract's re-reads come sooner (found 2026-10-08).** Not the server's admission
+order. The replay's chunk accesses rebuilt from LMCache's log (per request: the chain, what
+the engine held, the chunks loaded and stored) give the same read-after-read distance in
+any order: p50 6.0 GiB in admission order, 5.8 with the sessions taking turns a request
+each, 5.7 a chunk each (the dry run's round-robin); between two loads of a session the
+others sent 6 requests (p50), the dry run's slots 7. Lifting the context cap does not
+move it either. The difference is what the abstract reads. Split by path, its re-reads of
+conversation chunks are at p50 4.4 GiB, near the replay's; its re-reads of the system
+prompt are 63 % of all its re-reads (19,110 of 30,121 at seed 1) at p50 2.8 GiB. Under
+`sys_per_slot` every new conversation on a slot reads the slot's prompt when the engine
+holds none of it, the one-request side calls and the sub-agents' chains included, while
+in the replay only the main agent's chains begin with its opening prompt (main agent: 113
+requests, 32.6k chunks loaded, 16 chain starts; sub-agents and side calls: 107, 13.1k, 29).
+The totals agree and the mix does not. *Tried and rejected (2026-10-08):* C, `sys_starts`
+again with the prompt on the main agent's chain starts only (16 of 45): seven rows outside
+(the sub-agents' shared prefix, turned into their own tokens, is written by every
+sub-agent chain, 2.6k writes more than the server's one per session), one with the
+context cap lifted. Not committed. The pair's reason in `agentx.trace.tolerances.json`
+says this.
+
+**Two prefixes (proposed 2026-10-08, decided by the user and built the same day).** From primary sources
+instead of a fit to the trace that produced them. Each claim with its source, in falling
+confidence:
+
+- *Prompt order* (Anthropic's prompt-caching documentation): a request's prompt is its
+  `tools`, then `system`, then `messages`, so the first blocks of every prompt are its tool
+  definitions.
+- *Sub-agents* (Claude Code's sub-agent documentation): a sub-agent gets its own system
+  prompt plus environment details, "not the Claude Code system prompt", a filtered set of
+  the tools, and a fresh context without the parent's history. So a sub-agent's prompt
+  differs from the main agent's at its first block, and sub-agents of one type share a
+  prefix. The corpus agrees: the main agent's prompts share no block with the sub-agents'
+  prefix (all eight replayed sessions), and the sub-agents share 21k to 33k tokens
+  (quartiles over the 146 sessions with sub-agents; median 27k).
+- *The main agent's prefix* (the corpus, an inference): when the main agent's prompt cuts
+  the previous one (3,301 cuts over the corpus), it keeps nothing in 22 % (its first block,
+  a tool definition, changed) or most often 30k to 45k tokens: its tools and system prompt,
+  which a restart keeps. Whether two sessions share it is not in the corpus (its ids are
+  local); the documentation's static and session-specific parts of the system prompt
+  (secondary sources) say sessions of one version and configuration share the static
+  part. The public agentic corpus with text agrees (three system prompts for 756 of 767
+  sessions).
+- *LMCache 0.5.5* (its source, under `lmcache/`: `v1/token_database.py` for the key,
+  `integration/vllm/vllm_v1_adapter.py` for what is stored and loaded,
+  `v1/storage_backend/local_disk_backend.py` and `storage_manager.py` for the I/O): a chunk's key is a
+  chained hash of its whole prefix, with the TP rank; a chunk already stored is not written
+  again; the last partial chunk and decode are not stored; a request loads one contiguous
+  range, from the chunk holding the engine's cached tokens to LMCache's longest prefix hit,
+  on four threads; the index is in memory. So a request whose engine holds nothing loads
+  its prefix and its conversation as one range, and a prefix shared by many requests is
+  written once.
+
+*The model.* Each slot has two prefixes: the main agent's (`sysp`, as now) and a
+sub-agent's (a second dataset, `subp`, with `sub_prompts`, `sub_tokens` and its bounds,
+`sub_pop`, and `sub_per_slot` like `sys_per_slot`). A new conversation draws its `kind`:
+main, sub-agent, or none (a side call that begins with no stored prefix); a continuing one
+keeps its conversation's. The prefix of its kind takes the place the system prompt has
+now: its whole chunks read when the engine holds none of the conversation (`sys_local`
+false) or never (true), its tail counted with the conversation's own tokens, the context
+check counting it. Both prefixes stay datasets, never written by a run (LMCache writes a
+shared chunk once). `kind`'s draw goes after every existing draw, so its default (every
+conversation the main agent's) keeps the fingerprints and op counts of every committed
+parameter file; the AST's hash changes. No contract change.
+
+*The fit* (`agentx.py`): `kind` from the chain starts (a main-agent chain, a sub-agent
+group's chain, or neither); `sys_tokens` becomes the main agent's prefix (the most common
+kept prefix of its cuts, or the longest common prefix of a session's main-agent chain
+starts), and the present measure moves to `sub_tokens`; `turn_in` of a chain start is its
+prompt less its kind's prefix. *The replay* (`replay_agentx.py`): both prefixes generated
+by position, so sessions share them as far as the shorter goes, as the documentation says
+sessions of one configuration do. Then the buffered and `O_DIRECT` runs again (the second
+not yet redone), refit, and judge.
+
+*Expected, not yet measured:* side calls and sub-agents stop reading the main agent's
+prompt and read their own shorter one, shared by the session's sub-agents and so re-read
+more often by them; the system-prompt share of re-reads should fall toward the replay's.
+*Open:* whether `none` is worth a kind (the side calls are a few hundred tokens, under a
+chunk, and store nothing); whether a sub-agent prefix is per slot or per type across slots
+(`sub_per_slot`, the same choice as `sys_per_slot`); how the CPU tier (next) holds a prefix
+many requests share, which LMCache's source answers: the CPU tier is written through, LRU,
+5 GB by default, and a chunk read from disk is promoted into it.
+
+**Built (2026-10-08), with what building it found.** The defaults the open points took: a
+`none` kind kept (the fit gives it its weight), `sub_per_slot` added (default false), each
+prefix measured per session and model (another model's tokens are other tokens). The main
+agent's prefix is 511 blocks, 32,704 tokens: the length a main-agent prompt keeps when it
+cuts the previous one, 134 times in the corpus against at most 19 for any other length
+(`agentx.main_blocks`); 80 % of main-agent prompts begin with their session's first 511
+blocks, the rest after a tool set changed. Three more parameters, each found by a fit that
+failed without it, each drawn after every existing draw and defaulting to the old
+behaviour (so every committed parameter file keeps its fingerprints; the three ASTs'
+hashes re-recorded):
+
+- `first_in`: a new conversation's first prompt past its prefix, apart from `turn_in` (a
+  turn's growth). One pooled distribution is what made B and C fail. The fit takes it past
+  the prefix of the chain's kind or what its session had already stored, the longer (a
+  chain of neither kind often opens with another sub-agent type's tools).
+- `sys_held`, `sub_held`: the tokens of each prefix the engine holds when a request
+  arrives, apart from its conversation. With the main prefix shared by the sessions, vLLM
+  held all of it for 89 of 103 main-agent requests; reading the prefix whenever no
+  conversation is held was wrong. The fit takes them from the requests whose engine held no
+  whole chunk of the conversation.
+
+The corpus fit (`fitted.agentx.params.json`) stores 15.3 chunks a request against the
+reference's 14.41 (+6 %, +8 % before) and loads within 3 % of the default `keep`'s share
+of its hits. The replay run again with both prefixes shared (`agentx.*` replaced; the
+replay's code shares one main and one sub-agent prefix per session, the first of any
+model): 219 requests, 5,454 chunks written and 33,804 read (6,406 and 45,707 with one
+prefix: the shared main prefix is written once and mostly stays in the engine). At the
+fitted parameters the abstract writes 5,579 to 6,656 and reads 13,510 to 24,383, and four
+rows are outside: the reads' share of data ops and of bytes, and both reuse distances
+(p50 2.5 and 2 GiB against 4). With the context cap at 256k, one (read after write). The
+pair stays **not accepted**, its rows recorded as a checkpoint. *Next:* where the
+conversation reads go (their spread over seeds is wide: the long main-agent chains a slot
+draws carry most of them), and what the primary sources say about `first_in` and the
+prefix holds; then the `O_DIRECT` run again (still the first replay's).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

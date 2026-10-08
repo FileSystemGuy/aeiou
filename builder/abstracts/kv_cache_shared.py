@@ -46,6 +46,16 @@ def shape(name, reader, doc):
     w.param("sys_pop", zipf(s=1.1), doc="[measure]")
     w.param("sys_local", True, doc="[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63)")
     w.param("sys_per_slot", False, doc="[config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop`")
+    w.param("sub_prompts", 50, unit="count", doc="sub-agent prompts: a sub-agent's prompt is its own system prompt and tools, not the main agent's (Claude Code's documentation, §3.63)")
+    w.param("sub_tokens", 1500, unit="tokens", doc="median sub-agent prefix length [measure]")
+    w.param("sub_tokens_min", 1, unit="tokens", doc="bounds of the sub-agent prefix length; equal bounds give every prefix that length")
+    w.param("sub_tokens_max", 100_000, unit="tokens")
+    w.param("sub_pop", zipf(s=1.1), doc="[measure]")
+    w.param("sub_per_slot", False, doc="[config: load] a slot's sub-agent conversations all start with the sub-agent prefix of its own index (one session's sub-agents); false picks one per conversation by `sub_pop`")
+    w.param("kind", const(0), doc="[config: load] the prefix a new conversation opens with: 0 the system prompt (the main agent's tools and system prompt), 1 a sub-agent's prefix, 2 none (measured in the AgentX corpus: a prompt is its tools, then its system prompt, then its messages, and a sub-agent's are its own, §3.63)")
+    w.param("first_in", const(-1), unit="tokens", doc="the tokens of a new conversation's first prompt past its prefix; -1 draws them from `turn_in` as for any request (measured in the AgentX corpus: a chain's first prompt is not a turn's growth, §3.63)")
+    w.param("sys_held", const(0), unit="tokens", doc="[config: GPU KV memory against the prefixes] the tokens of the system prompt the engine holds when a request arrives, apart from its conversation: a prefix many requests share stays in the engine's own cache (measured in the AgentX replay: the whole main-agent prefix in 89 of 103 requests, §3.63)")
+    w.param("sub_held", const(0), unit="tokens", doc="[config: GPU KV memory against the prefixes] the same for a sub-agent prefix")
     w.param("reuse", mixture((0.15, none), (0.85, const(40))),
             doc="none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations "
                 "a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one")
@@ -82,6 +92,11 @@ def shape(name, reader, doc):
                                     min=P.sys_tokens_min * token_bytes, max=P.sys_tokens_max * token_bytes),
                      chunk=fsize,                                      # ceil(size / chunk) block objects {k}; the last, partial one is never read
                      seed=0x5eed_da80)
+    subp = w.dataset("subp", pattern="kv/sub/{id:04}/blk_{k:04}", count=P.sub_prompts,
+                     size=lognormal(median=P.sub_tokens * token_bytes, sigma=0.3,
+                                    min=P.sub_tokens_min * token_bytes, max=P.sub_tokens_max * token_bytes),
+                     chunk=fsize,                                      # ceil(size / chunk) block objects {k}; the last, partial one is never read
+                     seed=0x5eed_da84)
     kv = w.namespace("kv", pattern="kv/{conv:016x}-{k:04}.{ext}", fields={"conv": int, "k": int, "ext": str},
                      size=fsize, seed=0x5eed_da83, input=reader, same_run=reader)   # one flat directory (traced); the reader's names are the writer's draws (V15)
 
@@ -117,8 +132,17 @@ def shape(name, reader, doc):
                 turn = slot.let("turn", when(cont, slot.ref("turn").at(r - d) + 1, 0))
                 sp = slot.let("sp", when(cont, slot.ref("sp").at(r - d),
                                          when(P.sys_per_slot == True, sysp.file(slot.index % P.sys_prompts), sysp.pick(P.sys_pop))))   # noqa: E712
-                sysblk = slot.let("sysblk", sp.size // fsize)          # whole chunks inside the system prompt, shared by its conversations
-                ptoks = slot.let("ptoks", when(cont, prior, (sp.size % fsize) // token_bytes) + inn)
+                kd = slot.draw("kd", P.kind)                       # last of the draws: their sites (JSON pointers) stay put
+                fi = slot.draw("fi", P.first_in)
+                sh = slot.draw("sh", P.sys_held)
+                bh = slot.draw("bh", P.sub_held)
+                kind = slot.let("kind", when(cont, slot.ref("kind").at(r - d), kd))
+                sb = slot.let("sb", when(cont, slot.ref("sb").at(r - d),
+                                         when(P.sub_per_slot == True, subp.file(slot.index % P.sub_prompts), subp.pick(P.sub_pop))))   # noqa: E712
+                psize = slot.let("psize", when(kind == 0, sp.size, when(kind == 1, sb.size, 0)))   # the prefix the conversation opens with
+                sysblk = slot.let("sysblk", psize // fsize)    # whole chunks inside its prefix, shared by the conversations that open with it
+                pheld = slot.let("pheld", min_(when(kind == 0, sh, when(kind == 1, bh, 0)) // P.chunk_tokens, sysblk))   # whole chunks of its prefix the engine holds
+                ptoks = slot.let("ptoks", when(cont, prior, (psize % fsize) // token_bytes) + when(cont | (fi < 0), inn, fi))
                 stored = slot.let("stored", ptoks // P.chunk_tokens)   # whole chunks only
                 had = slot.let("had", when(cont & (d <= P.retain), min_(slot.ref("stored").at(r - d), prior // P.chunk_tokens), 0))   # the store's chunks of the kept prefix
                 # what the engine itself still holds of this conversation: what it kept of its last prompt and reply, in whole
@@ -129,16 +153,23 @@ def shape(name, reader, doc):
 
                 with slot.phase(when(r < P.warm, "warm", "serve")):
                     slot.compute(P.think)
-                    with slot.loop("q", sysblk) as q:                  # the lookup: one stat per whole chunk, in order
-                        slot.stat(sp.chunk(q))
+                    with slot.when(kind == 0):
+                        with slot.loop("q", sysblk) as q:              # the lookup: one stat per whole chunk, in order
+                            slot.stat(sp.chunk(q))
+                    with slot.when(kind == 1):
+                        with slot.loop("q", sysblk) as q:
+                            slot.stat(sb.chunk(q))
                     with slot.loop("q", hit) as q:
                         slot.stat(kv.object(conv=conv, k=q, ext="data"))
                     if not reader:
                         with slot.when(stored > had):                  # the lookup ends at the first chunk that is not there
                             slot.stat(kv.object(conv=conv, k=had, ext="data"), expect=["ENOENT"])
-                    with slot.when((P.sys_local == False) & (held == 0)):             # noqa: E712
-                        with slot.parallel("sk", sysblk) as rd:
-                            load(rd, rd.let("b", sp.chunk(rd.index)))
+                    with slot.when((P.sys_local == False) & (held == 0) & (kind == 0)):   # noqa: E712
+                        with slot.parallel("sk", sysblk - pheld) as rd:
+                            load(rd, rd.let("b", sp.chunk(pheld + rd.index)))
+                    with slot.when((P.sys_local == False) & (held == 0) & (kind == 1)):   # noqa: E712
+                        with slot.parallel("ak", sysblk - pheld) as rd:
+                            load(rd, rd.let("b", sb.chunk(pheld + rd.index)))
                     with slot.parallel("lk", nload) as rd:             # the chunks the engine does not hold, all at once
                         load(rd, rd.let("b", kv.object(conv=conv, k=held + rd.index, ext="data")))
                     if not reader:

@@ -1012,7 +1012,8 @@ partial order the abstract defines: concurrent contexts advancing at equal op ra
 chosen over the inline order of the plain dry run (sub-actor 0 to its end, then 1), under
 which the 32 search threads of `vdb_search_diskann` would run one after another and every
 block a later thread shares with an earlier one would show a reuse distance of a whole
-thread's work. With `--gpu`, the printed stream is in this order.
+thread's work. With `--gpu` and `--metrics`, the printed stream is in this order; with `--gpu`
+alone it is in the inline order (found 2026-10-08).
 
 **Definitions.**
 

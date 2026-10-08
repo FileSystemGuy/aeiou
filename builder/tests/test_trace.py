@@ -568,8 +568,8 @@ def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_p
 
 def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted(monkeypatch):
     """`builder/traces/kv_cache_serving`: the AgentX replay through vLLM and LMCache (2026-10-07,
-    run again 2026-10-08 with each session's own tokens, DESIGN_REVIEW.md §3.63): 8 sessions at
-    128k context, 2 GiB of engine KV. LMCache logs a lookup
+    run again 2026-10-08 with each session's own tokens and both prefixes shared, DESIGN_REVIEW.md
+    §3.63): 8 sessions at 128k context, 2 GiB of engine KV. LMCache logs a lookup
     at every step a request waits for KV memory, the held prefix falling as the running requests
     evict it; a request's is its last lookup before its first load or store. The kit's LMCache
     log keeps those two lines per request. `fitted.agentx-replay.params.json` is `agentx.py fit
@@ -578,11 +578,12 @@ def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted
     monkeypatch.syspath_prepend(str(kit))
     agentx = importlib.import_module("agentx")
     sessions, sent = agentx.replayed(kit / "agentx.replay.log", kit / "agentx.lmcache.log")
-    assert sessions == 8 and len(sent) == 220
-    assert sum(1 for _, held in sent.values() if held == 0) == 157          # the engine held nothing, the system prompt included
+    assert sessions == 8 and len(sent) == 219
+    assert sum(1 for _, held in sent.values() if held == 0) == 46           # the engine held nothing, not even a shared prefix
     p = json.loads((kit / "fitted.agentx-replay.params.json").read_text())["params"]
-    assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_per_slot"]) == (8, 28, 131072, False, True)
-    assert p["keep"]["empirical"]["values"].count(0) == 18                  # of 20 shares: nothing held past the system prompt
+    assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_prompts"], p["sub_prompts"]) == (8, 27, 131072, False, 1, 1)
+    assert p["kind"]["empirical"]["weights"] == [8, 10, 27]                 # chains opening with the main agent's prefix, a sub-agent's, neither
+    assert p["keep"]["empirical"]["values"].count(0) == 7                   # of 20 shares: nothing held past the prefix
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
@@ -703,7 +704,7 @@ KIT_PAIRS = [
     # conversations (§3.57) the reuse distance is within, and only the writer's store order (two threads) stays outside
     ("kv_cache_serving", "trace", "kv_cache_serving", "fitted.params.json", 1, "accepted"),
     # the AgentX replay (§3.63): the system prompt read when the engine holds none of the conversation, one per slot;
-    # not accepted since the replay was corrected (2026-10-08): the re-reads come sooner in the dry run
+    # not accepted since the replay was corrected (2026-10-08); the two-prefix model since the same day, four rows outside
     ("kv_cache_serving", "agentx.trace", "kv_cache_serving", "fitted.agentx-replay.params.json", 1, "not accepted"),
     # the same replay with LMCache's use_odirect (`direct`): read-after-write distance outside, the server's admission order
     ("kv_cache_serving", "agentx-odirect.trace", "kv_cache_serving", "fitted.agentx-odirect-replay.params.json", 1, "not accepted"),
