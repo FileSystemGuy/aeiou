@@ -557,7 +557,6 @@ def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_p
     assert p["trim"]["mixture"][0]["dist"] == {"const": 0} and 0.03 < p["trim"]["mixture"][1]["weight"] < 0.05
 
 
-@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted(monkeypatch):
     """`builder/traces/kv_cache_serving`: the AgentX replay through vLLM and LMCache (2026-10-07,
     DESIGN_REVIEW.md §3.63): 8 sessions at 128k context, 2 GiB of engine KV. LMCache logs a lookup
@@ -576,6 +575,7 @@ def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted
     assert p["keep"]["empirical"]["values"].count(0) == 16                  # of 20 shares: nothing held past the system prompt
 
 
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     """`builder/traces/kv_cache_shared`: vLLM with LMCache's `fs://` backend, the 300 requests of
     the row above sent to an engine on an empty store and then to a restarted engine on the
