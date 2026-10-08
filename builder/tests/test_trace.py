@@ -270,8 +270,16 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
         assert t[unit]["counts"] == [list(c) for c in d[unit]["counts"]], unit
     first = lambda m: sum(m["reuse_distance_bytes"]["first_touch"].values())
     assert first(t) == first(d)
-    # runs belong to a context: a thread there, a sub-actor here, the same ops either way
-    assert t["run_length"] == d["run_length"]
+    # runs belong to a context: a thread there, a sub-actor here, the same ops either way. A pool
+    # thread runs sub-actor k of every fork in turn (runner/REFERENCE.md §4), so when a fork's last
+    # read and the next fork's first are adjacent in one file and no other thread's call lands
+    # between them (timing: 1 in 3 to 1 in 40 under CPU contention, 2026-10-07), the strace sees
+    # one run where the dry run sees two. The ops and bytes in runs are the same either way.
+    for kind, rd in d["run_length"].items():
+        rt = t["run_length"][kind]
+        total = lambda h: round(h["n"] * h["mean"])
+        assert (total(rt["ops"]), total(rt["bytes"])) == (total(rd["ops"]), total(rd["bytes"])), kind
+        assert 0 <= rd["ops"]["n"] - rt["ops"]["n"] <= 2, (kind, rt, rd)
     # what a block's previous access was depends on the order (the real one against the
     # round-robin): the shares are close, not equal. The distance histograms are not bounded
     # here: on these configurations a kind has a few dozen samples, and on a host with two
@@ -284,7 +292,8 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     # compute the strace's own metrics; then the trace runs against the same corpus with
     # the fingerprint of its dry run. Under libaio the strace's metrics count an io_submit
     # member when it is reaped and the file counts it at submission, so the reuse-distance
-    # histograms of that pair differ by the reordering within a round; all else is equal.
+    # histograms of that pair differ by the reordering within a round, and so, now and then,
+    # does a run (two adjacent sector reads); all else is equal.
     exported = tmp_path / "exported.jsonl"
     r = subprocess.run([sys.executable, "-m", "aeiou.trace", "export", str(st), "--root", str(root), "--exclude", "*.aeiou-*", "-o", str(exported)], capture_output=True, text=True, cwd=ROOT / "builder")
     assert r.returncode == 0, r.stderr
@@ -299,7 +308,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     assert trace.main(["metrics", str(exported), "-o", str(tmp_path / "ex.json")]) == 0
     ex = json.loads((tmp_path / "ex.json").read_text())["total"]
     assert nd == ex, "the runner's walk of the file and the Python reader's disagree"
-    strip = lambda m: {k: v for k, v in m.items() if k != "reuse_distance_bytes"} if name == "vdb_search_diskann" else m
+    strip = lambda m: {k: v for k, v in m.items() if k not in ("reuse_distance_bytes", "run_length")} if name == "vdb_search_diskann" else m
     assert strip(t) == strip(nd), "the trace node's dry run is not the strace's metrics"
     fp = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("fingerprint "))
     # one thread per lane under sync; one task per lane on an event loop, a group's members
@@ -792,7 +801,29 @@ def test_export_resolves_shared_positions_and_lists_creates():
     assert (r["path"], r["to"]) == ("out/new", "out/final")
 
 
-@pytest.mark.parametrize("text", [SEQUENTIAL, WORKERS])
+# a thread's close begins, the kernel frees the descriptor, and another thread's open takes it
+# and is printed whole before the close resumes (seen 1 in 40 under CPU contention, 2026-10-07)
+REUSED_FD = """
+300 1700000003.000000 openat(AT_FDCWD</d>, "/d/a", O_RDONLY|O_CLOEXEC) = 3</d/a> <0.000010>
+300 1700000003.000100 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD, child_tid=0x7f, stack=0x7f, stack_size=0x1000}, 88) = 301 <0.000050>
+300 1700000003.000200 read(3</d/a>, "a"..., 4096) = 4096 <0.000010>
+300 1700000003.000300 close(3</d/a> <unfinished ...>
+301 1700000003.000400 openat(AT_FDCWD</d>, "/d/b", O_RDONLY|O_CLOEXEC) = 3</d/b> <0.000010>
+300 1700000003.000500 <... close resumed>) = 0 <0.000200>
+301 1700000003.000600 read(3</d/b>, "b"..., 4096) = 4096 <0.000010>
+301 1700000003.000700 close(3</d/b>) = 0 <0.000010>
+"""
+
+
+def test_a_descriptor_reused_while_its_close_resumes_closes_the_first_file():
+    h, ev = _export(REUSED_FD)
+    closes = [e for e in ev if e["op"] == "close"]
+    opens = {e["fd"]: e["path"] for e in ev if e["op"] == "open"}
+    assert [opens[e["fd"]] for e in closes] == ["a", "b"]
+    assert trace.metrics_of(REUSED_FD.strip().splitlines(), ["/d"])["total"]["counts"]["close"] == 2
+
+
+@pytest.mark.parametrize("text", [SEQUENTIAL, WORKERS, REUSED_FD])
 def test_exported_file_measures_as_the_strace(tmp_path, text):
     h, ev = _export(text)
     out = tmp_path / "t.jsonl"

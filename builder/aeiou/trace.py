@@ -454,6 +454,7 @@ class Tracer:
         self.instance_of: dict[int, int | None] = {}
         self.cwds: dict[int, str] = {}
         self.pending: dict[int, tuple] = {}
+        self.closing: dict[int, "object"] = {}      # tid -> the file its unfinished close took from the table
         self.chain: dict[int, list] = {}  # tid -> [length, time the last round ended]
         # AIO requests submitted and not yet reaped: (context, aio_data) -> the requests, oldest first
         self.aio: dict[tuple, list] = {}
@@ -617,6 +618,14 @@ class Tracer:
             name = body.split("(", 1)[0]
             if name in HANDLED:
                 self.pending[tid] = (name, body[: -len(UNFINISHED)], ts)
+            if name == "close":                        # the kernel frees the descriptor as the close begins: another
+                a = split_args(body[6 : -len(UNFINISHED)].rstrip())   # thread's open can take it before this resumes
+                fd, path = fd_arg(a[0]) if a else (None, None)
+                table = self.table(tid)
+                f = table.get(fd)
+                if f is not None and (path is None or f.path == path):
+                    del table[fd]
+                    self.closing[tid] = f
             return
         i = body.find("(")
         if i <= 0:
@@ -694,11 +703,13 @@ class Tracer:
         if name == "close":
             fd, path = fd_arg(a[0]) if a else (None, None)
             table = self.table(tid)
-            f = table.get(fd)
+            f = self.closing.pop(tid, None)                # taken from the table when the close began
+            if f is None:
+                f = table.get(fd)
+                if ret == 0 and f is not None and (path is None or f.path == path):
+                    del table[fd]
             if path is None and f is not None:
                 path = f.path
-            if ret == 0 and f is not None and f.path == path:
-                del table[fd]
             p = self.under(path)
             if inst is not None and p:
                 self._count(tid, "close")
