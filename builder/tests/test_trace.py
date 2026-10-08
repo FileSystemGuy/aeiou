@@ -725,9 +725,13 @@ def test_kit_pair_against_the_tolerances(tmp_path, capsys, kit, which, ast, para
     the recorded one, every row outside has its reason in the pair's file, and the file
     has no entry that matches nothing."""
     kit = BUILDER / "traces" / kit
+    # the trace's own unit: the KV kits measure in chunks, every access being one whole chunk (the
+    # shares and distances are those at 4 KiB, the counts 768 times fewer, and so the work)
+    block = json.loads((kit / f"{which}.metrics.json").read_text())["block"]
     docs = [tmp_path / f"dry.{seed}.json" for seed in (1, 2, 3, 4)]
     runs = [subprocess.Popen([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", str(gpus), "--seed", str(seed),
-                              "--params-file", str(kit / params), "--metrics-json", str(doc)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                              "--params-file", str(kit / params), "--metrics-json", str(doc), "--metrics-block", str(block)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             for seed, doc in zip((1, 2, 3, 4), docs)]               # the seeds at once: a dry run's metrics take one core
     for p in runs:
         _, err = p.communicate()

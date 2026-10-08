@@ -4,10 +4,10 @@ on:
   push:
   pull_request:
 
-# Three jobs on four runners (4 cores each; the integration job is two). `abstracts` needs no
-# Rust. The runner's own tests and the Python tests that drive the built binary each build on
-# their own runner from one shared Rust cache: the test binaries are compiled only where they
-# are run, and the integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers, the
+# Three jobs on three runners (4 cores each). `abstracts` needs no Rust. The runner's own
+# tests and the Python tests that drive the built binary each build on their own runner from
+# one shared Rust cache: the test binaries are compiled only where they are run, and the
+# integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers, the
 # runner's test binaries under cargo-nextest (every test its own process, 4 at a time; there
 # are no doctests for it to miss), and a kit pair's four seeds as four processes.
 jobs:
@@ -51,16 +51,6 @@ jobs:
 
   runner-integration:
     runs-on: ubuntu-latest
-    # two runners: the AgentX pairs' dry runs are CPU-bound (eight metrics passes over 41k
-    # chunk reads), so they get four cores of their own
-    strategy:
-      matrix:
-        part:
-          - name: agentx
-            select: "agentx or direct_path"
-          - name: rest
-            select: "not (agentx or direct_path)"
-    name: runner-integration (${{ matrix.part.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -76,7 +66,6 @@ jobs:
         working-directory: builder
         run: uv sync --locked --extra test --extra formats
       - name: Rust checker agrees with the reference checker on every committed AST
-        if: matrix.part.name == 'rest'
         run: |
           builder/.venv/bin/python schema/check.py > /tmp/check.py.out
           runner/target/release/aeiou check schema/examples/*.ast.json | sed '1,/^$/d' > /tmp/check.rs.out   # past the options block
@@ -85,4 +74,4 @@ jobs:
         working-directory: builder
         run: |
           command -v strace || sudo apt-get install -y strace
-          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs tests/test_formats.py tests/test_trace.py -k "${{ matrix.part.select }}"
+          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs tests/test_formats.py tests/test_trace.py

@@ -92,7 +92,7 @@ strace -f --seccomp-bpf -ttt -T -yy \
     -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy,io_uring_setup,io_uring_enter \
     -o trace.txt sh serve.sh > serve.log 2>&1 &
 python replay_agentx.py traces.jsonl --sessions 8 --requests 300 --max-context 131072 > agentx.replay.log   # once /health answers
-aeiou-trace metrics trace.txt --root /mnt/nfs -o agentx.trace.metrics.json
+aeiou-trace metrics trace.txt --root /mnt/nfs --metrics-block 3145728 -o agentx.trace.metrics.json   # a block per chunk
 python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context 131072 \
     --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false --set sys_per_slot=true \
     -o fitted.agentx-replay.params.json
@@ -105,6 +105,10 @@ python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context
   as the running requests evict it. `agentx.py fit --replay` takes the last lookup before the
   request's first load or store. `agentx.lmcache.log` keeps just those two lines per request
   (441 lines of the server's 32 MB; `agentx.replayed` parses both the same).
+- Its metrics are in blocks of one chunk: every access is one whole chunk, so the shares and
+  distances are those at 4 KiB with counts 768 times fewer (checked row by row, 2026-10-07;
+  only the top-0.1 % row turns "not judged", as the objects' already was), and the pair's dry
+  runs take the trace's block, a fraction of a second against twelve.
 - The kit's pair (`agentx.trace`, `fitted.agentx-replay.params.json`) is judged in
   `tests/test_trace.py` and accepted; the corpus is not committed, so the fit is repeated by
   the command above, not by the tests.
