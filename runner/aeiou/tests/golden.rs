@@ -32,11 +32,12 @@ fn hashes_match_check_py() {
     // optional `backend`; all again 2026-10-02 for contract 0.4, the optional `same_run` of a namespace, and
     // for contract 0.5, the wider `at` rule V3, with kv_cache_serving and kv_cache_shared changed under it;
     // the three KV abstracts again 2026-10-02 for `prefill_step`, `think`, `trim`, and `turns`, DESIGN_REVIEW §3.59,
-    // and 2026-10-07 for `sys_per_slot` and the system prompt read only when the engine holds none of the conversation, §3.63).
+    // and 2026-10-07 for `sys_per_slot` and the system prompt read only when the engine holds none of the conversation,
+    // then kv_cache_serving for `direct`, LMCache's O_DIRECT calls (its fingerprints at `direct` false unchanged), §3.63).
     let want = [
         ("ckpt_restore", "ed1b8905fb5f96a3892c0e895f27c172fb06fa2571568ae4d362ff344ae547d0"),
         ("ckpt_write_dcp", "f67dbd42462fd8ce7d0d0d9c92312f49cf4567a5cdd36a240d0cf446e2ed88a9"),
-        ("kv_cache_serving", "72c97a35b6e67bea274555f1c87ebc737f4146a2462cd5c7bf6117617864027f"),
+        ("kv_cache_serving", "0e6c074d05526875fc771c3aa5146dc2031b2829a05c821eb0041b093704e9d3"),
         ("model_load", "df63f75a22b063b44421e87c787d29d5d7f820cd4e96b0a8797876806ca496ae"),
         ("train_large_samples", "2fd904f665b70711797d9d588a94d5d660eabc68fe9a8b6ece876ae2a079c75a"),   // 2026-10-02: the `enumerate` phase, on by default
         ("train_small_files", "3f93512e6fe335abedd6e49421980af009984df1b35b7238b17c180a206cee65"),   // 2026-10-02: `enumerate` on by default

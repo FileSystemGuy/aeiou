@@ -215,8 +215,6 @@ Not built, in rough order of interest:
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only
   met `localhost`), and tensor-parallel sharding of a KV chunk, where `--gpus` is today
   independent engines rather than one TP group (`PROJECT_BRIEF.md` §6 item 20).
-- The KV abstracts' calls for LMCache's `O_DIRECT` path, so that its trace becomes a pair
-  under `sync-direct` (item 21, decided).
 - Backends from the brief's list that are not written: `gds`, `nixl-posix`, `libnfs`; object
   storage through `s3dlio` behind a feature flag (item 17).
 - `aeiou-verify`, the offline content verifier that takes a dataset manifest and

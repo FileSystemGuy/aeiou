@@ -1,0 +1,15 @@
+{
+  "aeiou_tolerances": 1,
+  "unseen": [
+    {
+      "metric": "fan-out",
+      "reason": "the loads of a request are issued by a thread pool: the trace shows no fork (fan-out comes from io_submit only)"
+    }
+  ],
+  "outside": [
+    {
+      "metric": "reuse distance, read after write",
+      "reason": "the server admits a request when KV memory frees (71 of 219 waited over 10 s, up to 72 s, while the other sessions ran), so a chunk is read back after more of their traffic than in the dry run's slots in turn; p99 10 GiB against 6. The buffered run's same row is within (0.274 of 0.392)"
+    }
+  ]
+}

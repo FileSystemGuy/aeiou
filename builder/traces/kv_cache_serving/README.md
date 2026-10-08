@@ -108,6 +108,8 @@ python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context
 - The kit's pair (`agentx.trace`, `fitted.agentx-replay.params.json`) is judged in
   `tests/test_trace.py` and accepted; the corpus is not committed, so the fit is repeated by
   the command above, not by the tests.
-- `lmcache.agentx.odirect.yaml` is the same with LMCache's `use_odirect`: the second run, whose
-  calls differ (§3.63) and wait for the abstract's direct path (brief item 21).
+- `lmcache.agentx.odirect.yaml` is the same with LMCache's `use_odirect`, the second run
+  (`agentx-odirect.*`, fitted with `--set direct=true` added): its calls are the abstract's
+  `direct` path. That pair is not accepted, one row recorded outside with its reason in
+  `agentx-odirect.trace.tolerances.json` (the server's admission order, §3.63).
 

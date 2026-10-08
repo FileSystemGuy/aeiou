@@ -576,6 +576,24 @@ def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
+    """LMCache's `use_odirect` (2026-10-07, DESIGN_REVIEW.md §3.63): a chunk is written by
+    `openat(O_WRONLY|O_CREAT|O_DIRECT)`, `write`, `close`, and read by
+    `openat(O_RDONLY|O_DIRECT|O_CLOEXEC)`, `fstat`, `read`, `close`; the abstract's `direct`
+    issues the same, under the backend it declares (`sync`)."""
+    kit = BUILDER / "traces" / "kv_cache_serving"
+    dry = tmp_path / "dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
+                        "--params-file", str(kit / "fitted.agentx-odirect-replay.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    t, d = json.loads((kit / "agentx-odirect.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    tc, dc = t["counts"], d["counts"]
+    for c in (tc, dc):
+        assert c["open"] == c["close"] == c["read"] + c["write"] and c["fstat"] == c["read"] and "ioctl" not in c and "lseek" not in c
+    assert (tc["write"], tc["read"]) == (5994, 41004) and (dc["write"], dc["read"]) == (5858, 29895)
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     """`builder/traces/kv_cache_shared`: vLLM with LMCache's `fs://` backend, the 300 requests of
     the row above sent to an engine on an empty store and then to a restarted engine on the
@@ -675,6 +693,8 @@ KIT_PAIRS = [
     ("kv_cache_serving", "trace", "kv_cache_serving", "fitted.params.json", 1, "accepted"),
     # the AgentX replay (§3.63): the system prompt read when the engine holds none of the conversation, one per slot
     ("kv_cache_serving", "agentx.trace", "kv_cache_serving", "fitted.agentx-replay.params.json", 1, "accepted"),
+    # the same replay with LMCache's use_odirect (`direct`): read-after-write distance outside, the server's admission order
+    ("kv_cache_serving", "agentx-odirect.trace", "kv_cache_serving", "fitted.agentx-odirect-replay.params.json", 1, "not accepted"),
     ("kv_cache_shared", "writer.trace", "kv_cache_shared", "fitted.params.json", 1, "not accepted"),
     ("kv_cache_shared", "reader.trace", "kv_cache_shared_reader", "fitted.reader.params.json", 1, "accepted"),
 ]

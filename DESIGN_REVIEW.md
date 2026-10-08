@@ -3597,7 +3597,7 @@ practice in `runner/REFERENCE.md` §7 remains a development convenience). Buffer
 `posix_fadvise(DONTNEED)` instead of `O_DIRECT` (the eviction cost the user described is
 paid before the advice runs).
 
-### 3.63 The AgentX replay on a GPU: `keep`, the system prompt as a prefix, and LMCache's `O_DIRECT` path (run 2026-10-07; A decided and built, B decided 2026-10-07)
+### 3.63 The AgentX replay on a GPU: `keep`, the system prompt as a prefix, and LMCache's `O_DIRECT` path (run, decided, and built 2026-10-07)
 
 **The runs.** Brief item 21: `replay_agentx.py` through vLLM 0.30.0 and LMCache 0.5.5 on the
 development box's 8 GB GPU (RTX 2000 Ada), local-disk backend on the loopback NFS mount, under
@@ -3672,9 +3672,28 @@ not Python `open`'s six: a write is `openat(O_WRONLY|O_CREAT|O_DIRECT)`, `write`
 41,004 read (within 1 to 2 % of the buffered run); 182,001 calls under the root against
 286,833.
 
-**B (decided by the user 2026-10-07, not yet built).** A parameter of the KV abstracts that
-selects the direct path's calls, so that a configuration with `use_odirect` declares
-`sync-direct` and is a traced configuration (brief item 21), not another workload.
+**B (decided by the user 2026-10-07, built the same day).** `direct` (default false), a
+parameter of `kv_cache_serving` (the local-disk backend's; the `fs://` pair has no such
+option): every chunk read and write takes the direct path's calls, with `DIRECT` on the
+chunk's open. *One choice made while building:* the brief said the configuration would
+declare `sync-direct`; the abstract keeps `sync` instead and puts `DIRECT` on the opens
+LMCache makes with it, as `vdb_search_diskann` does. That is the application's own call
+stream (it passes `O_DIRECT` itself, on its chunk files only, through plain `os.open` and
+`os.write`), so a run under the declared backend is CLOSED, and `sync-direct` would add
+nothing to it. At `direct` false the fingerprints are unchanged (the AST's hash is not).
+
+At the second run's parameters (`fitted.agentx-odirect-replay.params.json`, `direct` true)
+the calls match the trace's (open, fstat, read, close; open, write, close; no `ioctl` or
+`lseek`), the abstract writes 5,594 to 6,440 (5,994) and reads 29,895 to 38,554 (41,004),
+and the judge finds one row outside: read-after-write reuse distance, 0.434 against 0.374
+(p99 10 GiB against 6). Lifting the context cap leaves it there. The cause is the server's
+admission order: a request waits for KV memory while the other sessions run (71 of 219
+waited over 10 s, up to 72 s, between their first lookup and their admission), so a chunk is
+read back after more of their traffic than in the dry run's slots in turn. The buffered run
+has the same mechanism and its row is within (0.274 of 0.392). Recorded as outside in
+`agentx-odirect.trace.tolerances.json`; the pair is **not accepted**, as the shared store's
+writer is (§3.52). Modelling the admission queue would need the engine's memory as state
+across slots, which `GRAMMAR_OPTIONS.md` §5.3 rules out as it does for `retain`.
 
 ## 4. Plan changes
 

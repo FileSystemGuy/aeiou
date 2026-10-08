@@ -55,6 +55,10 @@
       "default": true,
       "doc": "[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63)"
     },
+    "direct": {
+      "default": false,
+      "doc": "[config] LMCache's `use_odirect`: every chunk opened with `O_DIRECT` by `os.open` and read or written in one call (traced 2026-10-07, §3.63); LMCache takes this path only when chunk_bytes is a multiple of the file system's block size, and is buffered otherwise, so set it only then"
+    },
     "sys_per_slot": {
       "default": false,
       "doc": "[config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop`"
@@ -1090,6 +1094,174 @@
                                         }
                                       },
                                       {
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "param": "direct"
+                                              },
+                                              false
+                                            ]
+                                          },
+                                          "then": [
+                                            {
+                                              "open": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "flags": [
+                                                  "RDONLY",
+                                                  "CLOEXEC"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "fstat": {
+                                                "file": {
+                                                  "ref": "b"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "ioctl": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "request": "TCGETS",
+                                                "expect": [
+                                                  "ENOTTY"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "lseek": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "offset": 0,
+                                                "whence": "CUR"
+                                              }
+                                            },
+                                            {
+                                              "read": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "len": {
+                                                  "param": "chunk_bytes"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "close": {
+                                                "file": {
+                                                  "ref": "b"
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "param": "direct"
+                                              },
+                                              true
+                                            ]
+                                          },
+                                          "then": [
+                                            {
+                                              "open": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "flags": [
+                                                  "RDONLY",
+                                                  "DIRECT",
+                                                  "CLOEXEC"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "fstat": {
+                                                "file": {
+                                                  "ref": "b"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "read": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "len": {
+                                                  "param": "chunk_bytes"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "close": {
+                                                "file": {
+                                                  "ref": "b"
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "parallel": {
+                              "index": "lk",
+                              "width": {
+                                "ref": "load"
+                              },
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "b",
+                                    "value": {
+                                      "object": {
+                                        "namespace": "kv",
+                                        "fields": {
+                                          "conv": {
+                                            "ref": "conv"
+                                          },
+                                          "k": {
+                                            "add": [
+                                              {
+                                                "ref": "held"
+                                              },
+                                              {
+                                                "index": "lk"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "cond": {
+                                    "if": {
+                                      "eq": [
+                                        {
+                                          "param": "direct"
+                                        },
+                                        false
+                                      ]
+                                    },
+                                    "then": [
+                                      {
                                         "open": {
                                           "file": {
                                             "ref": "b"
@@ -1146,95 +1318,55 @@
                                       }
                                     ]
                                   }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "parallel": {
-                              "index": "lk",
-                              "width": {
-                                "ref": "load"
-                              },
-                              "body": [
+                                },
                                 {
-                                  "let": {
-                                    "name": "b",
-                                    "value": {
-                                      "object": {
-                                        "namespace": "kv",
-                                        "fields": {
-                                          "conv": {
-                                            "ref": "conv"
+                                  "cond": {
+                                    "if": {
+                                      "eq": [
+                                        {
+                                          "param": "direct"
+                                        },
+                                        true
+                                      ]
+                                    },
+                                    "then": [
+                                      {
+                                        "open": {
+                                          "file": {
+                                            "ref": "b"
                                           },
-                                          "k": {
-                                            "add": [
-                                              {
-                                                "ref": "held"
-                                              },
-                                              {
-                                                "index": "lk"
-                                              }
-                                            ]
+                                          "flags": [
+                                            "RDONLY",
+                                            "DIRECT",
+                                            "CLOEXEC"
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "fstat": {
+                                          "file": {
+                                            "ref": "b"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "read": {
+                                          "file": {
+                                            "ref": "b"
+                                          },
+                                          "len": {
+                                            "param": "chunk_bytes"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "close": {
+                                          "file": {
+                                            "ref": "b"
                                           }
                                         }
                                       }
-                                    }
-                                  }
-                                },
-                                {
-                                  "open": {
-                                    "file": {
-                                      "ref": "b"
-                                    },
-                                    "flags": [
-                                      "RDONLY",
-                                      "CLOEXEC"
                                     ]
-                                  }
-                                },
-                                {
-                                  "fstat": {
-                                    "file": {
-                                      "ref": "b"
-                                    }
-                                  }
-                                },
-                                {
-                                  "ioctl": {
-                                    "file": {
-                                      "ref": "b"
-                                    },
-                                    "request": "TCGETS",
-                                    "expect": [
-                                      "ENOTTY"
-                                    ]
-                                  }
-                                },
-                                {
-                                  "lseek": {
-                                    "file": {
-                                      "ref": "b"
-                                    },
-                                    "offset": 0,
-                                    "whence": "CUR"
-                                  }
-                                },
-                                {
-                                  "read": {
-                                    "file": {
-                                      "ref": "b"
-                                    },
-                                    "len": {
-                                      "param": "chunk_bytes"
-                                    }
-                                  }
-                                },
-                                {
-                                  "close": {
-                                    "file": {
-                                      "ref": "b"
-                                    }
                                   }
                                 }
                               ]
@@ -1407,60 +1539,118 @@
                                         }
                                       },
                                       {
-                                        "open": {
-                                          "file": {
-                                            "ref": "b"
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "param": "direct"
+                                              },
+                                              false
+                                            ]
                                           },
-                                          "flags": [
-                                            "WRONLY",
-                                            "CREAT",
-                                            "TRUNC",
-                                            "CLOEXEC"
+                                          "then": [
+                                            {
+                                              "open": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "flags": [
+                                                  "WRONLY",
+                                                  "CREAT",
+                                                  "TRUNC",
+                                                  "CLOEXEC"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "fstat": {
+                                                "file": {
+                                                  "ref": "b"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "ioctl": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "request": "TCGETS",
+                                                "expect": [
+                                                  "ENOTTY"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "lseek": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "offset": 0,
+                                                "whence": "CUR"
+                                              }
+                                            },
+                                            {
+                                              "write": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "len": {
+                                                  "param": "chunk_bytes"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "close": {
+                                                "file": {
+                                                  "ref": "b"
+                                                }
+                                              }
+                                            }
                                           ]
                                         }
                                       },
                                       {
-                                        "fstat": {
-                                          "file": {
-                                            "ref": "b"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "ioctl": {
-                                          "file": {
-                                            "ref": "b"
+                                        "cond": {
+                                          "if": {
+                                            "eq": [
+                                              {
+                                                "param": "direct"
+                                              },
+                                              true
+                                            ]
                                           },
-                                          "request": "TCGETS",
-                                          "expect": [
-                                            "ENOTTY"
+                                          "then": [
+                                            {
+                                              "open": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "flags": [
+                                                  "WRONLY",
+                                                  "CREAT",
+                                                  "DIRECT",
+                                                  "CLOEXEC"
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "write": {
+                                                "file": {
+                                                  "ref": "b"
+                                                },
+                                                "len": {
+                                                  "param": "chunk_bytes"
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "close": {
+                                                "file": {
+                                                  "ref": "b"
+                                                }
+                                              }
+                                            }
                                           ]
-                                        }
-                                      },
-                                      {
-                                        "lseek": {
-                                          "file": {
-                                            "ref": "b"
-                                          },
-                                          "offset": 0,
-                                          "whence": "CUR"
-                                        }
-                                      },
-                                      {
-                                        "write": {
-                                          "file": {
-                                            "ref": "b"
-                                          },
-                                          "len": {
-                                            "param": "chunk_bytes"
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "close": {
-                                          "file": {
-                                            "ref": "b"
-                                          }
                                         }
                                       }
                                     ]
@@ -1498,9 +1688,9 @@
   "provenance": {
     "generator": {
       "script": "kv_cache_serving.py",
-      "sha256": "c5c771bb895c414f5c7933d3ce51612a2ee7697f9f2b0ad5c4bc526bd1af1095",
+      "sha256": "e5aabaf2cc628e676d22164eccf3e19f6579ee65f172bfd0d05188a0a8872cce",
       "builder_version": "0.1.0",
-      "git": "e941470c8734-dirty"
+      "git": "3c0d491a9ef1-dirty"
     },
     "python": "3.12.13",
     "lock": {
@@ -1508,6 +1698,6 @@
       "sha256": "f58ab2f23f8662236112836645f4d863a3a44858a5ea36281605f35ea08e77bd"
     },
     "built_twice_identical": true,
-    "ast_sha256": "72c97a35b6e67bea274555f1c87ebc737f4146a2462cd5c7bf6117617864027f"
+    "ast_sha256": "0e6c074d05526875fc771c3aa5146dc2031b2829a05c821eb0041b093704e9d3"
   }
 }

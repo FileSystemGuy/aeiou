@@ -456,8 +456,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     *2026-10-07 (`DESIGN_REVIEW.md` §3.63):* both run on the development box's GPU, buffered
     and with `use_odirect`. `keep` measured; the system prompt is now read when the engine
     holds none of the conversation and can be one per slot (decided and built), and the
-    agentic pair is accepted. Remaining: the abstracts' direct-path calls (decided, not
-    built), then the `O_DIRECT` trace as a pair.
+    agentic pair is accepted. `direct` (LMCache's `O_DIRECT` calls, under the declared
+    `sync` with `DIRECT` on the chunk opens, not `sync-direct`) decided and built the same
+    day; its pair has one row outside, recorded (the server's admission order).
 22. **The option layers (designed, built, and decided 2026-10-04, `DESIGN_REVIEW.md` §3.60,
     `runner/REFERENCE.md` §14).** Command line, then `AEIOU_<FLAG>`, then the TOML file
     `--config`/`AEIOU_CONFIG` names, then the default; the workload's identity, the checks

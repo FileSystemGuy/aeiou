@@ -1158,6 +1158,7 @@ workload kv_cache_serving {
   param sys_tokens   = 1500                     # median, log-normal sigma 0.3 [measure]
   param sys_local    = true                     # the engine holds the system prompts in GPU memory [config]; false: read when it holds none of the conversation (§3.63)
   param sys_per_slot = false                    # a slot's conversations share the system prompt of its index (an agent's sessions) [config: load]
+  param direct       = false                    # LMCache's use_odirect: chunk_read/chunk_write are os.open(O_DIRECT) + the data call (+ fstat before a read), §3.63 [config]
   param reuse        = mixture(0.15: none,      # new conversation: the share of first turns, measured (ShareGPT 0.148)
                                0.85: const(40))                 # requests ago: the conversations a slot has open [config: load]
   param keep         = empirical(0: 91, 1_000_000: 9)           # tokens of a returning conversation still in the engine, one draw per round [config: GPU KV memory]

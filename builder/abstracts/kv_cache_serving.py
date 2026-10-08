@@ -4,7 +4,8 @@ The calls are the trace of vLLM with LMCache's local-disk backend (2026-10-02, v
 LMCache 0.5.5, builder/traces/kv_cache_serving). LMCache keeps its index in memory: a lookup
 touches no storage. One file holds one chunk of `chunk_tokens` tokens, in one flat directory,
 named by the hash of the token prefix it ends; it is written with one `write` and read with
-one `read`, each inside the six calls of a Python `open`. Only whole chunks of the prompt are
+one `read`, each inside the six calls of a Python `open` (with `direct`, LMCache's `O_DIRECT`
+path: `os.open` and the data call, and an `fstat` before a read, §3.63). Only whole chunks of the prompt are
 stored, when the request is prefilled; nothing is written during decode. A returning
 conversation's chunks are read, all at once from a small thread pool, only when the engine
 no longer holds them in GPU memory; it loses a conversation from its end, so what is read is
@@ -34,6 +35,9 @@ w.param("sys_tokens_min", 1, unit="tokens", doc="bounds of the system prompt len
 w.param("sys_tokens_max", 100_000, unit="tokens")
 w.param("sys_pop", zipf(s=1.1), doc="[measure]")
 w.param("sys_local", True, doc="[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63)")
+w.param("direct", False, doc="[config] LMCache's `use_odirect`: every chunk opened with `O_DIRECT` by `os.open` and read or written "
+        "in one call (traced 2026-10-07, §3.63); LMCache takes this path only when chunk_bytes is a multiple of the file system's "
+        "block size, and is buffered otherwise, so set it only then")
 w.param("sys_per_slot", False, doc="[config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop`")
 w.param("reuse", mixture((0.15, none), (0.85, const(40))),
         doc="none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations "
@@ -82,6 +86,32 @@ def opened(a, b, flags):
     a.lseek(b, 0, "CUR")
 
 
+def chunk_read(a, b):
+    """One chunk read whole: Python's open() around it, or LMCache's `O_DIRECT` path (`direct`):
+    `os.open`, then `os.fdopen(fd, buffering=0).readinto`, which checks the file with `fstat`."""
+    with a.when(P.direct == False):                                  # noqa: E712
+        opened(a, b, "RDONLY|CLOEXEC")
+        a.read(b, P.chunk_bytes)
+        a.close(b)
+    with a.when(P.direct == True):                                   # noqa: E712
+        a.open(b, "RDONLY|DIRECT|CLOEXEC")
+        a.fstat(b)
+        a.read(b, P.chunk_bytes)
+        a.close(b)
+
+
+def chunk_write(a, b):
+    """One chunk written whole: Python's open() around it, or `os.open`, `os.write`, `os.close`."""
+    with a.when(P.direct == False):                                  # noqa: E712
+        opened(a, b, "WRONLY|CREAT|TRUNC|CLOEXEC")
+        a.write(b, P.chunk_bytes)
+        a.close(b)
+    with a.when(P.direct == True):                                   # noqa: E712
+        a.open(b, "WRONLY|CREAT|DIRECT|CLOEXEC")
+        a.write(b, P.chunk_bytes)
+        a.close(b)
+
+
 with w.actor("gpu") as gpu:
     with gpu.parallel("slot", P.concurrency) as slot:
         with slot.loop("r", P.warm + P.requests) as r:                # one index space (§9.5)
@@ -117,23 +147,14 @@ with w.actor("gpu") as gpu:
                 slot.compute(P.think)
                 with slot.when((P.sys_local == False) & (held == 0)):                 # noqa: E712
                     with slot.parallel("sk", sysblk) as rd:
-                        b = rd.let("b", sp.chunk(rd.index))
-                        opened(rd, b, "RDONLY|CLOEXEC")
-                        rd.read(b, P.chunk_bytes)
-                        rd.close(b)
+                        chunk_read(rd, rd.let("b", sp.chunk(rd.index)))
                 with slot.parallel("lk", load) as rd:                  # the cached chunks the engine lost, all at once
-                    b = rd.let("b", kv.object(conv=conv, k=held + rd.index))
-                    opened(rd, b, "RDONLY|CLOEXEC")
-                    rd.read(b, P.chunk_bytes)
-                    rd.close(b)
+                    chunk_read(rd, rd.let("b", kv.object(conv=conv, k=held + rd.index)))
                 cps = P.prefill_step // P.chunk_tokens                 # chunks a prefill step completes
                 with slot.loop("s", ceil_div(stored - had, cps)) as s:   # the prefill, a step at a time; its chunks stored after each
                     slot.compute(P.prefill_per_token * min_((stored - had - s * cps) * P.chunk_tokens, P.prefill_step))
                     with slot.loop("k", min_(stored, had + (s + 1) * cps), start=had + s * cps) as k:   # the step's new whole chunks
-                        b = slot.let("b", kv.object(conv=conv, k=k))
-                        opened(slot, b, "WRONLY|CREAT|TRUNC|CLOEXEC")
-                        slot.write(b, P.chunk_bytes)
-                        slot.close(b)
+                        chunk_write(slot, slot.let("b", kv.object(conv=conv, k=k)))
                 slot.compute(P.decode_per_token * out)
 
 if __name__ == "__main__":
