@@ -400,11 +400,12 @@ fn io_uring_reproduces_the_sync_runs() {
         assert_eq!(r.stats.bytes_read, bytes);
         assert_eq!(r.stats.threads as usize, threads.min(2), "loop threads, not actors");
         assert!(r.stats.expected_errors > 0);
-        // the host counters: the loops and the sampler are tasks, every `openat` punts to an
-        // io-wq worker (which lingers idle long after), and the root is on some mount
+        // the host counters: the loops and the sampler are tasks, and the root is on some mount.
+        // Not asserted: an io-wq worker. An `openat` whose lookup is cached completes inline, so
+        // whether a short run punts at all is the kernel's; under `cargo test` the idle workers
+        // of the binary's earlier tests were what this saw (2026-10-07, CI under nextest)
         let c = &r.counters;
         assert!(c.tasks_peak as usize >= threads.min(2) + 2, "{c:?}");
-        assert!(c.iowq_workers_peak >= 1, "{c:?}");
         assert!(c.cpu_user_ns + c.cpu_sys_ns > 0, "{c:?}");
         assert!(c.mount.as_ref().map(|m| !m.fstype.is_empty()).unwrap_or(false), "{c:?}");
         std::fs::remove_dir_all(&root).unwrap();
