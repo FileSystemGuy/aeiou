@@ -199,7 +199,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-08)
+## Status (2026-10-09)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -212,11 +212,13 @@ reported; the launcher takes host files and `pdsh`-style ranges).
 
 Not built, in rough order of interest:
 
+- The access layers (proposed 2026-10-09, `PROJECT_BRIEF.md` §6 item 25): protocol family
+  and endpoint per namespace, the API and the cache mode as separate axes, transport and
+  buffer beside them; then object storage through `s3dlio` behind a feature flag (item 17),
+  and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only
   met `localhost`), and tensor-parallel sharding of a KV chunk, where `--gpus` is today
   independent engines rather than one TP group (`PROJECT_BRIEF.md` §6 item 20).
-- Backends from the brief's list that are not written: `gds`, `nixl-posix`, `libnfs`; object
-  storage through `s3dlio` behind a feature flag (item 17).
 - `aeiou-verify`, the offline content verifier that takes a dataset manifest and
   regenerates any byte; `aeiou-fit`, the fitting of parameter files from a trace (each
   capture kit today has its own fitting script).

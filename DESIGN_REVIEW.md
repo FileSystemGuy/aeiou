@@ -4006,6 +4006,148 @@ replay's pool, given in the kit's README as 7,800 tokens, is 8,192 (vLLM's log a
 2026-10-08; the 2 GiB run's 174,752 is 2 GiB over Qwen2.5-0.5B's 12,288 bytes a token,
 rounded down to a 16-token block).
 
+### 3.65 The access layers: protocol, API, cache, transport, and buffer as separate axes, `s3dlio` as one engine among them (proposed 2026-10-09, not yet decided)
+
+**The question (the user's).** Polishing the KV abstracts kept running into "backend"
+questions that seemed unconnected: whether `s3dlio` needs PRs to give it buffered,
+`O_DIRECT`, POSIX AIO, and `io_uring` file access beside its S3, Azure, and GCS stores;
+whether `direct://` against `file://` in the AST would allow a run that mixes object and
+POSIX storage, and whether mixed-protocol workloads should be supported at all; whether
+`O_DIRECT` is a modifier of several APIs rather than part of a backend's name; and RDMA,
+which NFS and S3 can both use. Is that one design or a pile of ideas? The user's framing:
+the file structures (Parquet, HDF5, …) must be layered above the access-API work, and the
+access APIs are what is tangled.
+
+**What exists.** The file structures are already above it: format classes live in the
+Python builder and emit POSIX-shaped ops, and the runner is format-ignorant (brief §5,
+"Format classes"). The tangle is below, in "backend". The nine names of
+`BackendKind` (`runner/aeiou/src/backend.rs`) are the product of three choices: the API
+(syscalls, glibc AIO, kernel AIO, `io_uring`, `mmap`), whether `O_DIRECT` is added to every
+regular-file open (the `-direct` names), and how completions come back (a blocking thread
+per actor behind the `Backend` trait, or an event loop behind the `Engine` trait of
+`uring.rs`). The `Backend` trait is written over `OwnedFd`/`BorrowedFd`, which no object
+store has. The AST declares one `backend` for the whole abstract (contract 0.3, §3.48), and
+`--root` is one directory. None of this was the plan: §3.12 classified backends on three
+axes (initiation, completion, memory target) with `--buffer pageable|pinned|gpu` and
+`--cache buffered|direct|dontcache|fadv-dontneed` as orthogonal flags and a validity table
+(brief §4, `NAPKIN_MATH.md` §8.5), and §3.35 noted that the build had reduced both axes to
+the `-direct` suffix.
+
+**Assessment: one design.** Every one of the questions asks the same thing of a different
+axis: is the choice the application's (in the abstract, held fixed by CLOSED) or the
+solution's (the submitter's, recorded in the report)? The interposition test (brief §5)
+already answers that. The questions looked unconnected because the runner gives every axis
+one home, the backend name, when each binds to something different:
+
+| Axis | Binds to | Whose | Today |
+|---|---|---|---|
+| Op stream, with the application's own flags (`O_DIRECT` on the opens it uses it on) | the op | the abstract | built (`OpenFlag::DIRECT`; LMCache's `direct`, §3.63) |
+| Protocol family: POSIX or object | the namespace or dataset | the abstract (the application's API) | POSIX, implicitly |
+| Endpoint: a directory, a bucket, a URI | the namespace or dataset | the run (it is the system under test) | one `--root` |
+| API (engine): `sync`, `posix-aio`, `libaio`, `io_uring`, `mmap`; for objects the client library | the run, per protocol family | the abstract declares it; another is another workload (§3.48) | the backend name |
+| Cache mode forced on every open: `direct`, `dontcache`, `fadv-dontneed` | the run | an override, so another workload | the `-direct` names |
+| Transport: TCP or RDMA | the mount, or the client library's configuration | the solution | not modelled (`NAPKIN_MATH.md` §8.5 lists TCP against RDMA as an NFS mount row) |
+| Buffer: pageable host, pinned host, GPU memory | the run | open (GDS, `nixl-posix`) | pageable host only |
+
+**Proposed answers to the questions.**
+
+- **Mixed protocols: support them, bound per namespace.** Real jobs mix: a training set
+  read from an object store while checkpoints go to a file system is common, and KV engines
+  have remote tiers beside local disk (LMCache's remote connectors **[verify]** against its
+  source before relying on it). The structure is mostly in place: an abstract already has
+  namespaces and datasets, each with its own root under `--root`, and the event loop already
+  wakes on an eventfd, so a completion source on another runtime can wake the same loop that
+  owns the ring. What changes is that the protocol and API are declared per namespace (with
+  the abstract's top-level declaration as the default) and that a run is given an endpoint
+  per namespace rather than one `--root`. Design it per namespace now so nothing forecloses
+  it; build the single-protocol case first. Counter-argument: no traced application of the
+  eight mixes protocols today, and every mixed run doubles the setup a submitter must
+  reproduce; the per-namespace binding costs little, but a WG workload that mixes should wait
+  for a trace that does.
+- **No `direct://` in the AST.** `s3dlio`'s scheme puts a modifier in the protocol's name,
+  the same tangle as the `-direct` backend names. `O_DIRECT` already has its two right
+  places: in the op stream, on the opens where the application uses it (CLOSED), and as a
+  run-wide cache mode that forces it on every open (another workload). The scheme the AST may
+  carry is the protocol family; the cache mode is never in it.
+- **`O_DIRECT` is a modifier, orthogonal with known exceptions.** It applies to every POSIX
+  API but `mmap` (refused, as the brief's validity table planned); for `libaio` it is what
+  makes submission asynchronous (buffered kernel AIO mostly blocks in `io_submit`), which is
+  a property to report, not a refusal; for objects it has no meaning and is refused. The
+  run-wide flag becomes `--cache`, as planned in §3.12, with the abstract's own flags as
+  written the default (not "buffered": an abstract may carry `DIRECT` on some opens), and
+  today's nine names stay as aliases (`io_uring-direct` = `io_uring` + `--cache direct`).
+- **RDMA is below the protocol, and whose it is depends on where the client runs.** Under a
+  kernel client (NFS with `proto=rdma`, Lustre, GPFS) it is a mount option the application
+  never sees: the solution's, chosen by the submitter and recorded with the other mount
+  options the report already carries (§3.30). Under a user-space client in the runner (S3
+  over RDMA **[verify]** which clients and servers support it, `libnfs`, NIXL), it is a client
+  library option: a run option recorded in the report, solution side by the same reasoning,
+  since the application's calls are unchanged. Counter-argument: where the RDMA path needs a
+  different client API than the traced application uses, it is not a swap under an
+  unmodified application, so it is another workload. RDMA and the buffer axis are one
+  design: RDMA matters most when the bytes land in GPU memory.
+- **PRs to `s3dlio` for the POSIX APIs: not on aeiou's path.** The runner should not send
+  its POSIX ops through `s3dlio`. The object API has no descriptor, `open`, `close`, `lseek`,
+  `fstat` of a descriptor, `fadvise`, or `getdents`, so it cannot reproduce a traced call
+  sequence; a tokio task and a `bytes::Bytes` per op would charge every POSIX API costs that
+  are not its own; and the runner parks one VM per actor with one op in flight, which async
+  tasks do not model. If the WG wants one set of POSIX engines shared between the two, the
+  direction is reversed: aeiou's engines, as a crate with no tokio, which `s3dlio`'s
+  `file://` and `direct://` could use. What aeiou may need from `s3dlio` is narrower, and
+  guesses until its current source is read **[verify]**: a ranged read into the caller's
+  buffer (no allocation and copy per op), control of its runtime's and pools' sizes, and
+  per-request timing. Those PRs come from measuring it (step 3 below), not before.
+
+**The object mapping (draft; §3.32 extended).** Per op, for a namespace declared object:
+
+| Op | Object operation | Notes |
+|---|---|---|
+| `open` (read) | none, or `HEAD` when the abstract `fstat`s it | the handle is the key, the mode, and a position |
+| `read` at an offset | ranged `GET` | `streaming` mode: the reads of one open, sequential from its first, as one `GET` streamed; a legal row since a shim could do it (§3.12) |
+| `open` (write, `CREAT`/`TRUNC`) + sequential `write`s + `close` | one `PUT` at `close`, or a multipart upload in parts of a set size | the size is the writes' positional expressions, as for a POSIX namespace |
+| `fstat`, `stat` | `HEAD` | |
+| `readdir` | `LIST` of the prefix, paged | the page size an option of the run |
+| `unlink` | `DELETE` | |
+| `rename` | copy and `DELETE` | refusable per store; not atomic |
+| `mkdir`, `rmdir` | none | prefixes are not objects |
+| `lseek`, `fadvise`, `ioctl`, `fsync`, `fdatasync` | local | an upload is durable at its `close` |
+| `write` not sequential from 0, `O_APPEND`, `ftruncate`, `fallocate`, a read past a writer's end | refused | a new validity rule (V16) at `aeiou check`, as V9 refuses an access mode a format class lacks |
+
+The manifests (`.aeiou-dataset.json`, `.aeiou-namespace.json`) become objects at the
+prefix's root; `datagen` writes through the same engine. The fingerprint is untouched, as
+for every backend.
+
+**The contract.** Declaring the protocol and API per namespace, and splitting today's
+`backend` into an API and a cache mode, is a contract change (0.6). Proposed: the top-level
+`backend` keeps its meaning as the default API of POSIX namespaces, with the `-direct` names
+accepted and read as the API plus `cache: direct`; a namespace or dataset may declare
+`protocol: object` and its client. Every existing AST stays valid and every fingerprint and
+dataset id stays the same.
+
+**Order of work.**
+
+1. This entry, decided: the axes, the per-namespace binding, the mapping and V16, the
+   contract change.
+2. The runner refactored without a change of behaviour: a handle the engine owns instead of
+   a descriptor, the backend name split into API and `--cache` with the nine names as
+   aliases. The proof is that every fingerprint, golden, and test is unchanged.
+3. `s3dlio` as an engine behind a cargo feature, over `file://` first: the same
+   `train_small_files` fingerprint against `sync`, pricing the library alone (§3.32's first
+   measurement). This finds which PRs to `s3dlio` are needed.
+4. An S3 server on the development box: a run over `s3://`, with `datagen` and the
+   manifests through it.
+5. The PRs to `s3dlio` that steps 3 and 4 showed are needed.
+
+Then `libnfs`, `gds`, and `nixl-posix` come in on the same axes (the last two with the
+buffer axis), and a transport row joins the report.
+
+**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
+are designed in now (proposed) or deferred; the contract change; which real application's
+object I/O the first object abstract stands for, since under CLOSED a run over S3 of an
+abstract traced on POSIX is another workload (candidates: `s3torchconnector`, `s3dlio`'s own
+data loader, or one the WG names); and whether the POSIX-engine crate shared with `s3dlio`
+is worth offering.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
