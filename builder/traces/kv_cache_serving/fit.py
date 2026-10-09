@@ -1,7 +1,7 @@
 """Parameters of the KV-cache abstracts from a replay.py run: its log and the server's.
 
     python fit.py replay.log serve.log [--abstract kv_cache_serving] [--bins 20]
-                  [--set name=value]... [--doc TEXT] -o fitted.params.json
+                  [--set name=value]... [--condition name=value]... [--doc TEXT] -o fitted.params.json
 
 From the load's log (every request's prompt and completion tokens, and how many requests ago
 its conversation was last served):
@@ -25,8 +25,48 @@ the engine still held of the prompt; `grep "Inference Engine computed"` of it is
              censored observations, and the share beyond the longest is given the context.
 
 `--set` adds what belongs to the model and the backend (chunk_bytes, meta_bytes, buf).
+
+The fit's conditions go into the file's `provenance` (never compared): what an engine holds
+is its KV pool against the load, so `keep` stands for the pool it was fitted at
+(`DESIGN_REVIEW.md` §3.64). They come from the server's log where it has them, else from
+`--condition NAME=VALUE`, which also overrides.
 """
 import argparse, json, re
+
+
+def conditions(server_log, slots, given=()):
+    """The conditions a fit of the engine's holds is valid at: the model and its context, the
+    engine's KV pool (vLLM's `GPU KV cache size`, and the `--kv-cache-memory-bytes` that set
+    it), LMCache's CPU tier in bytes (0 with `local_cpu` off; its sizes are GiB), and the
+    slots one engine serves. Taken from the server's log, then `given` (NAME=VALUE, JSON)."""
+    found = {}
+    pats = [("model", r"'model': '([^']+)'", str), ("max_model_len", r"'max_model_len': (\d+)", int),
+            ("kv_cache_memory_bytes", r"'kv_cache_memory_bytes': (\d+)", int),
+            ("engine_pool_tokens", r"GPU KV cache size: ([\d,]+) tokens", lambda s: int(s.replace(",", ""))),
+            ("local_cpu", r"'local_cpu': (True|False)", lambda s: s == "True"), ("max_local_cpu_size", r"'max_local_cpu_size': ([\d.]+)", float)]
+    for l in open(server_log, errors="replace"):
+        for k, p, f in pats:
+            if k not in found:
+                m = re.search(p, l)
+                if m:
+                    found[k] = f(m[1])
+    c = {k: found[k] for k in ("model", "max_model_len", "kv_cache_memory_bytes", "engine_pool_tokens") if k in found}
+    if "local_cpu" in found:
+        c["cpu_tier_bytes"] = int(found.get("max_local_cpu_size", 0) * 1024 ** 3) if found["local_cpu"] else 0
+    c["slots_per_engine"] = slots
+    for s in given:
+        k, v = s.split("=", 1)
+        c[k] = json.loads(v)
+    order = ["model", "max_model_len", "kv_cache_memory_bytes", "engine_pool_tokens", "cpu_tier_bytes", "slots_per_engine"]
+    return dict(sorted(c.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else len(order)))
+
+
+def write(path, abstract, doc, params, conds=None):
+    """A parameter to a line; the fit's conditions, when known, as the file's provenance."""
+    with open(path, "w") as f:
+        f.write('{"params_version": 1, "abstract": %s,\n "doc": %s,\n "params": {\n%s}%s}\n' % (
+            json.dumps(abstract), json.dumps(doc), ",\n".join("  %s: %s" % (json.dumps(k), json.dumps(v)) for k, v in params.items()),
+            ',\n "provenance": {"conditions": %s}' % json.dumps(conds) if conds else ""))
 
 
 def shares(values, n):
@@ -74,6 +114,7 @@ def main():
     ap.add_argument("--block", type=int, default=16, help="tokens in a block of the engine's own cache")
     ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--doc", default="")
+    ap.add_argument("--condition", action="append", default=[], metavar="NAME=VALUE", help="a condition of the fit the server's log lacks")
     ap.add_argument("-o", "--out", required=True)
     a = ap.parse_args()
 
@@ -123,9 +164,7 @@ def main():
     for s in a.set:
         k, v = s.split("=", 1)
         params[k] = json.loads(v)
-    with open(a.out, "w") as f:                    # a parameter to a line
-        f.write('{"params_version": 1, "abstract": %s,\n "doc": %s,\n "params": {\n%s}}\n' % (
-            json.dumps(a.abstract), json.dumps(a.doc), ",\n".join("  %s: %s" % (json.dumps(k), json.dumps(v)) for k, v in params.items())))
+    write(a.out, a.abstract, a.doc, params, conditions(a.server_log, active, a.condition))
     print("requests %d, open conversations %d, begun after an ended one %d, tokens in %d out %d (mean %.1f, %.1f), returning conversations held whole %d of %d" % (
         n, active, began, sum(inn), sum(out), sum(inn) / n, sum(out) / n, sum(w for _, w in keep), len(keep)))
 

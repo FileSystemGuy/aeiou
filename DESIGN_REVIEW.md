@@ -3869,6 +3869,139 @@ conversation reads go (their spread over seeds is wide: the long main-agent chai
 draws carry most of them), and what the primary sources say about `first_in` and the
 prefix holds; then the `O_DIRECT` run again (still the first replay's).
 
+### 3.64 The engine's KV pool and the holds: what three times the pool changes, computed holds deferred, the CPU tier fixed at 0 (run and decided 2026-10-08)
+
+**The question (the user's).** Can an abstract be scaled along any dimension and keep the
+characteristics it was fitted to, or must the engine's KV pool be part of it? The pool is HBM
+less the model (the GPU's make and model) and LMCache's CPU tier (DRAM, which a submitter
+would buy as large as the budget allows to unload the storage). A training abstract has one
+stand-in for the hardware, the batch's compute time; the KV abstracts have the pool.
+
+**What the primary sources say** (read 2026-10-08):
+
+- *vLLM 0.30.0* (its source: `v1/core/kv_cache_utils.py`, `FreeKVCacheBlockQueue`;
+  `v1/core/block_pool.py`; `single_type_kv_cache_manager.py:581`; `sched/scheduler.py:753`):
+  a freed block that has a hash joins an LRU queue, a request's blocks freed in reverse so
+  that its head is evicted last; a hit takes the blocks back out of the queue; when a step
+  cannot get blocks, the FCFS scheduler preempts the last running request and frees its
+  blocks. So an engine holds a prefix of a prompt, never a middle, and a prefix every
+  request touches stays: the fitted `sys_held` is the whole main prefix in 17 of its 20
+  shares at 2 GiB.
+- *LMCache 0.5.5* (`v1/storage_backend/local_cpu_backend.py`, `v1/cache_engine.py`): the
+  CPU tier's size is `max_local_cpu_size` GiB (`× 1024**3`), not the machine's DRAM; written
+  through (§3.63), so it removes reads and never writes.
+- *Claude Code's documentation* (the sub-agents and prompt-caching pages, as published
+  2026-10-08; primary for the application, not for an engine): a request is its system
+  prompt and tools, then the project context (CLAUDE.md, memory), then the conversation,
+  which opens with the working directory and the git status; compaction keeps the first
+  layer (the corpus's cuts keeping 30k to 45k tokens). A sub-agent's first prompt is its own
+  system prompt and environment, the CLAUDE.md hierarchy (not for Explore and Plan), the git
+  status, any preloaded skills, then the delegation message: sub-agents of one type in one
+  session share all but the delegation message (`sub_tokens`, 21k to 33k), and a sub-agent
+  chain's `first_in` is that message. A *fork* inherits the parent's whole prompt and reads
+  its cache, a kind the corpus predates; not modelled. The cache is scoped to one machine and
+  directory: sessions in parallel in one directory share the prefix, sequential ones only
+  with the same git snapshot, so the replay's one main prefix across its eight sessions is
+  the parallel case.
+
+**The run.** The replay of §3.63 again, with `KV_BYTES` 6 GiB: 524,288 tokens, 3.0 times
+the 174,752 of 2 GiB, all else the same (raw in `~/MLPerfStorage/agentx/run-20261008c`; the
+kit's `agentx-6gib.*`). 232 requests were sent, 219 at 2 GiB: the replay's 300-request
+budget is shared by its session threads, so which requests go depends on the server's
+speed (recorded; a per-session budget would fix it).
+
+| | 2 GiB (174,752 tokens) | 6 GiB (524,288 tokens) |
+|---|---|---|
+| chunks written | 5,454 | 5,112 |
+| chunks read | 33,804 | 6,770 |
+| reads / data ops | 86 % | 57 % |
+| block reads after a read / after a write | 88 % / 12 % | 64 % / 36 % |
+| read-after-read distance p50 | 4 GiB | 2 GiB |
+| request size, runs, popularity | 3 MiB, single-op runs, top 10 % of blocks 35 % | the same (31 %) |
+
+The writes do not depend on the pool (LMCache stores a chunk once); the reads fall five
+times and come sooner. The refit moves the demand parameters only as the requests sent
+differ, and the holds: `keep`'s median from 192 tokens to about 65,000, `sub_held` up,
+`sys_held` already whole. Against the 6 GiB trace, four seeds each:
+
+| parameters | chunks read | verdict |
+|---|---|---|
+| the 6 GiB run's demand, the 2 GiB holds | 20k to 33k | 4 rows outside (reads' share, both reuse distances) |
+| the 6 GiB refit | 4.2k to 13k | accepted (fan-out unseen, as at 2 GiB) |
+| the 2 GiB set as committed | 13.5k to 24k | 2 outside (its wide seed spread widens the tolerance) |
+
+The first two differ in `keep`, `sys_held`, and `sub_held` alone: the pool reaches the
+storage through those three, and the rest of the fit carries over.
+
+**Whether the pool explains the holds** (`agentx.py holds`; `agentx.simulate`: vLLM's prefix
+cache over the corpus's 64-token blocks as the sources above describe it, a request taking
+its prompt's and reply's blocks when admitted). Held tokens predicted over measured, and the
+requests within one chunk of their measured hold:
+
+| timeline | pool | 2 GiB run | 6 GiB run |
+|---|---|---|---|
+| the engine's (LMCache's first lookup and first load or store), with preemption | the run's | 1.14, 78 % | 1.02, 79 % |
+| the engine's | the other run's | 2.93, 21 % | 0.62, 41 % |
+| clockless (each session back to back, seconds = c_in × prompt + c_out × reply) | the run's, its own c | 1.34, 55 % | 1.03, 76 % |
+| clockless, the 6 GiB run's c (the engine's speed with little queueing) | the run's | 1.79, 47 % | — |
+
+On the engine's own timeline LRU and preemption explain the holds at both pools, and the
+wrong pool does not. A first version without preemption predicted the same at either pool:
+in the replay a session's next request arrives as its last finishes, and only the pool's
+pressure (at 2 GiB a request waited 4.1 s at the median, LMCache looking it up 162 times;
+173 preemptions simulated, 11 at 6 GiB) evicts it meanwhile. The clockless timeline, the
+one an abstract could compute, is good without pressure and over-predicts under it, and no
+single share of the pool fits both runs (0.8: 1.44 and 0.95): what it lacks is the
+admission's dynamics, the waiting and a preempted request's recompute, not a fixed overhead.
+
+**Three kinds of dimension.** *Replication* (GPUs, hosts, steps, run length) scales exactly:
+each GPU's stream is positional and independent. *Data size* keeps its shape (layout and
+order are formulas); what changes is what the storage can cache, which is the solution's
+business. *Application-side capacity* (the engine's pool, LMCache's CPU tier) is a filter
+between the application's demand and the storage, and a fitted draw of a filter's output
+does not carry to another capacity. It is self-similar at constant pressure, roughly the
+context of the requests running at once over the pool (about 2.5 at 2 GiB, under 1 at 6
+GiB), as a scale model is faithful at a matching dimensionless number. A training step's
+compute time only paces the op stream; a KV pool changes which ops there are.
+
+**Decided (the user, 2026-10-08).**
+
+- *Computed holds are deferred.* The holds stay drawn, fitted at a reference engine and CPU
+  tier that a CLOSED submitter does not choose: the accelerator is emulated, so the WG fixes
+  the model, the GPU, TP, and the tier, and a submitter cannot buy them (WG process,
+  `PROJECT_BRIEF.md` §8). Any other value is another workload, as any parameter is; a
+  researcher or a vendor may set them, and comparability is then theirs to argue.
+- *The CPU tier is 0* (LMCache's `local_cpu` off), as in every replay so far. A nonzero
+  reference is the WG's to choose; it needs a replay with the tier at that size and a draw of
+  the loads it absorbs, or a plain LRU over the chunk stream (the tier has no preemption),
+  which is the likeliest first piece of computed holds.
+- *The reference holds must be fitted at the reference configuration.* The committed ones
+  are the development box's (Qwen2.5-0.5B, 2 GiB, eight slots), right for it and nothing
+  else. Without computed holds that needs a replay on the reference hardware, or a smaller
+  one at the same pressure, which would need validating.
+- *Kept so that computed holds stay cheap:* every fit of the holds records its conditions;
+  the hold simulation is a kit tool; the 6 GiB pair is a judged pair. `GRAMMAR_OPTIONS.md`
+  §5.3 (capacity an input, not a simulated cache) stands. A later design would be a cache
+  per engine, over one actor's slots and so not the cross-actor timing §5.3 rules out,
+  deterministic in the slots' round-robin order, with the admission's dynamics under
+  pressure, and a contract change; its parameters would default to the drawn holds, keeping
+  every fingerprint.
+
+**Built (2026-10-08).** `fit.conditions` and `fit.write`: a fit of the holds writes its
+conditions as the parameter file's `provenance` (never compared): the model, its context,
+`kv_cache_memory_bytes`, `engine_pool_tokens`, `cpu_tier_bytes`, `slots_per_engine`, and for
+`agentx.py` the replay's seconds per prompt and reply token (queueing included), from the
+server's log or `--condition`. Every KV parameter file fitted to an engine has them; the
+O_DIRECT and `kv_cache_shared` files were given them without a refit, from their runs' logs
+and the kit's README. `agentx.py log` writes the reduced server log (the conditions' lines,
+and per request its first lookup, its last before admission, and its admission; 580 lines at
+2 GiB, a superset of the 438 before); `agentx.py holds` runs the simulation (the corpus is
+not committed, so as with `fit` the tests cover `simulate` on a synthetic case and the
+conditions against the kit's logs). The 6 GiB pair (`agentx-6gib.*`) is accepted. The chat
+replay's pool, given in the kit's README as 7,800 tokens, is 8,192 (vLLM's log at 96 MiB,
+2026-10-08; the 2 GiB run's 174,752 is 2 GiB over Qwen2.5-0.5B's 12,288 bytes a token,
+rounded down to a 16-token block).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

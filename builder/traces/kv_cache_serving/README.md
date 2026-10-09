@@ -30,7 +30,7 @@ aeiou dry-run ../../../schema/examples/kv_cache_serving.ast.json --gpus 1 \
   docstring has the rest. `chat.py` is the synthetic load the call sequence was first
   traced with; `replay.py` takes its system prompts from it.
 
-- `KV_BYTES` limits vLLM's own KV memory (96 MiB here, 7,800 tokens). Without a limit the
+- `KV_BYTES` limits vLLM's own KV memory (96 MiB here, ~~7,800~~ 8,192 tokens, vLLM's log 2026-10-08). Without a limit the
   engine keeps every conversation of a small load in GPU memory and LMCache is never read.
 - `serve.sh` sets `VLLM_USE_FLASHINFER_SAMPLER=0`: that sampler compiles its kernels at
   first use and needs the CUDA compiler, which a machine with only the driver lacks.
@@ -99,9 +99,11 @@ strace -f --seccomp-bpf -ttt -T -yy \
     -o trace.txt sh serve.sh > serve.log 2>&1 &
 python replay_agentx.py traces.jsonl --sessions 8 --requests 300 --max-context 131072 > agentx.replay.log   # once /health answers
 aeiou-trace metrics trace.txt --root /mnt/nfs --metrics-block 3145728 -o agentx.trace.metrics.json   # a block per chunk
-python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context 131072 \
+python agentx.py log serve.log -o agentx.lmcache.log      # the lines of the server's log the fit reads
+python agentx.py fit traces.jsonl --replay agentx.replay.log agentx.lmcache.log --context 131072 \
     --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false \
     -o fitted.agentx-replay.params.json
+python agentx.py holds traces.jsonl --replay agentx.replay.log serve.log [--pool TOKENS] [--clockless]
 ```
 
 - vLLM 0.30 reads `rope_parameters` (Transformers 5) and wants `max_position_embeddings`
@@ -109,8 +111,13 @@ python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context
   prompts are tokens drawn from hash ids, the replies `ignore_eos`).
 - LMCache logs a lookup at every step a request waits for KV memory, its held prefix falling
   as the running requests evict it. `agentx.py fit --replay` takes the last lookup before the
-  request's first load or store. `agentx.lmcache.log` keeps just those two lines per request
-  (441 lines of the server's 32 MB; `agentx.replayed` parses both the same).
+  request's first load or store. `agentx.lmcache.log` keeps ~~just those two lines per request
+  (441 lines of the server's 32 MB; `agentx.replayed` parses both the same)~~ those two lines,
+  each request's first lookup, and the lines that give the fit's conditions (`agentx.py log`,
+  2026-10-08: 580 lines; `agentx.replayed` parses it and the whole log the same). The fit
+  writes those conditions (the model, the engine's KV pool, LMCache's CPU tier, the slots,
+  the replay's seconds per token) as the parameter file's `provenance`: what the engine
+  holds stands for that pool (`DESIGN_REVIEW.md` §3.64).
 - Its metrics are in blocks of one chunk: every access is one whole chunk, so the shares and
   distances are those at 4 KiB with counts 768 times fewer (checked row by row, 2026-10-07;
   only the top-0.1 % row turns "not judged", as the objects' already was), and the pair's dry
@@ -119,6 +126,12 @@ python agentx.py fit traces.jsonl --replay agentx.replay.log serve.log --context
   `tests/test_trace.py` and ~~accepted~~ not accepted since the corrected run (one row outside,
   read-after-read reuse distance, its reason in `agentx.trace.tolerances.json`); the corpus is not committed, so the fit is repeated by
   the command above, not by the tests.
+- The same replay with `KV_BYTES=6442450944` (6 GiB, 524,288 tokens, three times the pool;
+  2026-10-08) is `agentx-6gib.*`, fitted the same way: 5,112 chunks written and 6,770 read,
+  against 5,454 and 33,804 at 2 GiB. Its pair is accepted with only `keep`, `sys_held`, and
+  `sub_held` refitted; the 2 GiB values give three to five times its reads (`DESIGN_REVIEW.md`
+  §3.64). `agentx.py holds` simulates vLLM's prefix cache under either replay: on the
+  engine's timeline it gives the measured holds within 14 % at 2 GiB and 2 % at 6 GiB.
 - `lmcache.agentx.odirect.yaml` is the same with LMCache's `use_odirect`, the second run
   (`agentx-odirect.*`, fitted with `--set direct=true` added): its calls are the abstract's
   `direct` path. That pair is not accepted, one row recorded outside with its reason in

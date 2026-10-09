@@ -478,6 +478,18 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     ids of a larger corpus relaxes the manifest's `count` comparison to "at least". Names,
     sizes, directories, and payload groups are already functions of the id alone. Not built.
 
+24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
+    what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool
+    three times larger read a fifth as much, and only a refit of those three followed it. A
+    simulation of vLLM's prefix cache (LRU, a request freed tail first, FCFS preemption,
+    `agentx.py holds`) explains the measured holds at both pools on the engine's own timeline;
+    on a timeline an abstract could compute it holds without pool pressure and over-predicts
+    under it. Computed holds would be a per-engine cache in the runner (a contract change,
+    `GRAMMAR_OPTIONS.md` §5.3 amended) with a `pool_tokens` input, plus the admission's
+    dynamics under pressure; deferred because the WG fixes the engine and the CPU tier (§8),
+    so drawn holds at the reference configuration serve CLOSED. Kept for it: the fits'
+    conditions, the simulation, and the 2 GiB and 6 GiB pairs.
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS
@@ -513,6 +525,7 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Reference parameters | Every workload has parameter slots filled from configuration, measurement, and traces; a parameter file (`schema/README.md` §8) is the published form of one set. | Which values are the reference set (batch sizes, step times, dataset scale relative to client DRAM, the 500-step bound) is a WG decision recorded in the published parameter files. | §5 decisions; `ABSTRACTS.md` `[measure]` slots; `schema/examples/params/` |
 | Acceptance tolerances | `aeiou-trace compare --judge` holds a trace and an abstract to a tolerance per class of metric; the values in the tool are this repository's defaults (`builder/REFERENCE.md` §7; decided 2026-10-02, for now). | Which values accept an abstract for a workload class, and which recorded differences are tolerated, is a WG decision published as a tolerance file. | §6 item 14; `DESIGN_REVIEW.md` §3.55 |
 | Workload selection | The builder can express any POSIX-shaped skeleton. | The ninth and tenth abstracts follow the MLPerf Storage ResNet50/CosmoFlow and Parquet→Arrow shapes because those are what the WG submits (`train_stream_tfrecord` / `train_stream_parquet` done 2026-09-30; the tenth pending). | §6 item 15; `GRAMMAR_OPTIONS.md` §6.5 |
+| The KV workloads' engine and CPU tier | What an inference engine holds (its KV pool, HBM less the model) and what LMCache's CPU tier absorbs change which reads reach the storage; the KV abstracts draw the holds, fitted at the conditions their parameter file records (`provenance.conditions`), and any other engine or tier is another workload. | The reference model, accelerator, TP, and CPU tier are fixed by the WG, not chosen by a submitter (the accelerator is emulated; a submitter would otherwise buy the largest tier to unload the storage). The CPU tier is 0 (LMCache's `local_cpu` off; decided 2026-10-08); the reference holds must be fitted at the reference engine. | §6 item 24; `DESIGN_REVIEW.md` §3.64 |
 | Upstream requests | dgen-py's API is what it is. | The `fill_block`/`seek` request goes through the WG leadership channel. | `DESIGN_REVIEW.md` §3.17 |
 | Checkpoint write and restore | A write run leaves a namespace manifest; a restore run declares the namespace `input`, reads it, and reports the gap and the warm reads (§5, *Checkpoint restore inputs*). | The benchmark runs them as two invocations of the same host list, the restore with `--rank-rotate 1` so no host reads its own shards; the gap between the end of the write and the start of the restore is capped at 30 s (`--max-gap 30`); a failed DP=N job restarts as DP=N (no resharding, `replicas` stays 1 for fully sharded state); `readback` stays off in a scored write. | `DESIGN_REVIEW.md` §3.24; `ABSTRACTS.md` §3–§4 |
 

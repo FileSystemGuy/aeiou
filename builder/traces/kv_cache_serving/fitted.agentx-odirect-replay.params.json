@@ -22,4 +22,5 @@
   "chunk_bytes": 3145728,
   "prefill_step": 2048,
   "sys_per_slot": true,
-  "direct": true}}
+  "direct": true},
+ "provenance": {"conditions": {"model": "Qwen/Qwen2.5-0.5B-Instruct", "max_model_len": 131072, "kv_cache_memory_bytes": 2147483648, "engine_pool_tokens": 174752, "cpu_tier_bytes": 0, "slots_per_engine": 8, "latency_s_per_prompt_token": 0.000756, "latency_s_per_reply_token": 0.033}}}

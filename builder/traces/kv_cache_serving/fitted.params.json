@@ -16,4 +16,5 @@
   "retain": 300,
   "turn_in": {"empirical": {"values": [12, 15, 17, 18, 20, 20, 22, 24, 26, 28, 30, 33, 36, 41, 50, 60, 77, 104, 166, 854], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}},
   "turn_out": {"empirical": {"values": [17, 47, 89, 124, 152, 175, 196, 215, 233, 245, 269, 292, 313, 346, 380, 439, 483, 545, 630, 761], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}},
-  "chunk_bytes": 3145728}}
+  "chunk_bytes": 3145728},
+ "provenance": {"conditions": {"model": "Qwen/Qwen2.5-0.5B-Instruct", "max_model_len": 4096, "kv_cache_memory_bytes": 100663296, "engine_pool_tokens": 8192, "cpu_tier_bytes": 0, "slots_per_engine": 8}}}

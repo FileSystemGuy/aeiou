@@ -6,6 +6,8 @@ InferenceX AgentX sessions (Claude Code through a proxy, published on HuggingFac
     python agentx.py fit traces.jsonl [--traces N] [--bins 20] [--turn-bins 100] [--set name=value]... [--doc TEXT] -o fitted.agentx.params.json
     python agentx.py fit traces.jsonl --replay replay.log serve.log [--context TOKENS] [--set name=value]... -o fitted.PARAMS.json
     python agentx.py reference traces.jsonl [--traces N] [--context TOKENS] -o agentx.reference.json
+    python agentx.py log serve.log -o agentx.lmcache.log
+    python agentx.py holds traces.jsonl --replay replay.log serve.log [--pool TOKENS] [--clockless [--service C_IN C_OUT]] [-o FILE]
 
 One line of the file is one session: `requests` in time order, each with `t` (seconds), `in`
 (prompt tokens, a count of 64-token KV blocks), `out` (generated tokens), `hash_ids` (the
@@ -74,14 +76,20 @@ What the corpus gives, and how the abstracts take it:
              of the conversation, the tokens of their prefix it held (a prefix the sessions
              share stays in the engine's own cache).
 
+A fit with `--replay` records the engine it was fitted at as the file's provenance
+(`fit.conditions`: the model, its context, the KV pool, LMCache's CPU tier, the slots, and the
+replay's seconds per token), since the holds stand for that pool (DESIGN_REVIEW.md §3.64).
+`log` reduces the server's log to what `fit --replay` and `holds` read; `holds` simulates
+vLLM's prefix cache under the replay and compares its holds with the measured ones.
+
 `reference` is the corpus's own chunk accounting, the thing a dry run at the fitted
 parameters is compared with: per request, the whole 256-token chunks its prompt holds, how
 many of them the session had stored before (the prefix the store would hit), and how many
 are new (stored now), with totals, means, and equal shares.
 """
-import argparse, collections, json, re, statistics
+import argparse, collections, datetime, json, re, statistics
 
-from fit import kept
+from fit import conditions, kept, write
 
 BLOCK = 64                                            # tokens per hash id
 
@@ -284,6 +292,188 @@ def replayed(log, server_log):
     assert not any(by_prompt.values()), "the server's log has requests the replay's does not"
     return sessions, sent
 
+SENT = re.compile(r"req \d+ session (\d+) index (\d+) prompt (\d+) cached \S+ completion (\d+) ([\d.]+)s")
+LOOKUP = re.compile(r"Reqid: (\S+), Total tokens (\d+), Inference Engine computed tokens: (\d+)")
+ADMIT = re.compile(r"\[req_id=(\S+)\] (Retrieved|Stored)")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def service(log):
+    """A request's seconds in the replay as c_in × prompt tokens + c_out × reply tokens, least
+    squares over the requests the replay's log has (the engine's speed at that load, queueing
+    included)."""
+    xs = [(int(m[3]), int(m[4]), float(m[5])) for m in map(SENT.match, open(log)) if m]
+    sxx, syy, sxy = sum(p * p for p, _, _ in xs), sum(c * c for _, c, _ in xs), sum(p * c for p, c, _ in xs)
+    bx, by = sum(p * t for p, _, t in xs), sum(c * t for _, c, t in xs)
+    d = sxx * syy - sxy * sxy
+    return (bx * syy - by * sxy) / d, (by * sxx - bx * sxy) / d
+
+
+def trim(server_log, out):
+    """The server's log as the kit keeps it: the lines that give the fit's conditions (vLLM's
+    arguments and KV size, LMCache's configuration), and per request its first lookup, its
+    last before its first load or store (what `replayed` takes), and that load or store
+    (when the engine admitted it, what `holds` takes), ANSI codes removed."""
+    lines = [ANSI.sub("", l).rstrip("\n") for l in open(server_log, errors="replace")]
+    keep, first, last, admitted = set(), set(), {}, set()
+    for i, l in enumerate(lines):
+        if "non-default args" in l or "GPU KV cache size" in l or "Creating LMCacheEngine with config" in l:
+            keep.add(i)
+            continue
+        m = LOOKUP.search(l)
+        if m and m[1] not in admitted:
+            if m[1] not in first:
+                first.add(m[1])
+                keep.add(i)
+            last[m[1]] = i
+            continue
+        m = ADMIT.search(l)
+        if m and m[1] not in admitted:
+            admitted.add(m[1])
+            keep.update((i, last[m[1]]) if m[1] in last else (i,))
+    with open(out, "w") as f:
+        f.writelines(lines[i] + "\n" for i in sorted(keep))
+
+
+def stamp(line):
+    m = re.search(r"\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3})\]", line)
+    return datetime.datetime.strptime(m[1], "%Y-%m-%d %H:%M:%S").timestamp() + int(m[2]) / 1000
+
+
+def engine_times(log, server_log):
+    """Per request sent (session, index): when the engine first looked it up and when it
+    admitted it (its first load or store), in seconds, matched as `replayed` matches."""
+    first, admit, total = {}, {}, {}
+    for l in open(server_log, errors="replace"):
+        l = ANSI.sub("", l)
+        m = LOOKUP.search(l)
+        if m:
+            first.setdefault(m[1], stamp(l))
+            total.setdefault(m[1], int(m[2]))
+            continue
+        m = ADMIT.search(l)
+        if m:
+            admit.setdefault(m[1], stamp(l))
+    by_prompt = collections.defaultdict(collections.deque)
+    for rid in first:
+        by_prompt[total[rid]].append(rid)
+    times = {}
+    for m in map(SENT.match, open(log)):
+        if m:
+            rid = by_prompt[int(m[3])].popleft()
+            times[(int(m[1]), int(m[2]))] = (first[rid], admit.get(rid, first[rid]))
+    return times
+
+
+def simulate(events, blocks, replies, cap):
+    """vLLM's prefix cache over the corpus's blocks, `cap` of them: a block in use is counted
+    by the requests using it; a freed one joins the LRU queue, a request's freed tail first
+    (`free_blocks(reversed(...))`, so its head is evicted last) and leaves it on a hit; a
+    request takes its prompt's and its reply's blocks when admitted, evicting from the queue's
+    head, and when the queue is empty the last admitted running request is preempted, its
+    blocks freed (the FCFS scheduler's `running[-1]`). `events` are (time, 1 admitted or 0
+    finished, request) in time order; returns per request the blocks of its prompt held when
+    admitted, and the number of preemptions. A preempted request is not readmitted here."""
+    ref, queue, running, held = collections.Counter(), collections.OrderedDict(), collections.OrderedDict(), {}
+    preempted = 0
+    serial = 0
+
+    def free(mine):
+        for b in reversed(mine):
+            ref[b] -= 1
+            if not ref[b]:
+                del ref[b]
+                queue[b] = True
+
+    for _, admitted, k in events:
+        if not admitted:
+            free(running.pop(k))
+            continue
+        h = 0
+        for b in blocks[k]:
+            if b in queue or b in ref:
+                h += 1
+            else:
+                break
+        held[k] = h
+        mine = list(dict.fromkeys(blocks[k])) + [("reply", serial + j) for j in range(-(-replies[k] // BLOCK))]
+        serial += len(mine)
+        new = 0
+        for b in mine:
+            if b in queue:
+                del queue[b]
+            elif b not in ref:
+                new += 1
+        need = len(ref) + len(queue) + new - cap
+        while need > 0:
+            if queue:
+                queue.popitem(last=False)
+                need -= 1
+                continue
+            victims = [v for v, m in running.items() if m]
+            if not victims:
+                break
+            free(running[victims[-1]])
+            running[victims[-1]] = []
+            preempted += 1
+        for b in mine:
+            ref[b] += 1
+        running[k] = mine
+    return held, preempted
+
+
+def holds(a):
+    """Whether the engine's pool explains the holds a replay measured (`DESIGN_REVIEW.md`
+    §3.64): `simulate` on the replay's requests, with the block keys `replay_agentx.py` made,
+    at `--pool` tokens (the server's own by default), on the engine's timeline (each request
+    admitted when LMCache first loaded or stored for it, finished when its session's next
+    arrived) or, `--clockless`, on one an abstract could compute (each session back to back,
+    a request taking c_in × prompt + c_out × reply seconds, `service`'s fit or `--service`)."""
+    log, server_log = a.replay
+    pool = a.pool or conditions(server_log, 0)["engine_pool_tokens"]
+    nsess, sent = replayed(log, server_log)
+    mb, per = main_blocks(a.corpus), max(1, a.chunk_tokens // BLOCK)
+    keys = {}
+    with open(a.corpus) as f:
+        for ti, line in enumerate(f):
+            if ti == nsess:
+                break
+            flat = []
+            flatten(json.loads(line)["requests"], flat)
+            at = {b: "sub %d" % p for p, b in enumerate(shared_prefix(flat, per))}
+            at.update({b: "main %d" % p for p, b in enumerate(main_prefix(flat, mb))})
+            for fi, (_, r) in enumerate(flat):
+                keys[(ti, fi)] = [at.get(b, "%d %d" % (ti, b)) for b in r["hash_ids"]]
+    reqs = {(int(m[1]), int(m[2])): (int(m[3]), int(m[4]), float(m[5])) for m in map(SENT.match, open(log)) if m}
+    order = {s: sorted(i for ss, i in reqs if ss == s) for s in range(nsess)}
+    events = []
+    if a.clockless:
+        c_in, c_out = a.service or service(log)
+        for s, idx in order.items():
+            t = 0.0
+            for i in idx:
+                p, c, _ = reqs[(s, i)]
+                events += [(t, 1, (s, i)), (t + c_in * p + c_out * c, 0, (s, i))]
+                t += c_in * p + c_out * c
+    else:
+        times = engine_times(log, server_log)
+        for s, idx in order.items():
+            for j, i in enumerate(idx):
+                arrived, admitted = times[(s, i)]
+                done = times[(s, idx[j + 1])][0] if j + 1 < len(idx) else arrived + reqs[(s, i)][2]
+                events += [(admitted, 1, (s, i)), (done, 0, (s, i))]
+    events.sort(key=lambda e: (e[0], e[1]))         # at one time, finishes first
+    held, preempted = simulate(events, keys, {k: v[1] for k, v in reqs.items()}, pool // BLOCK)
+    rows = [(k, p, h, min(held[k] * BLOCK, p - 1)) for k, (p, h) in sorted(sent.items())]
+    meas, pred = sum(r[2] for r in rows), sum(r[3] for r in rows)
+    near = sum(1 for r in rows if abs(r[2] - r[3]) <= a.chunk_tokens)
+    print("pool %d tokens, %s timeline: %d requests, %d preemptions; held tokens measured %d, predicted %d (%.2f); within a chunk %d (%.0f%%); "
+          "nothing held (measured, predicted) %d, %d" % (pool, "clockless" if a.clockless else "the engine's", len(rows), preempted, meas, pred,
+                                                        pred / max(1, meas), near, 100 * near / len(rows),
+                                                        sum(1 for r in rows if r[2] < a.chunk_tokens), sum(1 for r in rows if r[3] < a.chunk_tokens)))
+    if a.out:
+        with open(a.out, "w") as f:
+            f.writelines("%d %d %d %d %d\n" % (k[0], k[1], p, m, q) for k, p, m, q in rows)
 
 def fit(a):
     sent = None
@@ -359,9 +549,13 @@ def fit(a):
         doc = doc.replace("keep not measured (the proxy saw no engine).", "the requests replay_agentx.py sent (%d sessions as %d slots, %d "
                           "requests each, back to back), and keep from the server's log: of %d continuing requests the engine held the "
                           "whole kept prefix in %d." % (a.traces, a.traces, params["requests"], len(keep), sum(w for _, w in keep)))
-    with open(a.out, "w") as f:                    # a parameter to a line
-        f.write('{"params_version": 1, "abstract": %s,\n "doc": %s,\n "params": {\n%s}}\n' % (
-            json.dumps(a.abstract), json.dumps(doc), ",\n".join("  %s: %s" % (json.dumps(k), json.dumps(v)) for k, v in params.items())))
+    conds = None
+    if sent is not None:                           # what the holds stand for: the engine, its pool, and its load (§3.64)
+        conds = conditions(a.replay[1], a.traces, a.condition)
+        c_in, c_out = service(a.replay[0])
+        conds.setdefault("latency_s_per_prompt_token", float("%.3g" % c_in))
+        conds.setdefault("latency_s_per_reply_token", float("%.3g" % c_out))
+    write(a.out, a.abstract, doc, params, conds)
     print("requests %d, chains %d (one request: %d, longest %d), rewrites %.4f of continuations (trim mean %.0f), sys_tokens %d, tokens in %d "
           "(mean %.1f) out %d (mean %.1f), think mean %.1f s, chain growth / corpus growth %.3f" % (
               n, len(lengths), sum(1 for v in lengths.values() if v == 1), max(lengths.values()), rewrite, sum(trim) / max(1, len(trim)),
@@ -390,7 +584,7 @@ def reference(a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=["fit", "reference"])
+    ap.add_argument("what", choices=["fit", "reference", "holds", "log"])
     ap.add_argument("corpus")
     ap.add_argument("--abstract", default="kv_cache_serving")
     ap.add_argument("--traces", type=int, default=10 ** 9, help="use the first N sessions")
@@ -404,9 +598,17 @@ def main():
     ap.add_argument("--block", type=int, default=16, help="--replay: tokens in a block of the engine's own cache")
     ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--doc", default="")
-    ap.add_argument("-o", "--out", required=True)
+    ap.add_argument("--condition", action="append", default=[], metavar="NAME=VALUE", help="fit --replay: a condition the server's log lacks")
+    ap.add_argument("--pool", type=int, default=0, help="holds: the engine's KV pool in tokens (default: the server's)")
+    ap.add_argument("--clockless", action="store_true", help="holds: sessions back to back at --service's cost, not the engine's timeline")
+    ap.add_argument("--service", type=float, nargs=2, metavar=("C_IN", "C_OUT"), help="holds --clockless: seconds per prompt and per reply token")
+    ap.add_argument("-o", "--out", help="fit, reference: the file; holds: per request, session index prompt measured predicted")
     a = ap.parse_args()
-    (fit if a.what == "fit" else reference)(a)
+    if a.what != "holds" and not a.out or a.what == "holds" and not a.replay:
+        ap.error("fit, reference, and log need -o; holds needs --replay")
+    if a.what == "log":                            # its one argument is the server's log
+        return trim(a.corpus, a.out)
+    {"fit": fit, "reference": reference, "holds": holds}[a.what](a)
 
 
 if __name__ == "__main__":

@@ -203,7 +203,7 @@ on a loopback NFS mount, TFRecord's from source.
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
-LMCache (item 21: `keep` measured, buffered and `O_DIRECT` both traced; the buffered replay corrected 2026-10-08 and the main agent's and sub-agents' prompts modelled apart, its pair not yet accepted). Built and tested: everything described above, the nine backends, the
+LMCache (item 21: `keep` measured, buffered and `O_DIRECT` both traced; the buffered replay corrected 2026-10-08 and the main agent's and sub-agents' prompts modelled apart, its pair not yet accepted; run again at three times the engine's KV pool, that pair accepted, the engine and CPU tier a fixed reference, item 24). Built and tested: everything described above, the nine backends, the
 multi-host coordinator (two ranks on `localhost`), the limit checks, the cold-start
 controls, the JSON report, the locality metrics on both sides with tolerances, the `trace`
 node under every backend, the option layers, the usage-error frame, and `datagen` across
@@ -225,6 +225,8 @@ Not built, in rough order of interest:
 - An `O_DIRECT` checkpoint writer to trace (item 19); a recorded wait time per lane and a
   cap on the file for the `trace` node; `RLIMIT_MEMLOCK` in the limit checks;
   wall-clock-bounded phases (a contract change).
+- Computed holds (item 24): what a KV engine holds derived from its pool in the runner,
+  not drawn at one reference engine.
 - `datagen --resume` (rewrite what is missing or short, by size alone), growing a corpus
   in place, and a run over the first *S* ids of a larger corpus (item 23): one long datagen
   on a fleet, then a series of runs growing toward the saturation point.

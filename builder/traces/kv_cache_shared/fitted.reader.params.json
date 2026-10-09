@@ -18,4 +18,5 @@
   "turn_out": {"empirical": {"values": [17, 47, 89, 124, 152, 175, 196, 215, 233, 245, 269, 292, 313, 346, 380, 439, 483, 545, 630, 761], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}},
   "chunk_bytes": 3145728,
   "meta_bytes": 28,
-  "buf": 1048576}}
+  "buf": 1048576},
+ "provenance": {"conditions": {"model": "Qwen/Qwen2.5-0.5B-Instruct", "max_model_len": 4096, "kv_cache_memory_bytes": 100663296, "engine_pool_tokens": 8192, "cpu_tier_bytes": 0, "slots_per_engine": 8}}}

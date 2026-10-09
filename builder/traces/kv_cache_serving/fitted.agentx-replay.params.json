@@ -28,4 +28,5 @@
   "sys_held": {"empirical": {"values": [122, 10307, 18864, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}},
   "sub_held": {"empirical": {"values": [0, 0, 0, 6784, 6784, 6784, 6784, 6784, 6784, 16597, 16640, 16640, 16640, 18795, 24832, 24832, 24832, 24832, 24832, 24832], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}},
   "chunk_bytes": 3145728,
-  "prefill_step": 2048}}
+  "prefill_step": 2048},
+ "provenance": {"conditions": {"model": "Qwen/Qwen2.5-0.5B-Instruct", "max_model_len": 131072, "kv_cache_memory_bytes": 2147483648, "engine_pool_tokens": 174752, "cpu_tier_bytes": 0, "slots_per_engine": 8, "latency_s_per_prompt_token": 0.000659, "latency_s_per_reply_token": 0.0326}}}

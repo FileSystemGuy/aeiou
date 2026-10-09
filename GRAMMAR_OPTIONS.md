@@ -576,6 +576,12 @@ Cache capacity and eviction are treated the same way: an input property of the w
 something that emerges from a simulated cache. For a storage benchmark this is the right cut,
 but it is a stated fidelity loss and belongs in the workload's documentation.
 
+*2026-10-08 (`DESIGN_REVIEW.md` §3.64):* still the rule. The KV abstracts' holds are inputs,
+fitted at a reference engine the WG fixes, and each fit records the pool it stands for. A
+cache simulated per engine (one actor's slots, so not the cross-actor timing above) explains
+the measured holds at two pools, and is the deferred way to make the pool an input instead of
+the holds (`PROJECT_BRIEF.md` §6 item 24).
+
 ### 5.4 Method: locality-metrics check and trace mode
 
 - **Locality-metrics check.** From a real trace, compute: reuse-distance distribution,

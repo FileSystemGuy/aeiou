@@ -420,7 +420,11 @@ traces on HuggingFace: timestamps, think times, and the prompts' KV blocks as ha
 writing `fitted.agentx.params.json`, and its `reference` is the corpus's own chunk
 accounting (`agentx.reference.json`), which `tests/test_trace.py` checks a dry run against;
 `replay_agentx.py` replays the corpus through a server for the trace and `keep` the corpus
-cannot give (`DESIGN_REVIEW.md` §3.59, 2026-10-02, not yet run on a GPU).
+cannot give (`DESIGN_REVIEW.md` §3.59, 2026-10-02, ~~not yet run on a GPU~~ run 2026-10-07
+and 2026-10-08, §3.63, at 2 GiB and 6 GiB of engine KV, §3.64). A fit of what an engine
+holds records the engine it was fitted at (pool, model, CPU tier, slots) as its parameter
+file's `provenance`; `agentx.py holds` checks a replay's holds against a simulation of the
+engine's prefix cache, and `agentx.py log` writes the reduced server log the kit keeps.
 `traces/kv_cache_shared` is the same load on LMCache's `fs://` backend, twice: an engine on
 an empty store, then a restarted engine on the filled one, sent the same requests
 (`replay.py --save`, `--replay`). `abstracts/kv_cache_shared.py` emits both abstracts,

@@ -526,7 +526,8 @@ def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path
     have = json.loads((kit / "fitted.params.json").read_text())
     out = tmp_path / "fit.json"
     r = subprocess.run([sys.executable, str(kit / "fit.py"), str(kit / "replay.log"), str(kit / "lmcache.log"), "--set", "chunk_bytes=3145728",
-                        "--doc", have["doc"], "-o", str(out)], capture_output=True, text=True)
+                        "--doc", have["doc"], *[x for k, v in have["provenance"]["conditions"].items() if k != "slots_per_engine"
+                                                for x in ("--condition", f"{k}={json.dumps(v)}")], "-o", str(out)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(out.read_text()) == have
     p = have["params"]
@@ -572,7 +573,7 @@ def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted
     §3.63): 8 sessions at 128k context, 2 GiB of engine KV. LMCache logs a lookup
     at every step a request waits for KV memory, the held prefix falling as the running requests
     evict it; a request's is its last lookup before its first load or store. The kit's LMCache
-    log keeps those two lines per request. `fitted.agentx-replay.params.json` is `agentx.py fit
+    log keeps those two lines per request (and the first lookup, and the lines of the fit's conditions). `fitted.agentx-replay.params.json` is `agentx.py fit
     --replay` on these logs and the corpus (not committed; the kit's README has the command)."""
     kit = BUILDER / "traces" / "kv_cache_serving"
     monkeypatch.syspath_prepend(str(kit))
@@ -584,6 +585,41 @@ def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted
     assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_prompts"], p["sub_prompts"]) == (8, 27, 131072, False, 1, 1)
     assert p["kind"]["empirical"]["weights"] == [8, 10, 27]                 # chains opening with the main agent's prefix, a sub-agent's, neither
     assert p["keep"]["empirical"]["values"].count(0) == 7                   # of 20 shares: nothing held past the prefix
+
+
+def test_agentx_replay_fits_record_the_engine_they_were_fitted_at(monkeypatch):
+    """What an engine holds is its KV pool against its load (DESIGN_REVIEW.md §3.64): a fit of
+    `keep`, `sys_held`, and `sub_held` records the pool, the model, the CPU tier (0, LMCache's
+    `local_cpu` off), the slots one engine serves, and the replay's seconds per token, as its
+    provenance; `agentx.py log` keeps the lines of the server's log they come from. The same
+    replay at 2 GiB and at 6 GiB of engine KV (3x the tokens): the larger pool held more of
+    every conversation, so fewer requests found nothing held."""
+    kit = BUILDER / "traces" / "kv_cache_serving"
+    monkeypatch.syspath_prepend(str(kit))
+    agentx = importlib.import_module("agentx")
+    fit = importlib.import_module("fit")
+    for which, pool, n, nothing in (("agentx", 174752, 219, 46), ("agentx-6gib", 524288, 232, 19)):
+        sessions, sent = agentx.replayed(kit / f"{which}.replay.log", kit / f"{which}.lmcache.log")
+        assert sessions == 8 and len(sent) == n and sum(1 for _, held in sent.values() if held == 0) == nothing
+        c = fit.conditions(kit / f"{which}.lmcache.log", sessions)
+        c_in, c_out = agentx.service(kit / f"{which}.replay.log")
+        c.update(latency_s_per_prompt_token=float("%.3g" % c_in), latency_s_per_reply_token=float("%.3g" % c_out))
+        assert json.loads((kit / f"fitted.{which}-replay.params.json").read_text())["provenance"]["conditions"] == c
+        assert (c["engine_pool_tokens"], c["cpu_tier_bytes"], c["model"]) == (pool, 0, "Qwen/Qwen2.5-0.5B-Instruct")
+
+
+def test_agentx_hold_simulation_evicts_a_freed_tail_first_and_preempts_the_last_admitted(monkeypatch):
+    """`agentx.simulate`, vLLM's prefix cache as `agentx.py holds` runs it (DESIGN_REVIEW.md §3.64):
+    a request's blocks freed tail first, so its head is evicted last; with nothing free to
+    evict, the last admitted running request is preempted and its blocks freed."""
+    monkeypatch.syspath_prepend(str(BUILDER / "traces" / "kv_cache_serving"))
+    agentx = importlib.import_module("agentx")
+    blocks = {"a": ["a1", "a2"], "b": ["b1", "b2", "b3"], "c": ["a1", "a2"]}
+    held, preempted = agentx.simulate([(0, 1, "a"), (1, 0, "a"), (2, 1, "b"), (3, 0, "b"), (4, 1, "c")], blocks, dict.fromkeys(blocks, 0), 4)
+    assert (held, preempted) == ({"a": 0, "b": 0, "c": 1}, 0)            # b evicted a2, a's tail; a1 stayed
+    blocks = {"x": ["x1", "x2", "x3"], "y": ["y1", "y2"], "z": ["x1", "x2"]}
+    held, preempted = agentx.simulate([(0, 1, "x"), (1, 1, "y"), (2, 0, "y"), (3, 1, "z")], blocks, dict.fromkeys(blocks, 0), 4)
+    assert (held, preempted) == ({"x": 0, "y": 0, "z": 2}, 1)            # y preempted x, whose tail x3 went first
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
@@ -708,6 +744,9 @@ KIT_PAIRS = [
     ("kv_cache_serving", "agentx.trace", "kv_cache_serving", "fitted.agentx-replay.params.json", 1, "not accepted"),
     # the same replay with LMCache's use_odirect (`direct`): read-after-write distance outside, the server's admission order
     ("kv_cache_serving", "agentx-odirect.trace", "kv_cache_serving", "fitted.agentx-odirect-replay.params.json", 1, "not accepted"),
+    # the same replay at 6 GiB of engine KV, three times the tokens (§3.64): fewer reads, the writes the same; the abstract
+    # follows through keep, sys_held, and sub_held alone, refitted (the 2 GiB values give three to five times the reads)
+    ("kv_cache_serving", "agentx-6gib.trace", "kv_cache_serving", "fitted.agentx-6gib-replay.params.json", 1, "accepted"),
     ("kv_cache_shared", "writer.trace", "kv_cache_shared", "fitted.params.json", 1, "not accepted"),
     ("kv_cache_shared", "reader.trace", "kv_cache_shared_reader", "fitted.reader.params.json", 1, "accepted"),
 ]
