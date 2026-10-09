@@ -216,7 +216,6 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
 
 
 @needs_runner
-@needs_runner
 def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(tmp_path):
     """`--endpoint NAME=DIR` (DESIGN_REVIEW.md §3.65): the Python writer puts the dataset's root at DIR,
     the runner finds it there, and the fingerprint is the one of the corpus under --root."""
@@ -238,6 +237,7 @@ def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(
     assert bad.returncode == 2 and "no dataset or namespace `nope`" in bad.stderr
 
 
+@needs_runner
 def test_size_draws_match_the_runner(tmp_path):
     """The Python `sample_size` port against sizes the Rust datagen wrote."""
     ast = {"ast": "0.6", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,
