@@ -609,12 +609,12 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     }
     let mmap = match &a.mmap_mode {
         None => MmapMode::default(),
-        Some(_) if backend != BackendKind::Mmap => aeiou::usage!("--mmap-mode is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-mode"])),
+        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-mode is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-mode"])),
         Some(m) => MmapMode::parse(m).ok_or_else(|| usage::err(format!("--mmap-mode {m}: not one of fault, populate, willneed{}", layers.from(&["mmap-mode"]))))?,
     };
     let mmap_consume = match &a.mmap_consume {
         None => MmapConsume::default(),
-        Some(_) if backend != BackendKind::Mmap => aeiou::usage!("--mmap-consume is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-consume"])),
+        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-consume is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-consume"])),
         Some(c) => MmapConsume::parse(c).ok_or_else(|| usage::err(format!("--mmap-consume {c}: not one of touch, copy{}", layers.from(&["mmap-consume"]))))?,
     };
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
@@ -645,7 +645,7 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     }
     writeln!(out, "backend {}  root {}{}", backend.name(), a.root.display(), if uring.any() {
         format!("  io_uring knobs: {}", uring.describe())
-    } else if backend == BackendKind::Mmap {
+    } else if backend.mmap() {
         format!("  mmap mode: {}  consume: {}", mmap.name(), mmap_consume.name())
     } else {
         String::new()
@@ -730,8 +730,8 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
             "time_scale": opts.time_scale,
             "io_uring": backend.uring().then_some(&opts.uring),
             "aio_depth": a.aio_depth,
-            "mmap_mode": (backend == BackendKind::Mmap).then(|| mmap.name()),
-            "mmap_consume": (backend == BackendKind::Mmap).then(|| mmap_consume.name()),
+            "mmap_mode": (backend.mmap()).then(|| mmap.name()),
+            "mmap_consume": (backend.mmap()).then(|| mmap_consume.name()),
             "clean_namespaces": a.clean_namespaces,
             "rank_rotate": a.rank_rotate,
             "max_gap": a.max_gap,

@@ -18,7 +18,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
-use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -761,9 +760,9 @@ impl ActorState {
         self.fds.get(path).ok_or_else(|| std::io::Error::from_raw_os_error(libc::EBADF))
     }
 
-    /// After a successful open: own the descriptor, note a creation, count an input open.
-    pub(crate) fn opened(&mut self, sh: &Shared, path: &str, aux: u64, fd: OwnedFd) {
-        self.fds.own.insert(Arc::from(path), Arc::new(OpenFile::from(fd)));
+    /// After a successful open: own the handle, note a creation, count an input open.
+    pub(crate) fn opened(&mut self, sh: &Shared, path: &str, aux: u64, file: OpenFile) {
+        self.fds.own.insert(Arc::from(path), Arc::new(file));
         if aux & (1 << (crate::ast::OpenFlag::CREAT as u8)) != 0 {
             self.created.push((path.to_string(), self.actor));
         }
@@ -927,7 +926,7 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
                 let got = (n - (op.offset - lo)).clamp(0, op.len);
                 if !op.positioned && !be.positional() {
                     // keep the file position where a plain read would have left it
-                    be.lseek(fd.as_fd(), op.offset + got, crate::ast::Whence::SET)?;
+                    be.lseek(&fd, op.offset + got, crate::ast::Whence::SET)?;
                 }
                 return Ok(got);
             }
@@ -940,32 +939,32 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
             let buf = wbuf.slice(op.len as usize);
             fill(a, op, buf);
             let off = if op.positioned || be.positional() { Some(op.offset) } else { None };
-            be.write(fd.as_fd(), buf, off).map(|n| n as i64)
+            be.write(&fd, buf, off).map(|n| n as i64)
         }
         OpKind::Lseek => {
             let fd = a.fd(op.path)?;
-            be.lseek(fd.as_fd(), op.offset, crate::ast::Whence::from_code(op.aux))
+            be.lseek(&fd, op.offset, crate::ast::Whence::from_code(op.aux))
         }
         OpKind::Ioctl => {
             let fd = a.fd(op.path)?;
-            be.ioctl(fd.as_fd(), crate::ast::IoctlRequest::from_code(op.aux)).map(|_| 0)
+            be.ioctl(&fd, crate::ast::IoctlRequest::from_code(op.aux)).map(|_| 0)
         }
         OpKind::Fadvise => {
             let fd = a.fd(op.path)?;
-            be.fadvise(fd.as_fd(), op.offset, op.len, crate::ast::Advice::from_code(op.aux)).map(|_| 0)
+            be.fadvise(&fd, op.offset, op.len, crate::ast::Advice::from_code(op.aux)).map(|_| 0)
         }
         OpKind::Fstat => {
             let fd = a.fd(op.path)?;
-            be.fstat(fd.as_fd())
+            be.fstat(&fd)
         }
         OpKind::Stat => be.stat(&full(op.path)),
         OpKind::Fsync => {
             let fd = a.fd(op.path)?;
-            be.fsync(fd.as_fd()).map(|_| 0)
+            be.fsync(&fd).map(|_| 0)
         }
         OpKind::Fdatasync => {
             let fd = a.fd(op.path)?;
-            be.fdatasync(fd.as_fd()).map(|_| 0)
+            be.fdatasync(&fd).map(|_| 0)
         }
         OpKind::Unlink => {
             be.unlink(&full(op.path))?;
@@ -974,11 +973,11 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
         }
         OpKind::Ftruncate => {
             let fd = a.fd(op.path)?;
-            be.ftruncate(fd.as_fd(), op.len).map(|_| 0)
+            be.ftruncate(&fd, op.len).map(|_| 0)
         }
         OpKind::Fallocate => {
             let fd = a.fd(op.path)?;
-            be.fallocate(fd.as_fd(), op.offset, op.len).map(|_| 0)
+            be.fallocate(&fd, op.offset, op.len).map(|_| 0)
         }
         OpKind::Mkdir => {
             be.mkdir(&full(op.path), op.aux as u32)?;
@@ -994,7 +993,7 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
         }
         OpKind::Readdir => {
             let fd = a.fd(op.path)?;
-            be.readdir(fd.as_fd()).map(|n| n as i64)
+            be.readdir(&fd).map(|n| n as i64)
         }
     }
 }
@@ -1912,7 +1911,7 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
         counters,
         uring,
         aio,
-        mmap: (sh.opts.backend == BackendKind::Mmap).then(|| {
+        mmap: sh.opts.backend.mmap().then(|| {
             let m = &sh.mmap_stats;
             MmapReport {
                 mode: sh.opts.mmap,

@@ -288,7 +288,7 @@ pub fn measure(model: &Model<'_>, opts: &RunOpts, loops: u64) -> Result<Limits> 
     let fds_needed = need.open_files + open_now + 4 * loops + opts.ranks.max(1) as u64 + 16;
     let threads_needed = tasks_now + if opts.backend.event_loop() { loops } else { need.contexts } + 2;
     let maps_now = std::fs::read_to_string("/proc/self/maps").map(|s| s.lines().count() as u64).unwrap_or(256);
-    let maps_needed = maps_now + 2 * threads_needed + if opts.backend == crate::backend::BackendKind::Mmap { need.open_files } else { 0 };
+    let maps_needed = maps_now + 2 * threads_needed + if opts.backend.mmap() { need.open_files } else { 0 };
     Ok(Limits {
         need,
         fds_needed,

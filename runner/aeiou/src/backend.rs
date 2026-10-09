@@ -26,23 +26,52 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{Advice, IoctlRequest, OpenFlag, Whence};
 
+/// The API a run issues its POSIX ops through (`DESIGN_REVIEW.md` §3.65): one axis of a
+/// backend, the cache mode the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendKind {
+pub enum Api {
+    /// Blocking syscalls on the calling thread.
     Sync,
-    SyncDirect,
-    /// `io_uring` through the `io-uring` crate: an event loop per thread multiplexing many
-    /// actors over one ring (`uring.rs`).
-    Uring,
-    UringDirect,
     /// glibc POSIX AIO, one request at a time per actor thread.
     PosixAio,
-    PosixAioDirect,
     /// The kernel AIO system calls (`io_setup`/`io_submit`/`io_getevents`, what the libaio
     /// library wraps) on the event loop (`aio.rs`).
     LibAio,
-    LibAioDirect,
+    /// `io_uring` through the `io-uring` crate: an event loop per thread multiplexing many
+    /// actors over one ring (`uring.rs`).
+    Uring,
     /// Reads are copies out of a shared mapping; everything else is `sync`.
     Mmap,
+}
+
+/// The run-wide cache mode: `PerOpen`, each open's own flags decide whether it bypasses the
+/// page cache, or `Direct`, `O_DIRECT` forced on every regular-file open (another workload,
+/// `DESIGN_REVIEW.md` §3.48).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cache {
+    PerOpen,
+    Direct,
+}
+
+/// A backend: an API and a cache mode. The nine names a run is given (`NAMES`) are aliases
+/// of the pairs, and the constants below their spelling here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackendKind {
+    pub api: Api,
+    pub cache: Cache,
+}
+
+#[allow(non_upper_case_globals)]
+impl BackendKind {
+    pub const Sync: BackendKind = BackendKind { api: Api::Sync, cache: Cache::PerOpen };
+    pub const SyncDirect: BackendKind = BackendKind { api: Api::Sync, cache: Cache::Direct };
+    pub const Uring: BackendKind = BackendKind { api: Api::Uring, cache: Cache::PerOpen };
+    pub const UringDirect: BackendKind = BackendKind { api: Api::Uring, cache: Cache::Direct };
+    pub const PosixAio: BackendKind = BackendKind { api: Api::PosixAio, cache: Cache::PerOpen };
+    pub const PosixAioDirect: BackendKind = BackendKind { api: Api::PosixAio, cache: Cache::Direct };
+    pub const LibAio: BackendKind = BackendKind { api: Api::LibAio, cache: Cache::PerOpen };
+    pub const LibAioDirect: BackendKind = BackendKind { api: Api::LibAio, cache: Cache::Direct };
+    pub const Mmap: BackendKind = BackendKind { api: Api::Mmap, cache: Cache::PerOpen };
 }
 
 pub const NAMES: &str = "sync, sync-direct, io_uring, io_uring-direct, posix-aio, posix-aio-direct, libaio, libaio-direct, mmap";
@@ -138,32 +167,37 @@ impl BackendKind {
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            BackendKind::Sync => "sync",
-            BackendKind::SyncDirect => "sync-direct",
-            BackendKind::Uring => "io_uring",
-            BackendKind::UringDirect => "io_uring-direct",
-            BackendKind::PosixAio => "posix-aio",
-            BackendKind::PosixAioDirect => "posix-aio-direct",
-            BackendKind::LibAio => "libaio",
-            BackendKind::LibAioDirect => "libaio-direct",
-            BackendKind::Mmap => "mmap",
+        match (self.api, self.cache) {
+            (Api::Sync, Cache::PerOpen) => "sync",
+            (Api::Sync, Cache::Direct) => "sync-direct",
+            (Api::Uring, Cache::PerOpen) => "io_uring",
+            (Api::Uring, Cache::Direct) => "io_uring-direct",
+            (Api::PosixAio, Cache::PerOpen) => "posix-aio",
+            (Api::PosixAio, Cache::Direct) => "posix-aio-direct",
+            (Api::LibAio, Cache::PerOpen) => "libaio",
+            (Api::LibAio, Cache::Direct) => "libaio-direct",
+            (Api::Mmap, _) => "mmap",
         }
     }
 
     /// `O_DIRECT` on every regular-file open.
     pub fn direct(self) -> bool {
-        matches!(self, BackendKind::SyncDirect | BackendKind::UringDirect | BackendKind::PosixAioDirect | BackendKind::LibAioDirect)
+        self.cache == Cache::Direct
     }
 
     /// Runs on the event loop (`uring.rs`) rather than one thread per actor.
     pub fn uring(self) -> bool {
-        matches!(self, BackendKind::Uring | BackendKind::UringDirect)
+        self.api == Api::Uring
     }
 
     /// The kernel AIO system calls on the event loop (`aio.rs`).
     pub fn libaio(self) -> bool {
-        matches!(self, BackendKind::LibAio | BackendKind::LibAioDirect)
+        self.api == Api::LibAio
+    }
+
+    /// Reads through a shared mapping.
+    pub fn mmap(self) -> bool {
+        self.api == Api::Mmap
     }
 
     /// One event loop per thread multiplexing the actors, rather than one thread per actor.
@@ -175,10 +209,10 @@ impl BackendKind {
     /// event loop uses inline for the ops its API cannot carry.
     pub fn make(self, mmap: MmapMode, consume: MmapConsume, stats: &Arc<MmapStats>) -> Box<dyn Backend> {
         let sync = Sync { direct: self.direct() };
-        match self {
-            BackendKind::PosixAio | BackendKind::PosixAioDirect => Box::new(PosixAio { sync }),
-            BackendKind::Mmap => Box::new(Mmap { sync, mode: mmap, consume, stats: stats.clone() }),
-            _ => Box::new(sync),
+        match self.api {
+            Api::PosixAio => Box::new(PosixAio { sync }),
+            Api::Mmap => Box::new(Mmap { sync, mode: mmap, consume, stats: stats.clone() }),
+            Api::Sync | Api::LibAio | Api::Uring => Box::new(sync),
         }
     }
 }
@@ -193,28 +227,28 @@ pub trait Backend: Send {
     fn positional(&self) -> bool {
         false
     }
-    fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OwnedFd>;
+    fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OpenFile>;
     /// `read(2)` at the file position, or `pread(2)` at `offset`.
     fn read(&mut self, file: &OpenFile, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize>;
-    fn write(&mut self, fd: BorrowedFd, buf: &[u8], offset: Option<i64>) -> io::Result<usize>;
-    fn lseek(&mut self, fd: BorrowedFd, offset: i64, whence: Whence) -> io::Result<i64>;
-    fn ioctl(&mut self, fd: BorrowedFd, request: IoctlRequest) -> io::Result<()>;
+    fn write(&mut self, file: &OpenFile, buf: &[u8], offset: Option<i64>) -> io::Result<usize>;
+    fn lseek(&mut self, file: &OpenFile, offset: i64, whence: Whence) -> io::Result<i64>;
+    fn ioctl(&mut self, file: &OpenFile, request: IoctlRequest) -> io::Result<()>;
     /// `posix_fadvise(2)` over `[offset, offset + len)` (`len` 0: to the end of the file).
-    fn fadvise(&mut self, fd: BorrowedFd, offset: i64, len: i64, advice: Advice) -> io::Result<()>;
+    fn fadvise(&mut self, file: &OpenFile, offset: i64, len: i64, advice: Advice) -> io::Result<()>;
     /// Returns `st_size`.
-    fn fstat(&mut self, fd: BorrowedFd) -> io::Result<i64>;
+    fn fstat(&mut self, file: &OpenFile) -> io::Result<i64>;
     fn stat(&mut self, path: &Path) -> io::Result<i64>;
-    fn fsync(&mut self, fd: BorrowedFd) -> io::Result<()>;
-    fn fdatasync(&mut self, fd: BorrowedFd) -> io::Result<()>;
+    fn fsync(&mut self, file: &OpenFile) -> io::Result<()>;
+    fn fdatasync(&mut self, file: &OpenFile) -> io::Result<()>;
     fn unlink(&mut self, path: &Path) -> io::Result<()>;
-    fn ftruncate(&mut self, fd: BorrowedFd, len: i64) -> io::Result<()>;
-    fn fallocate(&mut self, fd: BorrowedFd, offset: i64, len: i64) -> io::Result<()>;
+    fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()>;
+    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()>;
     fn mkdir(&mut self, path: &Path, mode: u32) -> io::Result<()>;
     fn rmdir(&mut self, path: &Path) -> io::Result<()>;
     fn rename(&mut self, from: &Path, to: &Path) -> io::Result<()>;
     /// Read the whole directory through `getdents64`; returns the number of entries, not
     /// counting `.`, `..`, and `.aeiou*` (`schema/README.md` §6).
-    fn readdir(&mut self, fd: BorrowedFd) -> io::Result<usize>;
+    fn readdir(&mut self, file: &OpenFile) -> io::Result<usize>;
 }
 
 /// `flag_bits` of `vm.rs` back to `O_*`.
@@ -294,7 +328,7 @@ impl Backend for Sync {
         if self.direct { "sync-direct" } else { "sync" }
     }
 
-    fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OwnedFd> {
+    fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OpenFile> {
         let c = cpath(path)?;
         let mut f = open_flags(flags);
         if self.direct && f & libc::O_DIRECTORY == 0 {
@@ -304,55 +338,54 @@ impl Backend for Sync {
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        Ok(OpenFile::from(unsafe { OwnedFd::from_raw_fd(fd) }))
     }
 
     fn read(&mut self, file: &OpenFile, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize> {
-        let fd = file.as_fd();
-        let r = match offset {
-            Some(off) => unsafe { libc::pread(fd.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len(), off) },
-            None => unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len()) },
+                let r = match offset {
+            Some(off) => unsafe { libc::pread(file.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len(), off) },
+            None => unsafe { libc::read(file.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len()) },
         };
         check(r as libc::c_long).map(|n| n as usize)
     }
 
-    fn write(&mut self, fd: BorrowedFd, buf: &[u8], offset: Option<i64>) -> io::Result<usize> {
+    fn write(&mut self, file: &OpenFile, buf: &[u8], offset: Option<i64>) -> io::Result<usize> {
         let r = match offset {
-            Some(off) => unsafe { libc::pwrite(fd.as_raw_fd(), buf.as_ptr() as *const _, buf.len(), off) },
-            None => unsafe { libc::write(fd.as_raw_fd(), buf.as_ptr() as *const _, buf.len()) },
+            Some(off) => unsafe { libc::pwrite(file.as_raw_fd(), buf.as_ptr() as *const _, buf.len(), off) },
+            None => unsafe { libc::write(file.as_raw_fd(), buf.as_ptr() as *const _, buf.len()) },
         };
         check(r as libc::c_long).map(|n| n as usize)
     }
 
-    fn lseek(&mut self, fd: BorrowedFd, offset: i64, whence: Whence) -> io::Result<i64> {
+    fn lseek(&mut self, file: &OpenFile, offset: i64, whence: Whence) -> io::Result<i64> {
         let w = match whence {
             Whence::SET => libc::SEEK_SET,
             Whence::CUR => libc::SEEK_CUR,
             Whence::END => libc::SEEK_END,
         };
-        check(unsafe { libc::lseek(fd.as_raw_fd(), offset, w) } as libc::c_long).map(|n| n as i64)
+        check(unsafe { libc::lseek(file.as_raw_fd(), offset, w) } as libc::c_long).map(|n| n as i64)
     }
 
-    fn ioctl(&mut self, fd: BorrowedFd, request: IoctlRequest) -> io::Result<()> {
+    fn ioctl(&mut self, file: &OpenFile, request: IoctlRequest) -> io::Result<()> {
         let r = match request {
             IoctlRequest::TCGETS => {
                 let mut t: libc::termios = unsafe { std::mem::zeroed() };
-                unsafe { libc::ioctl(fd.as_raw_fd(), libc::TCGETS, &mut t as *mut _) }
+                unsafe { libc::ioctl(file.as_raw_fd(), libc::TCGETS, &mut t as *mut _) }
             }
             IoctlRequest::FIONREAD => {
                 let mut n: libc::c_int = 0;
-                unsafe { libc::ioctl(fd.as_raw_fd(), libc::FIONREAD, &mut n as *mut _) }
+                unsafe { libc::ioctl(file.as_raw_fd(), libc::FIONREAD, &mut n as *mut _) }
             }
             IoctlRequest::BLKGETSIZE64 => {
                 let mut n: u64 = 0;
                 // BLKGETSIZE64 = _IOR(0x12, 114, size_t)
-                unsafe { libc::ioctl(fd.as_raw_fd(), 0x8008_1272, &mut n as *mut _) }
+                unsafe { libc::ioctl(file.as_raw_fd(), 0x8008_1272, &mut n as *mut _) }
             }
         };
         check_int(r)
     }
 
-    fn fadvise(&mut self, fd: BorrowedFd, offset: i64, len: i64, advice: Advice) -> io::Result<()> {
+    fn fadvise(&mut self, file: &OpenFile, offset: i64, len: i64, advice: Advice) -> io::Result<()> {
         let adv = match advice {
             Advice::NORMAL => libc::POSIX_FADV_NORMAL,
             Advice::RANDOM => libc::POSIX_FADV_RANDOM,
@@ -362,13 +395,13 @@ impl Backend for Sync {
             Advice::NOREUSE => libc::POSIX_FADV_NOREUSE,
         };
         // returns the errno directly, not -1
-        let r = unsafe { libc::posix_fadvise(fd.as_raw_fd(), offset, len, adv) };
+        let r = unsafe { libc::posix_fadvise(file.as_raw_fd(), offset, len, adv) };
         if r != 0 { Err(io::Error::from_raw_os_error(r)) } else { Ok(()) }
     }
 
-    fn fstat(&mut self, fd: BorrowedFd) -> io::Result<i64> {
+    fn fstat(&mut self, file: &OpenFile) -> io::Result<i64> {
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        check_int(unsafe { libc::fstat(fd.as_raw_fd(), &mut st) })?;
+        check_int(unsafe { libc::fstat(file.as_raw_fd(), &mut st) })?;
         Ok(st.st_size)
     }
 
@@ -379,12 +412,12 @@ impl Backend for Sync {
         Ok(st.st_size)
     }
 
-    fn fsync(&mut self, fd: BorrowedFd) -> io::Result<()> {
-        check_int(unsafe { libc::fsync(fd.as_raw_fd()) })
+    fn fsync(&mut self, file: &OpenFile) -> io::Result<()> {
+        check_int(unsafe { libc::fsync(file.as_raw_fd()) })
     }
 
-    fn fdatasync(&mut self, fd: BorrowedFd) -> io::Result<()> {
-        check_int(unsafe { libc::fdatasync(fd.as_raw_fd()) })
+    fn fdatasync(&mut self, file: &OpenFile) -> io::Result<()> {
+        check_int(unsafe { libc::fdatasync(file.as_raw_fd()) })
     }
 
     fn unlink(&mut self, path: &Path) -> io::Result<()> {
@@ -392,12 +425,12 @@ impl Backend for Sync {
         check_int(unsafe { libc::unlink(c.as_ptr()) })
     }
 
-    fn ftruncate(&mut self, fd: BorrowedFd, len: i64) -> io::Result<()> {
-        check_int(unsafe { libc::ftruncate(fd.as_raw_fd(), len) })
+    fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()> {
+        check_int(unsafe { libc::ftruncate(file.as_raw_fd(), len) })
     }
 
-    fn fallocate(&mut self, fd: BorrowedFd, offset: i64, len: i64) -> io::Result<()> {
-        check_int(unsafe { libc::fallocate(fd.as_raw_fd(), 0, offset, len) })
+    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()> {
+        check_int(unsafe { libc::fallocate(file.as_raw_fd(), 0, offset, len) })
     }
 
     fn mkdir(&mut self, path: &Path, mode: u32) -> io::Result<()> {
@@ -416,11 +449,11 @@ impl Backend for Sync {
         check_int(unsafe { libc::rename(a.as_ptr(), b.as_ptr()) })
     }
 
-    fn readdir(&mut self, fd: BorrowedFd) -> io::Result<usize> {
+    fn readdir(&mut self, file: &OpenFile) -> io::Result<usize> {
         let mut buf = vec![0u8; 32 * 1024];
         let mut entries = 0usize;
         loop {
-            let n = unsafe { libc::syscall(libc::SYS_getdents64, fd.as_raw_fd(), buf.as_mut_ptr(), buf.len()) };
+            let n = unsafe { libc::syscall(libc::SYS_getdents64, file.as_raw_fd(), buf.as_mut_ptr(), buf.len()) };
             let n = check(n)? as usize;
             if n == 0 {
                 return Ok(entries);
@@ -488,53 +521,52 @@ impl Backend for PosixAio {
         true
     }
 
-    fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OwnedFd> {
+    fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OpenFile> {
         self.sync.open(path, flags, mode)
     }
 
     fn read(&mut self, file: &OpenFile, buf: &mut [u8], offset: Option<i64>) -> io::Result<usize> {
-        let fd = file.as_fd();
         let Some(off) = offset else { return self.sync.read(file, buf, None) };
-        let mut cb = Self::cb(fd, buf.as_mut_ptr(), buf.len(), off);
+        let mut cb = Self::cb(file.as_fd(), buf.as_mut_ptr(), buf.len(), off);
         check_int(unsafe { libc::aio_read(&mut cb) })?;
         Self::wait(&mut cb).map(|n| n as usize)
     }
 
-    fn write(&mut self, fd: BorrowedFd, buf: &[u8], offset: Option<i64>) -> io::Result<usize> {
-        let Some(off) = offset else { return self.sync.write(fd, buf, None) };
-        let mut cb = Self::cb(fd, buf.as_ptr() as *mut u8, buf.len(), off);
+    fn write(&mut self, file: &OpenFile, buf: &[u8], offset: Option<i64>) -> io::Result<usize> {
+        let Some(off) = offset else { return self.sync.write(file, buf, None) };
+        let mut cb = Self::cb(file.as_fd(), buf.as_ptr() as *mut u8, buf.len(), off);
         check_int(unsafe { libc::aio_write(&mut cb) })?;
         Self::wait(&mut cb).map(|n| n as usize)
     }
 
-    fn lseek(&mut self, fd: BorrowedFd, offset: i64, whence: Whence) -> io::Result<i64> {
-        self.sync.lseek(fd, offset, whence)
+    fn lseek(&mut self, file: &OpenFile, offset: i64, whence: Whence) -> io::Result<i64> {
+        self.sync.lseek(file, offset, whence)
     }
 
-    fn ioctl(&mut self, fd: BorrowedFd, request: IoctlRequest) -> io::Result<()> {
-        self.sync.ioctl(fd, request)
+    fn ioctl(&mut self, file: &OpenFile, request: IoctlRequest) -> io::Result<()> {
+        self.sync.ioctl(file, request)
     }
 
-    fn fadvise(&mut self, fd: BorrowedFd, offset: i64, len: i64, advice: Advice) -> io::Result<()> {
-        self.sync.fadvise(fd, offset, len, advice)
+    fn fadvise(&mut self, file: &OpenFile, offset: i64, len: i64, advice: Advice) -> io::Result<()> {
+        self.sync.fadvise(file, offset, len, advice)
     }
 
-    fn fstat(&mut self, fd: BorrowedFd) -> io::Result<i64> {
-        self.sync.fstat(fd)
+    fn fstat(&mut self, file: &OpenFile) -> io::Result<i64> {
+        self.sync.fstat(file)
     }
 
     fn stat(&mut self, path: &Path) -> io::Result<i64> {
         self.sync.stat(path)
     }
 
-    fn fsync(&mut self, fd: BorrowedFd) -> io::Result<()> {
-        let mut cb = Self::cb(fd, std::ptr::null_mut(), 0, 0);
+    fn fsync(&mut self, file: &OpenFile) -> io::Result<()> {
+        let mut cb = Self::cb(file.as_fd(), std::ptr::null_mut(), 0, 0);
         check_int(unsafe { libc::aio_fsync(libc::O_SYNC, &mut cb) })?;
         Self::wait(&mut cb).map(|_| ())
     }
 
-    fn fdatasync(&mut self, fd: BorrowedFd) -> io::Result<()> {
-        let mut cb = Self::cb(fd, std::ptr::null_mut(), 0, 0);
+    fn fdatasync(&mut self, file: &OpenFile) -> io::Result<()> {
+        let mut cb = Self::cb(file.as_fd(), std::ptr::null_mut(), 0, 0);
         check_int(unsafe { libc::aio_fsync(libc::O_DSYNC, &mut cb) })?;
         Self::wait(&mut cb).map(|_| ())
     }
@@ -543,12 +575,12 @@ impl Backend for PosixAio {
         self.sync.unlink(path)
     }
 
-    fn ftruncate(&mut self, fd: BorrowedFd, len: i64) -> io::Result<()> {
-        self.sync.ftruncate(fd, len)
+    fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()> {
+        self.sync.ftruncate(file, len)
     }
 
-    fn fallocate(&mut self, fd: BorrowedFd, offset: i64, len: i64) -> io::Result<()> {
-        self.sync.fallocate(fd, offset, len)
+    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()> {
+        self.sync.fallocate(file, offset, len)
     }
 
     fn mkdir(&mut self, path: &Path, mode: u32) -> io::Result<()> {
@@ -563,8 +595,8 @@ impl Backend for PosixAio {
         self.sync.rename(from, to)
     }
 
-    fn readdir(&mut self, fd: BorrowedFd) -> io::Result<usize> {
-        self.sync.readdir(fd)
+    fn readdir(&mut self, file: &OpenFile) -> io::Result<usize> {
+        self.sync.readdir(file)
     }
 }
 
@@ -578,8 +610,9 @@ struct Mapping {
     len: usize,
 }
 
-/// An open file as the actors hold it: the descriptor and, under the `mmap` backend, the
-/// mapping of it. The mapping belongs to the open file, not to the actor that reads: every
+/// An open file as the actors hold it, and the handle every `Backend` method takes in place
+/// of a descriptor (`DESIGN_REVIEW.md` §3.65): the descriptor and, under the `mmap`
+/// backend, the mapping of it. The mapping belongs to the open file, not to the actor that reads: every
 /// actor that sees the descriptor (the one that opened it and the sub-actors that inherited
 /// it at a fork, which are threads of one address space) reads through the one mapping,
 /// made by whichever of them reads first and unmapped when the last of them lets the
@@ -683,7 +716,7 @@ impl Mmap {
                 return Ok((ptr, len));
             }
         }
-        let size = self.sync.fstat(file.as_fd())? as usize;
+        let size = self.sync.fstat(file)? as usize;
         if let Some((ptr, len)) = now {
             if len == size {
                 return Ok((ptr, len));
@@ -714,7 +747,7 @@ impl Backend for Mmap {
         true
     }
 
-    fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OwnedFd> {
+    fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OpenFile> {
         self.sync.open(path, flags, mode)
     }
 
@@ -764,48 +797,48 @@ impl Backend for Mmap {
         Ok(n)
     }
 
-    fn write(&mut self, fd: BorrowedFd, buf: &[u8], offset: Option<i64>) -> io::Result<usize> {
-        self.sync.write(fd, buf, offset)
+    fn write(&mut self, file: &OpenFile, buf: &[u8], offset: Option<i64>) -> io::Result<usize> {
+        self.sync.write(file, buf, offset)
     }
 
-    fn lseek(&mut self, fd: BorrowedFd, offset: i64, whence: Whence) -> io::Result<i64> {
-        self.sync.lseek(fd, offset, whence)
+    fn lseek(&mut self, file: &OpenFile, offset: i64, whence: Whence) -> io::Result<i64> {
+        self.sync.lseek(file, offset, whence)
     }
 
-    fn ioctl(&mut self, fd: BorrowedFd, request: IoctlRequest) -> io::Result<()> {
-        self.sync.ioctl(fd, request)
+    fn ioctl(&mut self, file: &OpenFile, request: IoctlRequest) -> io::Result<()> {
+        self.sync.ioctl(file, request)
     }
 
-    fn fadvise(&mut self, fd: BorrowedFd, offset: i64, len: i64, advice: Advice) -> io::Result<()> {
-        self.sync.fadvise(fd, offset, len, advice)
+    fn fadvise(&mut self, file: &OpenFile, offset: i64, len: i64, advice: Advice) -> io::Result<()> {
+        self.sync.fadvise(file, offset, len, advice)
     }
 
-    fn fstat(&mut self, fd: BorrowedFd) -> io::Result<i64> {
-        self.sync.fstat(fd)
+    fn fstat(&mut self, file: &OpenFile) -> io::Result<i64> {
+        self.sync.fstat(file)
     }
 
     fn stat(&mut self, path: &Path) -> io::Result<i64> {
         self.sync.stat(path)
     }
 
-    fn fsync(&mut self, fd: BorrowedFd) -> io::Result<()> {
-        self.sync.fsync(fd)
+    fn fsync(&mut self, file: &OpenFile) -> io::Result<()> {
+        self.sync.fsync(file)
     }
 
-    fn fdatasync(&mut self, fd: BorrowedFd) -> io::Result<()> {
-        self.sync.fdatasync(fd)
+    fn fdatasync(&mut self, file: &OpenFile) -> io::Result<()> {
+        self.sync.fdatasync(file)
     }
 
     fn unlink(&mut self, path: &Path) -> io::Result<()> {
         self.sync.unlink(path)
     }
 
-    fn ftruncate(&mut self, fd: BorrowedFd, len: i64) -> io::Result<()> {
-        self.sync.ftruncate(fd, len)
+    fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()> {
+        self.sync.ftruncate(file, len)
     }
 
-    fn fallocate(&mut self, fd: BorrowedFd, offset: i64, len: i64) -> io::Result<()> {
-        self.sync.fallocate(fd, offset, len)
+    fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()> {
+        self.sync.fallocate(file, offset, len)
     }
 
     fn mkdir(&mut self, path: &Path, mode: u32) -> io::Result<()> {
@@ -820,8 +853,8 @@ impl Backend for Mmap {
         self.sync.rename(from, to)
     }
 
-    fn readdir(&mut self, fd: BorrowedFd) -> io::Result<usize> {
-        self.sync.readdir(fd)
+    fn readdir(&mut self, file: &OpenFile) -> io::Result<usize> {
+        self.sync.readdir(file)
     }
 }
 

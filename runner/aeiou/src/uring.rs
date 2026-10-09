@@ -643,7 +643,7 @@ impl Engine for LoopIo {
         match op.kind {
             OpKind::Open => {
                 let fd = unsafe { OwnedFd::from_raw_fd(res) };
-                t.a.opened(sh, op.path, op.aux, fd);
+                t.a.opened(sh, op.path, op.aux, OpenFile::from(fd));
                 Ok(0)
             }
             OpKind::Read => {
