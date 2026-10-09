@@ -631,9 +631,9 @@
   "provenance": {
     "generator": {
       "script": "model_load.py",
-      "sha256": "64005861e278c37a74c56a90a6bca413158b6c2a017c4686dee8c2ebcd8b8a2d",
+      "sha256": "dcba8ec46def44a39f523e3bf999e156be2bb12dde4336f7cd8d94341b3bfa62",
       "builder_version": "0.1.0",
-      "git": "927281143c37-dirty"
+      "git": "ddb845fffc77-dirty"
     },
     "python": "3.12.13",
     "lock": {

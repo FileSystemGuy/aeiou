@@ -89,13 +89,10 @@ fn the_parsers_own_errors_and_the_layers_refusals_wear_the_frame() {
     assert!(message.ends_with("type --metrics to turn it on or --no-metrics to turn it off"), "{message}");
     let (message, _) = frame(&mut aeiou(&["run", &ast, "--gpus", "1", "--root", "/tmp", "--defer-taskrun", "--sqpoll", "10"]), "aeiou run");
     assert_eq!(message, "--defer-taskrun and --sqpoll exclude each other");
-    let (message, _) = frame(&mut aeiou(&["run", &ast, "--gpus", "1", "--root", "/tmp", "--io-backend", "nope"]), "aeiou run");
-    assert!(message.starts_with("--io-backend nope: not one of "), "{message}");
-    // a backend is an API and a cache mode (DESIGN_REVIEW §3.65); --io-backend names both, alone
+    // a backend is an API and a cache mode, each its own flag (DESIGN_REVIEW §3.65)
     let run = |extra: &[&str]| frame(&mut aeiou(&[&["run", &ast, "--gpus", "1", "--root", "/tmp"], extra].concat()), "aeiou run").0;
     assert!(run(&["--io-api", "nope"]).starts_with("--io-api nope: not one of "));
     assert!(run(&["--cache", "nope"]).starts_with("--cache nope: not one of "));
-    assert_eq!(run(&["--io-backend", "sync", "--cache", "direct"]), "--io-backend sync names the API and the cache mode; not with --io-api or --cache");
     assert_eq!(run(&["--io-api", "mmap", "--cache", "direct"]), "--cache direct under --io-api mmap: its reads are page faults on a mapping");
 }
 

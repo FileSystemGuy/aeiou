@@ -673,7 +673,7 @@ workload model_load {
 }
 ```
 
-Run with `--io-backend mmap`, each `read(f, off, len)` becomes a populate of that range and the
+Run with `--io-api mmap`, each `read(f, off, len)` becomes a populate of that range and the
 kernel's fault-around decides the RPC sizes, which is the point of having the backend: the
 abstract states what the application touched, the run reports what went over the wire.
 
@@ -717,8 +717,8 @@ loopback NFS mount; safetensors 0.8.0, transformers 5.18, torch 2.14.1 on CPU. R
   |---|---|---|
   | the library, copy with one thread (`touch.py`, `ONE=1`) | 1,648 | 437.8 MB |
   | the library, torch's default parallel copy | 2,629 to 2,848 | 437.9 MB |
-  | `aeiou run --io-backend mmap`, the fitted table | 1,687 | 439.6 MB |
-  | `aeiou run --io-backend sync`, the fitted table | 451 | 445.7 MB |
+  | `aeiou run --io-api mmap`, the fitted table | 1,687 | 439.6 MB |
+  | `aeiou run --io-api sync`, the fitted table | 451 | 445.7 MB |
 
   The runner's `mmap` backend is within 2.4 % of the library copying with one thread: about
   260 KiB per READ, the 128 KiB readahead window doubled by the `fadvise`. A parallel copy

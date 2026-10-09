@@ -746,11 +746,11 @@ impl ActorState {
     pub(crate) fn check_align(&self, sh: &Shared, op: &Op) -> Result<()> {
         if op.kind == OpKind::Write && sh.opts.backend.direct() && (op.offset % ALIGN as i64 != 0 || op.len % ALIGN as i64 != 0) {
             bail!(
-                "write {} off={} len={}: `{}` needs {ALIGN}-byte alignment for writes; use a buffered backend",
+                "write {} off={} len={}: `{}` needs {ALIGN}-byte alignment for writes; use --cache per-open",
                 op.path,
                 op.offset,
                 op.len,
-                sh.opts.backend.name()
+                sh.opts.backend.describe()
             );
         }
         Ok(())
@@ -1787,7 +1787,7 @@ pub fn participants(model: &Model<'_>, opts: &RunOpts) -> Result<Vec<(String, us
 /// of the process; a run is the process).
 pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>) -> Result<Report> {
     if opts.uring.any() && !opts.backend.uring() {
-        bail!("io_uring knobs ({}) with the `{}` backend, which has no ring", opts.uring.describe(), opts.backend.name());
+        bail!("io_uring knobs ({}) under --io-api {}, which has no ring", opts.uring.describe(), opts.backend.api.name());
     }
     let p = participants(model, &opts)?;
     run_with(model, opts, input_objects, Arc::new(Local::new(&p)), Arc::new(AtomicBool::new(false)))

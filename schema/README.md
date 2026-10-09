@@ -381,7 +381,7 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
   contract but because the three KV-cache abstracts now draw `keep` once per round of open
   conversations with the new form. Reasoning in `DESIGN_REVIEW.md` §3.57.
 - **0.6** (2026-10-09): the root key `backend` replaced by `api` and `cache` (§1), the
-  backend's two axes (`DESIGN_REVIEW.md` §3.65). A 0.5 document's `backend` maps to the pair
-  its name is an alias of (`mmap` to `api: mmap`, `libaio-direct` to `api: libaio, cache:
-  direct`); the committed ASTs declared only `mmap` and `libaio`. Every committed AST was
+  backend's two axes (`DESIGN_REVIEW.md` §3.65). A 0.5 document's `backend` maps to a pair
+  (`mmap` to `api: mmap`, `libaio-direct` to `api: libaio, cache: direct`); the committed
+  ASTs declared only `mmap` and `libaio`. Every committed AST was
   regenerated; no fingerprint changed.

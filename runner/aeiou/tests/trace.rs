@@ -182,7 +182,7 @@ fn runs_with_the_dry_runs_fingerprint_under_every_backend() {
             let _ = std::fs::remove_file(root.join(p));
         }
         let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap();
-        assert_eq!(rep.stats.fingerprint, dry.total.fingerprint, "{}", be.name());
+        assert_eq!(rep.stats.fingerprint, dry.total.fingerprint, "{}", be.describe());
         assert_eq!(rep.stats.ops, 21);
         assert_eq!(rep.stats.bytes_written, 1000);
         assert_eq!(rep.stats.expected_errors, 1);
@@ -190,7 +190,7 @@ fn runs_with_the_dry_runs_fingerprint_under_every_backend() {
         assert!(rep.created.iter().any(|(p, _)| p == "out/final"), "{:?}", rep.created);
         if be.event_loop() {
             // the lanes are tasks on the loop, not threads
-            assert_eq!(rep.stats.threads, 1, "{}", be.name());
+            assert_eq!(rep.stats.threads, 1, "{}", be.describe());
         }
     }
 }
@@ -219,8 +219,8 @@ fn path_order_makes_a_reader_wait_for_the_writer_whatever_the_lanes_timing() {
         for _ in 0..5 {
             let _ = std::fs::remove_file(root.join("f"));
             let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap();
-            assert_eq!(rep.stats.ops, 7, "{}", be.name());
-            assert_eq!(rep.stats.bytes_read, 8192, "{}", be.name());
+            assert_eq!(rep.stats.ops, 7, "{}", be.describe());
+            assert_eq!(rep.stats.bytes_read, 8192, "{}", be.describe());
         }
     }
 }

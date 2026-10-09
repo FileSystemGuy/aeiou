@@ -309,7 +309,7 @@
       "script": "train_small_files.py",
       "sha256": "d7010b7d6d36a512362127d4eff03c4e5158bdeac1f9d49ff137401cb01cc6b1",
       "builder_version": "0.1.0",
-      "git": "927281143c37"
+      "git": "ddb845fffc77"
     },
     "python": "3.12.13",
     "lock": {

@@ -27,7 +27,7 @@ abstract's header and tensor reads have no counterpart in `trace.metrics.json`.
 What the mapping costs on the wire was measured with `/proc/self/mountstats` deltas, cold
 (without root: `posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)` on each file after an `fsync`):
 `loadmodel.py --notouch`, `loadmodel.py --touch`, `touch.py` with and without `ONE=1`, and
-`aeiou run … --params-file fitted.params.json --io-backend mmap` over a dataset `aeiou datagen`
+`aeiou run … --params-file fitted.params.json --io-api mmap` over a dataset `aeiou datagen`
 wrote behind the server. The numbers are in `DESIGN_REVIEW.md` §3.47.
 
 `tests/test_trace.py` repeats the dry run against the committed metrics.

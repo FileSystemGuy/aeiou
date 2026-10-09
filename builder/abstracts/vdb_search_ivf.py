@@ -8,7 +8,7 @@ lists file whole; a search issues no call on it at all. `search` cuts its batch 
 slice per OpenMP thread, and each slice starts `prefetch` threads
 (`OnDiskInvertedLists::prefetch_nthread`, 32) that touch every byte of every list its
 queries probe while the slice's own thread scans them. The reads below are what the prefetch
-threads touch through the mapping, and `--io-backend mmap` is the application's own API here.
+threads touch through the mapping, and `--io-api mmap` is the application's own API here.
 Popularity and the list-size spread are measured on one corpus (SIFT1M, IVF1024,PQ32).
 """
 from aeiou import *

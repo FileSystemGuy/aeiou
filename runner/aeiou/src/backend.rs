@@ -53,8 +53,8 @@ pub enum Cache {
     Direct,
 }
 
-/// A backend: an API and a cache mode. The nine names a run is given (`NAMES`) are aliases
-/// of the pairs, and the constants below their spelling here.
+/// A backend: an API and a cache mode, given apart (`--io-api`, `--cache`). The constants
+/// below are the code's and the tests' shorthand for the valid pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendKind {
     pub api: Api,
@@ -74,7 +74,6 @@ impl BackendKind {
     pub const Mmap: BackendKind = BackendKind { api: Api::Mmap, cache: Cache::PerOpen };
 }
 
-pub const NAMES: &str = "sync, sync-direct, io_uring, io_uring-direct, posix-aio, posix-aio-direct, libaio, libaio-direct, mmap";
 pub const API_NAMES: &str = "sync, posix-aio, libaio, io_uring, mmap";
 pub const CACHE_NAMES: &str = "per-open, direct";
 
@@ -84,7 +83,7 @@ impl Api {
             "sync" => Some(Api::Sync),
             "posix-aio" => Some(Api::PosixAio),
             "libaio" => Some(Api::LibAio),
-            "io_uring" | "io-uring" => Some(Api::Uring),
+            "io_uring" => Some(Api::Uring),
             "mmap" => Some(Api::Mmap),
             _ => None,
         }
@@ -199,34 +198,9 @@ impl BackendKind {
         (api != Api::Mmap || cache == Cache::PerOpen).then_some(BackendKind { api, cache })
     }
 
-    /// One of the nine names, each an alias of a pair.
-    pub fn parse(s: &str) -> Option<BackendKind> {
-        match s {
-            "sync" => Some(BackendKind::Sync),
-            "sync-direct" => Some(BackendKind::SyncDirect),
-            "io_uring" | "io-uring" => Some(BackendKind::Uring),
-            "io_uring-direct" | "io-uring-direct" => Some(BackendKind::UringDirect),
-            "posix-aio" => Some(BackendKind::PosixAio),
-            "posix-aio-direct" => Some(BackendKind::PosixAioDirect),
-            "libaio" => Some(BackendKind::LibAio),
-            "libaio-direct" => Some(BackendKind::LibAioDirect),
-            "mmap" => Some(BackendKind::Mmap),
-            _ => None,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match (self.api, self.cache) {
-            (Api::Sync, Cache::PerOpen) => "sync",
-            (Api::Sync, Cache::Direct) => "sync-direct",
-            (Api::Uring, Cache::PerOpen) => "io_uring",
-            (Api::Uring, Cache::Direct) => "io_uring-direct",
-            (Api::PosixAio, Cache::PerOpen) => "posix-aio",
-            (Api::PosixAio, Cache::Direct) => "posix-aio-direct",
-            (Api::LibAio, Cache::PerOpen) => "libaio",
-            (Api::LibAio, Cache::Direct) => "libaio-direct",
-            (Api::Mmap, _) => "mmap",
-        }
+    /// What a run prints and records: `io-api API  cache MODE`.
+    pub fn describe(self) -> String {
+        format!("io-api {}  cache {}", self.api.name(), self.cache.name())
     }
 
     /// `O_DIRECT` on every regular-file open.
@@ -283,7 +257,6 @@ pub fn declared(ast: &crate::ast::Ast) -> anyhow::Result<BackendKind> {
 pub const ALIGN: usize = 4096;
 
 pub trait Backend: Send {
-    fn name(&self) -> &'static str;
     /// The backend's API has no file position: the driver passes every read and write its
     /// effective offset (the one the VM computed and the fingerprint hashes), as the event
     /// loops do (`uring.rs`).
@@ -387,10 +360,6 @@ pub struct Sync {
 }
 
 impl Backend for Sync {
-    fn name(&self) -> &'static str {
-        if self.direct { "sync-direct" } else { "sync" }
-    }
-
     fn open(&mut self, path: &Path, flags: u64, mode: u32) -> io::Result<OpenFile> {
         let c = cpath(path)?;
         let mut f = open_flags(flags);
@@ -576,10 +545,6 @@ impl PosixAio {
 }
 
 impl Backend for PosixAio {
-    fn name(&self) -> &'static str {
-        if self.sync.direct { "posix-aio-direct" } else { "posix-aio" }
-    }
-
     fn positional(&self) -> bool {
         true
     }
@@ -802,10 +767,6 @@ impl Mmap {
 }
 
 impl Backend for Mmap {
-    fn name(&self) -> &'static str {
-        "mmap"
-    }
-
     fn positional(&self) -> bool {
         true
     }

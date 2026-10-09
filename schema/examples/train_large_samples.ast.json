@@ -636,7 +636,7 @@
       "script": "train_large_samples.py",
       "sha256": "a902322a1b1334be4dcd810c6ed992c347e66be78656013feccb22178f1e767d",
       "builder_version": "0.1.0",
-      "git": "927281143c37"
+      "git": "ddb845fffc77"
     },
     "python": "3.12.13",
     "lock": {

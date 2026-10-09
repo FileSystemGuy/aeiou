@@ -54,7 +54,7 @@ hashes into the fingerprint; `metrics.rs` walks the same stream in the round-rob
 an instance's sub-actors for the order-dependent metrics.
 
 **Execute.** A `Backend` has an issue half and a completion half (`backend.rs`). Under the
-blocking backends (`sync`, `sync-direct`, `posix-aio`, `mmap`) every actor and sub-actor
+blocking APIs (`sync`, `posix-aio`, `mmap`, under either cache mode) every actor and sub-actor
 is an operating system thread and a blocking call is simply blocking (`run.rs`): this is the
 fidelity reference. Under `io_uring` and `libaio` an event loop per thread parks one machine
 per actor and keeps one operation in flight per actor, so thousands of actors share a few

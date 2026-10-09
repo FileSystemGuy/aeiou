@@ -4160,7 +4160,10 @@ buffer axis), and a transport row joins the report.
 - **Contract 0.6 replaces `backend`** with separate fields (the API, the cache mode, and per
   namespace the protocol family and its client) and regenerates every AST, rather than
   keeping `backend` with the `-direct` names read as aliases. The user's reason: the only
-  ASTs that exist are this repository's. The command line keeps the nine names as aliases.
+  ASTs that exist are this repository's. ~~The command line keeps the nine names as aliases.~~
+  *Superseded the same day (the user):* the aliases are dropped too, from the command line,
+  the output, and the report; with no users yet, old names only clutter the page and the
+  usage, and orthogonal flags let an expert name exactly the layered behaviour wanted.
 - **The first object abstract's application: deferred** until `s3dlio` over `file://` is
   measured (step 3); steps 2 and 3 do not depend on it.
 - **No shared POSIX-engine crate yet;** only the narrow PRs to `s3dlio` that the
@@ -4201,7 +4204,10 @@ alone, though no committed abstract declares `cache`: an application that opens 
 `O_DIRECT` says so in one key rather than on every open); the schema and the validator refuse
 `direct` under `mmap`; `Workload(api=, cache=)`; every AST regenerated, every hash re-recorded,
 no fingerprint changed. *The command line:* `--io-api` and `--cache` (default: the abstract's),
-`--io-backend` kept as the pair in one name and refused with either. Not yet: the endpoint
+~~`--io-backend` kept as the pair in one name and refused with either.~~ *Later the same day:*
+`--io-backend` and the nine names removed (above); a run prints and reports `io-api X  cache
+Y` (`io_api`, `cache`, `io_api_declared`, `cache_declared` in the report), and the nine
+constants remain only as the code's shorthand for the valid pairs. Not yet: the endpoint
 and protocol per namespace (`--endpoint`), the rest of step 2.
 
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols

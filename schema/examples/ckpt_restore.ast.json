@@ -1470,7 +1470,7 @@
       "script": "ckpt_restore.py",
       "sha256": "577424dd1d09dc1e2c701d466965f58c8b80f4eebeff4a6a5dd45a430620eb73",
       "builder_version": "0.1.0",
-      "git": "927281143c37"
+      "git": "ddb845fffc77"
     },
     "python": "3.12.13",
     "lock": {

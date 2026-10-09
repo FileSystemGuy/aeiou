@@ -366,9 +366,9 @@
   "provenance": {
     "generator": {
       "script": "vdb_search_ivf.py",
-      "sha256": "b7838176bdfda80c4500c067c0bd0e4283c8b11c9ca6d91dceb49ab579fefd6d",
+      "sha256": "e90f77f8f5a127c8f7b7914d57bb4eac7d6c043741365e0a80841708ed7cdcf1",
       "builder_version": "0.1.0",
-      "git": "927281143c37-dirty"
+      "git": "ddb845fffc77-dirty"
     },
     "python": "3.12.13",
     "lock": {

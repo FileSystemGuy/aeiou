@@ -3343,7 +3343,7 @@
       "script": "vdb_build_diskann.py",
       "sha256": "cfc0a42eec954973a006b89337e06cf54c88fcef07fa3ce0f1cfc0ac7e18a267",
       "builder_version": "0.1.0",
-      "git": "927281143c37"
+      "git": "ddb845fffc77"
     },
     "python": "3.12.13",
     "lock": {

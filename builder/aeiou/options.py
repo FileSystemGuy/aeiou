@@ -27,7 +27,7 @@ RESERVED_ENV = (ENV_CONFIG, "AEIOU_SCHEMA_DIR", "AEIOU_RUNNER", "AEIOU_RSH")
 SUBCOMMANDS = ("check", "dry-run", "datagen", "run")
 # every option name of every subcommand of the runner (options.rs ALL_OPTIONS), so an AEIOU_*
 # for another subcommand's option is left alone and anything else warns
-ALL_OPTIONS = frozenset("""files abstract param params-file gpus seed io-api cache io-backend root threads buffer-mib write-compress time-scale
+ALL_OPTIONS = frozenset("""files abstract param params-file gpus seed io-api cache root threads buffer-mib write-compress time-scale
 iowq-max-workers sqpoll sqpoll-shared defer-taskrun coop-taskrun aio-depth mmap-mode mmap-consume rank ranks coordinator
 rank-rotate expect-fingerprint expect-dataset-id max-gap require-cold drop-caches clean-namespaces ignore-limits report-json
 report-takes dedupe compress dataset gpu steps limit metrics metrics-block metrics-sample metrics-json config""".split())

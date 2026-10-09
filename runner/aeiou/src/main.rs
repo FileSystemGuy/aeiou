@@ -143,11 +143,6 @@ struct RunCmd {
     /// declares none). Any other is a different workload on the storage, and the run says so.
     #[arg(long, value_name = "MODE", help_heading = "Backend")]
     cache: Option<String>,
-    /// The API and the cache mode in one name, an alias of the pair: `sync`, `sync-direct`,
-    /// `io_uring`, `io_uring-direct`, `posix-aio`, `posix-aio-direct`, `libaio`,
-    /// `libaio-direct`, `mmap`. Not with --io-api or --cache.
-    #[arg(long = "io-backend", value_name = "NAME", help_heading = "Backend")]
-    backend: Option<String>,
     /// Required: directory the abstract's paths are relative to (datasets and namespaces live
     /// under it). From the command line, else $AEIOU_ROOT, else `root` in the [run] table of
     /// the config file.
@@ -269,7 +264,6 @@ struct RunOptions {
     gpus: i64,
     io_api: Option<String>,
     cache: Option<String>,
-    backend: Option<String>,
     root: PathBuf,
     threads: Option<usize>,
     buffer_mib: usize,
@@ -316,7 +310,6 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
     l.fixed("io-api", &a.io_api.clone().unwrap_or_else(|| "the abstract's".into()), a.io_api.is_some())?;
     l.fixed("cache", &a.cache.clone().unwrap_or_else(|| "the abstract's".into()), a.cache.is_some())?;
-    l.fixed("io-backend", &a.backend.clone().unwrap_or_else(|| "the abstract's".into()), a.backend.is_some())?;
     l.fixed("expect-fingerprint", &a.expect_fingerprint, a.expect_fingerprint.is_some())?;
     l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
     l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces || a.no_clean_namespaces)?;
@@ -351,7 +344,6 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         run: a.run,
         io_api: a.io_api,
         cache: a.cache,
-        backend: a.backend,
         expect_fingerprint: a.expect_fingerprint,
         expect_dataset_ids: a.expect_dataset_ids,
         clean_namespaces: a.clean_namespaces,
@@ -597,15 +589,8 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
     r
 }
 
-/// The run's backend: --io-backend, an alias of a pair, or --io-api and --cache, each
-/// defaulting to the abstract's.
+/// The run's backend: --io-api and --cache, each defaulting to the abstract's.
 fn run_backend(a: &RunOptions, declared: BackendKind) -> Result<BackendKind> {
-    if let Some(name) = &a.backend {
-        if a.io_api.is_some() || a.cache.is_some() {
-            aeiou::usage!("--io-backend {name} names the API and the cache mode; not with --io-api or --cache");
-        }
-        return BackendKind::parse(name).ok_or_else(|| usage::err(format!("--io-backend {name}: not one of {}", aeiou::backend::NAMES)));
-    }
     let api = match &a.io_api {
         None => declared.api,
         Some(n) => Api::parse(n).ok_or_else(|| usage::err(format!("--io-api {n}: not one of {}", aeiou::backend::API_NAMES)))?,
@@ -623,33 +608,32 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
     let declared = aeiou::backend::declared(&loaded.ast)?;
     let backend = run_backend(a, declared)?;
-    let declared = declared.name();
     let expect_fingerprint = match &a.expect_fingerprint {
         None => None,
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| usage::err(format!("--expect-fingerprint {h}: not hex")))?),
     };
     let uring = UringOpts { iowq_max_workers: a.iowq_max_workers.unwrap_or(0), sqpoll_idle_ms: a.sqpoll, sqpoll_shared: a.sqpoll_shared, defer_taskrun: a.defer_taskrun, coop_taskrun: a.coop_taskrun };
     if uring.any() && !backend.uring() {
-        aeiou::usage!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-backend {} has no ring{}", backend.name(), layers.from(&["iowq-max-workers", "sqpoll", "defer-taskrun", "coop-taskrun"]));
+        aeiou::usage!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-api {} has no ring{}", backend.api.name(), layers.from(&["iowq-max-workers", "sqpoll", "defer-taskrun", "coop-taskrun"]));
     }
     uring.check().map_err(|e| usage::err(format!("{e}{}", layers.from(&["sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "iowq-max-workers"]))))?;
     if a.aio_depth.is_some() && !backend.libaio() {
-        aeiou::usage!("--aio-depth is a libaio knob; --io-backend {} has no AIO context{}", backend.name(), layers.from(&["aio-depth"]));
+        aeiou::usage!("--aio-depth is a libaio knob; --io-api {} has no AIO context{}", backend.api.name(), layers.from(&["aio-depth"]));
     }
     if a.aio_depth == Some(0) {
         aeiou::usage!("--aio-depth 0: a context needs room for a request{}", layers.from(&["aio-depth"]));
     }
     if a.threads.is_some() && !backend.event_loop() {
-        aeiou::usage!("--threads sets the event-loop threads of io_uring and libaio; --io-backend {} runs one thread per actor{}", backend.name(), layers.from(&["threads"]));
+        aeiou::usage!("--threads sets the event-loop threads of io_uring and libaio; --io-api {} runs one thread per actor{}", backend.api.name(), layers.from(&["threads"]));
     }
     let mmap = match &a.mmap_mode {
         None => MmapMode::default(),
-        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-mode is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-mode"])),
+        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-mode is an mmap knob; --io-api {} maps nothing{}", backend.api.name(), layers.from(&["mmap-mode"])),
         Some(m) => MmapMode::parse(m).ok_or_else(|| usage::err(format!("--mmap-mode {m}: not one of fault, populate, willneed{}", layers.from(&["mmap-mode"]))))?,
     };
     let mmap_consume = match &a.mmap_consume {
         None => MmapConsume::default(),
-        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-consume is an mmap knob; --io-backend {} maps nothing{}", backend.name(), layers.from(&["mmap-consume"])),
+        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-consume is an mmap knob; --io-api {} maps nothing{}", backend.api.name(), layers.from(&["mmap-consume"])),
         Some(c) => MmapConsume::parse(c).ok_or_else(|| usage::err(format!("--mmap-consume {c}: not one of touch, copy{}", layers.from(&["mmap-consume"]))))?,
     };
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
@@ -662,8 +646,10 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     doc.set("seed", serde_json::json!(cfg.seed));
     doc.set("gpus", serde_json::json!(cfg.gpus));
     doc.set("params", payload::params_json(&loaded.doc, cfg, params)?);
-    doc.set("backend", serde_json::json!(backend.name()));
-    doc.set("backend_declared", serde_json::json!(declared));
+    doc.set("io_api", serde_json::json!(backend.api.name()));
+    doc.set("cache", serde_json::json!(backend.cache.name()));
+    doc.set("io_api_declared", serde_json::json!(declared.api.name()));
+    doc.set("cache_declared", serde_json::json!(declared.cache.name()));
     doc.set("host", serde_json::json!(run::hostname()));
     doc.set("rank", serde_json::json!(a.rank));
     doc.set("ranks", serde_json::json!(a.ranks));
@@ -675,10 +661,10 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     layers.print(&mut out)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
-    if backend.name() != declared {
-        writeln!(out, "backend {} is not the abstract's ({declared}): the storage sees another workload, and this run is not comparable with runs of the abstract as declared", backend.name())?;
+    if backend != declared {
+        writeln!(out, "{} is not the abstract's ({}): the storage sees another workload, and this run is not comparable with runs of the abstract as declared", backend.describe(), declared.describe())?;
     }
-    writeln!(out, "backend {}  root {}{}", backend.name(), a.root.display(), if uring.any() {
+    writeln!(out, "{}  root {}{}", backend.describe(), a.root.display(), if uring.any() {
         format!("  io_uring knobs: {}", uring.describe())
     } else if backend.mmap() {
         format!("  mmap mode: {}  consume: {}", mmap.name(), mmap_consume.name())
@@ -802,7 +788,8 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
                 "gpus": cfg.gpus,
                 "params": payload::params_json(&loaded.doc, cfg, params)?,
                 "dataset_ids": dataset_ids,
-                "backend": backend.name(),
+                "io_api": backend.api.name(),
+                "cache": backend.cache.name(),
                 "mmap_mode": mmap.name(),
                 "mmap_consume": mmap_consume.name(),
                 "rank_rotate": a.rank_rotate,
@@ -1126,7 +1113,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     l.print(&mut out)?;
     if loaded.ast.api.is_some() || loaded.ast.cache.is_some() {
-        writeln!(out, "declared backend {}", aeiou::backend::declared(&loaded.ast)?.name())?;
+        writeln!(out, "declared {}", aeiou::backend::declared(&loaded.ast)?.describe())?;
     }
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(&cfg))?;
     for line in report.total.take_lines() {

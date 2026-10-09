@@ -205,7 +205,7 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
     # the thread-per-actor backends and both event-loop engines issue the same ops over the same corpus
     for backend in ("sync", "io_uring", "posix-aio", "libaio", "mmap"):
         run = subprocess.run([RUNNER, "run", ast_path, "--root", root, "--gpus", "2", "--seed", "3", "--time-scale", "0",
-                              "--io-backend", backend, "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
+                              "--io-api", backend, "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
         assert run.returncode == 0, backend + ": " + run.stdout + run.stderr
         assert "fingerprint matches" in run.stdout
         if name == "train_stream_parquet":

@@ -314,7 +314,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     # one thread per lane under sync; one task per lane on an event loop, a group's members
     # in flight together, under io_uring and libaio: the same run either way
     for backend in ("sync", "io_uring", "libaio"):
-        r = run(RUNNER, "run", node_ast, "--gpus", "1", "--root", root, "--time-scale", "0", "--clean-namespaces", "--io-backend", backend)
+        r = run(RUNNER, "run", node_ast, "--gpus", "1", "--root", root, "--time-scale", "0", "--clean-namespaces", "--io-api", backend)
         assert r.returncode == 0, backend + "\n" + r.stdout + r.stderr
         assert f"fingerprint {fp}" in r.stdout, backend + "\n" + r.stdout
         assert "never CLOSED" in r.stdout

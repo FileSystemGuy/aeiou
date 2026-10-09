@@ -792,7 +792,7 @@
       "script": "train_stream_shards.py",
       "sha256": "cd091d66f4c3fcf5e7b7e78767aaca769aa0e1934825362154f45397eea1f441",
       "builder_version": "0.1.0",
-      "git": "927281143c37"
+      "git": "ddb845fffc77"
     },
     "python": "3.12.13",
     "lock": {

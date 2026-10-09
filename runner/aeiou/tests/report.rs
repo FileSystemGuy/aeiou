@@ -58,7 +58,7 @@ fn one_host_report_matches_the_text_and_failures_are_written() {
     assert!(text.contains(&format!("sha256 {}", d["abstract"]["sha256"].as_str().unwrap())));
     assert_eq!((d["seed"].as_u64(), d["gpus"].as_u64(), d["rank"].as_u64(), d["ranks"].as_u64()), (Some(7), Some(2), Some(0), Some(1)));
     assert_eq!(d["params"]["files"], 600);
-    assert_eq!(d["backend"], "sync");
+    assert_eq!((d["io_api"].as_str(), d["cache"].as_str()), (Some("sync"), Some("per-open")));
     assert_eq!(d["datasets"][0]["files"], 600);
     assert!(text.contains(&format!("id {}", d["datasets"][0]["id"].as_str().unwrap())));
     assert_eq!(d["scope"], "run");
@@ -185,7 +185,7 @@ fn the_declared_backend_is_the_default_and_another_is_named() {
     let (ok, _, err) = out(aeiou("datagen", "model_load.ast.json", &small).arg("--root").arg(&root).args(["--gpus", "2"]));
     assert!(ok, "{err}");
     let (_, dry, _) = out(aeiou("dry-run", "model_load.ast.json", &small).args(["--gpus", "2"]));
-    assert!(dry.contains("declared backend mmap"), "{dry}");
+    assert!(dry.contains("declared io-api mmap  cache per-open"), "{dry}");
     let run = |extra: &[&str]| {
         let mut c = aeiou("run", "model_load.ast.json", &small);
         c.arg("--root").arg(&root).args(["--gpus", "2", "--time-scale", "0"]).arg("--report-json").arg(&json).args(extra);
@@ -193,21 +193,21 @@ fn the_declared_backend_is_the_default_and_another_is_named() {
     };
     let (ok, text, err) = run(&[]);
     assert!(ok, "{text}\n{err}");
-    assert!(text.contains("backend mmap  root"), "{text}");
+    assert!(text.contains("io-api mmap  cache per-open  root"), "{text}");
     assert!(!text.contains("not the abstract's"), "{text}");
     let d = read(&json);
-    assert_eq!((d["backend"].as_str(), d["backend_declared"].as_str()), (Some("mmap"), Some("mmap")));
+    assert_eq!((d["io_api"].as_str(), d["io_api_declared"].as_str()), (Some("mmap"), Some("mmap")));
     let fp = d["fingerprint"].clone();
 
-    let (ok, text, err) = run(&["--io-backend", "sync"]);
+    let (ok, text, err) = run(&["--io-api", "sync"]);
     assert!(ok, "{text}\n{err}");
-    assert!(text.contains("backend sync is not the abstract's (mmap)"), "{text}");
+    assert!(text.contains("io-api sync  cache per-open is not the abstract's (io-api mmap  cache per-open)"), "{text}");
     let d = read(&json);
-    assert_eq!((d["backend"].as_str(), d["backend_declared"].as_str()), (Some("sync"), Some("mmap")));
+    assert_eq!((d["io_api"].as_str(), d["io_api_declared"].as_str()), (Some("sync"), Some("mmap")));
     assert_eq!(d["fingerprint"], fp, "the backend never changes the op stream");
 
     // an abstract that declares none is `sync`, and buffered against direct is a difference too
-    let (_, text, _) = out(aeiou("run", "train_small_files.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2", "--io-backend", "sync-direct"]));
-    assert!(text.contains("backend sync-direct is not the abstract's (sync)"), "{text}");
+    let (_, text, _) = out(aeiou("run", "train_small_files.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2", "--cache", "direct"]));
+    assert!(text.contains("io-api sync  cache direct is not the abstract's (io-api sync  cache per-open)"), "{text}");
     std::fs::remove_dir_all(&root).unwrap();
 }

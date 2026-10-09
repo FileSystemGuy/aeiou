@@ -60,7 +60,7 @@ operations by kind, in the format of the reference checker `schema/check.py`. Pr
 
 Walks every actor instance without I/O, in parallel over instances, and prints: the
 operation counts by kind and by phase, bytes read and written, emulated compute time,
-barriers, the declared backend when the abstract has one, and the workload fingerprint.
+barriers, the declared API and cache mode when the abstract declares one, and the workload fingerprint.
 With `--ranks` it adds the bytes per host, against this host's memory. With `--gpu` it
 prints one instance's operation stream, one line per operation, in the round-robin order
 of that instance's concurrent sub-actors. With `--metrics` it computes the locality
@@ -279,16 +279,12 @@ turns it off, and the last one on the line wins.
   The I/O API the operations are issued through: `sync`, `io_uring`, `posix-aio`,
   `libaio`, or `mmap`; see BACKENDS. Default: the API the abstract declares, `sync` when it
   declares none. Any other is a different workload on the storage, and the run says so and
-  records both backends.
+  records both.
 - **--cache** *MODE*
 
   `per-open` (each open's own flags decide whether it bypasses the page cache) or `direct` (`O_DIRECT` on
   every regular-file open; not with `mmap`). Default: the abstract's, `per-open` when it
   declares none. Any other is a different workload on the storage, as for `--io-api`.
-- **--io-backend** *NAME*
-
-  The API and the cache mode in one name, an alias of the pair (BACKENDS); not with
-  `--io-api` or `--cache`.
 - **--root** *DIR*
 
   Required, from some layer. The directory the abstract's paths are relative to; datasets
@@ -419,21 +415,22 @@ turns it off, and the last one on the line wins.
 ## BACKENDS
 
 The abstract is identical under every backend; a backend maps operations to an API and
-never changes the stream or the fingerprint. A run compares only with runs under the same
-backend. A backend is an API (`--io-api`) and a cache mode (`--cache`); each name below is
-an alias of the pair (`--io-backend`), `sync-direct` of `--io-api sync --cache direct`.
+never changes the stream or the fingerprint. A backend is two independent choices, the API
+(`--io-api`) and the cache mode (`--cache`), and a run compares only with runs under the
+same pair.
 
-| Name | API |
+| `--io-api` | API |
 |---|---|
-| `sync` | Buffered POSIX calls on one thread per actor. The fidelity reference. |
-| `sync-direct` | The same with `O_DIRECT` on every regular-file open; an unaligned read is rounded out to 4 KiB and the requested part counted, an unaligned write is refused. |
+| `sync` | POSIX calls on one thread per actor. The fidelity reference. |
 | `io_uring` | An event loop per thread multiplexing its actors over one ring, one operation in flight per actor. |
-| `io_uring-direct` | The same with `O_DIRECT`. |
 | `posix-aio` | glibc `aio_read`/`aio_write` on one thread per actor. |
-| `posix-aio-direct` | The same with `O_DIRECT`. |
-| `libaio` | The kernel AIO calls (`io_submit`/`io_getevents`) as a second engine of the event loop; the kernel runs buffered requests synchronously, so it is asynchronous only as `libaio-direct`. |
-| `libaio-direct` | The same with `O_DIRECT`. |
+| `libaio` | The kernel AIO calls (`io_submit`/`io_getevents`) as a second engine of the event loop; the kernel runs requests through the page cache synchronously, so it is asynchronous only under `--cache direct`. |
 | `mmap` | Reads are consumed out of a mapping of the file; see `--mmap-mode` and `--mmap-consume`. |
+
+| `--cache` | Opens |
+|---|---|
+| `per-open` | Each open's own flags decide whether it bypasses the page cache. |
+| `direct` | `O_DIRECT` on every regular-file open; an unaligned read is rounded out to 4 KiB and the requested part counted, an unaligned write is refused. Not with `mmap`. |
 
 ## METRICS
 
@@ -547,7 +544,7 @@ aeiou run schema/examples/train_small_files.ast.json --root /mnt/sut --gpus 8 --
 The same run on io_uring with a capped io-wq, the metrics of the stream to a file:
 
 ```
-aeiou run ... --io-backend io_uring --threads 4 --iowq-max-workers 2
+aeiou run ... --io-api io_uring --threads 4 --iowq-max-workers 2
 aeiou dry-run schema/examples/train_small_files.ast.json --gpus 8 --metrics-json abstract.metrics.json
 ```
 
