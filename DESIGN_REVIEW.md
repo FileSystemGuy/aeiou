@@ -4006,7 +4006,7 @@ replay's pool, given in the kit's README as 7,800 tokens, is 8,192 (vLLM's log a
 2026-10-08; the 2 GiB run's 174,752 is 2 GiB over Qwen2.5-0.5B's 12,288 bytes a token,
 rounded down to a 16-token block).
 
-### 3.65 The access layers: protocol, API, cache, transport, and buffer as separate axes, `s3dlio` as one engine among them (proposed 2026-10-09, not yet decided)
+### 3.65 The access layers: protocol, API, cache, transport, and buffer as separate axes, `s3dlio` as one engine among them (proposed and decided 2026-10-09)
 
 **The question (the user's).** Polishing the KV abstracts kept running into "backend"
 questions that seemed unconnected: whether `s3dlio` needs PRs to give it buffered,
@@ -4059,8 +4059,9 @@ one home, the backend name, when each binds to something different:
   wakes on an eventfd, so a completion source on another runtime can wake the same loop that
   owns the ring. What changes is that the protocol and API are declared per namespace (with
   the abstract's top-level declaration as the default) and that a run is given an endpoint
-  per namespace rather than one `--root`. Design it per namespace now so nothing forecloses
-  it; build the single-protocol case first. Counter-argument: no traced application of the
+  per namespace rather than one `--root`. ~~Design it per namespace now so nothing forecloses
+  it; build the single-protocol case first.~~ Decided 2026-10-09: designed and built now
+  (below). Counter-argument: no traced application of the
   eight mixes protocols today, and every mixed run doubles the setup a submitter must
   reproduce; the per-namespace binding costs little, but a WG workload that mixes should wait
   for a trace that does.
@@ -4118,19 +4119,23 @@ prefix's root; `datagen` writes through the same engine. The fingerprint is unto
 for every backend.
 
 **The contract.** Declaring the protocol and API per namespace, and splitting today's
-`backend` into an API and a cache mode, is a contract change (0.6). Proposed: the top-level
+`backend` into an API and a cache mode, is a contract change (0.6). ~~Proposed: the top-level
 `backend` keeps its meaning as the default API of POSIX namespaces, with the `-direct` names
 accepted and read as the API plus `cache: direct`; a namespace or dataset may declare
 `protocol: object` and its client. Every existing AST stays valid and every fingerprint and
-dataset id stays the same.
+dataset id stays the same.~~ Decided 2026-10-09 (below): `backend` is replaced by separate
+fields and every AST regenerated.
 
 **Order of work.**
 
 1. This entry, decided: the axes, the per-namespace binding, the mapping and V16, the
-   contract change.
+   contract change. Decided 2026-10-09.
 2. The runner refactored without a change of behaviour: a handle the engine owns instead of
    a descriptor, the backend name split into API and `--cache` with the nine names as
    aliases. The proof is that every fingerprint, golden, and test is unchanged.
+   *2026-10-09:* with contract 0.6 (the AST's `backend` replaced, every AST regenerated, so
+   the goldens that hold whole ASTs change and the fingerprints and dataset ids do not) and
+   the protocol and endpoint per namespace.
 3. `s3dlio` as an engine behind a cargo feature, over `file://` first: the same
    `train_small_files` fingerprint against `sync`, pricing the library alone (§3.32's first
    measurement). This finds which PRs to `s3dlio` are needed.
@@ -4141,12 +4146,40 @@ dataset id stays the same.
 Then `libnfs`, `gds`, and `nixl-posix` come in on the same axes (the last two with the
 buffer axis), and a transport row joins the report.
 
-**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
+**Decided (2026-10-09, the user).**
+
+- **The axes and their owners as proposed** (the table above), transport and buffer
+  included, rather than flat names such as `s3-direct` or the axes without those two.
+- **Mixed protocols designed and built now**, not only bound per namespace with the
+  single-protocol case first. The user's reason: KV caches are mixed workloads today, just
+  not yet in our traces; NVIDIA's G3 tier is POSIX and its G4 tier object (the user's
+  statement; **[verify]** against NVIDIA's documentation before the docs cite it as fact).
+  Mixed traces will be needed to debug this support; until there are some, what they show
+  is treated as bugs when it comes. This supersedes the counter-argument above as the
+  reason to wait.
+- **Contract 0.6 replaces `backend`** with separate fields (the API, the cache mode, and per
+  namespace the protocol family and its client) and regenerates every AST, rather than
+  keeping `backend` with the `-direct` names read as aliases. The user's reason: the only
+  ASTs that exist are this repository's. The command line keeps the nine names as aliases.
+- **The first object abstract's application: deferred** until `s3dlio` over `file://` is
+  measured (step 3); steps 2 and 3 do not depend on it.
+- **No shared POSIX-engine crate yet;** only the narrow PRs to `s3dlio` that the
+  measurements show aeiou needs. The crate may be raised again after step 3.
+- **RDMA under a user-space client is the solution's** when the application's calls are
+  unchanged: a run option recorded in the report, as `proto=rdma` is under a kernel client.
+  An RDMA path that needs a client API other than the traced application's is another
+  workload.
+
+- **The run-wide `--cache` defaults to the abstract's flags as written**, not to "buffered"
+  (decided the same day): an abstract may carry `DIRECT` on some opens, and "buffered" would
+  strip it.
+
+~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's
 object I/O the first object abstract stands for, since under CLOSED a run over S3 of an
 abstract traced on POSIX is another workload (candidates: `s3torchconnector`, `s3dlio`'s own
 data loader, or one the WG names); and whether the POSIX-engine crate shared with `s3dlio`
-is worth offering.
+is worth offering.~~
 
 ## 4. Plan changes
 

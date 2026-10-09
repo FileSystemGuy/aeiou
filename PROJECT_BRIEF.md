@@ -106,12 +106,12 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   | `gds` | cuFile: `cuFileRead` (sync), batch API, stream-ordered | needs a CUDA device on the client. **Must detect and report compat mode** (POSIX bounce buffer fallback), which is the common case on NFS |
   | `nixl-posix` | NIXL with its POSIX plugin (`nixl-sys` Rust bindings) | needs a CUDA device; per-transfer descriptor setup will dominate small reads, which is a valid result |
   | `libnfs` | user-space NFS client | no kernel page/dentry/attribute cache; every LOOKUP goes over the wire; a floor for "client CPU with no kernel in the path" |
-  | *deferred:* `s3`, `az`, `gs` | object GET/PUT | ~~not POSIX-shaped; needs `get`/`put` in the abstract's vocabulary.~~ Preliminary opinion 2026-10-01 (`DESIGN_REVIEW.md` §3.32): the abstract stays POSIX-shaped and the backend maps (`open, read…, close` to one streaming GET or ranged GETs, sequential writes to a multipart upload), refusing what has no mapping at `check` time; via the `s3dlio` crate behind a cargo feature (§6 item 17). MLPerf Storage is heading there. *2026-10-09:* bound per namespace, with the protocol family and the API as separate axes (§6 item 25, `DESIGN_REVIEW.md` §3.65, proposed) |
+  | *deferred:* `s3`, `az`, `gs` | object GET/PUT | ~~not POSIX-shaped; needs `get`/`put` in the abstract's vocabulary.~~ Preliminary opinion 2026-10-01 (`DESIGN_REVIEW.md` §3.32): the abstract stays POSIX-shaped and the backend maps (`open, read…, close` to one streaming GET or ranged GETs, sequential writes to a multipart upload), refusing what has no mapping at `check` time; via the `s3dlio` crate behind a cargo feature (§6 item 17). MLPerf Storage is heading there. *2026-10-09:* bound per namespace, with the protocol family and the API as separate axes (§6 item 25, `DESIGN_REVIEW.md` §3.65, decided 2026-10-09) |
 
   Orthogonal flags: `--buffer pageable|pinned|gpu` and `--cache buffered|direct|dontcache|fadv-dontneed`,
   with a validity table that rejects impossible combinations (buffered `gds`, `direct` `mmap`, …).
   (*2026-10-09:* built only as the `-direct` names so far; separating them again, with the
-  protocol family, transport, and an endpoint per namespace, is §6 item 25, proposed.)
+  protocol family, transport, and an endpoint per namespace, is §6 item 25, decided the same day.)
   `preadv2` flags, vectored reads, `readahead(2)`/`fadvise` hints, and io_uring features are
   options on a backend, not backends. `splice`/`sendfile`/`copy_file_range` only matter for a
   data-mover abstract and are not planned. SPDK, xNVMe, and NVMe passthrough do not apply to NFS.
@@ -144,6 +144,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Coordinator | Star topology over plain TCP with blocking `std::net` (~~on one coordinator thread~~ a reader thread per socket, built 2026-09-30); length-prefixed ~~`postcard`~~ JSON messages (`Hello` with a config hash, `Ready`/`Start`, `Arrive`/`Leave`/`Release`, `Report`/`Result`, `Stop`, `Heartbeat`). No tokio, no tonic/gRPC. Sits behind a `Coordinator` trait; single-host runs use an in-process implementation; rank 0 runs the server in-process and is the only host that empties namespace roots and writes manifests. See `NAPKIN_MATH.md` §8.A, `runner/REFERENCE.md` §6, `DESIGN_REVIEW.md` §3.25. |
 | Deployment | Bare Linux on the client nodes, **no containers**. |
 | I/O crate | `io-uring` (Rust). |
+| Access layers | **Decided 2026-10-09** (`DESIGN_REVIEW.md` §3.65, §6 item 25). Below the format classes, separate axes each owned by the abstract or the solution by the interposition test: the protocol family (POSIX or object) and the endpoint per namespace, mixed in one run; the API declared by the abstract; the run-wide cache mode (`--cache`, by default the abstract's flags as written) as an override, the nine backend names its aliases on the command line; transport (TCP or RDMA) the solution's, under a kernel or a user-space client alike when the application's calls are unchanged; the buffer axis with GDS and `nixl-posix`. Contract 0.6 replaces `backend` and regenerates every AST. Object namespaces map ops by a table, V16 refusing what has none. `s3dlio` is one engine on these axes; the runner's POSIX path never goes through it. |
 | A/B testing | Agreed. Backend × cache mode × io_uring features × NFS mount options (`NAPKIN_MATH.md` §8.5). The key metric is client CPU per op. |
 | Checkpoint restore inputs | **Decided 2026-09-30** (`DESIGN_REVIEW.md` §3.24). The restore reads the files a previous checkpoint-write run created, not a dataset: `ckpt_restore` declares its namespaces `input` (`schema/README.md` V14), the write run leaves `.aeiou-namespace.json` at the namespace root, and the restore run requires it, may not modify the namespace, reports the write-to-read gap, and counts reads served from the host that wrote them. `--rank-rotate k` runs the read on a rotated rank-to-host mapping so every host reads what another wrote; the per-object writer record in the manifest makes the warm-read count exact. The read-back phase of `ckpt_write_dcp` is off by default (`readback`). |
 | Grammar | Three layers: authoring language, the AST contract, the Rust VM. The AST (JSON; ~~serde YAML/JSON~~ YAML dropped 2026-09-30, `DESIGN_REVIEW.md` §3.20) is the contract and the only thing the runner executes; the WG publishes ASTs and their hashes, submitters run those (WG process; §8). Leading candidate for authoring (2026-09-28): **Option D**, a Python builder package that emits the AST, with source→AST reproducibility enforced by CI (build twice, compare) and by the runner's validator. Python stays on the authoring station, never on client nodes. ~~**User has not yet chosen.**~~ **Decided 2026-09-30: Option D.** The AST JSON Schema is `schema/abstract-ast.schema.json` (v0.1, draft 2020-12), with the canonical form and the validator's semantic rules in `schema/README.md` and the first abstracts in AST form under `schema/examples/`. The nine constructs of `ABSTRACTS.md` §9 were accepted the same day and are in the schema. Next: the builder package, `aeiou-build --hermetic`, and the build-twice CI check. |
@@ -151,8 +152,9 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 ## 6. Open items / next steps
 
 **Order of work (2026-10-09, the user's).** The access layers come first (item 25,
-`DESIGN_REVIEW.md` §3.65): (1) decide the axes, the per-namespace binding, the object mapping,
-and the contract change; (2) refactor the runner to those axes with no change of behaviour;
+`DESIGN_REVIEW.md` §3.65): (1) ~~decide the axes, the per-namespace binding, the object mapping,
+and the contract change;~~ decided 2026-10-09; (2) refactor the runner to those axes with no
+change of behaviour, with contract 0.6 and mixed protocols;
 (3) `s3dlio` as an engine over `file://` against `sync` (item 17). The KV work (the AgentX
 conversation reads, item 21; the `O_DIRECT` rerun; reference-configuration holds) goes on
 beside it when the GPU is free, then datagen resume (item 23). The items below keep their
@@ -501,21 +503,27 @@ numbers; the order is this note's.
     so drawn holds at the reference configuration serve CLOSED. Kept for it: the fits'
     conditions, the simulation, and the 2 GiB and 6 GiB pairs.
 
-25. **The access layers (proposed 2026-10-09, not yet decided, `DESIGN_REVIEW.md` §3.65).**
+25. **The access layers (proposed and decided 2026-10-09, `DESIGN_REVIEW.md` §3.65).**
     Format classes are already above the access APIs (the builder emits POSIX-shaped ops);
     "backend" below them binds three choices into one name (API, `O_DIRECT` on every open,
     blocking or event-loop completion) over file descriptors. Proposed: separate axes, each
     bound where it belongs and owned by the abstract or the solution by the interposition
     test (§5): protocol family (POSIX or object) and endpoint per namespace, so a run may mix
-    protocols; the API per run as the abstract declares it; `--cache` as the run-wide
+    protocols (built now, decided: KV caches mix tiers today, NVIDIA's G3 POSIX and G4 object
+    by the user's account [verify]); the API per run as the abstract declares it; `--cache` as the run-wide
     modifier §4 planned, with the nine names as aliases; transport (TCP or RDMA) the
     solution's, a mount option under a kernel client and a library option under a user-space
     one; the buffer axis with GDS and `nixl-posix`. The object mapping drafted with a validity
-    rule (V16); contract 0.6 keeps every AST, fingerprint, and dataset id. `s3dlio` is one
+    rule (V16); ~~contract 0.6 keeps every AST, fingerprint, and dataset id.~~ contract 0.6
+    replaces `backend` with separate fields and regenerates every AST (decided: the only ASTs
+    are this repository's); fingerprints and dataset ids are unchanged. `s3dlio` is one
     engine on these axes; the runner's POSIX path does not go through it. Then: the refactor
     with no change of behaviour, `s3dlio` over `file://` (item 17), an S3 server on the
-    development box, and only then PRs to `s3dlio`. Open: the first object abstract's
-    application (under CLOSED, S3 under a POSIX-traced abstract is another workload).
+    development box, and only then PRs to `s3dlio`, the narrow ones the measurements call for
+    (decided; no shared POSIX-engine crate for now). Deferred until `s3dlio` over `file://` is
+    measured: the first object abstract's application (under CLOSED, S3 under a POSIX-traced
+    abstract is another workload). Decided the same day: `--cache` defaults to the abstract's
+    flags as written.
 
 ## 7. Environment
 

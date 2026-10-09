@@ -212,7 +212,7 @@ reported; the launcher takes host files and `pdsh`-style ranges).
 
 Not built, in rough order of interest:
 
-- The access layers (proposed 2026-10-09, `PROJECT_BRIEF.md` §6 item 25): protocol family
+- The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included): protocol family
   and endpoint per namespace, the API and the cache mode as separate axes, transport and
   buffer beside them; then object storage through `s3dlio` behind a feature flag (item 17),
   and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
