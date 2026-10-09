@@ -4174,6 +4174,19 @@ buffer axis), and a transport row joins the report.
   (decided the same day): an abstract may carry `DIRECT` on some opens, and "buffered" would
   strip it.
 
+**Driver integration (the user's note, 2026-10-09).** Once `s3dlio` starts its runtime it
+never stops it: the first object call builds a global multi-thread tokio runtime
+(`global_rt_handle`, a `OnceCell` in its `src/s3_client.rs`, read 2026-10-09) and parks it on
+a thread of its own until the process exits; importing its Python module also builds a Rayon
+pool (`configure_thread_pools`, called at import). Until that first call nothing runs, and
+the default build links none of it. So when `mlpstorage` drives `aeiou` (brief §8), each
+phase is its own `aeiou` process by fork/exec, never the runner or `s3dlio` linked into the
+Python process: a phase that touched object storage would leave those threads running
+through every later phase, and the Python process's CPU, memory, and threads would land in
+a phase's report, which counts its own process. A process per phase also gives each phase
+its own limit checks and failure isolation, and matches the multi-host launch, which is
+already a process per host.
+
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's
 object I/O the first object abstract stands for, since under CLOSED a run over S3 of an
