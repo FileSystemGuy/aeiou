@@ -25,11 +25,17 @@ the same corpus has the same property.
 
 `--sessions` sessions are played at once, each on a thread, from `--skip` into the file;
 a session's requests go in time order, the main agent's and its sub-agents' alike, with
-the corpus's `think_time` before each scaled by `--time-scale` (0: back to back). A
-request whose prompt exceeds `--max-context` is skipped. A reply is asked for with
+the corpus's `think_time` before each scaled by `--time-scale` (0: back to back). Each
+session plays its own share of `--requests`, the first of them in its time order (300 over
+8 sessions: 38 for the first four, 37 for the rest), so what is sent is a function of the
+corpus and the arguments, never of the server's speed; until 2026-10-09 the sessions drew
+on one shared count, and a faster server sent more of the long sessions (232 requests at
+6 GiB, 219 at 2 GiB, `DESIGN_REVIEW.md` §3.64). A request whose prompt exceeds
+`--max-context` is skipped and counts against its session's share. A reply is asked for with
 `max_tokens` = the corpus's `out` (at most `--max-reply`) and `ignore_eos`.
 
-Prints one line per request: request, session, the request's index in it, prompt tokens,
+Prints one line per request: request (the session's first number plus the index),
+session, the request's index in it, prompt tokens,
 cached tokens when the server reports them, completion tokens, seconds. Run 2026-10-07 and, corrected,
 2026-10-08 on an 8 GB GPU at 128k context (the kit's README, `DESIGN_REVIEW.md` §3.63).
 """
@@ -50,7 +56,7 @@ def main():
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--sessions", type=int, default=8)
     ap.add_argument("--skip", type=int, default=0)
-    ap.add_argument("--requests", type=int, default=300, help="in all, over the sessions")
+    ap.add_argument("--requests", type=int, default=300, help="in all, split evenly over the sessions")
     ap.add_argument("--max-context", type=int, default=131072)
     ap.add_argument("--max-reply", type=int, default=4096)
     ap.add_argument("--time-scale", type=float, default=0.0)
@@ -81,17 +87,12 @@ def main():
         len(sessions), a.max_context, limit, vocab, " ".join("%d,%d" % (sum(v.startswith("main") for v in s[2].values()) * BLOCK,
                                                                        sum(v.startswith("sub") for v in s[2].values()) * BLOCK) for s in sessions)), flush=True)
 
-    lock = threading.Lock()
-    count = [0]
+    share = [a.requests // max(1, len(sessions)) + (si < a.requests % max(1, len(sessions))) for si in range(len(sessions))]
 
     def play(si, session):
         reqs, ti, at = session
-        for ri, r in enumerate(reqs):
-            with lock:
-                if count[0] >= a.requests:
-                    return
-                n = count[0]
-                count[0] += 1
+        for ri, r in enumerate(reqs[:share[si]]):
+            n = sum(share[:si]) + ri
             if r["in"] > min(a.max_context, limit):
                 continue
             if a.time_scale and r.get("think_time"):

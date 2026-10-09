@@ -3908,7 +3908,11 @@ stand-in for the hardware, the batch's compute time; the KV abstracts have the p
 the 174,752 of 2 GiB, all else the same (raw in `~/MLPerfStorage/agentx/run-20261008c`; the
 kit's `agentx-6gib.*`). 232 requests were sent, 219 at 2 GiB: the replay's 300-request
 budget is shared by its session threads, so which requests go depends on the server's
-speed (recorded; a per-session budget would fix it).
+speed (recorded; ~~a per-session budget would fix it~~ fixed 2026-10-09: each session plays
+its own share of the 300, the first of its requests in time order, 38 or 37 each, the
+over-context ones it skips included, so what is sent depends on the corpus and the
+arguments alone; checked against a stub server of random latency, two runs sent the same
+233 requests. Both runs above were made under the shared count).
 
 | | 2 GiB (174,752 tokens) | 6 GiB (524,288 tokens) |
 |---|---|---|
