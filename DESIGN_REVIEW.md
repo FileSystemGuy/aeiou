@@ -1220,6 +1220,11 @@ datagen` and the manifests through the same backend. First measurement, before a
 the same `train_small_files` fingerprint over `file://` through the library against the
 `sync` backend, which prices the library's overhead alone. Recorded as brief §6 item 17.
 
+*2026-10-09:* the mapping and the cargo feature stand; the library does not. The object engine
+is built on Apache `object_store` (3–4× less client CPU per small request than `s3dlio`'s AWS
+SDK path, measured), and the `file://` measurement is dropped, since the runner's POSIX path
+never goes through an object library (§3.65).
+
 ### 3.33 Speed of light of the benchmark code (added 2026-10-01)
 
 **Question (user).** Given what the counters now show, what is the most a 96-core node with
@@ -4006,7 +4011,7 @@ replay's pool, given in the kit's README as 7,800 tokens, is 8,192 (vLLM's log a
 2026-10-08; the 2 GiB run's 174,752 is 2 GiB over Qwen2.5-0.5B's 12,288 bytes a token,
 rounded down to a 16-token block).
 
-### 3.65 The access layers: protocol, API, cache, transport, and buffer as separate axes, `s3dlio` as one engine among them (proposed and decided 2026-10-09)
+### 3.65 The access layers: protocol, API, cache, transport, and buffer as separate axes, `s3dlio` as one engine among them (proposed and decided 2026-10-09; the object engine on `object_store` instead, decided the same day)
 
 **The question (the user's).** Polishing the KV abstracts kept running into "backend"
 questions that seemed unconnected: whether `s3dlio` needs PRs to give it buffered,
@@ -4098,6 +4103,7 @@ one home, the backend name, when each binds to something different:
   guesses until its current source is read **[verify]**: a ranged read into the caller's
   buffer (no allocation and copy per op), control of its runtime's and pools' sizes, and
   per-request timing. Those PRs come from measuring it (step 3 below), not before.
+  *2026-10-09:* moot; the object engine is built on `object_store` (decided below).
 
 **The object mapping (draft; §3.32 extended).** Per op, for a namespace declared object:
 
@@ -4136,12 +4142,16 @@ fields and every AST regenerated.
    *2026-10-09:* with contract 0.6 (the AST's `backend` replaced, every AST regenerated, so
    the goldens that hold whole ASTs change and the fingerprints and dataset ids do not) and
    the protocol and endpoint per namespace.
-3. `s3dlio` as an engine behind a cargo feature, over `file://` first: the same
+3. ~~`s3dlio` as an engine behind a cargo feature, over `file://` first: the same
    `train_small_files` fingerprint against `sync`, pricing the library alone (§3.32's first
-   measurement). This finds which PRs to `s3dlio` are needed.
-4. An S3 server on the development box: a run over `s3://`, with `datagen` and the
-   manifests through it.
-5. The PRs to `s3dlio` that steps 3 and 4 showed are needed.
+   measurement). This finds which PRs to `s3dlio` are needed.~~
+4. ~~An S3 server on the development box: a run over `s3://`, with `datagen` and the
+   manifests through it.~~
+5. ~~The PRs to `s3dlio` that steps 3 and 4 showed are needed.~~
+
+*Superseded 2026-10-09 (below, the object engine on `object_store`):* steps 3 and 4 are one
+step, the object engine on `object_store` behind the cargo feature `object`, run against an S3
+server on the development box with `datagen` and the manifests through it; step 5 is dropped.
 
 Then `libnfs`, `gds`, and `nixl-posix` come in on the same axes (the last two with the
 buffer axis), and a transport row joins the report.
@@ -4164,10 +4174,13 @@ buffer axis), and a transport row joins the report.
   *Superseded the same day (the user):* the aliases are dropped too, from the command line,
   the output, and the report; with no users yet, old names only clutter the page and the
   usage, and orthogonal flags let an expert name exactly the layered behaviour wanted.
-- **The first object abstract's application: deferred** until `s3dlio` over `file://` is
-  measured (step 3); steps 2 and 3 do not depend on it.
-- **No shared POSIX-engine crate yet;** only the narrow PRs to `s3dlio` that the
-  measurements show aeiou needs. The crate may be raised again after step 3.
+- **The first object abstract's application: deferred** until ~~`s3dlio` over `file://` is
+  measured (step 3)~~ the object engine runs against an S3 server (step 3 as revised the same
+  day); steps 2 and 3 do not depend on it.
+- **No shared POSIX-engine crate yet;** ~~only the narrow PRs to `s3dlio` that the
+  measurements show aeiou needs. The crate may be raised again after step 3.~~ *Superseded the
+  same day:* with the object engine on `object_store`, no PRs to `s3dlio` are on aeiou's path;
+  a crate shared with `s3dlio` would be the WG's offer to make, not a step of this work.
 - **RDMA under a user-space client is the solution's** when the application's calls are
   unchanged: a run option recorded in the report, as `proto=rdma` is under a kernel client.
   An RDMA path that needs a client API other than the traced application's is another
@@ -4232,6 +4245,90 @@ mounts in the report is a format change, left for when it is needed); `object` i
 A run placing the KV abstract's system prompts and its namespace in two directories issues
 the dry run's fingerprint and leaves nothing under `--root` (`tests/run.rs`); the Python
 writer and the runner agree on a placed container dataset (`test_formats.py`).
+
+**Decided (2026-10-09, later, the user): the object engine is built on Apache
+`object_store`, not on `s3dlio`.** The user's condition before believing an alternative was
+viable: `s3dlio`'s author put a lot of effort into its performance, so the other library had
+to be nearly as fast. Measured, it is faster.
+
+*What was read (`s3dlio` at `4542f82`, 0.9.114, still its default branch's head on
+2026-10-09).* Its S3 store is `aws-sdk-s3` (`GetObject` and `PutObject` with a `reqwest`
+transport of its own, `src/reqwest_client.rs`); a range read is one SDK `GetObject` on the
+caller's runtime (`get_object_range_uri_async`, `src/s3_utils.rs`), and a whole-object `get`
+first issues a `HEAD` for the size (its range optimization, on by default). Its own documents
+reach the same finding as below: `docs/performance/AWS_SDK_vs_Thin_Client_Benchmark.md`
+measures the SDK at 3.6× the per-request latency of a thin client against the same server,
+`docs/CUSTOM_S3_CLIENT_ANALYSIS.md` attributes about a third of client CPU to the SDK's
+middleware, and `docs/enhancement/AWS_SDK_OVERHEAD_BYPASS.md` proposes a thin path for the hot
+`GET` and `PUT`, status "Proposed — Not yet implemented". There is no run-time switch away
+from the SDK (the user asked; none found). The one way around it is the build feature
+`arrow-backend`, which puts `s3dlio`'s trait over `object_store` 0.13
+(`src/object_store_arrow.rs`): it does not compile at `4542f82` (16 errors: the adapter still
+has `Vec<u8>` and `&[u8]` where the trait moved to `Bytes`), its CI does not build it, and its
+contributor notes call it experimental. The author's own route around the SDK ends at
+`object_store`.
+
+*How it was measured.* Scratch programs, not in the repository: a minimal in-memory S3 server
+(`hyper`, one fixed pattern buffer, signatures ignored, requests counted per method) on cores
+10–19, so the server's cost is small and the same for both; one client binary driving either
+library through the same loop (`s3dlio::object_store::store_for_uri` with its default
+features less Azure and GCS, against `object_store` 0.14.2 with the `aws` feature), pinned to
+the stated cores with that many runtime threads (`S3DLIO_RT_THREADS` the same); keys
+`obj-SIZE-i` over 4,096 objects; 1 s warm-up, 4 s measured; client CPU from `getrusage`; each
+row run twice, libraries alternated. Loopback, plain HTTP/1.1, the WSL2 development box. Both
+libraries sign every request, payload included.
+
+| Case | `s3dlio` ops/s | `object_store` ops/s | CPU per op, `s3dlio` / `object_store` |
+|---|---|---|---|
+| 4 KiB range `GET`, 1 core, 1 in flight | 4.8–4.9k (p50 187 µs) | 12.2–12.4k (p50 75 µs) | 159–161 / 50–51 µs |
+| 4 KiB range `GET`, 4 cores, 64 in flight | 13.6–15.8k | 56.1–60.0k | 201–233 / 54–57 µs |
+| 4 KiB range `GET`, 8 cores, 128 in flight | 20.1–20.5k | 78.2–82.4k | 298–303 / 76–80 µs |
+| 128 KiB `GET`, 4 cores, 64 in flight | 11.8–12.8k | 41.8–43.2k | 246–269 / 76–78 µs |
+| 128 KiB `PUT`, 4 cores, 64 in flight | 10.7–11.7k | 26.4–26.6k | 287–314 / 134 µs |
+| 8 MiB `GET`, 4 cores, 64 in flight | 5.4–5.5 GB/s | 7.2–8.1 GB/s | 5.4 / 3.7–4.1 ms |
+| 8 MiB `PUT`, 4 cores, 64 in flight | 5.2 GB/s | 5.3–5.4 GB/s | 5.8 / 5.5–5.7 ms |
+
+The large `PUT` is even because both hash every byte for the signature; `s3dlio` with
+`S3DLIO_UNSIGNED_PAYLOAD=1` took 261 µs per 128 KiB `PUT` (`object_store`'s unsigned payload
+was not measured). Weight, each library alone in a probe with `tokio`, counted as distinct
+packages in `cargo tree -e normal`: `object_store` 131 packages, 7.3 MB stripped, a 32 s clean
+release build on 20 cores; `s3dlio` 405 packages, 24.8 MB, 131 s (the runner today: 81).
+Both bring `reqwest` 0.13, `rustls`, and `aws-lc-sys`, which is C; `s3dlio` also a second
+`hyper`, a second `rustls`, and `ring`, and non-optional dependencies the runner would never
+call (its data loaders and formats, `clap`, `rayon`, `ndarray`).
+
+*Why it matters here.* The runner is a load generator: its cost per op decides how many
+client cores it takes to drive a fast system, and the key metric of the A/B row (brief §5) is
+client CPU per op. Against real storage at milliseconds the latency gap shrinks; the CPU gap
+does not. Charging a library its own API is the rule (`s3dlio`'s `HEAD` before a whole-object
+`get` would be a cost of the engine, not of the system under test); choosing the cheaper
+library that issues the same requests is not unfair to anyone.
+
+*The op stream does not depend on the library.* The engine issues the requests of the object
+mapping above and nothing else; which crate formats them is the runner's, as `io_uring` against
+`sync` is under the same abstract. Where a traced application's client adds requests of its
+own (a `HEAD` for the size, a large `GET` split into ranges), they are that application's op
+stream and belong in its abstract, whatever library the runner uses.
+
+*Counter-arguments, weighed.* `s3dlio` is the WG's library, its author is in the WG, and an
+engine built on it would have carried that standing; the WG may still ask for it, and the
+`Backend` trait leaves room for a second object engine. `object_store` is pre-1.0 and has
+changed its API between minor versions (0.13 to 0.14 moved the range calls to an extension
+trait), so the version is pinned and an upgrade is a recorded change. `s3dlio` has things
+`object_store` lacks (multi-endpoint stores, its range engine, NUMA and thread placement); none
+is an op the mapping issues. The measurement is loopback against a server that does almost
+nothing, which isolates the client's cost; it does not show either library's behaviour at
+network latency or over TLS, which the step-4 server and a real store will.
+
+*What changes.* The object engine: `object_store` with the `aws` feature (Azure and GCS
+features when a workload needs them), behind the cargo feature `object`, on a `tokio` runtime
+the engine builds on first use and sizes itself, so the default build stays tokio-free and
+`CLAUDE.md`'s no-tokio invariant becomes "none in the default build" when the engine is built
+(the change §3.32 anticipated). Steps 3 and 4 above become one: the engine measured against an
+S3 server on the development box, never over `file://` (the runner's POSIX path stays on its
+own engines, decided above). No PRs to `s3dlio` are on aeiou's path. The driver note above
+holds for any library with a runtime: the engine's runtime lives as long as its process, one
+process per phase.
 
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's

@@ -224,7 +224,7 @@ Not built, in rough order of interest:
 - The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included; the API
   and the cache mode as separate axes, contract 0.6, and the protocol and `--endpoint` per
   dataset and namespace built the same day, the mount counters still `--root`'s alone):
-  transport and buffer beside them; then object storage through `s3dlio` behind a feature flag (item 17),
+  transport and buffer beside them; then object storage through Apache `object_store` behind a feature flag (item 17; ~~`s3dlio`~~ decided 2026-10-09, `DESIGN_REVIEW.md` §3.65),
   and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only
   met `localhost`), and tensor-parallel sharding of a KV chunk, where `--gpus` is today

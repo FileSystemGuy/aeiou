@@ -144,7 +144,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 | Coordinator | Star topology over plain TCP with blocking `std::net` (~~on one coordinator thread~~ a reader thread per socket, built 2026-09-30); length-prefixed ~~`postcard`~~ JSON messages (`Hello` with a config hash, `Ready`/`Start`, `Arrive`/`Leave`/`Release`, `Report`/`Result`, `Stop`, `Heartbeat`). No tokio, no tonic/gRPC. Sits behind a `Coordinator` trait; single-host runs use an in-process implementation; rank 0 runs the server in-process and is the only host that empties namespace roots and writes manifests. See `NAPKIN_MATH.md` §8.A, `runner/REFERENCE.md` §6, `DESIGN_REVIEW.md` §3.25. |
 | Deployment | Bare Linux on the client nodes, **no containers**. |
 | I/O crate | `io-uring` (Rust). |
-| Access layers | **Decided 2026-10-09** (`DESIGN_REVIEW.md` §3.65, §6 item 25). Below the format classes, separate axes each owned by the abstract or the solution by the interposition test: the protocol family (POSIX or object) and the endpoint per namespace, mixed in one run; the API declared by the abstract; the run-wide cache mode (`--cache`, by default `per-open`, the abstract's flags as written) as an override, ~~the nine backend names its aliases on the command line~~ no combined names (removed the same day); transport (TCP or RDMA) the solution's, under a kernel or a user-space client alike when the application's calls are unchanged; the buffer axis with GDS and `nixl-posix`. Contract 0.6 replaces `backend` and regenerates every AST. Object namespaces map ops by a table, ~~V16~~ V18 refusing what has none. `s3dlio` is one engine on these axes; the runner's POSIX path never goes through it. |
+| Access layers | **Decided 2026-10-09** (`DESIGN_REVIEW.md` §3.65, §6 item 25). Below the format classes, separate axes each owned by the abstract or the solution by the interposition test: the protocol family (POSIX or object) and the endpoint per namespace, mixed in one run; the API declared by the abstract; the run-wide cache mode (`--cache`, by default `per-open`, the abstract's flags as written) as an override, ~~the nine backend names its aliases on the command line~~ no combined names (removed the same day); transport (TCP or RDMA) the solution's, under a kernel or a user-space client alike when the application's calls are unchanged; the buffer axis with GDS and `nixl-posix`. Contract 0.6 replaces `backend` and regenerates every AST. Object namespaces map ops by a table, ~~V16~~ V18 refusing what has none. ~~`s3dlio` is one engine on these axes;~~ The object engine is built on Apache `object_store` behind the cargo feature `object` (decided 2026-10-09, §3.65: 3–4× less client CPU per small request than `s3dlio`'s AWS SDK path); the runner's POSIX path never goes through it. |
 | A/B testing | Agreed. Backend × cache mode × io_uring features × NFS mount options (`NAPKIN_MATH.md` §8.5). The key metric is client CPU per op. |
 | Checkpoint restore inputs | **Decided 2026-09-30** (`DESIGN_REVIEW.md` §3.24). The restore reads the files a previous checkpoint-write run created, not a dataset: `ckpt_restore` declares its namespaces `input` (`schema/README.md` V14), the write run leaves `.aeiou-namespace.json` at the namespace root, and the restore run requires it, may not modify the namespace, reports the write-to-read gap, and counts reads served from the host that wrote them. `--rank-rotate k` runs the read on a rotated rank-to-host mapping so every host reads what another wrote; the per-object writer record in the manifest makes the warm-read count exact. The read-back phase of `ckpt_write_dcp` is off by default (`readback`). |
 | Grammar | Three layers: authoring language, the AST contract, the Rust VM. The AST (JSON; ~~serde YAML/JSON~~ YAML dropped 2026-09-30, `DESIGN_REVIEW.md` §3.20) is the contract and the only thing the runner executes; the WG publishes ASTs and their hashes, submitters run those (WG process; §8). Leading candidate for authoring (2026-09-28): **Option D**, a Python builder package that emits the AST, with source→AST reproducibility enforced by CI (build twice, compare) and by the runner's validator. Python stays on the authoring station, never on client nodes. ~~**User has not yet chosen.**~~ **Decided 2026-09-30: Option D.** The AST JSON Schema is `schema/abstract-ast.schema.json` (v0.1, draft 2020-12), with the canonical form and the validator's semantic rules in `schema/README.md` and the first abstracts in AST form under `schema/examples/`. The nine constructs of `ABSTRACTS.md` §9 were accepted the same day and are in the schema. Next: the builder package, `aeiou-build --hermetic`, and the build-twice CI check. |
@@ -156,7 +156,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 and the contract change;~~ decided 2026-10-09; (2) refactor the runner to those axes with no
 change of behaviour, with contract 0.6 and mixed protocols (the two axes, the handle, and
 contract 0.6 built 2026-10-09, and the protocol and `--endpoint` per dataset and namespace the same day; the mount counters of several mounts not yet);
-(3) `s3dlio` as an engine over `file://` against `sync` (item 17). The KV work (the AgentX
+(3) ~~`s3dlio` as an engine over `file://` against `sync` (item 17)~~ the object engine on `object_store`, run against an S3 server on the development box (item 17; decided 2026-10-09, `DESIGN_REVIEW.md` §3.65). The KV work (the AgentX
 conversation reads, item 21; the `O_DIRECT` rerun; reference-configuration holds) goes on
 beside it when the GPU is free, then datagen resume (item 23). The items below keep their
 numbers; the order is this note's.
@@ -440,7 +440,11 @@ numbers; the order is this note's.
     POSIX-to-object mapping table and the validity rule first; first measurement is the same
     fingerprint over `file://` through the library versus the `sync` backend, pricing the
     library before any cloud is involved. *2026-10-09:* promoted to the top of the order, after
-    the access layers it plugs into (item 25, `DESIGN_REVIEW.md` §3.65).
+    the access layers it plugs into (item 25, `DESIGN_REVIEW.md` §3.65). *Later on
+    2026-10-09:* the engine is built on Apache `object_store`, not `s3dlio` (measured: 3–4×
+    less client CPU per small request; `s3dlio`'s S3 path is the AWS SDK, and its
+    `object_store` backend does not compile), and it is measured against an S3 server, not
+    over `file://` (`DESIGN_REVIEW.md` §3.65).
 18. **JSON report (built and decided 2026-10-01, `DESIGN_REVIEW.md` §3.41,
     `runner/REFERENCE.md` §12).** `aeiou run --report-json FILE` writes the
     run's identity, results (latency histograms in full), and verdict as format
@@ -517,12 +521,14 @@ numbers; the order is this note's.
     one; the buffer axis with GDS and `nixl-posix`. The object mapping drafted with a validity
     rule (~~V16~~ V18; V16 is the `trace` rule); ~~contract 0.6 keeps every AST, fingerprint, and dataset id.~~ contract 0.6
     replaces `backend` with separate fields and regenerates every AST (decided: the only ASTs
-    are this repository's); fingerprints and dataset ids are unchanged. `s3dlio` is one
-    engine on these axes; the runner's POSIX path does not go through it. Then: the refactor
-    with no change of behaviour, `s3dlio` over `file://` (item 17), an S3 server on the
+    are this repository's); fingerprints and dataset ids are unchanged. ~~`s3dlio` is one
+    engine on these axes;~~ the runner's POSIX path does not go through ~~it~~ an object library. Then: the refactor
+    with no change of behaviour, ~~`s3dlio` over `file://` (item 17), an S3 server on the
     development box, and only then PRs to `s3dlio`, the narrow ones the measurements call for
-    (decided; no shared POSIX-engine crate for now). Deferred until `s3dlio` over `file://` is
-    measured: the first object abstract's application (under CLOSED, S3 under a POSIX-traced
+    (decided; no shared POSIX-engine crate for now)~~ the object engine on Apache `object_store`
+    against an S3 server on the development box (item 17; decided later the same day after
+    measuring it against `s3dlio`; no PRs to `s3dlio` and no shared POSIX-engine crate). Deferred until ~~`s3dlio` over `file://` is
+    measured~~ the object engine runs: the first object abstract's application (under CLOSED, S3 under a POSIX-traced
     abstract is another workload). Decided the same day: `--cache` defaults to the abstract's
     flags as written.
 
