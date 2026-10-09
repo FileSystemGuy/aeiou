@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-use aeiou::backend::{BackendKind, MmapConsume, MmapMode};
+use aeiou::backend::{Api, BackendKind, Cache, MmapConsume, MmapMode};
 use aeiou::coord::{Coordinator, Local, Server, Tcp};
 use aeiou::datagen::{self, DatagenOpts, Hosts};
 use aeiou::dryrun;
@@ -130,14 +130,23 @@ struct DatagenArgs {
 struct RunCmd {
     #[command(flatten)]
     run: RunArgs,
-    /// `sync` (buffered POSIX on one thread per actor), `sync-direct` (the same with O_DIRECT),
-    /// `io_uring` (an event loop per thread multiplexing the actors over one ring), `io_uring-direct`,
-    /// `posix-aio` (glibc aio_read/aio_write on one thread per actor), `posix-aio-direct`,
-    /// `libaio` (the kernel AIO calls on the event loop; asynchronous only as `libaio-direct`),
-    /// `mmap` (reads are copies out of a mapping of the file).
-    /// Default: the backend the abstract declares (`sync` when it declares none). Any other is a
-    /// different workload on the storage, and the run says so.
-    #[arg(long = "io-backend", help_heading = "Backend")]
+    /// The API the ops are issued through: `sync` (POSIX calls on one thread per actor),
+    /// `io_uring` (an event loop per thread multiplexing the actors over one ring), `posix-aio`
+    /// (glibc aio_read/aio_write on one thread per actor), `libaio` (the kernel AIO calls on the
+    /// event loop; asynchronous only with --cache direct), `mmap` (reads are page faults on a
+    /// mapping of the file). Default: the API the abstract declares (`sync` when it declares
+    /// none). Any other is a different workload on the storage, and the run says so.
+    #[arg(long = "io-api", value_name = "API", help_heading = "Backend")]
+    io_api: Option<String>,
+    /// `per-open` (each open's own flags decide whether it bypasses the page cache) or `direct` (O_DIRECT on every
+    /// regular-file open; not with `mmap`). Default: the abstract's (`per-open` when it
+    /// declares none). Any other is a different workload on the storage, and the run says so.
+    #[arg(long, value_name = "MODE", help_heading = "Backend")]
+    cache: Option<String>,
+    /// The API and the cache mode in one name, an alias of the pair: `sync`, `sync-direct`,
+    /// `io_uring`, `io_uring-direct`, `posix-aio`, `posix-aio-direct`, `libaio`,
+    /// `libaio-direct`, `mmap`. Not with --io-api or --cache.
+    #[arg(long = "io-backend", value_name = "NAME", help_heading = "Backend")]
     backend: Option<String>,
     /// Required: directory the abstract's paths are relative to (datasets and namespaces live
     /// under it). From the command line, else $AEIOU_ROOT, else `root` in the [run] table of
@@ -258,6 +267,8 @@ struct RunOptions {
     run: RunArgs,
     abstract_path: PathBuf,
     gpus: i64,
+    io_api: Option<String>,
+    cache: Option<String>,
     backend: Option<String>,
     root: PathBuf,
     threads: Option<usize>,
@@ -303,6 +314,8 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     fix_shape(&mut l, &a.run.shape)?;
     l.fixed("gpus", &a.run.gpus, a.run.gpus.is_some())?;
     l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
+    l.fixed("io-api", &a.io_api.clone().unwrap_or_else(|| "the abstract's".into()), a.io_api.is_some())?;
+    l.fixed("cache", &a.cache.clone().unwrap_or_else(|| "the abstract's".into()), a.cache.is_some())?;
     l.fixed("io-backend", &a.backend.clone().unwrap_or_else(|| "the abstract's".into()), a.backend.is_some())?;
     l.fixed("expect-fingerprint", &a.expect_fingerprint, a.expect_fingerprint.is_some())?;
     l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
@@ -336,6 +349,8 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         report_json: l.layered("report-json", a.report_json, None)?,
         report_takes: l.flag("report-takes", neg(a.report_takes, a.no_report_takes), false)?,
         run: a.run,
+        io_api: a.io_api,
+        cache: a.cache,
         backend: a.backend,
         expect_fingerprint: a.expect_fingerprint,
         expect_dataset_ids: a.expect_dataset_ids,
@@ -582,13 +597,33 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
     r
 }
 
+/// The run's backend: --io-backend, an alias of a pair, or --io-api and --cache, each
+/// defaulting to the abstract's.
+fn run_backend(a: &RunOptions, declared: BackendKind) -> Result<BackendKind> {
+    if let Some(name) = &a.backend {
+        if a.io_api.is_some() || a.cache.is_some() {
+            aeiou::usage!("--io-backend {name} names the API and the cache mode; not with --io-api or --cache");
+        }
+        return BackendKind::parse(name).ok_or_else(|| usage::err(format!("--io-backend {name}: not one of {}", aeiou::backend::NAMES)));
+    }
+    let api = match &a.io_api {
+        None => declared.api,
+        Some(n) => Api::parse(n).ok_or_else(|| usage::err(format!("--io-api {n}: not one of {}", aeiou::backend::API_NAMES)))?,
+    };
+    let cache = match &a.cache {
+        None => declared.cache,
+        Some(n) => Cache::parse(n).ok_or_else(|| usage::err(format!("--cache {n}: not one of {}", aeiou::backend::CACHE_NAMES)))?,
+    };
+    BackendKind::of(api, cache).ok_or_else(|| usage::err(format!("--cache direct under --io-api {}: its reads are page faults on a mapping", api.name())))
+}
+
 fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
     let cfg = parse_config(&a.run.shape, a.gpus, a.run.seed)?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
-    let declared = loaded.ast.backend.as_deref().unwrap_or("sync");
-    let backend_name = a.backend.as_deref().unwrap_or(declared);
-    let backend = BackendKind::parse(backend_name).ok_or_else(|| usage::err(format!("--io-backend {}: not one of {}", backend_name, aeiou::backend::NAMES)))?;
+    let declared = aeiou::backend::declared(&loaded.ast)?;
+    let backend = run_backend(a, declared)?;
+    let declared = declared.name();
     let expect_fingerprint = match &a.expect_fingerprint {
         None => None,
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| usage::err(format!("--expect-fingerprint {h}: not hex")))?),
@@ -1090,8 +1125,8 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     let mut out = std::io::BufWriter::new(stdout.lock());
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     l.print(&mut out)?;
-    if let Some(b) = &loaded.ast.backend {
-        writeln!(out, "declared backend {b}")?;
+    if loaded.ast.api.is_some() || loaded.ast.cache.is_some() {
+        writeln!(out, "declared backend {}", aeiou::backend::declared(&loaded.ast)?.name())?;
     }
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(&cfg))?;
     for line in report.total.take_lines() {

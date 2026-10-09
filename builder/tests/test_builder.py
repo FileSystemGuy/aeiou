@@ -346,19 +346,25 @@ def test_check_mode_reports_drift(tmp_path):
     assert r.returncode == 1 and "DRIFT" in r.stdout
 
 
-def test_a_workload_may_declare_its_backend():
-    """Contract 0.3: the API of the traced application, a run's default backend."""
-    with pytest.raises(BuildError, match="backend must be one of"):
-        Workload("w", backend="pread")
-    w = Workload("w", backend="mmap")
+def test_a_workload_may_declare_its_api_and_cache():
+    """Contract 0.6 (`backend` from 0.3 until then): the API of the traced application and its
+    cache mode, a run's default backend; `direct` under `mmap` is no backend."""
+    with pytest.raises(BuildError, match="api must be one of"):
+        Workload("w", api="pread")
+    with pytest.raises(BuildError, match="cache must be one of"):
+        Workload("w", cache="dontcache")
+    with pytest.raises(BuildError, match="page faults"):
+        Workload("w", api="mmap", cache="direct")
+    w = Workload("w", api="libaio", cache="direct")
     d = w.dataset("d", pattern="d/f_{id:06}", count=1, size=const(1), seed=1)
     with w.actor("a", count=1) as a:
         a.stat(d.file(0))
     ast = w.build()
-    assert ast["backend"] == "mmap" and list(ast)[:2] == ["ast", "name"]
+    assert ast["api"] == "libaio" and ast["cache"] == "direct" and list(ast)[:2] == ["ast", "name"]
     examples = pathlib.Path(__file__).resolve().parents[2] / "schema" / "examples"
-    assert "backend" not in json.loads((examples / "train_small_files.ast.json").read_text())
-    assert json.loads((examples / "model_load.ast.json").read_text())["backend"] == "mmap"
+    small = json.loads((examples / "train_small_files.ast.json").read_text())
+    assert "api" not in small and "cache" not in small and "backend" not in small
+    assert json.loads((examples / "model_load.ast.json").read_text())["api"] == "mmap"
 
 
 def test_same_run_needs_input():

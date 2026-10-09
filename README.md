@@ -101,6 +101,15 @@ An abstract goes through five stages, each a tool of the suite.
   safetensors, `libaio` for DiskANN); any other backend is a different workload on the
   storage and the run says so. Anything an `LD_PRELOAD` shim could do under an unmodified
   application belongs to the system under test.
+- **Access is layered, and one run may mix protocols.** Formats sit above the access APIs,
+  and below them each choice is a separate axis: the protocol (POSIX or object) and the
+  endpoint of each dataset and namespace, the API (`sync`, `io_uring`, `libaio`, …), the cache
+  mode (`--cache per-open` or `direct`), the transport (TCP or RDMA), and the buffer (host or
+  GPU memory). Since the protocol belongs to a dataset or namespace rather than to the run,
+  one run can read its prompts from a POSIX tier and its KV chunks from an object tier, as
+  KV-cache engines with several storage tiers do, with the same op stream and fingerprint
+  either way (decided 2026-10-09; the API and cache axes built, the per-namespace protocol
+  and the object engine next; `PROJECT_BRIEF.md` §6 item 25).
 - **Every option has a provenance.** Options resolve through the command line, the
   environment, a TOML file, and the default; what the identity depends on is the command
   line's alone; every invocation prints what it resolved and from where, and on several
@@ -212,8 +221,9 @@ reported; the launcher takes host files and `pdsh`-style ranges).
 
 Not built, in rough order of interest:
 
-- The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included): protocol family
-  and endpoint per namespace, the API and the cache mode as separate axes, transport and
+- The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included; the API
+  and the cache mode as separate axes and contract 0.6 built the same day): protocol family
+  and endpoint per namespace, transport and
   buffer beside them; then object storage through `s3dlio` behind a feature flag (item 17),
   and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only

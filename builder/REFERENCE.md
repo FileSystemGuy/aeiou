@@ -433,9 +433,12 @@ an empty store, then a restarted engine on the filled one, sent the same request
 without the writer's `--seed`, `--gpus`, and parameters is refused before the gate
 (`DESIGN_REVIEW.md` §3.52, decided 2026-10-02).
 
-**The application's API is declared in the script** (contract 0.3, 2026-10-01):
-`Workload("model_load", backend="mmap")`. Leave it out for an application that calls `read`
-and `write`. The runner uses it as the default backend (`runner/REFERENCE.md` §4).
+**The application's API is declared in the script** (contract 0.3, 2026-10-01; `api` and
+`cache` since contract 0.6, 2026-10-09): `Workload("model_load", api="mmap")`. Leave it out
+for an application that calls `read` and `write`. `cache="direct"` declares an application
+that opens every regular file `O_DIRECT` (refused under `mmap`); leave it out when the open
+flags of the ops say what it does. The runner uses both as the default backend
+(`runner/REFERENCE.md` §4).
 
 **`aeiou-trace export`: the trace file of the `trace` node (added 2026-10-02;
 `DESIGN_REVIEW.md` §3.58, `runner/REFERENCE.md` §13).** The same `strace`, through the same

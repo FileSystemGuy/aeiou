@@ -154,7 +154,8 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 **Order of work (2026-10-09, the user's).** The access layers come first (item 25,
 `DESIGN_REVIEW.md` §3.65): (1) ~~decide the axes, the per-namespace binding, the object mapping,
 and the contract change;~~ decided 2026-10-09; (2) refactor the runner to those axes with no
-change of behaviour, with contract 0.6 and mixed protocols;
+change of behaviour, with contract 0.6 and mixed protocols (the two axes, the handle, and
+contract 0.6 built 2026-10-09; the endpoint and protocol per namespace next);
 (3) `s3dlio` as an engine over `file://` against `sync` (item 17). The KV work (the AgentX
 conversation reads, item 21; the `O_DIRECT` rerun; reference-configuration holds) goes on
 beside it when the GPU is free, then datagen resume (item 23). The items below keep their

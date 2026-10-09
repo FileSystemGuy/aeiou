@@ -46,6 +46,8 @@ options (cli > env > config > default)
   param = files=4000 steps=50                                [cli]
   gpus = 8                                                   [cli]
   seed = 1                                                   [cli]
+  io-api = the abstract's                                    [default]
+  cache = the abstract's                                     [default]
   io-backend = the abstract's                                [default]
   root = /mnt/sut                                            [config /etc/aeiou.toml]
   threads = 8                                                [env AEIOU_THREADS]
@@ -125,7 +127,7 @@ sides may come from different layers.
 ## OPTIONS BY KIND
 
 **aeiou run.** Fixed: the abstract, `--gpus`, `--seed`, `--param`, `--params-file`,
-`--io-backend`, `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`,
+`--io-api`, `--cache`, `--io-backend`, `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`,
 `--ignore-limits`. Layered: `--root`, `--threads`, `--buffer-mib`, `--write-compress`,
 `--time-scale`, the io_uring knobs (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`,
 `--defer-taskrun`, `--coop-taskrun`), `--aio-depth`, `--mmap-mode`, `--mmap-consume`,

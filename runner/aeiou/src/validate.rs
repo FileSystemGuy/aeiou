@@ -139,9 +139,17 @@ impl<'a> Checker<'a> {
         if !is_ident(&ast.name) {
             self.err(&vec!["name".into()], "not an identifier");
         }
-        if let Some(b) = &ast.backend {
-            if crate::backend::BackendKind::parse(b).is_none() {
-                self.err(&vec!["backend".into()], format!("`{b}` is not one of {}", crate::backend::NAMES));
+        let api = ast.api.as_deref().map(|a| (a, crate::backend::Api::parse(a)));
+        let cache = ast.cache.as_deref().map(|c| (c, crate::backend::Cache::parse(c)));
+        if let Some((a, None)) = api {
+            self.err(&vec!["api".into()], format!("`{a}` is not one of {}", crate::backend::API_NAMES));
+        }
+        if let Some((c, None)) = cache {
+            self.err(&vec!["cache".into()], format!("`{c}` is not one of {}", crate::backend::CACHE_NAMES));
+        }
+        if let (Some((_, Some(a))), Some((_, Some(c)))) = (api, cache) {
+            if crate::backend::BackendKind::of(a, c).is_none() {
+                self.err(&vec!["cache".into()], "`direct` under `mmap`: its reads are page faults on a mapping");
             }
         }
         if ast.params.contains_key("gpus") {

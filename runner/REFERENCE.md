@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
 | `aeiou datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]… [--ranks R --rank r --coordinator HOST:PORT]` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, then the manifest `.aeiou-dataset.json` at each dataset root. On several hosts each rank writes its slice of the ids and rank 0 writes the manifests once every rank has reported (§5). Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--seed S] [--params-file FILE]… [--param k=v]… [--io-backend sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap (default: the backend the abstract declares, `sync` when it declares none)] [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
+| `aeiou run AST --gpus G --root DIR [--seed S] [--params-file FILE]… [--param k=v]… [--io-api sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] (default: the abstract's, `sync` and `per-open` when it declares none; or `--io-backend NAME`, the pair in one name: sync\|sync-direct\|io_uring\|io_uring-direct\|posix-aio\|posix-aio-direct\|libaio\|libaio-direct\|mmap) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -178,7 +178,13 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   other `--io-backend` the op stream and the fingerprint are the same and the storage sees
   another workload, so the run prints `backend X is not the abstract's (Y)` and the report
   carries both names (§12). `sync` against `sync-direct` is such a difference. `dry-run`
-  prints `declared backend Y` when there is one.
+  prints `declared backend Y` when there is one. *Since contract 0.6 (2026-10-09,
+  `DESIGN_REVIEW.md` §3.65):* a backend is an API and a cache mode. The abstract declares
+  `api` and `cache` (absent: `sync` and `per-open`, the open flags of the ops); `--io-api`
+  and `--cache` each override one, and `--io-backend` names both at once as one of the nine
+  names, each an alias of a pair (`sync-direct` is `--io-api sync --cache direct`), so it is
+  refused with either of the other two. `--cache direct` under `mmap` is refused. The names
+  printed and reported are the nine.
 - **Threads.** One OS thread per actor instance. A `loader` spawns `workers` threads that
   live until the actor ends; a `parallel` ~~spawns `width` threads and joins them before the
   node returns~~ runs its `width` sub-actors on threads the forking actor keeps (the
@@ -1364,7 +1370,7 @@ lower one's value (`options.rs`; the reasoning is `DESIGN_REVIEW.md` §3.60):
 **Two kinds of option.** A *fixed* option is the command line's alone, and the environment
 and the file are refused when they name it: nothing the fingerprint, a dataset id, or a safety
 check depends on may come from a layer the command line does not show. For `run` these are
-the abstract, `--gpus`, `--seed`, `--param`, `--params-file`, `--io-backend`,
+the abstract, `--gpus`, `--seed`, `--param`, `--params-file`, `--io-api`, `--cache`, `--io-backend`,
 `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`, `--ignore-limits`; for
 `datagen` the abstract, `--gpus`, `--param`, `--params-file`, `--dedupe`, `--compress`,
 `--dataset` (the payload is part of what the run compares); for `dry-run` the identity and
@@ -1409,6 +1415,8 @@ options (cli > env > config > default)
   params-file = none                                         [default]
   gpus = 8                                                   [cli]
   seed = 1                                                   [cli]
+  io-api = the abstract's                                    [default]
+  cache = the abstract's                                     [default]
   io-backend = the abstract's                                [default]
   …
   root = /mnt/sut                                            [config /etc/aeiou.toml]

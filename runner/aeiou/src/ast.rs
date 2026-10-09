@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.5";
+pub const AST_VERSION: &str = "0.6";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,10 +20,15 @@ pub struct Ast {
     pub name: String,
     #[serde(default)]
     pub doc: Option<String>,
-    /// The API the application this abstract was traced from issues its I/O through, as an
-    /// `--io-backend` name (v0.3); absent: `sync`. A run uses it unless told otherwise.
+    /// The API the application this abstract was traced from issues its I/O through, an
+    /// `--io-api` name; absent: `sync`. A run uses it unless told otherwise (v0.6, `backend`
+    /// before, v0.3).
     #[serde(default)]
-    pub backend: Option<String>,
+    pub api: Option<String>,
+    /// The application's cache mode, an `--cache` name: `direct` when it opens every regular
+    /// file `O_DIRECT`; absent: `per-open`, the open flags of the op stream (v0.6).
+    #[serde(default)]
+    pub cache: Option<String>,
     #[serde(default)]
     pub params: BTreeMap<String, Param>,
     #[serde(default)]

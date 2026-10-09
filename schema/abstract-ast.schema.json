@@ -9,10 +9,12 @@
     "name",
     "actors"
   ],
+  "if": {"required": ["api"], "properties": {"api": {"const": "mmap"}}},
+  "then": {"properties": {"cache": {"const": "per-open"}}},
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.5",
+      "const": "0.6",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -21,9 +23,13 @@
     "doc": {
       "type": "string"
     },
-    "backend": {
-      "enum": ["sync", "sync-direct", "io_uring", "io_uring-direct", "posix-aio", "posix-aio-direct", "libaio", "libaio-direct", "mmap"],
-      "description": "The API the application this abstract was traced from issues its I/O through, as a runner backend name. Absent: sync. A run uses it by default; a run under another backend imposes another workload on the storage. Not part of the op stream or the fingerprint."
+    "api": {
+      "enum": ["sync", "posix-aio", "libaio", "io_uring", "mmap"],
+      "description": "The API the application this abstract was traced from issues its I/O through (contract 0.6; `backend` before). Absent: sync. A run uses it by default; a run under another API imposes another workload on the storage. Not part of the op stream or the fingerprint."
+    },
+    "cache": {
+      "enum": ["per-open", "direct"],
+      "description": "The application's cache mode (contract 0.6): `direct` when it opens every regular file O_DIRECT; absent: `per-open`, the open flags of the op stream. Not `direct` under api `mmap`. A run uses it by default; another is another workload. Not part of the op stream or the fingerprint."
     },
     "params": {
       "type": "object",

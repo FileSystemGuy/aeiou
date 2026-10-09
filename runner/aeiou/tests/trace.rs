@@ -33,7 +33,7 @@ fn abstract_with(dir: &Path, lines: &str, count: Option<i64>) -> PathBuf {
     std::fs::write(dir.join("t.jsonl"), &text).unwrap();
     let count = count.map(|c| format!(r#""count": {c},"#)).unwrap_or_default();
     let ast = format!(
-        r#"{{"ast": "0.5", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
+        r#"{{"ast": "0.6", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
             "actors": {{"app": {{{count} "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{}"}}}}]}}}}}}"#,
         sha(text.as_bytes())
     );

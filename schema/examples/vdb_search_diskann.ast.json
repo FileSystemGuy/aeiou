@@ -1,8 +1,8 @@
 {
-  "ast": "0.5",
+  "ast": "0.6",
   "name": "vdb_search_diskann",
   "doc": "Beam search over a sector-packed graph index: dependent rounds of `beam` concurrent 4 KiB reads per query.",
-  "backend": "libaio",
+  "api": "libaio",
   "params": {
     "threads": {
       "default": 32,
@@ -537,16 +537,16 @@
   "provenance": {
     "generator": {
       "script": "vdb_search_diskann.py",
-      "sha256": "94ba3088883122fa19aa100bc15b24220a30e14f025a9f1e6f069aabc99f4eff",
+      "sha256": "848b5fb93fa599282fcac66e37bcd0e0649a979d7fad941d7c87b8f2b5780431",
       "builder_version": "0.1.0",
-      "git": "cf63737dfbcd"
+      "git": "927281143c37-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
-      "sha256": "33cb12fe685c0477a2948b64e0a1b95787eeb66217ec71283d1aa47972cec724"
+      "sha256": "f58ab2f23f8662236112836645f4d863a3a44858a5ea36281605f35ea08e77bd"
     },
     "built_twice_identical": true,
-    "ast_sha256": "04099554a1a9f7c734c13269d0a91452e13e9f82b623ad07059a43d0bd9d3cf4"
+    "ast_sha256": "d956c30a9708e91bd5433c6b947aff309ec588f411bf715435f3f3afc94e8b9a"
   }
 }

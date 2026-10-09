@@ -38,7 +38,7 @@ pub const SUBCOMMANDS: &[&str] = &["check", "dry-run", "datagen", "run"];
 /// `AEIOU_*` for another subcommand's option is left alone, and anything else warns. A test in
 /// `main.rs` keeps it equal to the clap definitions.
 pub const ALL_OPTIONS: &[&str] = &[
-    "files", "abstract", "param", "params-file", "gpus", "seed", "io-backend", "root", "threads", "buffer-mib", "write-compress", "time-scale",
+    "files", "abstract", "param", "params-file", "gpus", "seed", "io-api", "cache", "io-backend", "root", "threads", "buffer-mib", "write-compress", "time-scale",
     "iowq-max-workers", "sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "aio-depth", "mmap-mode", "mmap-consume", "rank", "ranks",
     "coordinator", "rank-rotate", "expect-fingerprint", "expect-dataset-id", "max-gap", "require-cold", "drop-caches", "clean-namespaces",
     "ignore-limits", "report-json", "report-takes", "dedupe", "compress", "dataset", "gpu", "steps", "limit", "metrics", "metrics-block",

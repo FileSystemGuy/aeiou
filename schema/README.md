@@ -29,7 +29,7 @@ python3 schema/check.py path/to/x.ast.json   # one file
   distribution parameters.
 - **Identifiers** are `[a-z_][a-z0-9_]*`. `gpus` is a reserved parameter set by `--gpus`.
 - **One format: JSON.** The on-disk form is JSON, pretty-printed with two-space indentation
-  and the builder's key order (`ast`, `name`, `doc`, `backend`, `params`, `datasets`, `namespaces`,
+  and the builder's key order (`ast`, `name`, `doc`, `api`, `cache`, `params`, `datasets`, `namespaces`,
   `actors`, `provenance`), file suffix `.ast.json`. The identity of an AST is the SHA-256 of
   its canonical form: the same JSON with keys sorted, no whitespace, ASCII escapes, floats in
   Python `repr` (shortest round-trip), and the `provenance` block removed. `check.py` prints
@@ -38,11 +38,16 @@ python3 schema/check.py path/to/x.ast.json   # one file
   (PyYAML) and YAML 1.2 (the Rust crates) parse the same bytes differently, `serde_yaml` is
   unmaintained, and nobody hand-writes ASTs, so the readability YAML bought was not worth a
   second grammar on the contract.
-- **Declared backend** (0.3, 2026-10-01). The optional root key `backend` names the API the
-  traced application issues its I/O through, as a runner backend name (`sync`, `mmap`, …);
-  absent means `sync`. It is part of the document and of its hash, and of nothing else: the op
-  stream and the fingerprint are the same under every backend. `aeiou run` uses it by
-  default, and a run under another backend reports both (`DESIGN_REVIEW.md` §3.48).
+- **Declared backend** (0.3, 2026-10-01; two keys since 0.6, 2026-10-09). ~~The optional
+  root key `backend` names the API the traced application issues its I/O through, as a
+  runner backend name (`sync`, `mmap`, …); absent means `sync`.~~ The optional root key `api`
+  names the API the traced application issues its I/O through (`sync`, `io_uring`,
+  `posix-aio`, `libaio`, `mmap`); absent means `sync`. The optional `cache` is `direct` for
+  an application that opens every regular file `O_DIRECT`, never under `mmap` (the schema
+  and the validator refuse the pair); absent means `per-open`, the open flags of the ops.
+  They are part of the document and of its hash, and of nothing else: the op stream and the
+  fingerprint are the same under every backend. `aeiou run` uses them by default, and a run
+  under another backend reports both (`DESIGN_REVIEW.md` §3.48, §3.65).
 - **No site ids.** A draw's site is its structural path in the tree (the JSON pointer of the
   node). Two builds of the same source therefore agree on every site without coordination, and
   reordering two independent statements changes the sites, which is intended: they are
@@ -375,3 +380,8 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
   string. Every committed AST was regenerated; three fingerprints changed, not from the
   contract but because the three KV-cache abstracts now draw `keep` once per round of open
   conversations with the new form. Reasoning in `DESIGN_REVIEW.md` §3.57.
+- **0.6** (2026-10-09): the root key `backend` replaced by `api` and `cache` (§1), the
+  backend's two axes (`DESIGN_REVIEW.md` §3.65). A 0.5 document's `backend` maps to the pair
+  its name is an alias of (`mmap` to `api: mmap`, `libaio-direct` to `api: libaio, cache:
+  direct`); the committed ASTs declared only `mmap` and `libaio`. Every committed AST was
+  regenerated; no fingerprint changed.

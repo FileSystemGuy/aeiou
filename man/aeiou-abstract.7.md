@@ -49,9 +49,12 @@ of the operation's kind, actor, indices, effective offset, length, flags, and pa
 order, phases, `expect` lists, and results are not hashed. Two runs with the same
 fingerprint executed the same multiset of positioned operations.
 
-**Backend.** The optional root key `backend` names the API the traced application issues
-its I/O through (`sync`, `mmap`, ...); absent means `sync`. The runner uses it by default; the
-operation stream and the fingerprint are the same under every backend.
+**Backend.** The optional root key `api` names the API the traced application issues its
+I/O through (`sync`, `io_uring`, `posix-aio`, `libaio`, `mmap`); absent means `sync`. The
+optional `cache` is `direct` for an application that opens every regular file `O_DIRECT`
+(not under `mmap`); absent means `per-open`, the open flags of the operations. The runner
+uses both by default; the operation stream and the fingerprint are the same under every
+backend. (Contract 0.6; one key `backend` from 0.3 until then.)
 
 ## FORM
 
@@ -60,7 +63,7 @@ its kind: `{"read": {...}}`, `{"add": [a, b]}`, `{"zipf": {"s": 1.1}}`, `{"ref":
 Sizes are byte integers, durations nanosecond integers; floats appear only as
 probabilities, exponents, and distribution parameters. Identifiers are
 `[a-z_][a-z0-9_]*`. The top-level keys, in the builder's order: `ast` (the contract
-version), `name`, `doc`, `backend`, `params`, `datasets`, `namespaces`, `actors`,
+version), `name`, `doc`, `api`, `cache`, `params`, `datasets`, `namespaces`, `actors`,
 `provenance`.
 
 The on-disk form is pretty-printed JSON, two-space indentation, suffix `.ast.json`. JSON

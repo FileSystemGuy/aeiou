@@ -274,11 +274,21 @@ turns it off, and the last one on the line wins.
 
 **Backend**
 
-- **--io-backend** *BACKEND*
+- **--io-api** *API*
 
-  The I/O API the operations are issued through; see BACKENDS. Default: the backend the
-  abstract declares, `sync` when it declares none. Any other backend is a different
-  workload on the storage, and the run says so and records both names.
+  The I/O API the operations are issued through: `sync`, `io_uring`, `posix-aio`,
+  `libaio`, or `mmap`; see BACKENDS. Default: the API the abstract declares, `sync` when it
+  declares none. Any other is a different workload on the storage, and the run says so and
+  records both backends.
+- **--cache** *MODE*
+
+  `per-open` (each open's own flags decide whether it bypasses the page cache) or `direct` (`O_DIRECT` on
+  every regular-file open; not with `mmap`). Default: the abstract's, `per-open` when it
+  declares none. Any other is a different workload on the storage, as for `--io-api`.
+- **--io-backend** *NAME*
+
+  The API and the cache mode in one name, an alias of the pair (BACKENDS); not with
+  `--io-api` or `--cache`.
 - **--root** *DIR*
 
   Required, from some layer. The directory the abstract's paths are relative to; datasets
@@ -410,7 +420,8 @@ turns it off, and the last one on the line wins.
 
 The abstract is identical under every backend; a backend maps operations to an API and
 never changes the stream or the fingerprint. A run compares only with runs under the same
-backend.
+backend. A backend is an API (`--io-api`) and a cache mode (`--cache`); each name below is
+an alias of the pair (`--io-backend`), `sync-direct` of `--io-api sync --cache direct`.
 
 | Name | API |
 |---|---|

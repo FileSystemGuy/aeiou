@@ -75,6 +75,48 @@ impl BackendKind {
 }
 
 pub const NAMES: &str = "sync, sync-direct, io_uring, io_uring-direct, posix-aio, posix-aio-direct, libaio, libaio-direct, mmap";
+pub const API_NAMES: &str = "sync, posix-aio, libaio, io_uring, mmap";
+pub const CACHE_NAMES: &str = "per-open, direct";
+
+impl Api {
+    pub fn parse(s: &str) -> Option<Api> {
+        match s {
+            "sync" => Some(Api::Sync),
+            "posix-aio" => Some(Api::PosixAio),
+            "libaio" => Some(Api::LibAio),
+            "io_uring" | "io-uring" => Some(Api::Uring),
+            "mmap" => Some(Api::Mmap),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Api::Sync => "sync",
+            Api::PosixAio => "posix-aio",
+            Api::LibAio => "libaio",
+            Api::Uring => "io_uring",
+            Api::Mmap => "mmap",
+        }
+    }
+}
+
+impl Cache {
+    pub fn parse(s: &str) -> Option<Cache> {
+        match s {
+            "per-open" => Some(Cache::PerOpen),
+            "direct" => Some(Cache::Direct),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Cache::PerOpen => "per-open",
+            Cache::Direct => "direct",
+        }
+    }
+}
 
 /// What the `mmap` backend does before it touches (or copies) a read's range of the mapping.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +193,13 @@ pub struct MmapStats {
 }
 
 impl BackendKind {
+    /// The pair, unless it is one no backend is: `O_DIRECT` under `mmap`, whose reads are
+    /// page faults on a mapping (`DESIGN_REVIEW.md` §3.65).
+    pub fn of(api: Api, cache: Cache) -> Option<BackendKind> {
+        (api != Api::Mmap || cache == Cache::PerOpen).then_some(BackendKind { api, cache })
+    }
+
+    /// One of the nine names, each an alias of a pair.
     pub fn parse(s: &str) -> Option<BackendKind> {
         match s {
             "sync" => Some(BackendKind::Sync),
@@ -215,6 +264,20 @@ impl BackendKind {
             Api::Sync | Api::LibAio | Api::Uring => Box::new(sync),
         }
     }
+}
+
+/// The backend an abstract declares: its `api` and `cache`, `sync` and `per-open` when
+/// it names neither (`aeiou check` has refused names that are not, and the pair no backend is).
+pub fn declared(ast: &crate::ast::Ast) -> anyhow::Result<BackendKind> {
+    let api = match &ast.api {
+        None => Api::Sync,
+        Some(a) => Api::parse(a).ok_or_else(|| anyhow::anyhow!("api `{a}` is not one of {API_NAMES}"))?,
+    };
+    let cache = match &ast.cache {
+        None => Cache::PerOpen,
+        Some(c) => Cache::parse(c).ok_or_else(|| anyhow::anyhow!("cache `{c}` is not one of {CACHE_NAMES}"))?,
+    };
+    BackendKind::of(api, cache).ok_or_else(|| anyhow::anyhow!("cache `direct` under api `mmap`"))
 }
 
 pub const ALIGN: usize = 4096;

@@ -4172,7 +4172,10 @@ buffer axis), and a transport row joins the report.
 
 - **The run-wide `--cache` defaults to the abstract's flags as written**, not to "buffered"
   (decided the same day): an abstract may carry `DIRECT` on some opens, and "buffered" would
-  strip it.
+  strip it. The value is named `per-open` (the user's choice, the same day, over the first
+  name `as-written`, which said what the runner does, nothing, rather than what happens to
+  the I/O: each open's own flags decide whether it goes through the page cache). A future
+  `buffered`, stripping `O_DIRECT` from every open, would be a third value.
 
 **Driver integration (the user's note, 2026-10-09).** Once `s3dlio` starts its runtime it
 never stops it: the first object call builds a global multi-thread tokio runtime
@@ -4186,6 +4189,20 @@ through every later phase, and the Python process's CPU, memory, and threads wou
 a phase's report, which counts its own process. A process per phase also gives each phase
 its own limit checks and failure isolation, and matches the multi-host launch, which is
 already a process per host.
+
+**Built (2026-10-09), the first two parts of step 2.** *The runner's backend as two axes:*
+`BackendKind` is a pair, `Api` (`sync`, `posix-aio`, `libaio`, `io_uring`, `mmap`) and
+`Cache` (`per-open`, `direct`); the nine names are aliases of pairs and print as before,
+and `BackendKind::of` refuses `direct` under `mmap`. Every `Backend` method takes the open
+file's handle (`OpenFile`) in place of a descriptor, and `open` returns one: the handle is
+still a descriptor (and, under `mmap`, its mapping), and an object handle joins it in step 3.
+*Contract 0.6:* `backend` replaced by `api` and `cache` (the user chose both keys over `api`
+alone, though no committed abstract declares `cache`: an application that opens every file
+`O_DIRECT` says so in one key rather than on every open); the schema and the validator refuse
+`direct` under `mmap`; `Workload(api=, cache=)`; every AST regenerated, every hash re-recorded,
+no fingerprint changed. *The command line:* `--io-api` and `--cache` (default: the abstract's),
+`--io-backend` kept as the pair in one name and refused with either. Not yet: the endpoint
+and protocol per namespace (`--endpoint`), the rest of step 2.
 
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's

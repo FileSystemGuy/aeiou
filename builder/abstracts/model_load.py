@@ -19,7 +19,7 @@ real model's table is a parameter file built by `aeiou-params safetensors` from 
 """
 from aeiou import *
 
-w = Workload("model_load", backend="mmap",     # safetensors maps the shards and never calls read
+w = Workload("model_load", api="mmap",     # safetensors maps the shards and never calls read
              doc="Every process reads every safetensors shard, touching its tensor-parallel slice of each tensor (fan-in G).")
 P = w.P
 w.param("shards", 2, unit="count", doc="[config]; 4 here would be a 20 GiB model, 2 keeps the example short")
