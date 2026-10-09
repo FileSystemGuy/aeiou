@@ -368,7 +368,7 @@
       "script": "vdb_search_ivf.py",
       "sha256": "e90f77f8f5a127c8f7b7914d57bb4eac7d6c043741365e0a80841708ed7cdcf1",
       "builder_version": "0.1.0",
-      "git": "ddb845fffc77-dirty"
+      "git": "26415a1be282"
     },
     "python": "3.12.13",
     "lock": {

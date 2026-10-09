@@ -233,7 +233,7 @@ probes write a one-row file in memory with the library; the libraries are the `f
 extra and are pre-imported by the hermetic child. Arrow IPC, MDS, and Megatron are not
 written yet (`DESIGN_REVIEW.md` §3.28 says why).
 
-**`aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G] [--dedupe D]
+**`aeiou-datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--gpus G] [--dedupe D]
 [--compress C] [--threads N] [--dataset NAME]… [--config FILE]** writes every dataset that has a format class:
 names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
 bytes from `dgen-py` 0.3.0 under the `aeiou-positional/2` wrapper (bit-identical to the Rust
@@ -432,6 +432,14 @@ an empty store, then a restarted engine on the filled one, sent the same request
 `input` and `same_run` (contract 0.4: `w.namespace(..., input=True, same_run=True)`), so a run
 without the writer's `--seed`, `--gpus`, and parameters is refused before the gate
 (`DESIGN_REVIEW.md` §3.52, decided 2026-10-02).
+
+**Where a dataset or namespace lives is declared in the script** (contract 0.6,
+2026-10-09): `w.dataset(..., protocol="object")`, `w.regions(..., protocol=...)`,
+`w.namespace(..., protocol=...)` for one the application reaches through an object store;
+leave it out for a file system. Namespaces sharing a root declare one protocol (V17). A run
+places each with `--endpoint` (`runner/REFERENCE.md` §4), and `aeiou-datagen` takes the same
+flag; the protocol is not part of a dataset id. The runner refuses `object` until its object
+engine is built (`DESIGN_REVIEW.md` §3.65).
 
 **The application's API is declared in the script** (contract 0.3, 2026-10-01; `api` and
 `cache` since contract 0.6, 2026-10-09): `Workload("model_load", api="mmap")`. Leave it out

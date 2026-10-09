@@ -4112,7 +4112,7 @@ one home, the backend name, when each binds to something different:
 | `rename` | copy and `DELETE` | refusable per store; not atomic |
 | `mkdir`, `rmdir` | none | prefixes are not objects |
 | `lseek`, `fadvise`, `ioctl`, `fsync`, `fdatasync` | local | an upload is durable at its `close` |
-| `write` not sequential from 0, `O_APPEND`, `ftruncate`, `fallocate`, a read past a writer's end | refused | a new validity rule (V16) at `aeiou check`, as V9 refuses an access mode a format class lacks |
+| `write` not sequential from 0, `O_APPEND`, `ftruncate`, `fallocate`, a read past a writer's end | refused | a new validity rule (~~V16~~ V18: V16 was already the `trace` rule of §3.58, and V17 went to the protocol of namespaces sharing a root, both noted 2026-10-09) at `aeiou check`, as V9 refuses an access mode a format class lacks |
 
 The manifests (`.aeiou-dataset.json`, `.aeiou-namespace.json`) become objects at the
 prefix's root; `datagen` writes through the same engine. The fingerprint is untouched, as
@@ -4128,7 +4128,7 @@ fields and every AST regenerated.
 
 **Order of work.**
 
-1. This entry, decided: the axes, the per-namespace binding, the mapping and V16, the
+1. This entry, decided: the axes, the per-namespace binding, the mapping and ~~V16~~ V18, the
    contract change. Decided 2026-10-09.
 2. The runner refactored without a change of behaviour: a handle the engine owns instead of
    a descriptor, the backend name split into API and `--cache` with the nine names as
@@ -4207,8 +4207,31 @@ no fingerprint changed. *The command line:* `--io-api` and `--cache` (default: t
 ~~`--io-backend` kept as the pair in one name and refused with either.~~ *Later the same day:*
 `--io-backend` and the nine names removed (above); a run prints and reports `io-api X  cache
 Y` (`io_api`, `cache`, `io_api_declared`, `cache_declared` in the report), and the nine
-constants remain only as the code's shorthand for the valid pairs. Not yet: the endpoint
-and protocol per namespace (`--endpoint`), the rest of step 2.
+constants remain only as the code's shorthand for the valid pairs. ~~Not yet: the endpoint
+and protocol per namespace (`--endpoint`), the rest of step 2.~~
+
+**Built (2026-10-09), step 2c: the protocol and the endpoint per dataset and namespace.**
+*Contract:* the optional `protocol` (`posix`, `object`) on `files` and `regions` datasets and
+on namespaces, folded into 0.6 since nobody had used 0.6 yet and no committed AST changes;
+rule V17, namespaces sharing a root declare one protocol (datasets cannot share a root, V13).
+The protocol is left out of a dataset id and of a namespace's resolved definition, in both
+writers: where a corpus lives is not what it is. *The runner:* `--endpoint NAME=DIR`
+(repeatable, layered like `--root`, the first list among the layered options: a higher
+layer's list replaces a lower one's whole) on `aeiou run`, `aeiou datagen`, and
+`aeiou-datagen`. Choices made here, open to revision: an endpoint places the name's *root
+directory*, not a second `--root` (a path keeps its part below the root); a path falls under
+the longest placed root that is a prefix of it, so a dataset rooted inside a placed namespace
+moves with it unless placed itself (the KV abstracts' `kv/sys` inside `kv`); names sharing a
+root share its place, and two endpoints for one root are refused; a `trace` node's paths
+stay under `--root`. Every path goes through one function (`Endpoints::path`, and
+`datagen.placement` in Python): both drivers' ops, the manifests, the emptiness check and
+clean, the residency check, both writers. *Gaps, recorded:* the mount counters still sample
+`--root`'s mount alone, so the run warns when an endpoint is on another file system (several
+mounts in the report is a format change, left for when it is needed); `object` is refused by
+`run` and both writers until the object engine (step 3), and endpoints are directories only.
+A run placing the KV abstract's system prompts and its namespace in two directories issues
+the dry run's fingerprint and leaves nothing under `--root` (`tests/run.rs`); the Python
+writer and the runner agree on a placed container dataset (`test_formats.py`).
 
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's

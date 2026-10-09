@@ -76,6 +76,11 @@ def _reserved(pattern: str, what: str):
                              f"reserved for the dataset manifest (schema/README.md V13)")
 
 
+def _protocol(protocol, what: str) -> None:
+    """A dataset's or namespace's protocol (contract 0.6): `posix` (absent) or `object`."""
+    if protocol is not None and protocol not in ("posix", "object"):
+        raise BuildError(f"{what}: protocol must be posix or object")
+
 def _root(pattern: str) -> str:
     return pattern.split("{", 1)[0].rpartition("/")[0]
 
@@ -228,10 +233,12 @@ class Workload:
 
     # ---- datasets ----
     def dataset(self, name: str, *, pattern: str, count, size, seed: int, access: str | None = None,
-                samples_per_file=None, chunk=None, format: dict | None = None,
+                samples_per_file=None, chunk=None, format: dict | None = None, protocol: str | None = None,
                 doc: str | None = None) -> Dataset:
-        """A `files` dataset: files named by `pattern`, sizes drawn from `seed`."""
+        """A `files` dataset: files named by `pattern`, sizes drawn from `seed`. `protocol`:
+        `object` for one the application reads from an object store; absent, a file system."""
         self._declare(name, "dataset")
+        _protocol(protocol, f"dataset {name}")
         fields = set(FIELD.findall(pattern))
         if not fields <= {"id", "k"} or "id" not in fields:
             raise BuildError(f"dataset {name}: pattern fields must be `id` (and `k` for chunks), "
@@ -246,27 +253,29 @@ class Workload:
         _reserved(pattern, f"dataset {name}")
         self._claim_root(_root(pattern), name)
         spec = {"pattern": pattern, "count": lift(count, "count"), "size": distref(size),
-                "seed": _seed(seed, name), "access": access,
+                "seed": _seed(seed, name), "protocol": protocol, "access": access,
                 "samples_per_file": None if samples_per_file is None else lift(samples_per_file),
                 "chunk": None if chunk is None else lift(chunk, "chunk"), "format": format, "doc": doc}
         self._datasets[name] = ds = Dataset(name, "files", spec)
         ds.format = fmt_obj
         return ds
 
-    def regions(self, name: str, *, file: str, count, slot, size, seed: int,
+    def regions(self, name: str, *, file: str, count, slot, size, seed: int, protocol: str | None = None,
                 doc: str | None = None) -> Dataset:
         """A `regions` dataset: `count` fixed-slot regions inside one file."""
         self._declare(name, "dataset")
+        _protocol(protocol, f"dataset {name}")
         _reserved(file, f"dataset {name}")
         self._claim_root(file.rpartition("/")[0], name)
         spec = {"file": file, "count": lift(count, "count"), "slot": lift(slot, "slot"),
-                "size": distref(size), "seed": _seed(seed, name), "doc": doc}
+                "size": distref(size), "seed": _seed(seed, name), "protocol": protocol, "doc": doc}
         self._datasets[name] = ds = Dataset(name, "regions", spec)
         return ds
 
     # ---- namespaces ----
     def namespace(self, name: str, *, pattern: str, fields: dict, size, seed: int,
-                  input: bool = False, same_run: bool = False, doc: str | None = None) -> Namespace:
+                  input: bool = False, same_run: bool = False, protocol: str | None = None,
+                  doc: str | None = None) -> Namespace:
         """Workload-created objects. `size` is an expression over the fields and params, or
         "as_written" (the sum of the writes that create the object; schema/README.md V4).
         `input=True`: a previous run wrote the objects and this abstract only reads them; the
@@ -298,12 +307,17 @@ class Workload:
             for n in walk(size):
                 if isinstance(n, Ref) and n.name not in fields:
                     raise BuildError(f"namespace {name}: size may reference only its fields and params")
+        _protocol(protocol, f"namespace {name}")
         for other in self._namespaces.values():
             if _root(other.spec["pattern"]) == nroot and other.input != bool(input):
                 raise BuildError(f"namespace {name}: shares root {nroot!r}/ with namespace {other.name} but "
                                  f"`input` differs; a root has one manifest (schema/README.md V14)")
+            if _root(other.spec["pattern"]) == nroot and (other.spec.get("protocol") or "posix") != (protocol or "posix"):
+                raise BuildError(f"namespace {name}: shares root {nroot!r}/ with namespace {other.name} but "
+                                 f"`protocol` differs; a root is in one place (schema/README.md V17)")
         spec = {"pattern": pattern, "fields": fields, "size": size, "seed": _seed(seed, name),
-                "input": True if input else None, "same_run": True if same_run else None, "doc": doc}
+                "input": True if input else None, "same_run": True if same_run else None,
+                "protocol": protocol, "doc": doc}
         self._namespaces[name] = ns = Namespace(name, spec, fields, input=bool(input))
         return ns
 

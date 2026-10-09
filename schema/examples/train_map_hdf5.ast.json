@@ -304,7 +304,7 @@
       "script": "train_map_hdf5.py",
       "sha256": "e7dd541cfb2794306c465b1abce486c0b894047f1d58afda8f4596ab25a75a94",
       "builder_version": "0.1.0",
-      "git": "ddb845fffc77"
+      "git": "26415a1be282"
     },
     "python": "3.12.13",
     "lock": {

@@ -79,6 +79,7 @@ def resolved_dataset(ast: dict, name: str, values: dict) -> dict:
     for inner in entry.values():
         if isinstance(inner, dict):
             inner.pop("doc", None)
+            inner.pop("protocol", None)   # where the dataset lives, not what it is
     return json.loads(canonical_json(entry))
 
 
@@ -134,11 +135,70 @@ class Payload:
         return b"".join(out)
 
 
+# ---- where each dataset lives (the runner's endpoint.rs) ----
+
+def _roots(ast: dict) -> dict:
+    """Each dataset's and namespace's (protocol, root relative to --root)."""
+    out = {}
+    for name, d in ast.get("datasets", {}).items():
+        kind, body = next(iter(d.items()))
+        root = body["file"].rpartition("/")[0] if kind == "regions" else Pattern(body["pattern"]).root()
+        out[name] = (body.get("protocol", "posix"), root)
+    for name, n in ast.get("namespaces", {}).items():
+        out[name] = (n.get("protocol", "posix"), Pattern(n["pattern"]).root())
+    return out
+
+
+def placement(ast: dict, root: pathlib.Path, given: list):
+    """`--endpoint NAME=DIR`: the function from a path relative to --root to where it lives.
+    An endpoint places a name's root directory; a path falls under the longest placed root
+    that is a prefix of it, else under --root; names sharing a root share its place
+    (DESIGN_REVIEW.md §3.65). Directories only, for `posix` names, until the object engine."""
+    roots = _roots(ast)
+    for name, (proto, _) in roots.items():
+        if proto == "object":
+            raise BuildError(f"`{name}` is declared `protocol: object`, and the object engine is not built yet (DESIGN_REVIEW.md §3.65, step 3)")
+    placed: dict[str, tuple[list, pathlib.Path]] = {}
+    for g in given:
+        name, sep, d = g.partition("=")
+        if not sep:
+            raise usage.UsageError(f"--endpoint {g}: expected NAME=DIR")
+        if name not in roots:
+            raise usage.UsageError(f"--endpoint {g}: the abstract has no dataset or namespace `{name}`")
+        if "://" in d:
+            raise usage.UsageError(f"--endpoint {g}: only a directory for a `posix` dataset or namespace; object endpoints come with the object engine (DESIGN_REVIEW.md §3.65, step 3)")
+        if not d:
+            raise usage.UsageError(f"--endpoint {g}: no directory")
+        r = roots[name][1]
+        if r in placed:
+            names, at = placed[r]
+            if name in names:
+                raise usage.UsageError(f"--endpoint {name}: given twice")
+            if at != pathlib.Path(d):
+                raise usage.UsageError(f"--endpoint {g}: `{name}` shares root `{r}/` with `{'`, `'.join(names)}`, placed at {at}; a root is in one place")
+            names.append(name)
+        else:
+            placed[r] = ([name], pathlib.Path(d))
+    order = sorted(placed.items(), key=lambda kv: (-len(kv[0]), kv[0]))
+
+    def at(rel: str) -> pathlib.Path:
+        for r, (_, d) in order:
+            if r == "":
+                return d / rel
+            if rel == r:
+                return d
+            if rel.startswith(r + "/"):
+                return d / rel[len(r) + 1:]
+        return root / rel
+    return at
+
+
 # ---- one dataset ----
 
 class Job:
-    def __init__(self, ast, name, values, root: pathlib.Path, dedupe: int, compress: int):
-        self.ast, self.name, self.values, self.root = ast, name, values, root
+    def __init__(self, ast, name, values, at, dedupe: int, compress: int):
+        """`at`: where a path relative to --root lives (`placement`)."""
+        self.ast, self.name, self.values, self.at = ast, name, values, at
         self.resolved = resolved_dataset(ast, name, values)
         body = self.resolved["files"]
         self.fmt = body["format"]
@@ -164,7 +224,7 @@ class Job:
         sizes = self.sizes(file)
         geo = FileGeometry(self.layout, sizes)
         rel = self.pattern.format(id=file)
-        path = self.root / rel
+        path = self.at(rel)
         path.parent.mkdir(parents=True, exist_ok=True)
         # `aeiou-positional/2`: `dedupe` consecutive files share a unit, whatever the count
         payload = Payload(self.seed, file // self.dedupe, self.compress)
@@ -206,6 +266,7 @@ def parser() -> usage.Parser:
     ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE", help="Override a parameter: `--param name=value` (JSON; a bare word is a string)")
     ap.add_argument("--gpus", type=int, default=1, help="Instance count, for dataset definitions that reference `gpus` [default: 1]")
     ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="Required: directory the abstract's paths are relative to. From the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
+    ap.add_argument("--endpoint", action="append", metavar="NAME=DIR", help="Put the root directory of the abstract's dataset NAME at DIR instead of under --root (repeatable; names sharing a root share its place). From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the [datagen] table of the config file (an array)")
     ap.add_argument("--threads", type=int, help="Writer threads (default: all cores)")
     ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` consecutive files share content [default: 1]")
     ap.add_argument("--compress", type=int, default=1, help="Compression ratio: the last (C−1)/C of every 1 MiB block is zeros [default: 1]")
@@ -242,6 +303,7 @@ def resolve(a, ap: usage.Parser | None = None) -> options.Layers:
     layers.fixed("compress", a.compress, a.compress != 1)
     layers.fixed("dataset", a.dataset, bool(a.dataset))
     a.root = missing.want(layers.layered("root", a.root, pathlib.Path), *usage.root("datagen"))
+    a.endpoint = layers.layered("endpoint", a.endpoint, list) or []
     a.threads = layers.layered("threads", a.threads, int)
     if a.threads is None:
         a.threads = os.cpu_count() or 1
@@ -274,6 +336,7 @@ def _main(a, ap: usage.Parser) -> int:
     values = param_values(ast, sets, overrides, a.gpus)
     print(f"abstract {ast['name']}  sha256 {sha}")
     layers.print()
+    at = placement(ast, a.root, a.endpoint)
     provenance = {"abstract": ast["name"], "ast_sha256": sha, "params": values,
                   "param_files": [{"path": str(p), "sha256": params_mod.file_sha256(p)} for p in a.params_file]}
     wanted = set(a.dataset)
@@ -287,8 +350,8 @@ def _main(a, ap: usage.Parser) -> int:
                 raise BuildError(f"dataset `{name}` has no format class: `aeiou datagen` (the Rust writer) writes it")
             print(f"dataset {name}: no format class, left to `aeiou datagen`")
             continue
-        job = Job(ast, name, values, a.root, a.dedupe, a.compress)
-        root = a.root / job.rel_root
+        job = Job(ast, name, values, at, a.dedupe, a.compress)
+        root = at(job.rel_root)
         if root.exists() and any(root.iterdir()):
             raise BuildError(f"dataset `{name}`: {root} is not empty; datasets are read-only, remove it first")
         root.mkdir(parents=True, exist_ok=True)

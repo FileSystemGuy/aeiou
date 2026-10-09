@@ -43,7 +43,7 @@ fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Co
 
 fn gen(loaded: &aeiou::Loaded, cfg: &Config, model: &Model<'_>, root: &PathBuf) {
     let params = Params::new(&loaded.ast, cfg).unwrap();
-    let opts = DatagenOpts { root: root.clone(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
+    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
     let mut log = Vec::new();
     datagen(loaded, cfg, &params, model, &opts, None, &mut log).unwrap();
 }
@@ -51,6 +51,7 @@ fn gen(loaded: &aeiou::Loaded, cfg: &Config, model: &Model<'_>, root: &PathBuf) 
 fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
     RunOpts {
         root: root.clone(),
+        endpoints: Default::default(),
         backend,
         buffer_bytes: 1 << 20,
         threads: 0,
@@ -132,7 +133,7 @@ fn manifest_mismatch_and_missing_are_refused() {
     // datagen refuses a non-empty root
     let (loaded3, cfg3, model3) = leaked_model("train_small_files", config(1, 1, &[("files", "50")]));
     let params = Params::new(&loaded3.ast, cfg3).unwrap();
-    let o = DatagenOpts { root: root.clone(), threads: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
+    let o = DatagenOpts { root: root.clone(), endpoints: Default::default(), threads: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
     let mut log = Vec::new();
     assert!(datagen(loaded3, cfg3, &params, model3, &o, None, &mut log).is_err());
     std::fs::remove_dir_all(&root).unwrap();
@@ -189,6 +190,37 @@ fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
     assert!(r.stats.threads >= 1 + 2, "the actor's thread runs slot 0 itself: two pool threads for three slots, and one more under any slot that loads two chunks at once: {}", r.stats.threads);
     assert!(r.stats.expected_errors > 0, "the ENOTTY of the terminal probe in every open (ENOENT lookups and EEXIST mkdirs until the 2026-10-02 trace)");
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
+    // `--endpoint` (DESIGN_REVIEW §3.65): the system prompts' dataset in one directory, the KV namespace in
+    // another, the sub-agent prompts (no endpoint, root `kv/sub` inside the namespace's `kv`) moving with the
+    // namespace; nothing under --root, and the fingerprint of the run under --root alone
+    let base = tmpdir("kvplace");
+    let (root, sys, kv) = (base.join("root"), base.join("sys"), base.join("kv"));
+    std::fs::create_dir_all(&root).unwrap();
+    let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
+    let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(1, 5, &params));
+    let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &[format!("sysp={}", sys.display()), format!("kv={}", kv.display())]).unwrap();
+    let dparams = Params::new(&loaded.ast, cfg).unwrap();
+    let dopts = DatagenOpts { root: root.clone(), endpoints: endpoints.clone(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
+    datagen(loaded, cfg, &dparams, model, &dopts, None, &mut Vec::new()).unwrap();
+    assert!(sys.join("0000/blk_0000").exists() && sys.join(".aeiou-dataset.json").exists());
+    assert!(kv.join("sub/.aeiou-dataset.json").exists());
+    assert!(!root.join("kv").exists());
+    let mut o = opts(&root, BackendKind::Sync);
+    o.endpoints = endpoints;
+    assert!(run::check_datasets(loaded, cfg, &root).is_err(), "nothing under --root");
+    run::check_datasets(loaded, cfg, &o).unwrap();
+    run::prepare_namespaces(&loaded.ast, &o, false).unwrap();
+    let (fp, ops, _) = dry_fingerprint(model);
+    let r = go(model, o);
+    assert_eq!((r.stats.fingerprint, r.stats.ops), (fp, ops));
+    let chunks = std::fs::read_dir(&kv).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".pt")).count();
+    assert!(chunks > 0, "the namespace's chunks are written at its endpoint");
+    assert!(!root.join("kv").exists());
+    std::fs::remove_dir_all(&base).unwrap();
 }
 
 #[test]
@@ -674,7 +706,7 @@ fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
     let (l4, c4, m4) = leaked_model("train_small_files", config(1, 1, &[("files", "4")]));
     for (l, c, m, root) in [(l6, c6, m6, &six), (l4, c4, m4, &four)] {
         let params = Params::new(&l.ast, c).unwrap();
-        let opts = DatagenOpts { root: root.clone(), threads: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
+        let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), threads: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
         datagen(l, c, &params, m, &opts, None, &mut Vec::new()).unwrap();
     }
     let file = |root: &PathBuf, id: i64| std::fs::read(root.join(m6.datasets[0].file_path(id, None).unwrap().as_ref())).unwrap();

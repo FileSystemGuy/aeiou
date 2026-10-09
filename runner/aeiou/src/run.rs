@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
@@ -29,6 +29,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{Ast, Node};
+use crate::endpoint::Place;
 use crate::backend::{errno_name, Backend, BackendKind, MmapConsume, MmapMode, MmapStats, OpenFile, ALIGN};
 use crate::coord::{Coordinator, Local};
 use crate::counters::{HostCounters, Sampler};
@@ -218,6 +219,8 @@ impl MmapReport {
 pub struct RunOpts {
     /// The directory the abstract's paths are relative to.
     pub root: PathBuf,
+    /// The datasets and namespaces placed elsewhere (`endpoint.rs`).
+    pub endpoints: crate::endpoint::Endpoints,
     pub backend: BackendKind,
     /// Per-thread read and write buffer ring, bytes.
     pub buffer_bytes: usize,
@@ -255,6 +258,19 @@ pub struct RunOpts {
     pub require_cold: bool,
     /// `sync` and drop the page cache, dentries, and inodes before the start gate (`cold`).
     pub drop_caches: bool,
+}
+
+impl RunOpts {
+    /// Where the abstract's path `rel` lives: under its endpoint, or under `--root`.
+    pub fn path(&self, rel: &str) -> PathBuf {
+        self.endpoints.path(&self.root, rel)
+    }
+}
+
+impl Place for RunOpts {
+    fn at(&self, rel: &str) -> PathBuf {
+        self.path(rel)
+    }
 }
 
 /// The event-loop threads this host will run under an event-loop backend: `--threads`, or
@@ -903,7 +919,7 @@ impl ActorState {
 /// or 0). The `sync` sink's whole backend, and what the `io_uring` loop runs inline for the
 /// ops the ring has no opcode for (`lseek`, `ioctl`, `readdir`) or the kernel lacks.
 pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorState, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> std::io::Result<i64> {
-    let full = |rel: &str| sh.opts.root.join(rel);
+    let full = |rel: &str| sh.opts.path(rel);
     match op.kind {
         OpKind::Open => {
             let mode = (op.aux >> 32) as u32;
@@ -1417,11 +1433,11 @@ pub struct DatasetCheck {
 }
 
 /// Compare every dataset against its manifest; returns the dataset ids.
-pub fn check_datasets(loaded: &crate::Loaded, cfg: &Config, root: &Path) -> Result<Vec<DatasetCheck>> {
+pub fn check_datasets(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized)) -> Result<Vec<DatasetCheck>> {
     let mut out = Vec::new();
     for name in loaded.ast.datasets.keys() {
         let rel = payload::dataset_root(&loaded.ast, name)?;
-        let dir = root.join(&rel);
+        let dir = root.at(&rel);
         let m = Manifest::read(&dir).with_context(|| format!("dataset `{name}` at {}: run `aeiou datagen` first", dir.display()))?;
         let want = payload::resolved_dataset(&loaded.doc, name, cfg)?;
         if m.dataset != want {
@@ -1458,7 +1474,7 @@ pub struct NamespaceCheck {
 /// Every namespace declared `input` must have a manifest at its root whose resolved
 /// definitions match this abstract's; reports the write-to-read gap and the host overlap.
 /// Returns the checks and the writer map of every input object.
-pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &Path, opts: &RunOpts) -> Result<(Vec<NamespaceCheck>, HashMap<String, Option<String>>)> {
+pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized), opts: &RunOpts) -> Result<(Vec<NamespaceCheck>, HashMap<String, Option<String>>)> {
     let ast = &loaded.ast;
     let mut by_root: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (name, n) in &ast.namespaces {
@@ -1471,7 +1487,7 @@ pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &Path,
     let mut checks = Vec::new();
     let mut objects: HashMap<String, Option<String>> = HashMap::new();
     for (rel, names) in by_root {
-        let dir = root.join(&rel);
+        let dir = root.at(&rel);
         let m = NamespaceManifest::read(&dir).with_context(|| format!("input namespace(s) {} at {}: no run has written this root", names.join(", "), dir.display()))?;
         for name in &names {
             let want = payload::resolved_namespace(&loaded.doc, name, cfg)?;
@@ -1544,7 +1560,7 @@ pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &Path,
 /// After a run: `.aeiou-namespace.json` at every output namespace root (one not declared
 /// `input`), written last and atomically, with the objects created there and the rank
 /// records of `report` (every host's, when it is the coordinator's merged report).
-pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Path, _opts: &RunOpts, report: &Report, started: f64, finished: f64) -> Result<Vec<PathBuf>> {
+pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized), _opts: &RunOpts, report: &Report, started: f64, finished: f64) -> Result<Vec<PathBuf>> {
     let ast = &loaded.ast;
     let mut by_root: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (name, n) in &ast.namespaces {
@@ -1583,7 +1599,7 @@ pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Pa
             bytes_written: report.stats.bytes_written,
             objects: if objects.len() <= payload::NAMESPACE_OBJECT_LIMIT { Some(objects) } else { None },
         };
-        written.push(m.write(&root.join(&rel))?);
+        written.push(m.write(&root.at(&rel))?);
     }
     Ok(written)
 }
@@ -1591,10 +1607,10 @@ pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &Pa
 /// Output namespace roots must be empty (`--clean-namespaces` empties them); input roots
 /// are left as they are; dataset roots inside a namespace root are left alone. Creates the
 /// output roots.
-pub fn prepare_namespaces(ast: &Ast, root: &Path, clean: bool) -> Result<Vec<String>> {
+pub fn prepare_namespaces(ast: &Ast, root: &(impl Place + ?Sized), clean: bool) -> Result<Vec<String>> {
     let mut dataset_roots: Vec<PathBuf> = Vec::new();
     for name in ast.datasets.keys() {
-        dataset_roots.push(root.join(payload::dataset_root(ast, name)?));
+        dataset_roots.push(root.at(&payload::dataset_root(ast, name)?));
     }
     let mut cleaned = Vec::new();
     let mut seen = BTreeSet::new();
@@ -1607,7 +1623,7 @@ pub fn prepare_namespaces(ast: &Ast, root: &Path, clean: bool) -> Result<Vec<Str
         if !seen.insert(rel.clone()) {
             continue;
         }
-        let dir = root.join(&rel);
+        let dir = root.at(&rel);
         std::fs::create_dir_all(&dir).with_context(|| format!("creating namespace root {}", dir.display()))?;
         let mut stale = Vec::new();
         for entry in std::fs::read_dir(&dir)? {

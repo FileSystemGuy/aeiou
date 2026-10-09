@@ -494,7 +494,7 @@ impl Engine for LoopIo {
         }
         let path = |rel: &str| -> Result<CString> {
             use std::os::unix::ffi::OsStrExt;
-            CString::new(sh.opts.root.join(rel).as_os_str().as_bytes()).map_err(|_| anyhow!("path contains NUL: {rel}"))
+            CString::new(sh.opts.path(rel).as_os_str().as_bytes()).map_err(|_| anyhow!("path contains NUL: {rel}"))
         };
         t.started = Instant::now();
         let entry: squeue::Entry = match op.kind {

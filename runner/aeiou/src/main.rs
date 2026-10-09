@@ -103,6 +103,13 @@ struct DatagenArgs {
     /// $AEIOU_ROOT, else `root` in the [datagen] table of the config file.
     #[arg(long, value_name = "DIR", help_heading = "Writer")]
     root: Option<PathBuf>,
+    /// Place a dataset or namespace somewhere other than under --root: NAME=DIR puts the root
+    /// directory of the abstract's dataset or namespace NAME at DIR (repeatable; names sharing a
+    /// root share its place). Only directories, for `posix` names, until the object engine.
+    /// From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the
+    /// config file (an array).
+    #[arg(long = "endpoint", value_name = "NAME=DIR", help_heading = "Writer")]
+    endpoints: Vec<String>,
     /// Writer threads (default: all cores).
     #[arg(long, help_heading = "Writer")]
     threads: Option<usize>,
@@ -148,6 +155,13 @@ struct RunCmd {
     /// the config file.
     #[arg(long, value_name = "DIR", help_heading = "Backend")]
     root: Option<PathBuf>,
+    /// Place a dataset or namespace somewhere other than under --root: NAME=DIR puts the root
+    /// directory of the abstract's dataset or namespace NAME at DIR (repeatable; names sharing a
+    /// root share its place). Only directories, for `posix` names, until the object engine.
+    /// From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the
+    /// config file (an array).
+    #[arg(long = "endpoint", value_name = "NAME=DIR", help_heading = "Backend")]
+    endpoints: Vec<String>,
     /// Event-loop threads for the io_uring and libaio backends (default: one per core, at most one
     /// per actor instance). The other backends run one thread per actor and refuse it.
     #[arg(long, help_heading = "Backend")]
@@ -265,6 +279,7 @@ struct RunOptions {
     io_api: Option<String>,
     cache: Option<String>,
     root: PathBuf,
+    endpoints: Vec<String>,
     threads: Option<usize>,
     buffer_mib: usize,
     write_compress: u64,
@@ -316,8 +331,10 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     l.fixed("ignore-limits", &a.ignore_limits, a.ignore_limits || a.no_ignore_limits)?;
     let r = usage::root("run");
     let root = miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2));
+    let endpoints = l.layered::<Vec<String>>("endpoint", (!a.endpoints.is_empty()).then_some(a.endpoints), None)?.unwrap_or_default();
     let o = RunOptions {
         root: root.unwrap_or_default(),
+        endpoints,
         abstract_path: abstract_path.unwrap_or_default(),
         gpus: gpus.unwrap_or(0),
         threads: l.layered("threads", a.threads, None)?,
@@ -474,6 +491,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("dataset", &a.datasets, !a.datasets.is_empty())?;
     let r = usage::root("datagen");
     let root = miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2));
+    let endpoints = l.layered::<Vec<String>>("endpoint", (!a.endpoints.is_empty()).then_some(a.endpoints.clone()), None)?.unwrap_or_default();
     let threads = l.layered::<usize>("threads", a.threads, None)?;
     let rank = l.layered("rank", a.rank, Some(0))?.unwrap_or(0);
     let ranks = l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1);
@@ -500,8 +518,10 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
+    aeiou::endpoint::check_protocols(&loaded.ast)?;
+    let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks };
+    let opts = DatagenOpts { root, endpoints, threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks };
     let mut out = std::io::stdout();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     l.print(&mut out)?;
@@ -606,6 +626,8 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     let cfg = parse_config(&a.run.shape, a.gpus, a.run.seed)?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
+    aeiou::endpoint::check_protocols(&loaded.ast)?;
+    let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &a.endpoints)?;
     let declared = aeiou::backend::declared(&loaded.ast)?;
     let backend = run_backend(a, declared)?;
     let expect_fingerprint = match &a.expect_fingerprint {
@@ -671,8 +693,11 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     } else {
         String::new()
     })?;
+    for line in endpoints.lines(&a.root) {
+        writeln!(out, "{line}")?;
+    }
 
-    let checks = run::check_datasets(loaded, cfg, &a.root)?;
+    let checks = run::check_datasets(loaded, cfg, &(a.root.as_path(), &endpoints))?;
     for c in &checks {
         if !a.expect_dataset_ids.is_empty() && !a.expect_dataset_ids.iter().any(|x| *x == c.id) {
             bail!("dataset `{}` id {} is not among --expect-dataset-id", c.name, c.id);
@@ -708,6 +733,7 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     doc.set("traces", serde_json::json!(traces.iter().map(|t| serde_json::json!({"file": t.name, "sha256": t.sha256, "lanes": t.lanes(), "lines": t.lines.len(), "ops": t.ops, "opens": t.opens.len(), "creates": t.header.creates.len(), "notes": t.header.notes})).collect::<Vec<_>>()));
     let opts = RunOpts {
         root: a.root.clone(),
+        endpoints: endpoints.clone(),
         backend,
         buffer_bytes: a.buffer_mib.max(1) << 20,
         threads: a.threads.unwrap_or(0),
@@ -745,6 +771,7 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
         "options",
         serde_json::json!({
             "root": a.root,
+            "endpoints": endpoints.json(),
             "threads": a.threads,
             "buffer_bytes": opts.buffer_bytes,
             "write_compress": opts.write_compress,
@@ -826,7 +853,7 @@ fn run_connected(
     out: &mut impl Write,
     doc: &mut aeiou::report::Doc,
 ) -> Result<()> {
-    let (ns_checks, input_objects) = run::check_input_namespaces(loaded, cfg, &a.root, &opts)?;
+    let (ns_checks, input_objects) = run::check_input_namespaces(loaded, cfg, &opts, &opts)?;
     let inputs: Vec<serde_json::Value> = ns_checks
         .iter()
         .map(|c| {
@@ -865,7 +892,7 @@ fn run_connected(
         v
     };
     if a.rank == 0 {
-        let cleaned = run::prepare_namespaces(&loaded.ast, &a.root, a.clean_namespaces)?;
+        let cleaned = run::prepare_namespaces(&loaded.ast, &opts, a.clean_namespaces)?;
         for c in &cleaned {
             writeln!(out, "namespace root {c}/ emptied")?;
         }
@@ -924,7 +951,7 @@ fn run_connected(
     // the verdict: manifests for what was written and the fingerprint check, on the merged
     // report when there are several hosts
     let verdict = |out: &mut dyn Write, report: &Report| -> Result<()> {
-        for p in run::write_namespace_manifests(loaded, cfg, &a.root, &opts, report, started, finished)? {
+        for p in run::write_namespace_manifests(loaded, cfg, &opts, &opts, report, started, finished)? {
             writeln!(out, "namespace manifest {}", p.display())?;
         }
         if let Some(fp) = opts.expect_fingerprint {

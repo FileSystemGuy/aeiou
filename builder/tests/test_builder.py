@@ -367,6 +367,24 @@ def test_a_workload_may_declare_its_api_and_cache():
     assert json.loads((examples / "model_load.ast.json").read_text())["api"] == "mmap"
 
 
+def test_protocol_per_dataset_and_namespace():
+    """Contract 0.6: a dataset or namespace may live in an object store; namespaces sharing a root
+    declare one protocol (V17); the protocol is not part of a dataset's identity."""
+    from aeiou.datagen import resolved_dataset
+    with pytest.raises(BuildError, match="protocol must be posix or object"):
+        Workload("p").namespace("n", pattern="o/{k:04}", fields={"k": int}, size=1, seed=1, protocol="s3")
+    w = Workload("p")
+    d = w.dataset("d", pattern="d/f_{id:06}", count=1, size=const(1), seed=1, protocol="object")
+    w.namespace("a", pattern="o/{k:04}.a", fields={"k": int}, size=1, seed=2, protocol="object")
+    with pytest.raises(BuildError, match="V17"):
+        w.namespace("b", pattern="o/{k:04}.b", fields={"k": int}, size=1, seed=3)
+    with w.actor("x", count=1) as x:
+        x.stat(d.file(0))
+    ast = w.build()
+    assert ast["datasets"]["d"]["files"]["protocol"] == "object" and ast["namespaces"]["a"]["protocol"] == "object"
+    assert "protocol" not in resolved_dataset(ast, "d", {})["files"]
+
+
 def test_same_run_needs_input():
     """Contract 0.4, V15: `same_run` compares a run with the writer's manifest, which only an
     input namespace has; with `input` it is emitted on the namespace."""

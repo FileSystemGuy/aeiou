@@ -27,7 +27,7 @@ RESERVED_ENV = (ENV_CONFIG, "AEIOU_SCHEMA_DIR", "AEIOU_RUNNER", "AEIOU_RSH")
 SUBCOMMANDS = ("check", "dry-run", "datagen", "run")
 # every option name of every subcommand of the runner (options.rs ALL_OPTIONS), so an AEIOU_*
 # for another subcommand's option is left alone and anything else warns
-ALL_OPTIONS = frozenset("""files abstract param params-file gpus seed io-api cache root threads buffer-mib write-compress time-scale
+ALL_OPTIONS = frozenset("""files abstract param params-file gpus seed io-api cache root endpoint threads buffer-mib write-compress time-scale
 iowq-max-workers sqpoll sqpoll-shared defer-taskrun coop-taskrun aio-depth mmap-mode mmap-consume rank ranks coordinator
 rank-rotate expect-fingerprint expect-dataset-id max-gap require-cold drop-caches clean-namespaces ignore-limits report-json
 report-takes dedupe compress dataset gpu steps limit metrics metrics-block metrics-sample metrics-json config""".split())
@@ -68,6 +68,8 @@ def _from_env(text: str, kind):
         raise ValueError(f"{text!r}: expected true or false")
     if kind is pathlib.Path:
         return pathlib.Path(text)
+    if kind is list:
+        return text.split()
     return kind(text)
 
 
@@ -92,6 +94,12 @@ def _from_toml(v, kind):
         if isinstance(v, str):
             return v
         raise ValueError(f"expected a string, got {v!r}")
+    if kind is list:
+        if isinstance(v, str):
+            return [v]
+        if isinstance(v, list) and all(isinstance(x, str) for x in v):
+            return list(v)
+        raise ValueError(f"expected a string or an array of strings, got {v!r}")
     raise TypeError(kind)
 
 

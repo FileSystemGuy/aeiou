@@ -28,7 +28,10 @@ through four layers, a higher one replacing a lower one's value:
 
 The layers exist for one case above all: `--rank` from the environment. A launcher sets
 `AEIOU_RANK` from its own rank variable and the same command line runs on every host.
-"Replace" is the only merge rule; no layered option is a list.
+"Replace" is the only merge rule. The one list, `--endpoint`, is replaced whole: a list
+from a higher layer is the list in effect, never merged with a lower one's. In the
+environment its values are separated by whitespace (`AEIOU_ENDPOINT="kv=/a sysp=/b"`), in
+the file it is an array of strings (`endpoint = ["kv=/a", "sysp=/b"]`).
 
 **Two kinds of option.** A *fixed* option is the command line's alone, and the environment
 and the file are refused when they name it: nothing the workload's identity, a dataset id,
@@ -127,7 +130,7 @@ sides may come from different layers.
 
 **aeiou run.** Fixed: the abstract, `--gpus`, `--seed`, `--param`, `--params-file`,
 `--io-api`, `--cache`, `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`,
-`--ignore-limits`. Layered: `--root`, `--threads`, `--buffer-mib`, `--write-compress`,
+`--ignore-limits`. Layered: `--root`, `--endpoint`, `--threads`, `--buffer-mib`, `--write-compress`,
 `--time-scale`, the io_uring knobs (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`,
 `--defer-taskrun`, `--coop-taskrun`), `--aio-depth`, `--mmap-mode`, `--mmap-consume`,
 `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`, `--require-cold`,
@@ -135,7 +138,7 @@ sides may come from different layers.
 
 **aeiou datagen** and **aeiou-datagen.** Fixed: the abstract, `--gpus`, `--param`,
 `--params-file`, `--dedupe`, `--compress`, `--dataset` (the payload is part of what the
-run compares). Layered: `--root`, `--threads`.
+run compares). Layered: `--root`, `--endpoint`, `--threads`.
 
 **aeiou dry-run.** Fixed: the identity (the abstract, `--gpus`, `--seed`, `--param`,
 `--params-file`) and the output and metrics flags. Layered: `--threads`, `--ranks`.

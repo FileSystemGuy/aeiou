@@ -539,7 +539,7 @@
       "script": "vdb_search_diskann.py",
       "sha256": "848b5fb93fa599282fcac66e37bcd0e0649a979d7fad941d7c87b8f2b5780431",
       "builder_version": "0.1.0",
-      "git": "ddb845fffc77"
+      "git": "26415a1be282"
     },
     "python": "3.12.13",
     "lock": {

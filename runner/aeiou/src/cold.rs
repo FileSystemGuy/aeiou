@@ -168,7 +168,7 @@ pub fn file_residency(path: &Path) -> Result<(u64, u64)> {
 }
 
 /// The residency sample of every dataset under `root`.
-pub fn residency(model: &Model<'_>, root: &Path) -> Result<Vec<Residency>> {
+pub fn residency(model: &Model<'_>, root: &(impl crate::endpoint::Place + ?Sized)) -> Result<Vec<Residency>> {
     let mut out = Vec::new();
     for meta in &model.datasets {
         let files = meta.files().max(0);
@@ -182,7 +182,7 @@ pub fn residency(model: &Model<'_>, root: &Path) -> Result<Vec<Residency>> {
                 _ => None,
             };
             let rel = meta.file_path(file, chunk)?;
-            let (pages, resident) = file_residency(&root.join(&*rel)).with_context(|| format!("dataset `{}`", meta.name()))?;
+            let (pages, resident) = file_residency(&root.at(&rel)).with_context(|| format!("dataset `{}`", meta.name()))?;
             r.files += 1;
             r.pages += pages;
             r.resident += resident;
@@ -196,7 +196,7 @@ pub fn residency(model: &Model<'_>, root: &Path) -> Result<Vec<Residency>> {
 /// asked, the residency sample when either flag is given, and the `--require-cold` refusal.
 pub fn start(model: &Model<'_>, opts: &RunOpts) -> Result<ColdStart> {
     let dropped = if opts.drop_caches { Some(drop_caches()?) } else { None };
-    let residency = if opts.drop_caches || opts.require_cold { residency(model, &opts.root)? } else { Vec::new() };
+    let residency = if opts.drop_caches || opts.require_cold { residency(model, opts)? } else { Vec::new() };
     if opts.require_cold {
         if let Some(r) = residency.iter().find(|r| r.resident > 0) {
             bail!(

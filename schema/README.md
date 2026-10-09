@@ -108,8 +108,8 @@ handle used where a file is expected means its container file. Under `stream` ac
 `zipf {s}`, `hotset {fraction, weight}`, `mixture [{weight, dist|null}]`. Wherever the schema
 says `distref`, a `param` or a `cond` that evaluates to a distribution is also accepted.
 
-**Datasets:** `files {pattern, count, size, seed, access, samples_per_file, chunk, format}` or
-`regions {file, count, slot, size, seed}`. `count` is samples. Sizes are drawn from the dataset
+**Datasets:** `files {pattern, count, size, seed, protocol, access, samples_per_file, chunk, format}` or
+`regions {file, count, slot, size, seed, protocol}` (`protocol`: V17). `count` is samples. Sizes are drawn from the dataset
 seed, never from `--seed`. Patterns use `{field[:format]}` with fields `id` (and `k` for chunk
 objects) and the forms `{id:09}`, `{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; a
 dataset's directories are the distinct prefixes up to the last `/`, enumerated in id order.
@@ -234,6 +234,14 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   may run with any seed. What the rule cannot see is whether the two abstracts place their
   draws at the same sites; that is the authoring script's job and a run test's
   (`DESIGN_REVIEW.md` §3.52, §3.54).
+
+- **V17 namespaces sharing a root declare one protocol** (added 2026-10-09, contract 0.6). A
+  dataset or namespace may declare `protocol: object` (absent: `posix`): where it lives, which
+  a run places with `--endpoint` (`runner/REFERENCE.md` §4). Namespaces sharing a root share
+  its place as they share its manifest (V14), so they agree on the protocol. Datasets need
+  no such rule, since their roots are distinct (V13). The protocol is not part of a dataset
+  id or a namespace's resolved definition: where a corpus lives is not what it is. The
+  runner refuses `object` until its object engine is built (`DESIGN_REVIEW.md` §3.65).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -383,5 +391,6 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
 - **0.6** (2026-10-09): the root key `backend` replaced by `api` and `cache` (§1), the
   backend's two axes (`DESIGN_REVIEW.md` §3.65). A 0.5 document's `backend` maps to a pair
   (`mmap` to `api: mmap`, `libaio-direct` to `api: libaio, cache: direct`); the committed
-  ASTs declared only `mmap` and `libaio`. Every committed AST was
-  regenerated; no fingerprint changed.
+  ASTs declared only `mmap` and `libaio`. The same day, before any user: the optional key
+  `protocol` on `files` and `regions` datasets and on namespaces, and rule V17 (§4); no
+  committed AST declares it. Every committed AST was regenerated; no fingerprint changed.

@@ -9,8 +9,23 @@
     "name",
     "actors"
   ],
-  "if": {"required": ["api"], "properties": {"api": {"const": "mmap"}}},
-  "then": {"properties": {"cache": {"const": "per-open"}}},
+  "if": {
+    "required": [
+      "api"
+    ],
+    "properties": {
+      "api": {
+        "const": "mmap"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "cache": {
+        "const": "per-open"
+      }
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "ast": {
@@ -24,11 +39,20 @@
       "type": "string"
     },
     "api": {
-      "enum": ["sync", "posix-aio", "libaio", "io_uring", "mmap"],
+      "enum": [
+        "sync",
+        "posix-aio",
+        "libaio",
+        "io_uring",
+        "mmap"
+      ],
       "description": "The API the application this abstract was traced from issues its I/O through (contract 0.6; `backend` before). Absent: sync. A run uses it by default; a run under another API imposes another workload on the storage. Not part of the op stream or the fingerprint."
     },
     "cache": {
-      "enum": ["per-open", "direct"],
+      "enum": [
+        "per-open",
+        "direct"
+      ],
       "description": "The application's cache mode (contract 0.6): `direct` when it opens every regular file O_DIRECT; absent: `per-open`, the open flags of the op stream. Not `direct` under api `mmap`. A run uses it by default; another is another workload. Not part of the op stream or the fingerprint."
     },
     "params": {
@@ -725,6 +749,9 @@
             "seed": {
               "$ref": "#/$defs/seed"
             },
+            "protocol": {
+              "$ref": "#/$defs/protocol"
+            },
             "access": {
               "type": "string",
               "enum": [
@@ -761,7 +788,7 @@
                 "layout": {
                   "type": "object",
                   "additionalProperties": false,
-                  "description": "The container layout (v0.2): file = file_header ‖ units ‖ file_footer, aligned; unit = unit_header ‖ column chunks ‖ unit_footer, aligned; column chunk = header ‖ rows, aligned; row = row_header ‖ fixed ‖ share of the sample ‖ row_footer, aligned. Every field is an expression over parameters; absent means 0 (alignments 1). No layout is the packed layout: samples back to back.",
+                  "description": "The container layout (v0.2): file = file_header \u2016 units \u2016 file_footer, aligned; unit = unit_header \u2016 column chunks \u2016 unit_footer, aligned; column chunk = header \u2016 rows, aligned; row = row_header \u2016 fixed \u2016 share of the sample \u2016 row_footer, aligned. Every field is an expression over parameters; absent means 0 (alignments 1). No layout is the packed layout: samples back to back.",
                   "properties": {
                     "unit": {
                       "$ref": "#/$defs/expr",
@@ -886,6 +913,9 @@
             "seed": {
               "$ref": "#/$defs/seed"
             },
+            "protocol": {
+              "$ref": "#/$defs/protocol"
+            },
             "doc": {
               "type": "string"
             }
@@ -943,6 +973,9 @@
         "same_run": {
           "type": "boolean",
           "description": "Only with `input`: the names this abstract reads are positional draws of the run that wrote them, so the run is refused unless its seed, its instance count, and every parameter both abstracts declare equal the writer's, as recorded in `.aeiou-namespace.json` (V15, contract 0.4)."
+        },
+        "protocol": {
+          "$ref": "#/$defs/protocol"
         },
         "doc": {
           "type": "string"
@@ -1649,6 +1682,13 @@
           "description": "Hash of the canonical form with this block removed."
         }
       }
+    },
+    "protocol": {
+      "enum": [
+        "posix",
+        "object"
+      ],
+      "description": "Where a dataset or namespace lives (contract 0.6): a file system (`posix`, absent) or an object store (`object`), each run giving it an endpoint (`--endpoint NAME=...`, default under `--root`). Not part of the dataset id or the namespace's resolved definition; datasets and namespaces sharing a root declare the same protocol (V17). The runner refuses `object` until its object engine is built."
     }
   }
 }

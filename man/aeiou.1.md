@@ -221,6 +221,11 @@ turns it off, and the last one on the line wins.
   Required, from some layer. The directory the abstract's paths are relative to. From the
   command line, else `$AEIOU_ROOT`, else `root` in the `[datagen]` table of the config
   file. *Layered.*
+- **--endpoint** *NAME=DIR*
+
+  Puts the root directory of the abstract's dataset NAME at DIR instead of under `--root`
+  (repeatable); see ENDPOINTS. From the command line, else `$AEIOU_ENDPOINT`, else
+  `endpoint` in the `[datagen]` table of the config file. *Layered.*
 - **--threads** *THREADS*
 
   Writer threads; default all cores. *Layered.*
@@ -290,6 +295,11 @@ turns it off, and the last one on the line wins.
   Required, from some layer. The directory the abstract's paths are relative to; datasets
   and namespaces live under it. From the command line, else `$AEIOU_ROOT`, else `root` in
   the `[run]` table of the config file. *Layered.*
+- **--endpoint** *NAME=DIR*
+
+  Puts the root directory of the abstract's dataset or namespace NAME at DIR instead of
+  under `--root` (repeatable); see ENDPOINTS. From the command line, else
+  `$AEIOU_ENDPOINT`, else `endpoint` in the `[run]` table of the config file. *Layered.*
 - **--threads** *THREADS*
 
   Event-loop threads for the `io_uring` and `libaio` backends; default one per core, at
@@ -431,6 +441,23 @@ same pair.
 |---|---|
 | `per-open` | Each open's own flags decide whether it bypasses the page cache. |
 | `direct` | `O_DIRECT` on every regular-file open; an unaligned read is rounded out to 4 KiB and the requested part counted, an unaligned write is refused. Not with `mmap`. |
+
+## ENDPOINTS
+
+Every dataset and namespace lives under `--root` unless `--endpoint NAME=DIR` places it.
+An endpoint places a name's root directory, the constant directory prefix of its pattern:
+under `--endpoint sysp=/fast` the dataset whose pattern is `kv/sys/{id:04}/blk_{k:04}`
+has its file `kv/sys/0001/blk_0002` at `/fast/0001/blk_0002`. A path falls under the
+longest root that has an endpoint and is a prefix of it, so a dataset whose root lies
+inside a placed namespace's moves with the namespace unless it has its own endpoint; every
+other path stays under `--root`. Namespaces sharing a root share its place, and two
+endpoints for one root must agree. The run prints each endpoint, and warns when one lies on
+another file system than `--root`: the report's mount counters cover `--root`'s mount
+only. Placement never changes the operation stream, the fingerprint, or a dataset id.
+
+A dataset or namespace declares its protocol (`posix`, the default, or `object`;
+**aeiou-abstract**(7)). Endpoints are directories, for `posix` names; an abstract that
+declares `object` is refused until the object engine is built.
 
 ## METRICS
 

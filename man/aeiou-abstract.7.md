@@ -125,8 +125,8 @@ ids of `zipf` and `hotset` are fixed by the dataset seed, not the run seed.
 
 ## DATASETS, NAMESPACES, ACTORS
 
-**Datasets**: `files {pattern, count, size, seed, access, samples_per_file, chunk, format}`
-or `regions {file, count, slot, size, seed}`. `count` is samples. Patterns use
+**Datasets**: `files {pattern, count, size, seed, protocol, access, samples_per_file, chunk, format}`
+or `regions {file, count, slot, size, seed, protocol}`. `count` is samples. Patterns use
 `{field[:format]}` with the field `id` (and `k` for chunk objects) and the forms `{id:09}`,
 `{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; a dataset's directories are the distinct
 prefixes up to the last `/`, enumerated in id order. `access` is `map` (the shuffle runs
@@ -136,10 +136,16 @@ declares the container layout: a file is `file_header || units || file_footer`, 
 `row_header || fixed || its share of the sample || row_footer`, each with its alignment, and
 every field an expression over parameters.
 
-**Namespaces**: `{pattern, fields, size, seed, input, same_run}`. `size` is an expression or
+**Namespaces**: `{pattern, fields, size, seed, input, same_run, protocol}`. `size` is an expression or
 `as_written`, the sum of the writes that created the object. `input` marks objects a previous
 run wrote, read-only here; `same_run` marks a namespace read under names the writing run
 drew, so a run without the writer's seed, instance count, and common parameters is refused.
+
+**Protocol.** A dataset or namespace may declare `protocol`: `posix` (the default, a file
+system) or `object` (an object store), where the traced application reads or writes it. A run
+places each one with `--endpoint` (**aeiou**(1) ENDPOINTS), so one run may mix protocols; the
+operation stream, the fingerprint, and the dataset ids do not depend on it. The runner refuses
+`object` until its object engine is built.
 
 **Actors**: `{count, body}`; `count` defaults to `{param: gpus}`. Instances have global ids
 `0..count`.
@@ -167,6 +173,7 @@ these, and the builder enforces most of them at construction:
 - **V14** Input namespaces are read-only and come with the writer's manifest.
 - **V15** `same_run` needs `input`.
 - **V16** (runner) A `trace` that creates files runs in one instance only.
+- **V17** Namespaces sharing a root declare one `protocol`.
 
 ## PARAMETER FILES
 

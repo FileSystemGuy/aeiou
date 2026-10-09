@@ -216,6 +216,28 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
 
 
 @needs_runner
+@needs_runner
+def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(tmp_path):
+    """`--endpoint NAME=DIR` (DESIGN_REVIEW.md §3.65): the Python writer puts the dataset's root at DIR,
+    the runner finds it there, and the fingerprint is the one of the corpus under --root."""
+    name, params = "train_stream_tfrecord", CASES["train_stream_tfrecord"]
+    flags = sum([["--param", p] for p in params], [])
+    root, elsewhere = tmp_path / "root", tmp_path / "elsewhere"
+    root.mkdir()
+    r = _tool("datagen", [EXAMPLES / f"{name}.ast.json", "--root", root, "--endpoint", f"shards={elsewhere}", "--threads", "3", *flags])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (elsewhere / ".aeiou-dataset.json").exists() and not any(root.iterdir())
+    ast_path = EXAMPLES / f"{name}.ast.json"
+    dry = subprocess.run([RUNNER, "dry-run", ast_path, "--gpus", "2", "--seed", "3", *flags], capture_output=True, text=True)
+    fp = [l.split()[1] for l in dry.stdout.splitlines() if l.startswith("fingerprint ")][0]
+    run = subprocess.run([RUNNER, "run", ast_path, "--root", root, "--endpoint", f"shards={elsewhere}", "--gpus", "2", "--seed", "3",
+                          "--time-scale", "0", "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "fingerprint matches" in run.stdout and f"endpoint shards  root train/  at {elsewhere}" in run.stdout
+    bad = _tool("datagen", [ast_path, "--root", root, "--endpoint", "nope=/x", *flags])
+    assert bad.returncode == 2 and "no dataset or namespace `nope`" in bad.stderr
+
+
 def test_size_draws_match_the_runner(tmp_path):
     """The Python `sample_size` port against sizes the Rust datagen wrote."""
     ast = {"ast": "0.6", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,

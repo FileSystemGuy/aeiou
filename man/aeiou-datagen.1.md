@@ -63,6 +63,12 @@ every missing argument listed at once.
   Required, from some layer. The directory the abstract's paths are relative to. From the
   command line, else `$AEIOU_ROOT`, else `root` in the `[datagen]` table of the config
   file. *Layered.*
+- **--endpoint** *NAME=DIR*
+
+  Puts the root directory of the abstract's dataset NAME at DIR instead of under `--root`
+  (repeatable), as **aeiou**(1) ENDPOINTS describes. From the command line, else
+  `$AEIOU_ENDPOINT`, else `endpoint` in the `[datagen]` table of the config file.
+  *Layered.*
 - **--threads** *THREADS*
 
   Writer threads. Default all cores. *Layered.*

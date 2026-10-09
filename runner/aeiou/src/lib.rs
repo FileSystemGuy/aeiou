@@ -14,6 +14,7 @@ pub mod cold;
 pub mod coord;
 pub mod counters;
 pub mod datagen;
+pub mod endpoint;
 pub mod dryrun;
 pub mod eval;
 pub mod limits;

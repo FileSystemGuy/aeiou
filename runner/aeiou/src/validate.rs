@@ -261,7 +261,7 @@ impl<'a> Checker<'a> {
             }
             roots.insert(root, dname);
         }
-        let mut nroots: HashMap<String, (&str, bool)> = HashMap::new();
+        let mut nroots: HashMap<String, (&str, bool, crate::ast::Protocol)> = HashMap::new();
         for (nname, n) in &ast.namespaces {
             let path = vec!["namespaces".into(), nname.clone()];
             if !is_ident(nname) {
@@ -292,12 +292,17 @@ impl<'a> Checker<'a> {
             }
             // V14: namespaces sharing a root share its manifest, so they agree on `input`
             let inp = n.input.unwrap_or(false);
-            if let Some((other, oinp)) = nroots.get(&nroot) {
+            let proto = n.protocol.unwrap_or_default();
+            if let Some((other, oinp, oproto)) = nroots.get(&nroot) {
                 if *oinp != inp {
                     self.err(&path, format!("shares root `{nroot}/` with namespace `{other}` but `input` differs (V14)"));
                 }
+                // V17: and a root is in one place, so they agree on `protocol`
+                if *oproto != proto {
+                    self.err(&path, format!("shares root `{nroot}/` with namespace `{other}` but `protocol` differs (V17)"));
+                }
             } else {
-                nroots.insert(nroot, (nname.as_str(), inp));
+                nroots.insert(nroot, (nname.as_str(), inp, proto));
             }
             // V15: `same_run` compares this run with the writer's manifest, which only an input has
             if n.same_run.unwrap_or(false) && !inp {

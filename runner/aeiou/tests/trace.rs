@@ -54,6 +54,7 @@ fn leaked(path: &Path, gpus: i64) -> (&'static aeiou::Loaded, &'static Model<'st
 fn opts(root: &Path, backend: BackendKind, clean: bool) -> RunOpts {
     RunOpts {
         root: root.to_path_buf(),
+        endpoints: Default::default(),
         backend,
         buffer_bytes: 1 << 20,
         threads: 0,

@@ -361,6 +361,19 @@ fn validator_rejects_what_check_py_rejects() {
     rejects(&declared(r#""cache": "dontcache""#), "is not one of");
     rejects(&declared(r#""api": "mmap", "cache": "direct""#), "page faults on a mapping");
     rejects(&declared(r#""backend": "sync""#), "backend");
+    // V17: namespaces sharing a root share its place, so they declare one protocol
+    let two = |pa: &str, pb: &str| {
+        base(ds, "").replacen(
+            r#""datasets""#,
+            &format!(
+                r#""namespaces": {{"a": {{"pattern": "o/{{k}}.a", "fields": {{"k": "int"}}, "size": 1, "seed": 2{pa}}},
+                                  "b": {{"pattern": "o/{{k}}.b", "fields": {{"k": "int"}}, "size": 1, "seed": 3{pb}}}}}, "datasets""#
+            ),
+            1,
+        )
+    };
+    rejects(&two(r#", "protocol": "object""#, ""), "`protocol` differs (V17)");
+    aeiou::load_str(&two(r#", "protocol": "object""#, r#", "protocol": "object""#)).unwrap();
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 1, "body": [{"stat": {"file": {"ref": "nope"}}}]}}"#), "not in scope");
     rejects(&base(ds, r#"{"compute": {"ns": {"param": "missing"}}}"#), "unknown param");
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 4, "body": [{"let": {"name": "x", "value": {"cond": {"if": true, "then": {"at": {"ref": "x", "index": {"index": "i"}}}, "else": 1}}}}]}}"#), "provably >= 1");

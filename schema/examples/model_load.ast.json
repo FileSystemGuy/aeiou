@@ -633,7 +633,7 @@
       "script": "model_load.py",
       "sha256": "dcba8ec46def44a39f523e3bf999e156be2bb12dde4336f7cd8d94341b3bfa62",
       "builder_version": "0.1.0",
-      "git": "ddb845fffc77-dirty"
+      "git": "26415a1be282"
     },
     "python": "3.12.13",
     "lock": {

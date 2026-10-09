@@ -301,6 +301,10 @@ pub struct FilesDataset {
     pub chunk: Option<Expr>,
     #[serde(default)]
     pub format: Option<Format>,
+    /// Where the dataset or namespace lives: a file system (`posix`, absent) or an object
+    /// store (`object`) (`DESIGN_REVIEW.md` §3.65, contract 0.6). Not part of its identity.
+    #[serde(default)]
+    pub protocol: Option<Protocol>,
     #[serde(default)]
     pub doc: Option<String>,
 }
@@ -388,8 +392,30 @@ pub struct RegionsDataset {
     pub slot: Expr,
     pub size: DistRef,
     pub seed: u64,
+    /// Where the dataset or namespace lives: a file system (`posix`, absent) or an object
+    /// store (`object`) (`DESIGN_REVIEW.md` §3.65, contract 0.6). Not part of its identity.
+    #[serde(default)]
+    pub protocol: Option<Protocol>,
     #[serde(default)]
     pub doc: Option<String>,
+}
+
+/// The protocol a dataset or namespace is reached through (contract 0.6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    #[default]
+    Posix,
+    Object,
+}
+
+impl Protocol {
+    pub fn name(self) -> &'static str {
+        match self {
+            Protocol::Posix => "posix",
+            Protocol::Object => "object",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -426,6 +452,10 @@ pub struct Namespace {
     /// writer's seed, instance count, and common parameters (V15, v0.4).
     #[serde(default)]
     pub same_run: Option<bool>,
+    /// Where the dataset or namespace lives: a file system (`posix`, absent) or an object
+    /// store (`object`) (`DESIGN_REVIEW.md` §3.65, contract 0.6). Not part of its identity.
+    #[serde(default)]
+    pub protocol: Option<Protocol>,
     #[serde(default)]
     pub doc: Option<String>,
 }

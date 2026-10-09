@@ -38,7 +38,7 @@ pub const SUBCOMMANDS: &[&str] = &["check", "dry-run", "datagen", "run"];
 /// `AEIOU_*` for another subcommand's option is left alone, and anything else warns. A test in
 /// `main.rs` keeps it equal to the clap definitions.
 pub const ALL_OPTIONS: &[&str] = &[
-    "files", "abstract", "param", "params-file", "gpus", "seed", "io-api", "cache", "root", "threads", "buffer-mib", "write-compress", "time-scale",
+    "files", "abstract", "param", "params-file", "gpus", "seed", "io-api", "cache", "root", "endpoint", "threads", "buffer-mib", "write-compress", "time-scale",
     "iowq-max-workers", "sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "aio-depth", "mmap-mode", "mmap-consume", "rank", "ranks",
     "coordinator", "rank-rotate", "expect-fingerprint", "expect-dataset-id", "max-gap", "require-cold", "drop-caches", "clean-namespaces",
     "ignore-limits", "report-json", "report-takes", "dedupe", "compress", "dataset", "gpu", "steps", "limit", "metrics", "metrics-block",
@@ -213,6 +213,24 @@ impl Layered for PathBuf {
     }
     fn from_toml(v: &toml::Value) -> Result<Self> {
         v.as_str().map(PathBuf::from).ok_or_else(|| anyhow::anyhow!("expected a path string, got {v:?}"))
+    }
+}
+
+/// A list: whitespace-separated in the environment, an array of strings (or one string) in
+/// the file.
+impl Layered for Vec<String> {
+    fn from_env(s: &str) -> Result<Self> {
+        Ok(s.split_whitespace().map(str::to_string).collect())
+    }
+    fn from_toml(v: &toml::Value) -> Result<Self> {
+        match v {
+            toml::Value::String(s) => Ok(vec![s.clone()]),
+            toml::Value::Array(a) => a
+                .iter()
+                .map(|x| x.as_str().map(str::to_string).ok_or_else(|| anyhow::anyhow!("expected strings, got {x:?}")))
+                .collect(),
+            _ => crate::usage!("expected a string or an array of strings, got {v:?}"),
+        }
     }
 }
 

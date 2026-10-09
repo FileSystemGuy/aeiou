@@ -55,6 +55,8 @@ const REGIONS_PIECE: u64 = 64 << 20;
 #[derive(Debug, Clone)]
 pub struct DatagenOpts {
     pub root: PathBuf,
+    /// The datasets placed elsewhere (`endpoint.rs`).
+    pub endpoints: crate::endpoint::Endpoints,
     pub threads: usize,
     pub dedupe: u64,
     pub compress: u64,
@@ -347,7 +349,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                             }
                                         };
                                         for (path, logical, len) in objects {
-                                            let full = opts.root.join(&path);
+                                            let full = opts.endpoints.path(&opts.root, &path);
                                             let (f, direct) = create(&full, mode)?;
                                             write_range(&f, direct, mode, &seed_of, logical, 0, len, &mut filler, &mut buf, &full)?;
                                             files.fetch_add(1, Ordering::Relaxed);
@@ -373,7 +375,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
         }
         (Share::Regions, DsMeta::Regions { .. }) => {
             let path = meta.file_path(0, None)?.to_string();
-            let full = opts.root.join(&path);
+            let full = opts.endpoints.path(&opts.root, &path);
             let size = meta.file_size(0)? as u64;
             let (f, direct) = create(&full, mode)?;
             let pieces = (size + REGIONS_PIECE - 1) / REGIONS_PIECE;
@@ -453,7 +455,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             }
         }
         let rel = payload::dataset_root(&loaded.ast, name)?;
-        let root = opts.root.join(&rel);
+        let root = opts.endpoints.path(&opts.root, &rel);
         if root.exists() {
             let n = std::fs::read_dir(&root)?.count();
             if n > 0 {
@@ -505,6 +507,9 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         written.push(w);
     }
     syncfs(&opts.root)?;
+    for p in opts.endpoints.placed() {
+        syncfs(&p.dir)?;
+    }
 
     // the manifests: rank 0's, once every rank's part is in; on one host, now
     let mut parts: BTreeMap<i64, Value> = BTreeMap::new();

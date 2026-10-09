@@ -45,6 +45,7 @@ fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Co
 fn opts(root: &PathBuf, rank: i64, ranks: i64) -> RunOpts {
     RunOpts {
         root: root.clone(),
+        endpoints: Default::default(),
         backend: BackendKind::Sync,
         buffer_bytes: 1 << 20,
         threads: 0,
@@ -186,7 +187,7 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let (loaded, cfg, model) = leaked_model("train_small_files", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
-    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 }, None, &mut log).unwrap();
+    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 }, None, &mut log).unwrap();
     let dry = dryrun::run(model, 2, None).unwrap();
 
     let server = Server::start("127.0.0.1:0", 2).unwrap();
@@ -330,7 +331,7 @@ fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
 // ---------------------------------------------------------------- datagen on several hosts
 
 fn dopts(root: &PathBuf, rank: i64, ranks: i64) -> DatagenOpts {
-    DatagenOpts { root: root.clone(), threads: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks }
+    DatagenOpts { root: root.clone(), endpoints: Default::default(), threads: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks }
 }
 
 /// Every data file under `root` (the `.aeiou*` metadata left out), by relative path.

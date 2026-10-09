@@ -2278,7 +2278,7 @@
       "script": "kv_cache_serving.py",
       "sha256": "8356dc147525f757724772c473c4fa1d9c8fca37be103076efd8ed2990e30ee0",
       "builder_version": "0.1.0",
-      "git": "ddb845fffc77"
+      "git": "26415a1be282"
     },
     "python": "3.12.13",
     "lock": {

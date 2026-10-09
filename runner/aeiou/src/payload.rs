@@ -293,7 +293,7 @@ impl NamespaceManifest {
 /// `seed`, which fix the names and the content. `size` is each abstract's own model of the
 /// objects (`as_written` for the writer, an expression for a reader, V4) and is not
 /// compared; `doc` and `input` are not either (the writer declares the namespace without
-/// `input`, the reader with it).
+/// `input`, the reader with it), nor `protocol` (where it lives, not what it is).
 pub fn resolved_namespace(doc: &Value, name: &str, cfg: &Config) -> Result<Value> {
     let entry = doc
         .get("namespaces")
@@ -306,6 +306,7 @@ pub fn resolved_namespace(doc: &Value, name: &str, cfg: &Config) -> Result<Value
         o.remove("input");
         o.remove("same_run");
         o.remove("size");
+        o.remove("protocol");
     }
     let bytes = canon::canonical(&v);
     Ok(serde_json::from_slice(&bytes)?)
@@ -351,6 +352,7 @@ pub fn resolved_dataset(doc: &Value, name: &str, cfg: &Config) -> Result<Value> 
         for inner in obj.values_mut() {
             if let Some(o) = inner.as_object_mut() {
                 o.remove("doc");
+                o.remove("protocol");
             }
         }
     }
