@@ -696,9 +696,6 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     let backend = run_backend(a, declared)?;
     let object_threads = object_engine(&endpoints, a.object_threads, layers)?;
     let object_part = object_part(&endpoints, a.object_part_mib, layers)?;
-    if endpoints.any_object() && backend.event_loop() {
-        aeiou::usage!("--io-api {}: an event loop cannot wait on the object engine yet; the names placed in an object store run under a thread-per-actor API (`sync`, `posix-aio`, `mmap`; DESIGN_REVIEW.md §3.65)", backend.api.name());
-    }
     let expect_fingerprint = match &a.expect_fingerprint {
         None => None,
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| usage::err(format!("--expect-fingerprint {h}: not hex")))?),

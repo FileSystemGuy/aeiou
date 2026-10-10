@@ -450,7 +450,10 @@ numbers; the order is this note's.
     `--object-part-size`, V18) and the event loops.~~ *The writes the same night:* object
     namespaces written as uploads (multipart in parts of `--object-part-mib`, sent by
     `close`), `rename` as copy and `DELETE`, the namespace manifest as an object, rule V18;
-    next, the event loops.
+    ~~next, the event loops.~~ *The event loops the same night:* `io_uring` and `libaio` take
+    object names, each op's request spawned on the engine's runtime and its answer waking the
+    loop through its eventfd (`DESIGN_REVIEW.md` §3.65); next, `aeiou-datagen` to object
+    stores and a measurement against a real store.
 18. **JSON report (built and decided 2026-10-01, `DESIGN_REVIEW.md` §3.41,
     `runner/REFERENCE.md` §12).** `aeiou run --report-json FILE` writes the
     run's identity, results (latency histograms in full), and verdict as format

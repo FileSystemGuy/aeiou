@@ -169,8 +169,8 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
     let out = ok(&aeiou(Some(&m), &a));
     assert!(out.contains("fingerprint matches"), "{out}");
     assert!(out.contains("s3://bench/large is an object store: the report's mount counters and the residency sample do not cover it"), "{out}");
-    // the run's other APIs leave the object engine's ops alone; the event loops cannot wait on it
-    for api in ["posix-aio", "mmap"] {
+    // the run's other APIs leave the object engine's ops alone, the event loops waiting on it
+    for api in ["posix-aio", "mmap", "io_uring", "libaio"] {
         let mut a = vec!["run", ast, "--gpus", "1", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/large", "--expect-fingerprint", &want, "--io-api", api];
         a.extend(params);
         assert!(ok(&aeiou(Some(&m), &a)).contains("fingerprint matches"), "{api}");
@@ -200,6 +200,11 @@ fn listings_and_stats_of_prefixes_read_like_directories() {
     let out = ok(&aeiou(Some(&m), &a));
     assert!(out.contains("fingerprint matches"), "{out}");
     assert!(out.contains("readdir=8"), "{out}");
+    // the same under an event loop: stats, listings, and short reads come back to the loop
+    let mut a = vec!["run", ast, "--gpus", "2", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/small/t", "--expect-fingerprint", &want, "--io-api", "io_uring", "--threads", "1"];
+    a.extend(params);
+    let out = ok(&aeiou(Some(&m), &a));
+    assert!(out.contains("fingerprint matches") && out.contains("readdir=8"), "{out}");
     // the manifest says where it was checked, and a missing one says to write it
     let mut a = vec!["run", ast, "--gpus", "2", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/elsewhere"];
     a.extend(params);
@@ -247,10 +252,11 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     assert!(out.contains("runtime threads 2  part 5 MiB"), "{out}");
     assert!(out.contains("namespace manifest s3://bench/kvs/.aeiou-namespace.json"), "{out}");
     // a namespace root holds what a run wrote: a second run is refused, or empties it first,
-    // leaving the datasets inside it alone
+    // leaving the datasets inside it alone; this one under an event loop, whose objects the
+    // POSIX run's files are compared with below
     refused(&call(Some(&m), with("run", writer, &at)), "namespace `kv` root s3://bench/kvs is not empty");
     let mut a = at.to_vec();
-    a.extend(["--expect-fingerprint", &want, "--clean-namespaces"]);
+    a.extend(["--expect-fingerprint", &want, "--clean-namespaces", "--object-part-mib", "5", "--io-api", "io_uring"]);
     let out = ok(&call(Some(&m), with("run", writer, &a)));
     assert!(out.contains("namespace root kv/ emptied") && out.contains("fingerprint matches"), "{out}");
 
@@ -282,6 +288,8 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     let out = ok(&call(Some(&m), with("run", reader, &a)));
     assert!(out.contains("input namespace(s) kv at kv/: written by `kv_cache_shared`"), "{out}");
     assert!(out.contains("fingerprint matches"), "{out}");
+    a.extend(["--io-api", "libaio"]);
+    assert!(ok(&call(Some(&m), with("run", reader, &a))).contains("fingerprint matches"));
 
     // a write the upload has not reached is refused when it comes (V18: offsets are positional,
     // so the order is known at the write), and the upload is abandoned
@@ -304,7 +312,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
 }
 
 #[test]
-fn object_names_need_object_endpoints_and_thread_per_actor_apis() {
+fn object_names_need_object_endpoints() {
     let dir = tmpdir("refusals");
     let ast = object_variant("train_small_files", &["train"], &dir);
     let ast = ast.to_str().unwrap();
@@ -317,7 +325,6 @@ fn object_names_need_object_endpoints_and_thread_per_actor_apis() {
     };
     refused(&run(&[]), "`train` is declared `protocol: object` and has no object endpoint: give it --endpoint train=s3://BUCKET[/PREFIX]");
     refused(&run(&["--endpoint", "train=/somewhere"]), "`train` is declared `protocol: object`; its endpoint is s3://BUCKET[/PREFIX]");
-    refused(&run(&["--endpoint", "train=s3://bench/t", "--io-api", "io_uring"]), "--io-api io_uring: an event loop cannot wait on the object engine yet");
     refused(&run(&["--endpoint", "train=s3://bench/t", "--object-threads", "0"]), "--object-threads 0");
     refused(&run(&["--endpoint", "train=s3://bench/t", "--object-part-mib", "4"]), "--object-part-mib 4: S3 takes parts of 5 MiB to 5 GiB");
     // a posix abstract has no use for the engine's threads or an object endpoint

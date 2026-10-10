@@ -506,10 +506,12 @@ same as under a directory.
 | `lseek`, `fadvise`, `fsync`, `fdatasync`, `ioctl`, `mkdir`, `rmdir` | none (an `ioctl` answers as for a regular file: `TCGETS` is `ENOTTY`; a prefix is no object) |
 | `O_APPEND`, `O_RDWR`, `O_EXCL`, `ftruncate`, `fallocate` | refused by rule V18 at `aeiou check` (**aeiou-abstract**(7)) |
 
-Each actor runs its requests on its own thread, one at a time (`Handle::block_on` on the
-engine's runtime, whose `--object-threads` workers drive the connections), so a run with
-an object name uses an API with a thread per actor (`sync`, `posix-aio`, `mmap`; the API
-applies to the `posix` names) and refuses `io_uring` and `libaio`. **aeiou datagen**
+Each actor has one request in flight. Under an API with a thread per actor (`sync`,
+`posix-aio`, `mmap`) the actor's thread builds and signs it and waits, the engine's
+`--object-threads` workers driving the connections; under an event loop (`io_uring`,
+`libaio`) the workers do all of it and the loop goes on with its other actors until the
+answer wakes it. The API applies to the `posix` names only. Two actors writing one object
+at once (a sub-actor and the actor it was forked from) fail the run with `EBUSY`. **aeiou datagen**
 writes each file of an object dataset as one `PUT`, or as a multipart upload in 8 MiB
 parts when it is larger, and the manifest as one `PUT` at the prefix's root; the prefix
 must hold no key. A `regions` dataset has no object form. An object namespace's root is a

@@ -37,6 +37,10 @@
 //! without locks, since every lane of an instance is on its loop; a lane that must wait
 //! parks on its instance and is woken by every change to its tables.
 //!
+//! A path placed in an object store (`object.rs`) goes to the object engine rather than to
+//! the engine below: the op is begun on the loop, what it sends runs on the engine's tokio
+//! runtime, and the answer wakes the loop through its eventfd (`Objects`).
+//!
 //! The loop itself (tasks, channels, timers, barriers) is generic over an `Engine`, the part
 //! that carries ops to the kernel and brings completions back: the ring here, an AIO context
 //! in `aio.rs`.
@@ -673,6 +677,96 @@ impl Engine for LoopIo {
     }
 }
 
+// ---------------------------------------------------------------- the object engine
+
+/// How an op in flight ended: a completion of the engine's, or the object engine's answer.
+enum Completion {
+    Kernel(i32),
+    Object(crate::object::Answer),
+}
+
+/// The bridge from a loop to the object engine (`object.rs`, `DESIGN_REVIEW.md` §3.65): an
+/// op whose path lives in an object store is begun on the loop (`object::start`), and what
+/// it sends runs on the engine's runtime, whose worker puts the answer here and writes the
+/// loop's eventfd, which the loop keeps a read posted on (as for a barrier's release) while
+/// any is in flight. The loop then settles each answer on its own thread, so the actor's
+/// state is never touched by a worker. A read's buffer is owned by the op while it is in
+/// flight, from a FIFO of buffers that grows to `--buffer-mib` as the engine's pool does.
+struct Objects {
+    done: Arc<Mutex<Vec<(usize, crate::object::Answer)>>>,
+    efd: Arc<OwnedFd>,
+    in_flight: usize,
+    free: VecDeque<Vec<u8>>,
+    total: usize,
+    target: usize,
+}
+
+impl Objects {
+    fn new(efd: Arc<OwnedFd>, target: usize) -> Self {
+        Objects { done: Arc::new(Mutex::new(Vec::new())), efd, in_flight: 0, free: VecDeque::new(), total: 0, target }
+    }
+
+    fn buffer(&mut self, len: usize) -> Vec<u8> {
+        if self.total >= self.target {
+            if let Some(mut v) = self.free.pop_front() {
+                if v.len() < len {
+                    v.resize(len, 0);
+                }
+                return v;
+            }
+        }
+        self.total += len;
+        vec![0u8; len]
+    }
+
+    fn issue(&mut self, sh: &Shared, t: &mut TaskIo, op: &Op, store: &Arc<crate::object::Store>, rest: String) -> Issued {
+        use crate::object::{Sink, Step};
+        t.started = Instant::now();
+        let sink = (op.kind == OpKind::Read).then(|| Sink::Owned(self.buffer(op.len as usize), op.len as usize));
+        match crate::object::start(store, rest, sh, &mut t.a, op, sink) {
+            Step::Done(r) => Issued::Done(r, t.started.elapsed().as_nanos() as u64),
+            Step::Send(f) => {
+                let (done, efd, id) = (self.done.clone(), self.efd.clone(), t.id);
+                crate::object::spawn(
+                    f,
+                    Box::new(move |answer| {
+                        done.lock().unwrap().push((id, answer));
+                        let one = 1u64;
+                        // SAFETY: an eventfd takes an 8-byte count; `efd` lives while this does
+                        unsafe { libc::write(efd.as_raw_fd(), &one as *const u64 as *const libc::c_void, 8) };
+                    }),
+                );
+                self.in_flight += 1;
+                Issued::Pending
+            }
+        }
+    }
+
+    /// The answers that have come back.
+    fn take(&mut self) -> Vec<(usize, crate::object::Answer)> {
+        let got = std::mem::take(&mut *self.done.lock().unwrap());
+        self.in_flight -= got.len();
+        got
+    }
+
+    fn settle(&mut self, t: &mut TaskIo, op: &Op, answer: crate::object::Answer) -> std::io::Result<i64> {
+        let (r, buf) = crate::object::settle(&mut t.a, op, answer);
+        if let Some(v) = buf {
+            self.free.push_back(v);
+        }
+        r
+    }
+}
+
+/// Issue `op` through the object engine when its path lives in an object store, through the
+/// loop's engine otherwise.
+fn issue<E: Engine>(io: &mut E, objects: &mut Objects, sh: &Shared, t: &mut TaskIo, op: &Op) -> Result<Issued> {
+    match sh.opts.endpoints.object(op.path) {
+        Some((store, rest)) => Ok(objects.issue(sh, t, op, &store, rest)),
+        None => io.issue(sh, t, op),
+    }
+}
+
 // ---------------------------------------------------------------- the loop
 
 pub(crate) struct Loop<E: Engine> {
@@ -687,9 +781,11 @@ pub(crate) struct Loop<E: Engine> {
     barrier_waiters: Vec<usize>,
     /// The `trace` instances begun on this loop.
     traces: Vec<TraceInst>,
-    efd: OwnedFd,
+    efd: Arc<OwnedFd>,
     efd_buf: Box<u64>,
     efd_posted: bool,
+    /// The object engine's ops in flight from this loop.
+    objects: Objects,
     live: usize,
 }
 
@@ -738,8 +834,9 @@ impl<E: Engine> Loop<E> {
         if efd < 0 {
             return Err(std::io::Error::last_os_error()).context("eventfd");
         }
-        let efd = unsafe { OwnedFd::from_raw_fd(efd) };
+        let efd = Arc::new(unsafe { OwnedFd::from_raw_fd(efd) });
         sh.coord.subscribe(efd.as_raw_fd());
+        let objects = Objects::new(efd.clone(), sh.opts.buffer_bytes);
         Ok(Loop {
             io,
             sh,
@@ -754,6 +851,7 @@ impl<E: Engine> Loop<E> {
             efd,
             efd_buf: Box::new(0),
             efd_posted: false,
+            objects,
             live: 0,
         })
     }
@@ -829,7 +927,7 @@ impl<E: Engine> Loop<E> {
             if self.live == 0 {
                 return Ok(());
             }
-            if !self.barrier_waiters.is_empty() && !self.efd_posted {
+            if (!self.barrier_waiters.is_empty() || self.objects.in_flight > 0) && !self.efd_posted {
                 self.io.post_wake(self.efd.as_raw_fd(), &mut *self.efd_buf as *mut u64)?;
                 self.efd_posted = true;
             }
@@ -848,7 +946,12 @@ impl<E: Engine> Loop<E> {
                 if ud == EFD {
                     self.efd_posted = false;
                 } else {
-                    self.complete(ud as usize, res)?;
+                    self.complete(ud as usize, Completion::Kernel(res))?;
+                }
+            }
+            if self.objects.in_flight > 0 {
+                for (id, answer) in self.objects.take() {
+                    self.complete(id, Completion::Object(answer))?;
                 }
             }
             let now = Instant::now();
@@ -880,13 +983,18 @@ impl<E: Engine> Loop<E> {
     }
 
     /// A completion for task `id`.
-    fn complete(&mut self, id: usize, res: i32) -> Result<()> {
+    fn complete(&mut self, id: usize, c: Completion) -> Result<()> {
         let t = &mut self.tasks[id];
         let ns = t.io.started.elapsed().as_nanos() as u64;
+        let (io, objects, sh) = (&mut self.io, &mut self.objects, &self.sh);
+        let done = |t: &mut TaskIo, op: &Op| match c {
+            Completion::Kernel(res) => io.complete(sh, t, op, res),
+            Completion::Object(answer) => objects.settle(t, op, answer),
+        };
         match &t.prog {
             Prog::Vm(vm) => {
                 let (op, ctx) = vm.current();
-                let r = self.io.complete(&self.sh, &mut t.io, &op, res);
+                let r = done(&mut t.io, &op);
                 t.io.a.settle(&op, &ctx, r, ns)?;
                 t.wait = Wait::None;
                 self.ready(id);
@@ -894,7 +1002,7 @@ impl<E: Engine> Loop<E> {
             Prog::Lane(l) => {
                 let r = {
                     let b = l.built();
-                    self.io.complete(&self.sh, &mut t.io, &b.op, res)
+                    done(&mut t.io, &b.op)
                 };
                 t.wait = Wait::None;
                 match self.lane_finish(id, r, ns)? {
@@ -997,7 +1105,7 @@ impl<E: Engine> Loop<E> {
                 }
                 Some(Event::Op(op, ctx)) => {
                     t.io.a.check_align(&sh, &op)?;
-                    match self.io.issue(&sh, &mut t.io, &op)? {
+                    match issue(&mut self.io, &mut self.objects, &sh, &mut t.io, &op)? {
                         Issued::Done(r, ns) => t.io.a.settle(&op, &ctx, r, ns)?,
                         Issued::Pending => {
                             t.wait = Wait::Io;
@@ -1525,7 +1633,7 @@ impl<E: Engine> Loop<E> {
                         }
                     }
                 }
-                match self.io.issue(&sh, &mut t.io, &b.op)? {
+                match issue(&mut self.io, &mut self.objects, &sh, &mut t.io, &b.op)? {
                     Issued::Done(r, ns) => self.lane_finish(id, r, ns),
                     Issued::Pending => {
                         l.stage = Stage::InFlight;

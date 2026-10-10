@@ -1615,10 +1615,27 @@ with `--object-threads` workers (default 2; `run` and `datagen`, layered, refuse
 name is placed in an object store) and parked until the process exits, as the driver note of
 §3.65 expects of any library with a runtime. An actor's thread runs each op to completion
 with `Handle::block_on`: the request is built and signed on the actor's thread, the workers
-drive the connections, and an actor has one op in flight, as under `sync`. So a run with an
-object name takes an API with a thread per actor (`sync`, `posix-aio`, `mmap`, which apply
-to its `posix` names) and refuses `io_uring` and `libaio` until a completion on the runtime
-can wake an event loop. The limits check counts the workers among the threads (§11). The
+drive the connections, and an actor has one op in flight, as under `sync`. That is under an
+API with a thread per actor (`sync`, `posix-aio`, `mmap`, which apply to the `posix` names).
+~~So a run with an object name ... refuses `io_uring` and `libaio` until a completion on the
+runtime can wake an event loop.~~ *The event-loop bridge (built 2026-10-09):* an op is split
+in three, `object::start` on the actor's thread (what is local: the actor's tables, a write's
+payload into the part, the checks), a future that owns what it sends (the store's client,
+the key, the parts, a read's buffer), and `object::settle` on the actor's thread with its
+answer (the tables of created and removed paths, the upload back to its handle). A
+thread-per-actor API runs the three in a row (`object::issue`, `block_on`); an event loop
+(`uring.rs`, `Objects`) `spawn`s the future on the runtime and parks the actor, and the
+worker that finishes it queues the answer and writes the loop's eventfd, on which the loop
+keeps a read posted (the engine's own: a ring read, an AIO poll) while any object op is in
+flight, as it does for a barrier's release; the loop settles the queued answers on its own
+thread. Under a loop the workers build and sign the requests too, so `--object-threads`
+bounds the CPU the object ops get, as it would an asynchronous application's. A read's
+buffer is owned by its op while in flight: plain memory from a FIFO that grows to
+`--buffer-mib` as the ring's pool does (no alignment: no `O_DIRECT` on a socket). A write
+that fills no part, `open`, and the local ops complete inline on the loop. An upload is
+lent to the future while a part goes out, so a second op on it meanwhile (two actors writing
+one object at once, which V18's order from 0 could only meet by timing) is `EBUSY`, under
+every API. The limits check counts the workers among the threads (§11). The
 run prints `object engine: object_store 0.14.2  runtime threads N` and, under each object
 endpoint, that the mount counters and the residency sample do not cover it; the JSON report
 records `object_threads`, `object_part_mib`, and each endpoint's `uri`.
@@ -1632,18 +1649,19 @@ written at offsets has no object form. The writer threads make the requests, as 
 
 **Tests.** `tests/object.rs`, compiled with the feature: datagen into a MinIO bucket of 20
 MiB samples (three parts each) whose bytes equal the POSIX writer's files of the same names,
-read back to the dry run's fingerprint under `sync`, `posix-aio`, and `mmap`; the listing
-walk and directory `stat`s of `train_small_files` over four prefixes of 1,300 objects, with
-its header reads past every object's end; and the refusals, which need no server. The tests
-that need one start MinIO from the binary `TEST_MINIO_BIN` names, on a free port with a
+read back to the dry run's fingerprint under `sync`, `posix-aio`, `mmap`, `io_uring`, and
+`libaio`; the listing walk and directory `stat`s of `train_small_files` over four prefixes of
+1,300 objects, with its header reads past every object's end, under `sync` and `io_uring`;
+and the refusals, which need no server. The tests that need one start MinIO from the binary `TEST_MINIO_BIN` names, on a free port with a
 directory of their own, and create the bucket with `curl --aws-sigv4`; they are skipped,
 saying so, when it is unset. CI's `runner-object` job downloads the last MinIO release that
 has binaries (`RELEASE.2025-09-07T16-13-09Z`; the project stopped publishing them and archived
 its repository) and checks its SHA-256 before running them. Since the writes: the shared KV
 store (`kv_cache_shared`) written into a bucket with 6 MiB chunks in 5 MiB parts (every chunk
 file a two-part upload, then a copy and a `DELETE`), to the dry run's fingerprint; a second
-run refused on the non-empty prefix and one with `--clean-namespaces` that empties it but the
-system prompts' keys; each object's bytes equal to the file a POSIX run of the same
+run refused on the non-empty prefix and one with `--clean-namespaces` (under `io_uring`)
+that empties it but the system prompts' keys; each object's bytes equal to the file a POSIX run of the same
 abstract writes under the same name, and no temporary name left; the reader
 (`kv_cache_shared_reader`) reading the namespace as `input` from its manifest object, to its
-fingerprint; and a write past the upload's end failing the run under V18.
+fingerprint, under `sync` and `libaio`; and a write past the upload's end failing the run
+under V18.

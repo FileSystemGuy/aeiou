@@ -28,11 +28,15 @@
 //! before a run (`validate.rs`), and here with `EOPNOTSUPP` should one come.
 //!
 //! **Threads.** One multi-thread tokio runtime per process, built on the first object call
-//! with `--object-threads` workers (`set_threads`), parked until the process exits. An
-//! actor's thread runs each of its ops to completion with `Handle::block_on`, so an actor has
-//! one op in flight, as under `sync`: the request is built and signed on the actor's thread,
-//! and the workers drive the connections. The event loops (`io_uring`, `libaio`) refuse
-//! object names until a completion of the runtime can wake a loop.
+//! with `--object-threads` workers (`set_threads`), parked until the process exits. An op is
+//! begun on the actor's thread (`start`: what is local, the payload of a write, the actor's
+//! tables) and what it sends is a future that owns what it needs; its answer is settled on
+//! the actor's thread again (`settle`). Under a thread-per-actor API the actor's thread runs
+//! the future with `Handle::block_on` (`issue`), so the request is built and signed there and
+//! the workers drive the connections; an event loop (`uring.rs`, for `io_uring` and
+//! `libaio`) `spawn`s it instead, so the workers do all of it, and goes on with its other
+//! actors until the answer wakes it. Either way an actor has one op in flight. An op on an
+//! upload another op has on the runtime (two actors writing one object at once) is `EBUSY`.
 
 use std::io;
 use std::sync::Arc;
@@ -89,15 +93,58 @@ pub fn errno_of(e: &io::Error) -> Option<i32> {
 }
 
 /// A file of the abstract that lives in an object store, as an actor holds it open: the
-/// store, the key's part below the endpoint's prefix, and the upload when it was opened for
-/// writing.
+/// store, the key's part below the endpoint's prefix, and, when it was opened for writing,
+/// its upload (`None` inside while an op of the handle has it on the runtime).
 pub struct Handle {
     pub store: Arc<Store>,
     pub rest: String,
-    pub upload: Option<std::sync::Mutex<Upload>>,
+    pub upload: Option<std::sync::Mutex<Option<Upload>>>,
 }
 
-pub use imp::{set_threads, threads, Store, Upload};
+pub use imp::{block, set_threads, spawn, threads, Reader, Store, Upload};
+
+/// A future of the engine: what an op sends and receives, run by the runtime.
+pub type Fut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+/// Where a read's bytes go: the actor's buffer, lent while the actor's thread waits (a
+/// thread-per-actor API), or a buffer the op owns while it is in flight (an event loop),
+/// handed back with the answer; `.1` is the length read into it.
+pub enum Sink<'a> {
+    Lent(&'a mut [u8]),
+    Owned(Vec<u8>, usize),
+}
+
+impl Sink<'_> {
+    fn bytes(&mut self) -> &mut [u8] {
+        match self {
+            Sink::Lent(b) => b,
+            Sink::Owned(v, n) => &mut v[..*n],
+        }
+    }
+
+    fn owned(self) -> Option<Vec<u8>> {
+        match self {
+            Sink::Lent(_) => None,
+            Sink::Owned(v, _) => Some(v),
+        }
+    }
+}
+
+/// What an op sent brings back to the actor's thread, which settles it (`settle`).
+pub enum Answer {
+    Done(io::Result<i64>),
+    Read(io::Result<i64>, Option<Vec<u8>>),
+    Removed(io::Result<()>),
+    Renamed(io::Result<()>),
+    /// A write that sent parts: the upload goes back to its handle.
+    Wrote(Arc<crate::backend::OpenFile>, Upload, io::Result<i64>),
+}
+
+/// An op begun on the actor's thread: done there (nothing to send), or a future to run.
+pub enum Step<'a> {
+    Done(io::Result<i64>),
+    Send(Fut<'a, Answer>),
+}
 
 /// Is `uri` an object endpoint (rather than a directory)?
 pub fn is_uri(uri: &str) -> bool {
@@ -111,12 +158,40 @@ fn writes(flags: u64) -> bool {
     bit(OpenFlag::WRONLY) || bit(OpenFlag::RDWR) || bit(OpenFlag::CREAT) || bit(OpenFlag::TRUNC) || bit(OpenFlag::APPEND)
 }
 
-/// Issue `op`, whose path lives at `rest` of `store`, the object engine's way (see the module
-/// comment); `Ok(n)` is what the op returned, as from `run::issue_blocking`.
+/// An op on an upload another op has on the runtime: two actors writing one object at once
+/// (a sub-actor and the actor it was forked from), which an upload written in order (V18)
+/// cannot carry.
+fn busy(op: &crate::vm::Op) -> io::Error {
+    error(libc::EBUSY, format!("{} {}: another op of this upload is in flight; an object is written by one actor at a time (V18)", op.kind.name(), op.path))
+}
+
+/// Issue `op`, whose path lives at `rest` of `store`, on the actor's thread, waiting for
+/// what it sends (a thread-per-actor API); `Ok(n)` is what the op returned, as from
+/// `run::issue_blocking`.
 pub(crate) fn issue(store: &Arc<Store>, rest: String, sh: &crate::run::Shared, a: &mut crate::run::ActorState, rbuf: &mut crate::run::Ring, op: &crate::vm::Op) -> io::Result<i64> {
+    let sink = (op.kind == crate::vm::OpKind::Read).then(|| Sink::Lent(rbuf.slice(op.len as usize)));
+    match start(store, rest, sh, a, op, sink) {
+        Step::Done(r) => r,
+        Step::Send(f) => settle(a, op, block(f)).0,
+    }
+}
+
+/// Begin `op`, whose path lives at `rest` of `store`, the object engine's way (see the module
+/// comment): what is local is done here, on the actor's thread, and what goes to the store
+/// is the future returned, which holds no reference to the actor (`sink`, a read's buffer,
+/// aside). The future's answer is `settle`d on the actor's thread.
+pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Shared, a: &mut crate::run::ActorState, op: &crate::vm::Op, sink: Option<Sink<'a>>) -> Step<'a> {
     use crate::ast::OpenFlag;
     use crate::vm::OpKind;
-    let refused = |what: &str| Err(error(libc::EOPNOTSUPP, format!("{} {}: {what} has no object form (V18, DESIGN_REVIEW.md §3.65)", op.kind.name(), op.path)));
+    let refused = |what: &str| Step::Done(Err(error(libc::EOPNOTSUPP, format!("{} {}: {what} has no object form (V18, DESIGN_REVIEW.md §3.65)", op.kind.name(), op.path))));
+    macro_rules! fd {
+        () => {
+            match a.fd(op.path) {
+                Ok(f) => f,
+                Err(e) => return Step::Done(Err(e)),
+            }
+        };
+    }
     match op.kind {
         OpKind::Open => {
             let flags = op.aux & 0xffff_ffff;
@@ -124,86 +199,137 @@ pub(crate) fn issue(store: &Arc<Store>, rest: String, sh: &crate::run::Shared, a
             if bit(OpenFlag::APPEND) || bit(OpenFlag::RDWR) || bit(OpenFlag::EXCL) {
                 return refused("O_APPEND, O_RDWR, or O_EXCL");
             }
-            let upload = writes(flags).then(|| std::sync::Mutex::new(store.upload(&rest)));
+            let upload = writes(flags).then(|| std::sync::Mutex::new(Some(store.upload(&rest))));
             let file = crate::backend::OpenFile::object(Handle { store: store.clone(), rest, upload });
             a.opened(sh, op.path, op.aux, file);
-            Ok(0)
+            Step::Done(Ok(0))
         }
         OpKind::Close => {
             // the owner's close sends the object; a sub-actor closing what it inherited does not
-            if let Some(f) = a.fds.own.get(op.path).cloned() {
-                if let Some(up) = f.as_object().and_then(|h| h.upload.as_ref()) {
-                    let r = up.lock().unwrap().finish(store);
-                    a.close(op.path)?;
-                    return r.map(|_| 0);
-                }
+            let up = a.fds.own.get(op.path).cloned().and_then(|f| f.as_object().and_then(|h| h.upload.as_ref()).map(|c| c.lock().unwrap().take()));
+            if let Err(e) = a.close(op.path) {
+                return Step::Done(Err(e));
             }
-            a.close(op.path).map(|_| 0)
+            match up {
+                None => Step::Done(Ok(0)),
+                Some(None) => Step::Done(Err(busy(op))),
+                Some(Some(up)) => Step::Send(Box::pin(async move { Answer::Done(up.finish().await.map(|_| 0)) })),
+            }
         }
         OpKind::Read => {
-            let f = a.fd(op.path)?;
+            let f = fd!();
             if f.as_object().is_some_and(|h| h.upload.is_some()) {
-                return Err(io::Error::from_raw_os_error(libc::EBADF));
+                return Step::Done(Err(io::Error::from_raw_os_error(libc::EBADF)));
             }
-            let buf = rbuf.slice(op.len as usize);
-            store.read_into(&rest, op.offset as u64, buf).map(|n| n as i64)
+            let mut sink = sink.expect("a read is begun with its buffer");
+            let read = store.read(&rest, op.offset as u64);
+            Step::Send(Box::pin(async move {
+                let r = read.into(sink.bytes()).await.map(|n| n as i64);
+                Answer::Read(r, sink.owned())
+            }))
         }
         OpKind::Write => {
-            let f = a.fd(op.path)?;
-            let Some(up) = f.as_object().and_then(|h| h.upload.as_ref()) else {
-                return Err(io::Error::from_raw_os_error(libc::EBADF));
+            let f = fd!();
+            let Some(cell) = f.as_object().and_then(|h| h.upload.as_ref()) else {
+                return Step::Done(Err(io::Error::from_raw_os_error(libc::EBADF)));
             };
+            let Some(mut up) = cell.lock().unwrap().take() else { return Step::Done(Err(busy(op))) };
             let seed = crate::payload::object_seed(op.seed, op.path);
             let filler = &mut a.filler;
-            let mut up = up.lock().unwrap();
-            up.write(store, op.offset as u64, op.len as u64, &mut |at, b| filler.fill_range(|blk| crate::payload::block_seed(seed, 0, blk), at, b))
-                .map(|n| n as i64)
-                .map_err(|e| match e.raw_os_error() {
-                    Some(libc::ESPIPE) => error(libc::ESPIPE, format!("write {} at {}: the object has {} bytes written; an upload is written in order from 0 (V18)", op.path, op.offset, up.written())),
-                    _ => e,
-                })
+            let written = up.written();
+            let parts = up.fill(op.offset as u64, op.len as u64, &mut |at, b| filler.fill_range(|blk| crate::payload::block_seed(seed, 0, blk), at, b));
+            match parts {
+                Ok(parts) if !parts.is_empty() => {
+                    let len = op.len;
+                    let file = f.clone();
+                    Step::Send(Box::pin(async move {
+                        let r = up.send(parts).await.map(|_| len);
+                        Answer::Wrote(file, up, r)
+                    }))
+                }
+                r => {
+                    *cell.lock().unwrap() = Some(up);
+                    Step::Done(match r {
+                        Ok(_) => Ok(op.len),
+                        Err(e) if e.raw_os_error() == Some(libc::ESPIPE) => Err(error(libc::ESPIPE, format!("write {} at {}: the object has {written} bytes written; an upload is written in order from 0 (V18)", op.path, op.offset))),
+                        Err(e) => Err(e),
+                    })
+                }
+            }
         }
-        OpKind::Lseek | OpKind::Fadvise | OpKind::Fsync | OpKind::Fdatasync => a.fd(op.path).map(|_| 0),
+        OpKind::Lseek | OpKind::Fadvise | OpKind::Fsync | OpKind::Fdatasync => Step::Done(a.fd(op.path).map(|_| 0)),
         OpKind::Ioctl => {
-            a.fd(op.path)?;
-            match crate::ast::IoctlRequest::from_code(op.aux) {
+            fd!();
+            Step::Done(match crate::ast::IoctlRequest::from_code(op.aux) {
                 crate::ast::IoctlRequest::TCGETS => Err(io::Error::from_raw_os_error(libc::ENOTTY)),
                 _ => Ok(0),
-            }
+            })
         }
         OpKind::Fstat => {
-            let f = a.fd(op.path)?;
+            let f = fd!();
             match f.as_object().and_then(|h| h.upload.as_ref()) {
-                Some(up) => Ok(up.lock().unwrap().written() as i64),
-                None => store.stat(&rest),
+                Some(c) => Step::Done(c.lock().unwrap().as_ref().map(|u| u.written() as i64).ok_or_else(|| busy(op))),
+                None => {
+                    let f = store.stat(&rest);
+                    Step::Send(Box::pin(async move { Answer::Done(f.await) }))
+                }
             }
         }
-        OpKind::Stat => store.stat(&rest),
+        OpKind::Stat => {
+            let f = store.stat(&rest);
+            Step::Send(Box::pin(async move { Answer::Done(f.await) }))
+        }
         OpKind::Readdir => {
-            a.fd(op.path)?;
-            store.list_dir(&rest).map(|n| n as i64)
+            fd!();
+            let f = store.list_dir(&rest);
+            Step::Send(Box::pin(async move { Answer::Done(f.await.map(|n| n as i64)) }))
         }
         OpKind::Unlink => {
-            store.delete(&rest)?;
-            a.removed.push(op.path.to_string());
-            Ok(0)
+            let f = store.delete(&rest);
+            Step::Send(Box::pin(async move { Answer::Removed(f.await) }))
         }
         OpKind::Rename => {
             let to = op.path2.unwrap_or("");
             let Some((to_store, to_rest)) = sh.opts.endpoints.object(to) else {
-                return Err(error(libc::EXDEV, format!("rename {} to {to}: the target is not in the object store", op.path)));
+                return Step::Done(Err(error(libc::EXDEV, format!("rename {} to {to}: the target is not in the object store", op.path))));
             };
             if !Arc::ptr_eq(store, &to_store) {
-                return Err(error(libc::EXDEV, format!("rename {} to {to}: the target is in another object store", op.path)));
+                return Step::Done(Err(error(libc::EXDEV, format!("rename {} to {to}: the target is in another object store", op.path))));
             }
-            store.rename(&rest, &to_rest)?;
-            a.removed.push(op.path.to_string());
-            a.created.push((to.to_string(), a.actor));
-            Ok(0)
+            let f = store.rename(&rest, &to_rest);
+            Step::Send(Box::pin(async move { Answer::Renamed(f.await) }))
         }
-        OpKind::Mkdir | OpKind::Rmdir => Ok(0),
+        OpKind::Mkdir | OpKind::Rmdir => Step::Done(Ok(0)),
         OpKind::Ftruncate => refused("ftruncate"),
         OpKind::Fallocate => refused("fallocate"),
+    }
+}
+
+/// The answer of `op`'s future, on the actor's thread: what the op returned, and the read's
+/// buffer when it owned one.
+pub(crate) fn settle(a: &mut crate::run::ActorState, op: &crate::vm::Op, answer: Answer) -> (io::Result<i64>, Option<Vec<u8>>) {
+    match answer {
+        Answer::Done(r) => (r, None),
+        Answer::Read(r, buf) => (r, buf),
+        Answer::Removed(r) => {
+            if r.is_ok() {
+                a.removed.push(op.path.to_string());
+            }
+            (r.map(|_| 0), None)
+        }
+        Answer::Renamed(r) => {
+            if r.is_ok() {
+                a.removed.push(op.path.to_string());
+                a.created.push((op.path2.unwrap_or("").to_string(), a.actor));
+            }
+            (r.map(|_| 0), None)
+        }
+        Answer::Wrote(file, up, r) => {
+            if let Some(cell) = file.as_object().and_then(|h| h.upload.as_ref()) {
+                *cell.lock().unwrap() = Some(up);
+            }
+            (r, None)
+        }
     }
 }
 
@@ -219,7 +345,7 @@ mod imp {
     use object_store::path::Path;
     use object_store::{GetOptions, GetRange, MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload};
 
-    use super::error;
+    use super::{error, Fut};
 
     static THREADS: AtomicUsize = AtomicUsize::new(super::DEFAULT_THREADS);
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -233,29 +359,39 @@ mod imp {
         THREADS.load(Ordering::Relaxed)
     }
 
-    fn block<F: std::future::Future>(f: F) -> F::Output {
-        let rt = RUNTIME.get_or_init(|| {
+    fn runtime() -> &'static tokio::runtime::Runtime {
+        RUNTIME.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(threads())
                 .thread_name("aeiou-object")
                 .enable_all()
                 .build()
                 .expect("building the object engine's runtime")
-        });
-        rt.handle().block_on(f)
+        })
+    }
+
+    /// Run `f` on the runtime, the calling thread waiting for it (never one of the
+    /// runtime's own threads, where `block_on` panics).
+    pub fn block<F: std::future::Future>(f: F) -> F::Output {
+        runtime().handle().block_on(f)
+    }
+
+    /// Run `f` on the runtime without waiting; `done` gets its answer on a worker.
+    pub fn spawn(f: super::Fut<'static, super::Answer>, done: Box<dyn FnOnce(super::Answer) + Send>) {
+        runtime().spawn(async move { done(f.await) });
     }
 
     /// An object being written through one handle: the part being filled, what has been
     /// written, and the multipart upload once a part has gone out. Dropped unfinished (a
     /// run that failed), it aborts the upload, so the store keeps no parts.
     pub struct Upload {
+        s3: AmazonS3,
         key: Path,
         show: String,
         part: usize,
         buf: Vec<u8>,
         written: u64,
         multi: Option<Box<dyn MultipartUpload>>,
-        done: bool,
     }
 
     impl Upload {
@@ -265,15 +401,13 @@ mod imp {
         }
 
         /// `len` bytes at `offset`, which must be the end of what is written (else
-        /// `ESPIPE`), made by `fill(offset, bytes)` into the part being filled; a part that
-        /// fills is sent before this returns, the first one starting the multipart upload.
-        pub fn write(&mut self, store: &Store, offset: u64, len: u64, fill: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<u64> {
-            if self.done {
-                return Err(io::Error::from_raw_os_error(libc::EBADF));
-            }
+        /// `ESPIPE`), made by `fill(offset, bytes)` into the part being filled; returns the
+        /// parts that filled, for `send` before the write returns.
+        pub fn fill(&mut self, offset: u64, len: u64, fill: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<Vec<Vec<u8>>> {
             if offset != self.written {
                 return Err(io::Error::from_raw_os_error(libc::ESPIPE));
             }
+            let mut full = Vec::new();
             let mut at = 0u64;
             while at < len {
                 if self.buf.capacity() == 0 {
@@ -286,58 +420,89 @@ mod imp {
                 at += take as u64;
                 self.written += take as u64;
                 if self.buf.len() == self.part {
-                    self.send_part(store)?;
+                    full.push(std::mem::take(&mut self.buf));
                 }
             }
-            Ok(len)
+            Ok(full)
         }
 
-        fn send_part(&mut self, store: &Store) -> io::Result<()> {
-            let data = PutPayload::from(std::mem::take(&mut self.buf));
-            block(async {
+        /// Send `parts` in order, the first one starting the multipart upload.
+        pub async fn send(&mut self, parts: Vec<Vec<u8>>) -> io::Result<()> {
+            for data in parts {
                 if self.multi.is_none() {
-                    self.multi = Some(store.s3.put_multipart(&self.key).await.map_err(|e| io_err(&self.show, e))?);
+                    self.multi = Some(self.s3.put_multipart(&self.key).await.map_err(|e| io_err(&self.show, e))?);
                 }
                 let up = self.multi.as_mut().expect("started");
-                up.put_part(data).await.map_err(|e| io_err(&self.show, e))
-            })
+                up.put_part(PutPayload::from(data)).await.map_err(|e| io_err(&self.show, e))?;
+            }
+            Ok(())
         }
 
         /// The `close`: one `PUT` of what is written when no part has gone out, else the
         /// last part and the completion.
-        pub fn finish(&mut self, store: &Store) -> io::Result<()> {
-            if self.done {
-                return Ok(());
-            }
-            self.done = true;
+        pub async fn finish(mut self) -> io::Result<()> {
             if self.multi.is_none() {
                 let data = PutPayload::from(std::mem::take(&mut self.buf));
-                return block(async { store.s3.put(&self.key, data).await.map(|_| ()).map_err(|e| io_err(&self.show, e)) });
+                return self.s3.put(&self.key, data).await.map(|_| ()).map_err(|e| io_err(&self.show, e));
             }
             if !self.buf.is_empty() {
-                self.send_part(store)?;
+                let last = std::mem::take(&mut self.buf);
+                self.send(vec![last]).await?;
             }
             let mut up = self.multi.take().expect("started");
-            block(async {
-                match up.complete().await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        let _ = up.abort().await;
-                        Err(io_err(&self.show, e))
-                    }
+            match up.complete().await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    let _ = up.abort().await;
+                    Err(io_err(&self.show, e))
                 }
-            })
+            }
         }
     }
 
     impl Drop for Upload {
         fn drop(&mut self) {
             if let Some(mut up) = self.multi.take() {
-                // never on one of the runtime's own threads, where `block_on` panics
-                if tokio::runtime::Handle::try_current().is_err() {
-                    let _ = block(up.abort());
+                // on one of the runtime's own threads (an answer no loop took), where
+                // `block_on` panics, the abort goes on the runtime
+                match tokio::runtime::Handle::try_current() {
+                    Ok(h) => drop(h.spawn(async move { up.abort().await })),
+                    Err(_) => drop(block(up.abort())),
                 }
             }
+        }
+    }
+
+    /// A ranged `GET` about to be sent: `into` streams the bytes the object has at
+    /// `[offset, offset + buf.len())` into `buf` (fewer at its end, none past it).
+    pub struct Reader {
+        s3: AmazonS3,
+        key: Path,
+        show: String,
+        offset: u64,
+    }
+
+    impl Reader {
+        pub async fn into(self, buf: &mut [u8]) -> io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            let range: Range<u64> = self.offset..self.offset + buf.len() as u64;
+            let opts = GetOptions { range: Some(GetRange::Bounded(range)), ..Default::default() };
+            let r = match self.s3.get_opts(&self.key, opts).await {
+                Ok(r) => r,
+                Err(e) if not_satisfiable(&e) => return Ok(0),
+                Err(e) => return Err(io_err(&self.show, e)),
+            };
+            let mut stream = r.into_stream();
+            let mut n = 0usize;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| io_err(&self.show, e))?;
+                let take = chunk.len().min(buf.len() - n);
+                buf[n..n + take].copy_from_slice(&chunk[..take]);
+                n += take;
+            }
+            Ok(n)
         }
     }
 
@@ -363,6 +528,15 @@ mod imp {
     fn not_satisfiable(e: &object_store::Error) -> bool {
         let s = e.to_string();
         s.contains("416") || s.contains("Range Not Satisfiable") || s.contains("InvalidRange")
+    }
+
+    async fn any_below(s3: &AmazonS3, key: &Path) -> io::Result<bool> {
+        let prefix = if key.as_ref().is_empty() { None } else { Some(key) };
+        match s3.list(prefix).next().await {
+            None => Ok(false),
+            Some(Ok(_)) => Ok(true),
+            Some(Err(e)) => Err(io_err(key.as_ref(), e)),
+        }
     }
 
     impl Store {
@@ -402,64 +576,33 @@ mod imp {
             if rest.is_empty() { self.uri.clone() } else { format!("{}/{}", self.uri, rest.trim_matches('/')) }
         }
 
-        /// A ranged `GET` of `[offset, offset + buf.len())` streamed into `buf`: the bytes the
-        /// object has there (fewer at its end, none past it).
-        pub fn read_into(&self, rest: &str, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-            if buf.is_empty() {
-                return Ok(0);
-            }
-            let key = self.key(rest);
-            let range: Range<u64> = offset..offset + buf.len() as u64;
-            block(async {
-                let opts = GetOptions { range: Some(GetRange::Bounded(range)), ..Default::default() };
-                let r = match self.s3.get_opts(&key, opts).await {
-                    Ok(r) => r,
-                    Err(e) if not_satisfiable(&e) => return Ok(0),
-                    Err(e) => return Err(io_err(&self.show(rest), e)),
-                };
-                let mut stream = r.into_stream();
-                let mut n = 0usize;
-                while let Some(chunk) = stream.next().await {
-                    let chunk = chunk.map_err(|e| io_err(&self.show(rest), e))?;
-                    let take = chunk.len().min(buf.len() - n);
-                    buf[n..n + take].copy_from_slice(&chunk[..take]);
-                    n += take;
-                }
-                Ok(n)
-            })
+        /// The ranged `GET` of a read at `offset` of `rest`, owning what it needs.
+        pub fn read(&self, rest: &str, offset: u64) -> Reader {
+            Reader { s3: self.s3.clone(), key: self.key(rest), show: self.show(rest), offset }
         }
 
         /// `HEAD`: the object's size; for no object, size 0 when a `LIST` finds a key below
         /// it (a directory), `ENOENT` otherwise.
-        pub fn stat(&self, rest: &str) -> io::Result<i64> {
-            let key = self.key(rest);
-            block(async {
-                match self.s3.head(&key).await {
+        pub fn stat(&self, rest: &str) -> Fut<'static, io::Result<i64>> {
+            let (s3, key, show) = (self.s3.clone(), self.key(rest), self.show(rest));
+            Box::pin(async move {
+                match s3.head(&key).await {
                     Ok(m) => Ok(m.size as i64),
                     Err(object_store::Error::NotFound { .. }) => {
-                        if self.any_below(&key).await? { Ok(0) } else { Err(error(libc::ENOENT, format!("{}: no such object", self.show(rest)))) }
+                        if any_below(&s3, &key).await? { Ok(0) } else { Err(error(libc::ENOENT, format!("{show}: no such object"))) }
                     }
-                    Err(e) => Err(io_err(&self.show(rest), e)),
+                    Err(e) => Err(io_err(&show, e)),
                 }
             })
         }
 
-        async fn any_below(&self, key: &Path) -> io::Result<bool> {
-            let prefix = if key.as_ref().is_empty() { None } else { Some(key) };
-            match self.s3.list(prefix).next().await {
-                None => Ok(false),
-                Some(Ok(_)) => Ok(true),
-                Some(Err(e)) => Err(io_err(key.as_ref(), e)),
-            }
-        }
-
         /// `LIST` with the delimiter `/` below `rest`: its objects and common prefixes,
         /// not counting names that begin with `.aeiou` (`schema/README.md` §6).
-        pub fn list_dir(&self, rest: &str) -> io::Result<usize> {
-            let key = self.key(rest);
-            block(async {
+        pub fn list_dir(&self, rest: &str) -> Fut<'static, io::Result<usize>> {
+            let (s3, key, show) = (self.s3.clone(), self.key(rest), self.show(rest));
+            Box::pin(async move {
                 let prefix = if key.as_ref().is_empty() { None } else { Some(&key) };
-                let l = self.s3.list_with_delimiter(prefix).await.map_err(|e| io_err(&self.show(rest), e))?;
+                let l = s3.list_with_delimiter(prefix).await.map_err(|e| io_err(&show, e))?;
                 let hidden = |p: &Path| p.filename().is_some_and(|f| f.starts_with(".aeiou"));
                 Ok(l.objects.iter().filter(|o| !hidden(&o.location)).count() + l.common_prefixes.iter().filter(|p| !hidden(p)).count())
             })
@@ -468,7 +611,7 @@ mod imp {
         /// Is there any key below `rest`?
         pub fn non_empty(&self, rest: &str) -> io::Result<bool> {
             let key = self.key(rest);
-            block(self.any_below(&key))
+            block(any_below(&self.s3, &key))
         }
 
         /// The whole object, or `None` when there is none.
@@ -486,21 +629,21 @@ mod imp {
         /// An upload of the object at `rest`, in parts of `--object-part-size`; nothing is
         /// sent until a part fills or the handle closes.
         pub fn upload(&self, rest: &str) -> Upload {
-            Upload { key: self.key(rest), show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None, done: false }
+            Upload { s3: self.s3.clone(), key: self.key(rest), show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None }
         }
 
         /// `DELETE` (a missing key is no error, as S3 has it).
-        pub fn delete(&self, rest: &str) -> io::Result<()> {
-            let key = self.key(rest);
-            block(async { self.s3.delete(&key).await.map_err(|e| io_err(&self.show(rest), e)) })
+        pub fn delete(&self, rest: &str) -> Fut<'static, io::Result<()>> {
+            let (s3, key, show) = (self.s3.clone(), self.key(rest), self.show(rest));
+            Box::pin(async move { s3.delete(&key).await.map_err(|e| io_err(&show, e)) })
         }
 
         /// A copy on the server and a `DELETE` of the source.
-        pub fn rename(&self, from: &str, to: &str) -> io::Result<()> {
-            let (f, t) = (self.key(from), self.key(to));
-            block(async {
-                self.s3.copy(&f, &t).await.map_err(|e| io_err(&self.show(from), e))?;
-                self.s3.delete(&f).await.map_err(|e| io_err(&self.show(from), e))
+        pub fn rename(&self, from: &str, to: &str) -> Fut<'static, io::Result<()>> {
+            let (s3, f, t, show) = (self.s3.clone(), self.key(from), self.key(to), self.show(from));
+            Box::pin(async move {
+                s3.copy(&f, &t).await.map_err(|e| io_err(&show, e))?;
+                s3.delete(&f).await.map_err(|e| io_err(&show, e))
             })
         }
 
@@ -575,10 +718,22 @@ mod imp {
 mod imp {
     use std::io;
 
+    use super::Fut;
+
     pub fn set_threads(_: usize) {}
 
     pub fn threads() -> usize {
         0
+    }
+
+    const NONE: &str = "no object engine in this build, so no op of one";
+
+    pub fn block<F: std::future::Future>(_: F) -> F::Output {
+        unreachable!("{NONE}")
+    }
+
+    pub fn spawn(_: Fut<'static, super::Answer>, _: Box<dyn FnOnce(super::Answer) + Send>) {
+        unreachable!("{NONE}")
     }
 
     /// No store: this build has no object engine, and `open` says so.
@@ -586,15 +741,26 @@ mod imp {
 
     pub enum Upload {}
 
+    pub struct Reader;
+
+    impl Reader {
+        pub async fn into(self, _: &mut [u8]) -> io::Result<usize> {
+            unreachable!("{NONE}")
+        }
+    }
+
     impl Upload {
         pub fn written(&self) -> u64 {
             match *self {}
         }
-        pub fn write(&mut self, _: &Store, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<u64> {
+        pub fn fill(&mut self, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<Vec<Vec<u8>>> {
             match *self {}
         }
-        pub fn finish(&mut self, _: &Store) -> io::Result<()> {
+        pub async fn send(&mut self, _: Vec<Vec<u8>>) -> io::Result<()> {
             match *self {}
+        }
+        pub async fn finish(self) -> io::Result<()> {
+            match self {}
         }
     }
 
@@ -608,13 +774,13 @@ mod imp {
         pub fn show(&self, _: &str) -> String {
             match *self {}
         }
-        pub fn read_into(&self, _: &str, _: u64, _: &mut [u8]) -> io::Result<usize> {
+        pub fn read(&self, _: &str, _: u64) -> Reader {
             match *self {}
         }
-        pub fn stat(&self, _: &str) -> io::Result<i64> {
+        pub fn stat(&self, _: &str) -> Fut<'static, io::Result<i64>> {
             match *self {}
         }
-        pub fn list_dir(&self, _: &str) -> io::Result<usize> {
+        pub fn list_dir(&self, _: &str) -> Fut<'static, io::Result<usize>> {
             match *self {}
         }
         pub fn non_empty(&self, _: &str) -> io::Result<bool> {
@@ -629,10 +795,10 @@ mod imp {
         pub fn upload(&self, _: &str) -> Upload {
             match *self {}
         }
-        pub fn delete(&self, _: &str) -> io::Result<()> {
+        pub fn delete(&self, _: &str) -> Fut<'static, io::Result<()>> {
             match *self {}
         }
-        pub fn rename(&self, _: &str, _: &str) -> io::Result<()> {
+        pub fn rename(&self, _: &str, _: &str) -> Fut<'static, io::Result<()>> {
             match *self {}
         }
         pub fn keys_below(&self, _: &str) -> io::Result<Vec<String>> {

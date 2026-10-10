@@ -4346,7 +4346,7 @@ to revision: `--object-threads` defaults to 2 (the workers only drive connection
 actor threads sign and build the requests), a directory `stat` costs a `HEAD` and a `LIST`
 (a real client checking a prefix does the same), and `aeiou-datagen` (the Python container
 writer) still writes to directories only. Not yet: ~~object namespaces and every write (V18,
-`--object-part-size`),~~ the event-loop bridge, ~~the input-namespace manifest as an object,~~ and
+`--object-part-size`),~~ ~~the event-loop bridge,~~ ~~the input-namespace manifest as an object,~~ and
 a measurement against a real store (`runner/REFERENCE.md` §16).
 
 **Built (2026-10-09, later the same night), step 3 writes.** Object namespaces, by the table
@@ -4376,8 +4376,34 @@ has it: answering as POSIX would cost a `HEAD` each, a request no S3 application
 written size locally; `stat` of an object before its `close` is `ENOENT`. (5) The option is
 `--object-part-mib`, after `--buffer-mib`, not the `--object-part-size` named above; it is
 the run's only, and `aeiou datagen` keeps 8 MiB parts (a dataset's part size is not what a
-run measures). Not yet: the event-loop bridge, `aeiou-datagen` to object stores, a
+run measures). Not yet: ~~the event-loop bridge,~~ `aeiou-datagen` to object stores, a
 measurement against a real store.
+
+**Built (2026-10-09, later still), the event-loop bridge.** `io_uring` and `libaio` take
+object names. Each object op is split in three: `object::start` on the actor's thread does
+what is local (the actor's tables, a write's payload into the part, the checks) and returns
+either the result or a future that owns what it sends; the future runs on the runtime; and
+`object::settle` applies its answer on the actor's thread (created and removed paths, the
+upload back to its handle). A thread-per-actor API runs the three in a row with `block_on`,
+as before. An event loop `spawn`s the future and parks the actor; the worker that finishes it
+queues the answer and writes the loop's eventfd, the one barrier releases already write, on
+which the loop keeps a read posted (a ring read, an AIO poll) while any object op is in
+flight; the loop settles the queue on its own thread, so no worker touches an actor. The
+recorded idea held (an eventfd the runtime signals, ops spawned rather than `block_on`), with
+one change: the loop routes an object path before its engine sees the op, rather than making
+the engine's inline calls non-blocking, so the ring and the AIO context stay object-free.
+Tested against MinIO: the 20 MiB dataset under both loops, the listing walk with its short
+reads under `io_uring`, the shared KV writer under `io_uring` (its objects byte-equal to a
+POSIX run's files) and its reader under `libaio`, each to the dry run's fingerprint. *Choices
+made here, open to revision:* (1) under a loop the workers build and sign the requests as
+well as drive the connections, so `--object-threads` bounds the CPU object ops get, as it
+would in an asynchronous application; under `sync` the actor's thread signs, as before. (2) A
+read's buffer under a loop is plain heap memory owned by the op while in flight, from a FIFO
+that grows to `--buffer-mib` like the ring's pool; it is not aligned, since nothing reads a
+socket with `O_DIRECT`. (3) An upload is lent to its future while a part goes out, so a
+second op on it meanwhile (two actors writing one object at once, which V18's order from 0
+could meet only by timing) fails with `EBUSY`, under every API; before, `sync` serialized
+them on a lock. (4) The report counts no object op in the ring's in-flight peak.
 
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's
