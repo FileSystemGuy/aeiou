@@ -14,7 +14,7 @@ builder/
              (`aeiou-datagen`), trace (`aeiou-trace`, §7), and the ports of the runner's definitions
              it needs: rng, pattern, layout
   abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts), and the
-                     container workloads train_stream_shards.py (TFRecord and Parquet) and train_map_hdf5.py
+                     container workloads train_stream_shards.py (TFRecord and Parquet) and hdf5_map.py
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds;
                      the parameter files fit their abstracts; the format classes write files the
                      libraries read back and the runner executes to the dry-run fingerprint; the
@@ -25,10 +25,10 @@ builder/
 
 ```
 cd builder && uv sync --extra test --extra formats     # or: pip install -e '.[test,formats]'
-uv run aeiou-build --hermetic --twice -o ../schema/examples abstracts/*.py
+uv run aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')   # each AST beside its script
 uv run pytest
-uv run aeiou-build --check -o ../schema/examples abstracts/*.py     # drift check (CI)
-uv run aeiou-params check ../schema/examples/model_load.ast.json ../schema/examples/params/model_load.*.params.json
+uv run aeiou-build --check $(find ../workloads -name '*.py' -not -path '*/kit/*')     # drift check (CI)
+uv run aeiou-params check ../workloads/inference/safetensors-load/safetensors_load.ast.json ../workloads/inference/safetensors-load/params/synthetic.params.json
 ```
 
 ## 1. Writing an abstract
@@ -36,7 +36,7 @@ uv run aeiou-params check ../schema/examples/model_load.ast.json ../schema/examp
 ```python
 from aeiou import *
 
-w = Workload("train_small_files", doc="…")
+w = Workload("file_per_sample", doc="…")
 P = w.P
 w.param("batch", 32, unit="count")
 w.param("step_time", 105 * ms, unit="ns", doc="[measure]")
@@ -113,7 +113,7 @@ row (a hand-unrolled iteration); `Workload(..., lint=False)` allows it.
 Sugar that never reaches the AST: `every(n)` (a `cond` on `mod`), `repeat=n` on `read`/`write`
 (a `loop` with a generated index `rep`, so a drawn length is re-drawn per repetition),
 parameter tables (parallel arrays), `draw(name, dist)`, unit multipliers, and any helper
-function an author writes over nodes (`chunks(f)` in `abstracts/train_large_samples.py`).
+function an author writes over nodes (`chunks(f)` in `workloads/training/map/npy-per-sample/npy_per_sample.py`).
 `x @ (i − d)` is spelled `cursor.ref("x").at(i - d)`; `recent` is not a construct.
 
 Namespaces are always explicit (`w.namespace(...)` then `ns.object(...)`); the paper form's
@@ -159,7 +159,7 @@ dict. The Rust validator must reject everything they reject.
   This catches set-iteration order and `id()`-based ordering without anticipating them
   (`tests/test_builder.py::test_build_twice_detects_hash_order_dependence`).
 - **`--check`.** Rebuild and compare with the committed file's hash; CI runs it on every push
-  so `schema/examples/*.ast.json` cannot drift from `abstracts/*.py`.
+  so no committed `*.ast.json` under `workloads/` can drift from the script beside it.
 
 Three don'ts for authors: iterate sets or dicts keyed by nodes, use `id()`/`hash()` for
 ordering, read the environment or the clock. The harness turns each into an immediate error.
@@ -171,13 +171,13 @@ shape live in a **parameter file** (`schema/README.md` §8, `schema/params.schem
 the shape is published once and its parameter sets separately. `aeiou-params` is the helper:
 
 ```
-uv run aeiou-params defaults ../schema/examples/train_small_files.ast.json -o tsf.params.json --pin
-uv run aeiou-params check ../schema/examples/train_small_files.ast.json tsf.params.json
-uv run aeiou-params safetensors ../schema/examples/model_load.ast.json model-0000?-of-00004.safetensors -o llama.params.json --tp 8
-uv run aeiou-params npz ../schema/examples/train_large_samples.ast.json corpus/train/00000/sample_00000000?.npz [-o corpus.params.json]
+uv run aeiou-params defaults ../workloads/training/map/file-per-sample/file_per_sample.ast.json -o tsf.params.json --pin
+uv run aeiou-params check ../workloads/training/map/file-per-sample/file_per_sample.ast.json tsf.params.json
+uv run aeiou-params safetensors ../workloads/inference/safetensors-load/safetensors_load.ast.json model-0000?-of-00004.safetensors -o llama.params.json --tp 8
+uv run aeiou-params npz ../workloads/training/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_00000000?.npz [-o corpus.params.json]
 ```
 
-`npz` (2026-10-02) reads `framing` and `cd_len`, the two archive numbers `train_large_samples`
+`npz` (2026-10-02) reads `framing` and `cd_len`, the two archive numbers `npy_per_sample`
 takes as parameters, from real `.npz` files with the standard library alone, and compares
 them with the abstract's defaults: it prints both, ~~exits 2~~ exits 1 (2026-10-04; 2 is the
 suite's usage-error status, `runner/REFERENCE.md` §15) when they differ and no `-o` was given, and writes them as a parameter file with `-o`. It refuses archives that disagree with
@@ -188,7 +188,7 @@ archive written in memory by the installed NumPy (`DESIGN_REVIEW.md` §3.53, §3
 
 `defaults` writes every default as a set to edit or fit; `check` applies the runner's rules
 (declared names, no `gpus`, same kind as the default: scalar, array of the same element kind,
-or distribution); `safetensors` reads real shard headers and emits `model_load`'s tensor
+or distribution); `safetensors` reads real shard headers and emits `safetensors_load`'s tensor
 table (`shard`, `off`, `bytes`, `split`, `rows`, `row_bytes`, `hdr_len`, `shards`,
 `shard_bytes`, `tp`), deciding column- or row-parallel by tensor name (`--column`, `--row`,
 Llama-shaped defaults) and marking the rest replicated. The runner takes the file with
@@ -362,53 +362,53 @@ each pair's file):
 
 | Pair | Verdict | Outside or unseen |
 |---|---|---|
-| `train_small_files` | accepted | |
-| `train_large_samples`, both corpora | accepted | reuse distance 0.36 on 16 files, where the abstract differs from itself by 0.31 |
-| `ckpt_write_dcp` | accepted | |
-| `ckpt_restore`, three traces | accepted | |
-| `vdb_search_diskann`, with and without the node cache | accepted | depth not judged (no `--chain-gap-us`) |
-| `vdb_build_diskann` | not accepted, 9 rows | run-length histograms (unmodeled small files and headers), write-after-write (a header puts the stream's writes off block boundaries), two reuse distances (cause not isolated) |
-| `kv_cache_serving` | accepted | fan-out unseen (a thread pool); the reuse distance of the reads was outside until `keep` was drawn once per round of conversations (`DESIGN_REVIEW.md` §3.57; 1 row before, 6 before the ShareGPT replay, §3.56) |
-| `kv_cache_shared`, writer | not accepted, 1 row | the distance from a file's header write to its chunk write (two store threads); run length and fan-out unseen (a thread pool); 2 rows before §3.57, 7 before the replay |
-| `kv_cache_shared`, reader | accepted | run length and fan-out unseen; 1 row before §3.57, 4 before the replay |
-| `model_load`, `vdb_search_ivf` | nothing judged | the application reads through a mapping: every row is unseen. The exact call counts of their tests and `faults.py` are the evidence for these two. |
+| `file_per_sample` | accepted | |
+| `npy_per_sample`, both corpora | accepted | reuse distance 0.36 on 16 files, where the abstract differs from itself by 0.31 |
+| `dcp_save` | accepted | |
+| `dcp_load`, three traces | accepted | |
+| `diskann_search`, with and without the node cache | accepted | depth not judged (no `--chain-gap-us`) |
+| `diskann_build` | not accepted, 9 rows | run-length histograms (unmodeled small files and headers), write-after-write (a header puts the stream's writes off block boundaries), two reuse distances (cause not isolated) |
+| `lmcache_local_disk` | accepted | fan-out unseen (a thread pool); the reuse distance of the reads was outside until `keep` was drawn once per round of conversations (`DESIGN_REVIEW.md` §3.57; 1 row before, 6 before the ShareGPT replay, §3.56) |
+| `lmcache_shared_fs`, writer | not accepted, 1 row | the distance from a file's header write to its chunk write (two store threads); run length and fan-out unseen (a thread pool); 2 rows before §3.57, 7 before the replay |
+| `lmcache_shared_fs`, reader | accepted | run length and fan-out unseen; 1 row before §3.57, 4 before the replay |
+| `safetensors_load`, `faiss_ivf_ondisk` | nothing judged | the application reads through a mapping: every row is unseen. The exact call counts of their tests and `faults.py` are the evidence for these two. |
 
 **Checked against the runner (2026-10-01).** The runner under `strace` is an application
 whose abstract is known, so the trace's numbers must be the dry run's wherever order does
-not enter. `tests/test_trace.py` runs `train_small_files`, `kv_cache_serving`, and
-`vdb_search_diskann` (one GPU, `sync` backend) that way: read and write counts, bytes,
+not enter. `tests/test_trace.py` runs `file_per_sample`, `lmcache_local_disk`, and
+`diskann_search` (one GPU, `sync` backend) that way: read and write counts, bytes,
 request sizes, run lengths, block and object popularity, and first touches are equal;
 reuse distances differ by the order alone (CDF distance 0.07 to 0.20 on these small
 configurations). Fan-out and depth are `none` on the trace side, as said above: the
 runner's sub-actors are threads.
 
-**Checked against a real application (2026-10-01).** `traces/train_small_files` holds the
+**Checked against a real application (2026-10-01).** `traces/file_per_sample` holds the
 first row of the capture plan (`ABSTRACTS.md` §11): PyTorch `DataLoader` + `ImageFolder`
 on NFS, the script that was traced, the corpus writer, the fitted parameter file, and the
 trace's metrics document. The trace corrected the abstract (a second `lseek` per file,
 `stat` and `fstat` per directory in the walk); `tests/test_trace.py` now holds the abstract
 at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reasoning in
-`DESIGN_REVIEW.md` §3.43 (decided 2026-10-01). `traces/train_large_samples` is row 2,
+`DESIGN_REVIEW.md` §3.43 (decided 2026-10-01). `traces/npy_per_sample` is row 2,
 `np.load(...)["x"]` as upstream DLIO and any NumPy user issues it: that abstract was rewritten from its trace
 (`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44; explicit seeks decided 2026-10-01; reviewed 2026-10-02, §3.53 and §3.54, all choices decided: the script's `glob` is the phase `enumerate`, on by default, and `tests/test_formats.py` checks `framing` against the installed NumPy).
-`traces/ckpt_write_dcp` is row 3, `torch.distributed.checkpoint.save` on two ranks
+`traces/dcp_save` is row 3, `torch.distributed.checkpoint.save` on two ranks
 (`ABSTRACTS.md` §3, `DESIGN_REVIEW.md` §3.45, decided 2026-10-02).
-`traces/ckpt_restore` and `traces/model_load` are row 4: `torch.distributed.checkpoint.load`
+`traces/dcp_load` and `traces/safetensors_load` are row 4: `torch.distributed.checkpoint.load`
 on two ranks, whose trace rewrote the restore's item loop, and safetensors `from_pretrained`,
 which maps the shards and issues no `read` (`ABSTRACTS.md` §4, `DESIGN_REVIEW.md` §3.47, not
 yet confirmed). A third `dcp.load` trace (`name-order`) showed that the reader takes the
 items in the sorted order of their names and that an item's cost depends on where the
 buffer was left; the restore carries the buffer's start as a chain since (§3.48, decided
-2026-10-01), and `traces/ckpt_restore/params.py` makes the parameter file from a real
+2026-10-01), and `traces/dcp_load/params.py` makes the parameter file from a real
 checkpoint's `.metadata`.
-`traces/vdb_search_ivf` is row 6: FAISS `IndexIVFPQ` over `OnDiskInvertedLists`, which maps
+`traces/faiss_ivf_ondisk` is row 6: FAISS `IndexIVFPQ` over `OnDiskInvertedLists`, which maps
 the lists file and issues no call on it; its `faults.py` measures with `mincore` what the
 trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, decided 2026-10-01).
-`traces/vdb_build_diskann` and `traces/vdb_search_diskann` are rows 7 and 5: DiskANN through
+`traces/diskann_build` and `traces/diskann_search` are rows 7 and 5: DiskANN through
 `diskannpy`, one index built in 13 shards and then searched; `hops.py` reads the beam search
 (rounds, batch sizes, sector spread) off the `io_submit` lines (`ABSTRACTS.md` §5 and §7,
 `DESIGN_REVIEW.md` §3.50, decided 2026-10-02).
-`traces/kv_cache_serving` is row 8: vLLM with LMCache's local-disk backend on a GPU. A
+`traces/lmcache_local_disk` is row 8: vLLM with LMCache's local-disk backend on a GPU. A
 synthetic chat load (`chat.py`) fixed the call sequence (`ABSTRACTS.md` §8,
 `DESIGN_REVIEW.md` §3.51, decided 2026-10-02); the committed trace is a replay of ShareGPT
 (`replay.py`: the dataset's turns and reply lengths, eight conversations open and served
@@ -425,10 +425,10 @@ and 2026-10-08, §3.63, at 2 GiB and 6 GiB of engine KV, §3.64). A fit of what 
 holds records the engine it was fitted at (pool, model, CPU tier, slots) as its parameter
 file's `provenance`; `agentx.py holds` checks a replay's holds against a simulation of the
 engine's prefix cache, and `agentx.py log` writes the reduced server log the kit keeps.
-`traces/kv_cache_shared` is the same load on LMCache's `fs://` backend, twice: an engine on
+`traces/lmcache_shared_fs` is the same load on LMCache's `fs://` backend, twice: an engine on
 an empty store, then a restarted engine on the filled one, sent the same requests
-(`replay.py --save`, `--replay`). `abstracts/kv_cache_shared.py` emits both abstracts,
-`kv_cache_shared` and `kv_cache_shared_reader`; the reader takes the writer's namespace as
+(`replay.py --save`, `--replay`). `workloads/kvcache/lmcache-shared-fs/lmcache_shared_fs.py` emits both abstracts,
+`lmcache_shared_fs` and `lmcache_shared_fs_reader`; the reader takes the writer's namespace as
 `input` and `same_run` (contract 0.4: `w.namespace(..., input=True, same_run=True)`), so a run
 without the writer's `--seed`, `--gpus`, and parameters is refused before the gate
 (`DESIGN_REVIEW.md` §3.52, decided 2026-10-02).
@@ -449,7 +449,7 @@ container datasets to directories only (`DESIGN_REVIEW.md` §3.65).
 
 **The application's APIs are declared in the script** (contract 0.3, 2026-10-01; `api` and
 `cache` since contract 0.6, `posix`, `cache`, and `s3` since 0.7, 2026-10-09):
-`Workload("model_load", posix="mmap")`. Leave `posix` out for an application that calls
+`Workload("safetensors_load", posix="mmap")`. Leave `posix` out for an application that calls
 `read` and `write`. `cache="direct"` declares an application that opens every regular file
 `O_DIRECT` (refused under `mmap`); leave it out when the open flags of the ops say what it
 does. `s3="async"` declares an application whose S3 client keeps many requests in flight

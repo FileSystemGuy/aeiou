@@ -20,7 +20,7 @@ fn tmpdir(tag: &str) -> PathBuf {
 
 fn aeiou(sub: &str, ast: &str, params: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-    c.arg(sub).arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples").join(ast));
+    c.arg(sub).arg(crate::common::workload_ast(ast));
     for p in params {
         c.arg("--param").arg(p);
     }
@@ -42,10 +42,10 @@ const SMALL: [&str; 6] = ["files=600", "batch=4", "workers=2", "prefetch=2", "st
 fn one_host_report_matches_the_text_and_failures_are_written() {
     let root = tmpdir("one");
     let json = root.join("report.json");
-    let (ok, _, err) = out(aeiou("datagen", "train_small_files.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2"]));
+    let (ok, _, err) = out(aeiou("datagen", "file_per_sample.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2"]));
     assert!(ok, "{err}");
     let run = |extra: &[&str]| {
-        let mut c = aeiou("run", "train_small_files.ast.json", &SMALL);
+        let mut c = aeiou("run", "file_per_sample.ast.json", &SMALL);
         c.arg("--root").arg(&root).args(["--gpus", "2", "--seed", "7", "--time-scale", "0"]).arg("--report-json").arg(&json).args(extra);
         out(&mut c)
     };
@@ -54,7 +54,7 @@ fn one_host_report_matches_the_text_and_failures_are_written() {
     assert!(ok, "{text}\n{err}");
     let d = read(&json);
     assert_eq!(d["aeiou_report"], 1);
-    assert_eq!(d["abstract"]["name"], "train_small_files");
+    assert_eq!(d["abstract"]["name"], "file_per_sample");
     assert!(text.contains(&format!("sha256 {}", d["abstract"]["sha256"].as_str().unwrap())));
     assert_eq!((d["seed"].as_u64(), d["gpus"].as_u64(), d["rank"].as_u64(), d["ranks"].as_u64()), (Some(7), Some(2), Some(0), Some(1)));
     assert_eq!(d["params"]["files"], 600);
@@ -120,13 +120,13 @@ fn one_host_report_matches_the_text_and_failures_are_written() {
     assert_eq!(d["result"]["ops"].as_u64(), Some(ops));
 
     // a run that never starts replaces the earlier report: identity and error, no result
-    let mut c = aeiou("run", "train_small_files.ast.json", &SMALL);
+    let mut c = aeiou("run", "file_per_sample.ast.json", &SMALL);
     let (ok, _, _) = out(c.arg("--root").arg(root.join("nowhere")).args(["--gpus", "2"]).arg("--report-json").arg(&json));
     assert!(!ok);
     let d = read(&json);
     assert_eq!(d["verdict"]["ok"], false);
     assert!(d["verdict"]["error"].as_str().unwrap().contains("aeiou datagen"));
-    assert_eq!(d["abstract"]["name"], "train_small_files");
+    assert_eq!(d["abstract"]["name"], "file_per_sample");
     assert!(d["result"].is_null() && d["scope"].is_null() && d["verdict"]["fingerprint"].is_null());
     std::fs::remove_dir_all(&root).unwrap();
 }
@@ -138,7 +138,7 @@ fn two_ranks_merged_on_rank_0_and_own_on_rank_1() {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let mut children = Vec::new();
     for rank in 0..2 {
-        let mut c = aeiou("run", "ckpt_write_dcp.ast.json", &params);
+        let mut c = aeiou("run", "dcp_save.ast.json", &params);
         c.arg("--root").arg(&root).args(["--gpus", "2", "--time-scale", "0", "--ranks", "2"]).arg("--rank").arg(rank.to_string());
         c.arg("--coordinator").arg(format!("127.0.0.1:{port}")).arg("--report-json").arg(root.join(format!("report-{rank}.json")));
         children.push(c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap());
@@ -182,12 +182,12 @@ fn the_declared_backend_is_the_default_and_another_is_named() {
     let root = tmpdir("declared");
     let json = root.join("report.json");
     let small = ["shard_bytes=4194304", "hdr_len=[4096, 4096]", "off=[4104, 1052680, 4104, 1052680, 2101256]", "bytes=[1048576, 1048576, 1048576, 1048576, 16384]", "rows=[1, 64, 1, 64, 1]", "row_bytes=[1048576, 16384, 1048576, 16384, 16384]"];
-    let (ok, _, err) = out(aeiou("datagen", "model_load.ast.json", &small).arg("--root").arg(&root).args(["--gpus", "2"]));
+    let (ok, _, err) = out(aeiou("datagen", "safetensors_load.ast.json", &small).arg("--root").arg(&root).args(["--gpus", "2"]));
     assert!(ok, "{err}");
-    let (_, dry, _) = out(aeiou("dry-run", "model_load.ast.json", &small).args(["--gpus", "2"]));
+    let (_, dry, _) = out(aeiou("dry-run", "safetensors_load.ast.json", &small).args(["--gpus", "2"]));
     assert!(dry.contains("declared posix mmap  cache per-open"), "{dry}");
     let run = |extra: &[&str]| {
-        let mut c = aeiou("run", "model_load.ast.json", &small);
+        let mut c = aeiou("run", "safetensors_load.ast.json", &small);
         c.arg("--root").arg(&root).args(["--gpus", "2", "--time-scale", "0"]).arg("--report-json").arg(&json).args(extra);
         out(&mut c)
     };
@@ -207,7 +207,7 @@ fn the_declared_backend_is_the_default_and_another_is_named() {
     assert_eq!(d["fingerprint"], fp, "the backend never changes the op stream");
 
     // an abstract that declares none is `sync`, and buffered against direct is a difference too
-    let (_, text, _) = out(aeiou("run", "train_small_files.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2", "--cache", "direct"]));
+    let (_, text, _) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2", "--cache", "direct"]));
     assert!(text.contains("posix sync  cache direct is not the abstract's (posix sync  cache per-open)"), "{text}");
     std::fs::remove_dir_all(&root).unwrap();
 }

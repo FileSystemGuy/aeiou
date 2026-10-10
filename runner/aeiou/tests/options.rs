@@ -23,7 +23,7 @@ fn tmpdir(tag: &str) -> PathBuf {
 
 fn aeiou(sub: &str, ast: &str, params: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-    c.arg(sub).arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples").join(ast));
+    c.arg(sub).arg(crate::common::workload_ast(ast));
     for p in params {
         c.arg("--param").arg(p);
     }
@@ -77,13 +77,13 @@ fn every_subcommand_prints_the_block_with_sources() {
     let cfg = d.join("aeiou.toml");
     std::fs::write(&cfg, "[dry-run]\nthreads = 2\n\n[datagen]\nthreads = 3\n\n[run]\nbuffer-mib = 16\nrequire-cold = true\n").unwrap();
     // check: the files and the config file
-    let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("check").arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples/train_small_files.ast.json")).env_remove("AEIOU_CONFIG"));
+    let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("check").arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workloads/training/map/file-per-sample/file_per_sample.ast.json")).env_remove("AEIOU_CONFIG"));
     assert!(ok, "{err}");
     let rows = block(&text);
     assert_eq!(row(&rows, "config").2, "default");
-    assert!(text.lines().any(|l| l.starts_with("ok   train_small_files.ast.json")), "{text}");
+    assert!(text.lines().any(|l| l.starts_with("ok   file_per_sample.ast.json")), "{text}");
     // dry-run: cli, env, config, default, and a warning for an unknown AEIOU_*
-    let (ok, text, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--config").arg(&cfg).env("AEIOU_RANKS", "3").env("AEIOU_BOGUS", "1"));
+    let (ok, text, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--config").arg(&cfg).env("AEIOU_RANKS", "3").env("AEIOU_BOGUS", "1"));
     assert!(ok, "{err}");
     let rows = block(&text);
     assert_eq!(row(&rows, "gpus"), &("gpus".into(), "2".into(), "cli".into()));
@@ -94,12 +94,12 @@ fn every_subcommand_prints_the_block_with_sources() {
     assert!(text.contains("WARNING: AEIOU_BOGUS is set and is no option of any subcommand; ignored"), "{text}");
     assert!(text.contains("3 host(s)") || text.contains("per host"), "{text}");
     // the same through AEIOU_CONFIG
-    let (ok, text, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_CONFIG", &cfg));
+    let (ok, text, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_CONFIG", &cfg));
     assert!(ok, "{err}");
     assert_eq!(row(&block(&text), "config").2, "env AEIOU_CONFIG");
     // datagen: root from the environment, threads from the file
     let root = d.join("root");
-    let (ok, text, err) = out(aeiou("datagen", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_ROOT", &root).env("AEIOU_CONFIG", &cfg));
+    let (ok, text, err) = out(aeiou("datagen", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_ROOT", &root).env("AEIOU_CONFIG", &cfg));
     assert!(ok, "{err}");
     let rows = block(&text);
     assert_eq!(row(&rows, "root"), &("root".into(), root.display().to_string(), "env AEIOU_ROOT".into()));
@@ -108,7 +108,7 @@ fn every_subcommand_prints_the_block_with_sources() {
     // run: the file turns require-cold on and sets the buffer, the command line turns it off
     // again; the report records the layers
     let json = root.join("report.json");
-    let (ok, text, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL)
+    let (ok, text, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL)
         .args(["--gpus", "2", "--time-scale", "0", "--require-cold", "--no-require-cold"])
         .arg("--report-json")
         .arg(&json)
@@ -133,7 +133,7 @@ fn every_subcommand_prints_the_block_with_sources() {
     assert_eq!(doc["options"]["buffer_bytes"], 16 << 20);
     // the same run without the override: the file's require-cold is in effect (the dataset is
     // warm, so the run is refused for that reason)
-    let (ok, text, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2", "--time-scale", "0"]).env("AEIOU_ROOT", &root).env("AEIOU_CONFIG", &cfg));
+    let (ok, text, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2", "--time-scale", "0"]).env("AEIOU_ROOT", &root).env("AEIOU_CONFIG", &cfg));
     assert!(!ok);
     assert_eq!(row(&block(&text), "require-cold").2, format!("config {}", cfg.display()));
     assert!(err.contains("--require-cold"), "{err}");
@@ -143,42 +143,42 @@ fn every_subcommand_prints_the_block_with_sources() {
 #[test]
 fn fixed_options_are_refused_from_the_environment_and_the_file() {
     let d = tmpdir("fixed");
-    let (ok, _, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_SEED", "4"));
+    let (ok, _, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_SEED", "4"));
     assert!(!ok);
     assert!(err.contains("AEIOU_SEED is set, but --seed is the command line's alone"), "{err}");
     let cfg = d.join("aeiou.toml");
     std::fs::write(&cfg, "[run]\nclean-namespaces = true\n").unwrap();
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
     assert!(!ok);
     assert!(err.contains("[run] clean-namespaces is set, but --clean-namespaces is the command line's alone"), "{err}");
     // the environment and the file may not name an option that belongs to another subcommand's
     // table, nor an unknown one
     std::fs::write(&cfg, "[run]\nmetrics-block = 8\n").unwrap();
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
     assert!(!ok);
     assert!(err.contains("[run] metrics-block: not an option of `aeiou run`"), "{err}");
     std::fs::write(&cfg, "buffer-mib = 8\n").unwrap();
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
     assert!(!ok);
     assert!(err.contains("top level"), "{err}");
     // a knob the backend cannot take says which layer set it
     std::fs::write(&cfg, "[run]\naio-depth = 64\n").unwrap();
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
     assert!(!ok);
     assert!(err.contains(&format!("--aio-depth is a libaio knob; --posix sync has no AIO context (--aio-depth from config {})", cfg.display())), "{err}");
     std::fs::write(&cfg, "[run]\n").unwrap();
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
     assert!(!ok);
     assert!(err.contains("has one thread per actor (--threads from env AEIOU_THREADS)"), "{err}");
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2", "--threads", "4"]).arg("--root").arg(&d));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2", "--threads", "4"]).arg("--root").arg(&d));
     assert!(!ok);
     assert!(err.lines().next().unwrap().ends_with("has one thread per actor"), "{err}");
     // --root is required, from any layer: listed as missing (tests/usage.rs has the frame)
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]));
     assert!(!ok);
     assert!(err.contains("the following required arguments were not provided:\n  --root <DIR>  directory the abstract's paths are relative to\n"), "{err}");
     // a typed value that does not parse names the layer and the key
-    let (ok, _, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_THREADS", "many"));
+    let (ok, _, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_THREADS", "many"));
     assert!(!ok);
     assert!(err.contains("AEIOU_THREADS"), "{err}");
     std::fs::remove_dir_all(&d).unwrap();
@@ -189,7 +189,7 @@ fn two_ranks_record_every_host_and_print_the_differences_and_a_mismatch_names_th
     let root = tmpdir("two");
     let params = ["steps=4", "ckpt_every=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "meta_bytes=65536"];
     let spawn = |rank: i64, port: u16, extra: &[&str], seed: &str| {
-        let mut c = aeiou("run", "ckpt_write_dcp.ast.json", &params);
+        let mut c = aeiou("run", "dcp_save.ast.json", &params);
         c.arg("--root").arg(&root).args(["--gpus", "2", "--time-scale", "0", "--ranks", "2", "--clean-namespaces"]).arg("--rank").arg(rank.to_string()).args(["--seed", seed]);
         c.arg("--coordinator").arg(format!("127.0.0.1:{port}")).arg("--report-json").arg(root.join(format!("report-{rank}.json"))).args(extra);
         c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
@@ -283,7 +283,7 @@ fn every_boolean_reads_no_x_in_the_help_and_parses_both_ways() {
     }
     // --x then --no-x is off, --no-x then --x is on, and the notation typed literally is explained
     let metrics = |flags: &[&str]| {
-        let (ok, text, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "1"]).args(flags));
+        let (ok, text, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).args(flags));
         assert!(ok, "{err}");
         row(&block(&text), "metrics").clone()
     };
@@ -291,17 +291,17 @@ fn every_boolean_reads_no_x_in_the_help_and_parses_both_ways() {
     assert_eq!(metrics(&["--no-metrics", "--metrics"]), ("metrics".into(), "true".into(), "cli".into()));
     assert_eq!(metrics(&["--no-metrics"]), ("metrics".into(), "false".into(), "cli".into()));
     assert_eq!(metrics(&[]), ("metrics".into(), "false".into(), "default".into()));
-    let (ok, _, err) = out(aeiou("dry-run", "train_small_files.ast.json", &SMALL).args(["--gpus", "1", "--[no-]metrics"]));
+    let (ok, _, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1", "--[no-]metrics"]));
     assert!(!ok);
     assert!(err.contains("type --metrics to turn it on or --no-metrics to turn it off"), "{err}");
     // the file and the environment say false, never no-
     let d = tmpdir("neg");
     let cfg = d.join("aeiou.toml");
     std::fs::write(&cfg, "[run]\nno-drop-caches = true\n").unwrap();
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
     assert!(!ok);
     assert!(err.contains("[run] no-drop-caches") && err.contains("`drop-caches = false`"), "{err}");
-    let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).env("AEIOU_NO_DROP_CACHES", "1"));
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).env("AEIOU_NO_DROP_CACHES", "1"));
     assert!(!ok);
     assert!(err.contains("AEIOU_DROP_CACHES=true or false"), "{err}");
     std::fs::remove_dir_all(&d).unwrap();

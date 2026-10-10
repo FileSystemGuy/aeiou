@@ -11,8 +11,15 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
 ROOT = BUILDER.parent
-ABSTRACTS = sorted((BUILDER / "abstracts").glob("*.py"))
-EXAMPLES = ROOT / "schema" / "examples"
+WORKLOADS = ROOT / "workloads"
+
+
+def ast_path(name):
+    """The committed AST `name`, wherever its mechanism lives under workloads/ (DESIGN_REVIEW.md §3.66)."""
+    return next(WORKLOADS.rglob(f"{name}.ast.json"))
+
+
+ABSTRACTS = sorted(p for p in WORKLOADS.rglob("*.py") if "kit" not in p.relative_to(WORKLOADS).parts)
 sys.path.insert(0, str(BUILDER))
 
 from aeiou import *  # noqa: E402
@@ -31,8 +38,8 @@ def test_abstract_builds_and_matches_committed(script):
     for name, ast in asts.items():
         validate(ast, name)                                   # schema + semantic rules
         assert op_counts(ast)
-        committed = EXAMPLES / f"{name}.ast.json"
-        assert committed.exists(), f"{committed} missing: run `aeiou-build -o schema/examples {script}`"
+        committed = script.parent / f"{name}.ast.json"
+        assert committed.exists(), f"{committed} missing: run `aeiou-build {script}`"
         assert emit.sha256(emit.load(committed)) == emit.sha256(ast), \
             f"{name}: committed AST differs from the builder's output; regenerate and review the diff"
 
@@ -43,7 +50,7 @@ def test_canonical_form_matches_check_py():
     spec = importlib.util.spec_from_file_location("chk", ROOT / "schema" / "check.py")
     chk = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(chk)
-    ast = emit.load(EXAMPLES / "train_small_files.ast.json")
+    ast = emit.load(ast_path("file_per_sample"))
     assert chk.canonical(ast) == emit.canonical(ast)
 
 
@@ -256,7 +263,7 @@ def test_check_py_enforces_v12_v13_on_a_hand_written_ast():
     import copy
     from aeiou.validate import _load
     _, check = _load()
-    base = emit.load(EXAMPLES / "vdb_search_ivf.ast.json")
+    base = emit.load(ast_path("faiss_ivf_ondisk"))
     ast = copy.deepcopy(base)
     ast["actors"]["gpu"]["body"][5]["open"]["flags"] = ["RDWR"]
     assert any("V12" in e for e in check.Check(ast, "x").run())
@@ -278,13 +285,13 @@ def _run_cli(args, cwd=BUILDER):
 
 
 def test_hermetic_build_twice(tmp_path):
-    script = BUILDER / "abstracts" / "kv_cache_serving.py"
+    script = ast_path("lmcache_local_disk").parent / "lmcache_local_disk.py"
     r = _run_cli(["--hermetic", "--twice", "-o", tmp_path, script])
     assert r.returncode == 0, r.stderr
-    out = emit.load(tmp_path / "kv_cache_serving.ast.json")
+    out = emit.load(tmp_path / "lmcache_local_disk.ast.json")
     assert out["provenance"]["built_twice_identical"] is True
     assert out["provenance"]["ast_sha256"] == emit.sha256(out)
-    assert out["provenance"]["generator"]["script"] == "kv_cache_serving.py"
+    assert out["provenance"]["generator"]["script"] == "lmcache_local_disk.py"
 
 
 @pytest.mark.parametrize("poison, needle", [
@@ -333,12 +340,12 @@ def test_build_twice_detects_hash_order_dependence(tmp_path):
 
 
 def test_check_mode_reports_drift(tmp_path):
-    script = BUILDER / "abstracts" / "vdb_search_ivf.py"
+    script = ast_path("faiss_ivf_ondisk").parent / "faiss_ivf_ondisk.py"
     r = _run_cli(["-o", tmp_path, script])
     assert r.returncode == 0, r.stderr
     r = _run_cli(["--check", "-o", tmp_path, script])
     assert r.returncode == 0 and "ok" in r.stdout
-    p = tmp_path / "vdb_search_ivf.ast.json"
+    p = tmp_path / "faiss_ivf_ondisk.ast.json"
     doc = emit.load(p)
     doc["params"]["nprobe"]["default"] = 65
     p.write_text(emit.render(doc))
@@ -363,10 +370,9 @@ def test_a_workload_may_declare_its_apis_and_cache():
         a.stat(d.file(0))
     ast = w.build()
     assert ast["posix"] == "libaio" and ast["cache"] == "direct" and list(ast)[:2] == ["ast", "name"]
-    examples = pathlib.Path(__file__).resolve().parents[2] / "schema" / "examples"
-    small = json.loads((examples / "train_small_files.ast.json").read_text())
+    small = json.loads(ast_path("file_per_sample").read_text())
     assert not {"posix", "api", "cache", "s3", "backend"} & set(small)
-    assert json.loads((examples / "model_load.ast.json").read_text())["posix"] == "mmap"
+    assert json.loads(ast_path("safetensors_load").read_text())["posix"] == "mmap"
 
 
 def test_v19_apis_follow_the_protocols():

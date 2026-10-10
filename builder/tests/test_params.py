@@ -12,8 +12,12 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
 ROOT = BUILDER.parent
-EXAMPLES = ROOT / "schema" / "examples"
-PARAMS = EXAMPLES / "params"
+WORKLOADS = ROOT / "workloads"
+
+
+def ast_path(name):
+    """The committed AST `name`, wherever its mechanism lives under workloads/ (DESIGN_REVIEW.md §3.66)."""
+    return next(WORKLOADS.rglob(f"{name}.ast.json"))
 sys.path.insert(0, str(BUILDER))
 
 from aeiou import emit, params  # noqa: E402
@@ -26,45 +30,53 @@ def _run(args, cwd=BUILDER):
 
 
 def _ast(name):
-    ast = emit.load(EXAMPLES / f"{name}.ast.json")
+    ast = emit.load(ast_path(name))
     return ast, emit.sha256(ast)
 
 
-@pytest.mark.parametrize("path", sorted(PARAMS.glob("*.params.json")), ids=lambda p: p.name)
+def _mechanism(path):
+    """The directory of the mechanism a file belongs to: the nearest one holding an AST."""
+    return next(d for d in path.parents if any(d.glob("*.ast.json")))
+
+
+SETS = sorted(WORKLOADS.rglob("*params.json"))
+
+
+@pytest.mark.parametrize("path", SETS, ids=lambda p: str(p.relative_to(WORKLOADS)))
 def test_committed_sets_fit_their_abstracts(path):
     pset = params.load(path)
     ast, sha = _ast(pset["abstract"])
     assert params.check(ast, pset, ast_sha256=sha, name=path.name) == []
-    assert path.name.startswith(pset["abstract"] + "."), "named <abstract>.<set>.params.json"
+    assert (_mechanism(path) / f"{pset['abstract']}.ast.json").exists(), "a parameter file sits under its abstract's mechanism"
 
 
 def test_defaults_round_trip(tmp_path):
-    ast, sha = _ast("train_small_files")
+    ast, sha = _ast("file_per_sample")
     out = tmp_path / "d.params.json"
-    r = _run(["defaults", EXAMPLES / "train_small_files.ast.json", "-o", out, "--pin"])
+    r = _run(["defaults", ast_path("file_per_sample"), "-o", out, "--pin"])
     assert r.returncode == 0, r.stderr
     pset = params.load(out)
     assert pset["ast_sha256"] == sha
     assert pset["params"] == {k: p["default"] for k, p in ast["params"].items()}
     assert params.check(ast, pset, ast_sha256=sha) == []
-    r = _run(["check", EXAMPLES / "train_small_files.ast.json", out, PARAMS / "train_small_files.smoke.params.json"])
+    r = _run(["check", ast_path("file_per_sample"), out, ast_path("file_per_sample").parent / "params" / "smoke.params.json"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.count("ok   ") == 2
 
 
 def test_value_rules():
-    ast, sha = _ast("train_small_files")
-    base = {"params_version": 1, "abstract": "train_small_files", "params": {}}
-    assert params.check(ast, {**base, "abstract": "other"}) == ["params: for abstract `other`, not `train_small_files`"]
+    ast, sha = _ast("file_per_sample")
+    base = {"params_version": 1, "abstract": "file_per_sample", "params": {}}
+    assert params.check(ast, {**base, "abstract": "other"}) == ["params: for abstract `other`, not `file_per_sample`"]
     assert params.check(ast, {**base, "ast_sha256": "0" * 64}, ast_sha256=sha)[0].startswith("params: for AST 0000")
-    assert params.check(ast, {**base, "params": {"nope": 1}}) == ["params: no parameter `nope` in `train_small_files`"]
+    assert params.check(ast, {**base, "params": {"nope": 1}}) == ["params: no parameter `nope` in `file_per_sample`"]
     assert params.check(ast, {**base, "params": {"gpus": 4}})[0].endswith("--gpus, not by a parameter file")
     assert "the default is a scalar, the value is an array" in params.check(ast, {**base, "params": {"steps": [1]}})[0]
     assert "the default is a scalar, the value is a distribution" in params.check(ast, {**base, "params": {"steps": {"const": 1}}})[0]
     assert params.check(ast, {**base, "params": {"steps": 7, "enumerate": True, "hdr_read": 4096}}) == []
-    ast, _ = _ast("model_load")
-    assert params.check(ast, {**base, "abstract": "model_load", "params": {"off": [1, 2, 3]}}) == []      # arrays may change length
-    assert "elements are a scalar" in params.check(ast, {**base, "abstract": "model_load", "params": {"off": [1, [2]]}})[0]
+    ast, _ = _ast("safetensors_load")
+    assert params.check(ast, {**base, "abstract": "safetensors_load", "params": {"off": [1, 2, 3]}}) == []      # arrays may change length
+    assert "elements are a scalar" in params.check(ast, {**base, "abstract": "safetensors_load", "params": {"off": [1, [2]]}})[0]
 
 
 def test_schema_rejects_malformed_files(tmp_path):
@@ -123,13 +135,13 @@ def make_synthetic_model(d: pathlib.Path) -> list:
 def test_safetensors_table_matches_committed(tmp_path):
     shards = make_synthetic_model(tmp_path)
     out = tmp_path / "m.params.json"
-    r = _run(["safetensors", EXAMPLES / "model_load.ast.json", *shards, "-o", out, "--tp", "8",
+    r = _run(["safetensors", ast_path("safetensors_load"), *shards, "-o", out, "--tp", "8",
               "--doc", "x"])
     assert r.returncode == 0, r.stderr
     made = params.load(out)
-    committed = params.load(PARAMS / "model_load.synthetic.params.json")
+    committed = params.load(ast_path("safetensors_load").parent / "params" / "synthetic.params.json")
     assert made["params"] == committed["params"], \
-        "regenerate with: aeiou-params safetensors ../schema/examples/model_load.ast.json <the fixture's shards> -o ../schema/examples/params/model_load.synthetic.params.json"
+        "regenerate with: aeiou-params safetensors ../workloads/inference/safetensors-load/safetensors_load.ast.json <the fixture's shards> -o ../workloads/inference/safetensors-load/params/synthetic.params.json"
     t = made["params"]
     assert t["shards"] == 2 and len(t["hdr_len"]) == 2 and t["tp"] == 8
     assert len(t["shard"]) == 21 and set(t["split"]) == {"column", "row", "full"}
@@ -145,12 +157,12 @@ def test_safetensors_table_matches_committed(tmp_path):
 # ---- npz ----
 
 def test_npz_framing_is_read_from_real_archives_and_compared_with_the_abstract(tmp_path):
-    """`aeiou-params npz`: the two archive numbers `train_large_samples` takes as parameters,
+    """`aeiou-params npz`: the two archive numbers `npy_per_sample` takes as parameters,
     read from files. The traced writer's archives give the defaults; another set of members
     gives a larger number, which is reported and can be written as a parameter file; archives
     that disagree, a compressed member, and a member that is not first are refused."""
     np = pytest.importorskip("numpy")
-    ast = EXAMPLES / "train_large_samples.ast.json"
+    ast = ast_path("npy_per_sample")
     x = np.zeros((64, 64, 40), np.uint8)
     a, b = tmp_path / "a.npz", tmp_path / "b.npz"
     np.savez(a, x=x, y=np.array([0]))

@@ -4,15 +4,10 @@
 //! semantics behave as specified.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, Params};
 use aeiou::vm::{run_actor, Op, OpCtx, OpKind, Sink};
-
-fn examples() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
-}
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
     Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
@@ -28,76 +23,78 @@ fn dry(text: &str, cfg: &Config, threads: usize) -> dryrun::Report {
 #[test]
 fn hashes_match_check_py() {
     // From `python3 schema/check.py` on 2026-09-30 (corpus sizes became parameters the same day; re-recorded for
-    // contract 0.2 and model_load's `full` split the same day; all again 2026-10-01 for contract 0.3, the
+    // contract 0.2 and safetensors_load's `full` split the same day; all again 2026-10-01 for contract 0.3, the
     // optional `backend`; all again 2026-10-02 for contract 0.4, the optional `same_run` of a namespace, and
-    // for contract 0.5, the wider `at` rule V3, with kv_cache_serving and kv_cache_shared changed under it;
+    // for contract 0.5, the wider `at` rule V3, with lmcache_local_disk and lmcache_shared_fs changed under it;
     // the three KV abstracts again 2026-10-02 for `prefill_step`, `think`, `trim`, and `turns`, DESIGN_REVIEW §3.59,
     // and 2026-10-07 for `sys_per_slot` and the system prompt read only when the engine holds none of the conversation,
-    // then kv_cache_serving for `direct`, LMCache's O_DIRECT calls (its fingerprints at `direct` false unchanged), §3.63;
+    // then lmcache_local_disk for `direct`, LMCache's O_DIRECT calls (its fingerprints at `direct` false unchanged), §3.63;
     // the three again 2026-10-08 for the sub-agent prefix, `kind`, `first_in`, `sys_held`, and `sub_held`, whose defaults
     // leave every fingerprint unchanged; all again 2026-10-09 for contract 0.6, `api` and `cache` in place of
     // `backend`, DESIGN_REVIEW §3.65, every fingerprint unchanged; all again the same day for contract 0.7,
-    // `posix` in place of `api` and `s3` in place of the protocol `object`, every fingerprint unchanged).
+    // `posix` in place of `api` and `s3` in place of the protocol `object`, every fingerprint unchanged; all again
+    // 2026-10-10 when each abstract was renamed for its directory under workloads/, DESIGN_REVIEW §3.66, every
+    // fingerprint unchanged).
     let want = [
-        ("ckpt_restore", "f1d6a4b44da1eff83592b13b02f8bc4b042d3a68873957ecb9d1fbede6f104d1"),
-        ("ckpt_write_dcp", "0bda0a37d52b51e00793870694818f7f5ca20030fb8eeedb7eea858658e3aec9"),
-        ("kv_cache_serving", "a511dadf0cdf7347f63ddaff5d630439b01c298dd278152433a4eec38653b96f"),
-        ("model_load", "8cc6aec86d80257d96b903926b8a46b06427c34ceb3eb6e6ca5bce21c5082fef"),
-        ("train_large_samples", "b1bc4e0488d38b8fe3c7e18ed438bd17311f01eb67f8c2d0e8e5f44ded413fd8"),   // 2026-10-02: the `enumerate` phase, on by default
-        ("train_small_files", "2eea7e658144075ebd4c5ee0dec952d3fe6dbb37f900d07f23bbee5ab7321146"),   // 2026-10-02: `enumerate` on by default
-        ("vdb_build_diskann", "488f947a1208ce9d05c9fae6d060488ff93f461c078f6fb0b911863cbd534409"),
-        ("vdb_search_diskann", "569e26a7a183333cc11faf45fff880cf5f7a1323fbcc14ceb8bbf2393b1d3a02"),
-        ("train_stream_tfrecord", "d78ffeb96e1dc626005cb016d7e3bb7d708d2a4f2593c12af39420f96d3b4ebd"),
-        ("train_stream_parquet", "5872fa913593acf45298b6e2053f58dc7d9d3249ed037152546420902fc579da"),
-        ("train_map_hdf5", "799d0cca43191e4767c671d9fc27aef5cd74c47b3b8b5d6350b9d7c848dc34d9"),
-        ("vdb_search_ivf", "45ece2e4ae9f899a704602c598ae420206e5c47074947923e87826abb36fbe37"),
+        ("dcp_load", "8ce5ccab7d8069ab9df6ed5fe9eff026626f3c942081466cc1fc1cd2c6455c44"),
+        ("dcp_save", "ec466990b90cca88b787b5a1c1d288d4841a0143e95ed925d731330175b46083"),
+        ("lmcache_local_disk", "9b730fb631b30942c834d253046118b3f4f1a622a268e4485a030b095bf25c58"),
+        ("safetensors_load", "2d9c481862395342d3721a8e9244c21349fc18a82d6efb8fca35f8aabf720efe"),
+        ("npy_per_sample", "44262d5af1a138923d50ea56049988d968ebda6088c0025bd60abfce0d291d74"),   // 2026-10-02: the `enumerate` phase, on by default
+        ("file_per_sample", "a2e66f4a8618bb9c1d2971ed4129dd0a9f6ff7c083de6ffdb5f66994445eae99"),   // 2026-10-02: `enumerate` on by default
+        ("diskann_build", "abcdaa71c5db316c4eb499aa769ceb1293dc7f78c912cf23eae6bc1491cd5fb6"),
+        ("diskann_search", "853deb52cc743f1d5ac7fee2c6b5ea86f4e525e826496a61f806326f2f6e456d"),
+        ("tfrecord_stream", "c54cc83889d3e8715a895ca7da2ff353fd17635316f9d299fd7dd6b73efa850e"),
+        ("parquet_stream", "3db79bb582085d0577c0d082c0c2d20a1e4ea66eda76b78a2d03af7b272944cc"),
+        ("hdf5_map", "871810a6f6469acf34099c896a2fae077b7dc05522b8e5c4ed8ac825c385e580"),
+        ("faiss_ivf_ondisk", "89a51a34cdcd9d3dc2376f85d272741bf559db110deb820b9282fd2e0fffae1e"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("kv_cache_shared", "6b1f98ea0364c49ec86f3ec11001f26d9582e75d61c92633c9328f02719e2834"),
-        ("kv_cache_shared_reader", "7afe4b7290b89ac854c1c58bf2aa3f4277efb20017a93e8832b8996fa0744c8d"),
+        ("lmcache_shared_fs", "131cbb484ac7addfa34356fd51d160638f4a12df43212048582a774dffa4b373"),
+        ("lmcache_shared_fs_reader", "a1eb9ae7b8e898559ac58bd6202f453460a29d4d8f416dee655443a0130950a1"),
     ];
     for (name, sha) in want {
-        let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
+        let loaded = aeiou::load(&crate::common::workload_ast(name)).unwrap();
         assert_eq!(loaded.sha256, sha, "{name}");
         // the provenance block carries the same hash
-        let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(examples().join(format!("{name}.ast.json"))).unwrap()).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(crate::common::workload_ast(name)).unwrap()).unwrap();
         assert_eq!(doc["provenance"]["ast_sha256"], sha, "{name}: provenance");
     }
 }
 
 #[test]
 fn golden_fingerprints() {
-    // (abstract, gpus, params, fingerprint, ops) at --seed 1, recorded 2026-09-30 (kv_cache_serving
+    // (abstract, gpus, params, fingerprint, ops) at --seed 1, recorded 2026-09-30 (lmcache_local_disk
     // re-recorded the same day after the conversation-directory `mkdir` was added to the abstract;
-    // vdb_build_diskann likewise when its base file moved to `base/base.fbin`; ckpt_write_dcp when its
-    // readback phase went behind `readback = false`; train_small_files on 2026-10-01 after the trace of
-    // the real loader added the second `lseek` per file, DESIGN_REVIEW.md §3.43; train_large_samples the
-    // same day, rewritten from the trace of `np.load`, §3.44; ckpt_write_dcp from the trace of
-    // `dcp.save`, §3.45, and ckpt_restore with it: its default offsets follow the writer; ckpt_restore
-    // again the same day, its item loop rewritten from the trace of `dcp.load`, §3.47; model_load with the calls of
-    // `safetensors.safe_open` and the small JSON files, same section; vdb_search_ivf from the trace of FAISS
-    // `OnDiskInvertedLists`, §3.49: the index file, the prefetch threads, ids before codes; vdb_search_diskann
-    // 2026-10-02 from the trace of DiskANN's `PQFlashIndex`, §3.50: the load, the entry rounds, 24 to 30 more; vdb_build_diskann
+    // diskann_build likewise when its base file moved to `base/base.fbin`; dcp_save when its
+    // readback phase went behind `readback = false`; file_per_sample on 2026-10-01 after the trace of
+    // the real loader added the second `lseek` per file, DESIGN_REVIEW.md §3.43; npy_per_sample the
+    // same day, rewritten from the trace of `np.load`, §3.44; dcp_save from the trace of
+    // `dcp.save`, §3.45, and dcp_load with it: its default offsets follow the writer; dcp_load
+    // again the same day, its item loop rewritten from the trace of `dcp.load`, §3.47; safetensors_load with the calls of
+    // `safetensors.safe_open` and the small JSON files, same section; faiss_ivf_ondisk from the trace of FAISS
+    // `OnDiskInvertedLists`, §3.49: the index file, the prefetch threads, ids before codes; diskann_search
+    // 2026-10-02 from the trace of DiskANN's `PQFlashIndex`, §3.50: the load, the entry rounds, 24 to 30 more; diskann_build
     // the same day from the trace of `build_disk_index`, same section: the passes over the base, the shard files;
-    // kv_cache_serving the same day from the trace of vLLM with LMCache, §3.51: no lookups on storage, one flat
+    // lmcache_local_disk the same day from the trace of vLLM with LMCache, §3.51: no lookups on storage, one flat
     // directory, whole chunks of the prompt only, reads only for what the engine lost; the three KV-cache abstracts
     // again the same day from the replay of ShareGPT, §3.56: one `reuse` distance, `keep` in place of `local`,
     // `context`, and the measured lengths as defaults; the three again the same day, §3.57: one `keep` draw per
     // round of the open conversations, `kp @ (r − (r mod d + 1))` under the wider rule V3 of contract 0.5).
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         // the directory walk is on by default since 2026-10-02 (DESIGN_REVIEW §3.54): five ops per class directory and
-        // actor in train_small_files (38,462 directories), four per directory in train_large_samples; with
+        // actor in file_per_sample (38,462 directories), four per directory in npy_per_sample; with
         // `enumerate=false` both are what they were
-        ("train_small_files", 2, &[("steps", "10")], 0xfb3215e5607b32ae, 389740),
-        ("train_small_files", 2, &[("steps", "10"), ("enumerate", "false")], 0x71628bdb4289c4c8, 5120),
-        ("train_large_samples", 2, &[("steps", "5")], 0xf755bd4187b75b78, 50491),
-        ("train_large_samples", 2, &[("steps", "5"), ("enumerate", "false")], 0xa2c284c6137f9639, 50451),
-        ("ckpt_write_dcp", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
-        ("ckpt_restore", 2, &[], 0x22990a88db4e6d4f, 368),
-        ("model_load", 2, &[], 0x2668387c7aa4126b, 24682),
-        ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
-        ("vdb_search_ivf", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
+        ("file_per_sample", 2, &[("steps", "10")], 0xfb3215e5607b32ae, 389740),
+        ("file_per_sample", 2, &[("steps", "10"), ("enumerate", "false")], 0x71628bdb4289c4c8, 5120),
+        ("npy_per_sample", 2, &[("steps", "5")], 0xf755bd4187b75b78, 50491),
+        ("npy_per_sample", 2, &[("steps", "5"), ("enumerate", "false")], 0xa2c284c6137f9639, 50451),
+        ("dcp_save", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
+        ("dcp_load", 2, &[], 0x22990a88db4e6d4f, 368),
+        ("safetensors_load", 2, &[], 0x2668387c7aa4126b, 24682),
+        ("diskann_search", 1, &[("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
+        ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
         (
-            "vdb_build_diskann",
+            "diskann_build",
             1,
             &[("sectors", "1000"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000")],
             0xeaf5da9b000203a1,
@@ -107,17 +104,17 @@ fn golden_fingerprints() {
         // before the conversation and system-prompt picks move their sites, so a seed draws other prompts (the fitted
         // files, whose system prompts have one size, keep their counts); re-recorded 2026-10-07 (§3.63): the pick inside
         // `sys_per_slot`'s `when` moves its site again, the same way (with one prompt size the op counts are unchanged)
-        ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x9f7017e7011639d5, 1590),
+        ("lmcache_local_disk", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x9f7017e7011639d5, 1590),
         // the same request stream on LMCache's fs:// backend, and the cold engine on the store it leaves (2026-10-02, §3.52)
-        ("kv_cache_shared", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc7d83399ee6948bc, 3417),
-        ("kv_cache_shared_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x382dba518a89c85f, 2986),
+        ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc7d83399ee6948bc, 3417),
+        ("lmcache_shared_fs_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x382dba518a89c85f, 2986),
         // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations
-        ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
-        ("train_stream_parquet", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),
-        ("train_map_hdf5", 2, &[("samples", "64"), ("per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")], 0x3dd38374803bff38, 384),
+        ("tfrecord_stream", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
+        ("parquet_stream", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),
+        ("hdf5_map", 2, &[("samples", "64"), ("per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")], 0x3dd38374803bff38, 384),
     ];
     for (name, gpus, params, fp, ops) in cases {
-        let text = std::fs::read_to_string(examples().join(format!("{name}.ast.json"))).unwrap();
+        let text = std::fs::read_to_string(crate::common::workload_ast(name)).unwrap();
         let cfg = config(*gpus, 1, params);
         let r1 = dry(&text, &cfg, 1);
         assert_eq!(r1.total.fingerprint, *fp, "{name}: fingerprint {:016x}", r1.total.fingerprint);
@@ -131,9 +128,9 @@ fn golden_fingerprints() {
 #[test]
 fn parameter_files_apply_over_defaults_and_under_overrides() {
     use aeiou::eval::ParamSet;
-    let text = std::fs::read_to_string(examples().join("train_small_files.ast.json")).unwrap();
-    let set = ParamSet::load(&examples().join("params/train_small_files.smoke.params.json")).unwrap();
-    assert_eq!(set.abstract_name, "train_small_files");
+    let text = std::fs::read_to_string(crate::common::workload_ast("file_per_sample.ast.json")).unwrap();
+    let set = ParamSet::load(&crate::common::workloads().join("training/map/file-per-sample/params/smoke.params.json")).unwrap();
+    assert_eq!(set.abstract_name, "file_per_sample");
     // the set (files 4000, steps 50) under --param steps=10 equals the same values given as overrides
     let mut cfg = config(2, 1, &[("steps", "10")]);
     cfg.sets = vec![set.clone()];
@@ -152,25 +149,25 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
         }
     };
     assert!(outcome(r#"{"params_version":1,"abstract":"other","params":{}}"#).contains("for abstract `other`"));
-    assert!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"nope":1}}"#).contains("no parameter `nope`"));
-    assert!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"steps":[1]}}"#).contains("the default is a scalar, the value is an array"));
-    assert!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"step_time":{"const":5}}}"#).contains("the value is a distribution"));
-    assert!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"gpus":2}}"#).contains("--gpus"));
-    assert_eq!(outcome(r#"{"params_version":1,"abstract":"train_small_files","params":{"enumerate":true,"hdr_read":4096}}"#), "accepted");
+    assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"nope":1}}"#).contains("no parameter `nope`"));
+    assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"steps":[1]}}"#).contains("the default is a scalar, the value is an array"));
+    assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"step_time":{"const":5}}}"#).contains("the value is a distribution"));
+    assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"gpus":2}}"#).contains("--gpus"));
+    assert_eq!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"enumerate":true,"hdr_read":4096}}"#), "accepted");
     assert!(ParamSet::parse(r#"{"params_version":2,"abstract":"a","params":{}}"#, "x").is_err());
     assert!(ParamSet::parse(r#"{"params_version":1,"abstract":"a","params":{},"extra":1}"#, "x").is_err());
     assert!(ParamSet::parse(r#"{"params_version":1,"abstract":"a"}"#, "x").is_err());
     // an AST hash pins a set to one shape
-    let pinned = ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"train_small_files","ast_sha256":"{}","params":{{}}}}"#, "0".repeat(64)), "x").unwrap();
+    let pinned = ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"file_per_sample","ast_sha256":"{}","params":{{}}}}"#, "0".repeat(64)), "x").unwrap();
     let cfg = Config { sets: vec![pinned], ..config(2, 1, &[]) };
-    assert!(format!("{:#}", cfg.check_sets("train_small_files", &loaded.sha256).unwrap_err()).contains("is for AST"));
-    let pinned = ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"train_small_files","ast_sha256":"{}","params":{{}}}}"#, loaded.sha256), "x").unwrap();
-    assert!(Config { sets: vec![pinned], ..config(2, 1, &[]) }.check_sets("train_small_files", &loaded.sha256).is_ok());
+    assert!(format!("{:#}", cfg.check_sets("file_per_sample", &loaded.sha256).unwrap_err()).contains("is for AST"));
+    let pinned = ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"file_per_sample","ast_sha256":"{}","params":{{}}}}"#, loaded.sha256), "x").unwrap();
+    assert!(Config { sets: vec![pinned], ..config(2, 1, &[]) }.check_sets("file_per_sample", &loaded.sha256).is_ok());
     // --param keeps the kind too
     assert!(Params::new(&loaded.ast, &config(2, 1, &[("steps", "[1]")])).is_err());
-    // the committed synthetic tensor table drives model_load
-    let text = std::fs::read_to_string(examples().join("model_load.ast.json")).unwrap();
-    let set = ParamSet::load(&examples().join("params/model_load.synthetic.params.json")).unwrap();
+    // the committed synthetic tensor table drives safetensors_load
+    let text = std::fs::read_to_string(crate::common::workload_ast("safetensors_load.ast.json")).unwrap();
+    let set = ParamSet::load(&crate::common::workloads().join("inference/safetensors-load/params/synthetic.params.json")).unwrap();
     let mut cfg = config(2, 1, &[]);
     cfg.sets = vec![set];
     let r = dry(&text, &cfg, 1);
@@ -179,12 +176,12 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
 
 #[test]
 fn seed_changes_drawn_workloads_only() {
-    let text = std::fs::read_to_string(examples().join("train_small_files.ast.json")).unwrap();
+    let text = std::fs::read_to_string(crate::common::workload_ast("file_per_sample.ast.json")).unwrap();
     let a = dry(&text, &config(2, 1, &[("steps", "10")]), 2).total.fingerprint;
     let b = dry(&text, &config(2, 2, &[("steps", "10")]), 2).total.fingerprint;
     assert_ne!(a, b, "the file order depends on the seed");
     // no draw anywhere: the seed is irrelevant, the parameters and the actor ids decide everything
-    let text = std::fs::read_to_string(examples().join("ckpt_restore.ast.json")).unwrap();
+    let text = std::fs::read_to_string(crate::common::workload_ast("dcp_load.ast.json")).unwrap();
     let a = dry(&text, &config(2, 1, &[]), 2).total.fingerprint;
     let b = dry(&text, &config(2, 2, &[]), 2).total.fingerprint;
     assert_eq!(a, b);
@@ -456,7 +453,7 @@ fn validator_rejects_what_check_py_rejects() {
 /// parameters in effect are held to the same rule (§3.57), before anything is evaluated.
 #[test]
 fn parameters_given_are_held_to_the_at_rule() {
-    let text = std::fs::read_to_string(examples().join("kv_cache_serving.ast.json")).unwrap();
+    let text = std::fs::read_to_string(crate::common::workload_ast("lmcache_local_disk.ast.json")).unwrap();
     let loaded = aeiou::load_str(&text).unwrap();
     let small = [("concurrency", "1"), ("warm", "0"), ("requests", "20")];
     let with = |reuse: &str| {

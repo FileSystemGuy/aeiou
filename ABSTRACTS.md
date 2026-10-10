@@ -7,6 +7,11 @@ them (risk R4). The constructs the exercise surfaced are collected in §9; ~~the
 not decisions~~ **all nine were accepted on 2026-09-30** (two with qualifications, §9.6 and
 §9.7) and are carried by the AST schema in `schema/abstract-ast.schema.json`.
 
+**Names (2026-10-10).** The abstracts were renamed for their directories under `workloads/`
+(`DESIGN_REVIEW.md` §3.66, which has the table: `train_small_files` is `file_per_sample`,
+`kv_cache_serving` is `lmcache_local_disk`, …). This document keeps the names it was written
+with; paths in it are the new ones.
+
 **Provenance of the skeletons.** No `strace` of a real application has been captured for this
 project yet. The syscall skeletons below are derived from how the applications are built
 (CPython's `io` module, PyTorch's `DataLoader`, `torch.save`/`torch.load`,
@@ -173,7 +178,7 @@ workload train_small_files {
   separately reported phase, ~~off by default~~ **on by default since 2026-10-02**: the run stays as close to the
   metadata load a real job puts on the storage as to its data load (`DESIGN_REVIEW.md` §3.54).
 
-**Trace (2026-10-01).** `builder/traces/train_small_files`: `ImageFolder` + `DataLoader`,
+**Trace (2026-10-01).** `workloads/training/map/file-per-sample`: `ImageFolder` + `DataLoader`,
 batch 16, 2 workers, 2 epochs over 3,200 real JPEGs (median 111 KiB) on the loopback NFS
 mount (v4.2, rsize 1 MiB); torch 2.14.1, torchvision 0.29.1, Pillow 12.3.0, Python 3.12.3.
 Reasoning in `DESIGN_REVIEW.md` §3.43.
@@ -294,7 +299,7 @@ reads and `11 + chunks(f)` seeks, checked against every file of both traced corp
 the trace; `step_time` from the accelerator. ~~`members` and `lh_len`~~ are gone (2026-10-01):
 the reader takes one member and never reads a local header as a request of its own.
 
-**Trace (2026-10-01).** `builder/traces/train_large_samples`: upstream DLIO's read call (argonne-lcf
+**Trace (2026-10-01).** `workloads/training/map/npy-per-sample`: upstream DLIO's read call (argonne-lcf
 `npz_reader.py`; the MLCommons fork reads differently and is not modeled, `DESIGN_REVIEW.md`
 §3.46) through a
 `DataLoader`, 2 workers, 2 epochs, on the loopback NFS mount, over corpora written the way
@@ -423,7 +428,7 @@ at every item, so nothing is coalesced across items.
   }
 ```
 
-**Trace (2026-10-01).** `builder/traces/ckpt_write_dcp`: `dcp.save` on two ranks (gloo, CPU),
+**Trace (2026-10-01).** `workloads/checkpointing/dcp-save`: `dcp.save` on two ranks (gloo, CPU),
 six `DTensor` items of 16 MiB down to 2 KiB per rank, two checkpoints, on the loopback NFS
 mount; torch 2.14.1. Reasoning in `DESIGN_REVIEW.md` §3.45.
 
@@ -583,7 +588,7 @@ workload ckpt_restore {
 }
 ```
 
-**Trace (2026-10-01).** `builder/traces/ckpt_restore`: `dcp.load` on two ranks (gloo, CPU)
+**Trace (2026-10-01).** `workloads/checkpointing/dcp-load`: `dcp.load` on two ranks (gloo, CPU)
 into `DTensor`s, each rank reading its own shard, on the loopback NFS mount; torch 2.14.1.
 Three checkpoints: `mixed`, nine items of 16 MiB down to 2 KiB per rank with small ones
 between large ones; `small-last`, the six items §3's kit writes; `name-order`, seventeen
@@ -683,7 +688,7 @@ shards by `aeiou-params safetensors` (`schema/README.md` §8); the five-tensor d
 script are a stand-in. Shards are modeled at the largest shard's size (`shard_bytes`), and the
 dataset pattern is ~~`model-{id:05}.safetensors`~~ `model/model-{id:05}.safetensors` since 2026-10-01 (the names are the dataset's, not the model's).
 
-**Trace (2026-10-01).** `builder/traces/model_load`: `AutoModelForCausalLM.from_pretrained`
+**Trace (2026-10-01).** `workloads/inference/safetensors-load`: `AutoModelForCausalLM.from_pretrained`
 on a local directory of five safetensors shards (GPT-2 shape, random weights, 437 MB) on the
 loopback NFS mount; safetensors 0.8.0, transformers 5.18, torch 2.14.1 on CPU. Reasoning in
 `DESIGN_REVIEW.md` §3.47. ~~**The choices other than the backend are not yet confirmed by the user.**~~ **Decided 2026-10-02:** the user confirmed the choices that need no GPU; the tensor table and the copy's thread count wait for one (`DESIGN_REVIEW.md` §3.54).
@@ -801,7 +806,7 @@ workload vdb_search_diskann backend libaio {
 
 **Trace (2026-10-02).** DiskANN's `PQFlashIndex` through diskannpy 0.7.0 over SIFT1M (degree
 64, five nodes to a sector, 200,001 sectors, 13 medoids from a 13-shard build), search list
-100, beam 4, on the loopback NFS mount; kit in `builder/traces/vdb_search_diskann`, reasoning
+100, beam 4, on the loopback NFS mount; kit in `workloads/vdb/diskann-search`, reasoning
 in `DESIGN_REVIEW.md` §3.50.
 
 - **Load.** The PQ-compressed vectors (32 MB) are read through a C++ stream: three `lseek`s,
@@ -909,7 +914,7 @@ workload vdb_search_ivf backend mmap {
 
 **Trace (2026-10-01).** faiss-cpu 1.15.1, `IndexIVFPQ` built as `IVF1024,PQ32` over SIFT1M by
 the documented route (shard indexes, then `merge_ondisk`), searched with `nprobe = 64` on the
-loopback NFS mount; kit in `builder/traces/vdb_search_ivf`, reasoning in `DESIGN_REVIEW.md`
+loopback NFS mount; kit in `workloads/vdb/faiss-ivf-ondisk`, reasoning in `DESIGN_REVIEW.md`
 §3.49.
 
 - **`read_index` reads the index file and maps the lists file.** `open`, `fstat`, seven
@@ -1050,7 +1055,7 @@ close; `shard_bytes` is `overlap · n / shards` rows.)
 
 **Trace (2026-10-02).** `build_disk_index` through diskannpy 0.7.0 on SIFT1M (512 MB of
 vectors), degree 64, 20 threads, a memory budget that gives 13 shards; 407 s; kit in
-`builder/traces/vdb_build_diskann`, reasoning in `DESIGN_REVIEW.md` §3.50.
+`workloads/vdb/diskann-build`, reasoning in `DESIGN_REVIEW.md` §3.50.
 
 - **The base file is read whole twenty times** (10.2 GB for a 512 MB file): five passes
   through a block reader and fifteen loads into memory, one of them per shard. The draft
@@ -1216,7 +1221,7 @@ lseek(b, 0, CUR), read(b, $chunk_bytes), close(b)`; `chunk_write` the same with
 **Trace (2026-10-02).** vLLM 0.30.0 with LMCache 0.5.5 (`LMCacheConnectorV1`, `local_disk` on
 the loopback NFS mount, `local_cpu` off), Qwen2.5-0.5B (12,288 bytes of KV per token), GPU KV
 memory limited to 96 MiB; 8 conversations of 5 turns round-robin from one client, 2 system
-prompts; kit in `builder/traces/kv_cache_serving`, reasoning in `DESIGN_REVIEW.md` §3.51.
+prompts; kit in `workloads/kvcache/lmcache-local-disk`, reasoning in `DESIGN_REVIEW.md` §3.51.
 
 - **No lookup reaches storage.** LMCache's index is in memory: no `stat`, no `access`, no
   directory read. The whole trace on the cache directory is 47 chunk writes, 47 chunk
@@ -1342,7 +1347,7 @@ chunk names come from Python's per-process hash, and with the hash seed fixed
 none it had not written. LMCache's backend for a store that engines share is `remote_url:
 fs://…`, and it was traced twice on the loopback NFS mount with the 40 requests above: an
 engine on an empty store, then a restarted engine on the filled store, sent the same
-requests byte for byte (`chat.py --save`, `--replay`). Kit in `builder/traces/kv_cache_shared`,
+requests byte for byte (`chat.py --save`, `--replay`). Kit in `workloads/kvcache/lmcache-shared-fs`,
 reasoning in `DESIGN_REVIEW.md` §3.52.
 
 - **The store is the directory.** No index: a lookup is one `stat` per whole chunk of the
@@ -1360,7 +1365,7 @@ reasoning in `DESIGN_REVIEW.md` §3.52.
   the new ones included: the reader loads those where the writer computed and stored them.
 - **The reader writes nothing.** 91 loads and 168 lookups, against the writer's 47 stores,
   47 loads, and 161 lookups.
-- **Two abstracts from one script** (`builder/abstracts/kv_cache_shared.py`): the same
+- **Two abstracts from one script** (`workloads/kvcache/lmcache-shared-fs/lmcache_shared_fs.py`): the same
   request stream, with the store empty (a namespace) or filled (`input`, V14). The reader
   is run with the writer's `--seed`, `--gpus`, and parameters; the conversation ids are
   positional draws at the same sites in both, so the reader names the chunks the writer
@@ -1699,7 +1704,7 @@ Three workloads over container datasets, written straight in builder form (no pa
 the shapes are the loaders' and the format classes carry the readers' protocols,
 `GRAMMAR_OPTIONS.md` §6, `DESIGN_REVIEW.md` §3.28):
 
-- **`train_stream_tfrecord`, `train_stream_parquet`** (`builder/abstracts/train_stream_shards.py`,
+- **`train_stream_tfrecord`, `train_stream_parquet`** (`workloads/training/stream/tfrecord/tfrecord_stream.py`,
   `PROJECT_BRIEF.md` §6 item 15): the tf.data shape, and HF `streaming=True`, Ray Data, DALI
   over shards. The input pipeline shuffles the shard list and interleaves `cycle` shards; each
   is streamed whole by its reader library; the training loop takes a shard every
@@ -1707,7 +1712,7 @@ the shapes are the loaders' and the format classes carry the readers' protocols,
   CPU is one `compute` per shard; the shuffle buffer and in-shard batch boundaries are
   application memory. What it stresses: large sequential reads (TFRecord: positioned 256 KiB
   reads; Parquet: `fadvise(WILLNEED)` readahead then multi-MiB `pread`s), few opens.
-- **`train_map_hdf5`** (`builder/abstracts/train_map_hdf5.py`): a DataLoader whose
+- **`train_map_hdf5`** (`workloads/training/map/hdf5/hdf5_map.py`): a DataLoader whose
   `__getitem__` opens the container holding sample `i`, reads row `i` through libhdf5's
   sieve, and closes it. Cut: an open-file cache (the per-item open is the fork-safe shape).
   What it stresses: an open, eight small metadata reads, and one 192 KiB positioned read per

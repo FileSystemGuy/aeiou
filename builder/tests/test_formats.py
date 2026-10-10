@@ -15,7 +15,12 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
 ROOT = BUILDER.parent
-EXAMPLES = ROOT / "schema" / "examples"
+WORKLOADS = ROOT / "workloads"
+
+
+def ast_path(name):
+    """The committed AST `name`, wherever its mechanism lives under workloads/ (DESIGN_REVIEW.md §3.66)."""
+    return next(WORKLOADS.rglob(f"{name}.ast.json"))
 sys.path.insert(0, str(BUILDER))
 pytest.importorskip("pyarrow")
 pytest.importorskip("h5py")
@@ -108,15 +113,15 @@ def test_specs_probes_and_v9():
 # ---- datagen round trips ----
 
 CASES = {
-    "train_stream_tfrecord": ["samples=768", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
-    "train_stream_parquet": ["samples=768", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
-    "train_map_hdf5": ["samples=64", "per_file=16", "batch=4", "workers=2", "steps=4"],
+    "tfrecord_stream": ["samples=768", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
+    "parquet_stream": ["samples=768", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
+    "hdf5_map": ["samples=64", "per_file=16", "batch=4", "workers=2", "steps=4"],
 }
 
 
 def _datagen(name, tmp_path, params):
     root = tmp_path / "root"
-    r = _tool("datagen", [EXAMPLES / f"{name}.ast.json", "--root", root, "--threads", "3", *sum([["--param", p] for p in params], [])])
+    r = _tool("datagen", [ast_path(name), "--root", root, "--threads", "3", *sum([["--param", p] for p in params], [])])
     assert r.returncode == 0, r.stdout + r.stderr
     return root, r.stdout
 
@@ -139,10 +144,10 @@ def _parse_tfrecord(path):
 
 
 def test_datagen_tfrecord_round_trip(tmp_path):
-    root, out = _datagen("train_stream_tfrecord", tmp_path, CASES["train_stream_tfrecord"])
+    root, out = _datagen("tfrecord_stream", tmp_path, CASES["tfrecord_stream"])
     files = sorted((root / "train").glob("*.tfrecord"))
     assert len(files) == 6
-    ast = emit.load(EXAMPLES / "train_stream_tfrecord.ast.json")
+    ast = emit.load(ast_path("tfrecord_stream"))
     seed = ast["datasets"]["shards"]["files"]["seed"]
     sizes = _parse_tfrecord(files[2])
     assert sizes == [sample_size({"lognormal": {"median": 20000, "sigma": 0.45}}, seed, 2 * 128 + i) for i in range(128)]
@@ -153,18 +158,18 @@ def test_datagen_tfrecord_round_trip(tmp_path):
     assert m["provenance"]["files_written"] == 6
     assert "id " in out
     # a second datagen into the same root is refused: datasets are read-only
-    r = _tool("datagen", [EXAMPLES / "train_stream_tfrecord.ast.json", "--root", root, *sum([["--param", p] for p in CASES["train_stream_tfrecord"]], [])])
+    r = _tool("datagen", [ast_path("tfrecord_stream"), "--root", root, *sum([["--param", p] for p in CASES["tfrecord_stream"]], [])])
     assert r.returncode == 1 and "not empty" in r.stderr
 
 
 def test_datagen_parquet_reads_back_with_pyarrow(tmp_path):
     import pyarrow.parquet as pq
-    root, _ = _datagen("train_stream_parquet", tmp_path, CASES["train_stream_parquet"])
+    root, _ = _datagen("parquet_stream", tmp_path, CASES["parquet_stream"])
     files = sorted((root / "train").glob("*.parquet"))
     assert len(files) == 6
     t = pq.read_table(files[1])
     assert t.num_rows == 128 and t.column_names == ["image", "label"]
-    ast = emit.load(EXAMPLES / "train_stream_parquet.ast.json")
+    ast = emit.load(ast_path("parquet_stream"))
     seed = ast["datasets"]["shards"]["files"]["seed"]
     lens = [len(v.as_py()) for v in t.column("image")]
     assert lens == [sample_size({"lognormal": {"median": 20000, "sigma": 0.45}}, seed, 128 + i) for i in range(128)]
@@ -180,7 +185,7 @@ def test_datagen_parquet_reads_back_with_pyarrow(tmp_path):
 def test_datagen_hdf5_reads_back_with_h5py(tmp_path):
     import h5py
     import numpy as np
-    root, _ = _datagen("train_map_hdf5", tmp_path, CASES["train_map_hdf5"])
+    root, _ = _datagen("hdf5_map", tmp_path, CASES["hdf5_map"])
     files = sorted((root / "train").glob("*.h5"))
     assert len(files) == 4
     with h5py.File(files[3], "r") as h:
@@ -197,21 +202,21 @@ def test_datagen_hdf5_reads_back_with_h5py(tmp_path):
 def test_runner_executes_the_generated_corpus(name, tmp_path):
     params = CASES[name]
     root, _ = _datagen(name, tmp_path, params)
-    ast_path = EXAMPLES / f"{name}.ast.json"
+    ast_file = ast_path(name)
     flags = sum([["--param", p] for p in params], [])
-    dry = subprocess.run([RUNNER, "dry-run", ast_path, "--gpus", "2", "--seed", "3", *flags], capture_output=True, text=True)
+    dry = subprocess.run([RUNNER, "dry-run", ast_file, "--gpus", "2", "--seed", "3", *flags], capture_output=True, text=True)
     assert dry.returncode == 0, dry.stderr
     fp = [l.split()[1] for l in dry.stdout.splitlines() if l.startswith("fingerprint ")][0]
     # the thread-per-actor backends and both event-loop engines issue the same ops over the same corpus
     for backend in ("sync", "io_uring", "posix-aio", "libaio", "mmap"):
-        run = subprocess.run([RUNNER, "run", ast_path, "--root", root, "--gpus", "2", "--seed", "3", "--time-scale", "0",
+        run = subprocess.run([RUNNER, "run", ast_file, "--root", root, "--gpus", "2", "--seed", "3", "--time-scale", "0",
                               "--posix", backend, "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
         assert run.returncode == 0, backend + ": " + run.stdout + run.stderr
         assert "fingerprint matches" in run.stdout
-        if name == "train_stream_parquet":
+        if name == "parquet_stream":
             assert "fadvise" in run.stdout
     # the Rust writer refuses a dataset that has a format class
-    r = subprocess.run([RUNNER, "datagen", ast_path, "--root", tmp_path / "other", *flags], capture_output=True, text=True)
+    r = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "other", *flags], capture_output=True, text=True)
     assert r.returncode != 0 and "format class" in r.stderr
 
 
@@ -219,21 +224,21 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
 def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(tmp_path):
     """`--endpoint NAME=DIR` (DESIGN_REVIEW.md §3.65): the Python writer puts the dataset's root at DIR,
     the runner finds it there, and the fingerprint is the one of the corpus under --root."""
-    name, params = "train_stream_tfrecord", CASES["train_stream_tfrecord"]
+    name, params = "tfrecord_stream", CASES["tfrecord_stream"]
     flags = sum([["--param", p] for p in params], [])
     root, elsewhere = tmp_path / "root", tmp_path / "elsewhere"
     root.mkdir()
-    r = _tool("datagen", [EXAMPLES / f"{name}.ast.json", "--root", root, "--endpoint", f"shards={elsewhere}", "--threads", "3", *flags])
+    r = _tool("datagen", [ast_path(name), "--root", root, "--endpoint", f"shards={elsewhere}", "--threads", "3", *flags])
     assert r.returncode == 0, r.stdout + r.stderr
     assert (elsewhere / ".aeiou-dataset.json").exists() and not any(root.iterdir())
-    ast_path = EXAMPLES / f"{name}.ast.json"
-    dry = subprocess.run([RUNNER, "dry-run", ast_path, "--gpus", "2", "--seed", "3", *flags], capture_output=True, text=True)
+    ast_file = ast_path(name)
+    dry = subprocess.run([RUNNER, "dry-run", ast_file, "--gpus", "2", "--seed", "3", *flags], capture_output=True, text=True)
     fp = [l.split()[1] for l in dry.stdout.splitlines() if l.startswith("fingerprint ")][0]
-    run = subprocess.run([RUNNER, "run", ast_path, "--root", root, "--endpoint", f"shards={elsewhere}", "--gpus", "2", "--seed", "3",
+    run = subprocess.run([RUNNER, "run", ast_file, "--root", root, "--endpoint", f"shards={elsewhere}", "--gpus", "2", "--seed", "3",
                           "--time-scale", "0", "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "fingerprint matches" in run.stdout and f"endpoint shards  root train/  at {elsewhere}" in run.stdout
-    bad = _tool("datagen", [ast_path, "--root", root, "--endpoint", "nope=/x", *flags])
+    bad = _tool("datagen", [ast_file, "--root", root, "--endpoint", "nope=/x", *flags])
     assert bad.returncode == 2 and "no dataset or namespace `nope`" in bad.stderr
 
 
@@ -255,7 +260,7 @@ def test_size_draws_match_the_runner(tmp_path):
 
 
 def test_npz_framing_of_the_installed_numpy_is_the_abstracts_default():
-    """`train_large_samples` takes `framing` and `cd_len` as parameters whose defaults were read
+    """`npy_per_sample` takes `framing` and `cd_len` as parameters whose defaults were read
     off a trace (498 and 102 for `np.savez(x=<uint8 volume>, y=[0])`). They are facts of NumPy's
     writer (the padded `.npy` header, the forced zip64 local headers) and of the member names, so
     this writes such an archive in memory with the installed NumPy and compares. A failure here
@@ -263,7 +268,7 @@ def test_npz_framing_of_the_installed_numpy_is_the_abstracts_default():
     import io
     import zipfile
     np = pytest.importorskip("numpy")
-    ast = json.loads((ROOT / "schema" / "examples" / "train_large_samples.ast.json").read_text())
+    ast = json.loads(ast_path("npy_per_sample").read_text())
     want = {k: ast["params"][k]["default"] for k in ("framing", "cd_len")}
     for shape in ((256, 256, 16), (256, 256, 300)):          # independent of the volume's size
         x = np.zeros(shape, np.uint8)

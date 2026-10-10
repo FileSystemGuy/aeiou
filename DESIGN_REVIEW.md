@@ -6,6 +6,11 @@ Status: review of the pre-implementation design (2026-09-25). Reviewed documents
 The fixes listed here have been applied to those documents. This file records the reasoning so
 it is not lost when the documents are later condensed.
 
+**Names (2026-10-10).** The abstracts were renamed for their directories under `workloads/`
+(`DESIGN_REVIEW.md` §3.66, which has the table: `train_small_files` is `file_per_sample`,
+`kv_cache_serving` is `lmcache_local_disk`, …). Sections before §3.66 keep the names and paths they were
+written with.
+
 ## 1. Verdict
 
 The design is sound. The Feistel consumer, positional sharding by global GPU id, counter-based
@@ -4741,6 +4746,31 @@ like 112-byte runs. The column on the right places each traced workload, from it
    `aeiou-catalog`, and `CATALOG.md`.~~ *Left to me by the user 2026-10-10: two commits, the
    move (layout, names, tests, documents) first, then the dictionary, `shape.json`,
    `aeiou-catalog`, and `CATALOG.md`; before `aeiou-datagen` to S3.*
+
+**Built 2026-10-10: the move (the first of the two commits).** `builder/abstracts/`,
+`builder/traces/`, and `schema/examples/` are gone; every file moved with `git mv` into the
+tree of the mapping table, and every AST renamed for its directory and regenerated beside its
+script (`aeiou-build` writes there by default). Each AST's hash changed (its name and its
+provenance's script name); the golden test re-records the hashes and confirms every
+fingerprint unchanged. `train_stream_shards.py` is split into `tfrecord_stream.py` and
+`parquet_stream.py`, each repeating the shape. The tests find an AST by name anywhere under
+`workloads/` (`runner/aeiou/tests/common/mod.rs`, `ast_path` in each Python test file);
+every parameter file under the tree is checked against its abstract, and must sit under its
+abstract's mechanism; CI builds the scripts outside `kit/` and checks every `*params.json`;
+the release tarball ships the tree's ASTs, parameter files, and READMEs. A README per case
+and for the three mechanisms without one; `workloads/README.md` with the layout and a
+hand-kept table until `CATALOG.md` is generated. *Choices made in the build, open to
+revision:* (1) a capture is named by its date when the case has one, by what distinguishes it
+otherwise (`replay-2gib-pool`, `replay-6gib-pool`); (2) a capture holds `fitted.params.json`
+only when its fit differs from the case's `params.json` (the AgentX replays; for every other
+capture the case's set is the fit); (3) the 6 GiB AgentX replay is a capture of `agentx`, not
+a case: the engine's pool is a condition of the capture (§3.64), the abstract's parameters
+follow it; (4) the AgentX case's `params.json` is the fit to the whole corpus (393 sessions,
+32 MiB chunks), a candidate use case left unsettled in its README (`keep` not measured, never
+traced at that scale), every other case an example case; (5) the verdicts stay in
+`builder/tests/test_trace.py` (`CAPTURE_PAIRS`) until `capture.toml` holds them; (6) the
+`provenance.ast_sha256` of the two safetensors parameter files is left as recorded: it says
+which AST the tool read when it wrote them, and it was already older than the current one.
 
 ### 3.67 Client caches, the 5× rule, the harness's topology, and fidelity for small datasets (discussed and decided 2026-10-10; the fidelity tooling on the backlog)
 

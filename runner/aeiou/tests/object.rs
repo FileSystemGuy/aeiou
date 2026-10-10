@@ -29,15 +29,11 @@ fn tmpdir(tag: &str) -> PathBuf {
     d
 }
 
-fn examples() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
-}
-
 /// A committed example with its datasets and namespaces `names` declared `protocol: s3`, as a
 /// file in `dir`; when no name is left `posix`, its declared POSIX API and cache mode go too
 /// (V19: an API only for a protocol with names).
 fn object_variant(example: &str, names: &[&str], dir: &Path) -> PathBuf {
-    let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(examples().join(format!("{example}.ast.json"))).unwrap()).unwrap();
+    let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(crate::common::workload_ast(example)).unwrap()).unwrap();
     for n in names {
         if let Some(ns) = d.get_mut("namespaces").and_then(|v| v.get_mut(*n)) {
             ns["protocol"] = "s3".into();
@@ -135,7 +131,7 @@ fn fingerprint(out: &str) -> String {
 fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint() {
     let Some(m) = minio("an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint") else { return };
     let dir = tmpdir("large");
-    let ast = object_variant("train_large_samples", &["train"], &dir);
+    let ast = object_variant("npy_per_sample", &["train"], &dir);
     let ast = ast.to_str().unwrap();
     // 20 MiB samples: three parts each (8 + 8 + 4 MiB), read in 1 MiB requests across the seams
     let params = ["--param", "files=12", "--param", "sample_mean=20971520", "--param", "sample_sd=0", "--param", "steps=2", "--param", "batch=2", "--param", "workers=1", "--param", "step_time=0"];
@@ -153,7 +149,7 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
 
     // the POSIX writer's files, from the same definition, are the objects' bytes
     let posix = dir.join("posix");
-    let plain = examples().join("train_large_samples.ast.json");
+    let plain = crate::common::workload_ast("npy_per_sample.ast.json");
     let mut a = vec!["datagen", plain.to_str().unwrap(), "--root", posix.to_str().unwrap()];
     a.extend(params);
     ok(&aeiou(None, &a));
@@ -190,7 +186,7 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
 fn listings_and_stats_of_prefixes_read_like_directories() {
     let Some(m) = minio("listings_and_stats_of_prefixes_read_like_directories") else { return };
     let dir = tmpdir("small");
-    let ast = object_variant("train_small_files", &["train"], &dir);
+    let ast = object_variant("file_per_sample", &["train"], &dir);
     let ast = ast.to_str().unwrap();
     // four directories of 1300 files, walked by `stat` and `readdir` at startup (the counts are
     // checked against the definition, so the manifest object is not counted), and a header read
@@ -228,8 +224,8 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     // name and renamed, so with 5 MiB parts each is a multipart upload of two parts and a copy;
     // the system prompts (datasets inside the namespace's root) live under the same prefix
     let objects = ["sysp", "subp", "kv"];
-    let writer = object_variant("kv_cache_shared", &objects, &dir);
-    let reader = object_variant("kv_cache_shared_reader", &objects, &dir);
+    let writer = object_variant("lmcache_shared_fs", &objects, &dir);
+    let reader = object_variant("lmcache_shared_fs_reader", &objects, &dir);
     let (writer, reader) = (writer.to_str().unwrap(), reader.to_str().unwrap());
     let reuse = r#"reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}"#;
     let keep = r#"keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}"#;
@@ -270,7 +266,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
 
     // the same run on a directory: its files are the objects, name for name and byte for byte
     let posix = dir.join("posix");
-    let plain = examples().join("kv_cache_shared.ast.json");
+    let plain = crate::common::workload_ast("lmcache_shared_fs.ast.json");
     let plain = plain.to_str().unwrap();
     ok(&call(None, with("datagen", plain, &["--root", posix.to_str().unwrap()])));
     ok(&call(None, with("run", plain, &["--root", posix.to_str().unwrap()])));
@@ -294,7 +290,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     let mut a = at.to_vec();
     a.extend(["--expect-fingerprint", &want]);
     let out = ok(&call(Some(&m), with("run", reader, &a)));
-    assert!(out.contains("input namespace(s) kv at kv/: written by `kv_cache_shared`"), "{out}");
+    assert!(out.contains("input namespace(s) kv at kv/: written by `lmcache_shared_fs`"), "{out}");
     assert!(out.contains("fingerprint matches"), "{out}");
     a.extend(["--s3", "async"]);
     assert!(ok(&call(Some(&m), with("run", reader, &a))).contains("fingerprint matches"));
@@ -302,7 +298,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     // both protocols in one run: the system prompts in a directory, the chunks in the bucket,
     // on the ring and through the engine from the same loops
     std::fs::create_dir_all(dir.join("mixed")).unwrap();
-    let mixed = object_variant("kv_cache_shared", &["kv"], &dir.join("mixed"));
+    let mixed = object_variant("lmcache_shared_fs", &["kv"], &dir.join("mixed"));
     let mixed = mixed.to_str().unwrap();
     let mroot = dir.join("mixed/root");
     let mroot = mroot.to_str().unwrap();
@@ -337,7 +333,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
 #[test]
 fn object_names_need_object_endpoints() {
     let dir = tmpdir("refusals");
-    let ast = object_variant("train_small_files", &["train"], &dir);
+    let ast = object_variant("file_per_sample", &["train"], &dir);
     let ast = ast.to_str().unwrap();
     let root = dir.join("root");
     let root = root.to_str().unwrap();
@@ -354,7 +350,7 @@ fn object_names_need_object_endpoints() {
     refused(&run(&["--endpoint", "train=s3://bench/t", "--s3", "threads"]), "--s3 threads: not one of blocking, async");
     refused(&run(&["--endpoint", "train=s3://bench/t", "--threads", "2"]), "--threads sets the event-loop threads");
     // both protocols: their APIs are of one kind
-    let mixed = object_variant("kv_cache_shared", &["kv"], &dir);
+    let mixed = object_variant("lmcache_shared_fs", &["kv"], &dir);
     let at = ["run", mixed.to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "kv=s3://bench/x", "--endpoint", "sysp=/p/sysp", "--endpoint", "subp=/p/subp"];
     let o = aeiou(None, &[&at[..], &["--posix", "io_uring"]].concat());
     refused(&o, "--posix io_uring with --s3 blocking: one is event-driven and the other a thread per actor");
@@ -363,7 +359,7 @@ fn object_names_need_object_endpoints() {
     refused(&run(&["--endpoint", "train=s3://bench/t", "--object-threads", "0"]), "--object-threads 0");
     refused(&run(&["--endpoint", "train=s3://bench/t", "--object-part-mib", "4"]), "--object-part-mib 4: S3 takes parts of 5 MiB to 5 GiB");
     // a posix abstract has no use for the engine's threads or an object endpoint
-    let plain = examples().join("train_small_files.ast.json");
+    let plain = crate::common::workload_ast("file_per_sample.ast.json");
     let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--object-threads", "4"]);
     refused(&o, "--object-threads: no dataset or namespace is placed in an object store");
     let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--object-part-mib", "8"]);
@@ -375,7 +371,7 @@ fn object_names_need_object_endpoints() {
     let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--posix"]);
     refused(&o, "a value is required for '--posix <API>'");
     // a regions file has no object form
-    let vdb = object_variant("vdb_search_diskann", &["index"], &dir);
+    let vdb = object_variant("diskann_search", &["index"], &dir);
     // its other names stay posix under its declared `libaio`, so the S3 client is async (V19)
     let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&vdb).unwrap()).unwrap();
     d["s3"] = "async".into();

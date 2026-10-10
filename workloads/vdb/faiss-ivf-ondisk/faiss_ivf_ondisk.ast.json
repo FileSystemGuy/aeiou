@@ -1,0 +1,377 @@
+{
+  "ast": "0.7",
+  "name": "faiss_ivf_ondisk",
+  "doc": "Per search call and OpenMP slice, prefetch threads touch every inverted list the slice's queries probe; lists chosen by popularity.",
+  "posix": "mmap",
+  "params": {
+    "threads": {
+      "default": 32,
+      "unit": "count",
+      "doc": "[config] OpenMP threads: a search call of n queries runs min(threads, n) slices"
+    },
+    "calls": {
+      "default": 100000,
+      "unit": "count",
+      "doc": "search calls"
+    },
+    "batch": {
+      "default": 1,
+      "unit": "count",
+      "doc": "[config] queries per slice per call (the call's batch is threads * batch)"
+    },
+    "nprobe": {
+      "default": 64,
+      "unit": "count"
+    },
+    "prefetch": {
+      "default": 32,
+      "unit": "count",
+      "doc": "prefetch threads per slice: min(32, batch * nprobe) (traced); batch * nprobe is modeled as a multiple of it"
+    },
+    "list_pop": {
+      "default": {
+        "zipf": {
+          "s": 0.2
+        }
+      },
+      "doc": "list popularity; measured 0.20-0.25 on SIFT1M with its own query set"
+    },
+    "distance": {
+      "default": 400000,
+      "unit": "ns",
+      "doc": "[measure] scan time per query"
+    },
+    "lists": {
+      "default": 1000000,
+      "unit": "count",
+      "doc": "[config] inverted lists"
+    },
+    "list_bytes": {
+      "default": {
+        "lognormal": {
+          "median": 40960,
+          "sigma": 0.4
+        }
+      },
+      "doc": "[config] codes + ids of one list: vectors per list * (code size + 8); sigma measured 0.39 on SIFT1M"
+    },
+    "code_size": {
+      "default": 32,
+      "unit": "bytes",
+      "doc": "[config] bytes of one vector's code (PQ32); its id is 8 more"
+    },
+    "index_bytes": {
+      "default": 553779476,
+      "unit": "bytes",
+      "doc": "[config] the index file: centroids (lists * dimension * 4 bytes; 128 dimensions here), codebooks, 16 bytes per list"
+    },
+    "index_reads": {
+      "default": [
+        8192,
+        536862720,
+        8192,
+        122880,
+        8192,
+        16769024,
+        8192
+      ],
+      "unit": "bytes",
+      "doc": "[config] read lengths on the index file: stdio fills 8,192 bytes, and reads the bulk of each large array (centroids, codebooks, list table) directly"
+    }
+  },
+  "datasets": {
+    "lists": {
+      "regions": {
+        "file": "ivf/merged_index.ivfdata",
+        "count": {
+          "param": "lists"
+        },
+        "slot": 262144,
+        "size": {
+          "param": "list_bytes"
+        },
+        "seed": 1592646270
+      }
+    },
+    "index": {
+      "files": {
+        "pattern": "index/populated-{id}.index",
+        "count": 1,
+        "size": {
+          "const": {
+            "param": "index_bytes"
+          }
+        },
+        "seed": 1592646271
+      }
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "let": {
+            "name": "i",
+            "value": {
+              "file": {
+                "dataset": "index",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "i"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "fstat": {
+            "file": {
+              "ref": "i"
+            }
+          }
+        },
+        {
+          "loop": {
+            "index": "r",
+            "to": {
+              "len": "index_reads"
+            },
+            "body": [
+              {
+                "read": {
+                  "file": {
+                    "ref": "i"
+                  },
+                  "len": {
+                    "elem": {
+                      "array": "index_reads",
+                      "index": {
+                        "index": "r"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "let": {
+            "name": "f",
+            "value": {
+              "file": {
+                "dataset": "lists",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "f"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "i"
+            }
+          }
+        },
+        {
+          "loop": {
+            "index": "q",
+            "to": {
+              "param": "calls"
+            },
+            "body": [
+              {
+                "parallel": {
+                  "index": "th",
+                  "width": {
+                    "param": "threads"
+                  },
+                  "body": [
+                    {
+                      "parallel": {
+                        "index": "p",
+                        "width": {
+                          "param": "prefetch"
+                        },
+                        "body": [
+                          {
+                            "loop": {
+                              "index": "k",
+                              "to": {
+                                "div": [
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "batch"
+                                      },
+                                      {
+                                        "param": "nprobe"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "param": "prefetch"
+                                  }
+                                ]
+                              },
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "c",
+                                    "value": {
+                                      "pick": {
+                                        "dataset": "lists",
+                                        "dist": {
+                                          "param": "list_pop"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "let": {
+                                    "name": "ids",
+                                    "value": {
+                                      "div": [
+                                        {
+                                          "mul": [
+                                            {
+                                              "size": {
+                                                "ref": "c"
+                                              }
+                                            },
+                                            8
+                                          ]
+                                        },
+                                        {
+                                          "add": [
+                                            {
+                                              "param": "code_size"
+                                            },
+                                            8
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "ref": "ids"
+                                    },
+                                    "offset": {
+                                      "sub": [
+                                        {
+                                          "add": [
+                                            {
+                                              "offset": {
+                                                "ref": "c"
+                                              }
+                                            },
+                                            {
+                                              "size": {
+                                                "ref": "c"
+                                              }
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "ref": "ids"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "sub": [
+                                        {
+                                          "size": {
+                                            "ref": "c"
+                                          }
+                                        },
+                                        {
+                                          "ref": "ids"
+                                        }
+                                      ]
+                                    },
+                                    "offset": {
+                                      "offset": {
+                                        "ref": "c"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "compute": {
+                        "ns": {
+                          "mul": [
+                            {
+                              "param": "distance"
+                            },
+                            {
+                              "param": "batch"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "f"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "faiss_ivf_ondisk.py",
+      "sha256": "146a8d9229ae55d1d2b8815cd99a0a0a42cbb5d7dbd0e0ab0d71bd2c3578840c",
+      "builder_version": "0.1.0",
+      "git": "7b115db69f80-dirty"
+    },
+    "python": "3.12.13",
+    "built_twice_identical": true,
+    "ast_sha256": "89a51a34cdcd9d3dc2376f85d272741bf559db110deb820b9282fd2e0fffae1e"
+  }
+}

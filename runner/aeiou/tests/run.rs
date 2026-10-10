@@ -24,17 +24,13 @@ fn tmpdir(tag: &str) -> PathBuf {
     d
 }
 
-fn examples() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
-}
-
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
     Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
 }
 
 /// A run is the process: the model is leaked so the actor threads can borrow it.
 fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {
-    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap()));
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&crate::common::workload_ast(name)).unwrap()));
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
@@ -87,7 +83,7 @@ fn dry_fingerprint(model: &Model<'_>) -> (u64, u64, u64) {
 fn small_files_training_round_trip() {
     let root = tmpdir("tsf");
     let params = [("files", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("enumerate", "true")];
-    let (loaded, cfg, model) = leaked_model("train_small_files", config(2, 7, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(2, 7, &params));
     gen(loaded, cfg, model, &root);
     let checks = run::check_datasets(loaded, cfg, &root).unwrap();
     assert_eq!(checks.len(), 1);
@@ -122,17 +118,17 @@ fn small_files_training_round_trip() {
 #[test]
 fn manifest_mismatch_and_missing_are_refused() {
     let root = tmpdir("manifest");
-    let (loaded, cfg, model) = leaked_model("train_small_files", config(1, 1, &[("files", "50")]));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 1, &[("files", "50")]));
     // nothing generated yet
     assert!(run::check_datasets(loaded, cfg, &root).unwrap_err().to_string().contains("datagen"));
     gen(loaded, cfg, model, &root);
     run::check_datasets(loaded, cfg, &root).unwrap();
     // a different count resolves to a different definition
-    let (loaded2, cfg2, _) = leaked_model("train_small_files", config(1, 1, &[("files", "51")]));
+    let (loaded2, cfg2, _) = leaked_model("file_per_sample", config(1, 1, &[("files", "51")]));
     let e = run::check_datasets(loaded2, cfg2, &root).unwrap_err();
     assert!(e.to_string().contains("files.count: 51 vs 50"), "{e:#}");
     // datagen refuses a non-empty root
-    let (loaded3, cfg3, model3) = leaked_model("train_small_files", config(1, 1, &[("files", "50")]));
+    let (loaded3, cfg3, model3) = leaked_model("file_per_sample", config(1, 1, &[("files", "50")]));
     let params = Params::new(&loaded3.ast, cfg3).unwrap();
     let o = DatagenOpts { root: root.clone(), endpoints: Default::default(), threads: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
     let mut log = Vec::new();
@@ -144,7 +140,7 @@ fn manifest_mismatch_and_missing_are_refused() {
 fn namespaces_must_be_empty_and_writes_are_read_back() {
     let root = tmpdir("ckpt");
     let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true")];
-    let (loaded, _cfg, model) = leaked_model("ckpt_write_dcp", config(2, 3, &params));
+    let (loaded, _cfg, model) = leaked_model("dcp_save", config(2, 3, &params));
     run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
     let (fp, ops, _) = dry_fingerprint(model);
     let r = go(model, opts(&root, BackendKind::Sync));
@@ -175,7 +171,7 @@ const KV_KEEP: &str = r#"{"empirical": {"values": [0, 50, 100], "weights": [1, 1
 fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
     let root = tmpdir("kv");
     let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
-    let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(1, 5, &params));
+    let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(1, 5, &params));
     gen(loaded, cfg, model, &root);
     // the chunked files exist: kv/sys/0000/blk_0000 …
     assert!(root.join("kv/sys/0000/blk_0000").exists());
@@ -202,7 +198,7 @@ fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
     let (root, sys, kv) = (base.join("root"), base.join("sys"), base.join("kv"));
     std::fs::create_dir_all(&root).unwrap();
     let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
-    let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(1, 5, &params));
+    let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(1, 5, &params));
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &[format!("sysp={}", sys.display()), format!("kv={}", kv.display())]).unwrap();
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let dopts = DatagenOpts { root: root.clone(), endpoints: endpoints.clone(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
@@ -226,13 +222,13 @@ fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
 
 #[test]
 fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
-    // kv_cache_shared and kv_cache_shared_reader come from one script and place their draws at the same sites:
+    // lmcache_shared_fs and lmcache_shared_fs_reader come from one script and place their draws at the same sites:
     // with the writer's seed, instance count and parameters the reader opens exactly the chunks the writer
     // renamed into place (two instances, eviction with re-store, system prompts loaded).
     let root = tmpdir("kvshared");
     let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("buf", "65536"), ("concurrency", "3"), ("warm", "4"),
                   ("requests", "12"), ("reuse", KV_REUSE), ("keep", KV_KEEP), ("retain", "6"), ("sys_local", "false")];
-    let (wl, wcfg, wmodel) = leaked_model("kv_cache_shared", config(2, 5, &params));
+    let (wl, wcfg, wmodel) = leaked_model("lmcache_shared_fs", config(2, 5, &params));
     gen(wl, wcfg, wmodel, &root);
     run::check_datasets(wl, wcfg, &root).unwrap();
     run::prepare_namespaces(&wl.ast, &root, false).unwrap();
@@ -248,7 +244,7 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
     let objects = m.objects.as_ref().unwrap();
     assert!(objects.iter().all(|(p, _)| p.ends_with(".data")), "the temporary names are gone: {objects:?}");
 
-    let (rl, rcfg, rmodel) = leaked_model("kv_cache_shared_reader", config(2, 5, &params));
+    let (rl, rcfg, rmodel) = leaked_model("lmcache_shared_fs_reader", config(2, 5, &params));
     let ro = opts(&root, BackendKind::Sync);
     let (checks, input_objects) = run::check_input_namespaces(rl, rcfg, &root, &ro).unwrap();
     assert_eq!(checks[0].names, vec!["kv".to_string()]);
@@ -263,7 +259,7 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
     // another seed draws other conversation ids, which the store does not have. The namespace is declared
     // `same_run` (V15, contract 0.4), so the manifest check refuses before the gate, naming what differs
     let refusal = |seed: u64, gpus: i64, p: &[(&str, &str)]| {
-        let (l, c, _) = leaked_model("kv_cache_shared_reader", config(gpus, seed, p));
+        let (l, c, _) = leaked_model("lmcache_shared_fs_reader", config(gpus, seed, p));
         run::check_input_namespaces(l, c, &root, &opts(&root, BackendKind::Sync)).unwrap_err().to_string()
     };
     let e = refusal(6, 2, &params);
@@ -275,7 +271,7 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
     let e = refusal(5, 2, &other);
     assert!(e.contains("parameter `retain`: 7 here, 6 in the writer") && !e.contains("--seed"), "{e}");
     // without the check the same mismatch fails late, at the first chunk the store does not have
-    let (_, _, late) = leaked_model("kv_cache_shared_reader", config(2, 6, &params));
+    let (_, _, late) = leaked_model("lmcache_shared_fs_reader", config(2, 6, &params));
     let (_, inputs) = run::check_input_namespaces(rl, rcfg, &root, &opts(&root, BackendKind::Sync)).unwrap();
     assert!(run::run(late, opts(&root, BackendKind::Sync), inputs).is_err());
     std::fs::remove_dir_all(&root).unwrap();
@@ -285,7 +281,7 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
 fn regions_dataset_nested_parallel_and_direct_reads() {
     let root = tmpdir("diskann");
     let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
-    let (loaded, cfg, model) = leaked_model("vdb_search_diskann", config(1, 9, &params));
+    let (loaded, cfg, model) = leaked_model("diskann_search", config(1, 9, &params));
     gen(loaded, cfg, model, &root);
     assert_eq!(std::fs::metadata(root.join("diskann/index.bin")).unwrap().len(), 5000 * 4096);
     run::check_datasets(loaded, cfg, &root).unwrap();
@@ -309,7 +305,7 @@ fn loader_delivers_in_order_and_bounds_prefetch() {
     // non-zero step time the stall of every take after the first is about one batch's I/O.
     let root = tmpdir("loader");
     let params = [("files", "200"), ("batch", "2"), ("workers", "3"), ("prefetch", "1"), ("steps", "30"), ("step_time", "2000000")];
-    let (loaded, cfg, model) = leaked_model("train_small_files", config(1, 11, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 11, &params));
     gen(loaded, cfg, model, &root);
     let (fp, _, _) = dry_fingerprint(model);
     let mut o = opts(&root, BackendKind::Sync);
@@ -325,12 +321,12 @@ fn loader_delivers_in_order_and_bounds_prefetch() {
 
 #[test]
 fn write_then_restore_through_the_namespace_manifest() {
-    // ckpt_write_dcp leaves `.aeiou-namespace.json` at ckpt/; ckpt_restore declares the
+    // dcp_save leaves `.aeiou-namespace.json` at ckpt/; dcp_load declares the
     // namespaces `input`, reads what was written, measures the gap, and counts the warm opens
     // (all of them on one host).
     let root = tmpdir("restore");
     let wparams = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 1048576]"), ("meta_bytes", "65536")];
-    let (wl, wcfg, wmodel) = leaked_model("ckpt_write_dcp", config(2, 3, &wparams));
+    let (wl, wcfg, wmodel) = leaked_model("dcp_save", config(2, 3, &wparams));
     run::prepare_namespaces(&wl.ast, &root, false).unwrap();
     let wo = opts(&root, BackendKind::Sync);
     let t0 = run::unix_now();
@@ -341,7 +337,7 @@ fn write_then_restore_through_the_namespace_manifest() {
     assert_eq!(written.len(), 1);
     assert!(root.join("ckpt/.aeiou-namespace.json").exists());
     let m = aeiou::payload::NamespaceManifest::read(&root.join("ckpt")).unwrap();
-    assert_eq!(m.abstract_name, "ckpt_write_dcp");
+    assert_eq!(m.abstract_name, "dcp_save");
     assert_eq!(m.ranks.len(), 1);
     assert_eq!(m.ranks[0].gpus, [0, 2]);
     let objects = m.objects.as_ref().unwrap();
@@ -357,7 +353,7 @@ fn write_then_restore_through_the_namespace_manifest() {
         ("item_off", "[0, 1050153, 3148882, 4199035]"),   // Σ (704 + item + 873) of the writer
         ("meta_bytes", "65536"),
     ];
-    let (rl, rcfg, rmodel) = leaked_model("ckpt_restore", config(2, 5, &rparams));
+    let (rl, rcfg, rmodel) = leaked_model("dcp_load", config(2, 5, &rparams));
     let mut ro = opts(&root, BackendKind::Sync);
     ro.max_gap = Some(30.0);
     let (checks, input_objects) = run::check_input_namespaces(rl, rcfg, &root, &ro).unwrap();
@@ -420,7 +416,7 @@ fn io_uring_reproduces_the_sync_runs() {
     for threads in [1usize, 3] {
         let root = tmpdir("uring-kv");
         let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
-        let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(2, 5, &params));
+        let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(2, 5, &params));
         gen(loaded, cfg, model, &root);
         run::check_datasets(loaded, cfg, &root).unwrap();
         run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
@@ -428,7 +424,7 @@ fn io_uring_reproduces_the_sync_runs() {
         let mut o = opts(&root, BackendKind::Uring);
         o.threads = threads;
         let r = go(model, o);
-        assert_eq!(r.stats.fingerprint, fp, "kv_cache_serving on {threads} loop(s)");
+        assert_eq!(r.stats.fingerprint, fp, "lmcache_local_disk on {threads} loop(s)");
         assert_eq!(r.stats.ops, ops);
         assert_eq!(r.stats.bytes_read, bytes);
         assert_eq!(r.stats.threads as usize, threads.min(2), "loop threads, not actors");
@@ -446,7 +442,7 @@ fn io_uring_reproduces_the_sync_runs() {
     {
         let root = tmpdir("uring-diskann");
         let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
-        let (loaded, cfg, model) = leaked_model("vdb_search_diskann", config(2, 9, &params));
+        let (loaded, cfg, model) = leaked_model("diskann_search", config(2, 9, &params));
         gen(loaded, cfg, model, &root);
         let (fp, ops, bytes) = dry_fingerprint(model);
         for backend in [BackendKind::Uring, BackendKind::UringDirect] {
@@ -461,7 +457,7 @@ fn io_uring_reproduces_the_sync_runs() {
         let root = tmpdir("uring-ckpt");
         let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true"),
             ("hdr", "4096"), ("trailer", "4096")];   // the traced 704 and 873 are not aligned, and a direct backend refuses such writes
-        let (loaded, _cfg, model) = leaked_model("ckpt_write_dcp", config(2, 3, &params));
+        let (loaded, _cfg, model) = leaked_model("dcp_save", config(2, 3, &params));
         let (fp, ops, _) = dry_fingerprint(model);
         for backend in [BackendKind::Uring, BackendKind::UringDirect] {
             run::prepare_namespaces(&loaded.ast, &root, true).unwrap();
@@ -486,7 +482,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
     {
         let root = tmpdir("more-kv");
         let params = [("sys_prompts", "3"), ("sys_tokens", "6"), ("chunk_bytes", "262144"), ("concurrency", "3"), ("warm", "4"), ("requests", "8"), ("reuse", KV_REUSE), ("keep", KV_KEEP)];
-        let (loaded, cfg, model) = leaked_model("kv_cache_serving", config(2, 5, &params));
+        let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(2, 5, &params));
         gen(loaded, cfg, model, &root);
         let (fp, ops, bytes) = dry_fingerprint(model);
         for backend in blocking.into_iter().chain(looped) {
@@ -528,7 +524,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
     {
         let root = tmpdir("more-diskann");
         let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
-        let (loaded, cfg, model) = leaked_model("vdb_search_diskann", config(2, 9, &params));
+        let (loaded, cfg, model) = leaked_model("diskann_search", config(2, 9, &params));
         gen(loaded, cfg, model, &root);
         let (fp, ops, bytes) = dry_fingerprint(model);
         for backend in blocking.into_iter().chain(looped) {
@@ -574,7 +570,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
         let root = tmpdir("more-ckpt");
         let params = [("steps", "4"), ("ckpt_every", "2"), ("item_bytes", "[1048576, 2097152, 1048576, 65536]"), ("meta_bytes", "65536"), ("readback", "true"),
             ("hdr", "4096"), ("trailer", "4096")];   // the traced 704 and 873 are not aligned, and a direct backend refuses such writes
-        let (loaded, _cfg, model) = leaked_model("ckpt_write_dcp", config(2, 3, &params));
+        let (loaded, _cfg, model) = leaked_model("dcp_save", config(2, 3, &params));
         let (fp, ops, _) = dry_fingerprint(model);
         for backend in blocking.into_iter().chain(looped) {
             run::prepare_namespaces(&loaded.ast, &root, true).unwrap();
@@ -593,7 +589,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
 fn io_uring_loader_delivers_in_order_and_bounds_prefetch() {
     let root = tmpdir("uring-loader");
     let params = [("files", "200"), ("batch", "2"), ("workers", "3"), ("prefetch", "1"), ("steps", "30"), ("step_time", "2000000")];
-    let (loaded, cfg, model) = leaked_model("train_small_files", config(1, 11, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 11, &params));
     gen(loaded, cfg, model, &root);
     let (fp, _, _) = dry_fingerprint(model);
     let mut o = opts(&root, BackendKind::Uring);
@@ -646,7 +642,7 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     // cache, so there the pages stay.
     use aeiou::cold;
     let root = tmpdir("cold");
-    let (loaded, cfg, model) = leaked_model("train_small_files", config(1, 3, &[("files", "300")]));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 3, &[("files", "300")]));
     gen(loaded, cfg, model, &root);
     let fstype = aeiou::counters::MountSnapshot::for_path(&root).map(|m| m.fstype).unwrap_or_default();
     let r = cold::residency(model, &root).unwrap();
@@ -703,8 +699,8 @@ fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
     // the full ratio and a dataset can grow; file `id`'s bytes are the same under any count
     let six = tmpdir("dd6");
     let four = tmpdir("dd4");
-    let (l6, c6, m6) = leaked_model("train_small_files", config(1, 1, &[("files", "6")]));
-    let (l4, c4, m4) = leaked_model("train_small_files", config(1, 1, &[("files", "4")]));
+    let (l6, c6, m6) = leaked_model("file_per_sample", config(1, 1, &[("files", "6")]));
+    let (l4, c4, m4) = leaked_model("file_per_sample", config(1, 1, &[("files", "4")]));
     for (l, c, m, root) in [(l6, c6, m6, &six), (l4, c4, m4, &four)] {
         let params = Params::new(&l.ast, c).unwrap();
         let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), threads: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1 };

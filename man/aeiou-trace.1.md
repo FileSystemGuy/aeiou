@@ -199,10 +199,11 @@ class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
   `fd` an open id (the ordinal of the `open` line), `ret` the traced result (a count, or an
   errno name that becomes the op's `expect`), and `submit` lines holding the members of one
   `io_submit`. Defined in `runner/REFERENCE.md` §13.
-- `builder/traces/<workload>/`
+- `workloads/<category>/…/<mechanism>/kit/`, `…/cases/<case>/captures/<capture>/`
 
-  The capture kit of each real application traced so far: the traced script, the corpus
-  writer, the fitted parameter file, the trace's metrics document and tolerance file.
+  The capture kit of each real application traced so far (the traced script, the corpus
+  writer, the fitting script), and per capture the trace's metrics document, its
+  tolerance file, and the parameters fitted to it.
 
 ## EXIT STATUS
 

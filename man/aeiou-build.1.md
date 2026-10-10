@@ -106,17 +106,17 @@ three or more identical statements in a row (a hand-unrolled iteration);
 
 ## EXAMPLES
 
-Build every committed abstract hermetically, twice, into the examples directory:
+Build every committed abstract hermetically, twice, each beside its script:
 
 ```
 cd builder
-aeiou-build --hermetic --twice -o ../schema/examples abstracts/*.py
+aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')
 ```
 
 The drift check CI runs:
 
 ```
-aeiou-build --hermetic --twice --check -o ../schema/examples abstracts/*.py
+aeiou-build --hermetic --twice --check $(find ../workloads -name '*.py' -not -path '*/kit/*')
 ```
 
 A minimal script:
@@ -146,4 +146,4 @@ if __name__ == "__main__":
 **aeiou-abstract**(7).
 
 The reference: `builder/REFERENCE.md` (writing an abstract, §1; the discipline, §2; what
-fails where, §3; reproducible builds, §4). The committed scripts: `builder/abstracts/*.py`.
+fails where, §3; reproducible builds, §4). The committed scripts: `workloads/**/*.py`, outside the `kit/` directories.

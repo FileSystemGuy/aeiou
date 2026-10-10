@@ -23,7 +23,7 @@ fn aeiou(args: &[&str]) -> Command {
 }
 
 fn example(name: &str) -> String {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples").join(name).display().to_string()
+    crate::common::workload_ast(name).display().to_string()
 }
 
 /// The stderr of a usage error, split: (message, usage block); asserts the frame.
@@ -49,7 +49,7 @@ fn every_missing_argument_is_listed_at_once_and_the_list_shrinks() {
         )
     );
     assert!(usage.starts_with("Usage: aeiou datagen [OPTIONS] --root <DIR> <ABSTRACT_PATH>\n"), "{usage}");
-    let ast = example("train_small_files.ast.json");
+    let ast = example("file_per_sample.ast.json");
     let (message, _) = frame(&mut aeiou(&["datagen", &ast]), "aeiou datagen");
     assert_eq!(message, format!("{MISSING}\n  --root <DIR>  directory the abstract's paths are relative to\n                (also $AEIOU_ROOT, or `root` in the [datagen] table of the config file)"));
     // --root from a lower layer is not missing
@@ -80,7 +80,7 @@ fn every_missing_argument_is_listed_at_once_and_the_list_shrinks() {
 
 #[test]
 fn the_parsers_own_errors_and_the_layers_refusals_wear_the_frame() {
-    let ast = example("train_small_files.ast.json");
+    let ast = example("file_per_sample.ast.json");
     let (message, _) = frame(&mut aeiou(&["datagen", "--bogus", &ast, "--root", "/tmp"]), "aeiou datagen");
     assert!(message.starts_with("unexpected argument '--bogus' found"), "{message}");
     let (message, _) = frame(aeiou(&["dry-run", &ast, "--gpus", "1"]).env("AEIOU_GPUS", "3"), "aeiou dry-run");
@@ -98,11 +98,11 @@ fn the_parsers_own_errors_and_the_layers_refusals_wear_the_frame() {
 
 #[test]
 fn a_wrong_file_for_the_abstract_says_what_an_abstract_is() {
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../builder/abstracts/train_small_files.py").display().to_string();
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workloads/training/map/file-per-sample/file_per_sample.py").display().to_string();
     let (message, _) = frame(&mut aeiou(&["datagen", "--root", "/tmp", &script]), "aeiou datagen");
     assert_eq!(message, format!("{script}: a builder script, not an abstract; `aeiou-build {script}` writes the abstracts it authors (`<name>.ast.json`) next to it, and those are what the runner takes"));
-    let (message, _) = frame(&mut aeiou(&["datagen", "--root", "/tmp", "train_small_files"]), "aeiou datagen");
-    assert_eq!(message, "train_small_files: No such file or directory (os error 2); an abstract is the `.ast.json` file aeiou-build writes from a builder script");
+    let (message, _) = frame(&mut aeiou(&["datagen", "--root", "/tmp", "file_per_sample"]), "aeiou datagen");
+    assert_eq!(message, "file_per_sample: No such file or directory (os error 2); an abstract is the `.ast.json` file aeiou-build writes from a builder script");
     let dir = std::env::temp_dir().join(format!("aeiou-usage-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let bad = dir.join("x.ast.json");

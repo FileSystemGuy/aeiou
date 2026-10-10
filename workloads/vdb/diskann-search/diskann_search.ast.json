@@ -1,0 +1,548 @@
+{
+  "ast": "0.7",
+  "name": "diskann_search",
+  "doc": "Beam search over a sector-packed graph index: dependent rounds of `beam` concurrent 4 KiB reads per query.",
+  "posix": "libaio",
+  "params": {
+    "threads": {
+      "default": 32,
+      "unit": "count",
+      "doc": "search threads per node (an actor is a search node)"
+    },
+    "queries": {
+      "default": 100000,
+      "unit": "count",
+      "doc": "per thread; finite"
+    },
+    "beam": {
+      "default": 4,
+      "unit": "count"
+    },
+    "hops": {
+      "default": {
+        "empirical": {
+          "values": [
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "weights": [
+            1,
+            135,
+            536,
+            269,
+            47,
+            9,
+            2
+          ]
+        }
+      },
+      "unit": "count",
+      "doc": "rounds of a query after the two near the entry points; measured on SIFT1M at search list 100, beam 4"
+    },
+    "entry": {
+      "default": {
+        "hotset": {
+          "fraction": 2e-07,
+          "weight": 1
+        }
+      },
+      "doc": "[config] the entry points' sectors: medoids / sectors (one medoid per build shard; 40 here)"
+    },
+    "near": {
+      "default": {
+        "hotset": {
+          "fraction": 1e-05,
+          "weight": 1
+        }
+      },
+      "doc": "[config] the sectors of the entry points' neighbours: about 0.8 * medoids * degree / sectors (661 distinct sectors for 13 medoids of degree 64, measured)"
+    },
+    "node_cache": {
+      "default": 0,
+      "unit": "count",
+      "doc": "[config] sector reads that fill the node cache at load (about one per cached node); with a cache, queries skip the two rounds near the entry points"
+    },
+    "cache_batch": {
+      "default": 8,
+      "unit": "count",
+      "doc": "requests per submit while the node cache loads (traced)"
+    },
+    "rerank": {
+      "default": 500000,
+      "unit": "ns",
+      "doc": "CPU of one query; measured 0.5 ms of user time over 28 rounds, one host"
+    },
+    "sector": {
+      "default": 4096,
+      "unit": "bytes"
+    },
+    "nodes": {
+      "default": 200000000,
+      "unit": "count",
+      "doc": "[config] sectors of the index (a sector holds per_sector graph nodes)"
+    },
+    "per_sector": {
+      "default": 5,
+      "unit": "count",
+      "doc": "[config] graph nodes per sector: 4 KiB over (vector bytes + 4 + 4 * degree)"
+    },
+    "pq_code": {
+      "default": 32,
+      "unit": "bytes",
+      "doc": "[config] bytes of one PQ-compressed vector, held in memory"
+    },
+    "stream": {
+      "default": 8191,
+      "unit": "bytes",
+      "doc": "the first read of a C++ stream on a file (traced)"
+    },
+    "pq_read": {
+      "default": 2147479552,
+      "unit": "bytes",
+      "doc": "the stream reads the rest of the PQ file in one call; Linux returns at most this much per read"
+    }
+  },
+  "datasets": {
+    "index": {
+      "regions": {
+        "file": "diskann/index.bin",
+        "count": {
+          "param": "nodes"
+        },
+        "slot": {
+          "param": "sector"
+        },
+        "size": {
+          "const": {
+            "param": "sector"
+          }
+        },
+        "seed": 1592646269
+      }
+    },
+    "pq": {
+      "files": {
+        "pattern": "pq/pq_compressed-{id}.bin",
+        "count": 1,
+        "size": {
+          "const": {
+            "add": [
+              {
+                "mul": [
+                  {
+                    "mul": [
+                      {
+                        "param": "nodes"
+                      },
+                      {
+                        "param": "per_sector"
+                      }
+                    ]
+                  },
+                  {
+                    "param": "pq_code"
+                  }
+                ]
+              },
+              8
+            ]
+          }
+        },
+        "seed": 1592646272
+      }
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "let": {
+            "name": "c",
+            "value": {
+              "file": {
+                "dataset": "pq",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "c"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "lseek": {
+            "file": {
+              "ref": "c"
+            },
+            "offset": 0,
+            "whence": "END"
+          }
+        },
+        {
+          "lseek": {
+            "file": {
+              "ref": "c"
+            },
+            "offset": 0,
+            "whence": "SET"
+          }
+        },
+        {
+          "lseek": {
+            "file": {
+              "ref": "c"
+            },
+            "offset": 0,
+            "whence": "SET"
+          }
+        },
+        {
+          "read": {
+            "file": {
+              "ref": "c"
+            },
+            "len": {
+              "param": "stream"
+            }
+          }
+        },
+        {
+          "loop": {
+            "index": "rep",
+            "to": {
+              "ceil_div": [
+                {
+                  "sub": [
+                    {
+                      "size": {
+                        "ref": "c"
+                      }
+                    },
+                    {
+                      "param": "stream"
+                    }
+                  ]
+                },
+                {
+                  "param": "pq_read"
+                }
+              ]
+            },
+            "body": [
+              {
+                "read": {
+                  "file": {
+                    "ref": "c"
+                  },
+                  "len": {
+                    "param": "pq_read"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "c"
+            }
+          }
+        },
+        {
+          "let": {
+            "name": "f",
+            "value": {
+              "file": {
+                "dataset": "index",
+                "id": 0
+              }
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "f"
+            },
+            "flags": [
+              "RDONLY"
+            ]
+          }
+        },
+        {
+          "read": {
+            "file": {
+              "ref": "f"
+            },
+            "len": {
+              "param": "stream"
+            }
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "f"
+            }
+          }
+        },
+        {
+          "open": {
+            "file": {
+              "ref": "f"
+            },
+            "flags": [
+              "RDONLY",
+              "DIRECT"
+            ]
+          }
+        },
+        {
+          "loop": {
+            "index": "cl",
+            "to": {
+              "div": [
+                {
+                  "param": "node_cache"
+                },
+                {
+                  "param": "cache_batch"
+                }
+              ]
+            },
+            "body": [
+              {
+                "parallel": {
+                  "index": "cb",
+                  "width": {
+                    "param": "cache_batch"
+                  },
+                  "body": [
+                    {
+                      "let": {
+                        "name": "n",
+                        "value": {
+                          "pick": {
+                            "dataset": "index"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "f"
+                        },
+                        "len": {
+                          "param": "sector"
+                        },
+                        "offset": {
+                          "offset": {
+                            "ref": "n"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "parallel": {
+            "index": "th",
+            "width": {
+              "param": "threads"
+            },
+            "body": [
+              {
+                "loop": {
+                  "index": "q",
+                  "to": {
+                    "param": "queries"
+                  },
+                  "body": [
+                    {
+                      "cond": {
+                        "if": {
+                          "eq": [
+                            {
+                              "param": "node_cache"
+                            },
+                            0
+                          ]
+                        },
+                        "then": [
+                          {
+                            "parallel": {
+                              "index": "en",
+                              "width": 1,
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "e",
+                                    "value": {
+                                      "pick": {
+                                        "dataset": "index",
+                                        "dist": {
+                                          "param": "entry"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "sector"
+                                    },
+                                    "offset": {
+                                      "offset": {
+                                        "ref": "e"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "parallel": {
+                              "index": "nb",
+                              "width": {
+                                "param": "beam"
+                              },
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "s",
+                                    "value": {
+                                      "pick": {
+                                        "dataset": "index",
+                                        "dist": {
+                                          "param": "near"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "sector"
+                                    },
+                                    "offset": {
+                                      "offset": {
+                                        "ref": "s"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "loop": {
+                        "index": "hop",
+                        "to": {
+                          "draw": {
+                            "param": "hops"
+                          }
+                        },
+                        "body": [
+                          {
+                            "parallel": {
+                              "index": "bm",
+                              "width": {
+                                "param": "beam"
+                              },
+                              "body": [
+                                {
+                                  "let": {
+                                    "name": "s",
+                                    "value": {
+                                      "pick": {
+                                        "dataset": "index"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "f"
+                                    },
+                                    "len": {
+                                      "param": "sector"
+                                    },
+                                    "offset": {
+                                      "offset": {
+                                        "ref": "s"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "compute": {
+                        "ns": {
+                          "param": "rerank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "close": {
+            "file": {
+              "ref": "f"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "diskann_search.py",
+      "sha256": "24c1231fab4e42c33b64a5ed647191963d9ad561171ef992b4417aaf40c324aa",
+      "builder_version": "0.1.0",
+      "git": "7b115db69f80-dirty"
+    },
+    "python": "3.12.13",
+    "built_twice_identical": true,
+    "ast_sha256": "853deb52cc743f1d5ac7fee2c6b5ea86f4e525e826496a61f806326f2f6e456d"
+  }
+}

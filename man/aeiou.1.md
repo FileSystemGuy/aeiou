@@ -631,19 +631,19 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
 Validate the committed abstracts and print their identities:
 
 ```
-aeiou check schema/examples/*.ast.json
+aeiou check $(find workloads -name '*.ast.json')
 ```
 
 The fingerprint and totals of eight instances of a training workload at seed 1:
 
 ```
-aeiou dry-run schema/examples/train_small_files.ast.json --gpus 8 --seed 1
+aeiou dry-run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
 ```
 
 One instance's stream, the first fifty operations of its second step:
 
 ```
-aeiou dry-run schema/examples/kv_cache_serving.ast.json --gpus 1 \
+aeiou dry-run workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json --gpus 1 \
     --param concurrency=2 --param requests=20 --gpu 0 --steps 1..2 --limit 50
 ```
 
@@ -651,8 +651,8 @@ Generate a small corpus, then run against it under the abstract's own backend, h
 run to the dry run's fingerprint:
 
 ```
-aeiou datagen schema/examples/train_small_files.ast.json --root /mnt/sut --param files=4000
-aeiou run schema/examples/train_small_files.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+aeiou datagen workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+aeiou run workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50 --expect-fingerprint 3f1c... --report-json run.json
 ```
 
@@ -660,14 +660,14 @@ The same run on io_uring with a capped io-wq, the metrics of the stream to a fil
 
 ```
 aeiou run ... --posix io_uring --threads 4 --iowq-max-workers 2
-aeiou dry-run schema/examples/train_small_files.ast.json --gpus 8 --metrics-json abstract.metrics.json
+aeiou dry-run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --metrics-json abstract.metrics.json
 ```
 
 A parameter file over the defaults:
 
 ```
-aeiou dry-run schema/examples/model_load.ast.json --gpus 8 \
-    --params-file schema/examples/params/model_load.synthetic.params.json
+aeiou dry-run workloads/inference/safetensors-load/safetensors_load.ast.json --gpus 8 \
+    --params-file workloads/inference/safetensors-load/params/synthetic.params.json
 ```
 
 ## SEE ALSO

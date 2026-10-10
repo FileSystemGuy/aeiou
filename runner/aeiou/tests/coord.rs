@@ -1,6 +1,6 @@
 //! The TCP coordinator: barriers across hosts (with departures), the configuration check in
 //! `Hello`, a multi-host run whose merged fingerprint is the dry run's, and the binary end to
-//! end: `ckpt_write_dcp` on two ranks, then `ckpt_restore` on two ranks with `--rank-rotate 1`,
+//! end: `dcp_save` on two ranks, then `dcp_load` on two ranks with `--rank-rotate 1`,
 //! through the namespace manifest the coordinator's merged report produced. Every "host" is a
 //! thread or a process on this machine; the wire is the same.
 
@@ -26,16 +26,12 @@ fn tmpdir(tag: &str) -> PathBuf {
     d
 }
 
-fn examples() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
-}
-
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
     Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
 }
 
 fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {
-    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap()));
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&crate::common::workload_ast(name)).unwrap()));
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
@@ -185,7 +181,7 @@ fn a_failing_host_stops_the_others() {
 fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let root = tmpdir("two");
     let params = [("files", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("enumerate", "true")];
-    let (loaded, cfg, model) = leaked_model("train_small_files", config(4, 7, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
     datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), threads: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 }, None, &mut log).unwrap();
@@ -234,7 +230,7 @@ fn free_port() -> u16 {
 
 fn dry_fingerprint_cli(ast: &str, gpus: &str, params: &[&str]) -> String {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-    c.arg("dry-run").arg(examples().join(ast)).arg("--gpus").arg(gpus);
+    c.arg("dry-run").arg(crate::common::workload_ast(ast)).arg("--gpus").arg(gpus);
     for p in params {
         c.arg("--param").arg(p);
     }
@@ -249,7 +245,7 @@ fn run_ranks(ast: &str, root: &PathBuf, gpus: &str, params: &[&str], ranks: i64,
     let mut children = Vec::new();
     for rank in 0..ranks {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-        c.arg("run").arg(examples().join(ast)).arg("--gpus").arg(gpus).arg("--root").arg(root).arg("--time-scale").arg("0");
+        c.arg("run").arg(crate::common::workload_ast(ast)).arg("--gpus").arg(gpus).arg("--root").arg(root).arg("--time-scale").arg("0");
         c.arg("--ranks").arg(ranks.to_string()).arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}"));
         for p in params {
             c.arg("--param").arg(p);
@@ -271,8 +267,8 @@ fn run_ranks(ast: &str, root: &PathBuf, gpus: &str, params: &[&str], ranks: i64,
 fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
     let root = tmpdir("e2e");
     let wparams = ["steps=4", "ckpt_every=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "meta_bytes=65536"];
-    let wfp = dry_fingerprint_cli("ckpt_write_dcp.ast.json", "2", &wparams);
-    let outs = run_ranks("ckpt_write_dcp.ast.json", &root, "2", &wparams, 2, &["--expect-fingerprint", &wfp]);
+    let wfp = dry_fingerprint_cli("dcp_save.ast.json", "2", &wparams);
+    let outs = run_ranks("dcp_save.ast.json", &root, "2", &wparams, 2, &["--expect-fingerprint", &wfp]);
     for (ok, stdout, stderr) in &outs {
         assert!(*ok, "stdout:\n{stdout}\nstderr:\n{stderr}");
         assert!(stdout.contains("fingerprint matches"), "{stdout}");
@@ -292,8 +288,8 @@ fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
     // the restore on two ranks, rotated: each process reads the other's shard (same host
     // here, so the warm-open warning is expected and --require-cold would refuse)
     let rparams = ["restore_step=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "item_off=[0, 1050153, 3148882, 4199035]", "meta_bytes=65536"];
-    let rfp = dry_fingerprint_cli("ckpt_restore.ast.json", "2", &rparams);
-    let outs = run_ranks("ckpt_restore.ast.json", &root, "2", &rparams, 2, &["--rank-rotate", "1", "--max-gap", "120", "--expect-fingerprint", &rfp]);
+    let rfp = dry_fingerprint_cli("dcp_load.ast.json", "2", &rparams);
+    let outs = run_ranks("dcp_load.ast.json", &root, "2", &rparams, 2, &["--rank-rotate", "1", "--max-gap", "120", "--expect-fingerprint", &rfp]);
     for (ok, stdout, stderr) in &outs {
         assert!(*ok, "stdout:\n{stdout}\nstderr:\n{stderr}");
         assert!(stdout.contains("fingerprint matches"), "{stdout}");
@@ -309,14 +305,14 @@ fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// Two ranks of `ckpt_restore` with different seeds.
+/// Two ranks of `dcp_load` with different seeds.
 fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
     let port = free_port();
     let rparams = ["restore_step=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "item_off=[0, 1050153, 3148882, 4199035]", "meta_bytes=65536"];
     let mut children = Vec::new();
     for rank in 0..2 {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-        c.arg("run").arg(examples().join("ckpt_restore.ast.json")).arg("--gpus").arg("2").arg("--root").arg(root).arg("--time-scale").arg("0");
+        c.arg("run").arg(crate::common::workload_ast("dcp_load.ast.json")).arg("--gpus").arg("2").arg("--root").arg(root).arg("--time-scale").arg("0");
         c.arg("--ranks").arg("2").arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}")).arg("--seed").arg((rank + 1).to_string());
         for p in &rparams {
             c.arg("--param").arg(p);
@@ -356,7 +352,7 @@ fn tree(root: &PathBuf) -> std::collections::BTreeMap<String, Vec<u8>> {
 fn datagen_on_two_ranks_writes_the_one_host_corpus() {
     // a files dataset (120 files, one directory: both ranks create in it) and a corpus with a
     // regions file above one 64 MiB piece plus a one-file dataset (rank 1's slice is empty)
-    for (ast, gpus, params) in [("train_small_files", 2, vec![("files", "120")]), ("vdb_search_ivf", 1, vec![("lists", "280"), ("index_bytes", "1048576")])] {
+    for (ast, gpus, params) in [("file_per_sample", 2, vec![("files", "120")]), ("faiss_ivf_ondisk", 1, vec![("lists", "280"), ("index_bytes", "1048576")])] {
         let one = tmpdir("dg-one");
         let two = tmpdir("dg-two");
         let (loaded, cfg, model) = leaked_model(ast, config(gpus, 7, &params));
@@ -402,7 +398,7 @@ fn datagen_on_two_ranks_writes_the_one_host_corpus() {
             assert_eq!(m.provenance["files_written"].as_u64().unwrap(), a.files);
             assert_eq!(m.id(), a.id);
         }
-        if ast == "vdb_search_ivf" {
+        if ast == "faiss_ivf_ondisk" {
             let lists = r0.iter().position(|r| r.name == "lists").unwrap();
             assert!(r0[lists].owner.is_none() && r1[lists].owner == Some(0), "the first regions dataset is rank 0's");
             assert_eq!(r1[lists].files, 0);
@@ -423,7 +419,7 @@ fn datagen_ranks(root: &PathBuf, params: &[&str], ranks: i64, extra: impl Fn(i64
     let mut children = Vec::new();
     for rank in 0..ranks {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-        c.arg("datagen").arg(examples().join("train_small_files.ast.json")).arg("--root").arg(root).arg("--threads").arg("2");
+        c.arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(root).arg("--threads").arg("2");
         c.arg("--ranks").arg(ranks.to_string()).arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}"));
         for p in params {
             c.arg("--param").arg(p);

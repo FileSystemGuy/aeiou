@@ -9,15 +9,15 @@ Python.
 cd runner
 cargo build --release
 cargo test --release
-./target/release/aeiou check ../schema/examples/*.ast.json
-./target/release/aeiou dry-run ../schema/examples/train_small_files.ast.json --gpus 8 --seed 1
-./target/release/aeiou dry-run ../schema/examples/kv_cache_serving.ast.json --gpus 1 \
+./target/release/aeiou check $(find ../workloads -name '*.ast.json')
+./target/release/aeiou dry-run ../workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
+./target/release/aeiou dry-run ../workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json --gpus 1 \
     --param concurrency=2 --param requests=20 --gpu 0 --steps 1..2 --limit 50
-./target/release/aeiou datagen ../schema/examples/train_small_files.ast.json --root /mnt/sut --param files=4000
-./target/release/aeiou run ../schema/examples/train_small_files.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+./target/release/aeiou datagen ../workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+./target/release/aeiou run ../workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50 --posix sync
-./target/release/aeiou dry-run ../schema/examples/model_load.ast.json --gpus 8 \
-    --params-file ../schema/examples/params/model_load.synthetic.params.json      # a parameter file (§4)
+./target/release/aeiou dry-run ../workloads/inference/safetensors-load/safetensors_load.ast.json --gpus 8 \
+    --params-file ../workloads/inference/safetensors-load/params/synthetic.params.json      # a parameter file (§4)
 ```
 
 ## 1. What exists (2026-09-30)
@@ -127,7 +127,7 @@ each is a recorded decision and the golden tests pin them.
   evaluated, keyed by definition, index, and the indices of the enclosing loops (since
   2026-10-01): the value is a pure function of those, so nothing is stored that the
   definition does not say, and a chain that steps back one index per iteration
-  (`ckpt_restore`'s `bst @ k-1`) costs one link per iteration instead of a walk to the
+  (`dcp_load`'s `bst @ k-1`) costs one link per iteration instead of a walk to the
   start, with recursion one link deep. Before, a 900-item chain overflowed the stack. The
   index may be any expression the validator proves to step back (rule V3, contract 0.5:
   `kp @ (r − (r mod d + 1))` is the draw at the last request of the previous round of `d`);
@@ -160,10 +160,10 @@ each is a recorded decision and the golden tests pin them.
 
 Dry-run walks an actor instance at 150–350 ns per op on one core (one thread per instance,
 so `--gpus 8` uses eight; re-measured 2026-10-01 after the walk became a resumable state
-machine, §8: `vdb_build_diskann` 203M ops in 36 s against 32 s before, +12 %, the explicit
+machine, §8: `diskann_build` 203M ops in 36 s against 32 s before, +12 %, the explicit
 stack and the pending op slot standing in for the recursion's stack frames). The committed abstracts at their defaults: training shapes in
-under a second; `kv_cache_serving` 72M ops per instance in 24 s; `vdb_search_diskann` 68M
-ops in 28 s; `vdb_build_diskann` 203M ops in 33 s. Memory is a few MB: no per-file
+under a second; `lmcache_local_disk` 72M ops per instance in 24 s; `diskann_search` 68M
+ops in 28 s; `diskann_build` 203M ops in 33 s. Memory is a few MB: no per-file
 structure exists, and an actor's state is its frames, bindings, open files, and the as-written
 sums of the objects it created. The obvious speed-up, caching a bound handle's resolved path
 instead of re-formatting the pattern on every op, is not done yet.
@@ -176,7 +176,7 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   0.3, `DESIGN_REVIEW.md` §3.48; two axes since contract 0.6, an API per protocol since 0.7,
   2026-10-09, §3.65). The POSIX names' backend is an API and a cache mode, the S3 names' an
   API. An abstract may declare the API its traced application issues POSIX I/O through
-  (`model_load`: `mmap`), its cache mode, and how its S3 client waits; one that declares
+  (`safetensors_load`: `mmap`), its cache mode, and how its S3 client waits; one that declares
   none is `sync`, `per-open` (each open's own flags decide), and `blocking`. `--posix`,
   `--cache`, and `--s3` each override one. Under any other choice the op stream and the
   fingerprint are the same and the storage sees another workload, so the run prints `posix X
@@ -359,10 +359,10 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   ```
 
 Observed on the WSL2 ext4 disk (2026-09-30, `runner/aeiou/tests/run.rs` and the smoke runs):
-every committed abstract runs to the dry-run fingerprint under `sync` (`ckpt_restore`
-against the namespace a `ckpt_write_dcp` run left, through its manifest), and
-`train_small_files` also under `sync-direct`; a page-cache read of 1 MiB costs
-10 µs, an `O_DIRECT` one 258 µs; `vdb_search_diskann` ~~spawns a thread per beam per hop
+every committed abstract runs to the dry-run fingerprint under `sync` (`dcp_load`
+against the namespace a `dcp_save` run left, through its manifest), and
+`file_per_sample` also under `sync-direct`; a page-cache read of 1 MiB costs
+10 µs, an `O_DIRECT` one 258 µs; `diskann_search` ~~spawns a thread per beam per hop
 (923 threads for 924 reads), the cost of forking `parallel` afresh each time, and a per-actor
 sub-actor pool is the planned fix~~ spawned a thread per beam per hop (923 threads for 924
 reads) until the sub-actor pool (2026-10-01). With it, on the same disk (`nodes=200000
@@ -528,9 +528,9 @@ building it is `DESIGN_REVIEW.md` §3.25.
   `Done` message and `Server::gathered` are its reduction, a JSON document per rank.
 
 Observed on WSL2 (2026-09-30, `runner/aeiou/tests/coord.rs` and `aeiou-launch` with a local
-shim for ssh): two processes on `localhost` run `train_small_files` to the dry-run
-fingerprint; `ckpt_write_dcp` on two ranks leaves a manifest with both rank records, and
-`ckpt_restore` on two ranks with `--rank-rotate 1` reads it, each rank running the other's
+shim for ssh): two processes on `localhost` run `file_per_sample` to the dry-run
+fingerprint; `dcp_save` on two ranks leaves a manifest with both rank records, and
+`dcp_load` on two ranks with `--rank-rotate 1` reads it, each rank running the other's
 GPU range; a differing seed on one rank is refused on both before any I/O; a failing
 `--expect-fingerprint` fails both ranks and the launcher. Real hosts have not been tried.
 
@@ -578,15 +578,15 @@ parameters, each three times: `sync` with a cold client cache, `sync` again, and
 
 | abstract (G) | application ops | `sync`, cold: RPCs | `sync`, warm: RPCs | `sync-direct`: RPCs |
 |---|---|---|---|---|
-| train_small_files (2) | 678; 98 opens, 192 reads, 10.6 MiB | 97 READ (10.5 MiB), 53 OPEN, 2 READDIR | 0 READ, 99 GETATTR | 288 READ (10.7 MiB) |
-| train_large_samples (2) | 412; 244 reads, 159 MiB | 129 READ (80.8 MiB from the server, the rest page-cache hits within the run) | 0 READ, 19 GETATTR | 464 READ (159 MiB) |
-| kv_cache_serving (1) (the abstract before its 2026-10-02 correction, which removed the `stat` lookups, the directories and the decode writes; `ABSTRACTS.md` §8) | 1,144; 162 reads, 115 writes, 34 mkdirs | 14 READ, 116 WRITE (28.8 MiB), 117 OPEN, 34 CREATE | 0 READ, 116 WRITE | 162 READ, 116 WRITE, 120 CLOSE |
-| model_load (2) (the abstract before its 2026-10-01 correction, which added the small files, the second open and the `fadvise`; `ABSTRACTS.md` §4 has the wire numbers of the traced one) | 88; 76 reads, 4.1 MiB | 53 READ | 0 READ, 5 GETATTR | 76 READ (one per read) |
-| vdb_search_diskann (1) (the abstract before its 2026-10-02 correction: the load, 28 rounds per query, `libaio` declared; `ABSTRACTS.md` §5) | 244; 240 reads of 4 KiB | 241 READ | 240 READ | 240 READ |
-| vdb_search_ivf (1) (the abstract before its 2026-10-01 correction, which added the index file, the prefetch fan-out and the `mmap` declaration; `ABSTRACTS.md` §6 has the wire numbers of the traced one) | 36; 32 reads, 1.8 MiB | 28 READ | 0 READ | 32 READ (one per read) |
-| vdb_build_diskann (1) (the abstract before its 2026-10-02 rewrite; `ABSTRACTS.md` §7 has the wire numbers of the traced one) | 386; 106 reads, 262 writes, 7 MiB | 139 READ, 8 WRITE, 1 COMMIT | 0 READ, 8 WRITE, 1 COMMIT | 106 READ, 263 WRITE, 0 COMMIT |
-| ckpt_write_dcp (2) (the abstract before its 2026-10-01 rewrite; the traced one has unaligned writes and no direct column) | 70; 34 writes, 21.1 MiB | 27 WRITE, 4 COMMIT, 3 RENAME | same | 39 WRITE (21.1 MiB direct), 4 COMMIT |
-| ckpt_restore (2), after the write on this client (the abstract before its 2026-10-01 rewrite: two reads per item, where the traced reader issues six and 34 seeks) | 36; 20 reads, 18.1 MiB | **0 READ**: all 18.1 MiB from the client's page cache | 0 READ | 30 READ (18.2 MiB from the server) |
+| file_per_sample (2) | 678; 98 opens, 192 reads, 10.6 MiB | 97 READ (10.5 MiB), 53 OPEN, 2 READDIR | 0 READ, 99 GETATTR | 288 READ (10.7 MiB) |
+| npy_per_sample (2) | 412; 244 reads, 159 MiB | 129 READ (80.8 MiB from the server, the rest page-cache hits within the run) | 0 READ, 19 GETATTR | 464 READ (159 MiB) |
+| lmcache_local_disk (1) (the abstract before its 2026-10-02 correction, which removed the `stat` lookups, the directories and the decode writes; `ABSTRACTS.md` §8) | 1,144; 162 reads, 115 writes, 34 mkdirs | 14 READ, 116 WRITE (28.8 MiB), 117 OPEN, 34 CREATE | 0 READ, 116 WRITE | 162 READ, 116 WRITE, 120 CLOSE |
+| safetensors_load (2) (the abstract before its 2026-10-01 correction, which added the small files, the second open and the `fadvise`; `ABSTRACTS.md` §4 has the wire numbers of the traced one) | 88; 76 reads, 4.1 MiB | 53 READ | 0 READ, 5 GETATTR | 76 READ (one per read) |
+| diskann_search (1) (the abstract before its 2026-10-02 correction: the load, 28 rounds per query, `libaio` declared; `ABSTRACTS.md` §5) | 244; 240 reads of 4 KiB | 241 READ | 240 READ | 240 READ |
+| faiss_ivf_ondisk (1) (the abstract before its 2026-10-01 correction, which added the index file, the prefetch fan-out and the `mmap` declaration; `ABSTRACTS.md` §6 has the wire numbers of the traced one) | 36; 32 reads, 1.8 MiB | 28 READ | 0 READ | 32 READ (one per read) |
+| diskann_build (1) (the abstract before its 2026-10-02 rewrite; `ABSTRACTS.md` §7 has the wire numbers of the traced one) | 386; 106 reads, 262 writes, 7 MiB | 139 READ, 8 WRITE, 1 COMMIT | 0 READ, 8 WRITE, 1 COMMIT | 106 READ, 263 WRITE, 0 COMMIT |
+| dcp_save (2) (the abstract before its 2026-10-01 rewrite; the traced one has unaligned writes and no direct column) | 70; 34 writes, 21.1 MiB | 27 WRITE, 4 COMMIT, 3 RENAME | same | 39 WRITE (21.1 MiB direct), 4 COMMIT |
+| dcp_load (2), after the write on this client (the abstract before its 2026-10-01 rewrite: two reads per item, where the traced reader issues six and 34 seeks) | 36; 20 reads, 18.1 MiB | **0 READ**: all 18.1 MiB from the client's page cache | 0 READ | 30 READ (18.2 MiB from the server) |
 
 What the table says, with the reasoning in `DESIGN_REVIEW.md` §3.26:
 
@@ -595,7 +595,7 @@ What the table says, with the reasoning in `DESIGN_REVIEW.md` §3.26:
   to make the restore touch storage, and other hosts (`--rank-rotate`, `--require-cold`) are
   the real answer (`DESIGN_REVIEW.md` §3.24).
 - **Buffered reads are merged by readahead; O_DIRECT reads go out one RPC per application
-  read** (model_load 76 of 76, IVF 32 of 32; the training abstracts issue more because an
+  read** (safetensors_load 76 of 76, IVF 32 of 32; the training abstracts issue more because an
   unaligned tail read is rounded out and every `until_eof` probe is an RPC returning EOF).
   This is `NAPKIN_MATH.md` §8.B's expectation that the abstract's `xfer` becomes the wire
   size, seen on a real NFS client.
@@ -697,7 +697,7 @@ under `io_uring` (`tests/run.rs`: five abstracts with nested `parallel`, loaders
 across loops, namespace write-then-read, on one loop and on three;
 `builder/tests/test_formats.py`: the three container abstracts; the other five by hand), and
 under `io_uring-direct` wherever `sync-direct` runs. On ext4 from the page cache,
-`train_small_files` with 64 GPUs × (1 + 4 workers) = 320 actors, 92,672 ops, second run:
+`file_per_sample` with 64 GPUs × (1 + 4 workers) = 320 actors, 92,672 ops, second run:
 
 | backend | threads | elapsed | client CPU (user + sys) | read mean / p99 | RSS |
 |---|---|---|---|---|---|
@@ -710,7 +710,7 @@ under `io_uring-direct` wherever `sync-direct` runs. On ext4 from the page cache
 The direct rows read the virtual disk and say nothing about storage; the buffered rows are
 page-cache copies, where client CPU per op is the whole cost: four loops move the same
 bytes in the same time as 320 threads for a third of the CPU. On the loopback NFS mount
-(§7), `train_small_files` with 4 GPUs (11,260 ops: 3,200 reads, 1,620 opens): `sync` and
+(§7), `file_per_sample` with 4 GPUs (11,260 ops: 3,200 reads, 1,620 opens): `sync` and
 `io_uring` put identical RPCs on the wire (1,601 READ, 1,225 OPEN), `io_uring-direct`
 4,801 READ and 1,600 CLOSE like `sync-direct`; the peak count of `iou-wrk` threads was 20,
 ~~the core count (io-wq's bounded-worker cap),~~ for buffered and direct reads alike, because
@@ -722,7 +722,7 @@ separately on the real target with `IORING_REGISTER_IOWQ_MAX_WORKERS` in hand; t
 exists to ask it.
 
 **Observed again with the host counters in the report (2026-10-01, later).** The same
-`train_small_files` with 4 GPUs on the loopback mount, `--time-scale 0`, each backend on its
+`file_per_sample` with 4 GPUs on the loopback mount, `--time-scale 0`, each backend on its
 own freshly generated directory, cold then warm, as the report now prints them:
 
 | backend, pass | tasks peak | io-wq peak | cpu user + sys | server read | RPCs |
@@ -743,7 +743,7 @@ backends need the same gap since the last touch, which the counters now make vis
 `O_DIRECT requested read` figure is 3.13 GiB for 194.5 MiB from the server: 3,200 reads of
 a 1 MiB aligned buffer each, counted as requested.
 
-**Observed with the knobs (2026-10-01, later still).** `train_small_files` with 8 GPUs
+**Observed with the knobs (2026-10-01, later still).** `file_per_sample` with 8 GPUs
 (72 actors), 16,000 files, 896,000 ops of which 256,000 reads and 88,000 opens, on the
 loopback mount, `--time-scale 0`, `--threads 4`, data from the client's page cache in every
 row (one cold `sync` pass first), so each open still costs its `OPEN` and `DELEGRETURN`:
@@ -848,8 +848,8 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
   `mmap` the major faults are the reads that reached storage.
 - **Refusals.** `--aio-depth` without a `libaio` backend and `--mmap-mode` or
   `--mmap-consume` without `mmap` are refused, like the ring knobs under `sync`. There is no `mmap-direct`.
-- **Tests** (`tests/run.rs`). `train_small_files` under all nine backends; the
-  `kv_cache_serving`, `vdb_search_diskann`, and `ckpt_write_dcp` (since 2026-10-01 with `hdr` and
+- **Tests** (`tests/run.rs`). `file_per_sample` under all nine backends; the
+  `lmcache_local_disk`, `diskann_search`, and `dcp_save` (since 2026-10-01 with `hdr` and
   `trailer` set to 4096, the traced values being unaligned) runs of the `io_uring` test
   under the five new ones (`libaio` on one loop and on three, barriers through the poll,
   write-then-read-back through a mapping made after the write), and the three `mmap`
@@ -858,7 +858,7 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
   abstracts under `posix-aio`, `libaio`, and `mmap` as well. Not tested: a context that fills (the kernel rounds
   `nr_events` up to a few per CPU, so a small test never gets `EAGAIN`).
 
-**Observed (2026-10-01, loopback NFS of §7, `--time-scale 0`).** `train_small_files` with
+**Observed (2026-10-01, loopback NFS of §7, `--time-scale 0`).** `file_per_sample` with
 4 GPUs (36 actors), 1,600 files, `steps=12`: 10,752 ops, of which 3,072 reads and 1,536
 opens, 179 MiB. Each row on its own freshly generated directory, cold; all rows reproduce
 the fingerprint.
@@ -950,7 +950,7 @@ and that none of this is a number for a real target:
    line shows. It changed back and forth during the `touch` series as well, which is why
    that series is given in both regimes.
 
-**Observed on large files (2026-10-01, same mount).** `train_large_samples` with 4 GPUs
+**Observed on large files (2026-10-01, same mount).** `npy_per_sample` with 4 GPUs
 (20 actors), `files=28`, `steps=2`: 28 files of about 140 MiB, 8,220 reads of 1 MiB,
 7.83 GiB read, every file read twice (3.85 GiB from the server on a cold pass). This is
 the shape `mmap` loaders are used for. Cold rows each on a freshly generated directory:
@@ -1042,7 +1042,7 @@ turns beside the line that forked them (which goes on), worker `w` walking batch
 turns. Channels and barriers do not hold anyone back. This is one linearization of the
 partial order the abstract defines: concurrent contexts advancing at equal op rates. It was
 chosen over the inline order of the plain dry run (sub-actor 0 to its end, then 1), under
-which the 32 search threads of `vdb_search_diskann` would run one after another and every
+which the 32 search threads of `diskann_search` would run one after another and every
 block a later thread shares with an earlier one would show a reuse distance of a whole
 thread's work. With `--gpu` and `--metrics`, the printed stream is in this order; with `--gpu`
 alone it is in the inline order (found 2026-10-08).
@@ -1069,24 +1069,24 @@ printed are bucket lower bounds. Fan-out and depth are exact.
 and object overall. That is per-block state, which the runner never keeps; this is an
 analysis pass and does not run with I/O. `--metrics-sample N` keeps the blocks and objects
 whose hash is 0 mod `N` and scales distances and counts by `N` (SHARDS); the pass stops
-with a message naming the flag at 2^26 entries. On `kv_cache_serving` (18.0M block
+with a message naming the flag at 2^26 entries. On `lmcache_local_disk` (18.0M block
 accesses) one in 16 gave the same percentiles as exact in 0.25 s against 5.8 s. Sampling
 cannot resolve distances under `N` blocks.
 
 **What it shows on the committed abstracts** (small configurations, seed 1):
 
-- `vdb_search_diskann` (2,000 queries, 2 threads): ~~depth 3–8 in the proportions of the
+- `diskann_search` (2,000 queries, 2 threads): ~~depth 3–8 in the proportions of the
   `hops` parameter (5/20/35/25/10/5 %), fan-out 4, every run one op, and the hub draw as
   block skew and as reuse.~~ depth 26–32 (the `hops` parameter plus the two rounds near the
   entry points; 28 in 53 %), fan-out 4 and 1 (the entry point's sector), every sector read a
   run of one op, and the entry points as block skew and as reuse (the abstract as corrected
   from the trace, 2026-10-02).
-- `train_small_files`: one run per file, no block touched twice within an epoch, flat
+- `file_per_sample`: one run per file, no block touched twice within an epoch, flat
   popularity.
-- `ckpt_write_dcp`: 98.6 % of the bytes in multi-op write runs, ~~no reuse~~ 0.1 % of block
+- `dcp_save`: 98.6 % of the bytes in multi-op write runs, ~~no reuse~~ 0.1 % of block
   accesses rewrite a block (since the 2026-10-01 trace the writes are unaligned, and a block
   two consecutive writes share is written twice).
-- `kv_cache_serving` (the abstract before its 2026-10-02 correction): 7.4 % of block accesses are reads of a block the instance wrote,
+- `lmcache_local_disk` (the abstract before its 2026-10-02 correction): 7.4 % of block accesses are reads of a block the instance wrote,
   at a median distance of 8 GiB; 51 % are re-reads at a median of 2.5 GiB.
 
 **Limits.** (1) The order is a model: equal op rates, no compute time, no backpressure. A
@@ -1154,9 +1154,9 @@ host: tasks peak 36  open files peak 31  io-wq workers peak 0  …
   (the `libaio` setup error already names it, §9). A disabled `io_uring` is named by the
   ring setup error (§8).
 
-Observed (ext4, 2026-10-01): `train_small_files`, 4 GPUs: estimate 32 open files, counted
+Observed (ext4, 2026-10-01): `file_per_sample`, 4 GPUs: estimate 32 open files, counted
 31 (`sync`) and 32 (`io_uring`); threads estimated 39, `tasks peak` 36.
-`vdb_search_diskann`, 2 GPUs × 4 threads: 8 and 8; threads 35 and 34. With `ulimit -n 40`
+`diskann_search`, 2 GPUs × 4 threads: 8 and 8; threads 35 and 34. With `ulimit -n 40`
 the first refuses (53 needed); with `ulimit -Sn 40` the soft limit is raised and it runs.
 
 ## 12. The JSON report (2026-10-01)
@@ -1241,7 +1241,7 @@ instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_recor
   the end of §10). A change that removes or renames a field raises `aeiou_report`.
 
 ```
-aeiou run schema/examples/train_small_files.ast.json --gpus 2 --seed 7 --root DIR --report-json r.json
+aeiou run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 7 --root DIR --report-json r.json
 python3 -c 'import json; d = json.load(open("r.json")); print(d["verdict"]["ok"], d["result"]["latency"]["read"]["p99_ns"])'
 ```
 
@@ -1346,8 +1346,8 @@ node computes the trace's own metrics, and **equals `aeiou-trace metrics` of the
 was exported from, row for row,** reuse distance included (both are the trace in
 completion order as one instance); no depth is reported (a trace's chains need the
 think-time threshold of `aeiou-trace --chain-gap-us`, which the file does not carry).
-Checked on traces of this runner under `strace` on `train_small_files`, `kv_cache_serving`,
-and `vdb_search_diskann` (`builder/tests/test_trace.py`): exact, except that under libaio
+Checked on traces of this runner under `strace` on `file_per_sample`, `lmcache_local_disk`,
+and `diskann_search` (`builder/tests/test_trace.py`): exact, except that under libaio
 the strace's metrics count an `io_submit` member when it is reaped and the file counts it
 at submission, so the reuse-distance histogram of that pair differs by the reordering
 within a round. `dry-run --gpu 0` prints the lines as `app#0 [lane,ordinal] op path`.
@@ -1440,7 +1440,7 @@ warning, then an empty line (there is no `--show-config`: the block is always th
 
 ```
 options (cli > env > config > default)
-  abstract = ../schema/examples/train_small_files.ast.json   [cli]
+  abstract = ../workloads/training/map/file-per-sample/file_per_sample.ast.json   [cli]
   param = files=4000 steps=50                                [cli]
   params-file = none                                         [default]
   gpus = 8                                                   [cli]
@@ -1668,18 +1668,18 @@ written at offsets has no object form. The writer threads make the requests, as 
 **Tests.** `tests/object.rs`, compiled with the feature: datagen into a MinIO bucket of 20
 MiB samples (three parts each) whose bytes equal the POSIX writer's files of the same names,
 read back to the dry run's fingerprint under `sync`, `posix-aio`, `mmap`, `io_uring`, and
-`libaio`; the listing walk and directory `stat`s of `train_small_files` over four prefixes of
+`libaio`; the listing walk and directory `stat`s of `file_per_sample` over four prefixes of
 1,300 objects, with its header reads past every object's end, under `sync` and `io_uring`;
 and the refusals, which need no server. The tests that need one start MinIO from the binary `TEST_MINIO_BIN` names, on a free port with a
 directory of their own, and create the bucket with `curl --aws-sigv4`; they are skipped,
 saying so, when it is unset. CI's `runner-object` job downloads the last MinIO release that
 has binaries (`RELEASE.2025-09-07T16-13-09Z`; the project stopped publishing them and archived
 its repository) and checks its SHA-256 before running them. Since the writes: the shared KV
-store (`kv_cache_shared`) written into a bucket with 6 MiB chunks in 5 MiB parts (every chunk
+store (`lmcache_shared_fs`) written into a bucket with 6 MiB chunks in 5 MiB parts (every chunk
 file a two-part upload, then a copy and a `DELETE`), to the dry run's fingerprint; a second
 run refused on the non-empty prefix and one with `--clean-namespaces` (under `io_uring`)
 that empties it but the system prompts' keys; each object's bytes equal to the file a POSIX run of the same
 abstract writes under the same name, and no temporary name left; the reader
-(`kv_cache_shared_reader`) reading the namespace as `input` from its manifest object, to its
+(`lmcache_shared_fs_reader`) reading the namespace as `input` from its manifest object, to its
 fingerprint, under `sync` and `libaio`; and a write past the upload's end failing the run
 under V18.

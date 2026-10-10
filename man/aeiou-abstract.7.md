@@ -229,10 +229,12 @@ a namespace root may not lie inside a dataset root.
 - `schema/params.schema.json`
 
   The schema of a parameter file.
-- `schema/examples/*.ast.json`, `schema/examples/params/`
+- `workloads/<category>/…/<mechanism>/`
 
-  The committed abstracts, generated from `builder/abstracts/*.py` and never edited by
-  hand, and their example parameter sets.
+  The committed abstracts, one directory per I/O mechanism: the authoring script, the
+  `*.ast.json` generated beside it and never edited by hand, test-sized parameter sets in
+  `params/`, and the mechanism's cases in `cases/<case>/` (a parameter set describing one
+  workload, and the captures of the traced application under it).
 
 ## SEE ALSO
 

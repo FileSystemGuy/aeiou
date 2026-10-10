@@ -2,7 +2,7 @@
 """Validate abstract ASTs against schema/abstract-ast.schema.json and the semantic rules of
 schema/README.md, print each AST's canonical hash and op-kind counts.
 
-Usage: python3 schema/check.py [file.ast.json ...]   (default: schema/examples/*.ast.json)
+Usage: python3 schema/check.py [file.ast.json ...]   (default: workloads/**/*.ast.json)
 
 This is the reference for the rules until the Rust validator exists; the Rust validator must
 reject everything this rejects. It needs only jsonschema.
@@ -547,7 +547,7 @@ class Scope:
 
 
 def main(argv):
-    files = [pathlib.Path(a) for a in argv] or sorted((HERE / "examples").glob("*.ast.json"))
+    files = [pathlib.Path(a) for a in argv] or sorted((HERE.parent / "workloads").rglob("*.ast.json"))
     validator = jsonschema.Draft202012Validator(SCHEMA)
     failed = 0
     for f in files:

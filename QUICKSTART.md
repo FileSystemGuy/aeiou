@@ -11,7 +11,7 @@ and, for the runner alone, no Python.
 | `bin/aeiou-launch` | One `aeiou run` or `aeiou datagen` rank per host over ssh. A POSIX shell script. |
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
 | `man/` | The same pages as Markdown. |
-| `examples/` | The committed abstracts (`*.ast.json`), the only thing the runner executes, and `params/`, example parameter files. |
+| `workloads/` | The committed abstracts (`*.ast.json`), the only thing the runner executes, one directory per I/O mechanism under its category (`training/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …), each with its README, its cases (`cases/<case>/params.json`: a parameter set describing one workload), and test-sized parameter files in `params/`. |
 | `wheel/` | The Python builder, for those who want to author or change workloads, generate container datasets, or compare an `strace` of a real application with an abstract. Python 3.12 or newer. |
 
 ## First run
@@ -21,19 +21,20 @@ tar xzf aeiou-0.1.0-x86_64-linux.tar.gz && cd aeiou-0.1.0-x86_64-linux
 export PATH=$PWD/bin:$PATH
 
 # 1. the runner validates every shipped abstract and prints its hash and op counts
-aeiou check examples/*.ast.json
+aeiou check $(find workloads -name '*.ast.json')
 
 # 2. walk the small-file training workload without I/O: op counts, bytes, the fingerprint
-aeiou dry-run examples/train_small_files.ast.json --gpus 2 --seed 1 \
-    --params-file examples/params/train_small_files.smoke.params.json
+W=workloads/training/map/file-per-sample
+aeiou dry-run $W/file_per_sample.ast.json --gpus 2 --seed 1 \
+    --params-file $W/params/smoke.params.json
 
 # 3. write its dataset (4000 files, ~470 MiB) under the storage to test
-aeiou datagen examples/train_small_files.ast.json --root /mnt/sut/aeiou \
-    --params-file examples/params/train_small_files.smoke.params.json
+aeiou datagen $W/file_per_sample.ast.json --root /mnt/sut/aeiou \
+    --params-file $W/params/smoke.params.json
 
 # 4. run it: 2 emulated GPUs, 50 steps, the JSON report in run.json
-aeiou run examples/train_small_files.ast.json --root /mnt/sut/aeiou --gpus 2 --seed 1 \
-    --params-file examples/params/train_small_files.smoke.params.json --report-json run.json
+aeiou run $W/file_per_sample.ast.json --root /mnt/sut/aeiou --gpus 2 --seed 1 \
+    --params-file $W/params/smoke.params.json --report-json run.json
 ```
 
 `--root` is the storage under test: a directory on the mount you want to measure. The
@@ -48,16 +49,16 @@ and the command line of a run never disagree.
 
 ## Other workloads
 
-Every `examples/*.ast.json` runs the same way. `aeiou dry-run ABSTRACT --gpus 1` with no
+Every `workloads/**/*.ast.json` runs the same way. `aeiou dry-run ABSTRACT --gpus 1` with no
 parameter file uses the abstract's defaults, which for the training and checkpoint
 workloads are the sizes of a real job (thousands of files, hundreds of steps); scale them
-down with `--param k=v` or a parameter file. The `train_stream_*` and `train_map_hdf5`
+down with `--param k=v` or a parameter file. The `tfrecord_stream`, `parquet_stream`, and `hdf5_map`
 workloads read container files (TFRecord, Parquet, HDF5) that the Python side writes:
 
 ```
 python3 -m venv .venv && .venv/bin/pip install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
 # or: uv tool install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
-.venv/bin/aeiou-datagen examples/train_stream_tfrecord.ast.json --root /mnt/sut/aeiou
+.venv/bin/aeiou-datagen workloads/training/stream/tfrecord/tfrecord_stream.ast.json --root /mnt/sut/aeiou
 ```
 
 `aeiou-build`, `aeiou-params`, `aeiou-datagen`, and `aeiou-trace` each have a manual page

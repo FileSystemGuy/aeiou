@@ -138,7 +138,8 @@ one frame, listing every missing argument at once, and exits 2.
 | Path | What |
 |---|---|
 | `builder/` | The Python package `aeiou` and its four tools; `abstracts/` holds the twelve authoring scripts of the fourteen committed workloads; `traces/` the capture kit and trace metrics of each real application traced. [README](builder/README.md), [reference](builder/REFERENCE.md). |
-| `schema/` | The AST contract: the JSON Schema, the reference validator `check.py`, the parameter-file schema, and `examples/`, the committed abstracts (generated, never edited by hand) with example parameter sets. [README](schema/README.md). |
+| `schema/` | The AST contract: the JSON Schema, the reference validator `check.py`, and the parameter-file schema. [README](schema/README.md). |
+| `workloads/` | The committed abstracts, one directory per I/O mechanism under its category (`training/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …): the authoring script and the AST generated beside it (never edited by hand), the capture kit, and the cases, each a parameter set describing one workload with the captures of the traced application under it (`DESIGN_REVIEW.md` §3.66). |
 | `runner/` | The Rust workspace: the `aeiou` binary and `aeiou-launch`. [README](runner/README.md), [reference](runner/REFERENCE.md). |
 | `man/` | The manual pages, in Markdown with man-page sections; the test suites hold them to the tools' `--help`. [index](man/README.md). |
 | `QUICKSTART.md` | The guide shipped in the release tarball: first run, first bug report. |
@@ -193,10 +194,10 @@ cd runner && cargo build --release && cargo test --release && cd ..
 cd builder && uv sync --extra test --extra formats && uv run pytest && cd ..
 
 # check, dry-run, generate, run
-runner/target/release/aeiou check schema/examples/*.ast.json
-runner/target/release/aeiou dry-run schema/examples/train_small_files.ast.json --gpus 8 --seed 1
-runner/target/release/aeiou datagen schema/examples/train_small_files.ast.json --root /mnt/sut --param files=4000
-runner/target/release/aeiou run schema/examples/train_small_files.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+runner/target/release/aeiou check $(find workloads -name '*.ast.json')
+runner/target/release/aeiou dry-run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
+runner/target/release/aeiou datagen workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+runner/target/release/aeiou run workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50 --report-json run.json
 ```
 
@@ -223,11 +224,12 @@ reported; the launcher takes host files and `pdsh`-style ranges).
 
 Not built, in rough order of interest:
 
-- The workload catalog (designed 2026-10-10, `PROJECT_BRIEF.md` §6 item 26, `DESIGN_REVIEW.md`
-  §3.66): `workloads/<category>/…/<mechanism>/cases/<case>` in place of `builder/abstracts/`,
-  `builder/traces/`, and `schema/examples/`, cases labeled from an enforced dictionary of
-  attributes, and `aeiou-catalog`; next, before `aeiou-datagen` to object stores. Later:
-  the abstract rendered as prose (item 27).
+- The workload catalog's dictionary (`PROJECT_BRIEF.md` §6 item 26, `DESIGN_REVIEW.md`
+  §3.66): the tree `workloads/<category>/…/<mechanism>/cases/<case>` is built (2026-10-10,
+  in place of `builder/abstracts/`, `builder/traces/`, and `schema/examples/`, every AST
+  renamed for its directory); the enforced dictionary of attributes, each case's measured
+  shape, and `aeiou-catalog` are next, before `aeiou-datagen` to object stores. Later: the
+  abstract rendered as prose (item 27).
 - The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included; the API
   and the cache mode as separate axes, contract 0.6, and the protocol and `--endpoint` per
   dataset and namespace built the same day, the mount counters still `--root`'s alone):

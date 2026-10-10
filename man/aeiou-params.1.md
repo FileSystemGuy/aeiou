@@ -36,8 +36,8 @@ appear.
 - **defaults** writes every default of an abstract as a set, to edit or to fit.
 - **check** validates files against an abstract with the runner's rules.
 - **safetensors** reads real safetensors shard headers and writes the tensor table the
-  `model_load` abstract takes as parameters.
-- **npz** reads the archive framing the `train_large_samples` abstract takes as parameters
+  `safetensors_load` abstract takes as parameters.
+- **npz** reads the archive framing the `npy_per_sample` abstract takes as parameters
   from real `.npz` files and compares it with the abstract's defaults.
 
 ## OPTIONS
@@ -71,7 +71,7 @@ appear.
 
 - *ABSTRACT*
 
-  The `model_load` abstract; its parameter names are checked.
+  The `safetensors_load` abstract; its parameter names are checked.
 - *SHARDS...*
 
   The shard files, in dataset id order.
@@ -102,7 +102,7 @@ The table written has the parallel arrays `shard`, `off`, `bytes`, `split`, `row
 
 - *ABSTRACT*
 
-  The `train_large_samples` abstract.
+  The `npy_per_sample` abstract.
 - *ARCHIVES...*
 
   Archives of the corpus. A few are enough; all must agree with each other.
@@ -141,10 +141,11 @@ the abstract reads none of those shapes.
 
 ## FILES
 
-- `<abstract>.<set>.params.json`
+- `<abstract>.<set>.params.json`, `params.json`
 
-  A parameter file. The schema is `schema/params.schema.json`; the committed examples are
-  `schema/examples/params/`, each checked against its abstract in CI.
+  A parameter file. The schema is `schema/params.schema.json`; the committed ones are under
+  `workloads/` (a mechanism's `params/`, a case's `params.json`, a capture's
+  `fitted.params.json`), each checked against its abstract in CI.
 
 ## EXIT STATUS
 
@@ -164,12 +165,12 @@ the abstract reads none of those shapes.
 ## EXAMPLES
 
 ```
-aeiou-params defaults schema/examples/train_small_files.ast.json -o tsf.params.json --pin
-aeiou-params check schema/examples/train_small_files.ast.json tsf.params.json
-aeiou-params safetensors schema/examples/model_load.ast.json model-0000?-of-00004.safetensors \
+aeiou-params defaults workloads/training/map/file-per-sample/file_per_sample.ast.json -o tsf.params.json --pin
+aeiou-params check workloads/training/map/file-per-sample/file_per_sample.ast.json tsf.params.json
+aeiou-params safetensors workloads/inference/safetensors-load/safetensors_load.ast.json model-0000?-of-00004.safetensors \
     -o llama.params.json --tp 8
-aeiou-params npz schema/examples/train_large_samples.ast.json corpus/train/00000/sample_0000000?.npz
-aeiou run schema/examples/model_load.ast.json --gpus 8 --root /mnt/sut --params-file llama.params.json
+aeiou-params npz workloads/training/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_0000000?.npz
+aeiou run workloads/inference/safetensors-load/safetensors_load.ast.json --gpus 8 --root /mnt/sut --params-file llama.params.json
 ```
 
 ## SEE ALSO

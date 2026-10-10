@@ -9,8 +9,8 @@ sets and a fitted set can be reviewed and hashed on its own. The runner applies 
 
     aeiou-params defaults  AST.json [-o FILE] [--doc TEXT] [--pin]   the defaults as a starting set
     aeiou-params check     AST.json FILE...                          validate sets against an abstract
-    aeiou-params safetensors AST.json SHARD... [-o FILE] [--tp N]    model_load's tensor table from real shards
-    aeiou-params npz       AST.json ARCHIVE... [-o FILE] [--member x] train_large_samples' framing from real .npz files
+    aeiou-params safetensors AST.json SHARD... [-o FILE] [--tp N]    safetensors_load's tensor table from real shards
+    aeiou-params npz       AST.json ARCHIVE... [-o FILE] [--member x] npy_per_sample' framing from real .npz files
 
 The value rules are the runner's (`runner/aeiou/src/eval.rs`): a name must be declared, `gpus`
 may not appear, and a value replaces a default of the same kind (scalar, array, distribution;
@@ -123,7 +123,7 @@ def file_sha256(path) -> str:
 
 
 # ----------------------------------------------------------------------------------------------
-# safetensors: model_load's tensor table from the real shards (source 1, configuration)
+# safetensors: safetensors_load's tensor table from the real shards (source 1, configuration)
 # ----------------------------------------------------------------------------------------------
 
 DTYPE_BYTES = {"F64": 8, "I64": 8, "U64": 8, "F32": 4, "I32": 4, "U32": 4, "F16": 2, "BF16": 2, "I16": 2,
@@ -145,7 +145,7 @@ def read_safetensors_header(path) -> tuple[int, dict]:
 
 
 def safetensors_table(shards: list, *, tp: int = 8, column: str = COLUMN_RE, row: str = ROW_RE) -> dict:
-    """The `model_load` parameters for these shard files: one row per tensor, shards in the
+    """The `safetensors_load` parameters for these shard files: one row per tensor, shards in the
     order given (the dataset's file id), tensors in file order."""
     col_re, row_re = re.compile(column), re.compile(row)
     shards = [pathlib.Path(s) for s in shards]
@@ -188,7 +188,7 @@ def _load_ast(path) -> tuple[dict, str]:
     return ast, sha256(ast)
 
 
-# npz: train_large_samples' archive framing from real files (source 1, configuration)
+# npz: npy_per_sample' archive framing from real files (source 1, configuration)
 #
 # The abstract reads one member of an uncompressed .npz front to back and takes two numbers
 # about the archive as parameters: `framing`, the archive's bytes that are not that member's
@@ -260,8 +260,8 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     c = sub.add_parser("check", help="Validate parameter files against an abstract", usage="aeiou-params check <ABSTRACT_PATH> <FILES>...")
     c.add_argument("ast", **abstract, help="The abstract (`.ast.json`)")
     c.add_argument("files", nargs="*", type=pathlib.Path, metavar="FILES", help="Parameter files (`.params.json`)")
-    s = sub.add_parser("safetensors", help="Build model_load's tensor table from safetensors shards", usage="aeiou-params safetensors [OPTIONS] -o <FILE> <ABSTRACT_PATH> <SHARDS>...")
-    s.add_argument("ast", **abstract, help="The model_load abstract (its parameter names are checked)")
+    s = sub.add_parser("safetensors", help="Build safetensors_load's tensor table from safetensors shards", usage="aeiou-params safetensors [OPTIONS] -o <FILE> <ABSTRACT_PATH> <SHARDS>...")
+    s.add_argument("ast", **abstract, help="The safetensors_load abstract (its parameter names are checked)")
     s.add_argument("shards", nargs="*", type=pathlib.Path, metavar="SHARDS", help="Shard files in dataset id order")
     s.add_argument("-o", "--out", type=pathlib.Path, metavar="FILE", help="Required: the parameter file to write")
     s.add_argument("--tp", type=int, default=8, help="Tensor-parallel degree [default: 8]")
@@ -269,8 +269,8 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     s.add_argument("--row", default=ROW_RE, metavar="REGEX", help="Regex of row-parallel tensors")
     s.add_argument("--doc", metavar="TEXT", help="The set's `doc` line")
     s.add_argument("--pin", action="store_true", help="Record the AST hash so the set is for this exact shape")
-    n = sub.add_parser("npz", help="Read train_large_samples' framing and cd_len from real .npz archives and compare them with the abstract's defaults", usage="aeiou-params npz [OPTIONS] <ABSTRACT_PATH> <ARCHIVES>...")
-    n.add_argument("ast", **abstract, help="The train_large_samples abstract")
+    n = sub.add_parser("npz", help="Read npy_per_sample' framing and cd_len from real .npz archives and compare them with the abstract's defaults", usage="aeiou-params npz [OPTIONS] <ABSTRACT_PATH> <ARCHIVES>...")
+    n.add_argument("ast", **abstract, help="The npy_per_sample abstract")
     n.add_argument("archives", nargs="*", type=pathlib.Path, metavar="ARCHIVES", help="Archives of the corpus (a few are enough; all must agree)")
     n.add_argument("-o", "--out", type=pathlib.Path, metavar="FILE", help="Write a parameter file with the two values")
     n.add_argument("--member", default="x", metavar="NAME", help="The member the application reads [default: x]")

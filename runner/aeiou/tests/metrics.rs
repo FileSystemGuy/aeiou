@@ -1,18 +1,13 @@
 //! `aeiou dry-run --metrics` (`runner/REFERENCE.md` §10): the round-robin walk issues the same op
 //! multiset as the inline walk, and the metrics recover the structure the abstracts put in.
 
-use std::path::PathBuf;
 
 use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, Params};
 use aeiou::metrics::{self, Opts};
 
-fn examples() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
-}
-
 fn dry(name: &str, gpus: i64, params: &[(&str, &str)], threads: usize, opts: Option<Opts>) -> dryrun::Report {
-    let text = std::fs::read_to_string(examples().join(format!("{name}.ast.json"))).unwrap();
+    let text = std::fs::read_to_string(crate::common::workload_ast(name)).unwrap();
     let cfg = Config { seed: 1, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] };
     let loaded = aeiou::load_str(&text).expect("valid abstract");
     let params = Params::new(&loaded.ast, &cfg).unwrap();
@@ -22,20 +17,20 @@ fn dry(name: &str, gpus: i64, params: &[(&str, &str)], threads: usize, opts: Opt
 
 /// The golden configurations of `tests/golden.rs`.
 const CASES: &[(&str, i64, &[(&str, &str)])] = &[
-    ("train_small_files", 2, &[("steps", "10")]),
-    ("train_large_samples", 2, &[("steps", "5")]),
-    ("ckpt_write_dcp", 2, &[("steps", "200")]),
-    ("ckpt_restore", 2, &[]),
-    ("model_load", 2, &[]),
-    ("vdb_search_diskann", 1, &[("queries", "100"), ("threads", "2")]),
-    ("vdb_search_ivf", 1, &[("calls", "100"), ("threads", "2")]),
-    ("vdb_build_diskann", 1, &[("sectors", "1000"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000")]),
-    ("kv_cache_serving", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
-    ("kv_cache_shared", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
-    ("kv_cache_shared_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
-    ("train_stream_tfrecord", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
-    ("train_stream_parquet", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
-    ("train_map_hdf5", 2, &[("samples", "64"), ("per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")]),
+    ("file_per_sample", 2, &[("steps", "10")]),
+    ("npy_per_sample", 2, &[("steps", "5")]),
+    ("dcp_save", 2, &[("steps", "200")]),
+    ("dcp_load", 2, &[]),
+    ("safetensors_load", 2, &[]),
+    ("diskann_search", 1, &[("queries", "100"), ("threads", "2")]),
+    ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")]),
+    ("diskann_build", 1, &[("sectors", "1000"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000")]),
+    ("lmcache_local_disk", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
+    ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
+    ("lmcache_shared_fs_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
+    ("tfrecord_stream", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
+    ("parquet_stream", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
+    ("hdf5_map", 2, &[("samples", "64"), ("per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")]),
 ];
 
 #[test]
@@ -76,7 +71,7 @@ fn metrics_do_not_depend_on_the_thread_count() {
 /// read continues another, and the entry points show as reuse and as skew.
 #[test]
 fn diskann_structure_is_recovered() {
-    let r = dry("vdb_search_diskann", 1, &[("queries", "2000"), ("threads", "2"), ("nodes", "20000")], 2, Some(Opts::default()));
+    let r = dry("diskann_search", 1, &[("queries", "2000"), ("threads", "2"), ("nodes", "20000")], 2, Some(Opts::default()));
     let m = r.total.metrics.as_ref().unwrap();
     assert_eq!(m.depth.keys().copied().collect::<Vec<_>>(), vec![1, 26, 27, 28, 29, 30, 31, 32]); // 1: the thread fork
     let chains: u64 = m.depth.iter().filter(|(k, _)| **k >= 26).map(|(_, v)| v).sum();
@@ -99,7 +94,7 @@ fn diskann_structure_is_recovered() {
 /// Small-file training: every file is read whole, front to back, and once per epoch.
 #[test]
 fn small_file_training_is_sequential_and_flat() {
-    let r = dry("train_small_files", 2, &[("steps", "10")], 2, Some(Opts::default()));
+    let r = dry("file_per_sample", 2, &[("steps", "10")], 2, Some(Opts::default()));
     let m = r.total.metrics.as_ref().unwrap();
     let p = m.popularity_objects();
     assert_eq!(p.max, p.counts.last().unwrap().0, "every file has the same number of data ops");
@@ -111,8 +106,8 @@ fn small_file_training_is_sequential_and_flat() {
 #[test]
 fn sampling_estimates_the_exact_counts() {
     let params: &[(&str, &str)] = &[("queries", "2000"), ("threads", "2"), ("nodes", "1000000")];
-    let exact = dry("vdb_search_diskann", 1, params, 2, Some(Opts::default()));
-    let sampled = dry("vdb_search_diskann", 1, params, 2, Some(Opts { block: 4096, sample: 8 }));
+    let exact = dry("diskann_search", 1, params, 2, Some(Opts::default()));
+    let sampled = dry("diskann_search", 1, params, 2, Some(Opts { block: 4096, sample: 8 }));
     let (e, s) = (exact.total.metrics.as_ref().unwrap(), sampled.total.metrics.as_ref().unwrap());
     let (pe, ps) = (e.popularity_blocks(), s.popularity_blocks());
     let close = |a: u64, b: u64| (a as f64 - b as f64).abs() / (b as f64) < 0.10;

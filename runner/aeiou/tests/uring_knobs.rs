@@ -3,6 +3,7 @@
 //! this process's `iou-wrk-*` and `iou-sqp-*` threads, which the other `io_uring` tests
 //! would add to if they ran beside this one.
 
+mod common;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -21,17 +22,13 @@ fn tmpdir(tag: &str) -> PathBuf {
     d
 }
 
-fn examples() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
-}
-
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
     Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
 }
 
 /// A run is the process: the model is leaked so the actor threads can borrow it.
 fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {
-    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap()));
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&common::workload_ast(name)).unwrap()));
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
@@ -92,7 +89,7 @@ fn io_uring_knobs_keep_the_fingerprint() {
     // (SQPOLL needs 5.13 unprivileged, DEFER_TASKRUN 6.1) skips that row.
     let root = tmpdir("uring-knobs");
     let params = [("files", "300"), ("batch", "4"), ("workers", "3"), ("prefetch", "2"), ("steps", "10"), ("enumerate", "true")];
-    let (loaded, cfg, model) = leaked_model("train_small_files", config(3, 11, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(3, 11, &params));
     gen(loaded, cfg, model, &root);
     run::check_datasets(loaded, cfg, &root).unwrap();
     run::prepare_namespaces(&loaded.ast, &root, false).unwrap();

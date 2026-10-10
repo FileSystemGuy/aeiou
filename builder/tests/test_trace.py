@@ -24,6 +24,17 @@ from aeiou.nodes import BuildError  # noqa: E402
 from aeiou.trace import Instance, LogHist, compare, metrics_of, split_args  # noqa: E402
 
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+WORKLOADS = ROOT / "workloads"
+
+
+def ast_path(name):
+    """The committed AST `name`, wherever its mechanism lives under workloads/ (DESIGN_REVIEW.md §3.66)."""
+    return next(WORKLOADS.rglob(f"{name}.ast.json"))
+
+
+def case_dir(name, case):
+    """A case of the mechanism whose AST is `name`: its parameter set and its captures."""
+    return ast_path(name).parent / "cases" / case
 
 
 def total(text, **kw):
@@ -235,15 +246,15 @@ needs_run = pytest.mark.skipif(not RUNNER.exists() or not _strace_works(), reaso
 @pytest.mark.parametrize(
     "name, seed, params",
     [
-        ("train_small_files", 7, ["files=600", "batch=4", "workers=2", "prefetch=2", "steps=12"]),
-        ("kv_cache_serving", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
+        ("file_per_sample", 7, ["files=600", "batch=4", "workers=2", "prefetch=2", "steps=12"]),
+        ("lmcache_local_disk", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
                               'reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}',
                               'keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}']),
-        ("vdb_search_diskann", 9, ["nodes=5000", "threads=2", "queries=6"]),
+        ("diskann_search", 9, ["nodes=5000", "threads=2", "queries=6"]),
     ],
 )
 def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
-    ast = ROOT / "schema" / "examples" / f"{name}.ast.json"
+    ast = ast_path(name)
     root = tmp_path / "root"
     root.mkdir()
     common = [str(ast), "--gpus", "1", *[x for p in params for x in ("--param", p)]]
@@ -308,7 +319,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     assert trace.main(["metrics", str(exported), "-o", str(tmp_path / "ex.json")]) == 0
     ex = json.loads((tmp_path / "ex.json").read_text())["total"]
     assert nd == ex, "the runner's walk of the file and the Python reader's disagree"
-    strip = lambda m: {k: v for k, v in m.items() if k not in ("reuse_distance_bytes", "run_length")} if name == "vdb_search_diskann" else m
+    strip = lambda m: {k: v for k, v in m.items() if k not in ("reuse_distance_bytes", "run_length")} if name == "diskann_search" else m
     assert strip(t) == strip(nd), "the trace node's dry run is not the strace's metrics"
     fp = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("fingerprint "))
     # one thread per lane under sync; one task per lane on an event loop, a group's members
@@ -322,16 +333,16 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
-    """`builder/traces/train_small_files`: DataLoader + ImageFolder on NFS, traced 2026-10-01.
+    """`workloads/training/map/file-per-sample`: DataLoader + ImageFolder on NFS, traced 2026-10-01.
     The abstract at the fitted parameters has the application's op mix exactly but for the
     one listing of the dataset root; the corpus of real JPEGs is near the abstract's size
     distribution, not equal to it, and the order differs."""
-    kit = BUILDER / "traces" / "train_small_files"
+    case = case_dir("file_per_sample", "imagefolder-jpeg")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "train_small_files.ast.json"), "--gpus", "1",
-                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("file_per_sample")), "--gpus", "1",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     root_listing = {"open": 1, "fstat": 1, "readdir": 1, "close": 1}
     assert {k: v - root_listing.get(k, 0) for k, v in t["counts"].items()} == d["counts"]
     assert t["request_size"]["read"]["buckets"] == d["request_size"]["read"]["buckets"]
@@ -345,16 +356,16 @@ def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 @pytest.mark.parametrize("which, reuse", [("140MiB", 0.3), ("8MiB", 0.07)])
 def test_large_sample_abstract_matches_the_trace_of_np_load(tmp_path, which, reuse):
-    """`builder/traces/train_large_samples`: `np.load(...)["x"]` on NFS, traced 2026-10-01.
+    """`workloads/training/map/npy-per-sample`: `np.load(...)["x"]` on NFS, traced 2026-10-01.
     The abstract draws its sizes, the corpus has its own, so the counts are near, not equal
     (they are exact per file: `ABSTRACTS.md` §2). Sixteen files say little about the reuse
     distance; 256 say more."""
-    kit = BUILDER / "traces" / "train_large_samples"
+    case = case_dir("npy_per_sample", f"npy-{which.lower()}")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "train_large_samples.ast.json"), "--gpus", "1",
-                        "--params-file", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("npy_per_sample")), "--gpus", "1",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     listing = {"open": 1, "fstat": 1, "readdir": 1, "close": 1}       # glob lists the root too; the abstract lists the sample directories (one here)
     for k, v in t["counts"].items():
         v -= listing.get(k, 0)
@@ -366,15 +377,15 @@ def test_large_sample_abstract_matches_the_trace_of_np_load(tmp_path, which, reu
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_checkpoint_write_abstract_matches_the_trace_of_dcp_save(tmp_path):
-    """`builder/traces/ckpt_write_dcp`: `torch.distributed.checkpoint.save` on two ranks,
+    """`workloads/checkpointing/dcp-save`: `torch.distributed.checkpoint.save` on two ranks,
     traced 2026-10-01. Every call on the shard files and `.metadata` is in the abstract; the
     path checks around `mkdir` that it cannot express are listed here (`ABSTRACTS.md` §3)."""
-    kit = BUILDER / "traces" / "ckpt_write_dcp"
+    case = case_dir("dcp_save", "toy-6-items")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "ckpt_write_dcp.ast.json"), "--gpus", "2",
-                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("dcp_save")), "--gpus", "2",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     not_modeled = {
         "mkdir": 2,   # once in the job: the step directory's parent is absent (ENOENT), then made
         "stat": 8,    # per rank and checkpoint the parent (4); the rank that lost the mkdir, the directory (2); the root, first time (2)
@@ -386,20 +397,20 @@ def test_checkpoint_write_abstract_matches_the_trace_of_dcp_save(tmp_path):
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
-@pytest.mark.parametrize("which, bytes_off", [("mixed", 0), ("small-last", 88), ("name-order", 0)])
+@pytest.mark.parametrize("which, bytes_off", [("mixed-9-items", 0), ("small-last-6-items", 88), ("name-order-17-items", 0)])
 def test_checkpoint_restore_abstract_matches_the_trace_of_dcp_load(tmp_path, which, bytes_off):
-    """`builder/traces/ckpt_restore`: `torch.distributed.checkpoint.load` on two ranks, traced
+    """`workloads/checkpointing/dcp-load`: `torch.distributed.checkpoint.load` on two ranks, traced
     2026-10-01. Every call on the shard files and `.metadata` is in the abstract, with its
     count; the check of the checkpoint's parent directory is not (`ABSTRACTS.md` §4). A small
     last item has its zip records 44 bytes nearer its ends than `rec2` and `tail_back` say,
     which is 88 bytes over two ranks. `name-order` has 17 items, read in the sorted order of
     their names across runs of small ones longer than the buffer: the buffer chain."""
-    kit = BUILDER / "traces" / "ckpt_restore"
+    case = case_dir("dcp_load", which)
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "ckpt_restore.ast.json"), "--gpus", "2",
-                        "--params-file", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("dcp_load")), "--gpus", "2",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     not_modeled = {"stat": 2}   # per rank, the parent of the checkpoint directory (and an `access`, which the trace metrics do not count)
     assert {k: v - not_modeled.get(k, 0) for k, v in t["counts"].items() if v != not_modeled.get(k)} == d["counts"]
     assert d["bytes_read"] - t["bytes_read"] == bytes_off
@@ -409,16 +420,16 @@ def test_checkpoint_restore_abstract_matches_the_trace_of_dcp_load(tmp_path, whi
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_model_load_abstract_matches_the_trace_of_from_pretrained(tmp_path):
-    """`builder/traces/model_load`: `from_pretrained` on five safetensors shards, traced
+    """`workloads/inference/safetensors-load`: `from_pretrained` on five safetensors shards, traced
     2026-10-01. The library maps the shards and issues no `read` on them, so the trace has the
     calls around the mappings and the small JSON files, and nothing of the tensor bytes
     (`ABSTRACTS.md` §4)."""
-    kit = BUILDER / "traces" / "model_load"
+    case = case_dir("safetensors_load", "gpt2-random")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "model_load.ast.json"), "--gpus", "1",
-                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("safetensors_load")), "--gpus", "1",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
+    t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
     for op in ("open", "close", "fstat", "ioctl", "lseek", "fadvise"):
         assert t[op] == d[op], op
     assert d["read"] - t["read"] == 2 * 5 + 76   # through the mappings, unseen by strace: 8 bytes and the header per shard, 76 tensors
@@ -427,16 +438,16 @@ def test_model_load_abstract_matches_the_trace_of_from_pretrained(tmp_path):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_ivf_abstract_matches_the_trace_of_faiss_search(tmp_path):
-    """`builder/traces/vdb_search_ivf`: `faiss.read_index` and 20 searches over
+    """`workloads/vdb/faiss-ivf-ondisk`: `faiss.read_index` and 20 searches over
     `OnDiskInvertedLists`, traced 2026-10-01. FAISS maps the lists file and issues no call on
     it, so the trace has the index file's reads and the two opens, and nothing of the lists
     (`ABSTRACTS.md` §6)."""
-    kit = BUILDER / "traces" / "vdb_search_ivf"
+    case = case_dir("faiss_ivf_ondisk", "sift1m-ivf1024-pq32")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_search_ivf.ast.json"), "--gpus", "1",
-                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("faiss_ivf_ondisk")), "--gpus", "1",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
+    t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"]["counts"], json.loads(dry.read_text())["total"]["counts"]
     assert {k: v for k, v in d.items() if k != "read"} == {k: v for k, v in t.items() if k != "read"}
     assert d["read"] - t["read"] == 20 * 64 * 2   # through the mapping, unseen by strace: ids and codes of 64 lists per query
 
@@ -444,17 +455,17 @@ def test_ivf_abstract_matches_the_trace_of_faiss_search(tmp_path):
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 @pytest.mark.parametrize("which, reads_off", [("nocache", 0.02), ("cache", 0.04)])
 def test_diskann_search_abstract_matches_the_trace(tmp_path, which, reads_off):
-    """`builder/traces/vdb_search_diskann`: 1,000 queries through DiskANN's `PQFlashIndex`,
+    """`workloads/vdb/diskann-search`: 1,000 queries through DiskANN's `PQFlashIndex`,
     traced 2026-10-02 without a node cache and with 10,000 nodes cached. The abstract issues
     full rounds of `beam` reads where the search skips nodes it already holds, so it reads a
     little more; the load's small files (pivots, medoids, centroids, metadata) are not
     modeled (`ABSTRACTS.md` §5)."""
-    kit = BUILDER / "traces" / "vdb_search_diskann"
+    case = case_dir("diskann_search", f"sift1m-{which}")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_search_diskann.ast.json"), "--gpus", "1",
-                        "--params-file", str(kit / f"fitted.{which}.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("diskann_search")), "--gpus", "1",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / f"trace.{which}.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    t, d = json.loads((case / "captures/2026-10-02/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
     assert 0 <= (dc["read"] - tc["read"]) / tc["read"] <= reads_off
     small = {"open": 8, "close": 9, "lseek": 28, "stat": 9, "fstat": 3, "ioctl": 1}   # the unmodeled small files
@@ -469,15 +480,15 @@ def test_diskann_search_abstract_matches_the_trace(tmp_path, which, reads_off):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_diskann_build_abstract_matches_the_trace(tmp_path):
-    """`builder/traces/vdb_build_diskann`: `build_disk_index` on SIFT1M in 13 shards, traced
+    """`workloads/vdb/diskann-build`: `build_disk_index` on SIFT1M in 13 shards, traced
     2026-10-02. The data path agrees to a part in a thousand; the shards are modeled at one
     size and the files' small headers and probes are not modeled (`ABSTRACTS.md` §7)."""
-    kit = BUILDER / "traces" / "vdb_build_diskann"
+    case = case_dir("diskann_build", "sift1m-13-shards")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "vdb_build_diskann.ast.json"), "--gpus", "1",
-                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("diskann_build")), "--gpus", "1",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    t, d = json.loads((case / "captures/2026-10-02/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     for k in ("read", "write", "lseek"):
         assert abs(t["counts"][k] - d["counts"][k]) / t["counts"][k] < 0.001, k
     for k in ("bytes_read", "bytes_written"):
@@ -492,7 +503,7 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
-    """`builder/traces/kv_cache_serving`: vLLM with LMCache's local-disk backend under a replay
+    """`workloads/kvcache/lmcache-local-disk`: vLLM with LMCache's local-disk backend under a replay
     of ShareGPT, 300 requests with 8 conversations open, traced 2026-10-02. Every chunk is the
     same six calls around one `read` or `write`. At the parameters `fit.py` takes from the
     run's two logs the abstract stores 382 chunks where the engine stored 370 (two of them
@@ -500,12 +511,12 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     seeds it reads 587 to 781: one `keep` draw per round of conversations, §3.57, makes the
     loads come in bursts, so the seeds spread wider than with a draw per request)
     (`ABSTRACTS.md` §8)."""
-    kit = BUILDER / "traces" / "kv_cache_serving"
+    case = case_dir("lmcache_local_disk", "sharegpt-chat")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(kit / "fitted.params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", "1",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / "trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    t, d = json.loads((case / "captures/2026-10-02/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
     for c in (tc, dc):                                    # one open, fstat, ioctl, lseek and close per data call
         assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"] == c["read"] + c["write"]
@@ -519,13 +530,14 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
 
 
 def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path):
-    """The kit's `fitted.params.json` is `fit.py` on the kit's two logs: the load's, and
+    """The ShareGPT case's `params.json` is `fit.py` on its capture's two logs: the load's, and
     LMCache's line per request from the server's. `keep` is a product-limit estimate: a
     conversation the engine held whole is a lower bound on what it would have kept."""
-    kit = BUILDER / "traces" / "kv_cache_serving"
-    have = json.loads((kit / "fitted.params.json").read_text())
+    case = case_dir("lmcache_local_disk", "sharegpt-chat")
+    kit, cap = ast_path("lmcache_local_disk").parent / "kit", case / "captures" / "2026-10-02"
+    have = json.loads((case / "params.json").read_text())
     out = tmp_path / "fit.json"
-    r = subprocess.run([sys.executable, str(kit / "fit.py"), str(kit / "replay.log"), str(kit / "lmcache.log"), "--set", "chunk_bytes=3145728",
+    r = subprocess.run([sys.executable, str(kit / "fit.py"), str(cap / "replay.log"), str(cap / "lmcache.log"), "--set", "chunk_bytes=3145728",
                         "--doc", have["doc"], *[x for k, v in have["provenance"]["conditions"].items() if k != "slots_per_engine"
                                                 for x in ("--condition", f"{k}={json.dumps(v)}")], "-o", str(out)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -544,44 +556,44 @@ def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_path):
-    """`builder/traces/kv_cache_serving/agentx.py`: the KV abstract fitted to the AgentX corpus
+    """`workloads/kvcache/lmcache-local-disk/kit/agentx.py`: the KV abstract fitted to the AgentX corpus
     (agentic coding sessions, 2026-10-02) against the corpus's own chunk accounting
     (`agentx.reference.json`: per request, the whole chunks a store that never evicts would
     hit and would store). The abstract stores 8 % more (the reply counted whole where the
     model kept less of it) and, at the default `keep` (91 % of returns hold nothing), loads
     0.91 of its hits, which are within 10 % of the corpus's; the first 10,000 of the 98,827
     requests, one slot (`DESIGN_REVIEW.md` §3.59)."""
-    kit = BUILDER / "traces" / "kv_cache_serving"
+    kit, case = ast_path("lmcache_local_disk").parent / "kit", case_dir("lmcache_local_disk", "agentx")
     ref = json.loads((kit / "agentx.reference.json").read_text())
     n = 10_000
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(kit / "fitted.agentx.params.json"), "--param", f"requests={n}"], capture_output=True, text=True)
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", "1",
+                        "--params-file", str(case / "params.json"), "--param", f"requests={n}"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", r.stdout)[1]))
     stored, loaded = int(kinds["write"]) / n, int(kinds["read"]) / n
     assert ref["chunks_stored"]["mean"] == 14.41 and ref["chunks_hit"]["mean"] == 840.14 and ref["requests"] == 98827
     assert 0.95 * ref["chunks_stored"]["mean"] < stored < 1.2 * ref["chunks_stored"]["mean"], stored
     assert 0.8 * ref["chunks_hit"]["mean"] < loaded / 0.91 < 1.2 * ref["chunks_hit"]["mean"], loaded
-    p = json.loads((kit / "fitted.agentx.params.json").read_text())["params"]
+    p = json.loads((case / "params.json").read_text())["params"]
     assert p["reuse"]["mixture"][0]["weight"] == 0 and p["turns"]["empirical"]["values"][0] == 1 and len(p["turns"]["empirical"]["values"]) == 100
     assert p["trim"]["mixture"][0]["dist"] == {"const": 0} and 0.03 < p["trim"]["mixture"][1]["weight"] < 0.05
 
 
 def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted(monkeypatch):
-    """`builder/traces/kv_cache_serving`: the AgentX replay through vLLM and LMCache (2026-10-07,
+    """`workloads/kvcache/lmcache-local-disk`: the AgentX replay through vLLM and LMCache (2026-10-07,
     run again 2026-10-08 with each session's own tokens and both prefixes shared, DESIGN_REVIEW.md
     §3.63): 8 sessions at 128k context, 2 GiB of engine KV. LMCache logs a lookup
     at every step a request waits for KV memory, the held prefix falling as the running requests
     evict it; a request's is its last lookup before its first load or store. The kit's LMCache
-    log keeps those two lines per request (and the first lookup, and the lines of the fit's conditions). `fitted.agentx-replay.params.json` is `agentx.py fit
+    log keeps those two lines per request (and the first lookup, and the lines of the fit's conditions). The capture's `fitted.params.json` is `agentx.py fit
     --replay` on these logs and the corpus (not committed; the kit's README has the command)."""
-    kit = BUILDER / "traces" / "kv_cache_serving"
-    monkeypatch.syspath_prepend(str(kit))
+    cap = case_dir("lmcache_local_disk", "agentx") / "captures" / "replay-2gib-pool"
+    monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
     agentx = importlib.import_module("agentx")
-    sessions, sent = agentx.replayed(kit / "agentx.replay.log", kit / "agentx.lmcache.log")
+    sessions, sent = agentx.replayed(cap / "replay.log", cap / "lmcache.log")
     assert sessions == 8 and len(sent) == 219
     assert sum(1 for _, held in sent.values() if held == 0) == 46           # the engine held nothing, not even a shared prefix
-    p = json.loads((kit / "fitted.agentx-replay.params.json").read_text())["params"]
+    p = json.loads((cap / "fitted.params.json").read_text())["params"]
     assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_prompts"], p["sub_prompts"]) == (8, 27, 131072, False, 1, 1)
     assert p["kind"]["empirical"]["weights"] == [8, 10, 27]                 # chains opening with the main agent's prefix, a sub-agent's, neither
     assert p["keep"]["empirical"]["values"].count(0) == 7                   # of 20 shares: nothing held past the prefix
@@ -594,17 +606,17 @@ def test_agentx_replay_fits_record_the_engine_they_were_fitted_at(monkeypatch):
     provenance; `agentx.py log` keeps the lines of the server's log they come from. The same
     replay at 2 GiB and at 6 GiB of engine KV (3x the tokens): the larger pool held more of
     every conversation, so fewer requests found nothing held."""
-    kit = BUILDER / "traces" / "kv_cache_serving"
-    monkeypatch.syspath_prepend(str(kit))
+    monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
     agentx = importlib.import_module("agentx")
     fit = importlib.import_module("fit")
-    for which, pool, n, nothing in (("agentx", 174752, 219, 46), ("agentx-6gib", 524288, 232, 19)):
-        sessions, sent = agentx.replayed(kit / f"{which}.replay.log", kit / f"{which}.lmcache.log")
+    for which, pool, n, nothing in (("replay-2gib-pool", 174752, 219, 46), ("replay-6gib-pool", 524288, 232, 19)):
+        cap = case_dir("lmcache_local_disk", "agentx") / "captures" / which
+        sessions, sent = agentx.replayed(cap / "replay.log", cap / "lmcache.log")
         assert sessions == 8 and len(sent) == n and sum(1 for _, held in sent.values() if held == 0) == nothing
-        c = fit.conditions(kit / f"{which}.lmcache.log", sessions)
-        c_in, c_out = agentx.service(kit / f"{which}.replay.log")
+        c = fit.conditions(cap / "lmcache.log", sessions)
+        c_in, c_out = agentx.service(cap / "replay.log")
         c.update(latency_s_per_prompt_token=float("%.3g" % c_in), latency_s_per_reply_token=float("%.3g" % c_out))
-        assert json.loads((kit / f"fitted.{which}-replay.params.json").read_text())["provenance"]["conditions"] == c
+        assert json.loads((cap / "fitted.params.json").read_text())["provenance"]["conditions"] == c
         assert (c["engine_pool_tokens"], c["cpu_tier_bytes"], c["model"]) == (pool, 0, "Qwen/Qwen2.5-0.5B-Instruct")
 
 
@@ -612,7 +624,7 @@ def test_agentx_hold_simulation_evicts_a_freed_tail_first_and_preempts_the_last_
     """`agentx.simulate`, vLLM's prefix cache as `agentx.py holds` runs it (DESIGN_REVIEW.md §3.64):
     a request's blocks freed tail first, so its head is evicted last; with nothing free to
     evict, the last admitted running request is preempted and its blocks freed."""
-    monkeypatch.syspath_prepend(str(BUILDER / "traces" / "kv_cache_serving"))
+    monkeypatch.syspath_prepend(str(ast_path("lmcache_local_disk").parent / "kit"))
     agentx = importlib.import_module("agentx")
     blocks = {"a": ["a1", "a2"], "b": ["b1", "b2", "b3"], "c": ["a1", "a2"]}
     held, preempted = agentx.simulate([(0, 1, "a"), (1, 0, "a"), (2, 1, "b"), (3, 0, "b"), (4, 1, "c")], blocks, dict.fromkeys(blocks, 0), 4)
@@ -628,13 +640,13 @@ def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
     `openat(O_WRONLY|O_CREAT|O_DIRECT)`, `write`, `close`, and read by
     `openat(O_RDONLY|O_DIRECT|O_CLOEXEC)`, `fstat`, `read`, `close`; the abstract's `direct`
     issues the same, under the backend it declares (`sync`)."""
-    kit = BUILDER / "traces" / "kv_cache_serving"
+    case = case_dir("lmcache_local_disk", "agentx-odirect")
     dry = tmp_path / "dry.json"
-    r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / "kv_cache_serving.ast.json"), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(kit / "fitted.agentx-odirect-replay.params.json"), "--metrics-json", str(dry),
+    r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", "1",
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry),
                         "--metrics-sample", "64"], capture_output=True, text=True)       # the counts only, which sampling leaves exact
     assert r.returncode == 0, r.stderr
-    t, d = json.loads((kit / "agentx-odirect.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+    t, d = json.loads((case / "captures/replay-2gib-pool/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
     for c in (tc, dc):
         assert c["open"] == c["close"] == c["read"] + c["write"] and c["fstat"] == c["read"] and "ioctl" not in c and "lseek" not in c
@@ -643,20 +655,20 @@ def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
-    """`builder/traces/kv_cache_shared`: vLLM with LMCache's `fs://` backend, the 300 requests of
+    """`workloads/kvcache/lmcache-shared-fs`: vLLM with LMCache's `fs://` backend, the 300 requests of
     the row above sent to an engine on an empty store and then to a restarted engine on the
     filled one, traced 2026-10-02. A chunk file is a 28-byte header and the chunk, read as one
     buffer and the rest; the writer renames every file into place and the reader writes
     nothing. The writer stores and loads what the local-disk engine did, chunk for chunk; the
     abstract's counts at seed 1 are the low end of its seeds (`ABSTRACTS.md` §8)."""
-    kit = BUILDER / "traces" / "kv_cache_shared"
+    case = case_dir("lmcache_shared_fs", "sharegpt-chat")
     got = {}
-    for who, ast, params in (("writer", "kv_cache_shared", "fitted.params.json"), ("reader", "kv_cache_shared_reader", "fitted.reader.params.json")):
+    for who, ast, params in (("writer", "lmcache_shared_fs", "writer.params.json"), ("reader", "lmcache_shared_fs_reader", "reader.params.json")):
         dry = tmp_path / f"{who}.json"
-        r = subprocess.run([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", "1", "--seed", "1",
-                            "--params-file", str(kit / params), "--metrics-json", str(dry)], capture_output=True, text=True)
+        r = subprocess.run([str(RUNNER), "dry-run", str(ast_path(ast)), "--gpus", "1", "--seed", "1",
+                            "--params-file", str(case / params), "--metrics-json", str(dry)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
-        t, d = json.loads((kit / f"{who}.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
+        t, d = json.loads((case / f"captures/2026-10-02/{who}.trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
         got[who] = (t["counts"], d["counts"])
         for c in (t["counts"], d["counts"]):              # Python's open around every file; a load is two reads
             assert c["open"] == c["fstat"] == c["ioctl"] == c["lseek"] == c["close"]
@@ -671,10 +683,10 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     assert (tw["stat"], dw["stat"]) == (1418, 1336)       # 1,193 hits and a miss in most requests
     assert (tr["stat"], dr["stat"]) == (1564, 1499)       # every chunk of every prompt, and the directory once in the trace
     # the same parameter values in both files: the reader is run with the writer's; and they are the local-disk
-    # kit's (the same requests, and the engine held the same of each) with the header and the buffer
-    pw, pr = (json.loads((kit / f).read_text())["params"] for f in ("fitted.params.json", "fitted.reader.params.json"))
+    # mechanism's ShareGPT case (the same requests, and the engine held the same of each) with the header and the buffer
+    pw, pr = (json.loads((case / f).read_text())["params"] for f in ("writer.params.json", "reader.params.json"))
     assert pw == pr
-    assert pw == {**json.loads((BUILDER / "traces" / "kv_cache_serving" / "fitted.params.json").read_text())["params"], "meta_bytes": 28, "buf": 1048576}
+    assert pw == {**json.loads((case_dir("lmcache_local_disk", "sharegpt-chat") / "params.json").read_text())["params"], "meta_bytes": 28, "buf": 1048576}
 
 
 
@@ -723,63 +735,83 @@ def test_judge_classes_spread_and_the_tolerance_file(tmp_path):
 # metrics, the abstract, the fitted parameters, `--gpus`, and the verdict. A pair's
 # tolerance file, beside its trace document, names the rows the trace cannot show and
 # records, with the reason, the rows that are outside.
-KIT_PAIRS = [
-    ("train_small_files", "trace", "train_small_files", "fitted.params.json", 1, "accepted"),
-    ("train_large_samples", "trace.140MiB", "train_large_samples", "fitted.140MiB.params.json", 1, "accepted"),
-    ("train_large_samples", "trace.8MiB", "train_large_samples", "fitted.8MiB.params.json", 1, "accepted"),
-    ("ckpt_write_dcp", "trace", "ckpt_write_dcp", "fitted.params.json", 2, "accepted"),
-    ("ckpt_restore", "trace.mixed", "ckpt_restore", "fitted.mixed.params.json", 2, "accepted"),
-    ("ckpt_restore", "trace.small-last", "ckpt_restore", "fitted.small-last.params.json", 2, "accepted"),
-    ("ckpt_restore", "trace.name-order", "ckpt_restore", "fitted.name-order.params.json", 2, "accepted"),
-    ("model_load", "trace", "model_load", "fitted.params.json", 1, "nothing judged"),
-    ("vdb_search_ivf", "trace", "vdb_search_ivf", "fitted.params.json", 1, "nothing judged"),
-    ("vdb_search_diskann", "trace.nocache", "vdb_search_diskann", "fitted.nocache.params.json", 1, "accepted"),
-    ("vdb_search_diskann", "trace.cache", "vdb_search_diskann", "fitted.cache.params.json", 1, "accepted"),
-    ("vdb_build_diskann", "trace", "vdb_build_diskann", "fitted.params.json", 1, "not accepted"),
+CAPTURE_PAIRS = [   # (capture under workloads/, trace document's stem, AST, parameter file under workloads/, GPUs, verdict)
+    ("training/map/file-per-sample/cases/imagefolder-jpeg/captures/2026-10-01", "trace", "file_per_sample",
+     "training/map/file-per-sample/cases/imagefolder-jpeg/params.json", 1, "accepted"),
+    ("training/map/npy-per-sample/cases/npy-140mib/captures/2026-10-01", "trace", "npy_per_sample",
+     "training/map/npy-per-sample/cases/npy-140mib/params.json", 1, "accepted"),
+    ("training/map/npy-per-sample/cases/npy-8mib/captures/2026-10-01", "trace", "npy_per_sample",
+     "training/map/npy-per-sample/cases/npy-8mib/params.json", 1, "accepted"),
+    ("checkpointing/dcp-save/cases/toy-6-items/captures/2026-10-01", "trace", "dcp_save",
+     "checkpointing/dcp-save/cases/toy-6-items/params.json", 2, "accepted"),
+    ("checkpointing/dcp-load/cases/mixed-9-items/captures/2026-10-01", "trace", "dcp_load",
+     "checkpointing/dcp-load/cases/mixed-9-items/params.json", 2, "accepted"),
+    ("checkpointing/dcp-load/cases/small-last-6-items/captures/2026-10-01", "trace", "dcp_load",
+     "checkpointing/dcp-load/cases/small-last-6-items/params.json", 2, "accepted"),
+    ("checkpointing/dcp-load/cases/name-order-17-items/captures/2026-10-01", "trace", "dcp_load",
+     "checkpointing/dcp-load/cases/name-order-17-items/params.json", 2, "accepted"),
+    ("inference/safetensors-load/cases/gpt2-random/captures/2026-10-01", "trace", "safetensors_load",
+     "inference/safetensors-load/cases/gpt2-random/params.json", 1, "nothing judged"),
+    ("vdb/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/captures/2026-10-01", "trace", "faiss_ivf_ondisk",
+     "vdb/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json", 1, "nothing judged"),
+    ("vdb/diskann-search/cases/sift1m-nocache/captures/2026-10-02", "trace", "diskann_search",
+     "vdb/diskann-search/cases/sift1m-nocache/params.json", 1, "accepted"),
+    ("vdb/diskann-search/cases/sift1m-cache/captures/2026-10-02", "trace", "diskann_search",
+     "vdb/diskann-search/cases/sift1m-cache/params.json", 1, "accepted"),
+    ("vdb/diskann-build/cases/sift1m-13-shards/captures/2026-10-02", "trace", "diskann_build",
+     "vdb/diskann-build/cases/sift1m-13-shards/params.json", 1, "not accepted"),
     # the three KV-cache pairs are the ShareGPT replay (DESIGN_REVIEW.md §3.56); with one `keep` draw per round of
     # conversations (§3.57) the reuse distance is within, and only the writer's store order (two threads) stays outside
-    ("kv_cache_serving", "trace", "kv_cache_serving", "fitted.params.json", 1, "accepted"),
+    ("kvcache/lmcache-local-disk/cases/sharegpt-chat/captures/2026-10-02", "trace", "lmcache_local_disk",
+     "kvcache/lmcache-local-disk/cases/sharegpt-chat/params.json", 1, "accepted"),
     # the AgentX replay (§3.63): the system prompt read when the engine holds none of the conversation, one per slot;
     # not accepted since the replay was corrected (2026-10-08); the two-prefix model since the same day, four rows outside
-    ("kv_cache_serving", "agentx.trace", "kv_cache_serving", "fitted.agentx-replay.params.json", 1, "not accepted"),
+    ("kvcache/lmcache-local-disk/cases/agentx/captures/replay-2gib-pool", "trace", "lmcache_local_disk",
+     "kvcache/lmcache-local-disk/cases/agentx/captures/replay-2gib-pool/fitted.params.json", 1, "not accepted"),
     # the same replay with LMCache's use_odirect (`direct`): read-after-write distance outside, the server's admission order
-    ("kv_cache_serving", "agentx-odirect.trace", "kv_cache_serving", "fitted.agentx-odirect-replay.params.json", 1, "not accepted"),
+    ("kvcache/lmcache-local-disk/cases/agentx-odirect/captures/replay-2gib-pool", "trace", "lmcache_local_disk",
+     "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json", 1, "not accepted"),
     # the same replay at 6 GiB of engine KV, three times the tokens (§3.64): fewer reads, the writes the same; the abstract
     # follows through keep, sys_held, and sub_held alone, refitted (the 2 GiB values give three to five times the reads)
-    ("kv_cache_serving", "agentx-6gib.trace", "kv_cache_serving", "fitted.agentx-6gib-replay.params.json", 1, "accepted"),
-    ("kv_cache_shared", "writer.trace", "kv_cache_shared", "fitted.params.json", 1, "not accepted"),
-    ("kv_cache_shared", "reader.trace", "kv_cache_shared_reader", "fitted.reader.params.json", 1, "accepted"),
+    ("kvcache/lmcache-local-disk/cases/agentx/captures/replay-6gib-pool", "trace", "lmcache_local_disk",
+     "kvcache/lmcache-local-disk/cases/agentx/captures/replay-6gib-pool/fitted.params.json", 1, "accepted"),
+    ("kvcache/lmcache-shared-fs/cases/sharegpt-chat/captures/2026-10-02", "writer.trace", "lmcache_shared_fs",
+     "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json", 1, "not accepted"),
+    ("kvcache/lmcache-shared-fs/cases/sharegpt-chat/captures/2026-10-02", "reader.trace", "lmcache_shared_fs_reader",
+     "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json", 1, "accepted"),
 ]
 
 
-def test_every_trace_of_a_kit_is_a_pair():
-    have = {(p.parent.name, p.name[: -len(".metrics.json")]) for p in (BUILDER / "traces").glob("*/*.metrics.json")}
-    assert have == {(k, t) for k, t, *_ in KIT_PAIRS}
-    files = {(p.parent.name, p.name[: -len(".tolerances.json")]) for p in (BUILDER / "traces").glob("*/*.tolerances.json")}
+def test_every_trace_of_a_capture_is_a_pair():
+    rel = lambda p, suffix: (str(p.parent.relative_to(WORKLOADS)), p.name[: -len(suffix)])
+    have = {rel(p, ".metrics.json") for p in WORKLOADS.rglob("captures/*/*.metrics.json")}
+    assert have == {(c, t) for c, t, *_ in CAPTURE_PAIRS}
+    files = {rel(p, ".tolerances.json") for p in WORKLOADS.rglob("captures/*/*.tolerances.json")}
     assert files <= have
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
-@pytest.mark.parametrize("kit, which, ast, params, gpus, verdict", KIT_PAIRS, ids=[f"{k}:{t}" for k, t, *_ in KIT_PAIRS])
-def test_kit_pair_against_the_tolerances(tmp_path, capsys, kit, which, ast, params, gpus, verdict):
+@pytest.mark.parametrize("capture, which, ast, params, gpus, verdict", CAPTURE_PAIRS,
+                         ids=[f"{c.split('/cases/')[1]}:{t}" for c, t, *_ in CAPTURE_PAIRS])
+def test_capture_pair_against_the_tolerances(tmp_path, capsys, capture, which, ast, params, gpus, verdict):
     """`aeiou-trace compare --judge` on a committed trace and its abstract at the fitted
     parameters, with the abstract at three other seeds as its own spread. The verdict is
     the recorded one, every row outside has its reason in the pair's file, and the file
     has no entry that matches nothing."""
-    kit = BUILDER / "traces" / kit
-    # the trace's own unit: the KV kits measure in chunks, every access being one whole chunk (the
+    capture = WORKLOADS / capture
+    # the trace's own unit: the KV captures measure in chunks, every access being one whole chunk (the
     # shares and distances are those at 4 KiB, the counts 768 times fewer, and so the work)
-    block = json.loads((kit / f"{which}.metrics.json").read_text())["block"]
+    block = json.loads((capture / f"{which}.metrics.json").read_text())["block"]
     docs = [tmp_path / f"dry.{seed}.json" for seed in (1, 2, 3, 4)]
-    runs = [subprocess.Popen([str(RUNNER), "dry-run", str(ROOT / "schema" / "examples" / f"{ast}.ast.json"), "--gpus", str(gpus), "--seed", str(seed),
-                              "--params-file", str(kit / params), "--metrics-json", str(doc), "--metrics-block", str(block)],
+    runs = [subprocess.Popen([str(RUNNER), "dry-run", str(ast_path(ast)), "--gpus", str(gpus), "--seed", str(seed),
+                              "--params-file", str(WORKLOADS / params), "--metrics-json", str(doc), "--metrics-block", str(block)],
                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             for seed, doc in zip((1, 2, 3, 4), docs)]               # the seeds at once: a dry run's metrics take one core
     for p in runs:
         _, err = p.communicate()
         assert p.returncode == 0, err
-    spec = kit / f"{which}.tolerances.json"
-    args = ["compare", str(kit / f"{which}.metrics.json"), str(docs[0]), *[x for d in docs[1:] for x in ("--self", str(d))]]
+    spec = capture / f"{which}.tolerances.json"
+    args = ["compare", str(capture / f"{which}.metrics.json"), str(docs[0]), *[x for d in docs[1:] for x in ("--self", str(d))]]
     rc = trace.main(args + (["--tolerances", str(spec)] if spec.exists() else ["--judge"]))
     out = capsys.readouterr().out.splitlines()
     assert out[-1].startswith(verdict + ": "), out[-1]

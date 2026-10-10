@@ -2,6 +2,7 @@
 //! so a process of its own: the open-file peak is counted per process, and the checks raise
 //! this process's soft limits.
 
+mod common;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -20,17 +21,13 @@ fn tmpdir(tag: &str) -> PathBuf {
     d
 }
 
-fn examples() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
-}
-
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
     Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
 }
 
 /// A run is the process: the model is leaked so the actor threads can borrow it.
 fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {
-    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap()));
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&common::workload_ast(name)).unwrap()));
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
@@ -76,7 +73,7 @@ fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
 fn the_estimate_matches_the_counted_peak() {
     let root = tmpdir("limits");
     let params = [("files", "300"), ("batch", "4"), ("workers", "3"), ("prefetch", "2"), ("steps", "10")];
-    let (loaded, cfg, model) = leaked_model("train_small_files", config(3, 11, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(3, 11, &params));
     gen(loaded, cfg, model, &root);
     run::check_datasets(loaded, cfg, &root).unwrap();
     run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
@@ -104,7 +101,7 @@ fn the_estimate_matches_the_counted_peak() {
 /// and a context per beam slot (2 instances × 32 threads × beam 4).
 #[test]
 fn a_truncated_walk_scales_by_the_fork_width() {
-    let (_, _, model) = leaked_model("vdb_search_diskann", config(2, 1, &[]));
+    let (_, _, model) = leaked_model("diskann_search", config(2, 1, &[]));
     let need = limits::estimate(model, &opts(&PathBuf::from("/nonexistent"), BackendKind::Sync)).unwrap();
     assert_eq!(need, Need { open_files: 2, contexts: 2 * 32 * 4, truncated: true });
     // host 1 of 2 runs one of the two instances

@@ -80,23 +80,23 @@ the gate, show what each host resolved.
 The corpus written by the fifty hosts that will run against it, then a run on them:
 
 ```
-aeiou-launch 'client[01-50]' -- aeiou datagen train_small_files.ast.json --gpus 400 --root /mnt/sut
-aeiou-launch 'client[01-50]' -- aeiou run train_small_files.ast.json --gpus 400 --root /mnt/sut --drop-caches
+aeiou-launch 'client[01-50]' -- aeiou datagen file_per_sample.ast.json --gpus 400 --root /mnt/sut
+aeiou-launch 'client[01-50]' -- aeiou run file_per_sample.ast.json --gpus 400 --root /mnt/sut --drop-caches
 ```
 
 A write run on four hosts, then the restore on the same hosts with each reading what another
 wrote:
 
 ```
-aeiou-launch n1 n2 n3 n4 -- aeiou run ckpt_write_dcp.ast.json --gpus 32 --root /mnt/sut --seed 7
-aeiou-launch n1 n2 n3 n4 -- aeiou run ckpt_restore.ast.json --gpus 32 --root /mnt/sut --seed 7 \
+aeiou-launch n1 n2 n3 n4 -- aeiou run dcp_save.ast.json --gpus 32 --root /mnt/sut --seed 7
+aeiou-launch n1 n2 n3 n4 -- aeiou run dcp_load.ast.json --gpus 32 --root /mnt/sut --seed 7 \
     --rank-rotate 1 --max-gap 30 --require-cold
 ```
 
 Two hundred hosts from a file:
 
 ```
-aeiou-launch -f hosts.txt -- aeiou run model_load.ast.json --gpus 1600 --root /mnt/sut
+aeiou-launch -f hosts.txt -- aeiou run safetensors_load.ast.json --gpus 1600 --root /mnt/sut
 ```
 
 ## SEE ALSO

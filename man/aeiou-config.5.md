@@ -45,7 +45,7 @@ warning, then an empty line. There is no flag to print the configuration: the bl
 
 ```
 options (cli > env > config > default)
-  abstract = ../schema/examples/train_small_files.ast.json   [cli]
+  abstract = ../workloads/training/map/file-per-sample/file_per_sample.ast.json   [cli]
   param = files=4000 steps=50                                [cli]
   gpus = 8                                                   [cli]
   seed = 1                                                   [cli]

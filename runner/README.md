@@ -9,9 +9,9 @@ fixes and every choice made in building it, is [REFERENCE.md](REFERENCE.md).
 ```
 cargo build --release
 cargo test --release
-./target/release/aeiou check ../schema/examples/*.ast.json
-./target/release/aeiou dry-run ../schema/examples/train_small_files.ast.json --gpus 8 --seed 1
-./target/release/aeiou run ../schema/examples/train_small_files.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+./target/release/aeiou check $(find ../workloads -name '*.ast.json')
+./target/release/aeiou dry-run ../workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
+./target/release/aeiou run ../workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50
 ```
 

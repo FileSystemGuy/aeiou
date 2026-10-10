@@ -10,7 +10,12 @@ import pytest
 
 BUILDER = pathlib.Path(__file__).resolve().parents[1]
 ROOT = BUILDER.parent
-EXAMPLES = ROOT / "schema" / "examples"
+WORKLOADS = ROOT / "workloads"
+
+
+def ast_path(name):
+    """The committed AST `name`, wherever its mechanism lives under workloads/ (DESIGN_REVIEW.md §3.66)."""
+    return next(WORKLOADS.rglob(f"{name}.ast.json"))
 sys.path.insert(0, str(BUILDER))
 
 from aeiou import options  # noqa: E402
@@ -129,7 +134,7 @@ def test_aeiou_datagen_through_the_layers(tmp_path):
     cfg = tmp_path / "aeiou.toml"
     cfg.write_text("[datagen]\nthreads = 2\n")
     root = tmp_path / "root"
-    ast = EXAMPLES / "train_stream_tfrecord.ast.json"
+    ast = ast_path("tfrecord_stream")
     params = ["samples=64", "per_shard=16", "batch=8", "steps=2", "cycle=1", "sample_median=2000"]
     r = _datagen([ast, *sum([["--param", p] for p in params], [])], {"AEIOU_ROOT": str(root), "AEIOU_CONFIG": str(cfg), "AEIOU_BOGUS": "1"})
     assert r.returncode == 0, r.stdout + r.stderr

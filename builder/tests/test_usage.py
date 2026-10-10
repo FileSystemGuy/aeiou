@@ -14,7 +14,12 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
 ROOT = BUILDER.parent
-EXAMPLES = ROOT / "schema" / "examples"
+WORKLOADS = ROOT / "workloads"
+
+
+def ast_path(name):
+    """The committed AST `name`, wherever its mechanism lives under workloads/ (DESIGN_REVIEW.md §3.66)."""
+    return next(WORKLOADS.rglob(f"{name}.ast.json"))
 # the runner binary: $AEIOU_RUNNER, else the newest build (a stale release build next to a
 # fresh debug one would compare yesterday's wording)
 _BUILDS = [p for p in (ROOT / "runner" / "target" / "release" / "aeiou", ROOT / "runner" / "target" / "debug" / "aeiou") if p.exists()]
@@ -41,7 +46,7 @@ def frame(r, prog):
 
 
 def test_aeiou_datagen_lists_every_missing_argument_and_the_list_shrinks(tmp_path):
-    ast = EXAMPLES / "train_stream_tfrecord.ast.json"
+    ast = ast_path("tfrecord_stream")
     message, usage = frame(tool("datagen"), "aeiou-datagen")
     assert message == (
         f"{MISSING}\n"
@@ -67,18 +72,18 @@ def test_aeiou_datagen_lists_every_missing_argument_and_the_list_shrinks(tmp_pat
 
 
 def test_a_wrong_file_for_the_abstract_says_what_an_abstract_is(tmp_path):
-    script = BUILDER / "abstracts" / "train_small_files.py"
+    script = ast_path("file_per_sample").parent / "file_per_sample.py"
     message, _ = frame(tool("datagen", "--root", tmp_path, script), "aeiou-datagen")
     assert message == f"{script}: a builder script, not an abstract; `aeiou-build {script}` writes the abstracts it authors (`<name>.ast.json`) next to it, and those are what this tool takes"
-    message, _ = frame(tool("datagen", "--root", tmp_path, "train_small_files"), "aeiou-datagen")
-    assert message == "train_small_files: No such file or directory (os error 2); an abstract is the `.ast.json` file aeiou-build writes from a builder script"
+    message, _ = frame(tool("datagen", "--root", tmp_path, "file_per_sample"), "aeiou-datagen")
+    assert message == "file_per_sample: No such file or directory (os error 2); an abstract is the `.ast.json` file aeiou-build writes from a builder script"
     bad = tmp_path / "x.ast.json"
     bad.write_text("import aeiou\n")
     message, _ = frame(tool("params", "defaults", bad), "aeiou-params defaults")
     assert message == f"{bad}: not an abstract (Expecting value: line 1 column 1 (char 0)); an abstract is the `.ast.json` file aeiou-build writes from a builder script"
     # the other way round, a per-script failure of aeiou-build, status 1
-    r = tool("cli", EXAMPLES / "train_small_files.ast.json")
-    assert r.returncode == 1 and r.stderr.startswith("FAIL train_small_files.ast.json: an abstract, not a builder script; aeiou-build takes the `.py` that authors it")
+    r = tool("cli", ast_path("file_per_sample"))
+    assert r.returncode == 1 and r.stderr.startswith("FAIL file_per_sample.ast.json: an abstract, not a builder script; aeiou-build takes the `.py` that authors it")
 
 
 def test_every_tool_and_subcommand_lists_what_it_lacks():
@@ -95,7 +100,7 @@ def test_every_tool_and_subcommand_lists_what_it_lacks():
         "  -o <FILE>        the parameter file to write"
     )
     assert usage == "Usage: aeiou-params safetensors [OPTIONS] -o <FILE> <ABSTRACT_PATH> <SHARDS>..."
-    message, _ = frame(tool("params", "check", EXAMPLES / "train_small_files.ast.json"), "aeiou-params check")
+    message, _ = frame(tool("params", "check", ast_path("file_per_sample")), "aeiou-params check")
     assert message == f"{MISSING}\n  <FILES>...  the parameter files (`.params.json`) to validate against the abstract"
     message, _ = frame(tool("trace"), "aeiou-trace")
     assert message == f"{MISSING}\n  <COMMAND>  one of metrics, export, compare"
@@ -142,7 +147,7 @@ def test_the_runner_prints_the_same_list_for_the_same_mistake(tmp_path):
     """`aeiou datagen` and `aeiou-datagen` differ only in the command's name: the message and
     the frame are the same bytes, so the suite reads as one tool."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("AEIOU_")}
-    for args in ((), (EXAMPLES / "train_stream_tfrecord.ast.json",), ("--root", tmp_path, "nope"), ("--root", tmp_path, BUILDER / "abstracts" / "train_small_files.py")):
+    for args in ((), (ast_path("tfrecord_stream"),), ("--root", tmp_path, "nope"), ("--root", tmp_path, ast_path("file_per_sample").parent / "file_per_sample.py")):
         rs = subprocess.run([str(RUNNER), "datagen", *map(str, args)], capture_output=True, text=True, env=env)
         py = tool("datagen", *args)
         assert rs.returncode == py.returncode == 2, rs.stderr + py.stderr

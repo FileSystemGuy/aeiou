@@ -26,13 +26,13 @@ jobs:
         run: .venv/bin/pytest -q -n 4
       - name: Hermetic build-twice of every abstract, compared with the committed ASTs
         working-directory: builder
-        run: .venv/bin/aeiou-build --hermetic --twice --check -o ../schema/examples abstracts/*.py
+        run: .venv/bin/aeiou-build --hermetic --twice --check $(find ../workloads -name '*.py' -not -path '*/kit/*' | LC_ALL=C sort)
       - name: Parameter files fit their abstracts
         working-directory: builder
         run: |
-          for f in ../schema/examples/params/*.params.json; do
-            a=$(basename "$f" | cut -d. -f1)
-            .venv/bin/aeiou-params check "../schema/examples/$a.ast.json" "$f" || exit 1
+          for f in $(find ../workloads -name '*params.json' | LC_ALL=C sort); do
+            a=$(.venv/bin/python -c 'import json, sys; print(json.load(open(sys.argv[1]))["abstract"])' "$f")
+            .venv/bin/aeiou-params check "$(find ../workloads -name "$a.ast.json")" "$f" || exit 1
           done
 
   runner-tests:
@@ -89,7 +89,7 @@ jobs:
       - name: Rust checker agrees with the reference checker on every committed AST
         run: |
           builder/.venv/bin/python schema/check.py > /tmp/check.py.out
-          runner/target/release/aeiou check schema/examples/*.ast.json | sed '1,/^$/d' > /tmp/check.rs.out   # past the options block
+          runner/target/release/aeiou check $(find workloads -name '*.ast.json' | LC_ALL=C sort) | sed '1,/^$/d' > /tmp/check.rs.out   # past the options block
           diff /tmp/check.py.out /tmp/check.rs.out
       - name: Container datasets run to the dry-run fingerprint; traces and kit pairs against the binary
         working-directory: builder

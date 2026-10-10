@@ -123,6 +123,11 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
   the report since 2026-10-01: task, io-wq worker, and `SQPOLL` thread peaks, CPU, RSS, the mount's options and NFS byte
   and RPC deltas; `runner/REFERENCE.md` §4, `DESIGN_REVIEW.md` §3.30.)
 
+**Names (2026-10-10).** The abstracts were renamed for their directories under `workloads/`
+(`DESIGN_REVIEW.md` §3.66, which has the table: `train_small_files` is `file_per_sample`,
+`kv_cache_serving` is `lmcache_local_disk`, …). This document keeps the names it was written
+with; paths in it are the new ones.
+
 ## 5. Decisions so far
 
 | Topic | Decision |
@@ -300,22 +305,22 @@ numbers; the order is this note's.
     distance per metric. Checked against traces of the runner itself. ~~Still to do: a trace
     of a real application, the tolerances, the `trace` node.~~
     **First real application traced 2026-10-01** (`ABSTRACTS.md` §1 "Trace",
-    `DESIGN_REVIEW.md` §3.43, `builder/traces/train_small_files`): PyTorch `DataLoader` +
+    `DESIGN_REVIEW.md` §3.43, `workloads/training/map/file-per-sample`): PyTorch `DataLoader` +
     `ImageFolder` on loopback NFS; the abstract gained the second `lseek` per file and the
     walk's `stat`/`fstat`, after which every op share and request size is equal and the
     largest distance is 0.048 (reuse distance, the order). Choices confirmed by the user (**decided 2026-10-01**). 
     **Second, 2026-10-01** (`ABSTRACTS.md` §2 "Trace", `DESIGN_REVIEW.md` §3.44,
-    `builder/traces/train_large_samples`): `np.load(...)["x"]` as upstream DLIO and any NumPy user issues it. The
+    `workloads/training/map/npy-per-sample`): `np.load(...)["x"]` as upstream DLIO and any NumPy user issues it. The
     drafted abstract was wrong in shape (two members, header reads, no read at 0) and was
     rewritten from the trace; largest distance 0.040 on a 256-file corpus. Explicit seeks
     confirmed by the user (**decided 2026-10-01**); the other choices not yet.
     **Third, 2026-10-01** (`ABSTRACTS.md` §3 "Trace", `DESIGN_REVIEW.md` §3.45,
-    `builder/traces/ckpt_write_dcp`): `dcp.save` on two ranks. The frame was right, the item
+    `workloads/checkpointing/dcp-save`): `dcp.save` on two ranks. The frame was right, the item
     loop was not (704 + item + 873 per item, split at the buffer size, two tells); counts and
     bytes now equal but for 10 path calls the contract cannot express. The traced writes are
     unaligned, so a direct backend cannot run them. ~~Choices not yet confirmed.~~ Choices decided 2026-10-02.
     **Fourth, 2026-10-01** (`ABSTRACTS.md` §4 "Trace", `DESIGN_REVIEW.md` §3.47,
-    `builder/traces/ckpt_restore`, `builder/traces/model_load`): `dcp.load` on two ranks and
+    `workloads/checkpointing/dcp-load`, `workloads/inference/safetensors-load`): `dcp.load` on two ranks and
     safetensors `from_pretrained`. The restore's item loop was rewritten (six reads and 34
     seeks per item through one 1 MiB buffer; counts now equal). The model load issues no
     `read`: two mappings per shard, `fadvise(SEQUENTIAL)`, and nothing touched until a tensor
@@ -330,13 +335,13 @@ numbers; the order is this note's.
     to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ ~~a chat replay for row 8 of `ABSTRACTS.md` §11,~~ ~~the tolerances,~~ the `trace` node.
     **Tolerances built 2026-10-02** (`aeiou-trace compare --judge`, `builder/REFERENCE.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now): a tolerance per class of metric (0.05 for the op mix, request sizes, and popularity; 0.10 for run lengths, reuse, fan-out, and depth), raised by what the abstract differs from itself by at other seeds; rows the trace cannot show are named per pair and not judged. Of the fifteen committed pairs ~~nine are accepted, four are not (the DiskANN build and the three KV-cache pairs, each row with its recorded reason; the KV pairs' rows are those of the replay since §3.56)~~ eleven are accepted, two are not (the DiskANN build and the KV-cache writer, each row with its recorded reason; since §3.57 and one `keep` draw per round, 2026-10-02), and the two applications that read through a mapping cannot be judged from an `strace` at all.
     **Sixth row, 2026-10-01** (`ABSTRACTS.md` §6 "Trace", `DESIGN_REVIEW.md` §3.49,
-    `builder/traces/vdb_search_ivf`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
+    `workloads/vdb/faiss-ivf-ondisk`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
     FAISS maps the lists file and issues no call on it; 32 prefetch threads per search slice
     touch every probed list, ids before codes. The abstract declares `mmap` and gained the
     index file, the prefetch fan-out, and that order; list-size spread and popularity are
     now SIFT1M's. ~~Choices not yet confirmed.~~ Choices decided 2026-10-01.
     **Fifth and seventh rows, 2026-10-02** (`ABSTRACTS.md` §5 and §7 "Trace", `DESIGN_REVIEW.md`
-    §3.50, `builder/traces/vdb_search_diskann`, `builder/traces/vdb_build_diskann`): DiskANN
+    §3.50, `workloads/vdb/diskann-search`, `workloads/vdb/diskann-build`): DiskANN
     through diskannpy on SIFT1M. Search: 28 dependent rounds and 108 sector reads per query
     (the draft had 3 to 8 rounds), the first two rounds on the medoids and their neighbours,
     which a 1 % node cache holds; the abstract declares `libaio` and opens once per process.
@@ -344,7 +349,7 @@ numbers; the order is this note's.
     abstract was rewritten and agrees with the trace to 0.1 % in calls and bytes, and with
     the wire in READ, WRITE, and COMMIT counts. ~~Choices not yet confirmed.~~ Choices decided 2026-10-02. ~~Row 8 remains.~~
     **Eighth row, 2026-10-02** (`ABSTRACTS.md` §8 "Trace", `DESIGN_REVIEW.md` §3.51,
-    `builder/traces/kv_cache_serving`): vLLM with LMCache's local-disk backend on a GPU. No
+    `workloads/kvcache/lmcache-local-disk`): vLLM with LMCache's local-disk backend on a GPU. No
     lookup reaches storage; a chunk is one file in one flat directory, one `write`, one
     `read`; only whole chunks of the prompt are stored and nothing during decode; reads
     happen only for what the engine's own GPU cache lost. The abstract lost its `stat`
@@ -352,7 +357,7 @@ numbers; the order is this note's.
     yet confirmed.~~ Choices decided 2026-10-02. Every row now has a trace; ~~the chat replay for the KV distributions is
     still to do.~~
     **Chat replay, 2026-10-02** (`ABSTRACTS.md` §8 "Replay", `DESIGN_REVIEW.md` §3.56,
-    `replay.py` and `fit.py` in `builder/traces/kv_cache_serving`): ShareGPT through the same
+    `replay.py` and `fit.py` in `workloads/kvcache/lmcache-local-disk`): ShareGPT through the same
     server, on local disk and on the shared store, 300 requests with eight conversations
     open. The dataset gives the lengths and the share of first turns, now the defaults; it
     has no timestamps, so the reuse distance is a load parameter and no longer
@@ -377,7 +382,7 @@ numbers; the order is this note's.
     the chunks it wrote. ~~Which cold-reader configuration to score is open (§3.51).~~
     **Decided 2026-10-02:** the cold reader is two runs, a writer and then a reader over an
     `input` namespace after `--drop-caches` (§3.51); ~~the reader abstract is not built yet.~~
-    **Built 2026-10-02** (§3.52, `builder/traces/kv_cache_shared`): the local-disk backend
+    **Built 2026-10-02** (§3.52, `workloads/kvcache/lmcache-shared-fs`): the local-disk backend
     has no reader (a restarted engine rewrites the store), so the pair is traced from
     LMCache's `fs://` backend: `kv_cache_shared` (stat lookups, header and chunk written to
     a temporary name and renamed) and `kv_cache_shared_reader` (the same request stream on

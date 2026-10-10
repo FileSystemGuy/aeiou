@@ -1,0 +1,604 @@
+{
+  "ast": "0.7",
+  "name": "dcp_save",
+  "doc": "Every rank writes its shard file per checkpoint step; rank 0 writes .metadata through a temp file and rename.",
+  "params": {
+    "steps": {
+      "default": 500,
+      "unit": "count"
+    },
+    "step_time": {
+      "default": 323000000,
+      "unit": "ns"
+    },
+    "ckpt_every": {
+      "default": 100,
+      "unit": "count"
+    },
+    "items": {
+      "default": 4,
+      "unit": "count",
+      "doc": "write items per rank [config]; 900 for an 8B model, 4 here to keep the example short"
+    },
+    "item_bytes": {
+      "default": [
+        16777216,
+        33554432,
+        16777216,
+        8388608
+      ],
+      "unit": "bytes",
+      "doc": "per-item bytes, 1/G of each tensor [config]"
+    },
+    "hdr": {
+      "default": 704,
+      "unit": "bytes",
+      "doc": "per item, before the storage: zip local headers, data.pkl, padding to 64 (traced 2026-10-01, torch 2.14)"
+    },
+    "trailer": {
+      "default": 873,
+      "unit": "bytes",
+      "doc": "per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01); less the storage's length mod 64, since the record after it is aligned"
+    },
+    "buf": {
+      "default": 1048576,
+      "unit": "bytes",
+      "doc": "Python BufferedWriter size = st_blksize; an item above it is written directly, one at or below it is coalesced with its header and trailer"
+    },
+    "meta_bytes": {
+      "default": 2097152,
+      "unit": "bytes",
+      "doc": "[measure] .metadata size; traced 2,602 bytes for 6 items on 2 ranks, about 217 per item and rank"
+    },
+    "xfer": {
+      "default": 1048576,
+      "unit": "bytes"
+    },
+    "readback": {
+      "default": false,
+      "doc": "read each shard back on the writing node after the final barrier; off by default, the restore is the separate dcp_load run on other nodes (PROJECT_BRIEF.md §8)"
+    }
+  },
+  "namespaces": {
+    "ckpt_dir": {
+      "pattern": "ckpt/step_{step:06}",
+      "fields": {
+        "step": "int"
+      },
+      "size": 0,
+      "seed": 1592646274
+    },
+    "ckpt": {
+      "pattern": "ckpt/step_{step:06}/__{rank}_0.distcp",
+      "fields": {
+        "step": "int",
+        "rank": "int"
+      },
+      "size": "as_written",
+      "seed": 1592646274
+    },
+    "ckpt_meta": {
+      "pattern": "ckpt/step_{step:06}/{name}",
+      "fields": {
+        "step": "int",
+        "name": "str"
+      },
+      "size": {
+        "param": "meta_bytes"
+      },
+      "seed": 1592646274
+    }
+  },
+  "actors": {
+    "gpu": {
+      "body": [
+        {
+          "loop": {
+            "index": "step",
+            "to": {
+              "param": "steps"
+            },
+            "body": [
+              {
+                "compute": {
+                  "ns": {
+                    "param": "step_time"
+                  }
+                }
+              },
+              {
+                "cond": {
+                  "if": {
+                    "eq": [
+                      {
+                        "mod": [
+                          {
+                            "index": "step"
+                          },
+                          {
+                            "param": "ckpt_every"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  },
+                  "then": [
+                    {
+                      "barrier": {
+                        "scope": "global"
+                      }
+                    },
+                    {
+                      "let": {
+                        "name": "c",
+                        "value": {
+                          "object": {
+                            "namespace": "ckpt",
+                            "fields": {
+                              "step": {
+                                "index": "step"
+                              },
+                              "rank": {
+                                "actor": "id"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "phase": {
+                        "name": "ckpt_write",
+                        "body": [
+                          {
+                            "mkdir": {
+                              "dir": {
+                                "object": {
+                                  "namespace": "ckpt_dir",
+                                  "fields": {
+                                    "step": {
+                                      "index": "step"
+                                    }
+                                  }
+                                }
+                              },
+                              "expect": [
+                                "EEXIST"
+                              ]
+                            }
+                          },
+                          {
+                            "stat": {
+                              "file": {
+                                "object": {
+                                  "namespace": "ckpt_meta",
+                                  "fields": {
+                                    "step": {
+                                      "index": "step"
+                                    },
+                                    "name": ".metadata"
+                                  }
+                                }
+                              },
+                              "expect": [
+                                "ENOENT"
+                              ]
+                            }
+                          },
+                          {
+                            "open": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "flags": [
+                                "WRONLY",
+                                "CREAT",
+                                "TRUNC",
+                                "CLOEXEC"
+                              ]
+                            }
+                          },
+                          {
+                            "fstat": {
+                              "file": {
+                                "ref": "c"
+                              }
+                            }
+                          },
+                          {
+                            "ioctl": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "request": "TCGETS",
+                              "expect": [
+                                "ENOTTY"
+                              ]
+                            }
+                          },
+                          {
+                            "lseek": {
+                              "file": {
+                                "ref": "c"
+                              },
+                              "offset": 0,
+                              "whence": "CUR"
+                            }
+                          },
+                          {
+                            "loop": {
+                              "index": "t",
+                              "to": {
+                                "param": "items"
+                              },
+                              "body": [
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                },
+                                {
+                                  "cond": {
+                                    "if": {
+                                      "gt": [
+                                        {
+                                          "elem": {
+                                            "array": "item_bytes",
+                                            "index": {
+                                              "index": "t"
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "param": "buf"
+                                        }
+                                      ]
+                                    },
+                                    "then": [
+                                      {
+                                        "write": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "param": "hdr"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "write": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "elem": {
+                                              "array": "item_bytes",
+                                              "index": {
+                                                "index": "t"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "write": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "sub": [
+                                              {
+                                                "param": "trailer"
+                                              },
+                                              {
+                                                "mod": [
+                                                  {
+                                                    "elem": {
+                                                      "array": "item_bytes",
+                                                      "index": {
+                                                        "index": "t"
+                                                      }
+                                                    }
+                                                  },
+                                                  64
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "else": [
+                                      {
+                                        "write": {
+                                          "file": {
+                                            "ref": "c"
+                                          },
+                                          "len": {
+                                            "sub": [
+                                              {
+                                                "add": [
+                                                  {
+                                                    "add": [
+                                                      {
+                                                        "param": "hdr"
+                                                      },
+                                                      {
+                                                        "elem": {
+                                                          "array": "item_bytes",
+                                                          "index": {
+                                                            "index": "t"
+                                                          }
+                                                        }
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "param": "trailer"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "mod": [
+                                                  {
+                                                    "elem": {
+                                                      "array": "item_bytes",
+                                                      "index": {
+                                                        "index": "t"
+                                                      }
+                                                    }
+                                                  },
+                                                  64
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "fsync": {
+                              "file": {
+                                "ref": "c"
+                              }
+                            }
+                          },
+                          {
+                            "close": {
+                              "file": {
+                                "ref": "c"
+                              }
+                            }
+                          },
+                          {
+                            "barrier": {
+                              "scope": "global"
+                            }
+                          },
+                          {
+                            "cond": {
+                              "if": {
+                                "eq": [
+                                  {
+                                    "actor": "id"
+                                  },
+                                  0
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "let": {
+                                    "name": "m",
+                                    "value": {
+                                      "object": {
+                                        "namespace": "ckpt_meta",
+                                        "fields": {
+                                          "step": {
+                                            "index": "step"
+                                          },
+                                          "name": ".metadata.tmp"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "open": {
+                                    "file": {
+                                      "ref": "m"
+                                    },
+                                    "flags": [
+                                      "WRONLY",
+                                      "CREAT",
+                                      "TRUNC",
+                                      "CLOEXEC"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "fstat": {
+                                    "file": {
+                                      "ref": "m"
+                                    }
+                                  }
+                                },
+                                {
+                                  "ioctl": {
+                                    "file": {
+                                      "ref": "m"
+                                    },
+                                    "request": "TCGETS",
+                                    "expect": [
+                                      "ENOTTY"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "lseek": {
+                                    "file": {
+                                      "ref": "m"
+                                    },
+                                    "offset": 0,
+                                    "whence": "CUR"
+                                  }
+                                },
+                                {
+                                  "write": {
+                                    "file": {
+                                      "ref": "m"
+                                    },
+                                    "len": {
+                                      "param": "meta_bytes"
+                                    }
+                                  }
+                                },
+                                {
+                                  "fsync": {
+                                    "file": {
+                                      "ref": "m"
+                                    }
+                                  }
+                                },
+                                {
+                                  "close": {
+                                    "file": {
+                                      "ref": "m"
+                                    }
+                                  }
+                                },
+                                {
+                                  "stat": {
+                                    "file": {
+                                      "object": {
+                                        "namespace": "ckpt_meta",
+                                        "fields": {
+                                          "step": {
+                                            "index": "step"
+                                          },
+                                          "name": ".metadata"
+                                        }
+                                      }
+                                    },
+                                    "expect": [
+                                      "ENOENT"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "rename": {
+                                    "from": {
+                                      "ref": "m"
+                                    },
+                                    "to": {
+                                      "object": {
+                                        "namespace": "ckpt_meta",
+                                        "fields": {
+                                          "step": {
+                                            "index": "step"
+                                          },
+                                          "name": ".metadata"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "barrier": {
+                              "scope": "global"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "cond": {
+                        "if": {
+                          "param": "readback"
+                        },
+                        "then": [
+                          {
+                            "phase": {
+                              "name": "ckpt_readback",
+                              "body": [
+                                {
+                                  "open": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "flags": [
+                                      "RDONLY"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "read": {
+                                    "file": {
+                                      "ref": "c"
+                                    },
+                                    "len": {
+                                      "param": "xfer"
+                                    },
+                                    "repeat": "until_eof"
+                                  }
+                                },
+                                {
+                                  "close": {
+                                    "file": {
+                                      "ref": "c"
+                                    }
+                                  }
+                                },
+                                {
+                                  "barrier": {
+                                    "scope": "global"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "generator": {
+      "script": "dcp_save.py",
+      "sha256": "9ce92720fcaad20f37c4adf77e249093f0faffb4f06bef838c5d2f954ab6a410",
+      "builder_version": "0.1.0",
+      "git": "7b115db69f80-dirty"
+    },
+    "python": "3.12.13",
+    "built_twice_identical": true,
+    "ast_sha256": "ec466990b90cca88b787b5a1c1d288d4841a0143e95ed925d731330175b46083"
+  }
+}

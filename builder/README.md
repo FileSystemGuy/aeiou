@@ -10,7 +10,7 @@ choice made in building it, is [REFERENCE.md](REFERENCE.md).
 
 ```
 uv sync --extra test --extra formats          # or: pip install -e '.[test,formats]'
-uv run aeiou-build --hermetic --twice -o ../schema/examples abstracts/*.py
+uv run aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')   # each AST beside its script
 uv run pytest
 ```
 
@@ -47,8 +47,8 @@ with a scrubbed environment and PEP 578 audit hooks that deny sockets, subproces
 write, and reads outside the interpreter, the schema, and the script's directory; clocks and
 entropy raise. `--twice` builds in two children with different hash seeds and refuses to
 write unless the hashes agree, which catches set-iteration order without anticipating it.
-`--check` is CI's drift test: the committed abstracts in `../schema/examples/` must
-regenerate hash-identically from `abstracts/*.py`.
+`--check` is CI's drift test: every committed abstract under `../workloads/` must
+regenerate hash-identically from the script beside it.
 
 **Shape and parameters.** A script's defaults are placeholders or one reference set; the
 measured values of a shape live in a parameter file, so one published shape carries several
