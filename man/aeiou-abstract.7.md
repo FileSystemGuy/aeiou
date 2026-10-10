@@ -144,8 +144,9 @@ drew, so a run without the writer's seed, instance count, and common parameters 
 **Protocol.** A dataset or namespace may declare `protocol`: `posix` (the default, a file
 system) or `object` (an object store), where the traced application reads or writes it. A run
 places each one with `--endpoint` (**aeiou**(1) ENDPOINTS), so one run may mix protocols; the
-operation stream, the fingerprint, and the dataset ids do not depend on it. The runner refuses
-`object` until its object engine is built.
+operation stream, the fingerprint, and the dataset ids do not depend on it. The runner reads
+an `object` dataset through its object engine (**aeiou**(1) OBJECT STORES) and refuses an
+`object` namespace until the engine writes.
 
 **Actors**: `{count, body}`; `count` defaults to `{param: gpus}`. Instances have global ids
 `0..count`.

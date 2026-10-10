@@ -133,12 +133,13 @@ sides may come from different layers.
 `--ignore-limits`. Layered: `--root`, `--endpoint`, `--threads`, `--buffer-mib`, `--write-compress`,
 `--time-scale`, the io_uring knobs (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`,
 `--defer-taskrun`, `--coop-taskrun`), `--aio-depth`, `--mmap-mode`, `--mmap-consume`,
-`--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`, `--require-cold`,
+`--object-threads`, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`, `--require-cold`,
 `--drop-caches`, `--report-json`, `--report-takes`.
 
 **aeiou datagen** and **aeiou-datagen.** Fixed: the abstract, `--gpus`, `--param`,
 `--params-file`, `--dedupe`, `--compress`, `--dataset` (the payload is part of what the
-run compares). Layered: `--root`, `--endpoint`, `--threads`.
+run compares). Layered: `--root`, `--endpoint`, `--threads`, and for **aeiou datagen**
+`--object-threads`.
 
 **aeiou dry-run.** Fixed: the identity (the abstract, `--gpus`, `--seed`, `--param`,
 `--params-file`) and the output and metrics flags. Layered: `--threads`, `--ranks`.

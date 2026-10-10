@@ -6,6 +6,8 @@ mod golden;
 mod layout;
 mod man;
 mod metrics;
+#[cfg(feature = "object")]
+mod object;
 mod options;
 mod report;
 mod run;

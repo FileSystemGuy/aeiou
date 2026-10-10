@@ -649,8 +649,13 @@ struct Mapping {
 /// Readers find the current mapping without a lock. A file that has grown past it is mapped
 /// again at its new size, under the lock, and the earlier mapping stays until the close,
 /// since another sub-actor may be inside it.
+///
+/// A file in an object store (`object.rs`) has no descriptor: its handle is the store and
+/// the key, and the driver routes its ops to the object engine by path, so no `Backend`
+/// ever sees one (the descriptor of such a handle is a bug, and panics).
 pub struct OpenFile {
-    fd: OwnedFd,
+    fd: Option<OwnedFd>,
+    object: Option<crate::object::Handle>,
     map: AtomicPtr<Mapping>,
     all: Mutex<Vec<Box<Mapping>>>,
 }
@@ -678,20 +683,33 @@ impl From<OwnedFd> for OpenFile {
     fn from(fd: OwnedFd) -> Self {
         let now = OPEN_FILES.fetch_add(1, Ordering::Relaxed) + 1;
         OPEN_FILES_PEAK.fetch_max(now, Ordering::Relaxed);
-        OpenFile { fd, map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()) }
+        OpenFile { fd: Some(fd), object: None, map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()) }
+    }
+}
+
+impl OpenFile {
+    /// An object's handle: no descriptor, so not counted among the open files.
+    pub fn object(h: crate::object::Handle) -> OpenFile {
+        OpenFile { fd: None, object: Some(h), map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()) }
+    }
+
+    pub fn as_object(&self) -> Option<&crate::object::Handle> {
+        self.object.as_ref()
     }
 }
 
 impl std::ops::Deref for OpenFile {
     type Target = OwnedFd;
     fn deref(&self) -> &OwnedFd {
-        &self.fd
+        self.fd.as_ref().expect("an object's handle has no descriptor; its ops go to the object engine")
     }
 }
 
 impl Drop for OpenFile {
     fn drop(&mut self) {
-        OPEN_FILES.fetch_sub(1, Ordering::Relaxed);
+        if self.fd.is_some() {
+            OPEN_FILES.fetch_sub(1, Ordering::Relaxed);
+        }
         for m in self.all.get_mut().unwrap_or_else(|e| e.into_inner()).drain(..) {
             unsafe { libc::munmap(m.ptr as *mut libc::c_void, m.len) };
         }

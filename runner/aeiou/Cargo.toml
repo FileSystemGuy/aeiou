@@ -22,6 +22,13 @@ libc = "0.2"
 dgen-data = { version = "=0.3.0", default-features = false }
 io-uring = "0.7"
 toml = { version = "1.1.6", default-features = false, features = ["parse", "serde"] }
+# the object engine (DESIGN_REVIEW.md §3.65), behind the `object` feature: the default build has no tokio
+object_store = { version = "=0.14.2", default-features = false, features = ["aws"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
+
+[features]
+object = ["dep:object_store", "dep:tokio", "dep:futures"]
 
 [[test]]
 name = "all"

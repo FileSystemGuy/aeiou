@@ -104,15 +104,20 @@ struct DatagenArgs {
     #[arg(long, value_name = "DIR", help_heading = "Writer")]
     root: Option<PathBuf>,
     /// Place a dataset or namespace somewhere other than under --root: NAME=DIR puts the root
-    /// directory of the abstract's dataset or namespace NAME at DIR (repeatable; names sharing a
-    /// root share its place). Only directories, for `posix` names, until the object engine.
-    /// From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the
-    /// config file (an array).
-    #[arg(long = "endpoint", value_name = "NAME=DIR", help_heading = "Writer")]
+    /// directory of the abstract's dataset or namespace NAME at DIR, and NAME=s3://BUCKET[/PREFIX]
+    /// puts a name declared `protocol: object` at that prefix of a bucket, the store named by the
+    /// AWS_* environment (a build with the object engine; every object name needs one). Repeatable;
+    /// names sharing a root share its place. From the command line, else $AEIOU_ENDPOINT
+    /// (whitespace-separated), else `endpoint` in the config file (an array).
+    #[arg(long = "endpoint", value_name = "NAME=DIR|URI", help_heading = "Writer")]
     endpoints: Vec<String>,
     /// Writer threads (default: all cores).
     #[arg(long, help_heading = "Writer")]
     threads: Option<usize>,
+    /// Worker threads of the object engine's runtime, which drive its connections (the
+    /// requests are made on the writer threads). Default 2.
+    #[arg(long, value_name = "N", help_heading = "Writer")]
+    object_threads: Option<usize>,
     /// Dedupe ratio: every `dedupe` consecutive files (or 1 MiB blocks of a regions file) share content.
     #[arg(long, default_value_t = 1, help_heading = "Writer")]
     dedupe: u64,
@@ -156,11 +161,12 @@ struct RunCmd {
     #[arg(long, value_name = "DIR", help_heading = "Backend")]
     root: Option<PathBuf>,
     /// Place a dataset or namespace somewhere other than under --root: NAME=DIR puts the root
-    /// directory of the abstract's dataset or namespace NAME at DIR (repeatable; names sharing a
-    /// root share its place). Only directories, for `posix` names, until the object engine.
-    /// From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the
-    /// config file (an array).
-    #[arg(long = "endpoint", value_name = "NAME=DIR", help_heading = "Backend")]
+    /// directory of the abstract's dataset or namespace NAME at DIR, and NAME=s3://BUCKET[/PREFIX]
+    /// puts a name declared `protocol: object` at that prefix of a bucket, the store named by the
+    /// AWS_* environment (a build with the object engine; every object name needs one). Repeatable;
+    /// names sharing a root share its place. From the command line, else $AEIOU_ENDPOINT
+    /// (whitespace-separated), else `endpoint` in the config file (an array).
+    #[arg(long = "endpoint", value_name = "NAME=DIR|URI", help_heading = "Backend")]
     endpoints: Vec<String>,
     /// Event-loop threads for the io_uring and libaio backends (default: one per core, at most one
     /// per actor instance). The other backends run one thread per actor and refuse it.
@@ -212,6 +218,11 @@ struct RunCmd {
     /// (the range is copied into the actor's buffer). Default touch.
     #[arg(long, value_name = "HOW", help_heading = "mmap")]
     mmap_consume: Option<String>,
+    /// Worker threads of the object engine's runtime, which drive its connections; each actor
+    /// makes its requests on its own thread, one at a time. Only with a name placed in an object
+    /// store. Default 2.
+    #[arg(long, value_name = "N", help_heading = "Object engine")]
+    object_threads: Option<usize>,
     /// This host's index among --ranks hosts. Default 0.
     #[arg(long, value_name = "R", help_heading = "Several hosts")]
     rank: Option<i64>,
@@ -292,6 +303,7 @@ struct RunOptions {
     aio_depth: Option<u32>,
     mmap_mode: Option<String>,
     mmap_consume: Option<String>,
+    object_threads: Option<usize>,
     rank: i64,
     ranks: i64,
     coordinator: Option<String>,
@@ -349,6 +361,7 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         aio_depth: l.layered("aio-depth", a.aio_depth, None)?,
         mmap_mode: l.layered("mmap-mode", a.mmap_mode, None)?,
         mmap_consume: l.layered("mmap-consume", a.mmap_consume, None)?,
+        object_threads: l.layered("object-threads", a.object_threads, None)?,
         rank: l.layered("rank", a.rank, Some(0))?.unwrap_or(0),
         ranks: l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1),
         coordinator: l.layered("coordinator", a.coordinator, None)?,
@@ -493,6 +506,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let root = miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2));
     let endpoints = l.layered::<Vec<String>>("endpoint", (!a.endpoints.is_empty()).then_some(a.endpoints.clone()), None)?.unwrap_or_default();
     let threads = l.layered::<usize>("threads", a.threads, None)?;
+    let object_threads = l.layered::<usize>("object-threads", a.object_threads, None)?;
     let rank = l.layered("rank", a.rank, Some(0))?.unwrap_or(0);
     let ranks = l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1);
     let coordinator = l.layered::<String>("coordinator", a.coordinator, None)?;
@@ -520,6 +534,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     model.traces = loaded.traces.clone();
     aeiou::endpoint::check_protocols(&loaded.ast)?;
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
+    let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
     let opts = DatagenOpts { root, endpoints, threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks };
     let mut out = std::io::stdout();
@@ -527,6 +542,12 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     l.print(&mut out)?;
     writeln!(out, "gpus {}  params: {}", cfg.gpus, params_line(&cfg))?;
     writeln!(out, "host {}  rank {} of {}  threads {}", aeiou::run::hostname(), rank, ranks, threads)?;
+    if let Some(line) = object_line(object_threads) {
+        writeln!(out, "{line}")?;
+    }
+    for line in opts.endpoints.lines(&opts.root) {
+        writeln!(out, "{line}")?;
+    }
     out.flush()?;
 
     // several hosts: rank 0 listens, every rank connects and has its configuration checked
@@ -609,6 +630,28 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
     r
 }
 
+/// The object engine's runtime threads when a name is placed in an object store (the option
+/// is refused otherwise), set before the first object call builds the runtime.
+fn object_engine(endpoints: &aeiou::endpoint::Endpoints, given: Option<usize>, l: &Layers) -> Result<Option<usize>> {
+    if !endpoints.any_object() {
+        if given.is_some() {
+            aeiou::usage!("--object-threads: no dataset or namespace is placed in an object store{}", l.from(&["object-threads"]));
+        }
+        return Ok(None);
+    }
+    let n = given.unwrap_or(aeiou::object::DEFAULT_THREADS);
+    if n == 0 {
+        aeiou::usage!("--object-threads 0: the runtime needs a worker{}", l.from(&["object-threads"]));
+    }
+    aeiou::object::set_threads(n);
+    Ok(Some(n))
+}
+
+/// What a run or a datagen prints of the object engine.
+fn object_line(threads: Option<usize>) -> Option<String> {
+    threads.map(|n| format!("object engine: object_store {}  runtime threads {n}", aeiou::object::LIBRARY_VERSION))
+}
+
 /// The run's backend: --io-api and --cache, each defaulting to the abstract's.
 fn run_backend(a: &RunOptions, declared: BackendKind) -> Result<BackendKind> {
     let api = match &a.io_api {
@@ -630,6 +673,10 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &a.endpoints)?;
     let declared = aeiou::backend::declared(&loaded.ast)?;
     let backend = run_backend(a, declared)?;
+    let object_threads = object_engine(&endpoints, a.object_threads, layers)?;
+    if endpoints.any_object() && backend.event_loop() {
+        aeiou::usage!("--io-api {}: an event loop cannot wait on the object engine yet; the names placed in an object store run under a thread-per-actor API (`sync`, `posix-aio`, `mmap`; DESIGN_REVIEW.md §3.65)", backend.api.name());
+    }
     let expect_fingerprint = match &a.expect_fingerprint {
         None => None,
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| usage::err(format!("--expect-fingerprint {h}: not hex")))?),
@@ -695,6 +742,12 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     })?;
     for line in endpoints.lines(&a.root) {
         writeln!(out, "{line}")?;
+    }
+    if let Some(line) = object_line(object_threads) {
+        writeln!(out, "{line}")?;
+    }
+    if let Some(n) = object_threads {
+        doc.set("object_threads", serde_json::json!(n));
     }
 
     let checks = run::check_datasets(loaded, cfg, &(a.root.as_path(), &endpoints))?;

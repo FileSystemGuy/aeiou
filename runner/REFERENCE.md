@@ -197,8 +197,10 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   `aeiou-datagen`, which take the same flag. A `trace` node's paths stay under `--root`.
   The run prints each endpoint and warns when one is on another file system than `--root`,
   whose mount alone the counters sample (below); the report records them under `options`.
-  Endpoints are directories, for `posix` names; an abstract that declares
-  `protocol: object` is refused by `run` and `datagen` until the object engine is built.
+  ~~Endpoints are directories, for `posix` names; an abstract that declares
+  `protocol: object` is refused by `run` and `datagen` until the object engine is built.~~
+  An endpoint is a directory for a `posix` name and `s3://BUCKET[/PREFIX]` for an `object`
+  one, which has no default place (2026-10-09, §16).
 - **Threads.** One OS thread per actor instance. A `loader` spawns `workers` threads that
   live until the actor ends; a `parallel` ~~spawns `width` threads and joins them before the
   node returns~~ runs its `width` sub-actors on threads the forking actor keeps (the
@@ -1546,3 +1548,74 @@ items with their reasons and layers, the three wrong-file messages, and a failur
 with status 1. `builder/tests/test_usage.py`: the same for the four Python tools, the help's
 look, and, when the runner binary is built, that `aeiou datagen` and `aeiou-datagen` print
 the same bytes for the same mistake but for the command's name.
+
+## 16. The object engine (2026-10-09)
+
+`src/object.rs`, behind the cargo feature `object` (`cargo build --release --features
+object`): the ops of a dataset declared `protocol: object` (contract 0.6) issued to an S3
+store through Apache `object_store` 0.14.2 (`aws` feature, pinned), the library chosen over
+`s3dlio` by measurement (`DESIGN_REVIEW.md` §3.65). The default build has no tokio, no
+`object_store`, and refuses an object endpoint (`Store` is an empty enum there). Reads first:
+object namespaces, and every op that would change a store, wait for the engine's writes.
+
+**Where.** `--endpoint NAME=s3://BUCKET[/PREFIX]` places an object name's root at a prefix,
+as a directory endpoint places a `posix` name's (§4, `endpoint.rs`): the path `ROOT/a/b` is
+the key `PREFIX/a/b`. An object name has no default place, so `Endpoints::parse` refuses an
+abstract with one unplaced, an endpoint of the wrong kind for its name's protocol, and a
+`posix` name that would fall under a root placed in an object store. The store comes from
+the environment (`AmazonS3Builder::from_env`: `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ALLOW_HTTP`), path-style unless
+`AWS_VIRTUAL_HOSTED_STYLE_REQUEST` is set. `Place::object` and `Endpoints::object` give the
+store and the key below its prefix for a path, and every place that would touch a file
+system for a path asks them first: the driver (`issue_blocking` routes an object path to
+`object::issue` before the run's API sees it, whatever the API), the manifest check
+(`Manifest::read_object`), the residency sample (skipped: no page cache of this host's to
+sample), and `aeiou datagen`.
+
+**The mapping** (the table of §3.65; reads):
+
+| Op | Request |
+|---|---|
+| `open` (read) | none: the handle (`OpenFile::object`) is the store and the key, no descriptor, not counted among the open files |
+| `read` at the effective offset | one `GET` of `bytes=off-(off+len-1)` streamed into the actor's buffer ring (one copy, from the HTTP client's buffers); a range over the end is a short read, a start at or past it the server's 416, a read of 0 bytes |
+| `stat`, `fstat` | `HEAD`; a 404 is followed by a `LIST` below the key, size 0 when it finds one (a directory), `ENOENT` otherwise |
+| `readdir` | `LIST` with the delimiter `/` (`list_with_delimiter`, every page): objects plus common prefixes, names beginning `.aeiou` not counted |
+| `lseek`, `fadvise`, `fsync`, `fdatasync` | none |
+| `ioctl` | none; `TCGETS` is `ENOTTY`, as for a regular file |
+| `open` for writing, `write`, `unlink`, `ftruncate`, `fallocate`, `mkdir`, `rmdir`, `rename` | `EROFS` |
+
+The structural checks are the POSIX ones: a read returns the computed count, `readdir` the
+computed entries. Errors carry an errno for `expect` lists and the check (`object::errno_of`):
+`NotFound` is `ENOENT`, `PermissionDenied` and `Unauthenticated` `EACCES`, the rest `EIO`, with
+the store's message.
+
+**Threads.** One multi-thread tokio runtime per process, built on the first object call
+with `--object-threads` workers (default 2; `run` and `datagen`, layered, refused when no
+name is placed in an object store) and parked until the process exits, as the driver note of
+§3.65 expects of any library with a runtime. An actor's thread runs each op to completion
+with `Handle::block_on`: the request is built and signed on the actor's thread, the workers
+drive the connections, and an actor has one op in flight, as under `sync`. So a run with an
+object name takes an API with a thread per actor (`sync`, `posix-aio`, `mmap`, which apply
+to its `posix` names) and refuses `io_uring` and `libaio` until a completion on the runtime
+can wake an event loop. The limits check counts the workers among the threads (§11). The
+run prints `object engine: object_store 0.14.2  runtime threads N` and, under each object
+endpoint, that the mount counters and the residency sample do not cover it; the JSON report
+records `object_threads` and each endpoint's `uri`.
+
+**`aeiou datagen`.** A `files` dataset declared `object`: the prefix must hold no key (a
+`LIST`); each file (or chunk object) is one `PUT`, or a multipart upload in parts of
+`object::DEFAULT_PART` (8 MiB) when larger, each part made from the payload and sent before
+the next; the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix (atomic, so no
+temporary name), and there is no `syncfs`. A `regions` dataset is refused: a sparse layout
+written at offsets has no object form. The writer threads make the requests, as actors do.
+
+**Tests.** `tests/object.rs`, compiled with the feature: datagen into a MinIO bucket of 20
+MiB samples (three parts each) whose bytes equal the POSIX writer's files of the same names,
+read back to the dry run's fingerprint under `sync`, `posix-aio`, and `mmap`; the listing
+walk and directory `stat`s of `train_small_files` over four prefixes of 1,300 objects, with
+its header reads past every object's end; and the refusals, which need no server. The tests
+that need one start MinIO from the binary `TEST_MINIO_BIN` names, on a free port with a
+directory of their own, and create the bucket with `curl --aws-sigv4`; they are skipped,
+saying so, when it is unset. CI's `runner-object` job downloads the last MinIO release that
+has binaries (`RELEASE.2025-09-07T16-13-09Z`; the project stopped publishing them and archived
+its repository) and checks its SHA-256 before running them.

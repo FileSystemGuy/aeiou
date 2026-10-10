@@ -240,8 +240,10 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   a run places with `--endpoint` (`runner/REFERENCE.md` §4). Namespaces sharing a root share
   its place as they share its manifest (V14), so they agree on the protocol. Datasets need
   no such rule, since their roots are distinct (V13). The protocol is not part of a dataset
-  id or a namespace's resolved definition: where a corpus lives is not what it is. The
-  runner refuses `object` until its object engine is built (`DESIGN_REVIEW.md` §3.65).
+  id or a namespace's resolved definition: where a corpus lives is not what it is. ~~The
+  runner refuses `object` until its object engine is built~~ The runner reads an `object`
+  dataset through its object engine (`runner/REFERENCE.md` §16, 2026-10-09) and refuses an
+  `object` namespace until the engine writes (`DESIGN_REVIEW.md` §3.65).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)

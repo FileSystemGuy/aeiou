@@ -271,6 +271,9 @@ impl Place for RunOpts {
     fn at(&self, rel: &str) -> PathBuf {
         self.path(rel)
     }
+    fn object(&self, rel: &str) -> Option<(Arc<crate::object::Store>, String)> {
+        self.endpoints.object(rel)
+    }
 }
 
 /// The event-loop threads this host will run under an event-loop backend: `--threads`, or
@@ -685,7 +688,7 @@ impl Ring {
         }
     }
 
-    fn slice(&mut self, len: usize) -> &mut [u8] {
+    pub(crate) fn slice(&mut self, len: usize) -> &mut [u8] {
         self.ensure(len);
         let aligned = ((len + ALIGN - 1) / ALIGN) * ALIGN;
         if self.pos + aligned > self.cap {
@@ -855,7 +858,7 @@ impl ActorState {
                 Ok(())
             }
             Err(e) => {
-                let code = e.raw_os_error().unwrap_or(0);
+                let code = crate::object::errno_of(&e).unwrap_or(0);
                 let name = errno_name(code);
                 if op.expect.iter().any(|x| x == name) {
                     self.st.expected_errors += 1;
@@ -919,6 +922,10 @@ impl ActorState {
 /// or 0). The `sync` sink's whole backend, and what the `io_uring` loop runs inline for the
 /// ops the ring has no opcode for (`lseek`, `ioctl`, `readdir`) or the kernel lacks.
 pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorState, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> std::io::Result<i64> {
+    // a path in an object store is the object engine's, whatever the run's API
+    if let Some((store, rest)) = sh.opts.endpoints.object(op.path) {
+        return crate::object::issue(&store, rest, sh, a, rbuf, op);
+    }
     let full = |rel: &str| sh.opts.path(rel);
     match op.kind {
         OpKind::Open => {
@@ -1438,7 +1445,11 @@ pub fn check_datasets(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place +
     for name in loaded.ast.datasets.keys() {
         let rel = payload::dataset_root(&loaded.ast, name)?;
         let dir = root.at(&rel);
-        let m = Manifest::read(&dir).with_context(|| format!("dataset `{name}` at {}: run `aeiou datagen` first", dir.display()))?;
+        let m = match root.object(&rel) {
+            Some((store, rest)) => Manifest::read_object(&store, &rest),
+            None => Manifest::read(&dir),
+        }
+        .with_context(|| format!("dataset `{name}` at {}: run `aeiou datagen` first", dir.display()))?;
         let want = payload::resolved_dataset(&loaded.doc, name, cfg)?;
         if m.dataset != want {
             let mut lines = Vec::new();

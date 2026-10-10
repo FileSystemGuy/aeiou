@@ -182,6 +182,10 @@ pub fn residency(model: &Model<'_>, root: &(impl crate::endpoint::Place + ?Sized
                 _ => None,
             };
             let rel = meta.file_path(file, chunk)?;
+            if root.object(&rel).is_some() {
+                // an object store has no page cache of this host's to sample
+                break;
+            }
             let (pages, resident) = file_residency(&root.at(&rel)).with_context(|| format!("dataset `{}`", meta.name()))?;
             r.files += 1;
             r.pages += pages;

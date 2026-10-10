@@ -1688,7 +1688,7 @@
         "posix",
         "object"
       ],
-      "description": "Where a dataset or namespace lives (contract 0.6): a file system (`posix`, absent) or an object store (`object`), each run giving it an endpoint (`--endpoint NAME=...`, default under `--root`). Not part of the dataset id or the namespace's resolved definition; datasets and namespaces sharing a root declare the same protocol (V17). The runner refuses `object` until its object engine is built."
+      "description": "Where a dataset or namespace lives (contract 0.6): a file system (`posix`, absent) or an object store (`object`), each run giving it an endpoint (`--endpoint NAME=...`, default under `--root`). Not part of the dataset id or the namespace's resolved definition; datasets and namespaces sharing a root declare the same protocol (V17). The runner reads an `object` dataset through its object engine (cargo feature `object`) and refuses an `object` namespace until the engine writes."
     }
   }
 }

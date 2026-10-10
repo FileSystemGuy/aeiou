@@ -221,14 +221,20 @@ turns it off, and the last one on the line wins.
   Required, from some layer. The directory the abstract's paths are relative to. From the
   command line, else `$AEIOU_ROOT`, else `root` in the `[datagen]` table of the config
   file. *Layered.*
-- **--endpoint** *NAME=DIR*
+- **--endpoint** *NAME=DIR|URI*
 
-  Puts the root directory of the abstract's dataset NAME at DIR instead of under `--root`
-  (repeatable); see ENDPOINTS. From the command line, else `$AEIOU_ENDPOINT`, else
-  `endpoint` in the `[datagen]` table of the config file. *Layered.*
+  Puts the root directory of the abstract's dataset NAME at DIR instead of under `--root`,
+  or, for a dataset declared `protocol: object`, at `s3://BUCKET[/PREFIX]` (repeatable); see
+  ENDPOINTS. From the command line, else `$AEIOU_ENDPOINT`, else `endpoint` in the
+  `[datagen]` table of the config file. *Layered.*
 - **--threads** *THREADS*
 
   Writer threads; default all cores. *Layered.*
+- **--object-threads** *N*
+
+  Worker threads of the object engine's runtime, which drive its connections (the writer
+  threads make the requests); see OBJECT STORES. Only with a dataset placed in an object
+  store. Default 2. *Layered.*
 - **--dedupe** *DEDUPE*
 
   Dedupe ratio: every *DEDUPE* consecutive files (or 1 MiB blocks of a `regions` file) share
@@ -295,10 +301,11 @@ turns it off, and the last one on the line wins.
   Required, from some layer. The directory the abstract's paths are relative to; datasets
   and namespaces live under it. From the command line, else `$AEIOU_ROOT`, else `root` in
   the `[run]` table of the config file. *Layered.*
-- **--endpoint** *NAME=DIR*
+- **--endpoint** *NAME=DIR|URI*
 
   Puts the root directory of the abstract's dataset or namespace NAME at DIR instead of
-  under `--root` (repeatable); see ENDPOINTS. From the command line, else
+  under `--root`, or, for a name declared `protocol: object`, at `s3://BUCKET[/PREFIX]`
+  (repeatable); see ENDPOINTS. From the command line, else
   `$AEIOU_ENDPOINT`, else `endpoint` in the `[run]` table of the config file. *Layered.*
 - **--threads** *THREADS*
 
@@ -357,6 +364,14 @@ turns it off, and the last one on the line wins.
   How a read's range is consumed: `touch` (one byte of every page is read, so each page is
   resident and mapped; nothing under `populate`, which has done that) or `copy` (the range
   is copied into the actor's buffer). Default `touch`. *Layered.*
+
+**Object engine**
+
+- **--object-threads** *N*
+
+  Worker threads of the object engine's runtime, which drive its connections; each actor
+  makes its requests on its own thread, one at a time. Only with a name placed in an
+  object store; see OBJECT STORES. Default 2. *Layered.*
 
 **Several hosts**
 
@@ -456,8 +471,41 @@ another file system than `--root`: the report's mount counters cover `--root`'s 
 only. Placement never changes the operation stream, the fingerprint, or a dataset id.
 
 A dataset or namespace declares its protocol (`posix`, the default, or `object`;
-**aeiou-abstract**(7)). Endpoints are directories, for `posix` names; an abstract that
-declares `object` is refused until the object engine is built.
+**aeiou-abstract**(7)), and its endpoint fits it: a directory for `posix`,
+`s3://BUCKET[/PREFIX]` for `object`. An object name has no default place, so every one
+needs an endpoint, and a `posix` name may not fall under a root placed in an object store
+(give it its own directory). The paths below an object endpoint are keys below its prefix:
+under `--endpoint train=s3://data/imagenet` the file `train/00001/img_000001300.jpg` is the
+key `imagenet/00001/img_000001300.jpg` of the bucket `data`.
+
+## OBJECT STORES
+
+A name declared `protocol: object` is read through the object engine, built on Apache
+`object_store` with the cargo feature `object` (a build without it refuses an object
+endpoint). The store is the one the environment names: `AWS_ENDPOINT_URL`,
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_ALLOW_HTTP=true` for a
+plain-HTTP endpoint; requests are path-style unless `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` is
+set. Operations map as follows; the stream, the fingerprint, and the dataset ids are the
+same as under a directory.
+
+| Operation | Request |
+|---|---|
+| `open` | none: the handle is the key |
+| `read` at an offset | one ranged `GET`, streamed into the actor's buffer; a short read at the object's end, 0 bytes past it |
+| `stat`, `fstat` | `HEAD`; for a key that is no object, a `LIST` below it, which succeeds (size 0) when there is a key there |
+| `readdir` | `LIST` with the delimiter `/`: the objects and common prefixes, not counting names that begin with `.aeiou` |
+| `lseek`, `fadvise`, `fsync`, `fdatasync`, `ioctl` | none (an `ioctl` answers as for a regular file: `TCGETS` is `ENOTTY`) |
+| anything that writes | `EROFS`: the object engine reads datasets only, so far |
+
+Each actor runs its requests on its own thread, one at a time (`Handle::block_on` on the
+engine's runtime, whose `--object-threads` workers drive the connections), so a run with
+an object name uses an API with a thread per actor (`sync`, `posix-aio`, `mmap`; the API
+applies to the `posix` names) and refuses `io_uring` and `libaio`. **aeiou datagen**
+writes each file of an object dataset as one `PUT`, or as a multipart upload in 8 MiB
+parts when it is larger, and the manifest as one `PUT` at the prefix's root; the prefix
+must hold no key. A `regions` dataset has no object form. An object namespace is refused
+until the engine writes. The report's mount counters and the residency sample of
+`--require-cold` do not cover an object store, and the run says so.
 
 ## METRICS
 

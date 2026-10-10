@@ -22,6 +22,12 @@
 //! leaves a strict prefix of every file: a file of the right size is a whole file, which is
 //! what a later `--resume` will rely on.
 //!
+//! **Object datasets** (`protocol: object`, `object.rs`): each file is one object, sent as
+//! one `PUT` or, when larger than `object::DEFAULT_PART`, a multipart upload in parts of
+//! that size, each part made and sent before the next; the root's emptiness is a `LIST`, the
+//! manifest one `PUT` (atomic, so no temporary name), and there is no `syncfs`. A `regions`
+//! dataset, a sparse layout written at offsets, has no object form and is refused.
+//!
 //! **Threads.** A rank's ids are handed to its threads in runs aligned to the pattern's
 //! directories (`{id div N}`: a run is a directory, shrunk so that every thread has several),
 //! because Linux takes the parent directory's lock exclusively for every create, and on NFS
@@ -275,6 +281,8 @@ struct Plan<'m, 'a> {
     meta: &'m DsMeta<'a>,
     name: &'a str,
     root: PathBuf,
+    /// The store and root key of an object dataset.
+    object: Option<(std::sync::Arc<crate::object::Store>, String)>,
     share: Share,
 }
 
@@ -349,6 +357,12 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                             }
                                         };
                                         for (path, logical, len) in objects {
+                                            if let Some((store, rest)) = opts.endpoints.object(&path) {
+                                                store.put_parts(&rest, len, crate::object::DEFAULT_PART, &mut |at, b| filler.fill_range(&seed_of, logical + at, b))?;
+                                                files.fetch_add(1, Ordering::Relaxed);
+                                                bytes.fetch_add(len, Ordering::Relaxed);
+                                                continue;
+                                            }
                                             let full = opts.endpoints.path(&opts.root, &path);
                                             let (f, direct) = create(&full, mode)?;
                                             write_range(&f, direct, mode, &seed_of, logical, 0, len, &mut filler, &mut buf, &full)?;
@@ -456,13 +470,23 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
         let rel = payload::dataset_root(&loaded.ast, name)?;
         let root = opts.endpoints.path(&opts.root, &rel);
-        if root.exists() {
+        let object = opts.endpoints.object(&rel);
+        if let Some((store, rest)) = &object {
+            if matches!(meta, DsMeta::Regions { .. }) {
+                bail!("dataset `{name}`: a `regions` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
+            }
+            if store.non_empty(rest)? {
+                bail!("dataset `{name}`: {} is not empty; datasets are read-only, remove it first", store.show(rest));
+            }
+        } else if root.exists() {
             let n = std::fs::read_dir(&root)?.count();
             if n > 0 {
                 bail!("dataset `{name}`: {} is not empty ({n} entries); datasets are read-only, remove it first", root.display());
             }
         }
-        std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
+        if object.is_none() {
+            std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
+        }
         let share = match meta {
             DsMeta::Files { .. } => {
                 let (lo, hi) = file_slice(meta.files(), ranks, rank);
@@ -478,7 +502,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 }
             }
         };
-        plans.push(Plan { meta, name, root, share });
+        plans.push(Plan { meta, name, root, object, share });
     }
     for p in &plans {
         match &p.share {
@@ -506,9 +530,14 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
         written.push(w);
     }
-    syncfs(&opts.root)?;
+    // --root holds nothing when every dataset is an object, and may not exist
+    if opts.root.exists() {
+        syncfs(&opts.root)?;
+    }
     for p in opts.endpoints.placed() {
-        syncfs(&p.dir)?;
+        if p.store.is_none() {
+            syncfs(&p.dir)?;
+        }
     }
 
     // the manifests: rank 0's, once every rank's part is in; on one host, now
@@ -584,14 +613,21 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             }),
         };
         if wrote_manifest {
-            if let Err(e) = manifest.write(&p.root) {
+            let w = match &p.object {
+                Some((store, rest)) => manifest.write_object(store, rest).map(|_| ()),
+                None => manifest.write(&p.root).map(|_| ()),
+            };
+            if let Err(e) = w {
                 manifest_error = Some(format!("dataset `{}`: {e:#}", p.name));
                 break;
             }
         }
         results.push(DatasetResult {
             name: p.name.to_string(),
-            root: p.root.clone(),
+            root: match &p.object {
+                Some((store, rest)) => PathBuf::from(store.show(rest)),
+                None => p.root.clone(),
+            },
             files: w.files,
             bytes: w.bytes,
             total_files: if wrote_manifest { total_files } else { w.files },

@@ -153,11 +153,12 @@ def placement(ast: dict, root: pathlib.Path, given: list):
     """`--endpoint NAME=DIR`: the function from a path relative to --root to where it lives.
     An endpoint places a name's root directory; a path falls under the longest placed root
     that is a prefix of it, else under --root; names sharing a root share its place
-    (DESIGN_REVIEW.md §3.65). Directories only, for `posix` names, until the object engine."""
+    (DESIGN_REVIEW.md §3.65). Directories only: this writer has no object client, and the
+    runner's object engine (`aeiou datagen`) writes plain datasets, not containers."""
     roots = _roots(ast)
     for name, (proto, _) in roots.items():
         if proto == "object":
-            raise BuildError(f"`{name}` is declared `protocol: object`, and the object engine is not built yet (DESIGN_REVIEW.md §3.65, step 3)")
+            raise BuildError(f"`{name}` is declared `protocol: object`: aeiou-datagen writes to directories only; a plain dataset in an object store is written by `aeiou datagen`, and container datasets in one are not written yet (DESIGN_REVIEW.md §3.65)")
     placed: dict[str, tuple[list, pathlib.Path]] = {}
     for g in given:
         name, sep, d = g.partition("=")
@@ -166,7 +167,7 @@ def placement(ast: dict, root: pathlib.Path, given: list):
         if name not in roots:
             raise usage.UsageError(f"--endpoint {g}: the abstract has no dataset or namespace `{name}`")
         if "://" in d:
-            raise usage.UsageError(f"--endpoint {g}: only a directory for a `posix` dataset or namespace; object endpoints come with the object engine (DESIGN_REVIEW.md §3.65, step 3)")
+            raise usage.UsageError(f"--endpoint {g}: aeiou-datagen writes to directories only; an object endpoint is `aeiou datagen`'s (DESIGN_REVIEW.md §3.65)")
         if not d:
             raise usage.UsageError(f"--endpoint {g}: no directory")
         r = roots[name][1]

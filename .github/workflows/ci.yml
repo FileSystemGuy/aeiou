@@ -4,7 +4,7 @@ on:
   push:
   pull_request:
 
-# Three jobs on three runners (4 cores each). `abstracts` needs no Rust. The runner's own
+# Four jobs on four runners (4 cores each); the fourth, `runner-object`, builds the object engine. `abstracts` needs no Rust. The runner's own
 # tests and the Python tests that drive the built binary each build on their own runner from
 # one shared Rust cache: the test binaries are compiled only where they are run, and the
 # integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers, the
@@ -48,6 +48,27 @@ jobs:
       - name: Build and test
         working-directory: runner
         run: cargo nextest run --release
+
+  # The object engine (cargo feature `object`, runner/REFERENCE.md §16) against MinIO: the last
+  # release that has binaries (the project archived its repository), checked by SHA-256.
+  runner-object:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runner
+          shared-key: runner-object
+      - uses: taiki-e/install-action@nextest
+      - name: MinIO server
+        run: |
+          curl -sSfL -o /tmp/minio https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
+          echo "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f  /tmp/minio" | sha256sum -c
+          chmod +x /tmp/minio
+      - name: Build with the object engine and test it
+        working-directory: runner
+        run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release --features object -E 'test(/object/) | test(/endpoint/)'
 
   runner-integration:
     runs-on: ubuntu-latest

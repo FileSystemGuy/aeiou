@@ -6,13 +6,18 @@
 //! and has an endpoint; any other path, and every path when no endpoint is given, is under
 //! `--root`. Namespaces sharing a root share its place (V14, V17).
 //!
-//! The protocol a name declares decides what an endpoint may be: a directory for `posix`.
-//! `object` is accepted by the contract and refused here until the object engine is built
-//! (§3.65, step 3).
+//! The protocol a name declares decides what an endpoint may be: a directory for `posix`,
+//! `s3://BUCKET[/PREFIX]` for `object` (`object.rs`, built with the cargo feature `object`).
+//! An object name has no default place, so every one needs an endpoint, and a name may not
+//! fall under a root placed for the other protocol. Object namespaces wait for the object
+//! writes (§3.65, step 3): only datasets, which are read, may be objects so far.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{bail, Result};
+
+use crate::object::Store;
 
 use crate::ast::{Ast, Dataset, Protocol};
 use crate::payload;
@@ -21,6 +26,10 @@ use crate::payload;
 /// root with its endpoints.
 pub trait Place {
     fn at(&self, rel: &str) -> PathBuf;
+    /// The store and the key below its prefix, for a path placed in an object store.
+    fn object(&self, _rel: &str) -> Option<(Arc<Store>, String)> {
+        None
+    }
 }
 
 impl Place for Path {
@@ -39,14 +48,25 @@ impl Place for (&Path, &Endpoints) {
     fn at(&self, rel: &str) -> PathBuf {
         self.1.path(self.0, rel)
     }
+    fn object(&self, rel: &str) -> Option<(Arc<Store>, String)> {
+        self.1.object(rel)
+    }
 }
 
-/// One placed root: the names it belongs to, its root relative to `--root`, and its directory.
-#[derive(Debug, Clone)]
+/// One placed root: the names it belongs to, its root relative to `--root`, and its
+/// directory, or its object store (`dir` is then the URI, for messages).
+#[derive(Clone)]
 pub struct Placed {
     pub names: Vec<String>,
     pub root: String,
     pub dir: PathBuf,
+    pub store: Option<Arc<Store>>,
+}
+
+impl std::fmt::Debug for Placed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Placed {{ names: {:?}, root: {:?}, at: {:?} }}", self.names, self.root, self.dir)
+    }
 }
 
 /// The endpoints of a run, longest root first.
@@ -70,11 +90,12 @@ fn lookup(ast: &Ast, name: &str) -> Result<Option<(Protocol, String)>> {
     Ok(None)
 }
 
-/// Refuse an abstract that declares a protocol this runner has no engine for.
+/// Refuse an abstract that declares what the object engine does not do yet: an object
+/// namespace (the engine reads, and writes come next).
 pub fn check_protocols(ast: &Ast) -> Result<()> {
-    for name in ast.datasets.keys().chain(ast.namespaces.keys()) {
+    for name in ast.namespaces.keys() {
         if let Some((Protocol::Object, _)) = lookup(ast, name)? {
-            bail!("`{name}` is declared `protocol: object`, and the object engine is not built yet (DESIGN_REVIEW.md §3.65, step 3)");
+            bail!("namespace `{name}` is declared `protocol: object`, and the object engine does not write yet: only datasets may be objects so far (DESIGN_REVIEW.md §3.65, step 3)");
         }
     }
     Ok(())
@@ -91,8 +112,11 @@ impl Endpoints {
             let Some((protocol, root)) = lookup(ast, name)? else {
                 crate::usage!("--endpoint {g}: the abstract has no dataset or namespace `{name}`");
             };
-            if protocol != Protocol::Posix || dir.contains("://") {
-                crate::usage!("--endpoint {g}: only a directory for a `posix` dataset or namespace; object endpoints come with the object engine (DESIGN_REVIEW.md §3.65, step 3)");
+            let uri = crate::object::is_uri(dir);
+            match protocol {
+                Protocol::Posix if uri => crate::usage!("--endpoint {g}: `{name}` is a `posix` dataset or namespace; its endpoint is a directory"),
+                Protocol::Object if !uri => crate::usage!("--endpoint {g}: `{name}` is declared `protocol: object`; its endpoint is s3://BUCKET[/PREFIX]"),
+                _ => {}
             }
             if dir.is_empty() {
                 crate::usage!("--endpoint {g}: no directory");
@@ -105,11 +129,53 @@ impl Endpoints {
                     p.dir.display()
                 ),
                 Some(p) => p.names.push(name.to_string()),
-                None => placed.push(Placed { names: vec![name.to_string()], root, dir: PathBuf::from(dir) }),
+                None => {
+                    let store = if uri { Some(Arc::new(Store::open(dir).map_err(|e| crate::usage::err(format!("--endpoint {g}: {e:#}")))?)) } else { None };
+                    placed.push(Placed { names: vec![name.to_string()], root, dir: PathBuf::from(dir), store })
+                }
             }
         }
         placed.sort_by(|a, b| b.root.len().cmp(&a.root.len()).then_with(|| a.root.cmp(&b.root)));
-        Ok(Endpoints { placed })
+        let e = Endpoints { placed };
+        // every name lands where its protocol can be reached: an object name at an object
+        // endpoint (there is no default for one), a posix name never under an object's root
+        let mut names: Vec<&String> = ast.datasets.keys().chain(ast.namespaces.keys()).collect();
+        names.sort();
+        for name in names {
+            let Some((protocol, root)) = lookup(ast, name)? else { continue };
+            let under = e.placement(&root);
+            match (protocol, under.map(|p| p.store.is_some())) {
+                (Protocol::Object, None | Some(false)) => crate::usage!(
+                    "`{name}` is declared `protocol: object` and has no object endpoint{}: give it --endpoint {name}=s3://BUCKET[/PREFIX]",
+                    under.map(|p| format!(" (it falls under `{}`, placed at {})", p.names.join("`, `"), p.dir.display())).unwrap_or_default()
+                ),
+                (Protocol::Posix, Some(true)) => {
+                    let p = under.expect("placed");
+                    crate::usage!("`{name}` is a `posix` dataset or namespace under `{}`, placed in the object store {}: give it a directory, --endpoint {name}=DIR", p.names.join("`, `"), p.dir.display())
+                }
+                _ => {}
+            }
+        }
+        Ok(e)
+    }
+
+    /// The placed root a path falls under: the longest that is a prefix of it.
+    fn placement(&self, rel: &str) -> Option<&Placed> {
+        self.placed.iter().find(|p| p.root.is_empty() || rel == p.root || rel.strip_prefix(p.root.as_str()).is_some_and(|r| r.starts_with('/')))
+    }
+
+    /// The store and the key below its prefix of the path `rel`, when it falls under a root
+    /// placed in an object store.
+    pub fn object(&self, rel: &str) -> Option<(Arc<Store>, String)> {
+        let p = self.placement(rel)?;
+        let store = p.store.as_ref()?;
+        let rest = if p.root.is_empty() { rel } else { rel[p.root.len()..].trim_start_matches('/') };
+        Some((store.clone(), rest.to_string()))
+    }
+
+    /// Some name is placed in an object store.
+    pub fn any_object(&self) -> bool {
+        self.placed.iter().any(|p| p.store.is_some())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -146,6 +212,10 @@ impl Endpoints {
         let mut out = Vec::new();
         for p in &self.placed {
             out.push(format!("endpoint {}  root {}/  at {}", p.names.join(", "), p.root, p.dir.display()));
+            if p.store.is_some() {
+                out.push(format!("  {} is an object store: the report's mount counters and the residency sample do not cover it", p.dir.display()));
+                continue;
+            }
             if dev(&p.dir).is_some() && dev(&p.dir) != dev(root) {
                 out.push(format!("  WARNING: {} is on another file system than --root; the report's mount counters cover --root's mount only", p.dir.display()));
             }
@@ -158,7 +228,10 @@ impl Endpoints {
         serde_json::Value::Array(
             self.placed
                 .iter()
-                .map(|p| serde_json::json!({"names": p.names, "root": p.root, "dir": p.dir.display().to_string()}))
+                .map(|p| match p.store {
+                    Some(_) => serde_json::json!({"names": p.names, "root": p.root, "uri": p.dir.display().to_string()}),
+                    None => serde_json::json!({"names": p.names, "root": p.root, "dir": p.dir.display().to_string()}),
+                })
                 .collect(),
         )
     }
@@ -168,18 +241,23 @@ impl Endpoints {
 mod tests {
     use super::*;
 
-    fn ast() -> Ast {
-        crate::load_str(
-            r#"{"ast": "0.6", "name": "t",
-                "datasets": {"sysp": {"files": {"pattern": "kv/sys/{id:04}/blk", "count": 2, "size": {"const": 1}, "seed": 1}},
-                             "flat": {"files": {"pattern": "flat/f_{id}", "count": 2, "size": {"const": 1}, "seed": 2}}},
-                "namespaces": {"kv": {"pattern": "kv/{c}.pt", "fields": {"c": "int"}, "size": 1, "seed": 3},
-                               "kw": {"pattern": "kv/{c}.w", "fields": {"c": "int"}, "size": 1, "seed": 4},
-                               "obj": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 5, "protocol": "object"}},
-                "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "flat", "id": 0}}}}]}}}"#,
-        )
+    /// With the object namespace `obj` when `object`.
+    fn ast_with(object: bool) -> Ast {
+        let obj = if object { r#", "obj": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 5, "protocol": "object"}"# } else { "" };
+        crate::load_str(&format!(
+            r#"{{"ast": "0.6", "name": "t",
+                "datasets": {{"sysp": {{"files": {{"pattern": "kv/sys/{{id:04}}/blk", "count": 2, "size": {{"const": 1}}, "seed": 1}}}},
+                             "flat": {{"files": {{"pattern": "flat/f_{{id}}", "count": 2, "size": {{"const": 1}}, "seed": 2}}}}}},
+                "namespaces": {{"kv": {{"pattern": "kv/{{c}}.pt", "fields": {{"c": "int"}}, "size": 1, "seed": 3}},
+                               "kw": {{"pattern": "kv/{{c}}.w", "fields": {{"c": "int"}}, "size": 1, "seed": 4}}{obj}}},
+                "actors": {{"a": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "flat", "id": 0}}}}}}}}]}}}}}}"#
+        ))
         .unwrap()
         .ast
+    }
+
+    fn ast() -> Ast {
+        ast_with(false)
     }
 
     #[test]
@@ -203,16 +281,48 @@ mod tests {
     }
 
     #[test]
-    fn names_sharing_a_root_share_its_place_and_object_waits_for_its_engine() {
-        let a = ast();
+    fn names_sharing_a_root_share_its_place_and_an_endpoint_fits_its_protocol() {
+        let a = ast_with(true);
         let err = |g: &[&str]| format!("{:#}", Endpoints::parse(&a, &g.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_err());
-        assert!(Endpoints::parse(&a, &["kv=/n".into(), "kw=/n".into()]).is_ok());
+        // `obj` is an object namespace: without its endpoint nothing parses
+        assert!(err(&["kv=/n"]).contains("`obj` is declared `protocol: object` and has no object endpoint"));
         assert!(err(&["kv=/n", "kw=/m"]).contains("a root is in one place"));
         assert!(err(&["kv=/n", "kv=/n"]).contains("given twice"));
         assert!(err(&["nope=/n"]).contains("no dataset or namespace `nope`"));
         assert!(err(&["kv"]).contains("expected NAME=DIR"));
-        assert!(err(&["kv=s3://b/kv"]).contains("object endpoints come with the object engine"));
-        assert!(err(&["obj=/o"]).contains("object endpoints come with the object engine"));
-        assert!(format!("{:#}", check_protocols(&a).unwrap_err()).contains("`obj` is declared `protocol: object`"));
+        assert!(err(&["kv=s3://b/kv"]).contains("`kv` is a `posix` dataset or namespace; its endpoint is a directory"));
+        assert!(err(&["obj=/o"]).contains("`obj` is declared `protocol: object`; its endpoint is s3://BUCKET[/PREFIX]"));
+        assert!(format!("{:#}", check_protocols(&a).unwrap_err()).contains("namespace `obj` is declared `protocol: object`, and the object engine does not write yet"));
+    }
+
+    #[cfg(not(feature = "object"))]
+    #[test]
+    fn a_build_without_the_engine_refuses_an_object_endpoint() {
+        let a = ast_with(true);
+        let e = format!("{:#}", Endpoints::parse(&a, &["obj=s3://b/o".into()]).unwrap_err());
+        assert!(e.contains("built without the object engine"), "{e}");
+    }
+
+    #[cfg(feature = "object")]
+    #[test]
+    fn a_posix_name_never_falls_under_an_object_root_and_a_key_keeps_its_rest() {
+        let a = crate::load_str(
+            r#"{"ast": "0.6", "name": "t",
+                "datasets": {"inner": {"files": {"pattern": "o/in/f_{id}", "count": 2, "size": {"const": 1}, "seed": 1}}},
+                "namespaces": {"outer": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 2, "protocol": "object"}},
+                "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "inner", "id": 0}}}}]}}}"#,
+        )
+        .unwrap()
+        .ast;
+        let parse = |g: &[&str]| Endpoints::parse(&a, &g.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let e = format!("{:#}", parse(&["outer=s3://b/p"]).unwrap_err());
+        assert!(e.contains("`inner` is a `posix` dataset or namespace under `outer`, placed in the object store s3://b/p"), "{e}");
+        let e = parse(&["outer=s3://b/p", "inner=/d"]).unwrap();
+        assert_eq!(e.path(Path::new("/r"), "o/in/f_1"), PathBuf::from("/d/f_1"));
+        assert!(e.object("o/in/f_1").is_none());
+        let (s, rest) = e.object("o/f_1").unwrap();
+        assert_eq!((s.uri(), rest.as_str()), ("s3://b/p", "f_1"));
+        assert_eq!(e.object("o").unwrap().1, "");
+        assert!(e.object("ox/f_1").is_none());
     }
 }

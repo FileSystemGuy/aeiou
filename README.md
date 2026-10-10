@@ -109,7 +109,8 @@ An abstract goes through five stages, each a tool of the suite.
   one run can read its prompts from a POSIX tier and its KV chunks from an object tier, as
   KV-cache engines with several storage tiers do, with the same op stream and fingerprint
   either way (decided 2026-10-09; the API and cache axes and the per-namespace protocol and
-  `--endpoint` built, the object engine next; `PROJECT_BRIEF.md` §6 item 25).
+  `--endpoint` built, and the object engine's reads on Apache `object_store`; its writes next;
+  `PROJECT_BRIEF.md` §6 item 25).
 - **Every option has a provenance.** Options resolve through the command line, the
   environment, a TOML file, and the default; what the identity depends on is the command
   line's alone; every invocation prints what it resolved and from where, and on several
@@ -224,8 +225,10 @@ Not built, in rough order of interest:
 - The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included; the API
   and the cache mode as separate axes, contract 0.6, and the protocol and `--endpoint` per
   dataset and namespace built the same day, the mount counters still `--root`'s alone):
-  transport and buffer beside them; then object storage through Apache `object_store` behind a feature flag (item 17; ~~`s3dlio`~~ decided 2026-10-09, `DESIGN_REVIEW.md` §3.65),
-  and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
+  transport and buffer beside them; ~~then object storage through Apache `object_store` behind a feature flag (item 17; ~~`s3dlio`~~ decided 2026-10-09, `DESIGN_REVIEW.md` §3.65),~~
+  the object engine's writes (object namespaces, multipart at `close`, V18) and its event-loop
+  bridge, its reads of datasets on Apache `object_store` behind the cargo feature `object`
+  built 2026-10-09 (item 17, `runner/REFERENCE.md` §16), and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only
   met `localhost`), and tensor-parallel sharding of a KV chunk, where `--gpus` is today
   independent engines rather than one TP group (`PROJECT_BRIEF.md` §6 item 20).

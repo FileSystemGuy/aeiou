@@ -4330,6 +4330,25 @@ own engines, decided above). No PRs to `s3dlio` are on aeiou's path. The driver 
 holds for any library with a runtime: the engine's runtime lives as long as its process, one
 process per phase.
 
+**Built (2026-10-09, night), step 3 reads first** (the user's choice of order, test store,
+and part size the same night: reads before writes; MinIO in CI, the last release with
+binaries pinned by SHA-256; 8 MiB parts as a run option when the writes come). `object.rs`
+behind the cargo feature `object`: `--endpoint NAME=s3://BUCKET[/PREFIX]` for a name declared
+`object` (every one needs it, and a `posix` name may not fall under one); the driver routes
+an object path to the engine before the run's API sees it; reads are one ranged `GET` each,
+`stat` a `HEAD` (and a `LIST` for a directory), `readdir` a `LIST` with the delimiter; one
+tokio runtime per process (`--object-threads`, default 2), each actor's op run with
+`block_on` on its own thread, so the event loops refuse object names for now; `aeiou
+datagen` writes object datasets as `PUT`s and 8 MiB multipart uploads, the manifest as one
+`PUT`. MinIO tests: the objects' bytes equal the POSIX writer's files, and runs under
+`sync`, `posix-aio`, and `mmap` reproduce the dry run's fingerprint. Choices made here, open
+to revision: `--object-threads` defaults to 2 (the workers only drive connections; the
+actor threads sign and build the requests), a directory `stat` costs a `HEAD` and a `LIST`
+(a real client checking a prefix does the same), and `aeiou-datagen` (the Python container
+writer) still writes to directories only. Not yet: object namespaces and every write (V18,
+`--object-part-size`), the event-loop bridge, the input-namespace manifest as an object, and
+a measurement against a real store (`runner/REFERENCE.md` §16).
+
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's
 object I/O the first object abstract stands for, since under CLOSED a run over S3 of an

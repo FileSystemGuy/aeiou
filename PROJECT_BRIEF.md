@@ -444,7 +444,10 @@ numbers; the order is this note's.
     2026-10-09:* the engine is built on Apache `object_store`, not `s3dlio` (measured: 3–4×
     less client CPU per small request; `s3dlio`'s S3 path is the AWS SDK, and its
     `object_store` backend does not compile), and it is measured against an S3 server, not
-    over `file://` (`DESIGN_REVIEW.md` §3.65).
+    over `file://` (`DESIGN_REVIEW.md` §3.65). *Built the same night, reads first:* object
+    datasets written by `aeiou datagen` and read by `aeiou run` against MinIO, to the dry
+    run's fingerprint (`runner/REFERENCE.md` §16); next, object namespaces (the writes,
+    `--object-part-size`, V18) and the event loops.
 18. **JSON report (built and decided 2026-10-01, `DESIGN_REVIEW.md` §3.41,
     `runner/REFERENCE.md` §12).** `aeiou run --report-json FILE` writes the
     run's identity, results (latency histograms in full), and verdict as format
