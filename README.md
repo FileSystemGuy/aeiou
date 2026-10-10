@@ -210,7 +210,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-09)
+## Status (2026-10-10)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -223,6 +223,11 @@ reported; the launcher takes host files and `pdsh`-style ranges).
 
 Not built, in rough order of interest:
 
+- The workload catalog (designed 2026-10-10, `PROJECT_BRIEF.md` §6 item 26, `DESIGN_REVIEW.md`
+  §3.66): `workloads/<category>/…/<mechanism>/cases/<case>` in place of `builder/abstracts/`,
+  `builder/traces/`, and `schema/examples/`, cases labeled from an enforced dictionary of
+  attributes, and `aeiou-catalog`; next, before `aeiou-datagen` to object stores. Later:
+  the abstract rendered as prose (item 27).
 - The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included; the API
   and the cache mode as separate axes, contract 0.6, and the protocol and `--endpoint` per
   dataset and namespace built the same day, the mount counters still `--root`'s alone):
@@ -246,6 +251,9 @@ Not built, in rough order of interest:
 - `datagen --resume` (rewrite what is missing or short, by size alone), growing a corpus
   in place, and a run over the first *S* ids of a larger corpus (item 23): one long datagen
   on a fleet, then a series of runs growing toward the saturation point.
+- Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
+  validation run on one realistic node), the harness's topology in the report (item 29),
+  and concurrent mixes of cases (item 30, critical but not yet; `DESIGN_REVIEW.md` §3.67).
 
 ## License
 

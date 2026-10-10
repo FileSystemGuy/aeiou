@@ -129,7 +129,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
 |---|---|
 | Multi-host | **Pure-Rust TCP coordinator, not MPI** (decided 2026-09-28, replacing the earlier MPI decision). Same seed on every rank; each rank takes its own subset with no negotiation. Work is split **by global GPU id** over **positions in the Feistel shuffle**. "Rank" is only the host index that selects a GPU id range. Processes are launched with `pdsh` or an ssh loop instead of `mpirun`. |
 | Run length | Step-bounded, currently 500 steps (adjustable). `steps` and `sync_every` are separate parameters. |
-| Dataset sizing rule | Dataset capacity ≥ **5× the total DRAM of all client nodes**. |
+| Dataset sizing rule | Dataset capacity ≥ **5× the total DRAM of all client nodes**. *(2026-10-10, `DESIGN_REVIEW.md` §3.67: this is the WG's run rule, listed in §8; its reason is that the benchmark's clients are not production nodes, so client count must not buy cache. aeiou keeps dataset size a parameter of the case, and small datasets that fit in cache are legitimate use cases.)* |
 | Page cache | The main concern: Linux gets non-linearly slower at finding pages to evict as memory fills, even with clean pages. This motivates O_DIRECT / io_uring / DONTCACHE. |
 | Reproducibility | **Exact** run-to-run reproducibility of each GPU's op stream is required; training-style randomness across runs is not needed. Plan: positional RNG keyed on `(seed, gpu, site, loop indices)` with no per-actor counters; consumer position by formula `g + G·(b·B + j)` with `drop_last` epochs; finite producers; an **order-independent** fingerprint (sum of per-op hashes, summed by the coordinator), since issue order within a GPU's workers is timing-dependent. `--dry-run` computes the fingerprint and can print any GPU's op stream for any step range. |
 | Dataset identity | The dataset definition has its own seed, separate from `--seed`. `datagen` writes a manifest at the corpus root (pattern, count, size distribution, dataset seed, generator version); the runner validates the abstract against it before starting. **Extended 2026-09-30 (reasoning in `DESIGN_REVIEW.md` §3.21; contract in `schema/README.md` §6):** the manifest is `.aeiou-dataset.json` at each dataset's root, and its normative part is the *resolved dataset definition*, the dataset's `datasets` entry with every referenced parameter substituted, in canonical JSON, plus what the abstract does not know (payload generator and version, dedupe/compression settings, block size, format-class writer version). `aeiou run` resolves the same closure from its own abstract and the parameters in effect and requires an exact match; it never compares the whole parameter set (most parameters do not shape the dataset) nor the abstract hash (one corpus legitimately serves several abstracts). The abstract's hash and name and the full parameter values at datagen time are recorded as provenance, not compared. The manifest's canonical hash is the dataset id, printed with every result next to the AST hash and the parameters in effect. The seed alone is not the identity: it fixes the bytes given a definition, not the definition. |
@@ -547,6 +547,55 @@ numbers; the order is this note's.
     measured~~ the object engine runs: the first object abstract's application (under CLOSED, S3 under a POSIX-traced
     abstract is another workload). Decided the same day: `--cache` defaults to the abstract's
     flags as written.
+26. **A catalog of workloads (proposed 2026-10-10, `DESIGN_REVIEW.md` §3.66).** One tree,
+    `workloads/<category>/[<access>/]<mechanism>/cases/<case>/captures/<capture>`, replaces
+    `builder/abstracts/`, `builder/traces/`, and `schema/examples/`: a directory per I/O
+    mechanism (one authoring script and its ASTs, named alike), a case per workload a user
+    would ask for (an AST and a parameter set), captures under the case that was traced. Cases
+    are labeled from an enforced dictionary (`workloads/attributes.toml`): curated, derived
+    from the AST, and measured from the dry run at the smallest length where the numbers are
+    stable. A separate tool, `aeiou-catalog`, checks and generates the catalog. Before
+    `aeiou-datagen` to S3 (item 17).
+27. **The abstract in prose (backlog, raised by the user 2026-10-10).** An AST is a compact,
+    machine-readable account of a workload's I/O, so it can be rendered as English: a
+    literal abstract, in the sense of a paper's, of the workload's patterns, for readers who
+    will not read the JSON (WG reviewers, submitters, a catalog's visitors). Generated, not
+    written: a deterministic walk of the AST (actors, loops, loaders, what `consume` draws and
+    in what order, each op with its sizes, distributions in words and percentiles, parameters
+    by name and value with their `doc` strings), joined with the case's measured shape
+    (`shape.json`, item 26) and the mechanism's curated attributes. Two lengths: a paragraph
+    (context, pattern, measured shape) and a section-by-section account. Checked in CI against
+    the AST like the man pages against `--help`, so it cannot drift; a parameter change shows
+    up as a prose diff. What it cannot say is why the application does it (the mechanism's
+    README) or what a storage system should do about it, which is interpretation and stays
+    labeled as such if ever added. A language model may polish the generated text only if
+    every number and claim is then checked against the generated facts; deterministic
+    templates first. Natural home: `aeiou-catalog describe`, after item 26. The user's note (2026-10-10): the same
+    for a raw trace, an accurate and succinct prose description of what a captured
+    application did, has value of its own (through `aeiou-trace metrics` and, for the call
+    sequence, the `trace` node's lanes), whether or not an abstract is ever fitted to it.
+28. **Comparability and fidelity (backlog, 2026-10-10, `DESIGN_REVIEW.md` §3.67).** Two goals,
+    named so every rule says which it serves: comparability (a score does not move with the
+    harness's choices: client count, GPUs per client) and fidelity (a result predicts what a
+    real deployment sees from storage). The 5× rule serves the first and distorts the second
+    for small datasets, since a real cluster at 8 GPUs per node has about 8× the client DRAM
+    per GPU of a benchmark at 64. To build: per-node miss-ratio curves in `dry-run --metrics`
+    (the reuse-distance histogram is the LRU curve; `--gpus-per-node`, 8 by default), shown
+    in the catalog's shape; the prediction "GPUs the storage can feed ≈ measured capability ÷
+    (demand per GPU × client miss ratio)"; cold-start time as the storage metric of a case
+    whose working set fits; one realistic node (8 GPUs, the application's memory held by a
+    ballast) run to validate the curve against Linux's page cache, which is not an exact LRU.
+29. **The harness's topology in the report (backlog, 2026-10-10, `DESIGN_REVIEW.md` §3.67).**
+    The report says how many GPUs each client host emulated, the client hosts' memory, and the
+    datasets' bytes against it, and the client hit ratio where the client exposes counters
+    (NFS mount counters today); reported, never capped. Simulated nodes on one host (cgroup
+    cache budgets) are not pursued: the groups share one page cache, separable only under NFS
+    `nosharecache`.
+30. **Concurrent mixes of cases (backlog, critical but not yet, 2026-10-10, `DESIGN_REVIEW.md`
+    §3.67).** Several cases run at once against one system: the research site where many
+    small jobs share the storage and compete for its caches, which a single case (one job
+    with every cache to itself) cannot show. Needs a run of several ASTs under one
+    coordinator, each with its own seed, GPUs, and report, and a fingerprint per case.
 
 ## 7. Environment
 
@@ -584,6 +633,7 @@ dgen-py is a generic payload generator that happens to come from the same commun
 | Acceptance tolerances | `aeiou-trace compare --judge` holds a trace and an abstract to a tolerance per class of metric; the values in the tool are this repository's defaults (`builder/REFERENCE.md` §7; decided 2026-10-02, for now). | Which values accept an abstract for a workload class, and which recorded differences are tolerated, is a WG decision published as a tolerance file. | §6 item 14; `DESIGN_REVIEW.md` §3.55 |
 | Workload selection | The builder can express any POSIX-shaped skeleton. | The ninth and tenth abstracts follow the MLPerf Storage ResNet50/CosmoFlow and Parquet→Arrow shapes because those are what the WG submits (`train_stream_tfrecord` / `train_stream_parquet` done 2026-09-30; the tenth pending). | §6 item 15; `GRAMMAR_OPTIONS.md` §6.5 |
 | The KV workloads' engine and CPU tier | What an inference engine holds (its KV pool, HBM less the model) and what LMCache's CPU tier absorbs change which reads reach the storage; the KV abstracts draw the holds, fitted at the conditions their parameter file records (`provenance.conditions`), and any other engine or tier is another workload. | The reference model, accelerator, TP, and CPU tier are fixed by the WG, not chosen by a submitter (the accelerator is emulated; a submitter would otherwise buy the largest tier to unload the storage). The CPU tier is 0 (LMCache's `local_cpu` off; decided 2026-10-08); the reference holds must be fitted at the reference engine. | §6 item 24; `DESIGN_REVIEW.md` §3.64 |
+| Dataset sizing against client DRAM (added 2026-10-10) | Dataset size is a parameter of the case (`DESIGN_REVIEW.md` §3.66, kind (a)); a use case's working set may fit in cache. Caching anywhere inside the solution, kernel client or user-space object client included, is fair (interposition test, §5). aeiou reports client hosts, GPUs per client, client memory, dataset bytes against it, and the client hit ratio where counters exist; it caps nothing. | The dataset is at least 5× the clients' total DRAM, on every path (`O_DIRECT` and object included, since a solution's client may cache there too), because the clients are not production nodes: a submitter emulates as many GPUs per client as it can (64 against a real node's 8), and without the rule adding clients adds cache. It serves comparability and costs fidelity for small datasets (§6 item 28). | §5 sizing row; `DESIGN_REVIEW.md` §3.67 |
 | Upstream requests | dgen-py's API is what it is. | The `fill_block`/`seek` request goes through the WG leadership channel. | `DESIGN_REVIEW.md` §3.17 |
 | Driver integration (added 2026-10-09) | `aeiou` is a command: one invocation is one process, its report counts that process's CPU, RSS, and thread peaks (`getrusage`, §4 of `runner/REFERENCE.md`), its limit checks are that process's, and the multi-host launch is a process per host. Under the object feature, `s3dlio`'s tokio runtime starts at the first object call and stays until the process exits (`DESIGN_REVIEW.md` §3.65). | When `mlpstorage` drives `aeiou`, it runs each phase as its own `aeiou` process (fork/exec, `subprocess`), never by linking the runner or `s3dlio` into the Python process: otherwise a phase that touched object storage leaves tokio worker threads (and the Rayon pool that importing `s3dlio`'s Python module builds) running through every later phase, and the Python process's own CPU, memory, and threads land in a phase's measurements. | `DESIGN_REVIEW.md` §3.65, *Driver integration* |
 | Checkpoint write and restore | A write run leaves a namespace manifest; a restore run declares the namespace `input`, reads it, and reports the gap and the warm reads (§5, *Checkpoint restore inputs*). | The benchmark runs them as two invocations of the same host list, the restore with `--rank-rotate 1` so no host reads its own shards; the gap between the end of the write and the start of the restore is capped at 30 s (`--max-gap 30`); a failed DP=N job restarts as DP=N (no resharding, `replicas` stays 1 for fully sharded state); `readback` stays off in a scored write. | `DESIGN_REVIEW.md` §3.24; `ABSTRACTS.md` §3–§4 |

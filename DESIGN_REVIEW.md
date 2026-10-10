@@ -4461,6 +4461,384 @@ abstract traced on POSIX is another workload (candidates: `s3torchconnector`, `s
 data loader, or one the WG names); and whether the POSIX-engine crate shared with `s3dlio`
 is worth offering.~~
 
+### 3.66 A catalog of workloads: `workloads/<category>/…/<mechanism>/cases/<case>`, and a dictionary of the attributes it is searched by (proposed 2026-10-10; the shape of it decided the same day, the details open)
+
+**The question (the user's).** Traces and the abstracts fitted to them are accumulating, and
+what belongs to one workload is spread over three directories that share only a name: the
+authoring script in `builder/abstracts/`, its AST in `schema/examples/`, and the capture kit
+with its metrics, fitted parameters, logs, and README in `builder/traces/`. The user asked for
+a taxonomically structured repository at the root, `workloads/{training,checkpointing,vdb,
+kvcache}/<name>/*`, holding everything curated for a workload (the abstract, the traces or
+pointers to them, the analysis, the READMEs), with categories growing over time (IO500 and
+others), and short names that let a reader pick the directory to look into for a workload of
+a given shape.
+
+**What exists.** Twelve scripts emit fourteen ASTs (`train_stream_shards.py` emits the Parquet
+and TFRecord ASTs, `kv_cache_shared.py` the writer and its reader). Ten trace kits, each a flat
+directory. The names do not line up: one script, two ASTs, one kit (`kv_cache_shared`), and one
+kit holding four loads distinguished by file-name prefixes (`kv_cache_serving`: the ShareGPT
+replay, `agentx`, `agentx-6gib`, `agentx-odirect`, each with its own logs, metrics,
+tolerances, and fitted parameters). The pairs `aeiou-trace compare --judge` is pinned on are a
+hand-kept list in `builder/tests/test_trace.py`. Three smoke parameter files sit in
+`schema/examples/params/`. Nothing records a workload's attributes except prose in READMEs and
+`ABSTRACTS.md`.
+
+**What the user decided in discussion (2026-10-10).**
+
+- **The unit on disk is the mechanism; the unit searched for is the case.** An abstract and a
+  workload are not one to one in either direction. One abstract reproduces many workloads:
+  `kv_cache_serving` is the ShareGPT chat and the AgentX sessions with different parameter
+  files, and `train_small_files` would be ImageNet JPEGs or audio clips read one file per
+  sample. One workload can need several abstracts: the shared KV store is a writer and a
+  reader. The runner already says what a reproducible workload is: an AST and a parameter set
+  (with the seed and the GPU count), which is what the fingerprint covers. So a directory holds
+  one mechanism (one authoring script, the AST or ASTs it emits, and what was learned about
+  the application's I/O), and each workload a user would ask for is a **case** inside it: a
+  parameter set, its README, its attributes, and the captures taken under that load. The
+  catalog has one row per case.
+- **Directories are named for the mechanism, never the use case.** Image and audio
+  classification over one file per sample through a map-style loader are one workload to
+  storage; only the parameters differ. Named for use cases, `training/` would grow a
+  directory per modality and per dataset; named for mechanisms it grows only with new I/O
+  shapes, and the use cases become cases and tags. This is already how the KV names read
+  (a technology combination). Training gains a level for the access mode (`map/`,
+  `stream/`), the first split storage feels.
+- **Categories:** `training`, `inference` (model loading belongs here, not under
+  checkpointing), `checkpointing`, `vdb`, `kvcache`, and `synthetic` for benchmarks that are
+  not applications (IO500 and the like). A synthetic case reproduces a benchmark's defined
+  operations, so it is not traced and is never presented as an application's I/O. This keeps
+  §3.46 clear: DLIO emulates applications and is not an abstract's source; IO500's op stream
+  is the benchmark itself.
+- **AgentX is a case of the local-disk mechanism**, not a mechanism of its own: same AST,
+  other parameters. Its `O_DIRECT` run is a sibling case, not another capture of the same
+  case, because under CLOSED buffered and direct are two workloads (§3.48).
+- **A dictionary of attributes, enforced.** Every attribute a case is labeled with is defined
+  in one file with its meaning and allowed values; a case may use only defined attributes and
+  values, and CI fails otherwise. Without that the catalog fills with near-synonyms (`image`,
+  `images`, `vision`, `cv`), each tagging a part of the cases, and a search misses the rest.
+- **Captures stay pointers when large, and the SNIA AIWD TWG traces stay out entirely**,
+  pointers included, until the user says permission to point to them (or to traces like them)
+  has been given.
+
+**Proposed layout (proposed, not yet decided).**
+
+```
+workloads/
+  README.md                 hand-written: how the tree is organized, how to add a mechanism or case
+  attributes.toml           the dictionary (below)
+  CATALOG.md                generated: one row per case, and the glossary rendered from the dictionary
+  <category>/[<access>/]<mechanism>/
+    README.md               the mechanism: what the application does, what storage sees, what the
+                            traces taught, known gaps (today's kit README, less the per-load parts)
+    mechanism.toml          curated attributes that hold for every case (application, format, …)
+    <mechanism>.py          the authoring script (from builder/abstracts/)
+    <ast>.ast.json          the AST(s) it emits, generated beside it, never edited by hand
+    kit/                    capture and fitting scripts its cases share (train.py, serve.sh, fit.py, …)
+    cases/<case>/
+      README.md             the load: which job, which data, which scale, why it is a case
+      case.toml             curated attributes of this case; which AST(s) and parameter file(s) it runs
+      params.json           the parameter set (or one per AST: writer.params.json, reader.params.json)
+      shape.json            generated: the measured attributes and their raw numbers
+      captures/<capture>/
+        README.md           the command lines, host, kernel, file system, versions, date
+        capture.toml        the raw trace: URL or "not retained", bytes, SHA-256; the inputs' sources,
+                            licences, and SHA-256 (ShareGPT, SIFT1M, the model); the expected verdict
+        trace.metrics.json, trace.tolerances.json, fitted.params.json, *.log
+```
+
+- `capture.toml` carries the verdict `compare --judge` is expected to give (accepted, not
+  accepted with the `DESIGN_REVIEW` section that says why, or nothing judged), so the test walks
+  the tree instead of a list kept in `test_trace.py`.
+- Size rule: no file over about 1 MiB in the tree; a raw trace is a pointer with its SHA-256,
+  or "not retained" when it was a scratch capture (every one so far).
+- The AST's `name` (an `ident`, `^[a-z_][a-z0-9_]*$`) is the mechanism directory's last part
+  with underscores; names stay unique across the tree, checked. A writer/reader pair keeps a
+  suffix (`lmcache_shared_fs`, `lmcache_shared_fs_reader`).
+- A mechanism with no case yet (the two untraced stream formats, HDF5) still has a catalog row:
+  its defaults, marked `defaults`, so the catalog shows the gaps.
+- `schema/examples/` goes away with its smoke parameter files, which become cases or move
+  into the mechanism's `params/` when they are test fixtures rather than workloads.
+
+**The mapping (proposed names).**
+
+| Today: script → AST(s); kit | Mechanism | AST name(s) | Cases, from |
+|---|---|---|---|
+| `train_small_files`; kit `train_small_files` | `training/map/file-per-sample` | `file_per_sample` | `imagefolder-jpeg` (the 2026-10-01 trace; 3,200 JPEGs) |
+| `train_large_samples`; kit `train_large_samples` | `training/map/npy-per-sample` | `npy_per_sample` | `npy-8mib`, `npy-140mib` (the two traces) |
+| `train_map_hdf5` | `training/map/hdf5` | `hdf5_map` | none yet (defaults) |
+| `train_stream_shards` → `train_stream_tfrecord`, `train_stream_parquet` | `training/stream/tfrecord`, `training/stream/parquet` | `tfrecord_stream`, `parquet_stream` | none yet (defaults) |
+| `ckpt_write_dcp`; kit `ckpt_write_dcp` | `checkpointing/dcp-save` | `dcp_save` | `toy-6-items` |
+| `ckpt_restore`; kit `ckpt_restore` | `checkpointing/dcp-load` | `dcp_load` | `mixed-9-items`, `small-last`, `name-order` (validation cases) |
+| `model_load`; kit `model_load` | `inference/safetensors-load` | `safetensors_load` | `gpt2-random` (today's `model_load.synthetic` params) |
+| `vdb_search_ivf`; kit `vdb_search_ivf` | `vdb/faiss-ivf-ondisk` | `faiss_ivf_ondisk` | `sift1m-ivf1024-pq32` |
+| `vdb_search_diskann`; kit `vdb_search_diskann` | `vdb/diskann-search` | `diskann_search` | `sift1m-nocache`, `sift1m-cache` |
+| `vdb_build_diskann`; kit `vdb_build_diskann` | `vdb/diskann-build` | `diskann_build` | `sift1m-13-shards` |
+| `kv_cache_serving`; kit `kv_cache_serving` | `kvcache/lmcache-local-disk` | `lmcache_local_disk` | `sharegpt-chat`, `agentx`, `agentx-6gib`, `agentx-odirect` |
+| `kv_cache_shared` → writer, `…_reader`; kit `kv_cache_shared` | `kvcache/lmcache-shared-fs` | `lmcache_shared_fs`, `lmcache_shared_fs_reader` | `sharegpt-chat` (writer and reader captures) |
+
+The kit of `kvcache/lmcache-shared-fs` runs the replay scripts of `lmcache-local-disk`; its
+README points there rather than copying them.
+
+**Case kinds.** The three `dcp-load` captures are not workloads anyone shops for: they are
+small corpora chosen to prove the abstract mimics `dcp.load` call for call. A case says which
+it is: `validation` (a capture-scale load that proves the mechanism) or `reference` (a load at
+a scale meant to be run). Every case today is `validation`; reference cases come with the
+first parameter sets at real scale (and a WG's reference parameters, when they come, are
+reference cases that say so, per `PROJECT_BRIEF.md` §8).
+
+**The dictionary (proposed, not yet decided).** `workloads/attributes.toml`, one table per
+attribute:
+
+```toml
+[attribute.modality]
+meaning = "The kind of data the job reads, as its users name it."
+source  = "curated"           # curated | derived | measured
+level   = "case"              # mechanism | case
+required = false
+[attribute.modality.values]
+image = { meaning = "Still images (JPEG, PNG, …).", search = ["vision", "cv"] }
+audio = { meaning = "Sound clips or streams." }
+```
+
+`search` lists words a searcher may type; it changes nothing any tool accepts (it is not an
+alias of the kind §3.65 removed from the command line; it only finds a case). Values are defined before use;
+adding one is a one-line change, renaming or removing one is a recorded decision. The catalog's
+glossary is rendered from this file, so a reader sees what "small" or "random" means where they
+search.
+
+Three sources, and the split matters more than the list:
+
+1. **Curated** (only a person knows them). Mechanism level: `category` (required),
+   `application` (the library traced: torchvision, NumPy, `torch.distributed.checkpoint`,
+   safetensors, FAISS, DiskANN, vLLM with LMCache), `format` (jpeg-files, npy, hdf5,
+   tfrecord, parquet, dcp, safetensors, faiss-ivf, diskann-index, lmcache-chunks), `sharing`
+   (one job; a writer and a later reader; several hosts at once). Case level: `modality`,
+   `kind` (validation | reference, required), and, as free text rather than tags, the model
+   and dataset named in its README.
+2. **Derived** from the AST and the case's parameters, statically: the declared APIs and
+   protocols (`posix`, `cache`, `s3` keys), whether it writes (namespaces) and reads its own
+   output (`input`, `same_run`), the file-size class and file-count class of each dataset at the
+   case's parameters, the `trace` node's presence, and `status` (untraced | traced | accepted |
+   not accepted, from the captures' verdicts).
+3. **Measured**: the storage shape, from `aeiou dry-run --metrics-json` of the case (its AST and
+   parameter file, seed 1, its GPU count), written to `shape.json` and re-derived in CI so a
+   label cannot drift from the abstract. Measured from the abstract, not the trace, because the
+   trace of an `mmap` application sees almost nothing (`model_load`'s trace counts 12.5
+   metadata calls per read; `vdb_search_ivf`'s has 12 calls in all), mechanisms without a
+   trace need a shape too, and the dry run is deterministic. The traces stay as the evidence
+   in `captures/`.
+
+Proposed measured attributes, each shown as its class and its raw number. Sizes are
+byte-weighted medians (half the bytes move in runs at least this long): a count-weighted
+median is wrong here, since `np.load`'s many tiny header reads make the 140 MiB samples look
+like 112-byte runs. The column on the right places each traced workload, from its
+`trace.metrics.json`, as a check that the thresholds separate what should be separate:
+
+| Attribute | Classes | Where the traces fall |
+|---|---|---|
+| `run_length` (read; write) | tiny < 16 KiB, small < 1 MiB, medium < 32 MiB, large ≥ 32 MiB | tiny: DiskANN search (4 KiB). small: ImageFolder (128 KiB), FAISS IVF (640 KiB). medium: KV (2–3 MiB), `npy` 8 MiB, `dcp.load` (8–16 MiB). large: `npy` 140 MiB (128 MiB), `dcp.save` (64 MiB write), DiskANN build (448 MiB read, 80 MiB write) |
+| `request_size` (read; write) | the same classes | differs from runs where it matters: ImageFolder asks for 1 MiB and gets 128 KiB files; DiskANN build writes 8 KiB requests in 80 MiB runs |
+| `read_share` (bytes) | read-only = 1, read-mostly ≥ 0.8, mixed ≥ 0.2, write-mostly > 0, write-only = 0 | read-only: training, restore, search, the KV reader. read-mostly: AgentX (0.86–0.87). mixed: ShareGPT serving (0.67), the KV writer (0.67), DiskANN build (0.77). write-only: `dcp.save` |
+| `metadata` (metadata calls per data call) | none < 0.01, low < 0.5, medium < 2, high ≥ 2 | none: DiskANN. low: `dcp.load` (0.2), `npy`. medium: ImageFolder (1.5), `dcp.save` (0.8), IVF (0.7). high: every KV load (2.2–3) |
+| `reads_own_writes` | yes when any read follows a write of the same block | yes: KV serving, DiskANN build. no: the rest |
+| `reread` (block reads that read a block again / all block reads) | none < 0.05, some < 0.5, repeated ≥ 0.5 | repeated: training at two epochs (0.50–0.56), every KV load (0.64–0.89), DiskANN build (0.84). some: `dcp.load` (0.16–0.22, its buffer refills ranges it has read), DiskANN search (0.26–0.29). none: `dcp.save`. Training's value is its epoch count, a parameter, which is why this is measured per case |
+| `skew` (share of accesses on the busiest 1 % of blocks) | uniform < 0.1, skewed ≥ 0.1 | every trace so far is uniform (0.01–0.06); kept for the KV and VDB loads expected to be skewed |
+| `concurrency` | the actor count of the case | from the AST at the case's parameters |
+
+**Tooling (proposed).**
+
+- `aeiou-build` writes each AST beside its script and `--check` walks `workloads/**/*.py`; it
+  refuses two ASTs with one name.
+- A new tool `aeiou-catalog` (convention of `PROJECT_BRIEF.md` §8; a man page like the others):
+  `check` validates every `mechanism.toml`, `case.toml`, and `capture.toml` against
+  `attributes.toml`, re-derives `shape.json` (it needs the runner binary, so it runs in a CI job
+  that builds one) and `CATALOG.md`, and fails on drift; `write` regenerates them.
+- The tests that name AST paths (`golden.rs`, `run.rs`, `metrics.rs`, `limits.rs`,
+  `uring_knobs.rs`, `report.rs`, `coord.rs`, `options.rs`, `object.rs`, `usage.rs`,
+  `test_builder.py`, `test_params.py`, `test_trace.py`), CI and the release workflow, the kit
+  READMEs' command lines, the man pages, and every document citing `builder/abstracts/`,
+  `builder/traces/`, or `schema/examples/` follow. The files move with `git mv` so their
+  history follows.
+- Renaming the ASTs changes each AST's SHA-256 (the golden hashes are re-recorded) and the
+  `abstract` field of every parameter file. It changes no fingerprint (a per-op hash covers the
+  actor, loop indices, op, file, offset, and length, §2.1, never the abstract's name) and no
+  dataset id (the SHA-256 of the resolved dataset definition and payload, `payload.rs`
+  `Manifest::normative`). The golden test confirms both.
+
+**Open for the user.**
+
+1. The names in the mapping table, mechanisms and cases, and renaming the ASTs to match
+   (recommended: there are no users, so no aliases) rather than keeping today's AST names
+   under the new directories. *Decided 2026-10-10: the AST names match the directory names.*
+2. Splitting `train_stream_shards.py` into one script per format (recommended: their reader
+   protocols differ, Parquet reading a footer and then row-group ranges, TFRecord whole shards
+   front to back; each script repeats the ~20 lines of loader they share) or one
+   `training/stream/shards` mechanism with two ASTs. *Decided 2026-10-10: two directories,
+   the shared lines duplicated and kept minimal.*
+3. Case kinds `validation` and `reference`, and `defaults` rows for mechanisms with no case.
+   *Decided 2026-10-10: a mechanism with no case yet still gets its directory and its
+   `defaults` row.* The kinds are under discussion: the user asked why a validation case
+   differs from a reference one when an abstract grows with `--gpus`, and proposed "test
+   case" and "use case" if it does. What grows with `--gpus` is the number of actors (every
+   actor template defaults to `count = gpus`), so the op count; what a case's parameters fix
+   is the application's data and configuration: the state dict's tensors and their sizes,
+   the corpus's file sizes and count, the model's KV chunk bytes, the index's geometry. More
+   GPUs never turn the nine-item state dict traced for `dcp.load` into a real model's
+   checkpoint. So the AST is the same and the difference is the provenance of the values: a
+   configuration chosen small enough to trace, or one describing a real job. The smoke
+   parameter files of `schema/examples/params/` are a third thing, test fixtures, and stay out
+   of the catalog. *Decided 2026-10-10: the kinds are named **example case** (a configuration
+   small enough to trace, "example" saying it is not a job anyone runs) and **use case** (a
+   configuration describing a real job).*
+
+   **What scales with `--gpus`, and the definition it gives a use case (proposed).** The user
+   separated two things: the load an abstract imposes grows with `--gpus` (a fact: each actor
+   template defaults to `count = gpus`), and whether the data must grow with it (a need,
+   which depends on the workload). The system allows both: `gpus` is a reserved parameter any
+   expression may use, a dataset's `count` included, and `aeiou datagen` takes `--gpus` as a
+   fixed option for that reason; no abstract uses it today. Sizes fall in four kinds:
+   (a) the application's data, fixed whatever the GPU count: a corpus, a model's tensors, an
+   index; (b) each GPU's share of it, a function of `gpus`: a rank's checkpoint shard, how fast
+   an epoch is consumed (the latter already is, through the position formula); (c) what the
+   run creates, which grows with the load: KV chunks, checkpoint files per step; (d) a run
+   rule's override of (a): the dataset sized to five times the clients' DRAM (`PROJECT_BRIEF.md`
+   §5), which follows the hosts, not the application, and is the WG's (`PROJECT_BRIEF.md` §8; its
+   reason is in §3.67). This gives a test
+   for a use case: its parameters hold ~~at any `--gpus`~~ at every GPU count the case declares
+   (*corrected 2026-10-10, §3.67: a use case declares its GPU counts, one, a list, or a range,
+   as MLPerf Storage's CLOSED division fixes the GPU count by model size, so no one checkpoints
+   an 8B model from 2,048 GPUs*), every size being an application fact or an expression of
+   `gpus`. An example case may be pinned to the GPU count it was traced at
+   (`dcp.load` on 2 ranks), and its `case.toml` says so. **Finding:** the checkpoint
+   abstracts fail that test today. `ckpt_write_dcp`'s `item_bytes` is documented as "1/G of
+   each tensor" (`ABSTRACTS.md` §3) but is a fixed array, so `--gpus 64` writes 64 times the
+   bytes of one rank's shard of a checkpoint whose size is fixed by the model; `ckpt_restore`
+   inherits the same. The fix is a parameter of tensor sizes divided by `gpus` (fully
+   sharded) or by `gpus / replicas`; unbuilt, to be done with the first checkpoint use case.
+4. The dictionary's starting attributes, which are required, and the thresholds in the table
+   (proposed from the spread of the eighteen captures we have; a threshold is a judgement and
+   moves cases between classes). *Decided 2026-10-10: fine for now; measured classes are
+   computed, so moving a threshold later re-labels every case by regeneration.*
+5. ~~The shape measured from the abstract's dry run at the case's parameters. A reference case at
+   real scale may take long to dry-run; such a case would name a smaller parameter set for its
+   shape, at the cost that some attributes (`reread`, `skew`) change with scale.~~ *Decided
+   2026-10-10 (the user): measured at the smallest scale at which the numbers are stable, so
+   that the reported numbers carry as little statistical error as the measurement needs and no
+   more cost.* What that means in the tool (proposed): a case names its length parameter (the
+   one that only makes the run longer: `steps`, `queries`, `requests`), never one that
+   changes the pattern (epochs, file sizes, a pool's size); `aeiou-catalog` dry-runs the case
+   at growing lengths (doubling) and at a few seeds, and stops at the first length where every
+   measured number moves less than its class tolerance between one length and the next and
+   between seeds; `shape.json` records that length and the spread. A number that keeps moving
+   with length (a reuse distance bounded by the run, `reread` under a growing working set) is
+   a property of the length, and the case says what length it is reported at.
+6. ~~A new tool `aeiou-catalog` rather than a flag of `aeiou-build`.~~ *Decided 2026-10-10:
+   a separate tool. The user's reason: building is a compiler's problem (a script to an AST),
+   the catalog a data-management problem (curated records, their vocabulary, their
+   consistency).*
+7. ~~The order of work: the user asked for this before `aeiou-datagen` to S3. Proposed as two
+   commits, the move (layout, names, tests, documents) and then the dictionary, `shape.json`,
+   `aeiou-catalog`, and `CATALOG.md`.~~ *Left to me by the user 2026-10-10: two commits, the
+   move (layout, names, tests, documents) first, then the dictionary, `shape.json`,
+   `aeiou-catalog`, and `CATALOG.md`; before `aeiou-datagen` to S3.*
+
+### 3.67 Client caches, the 5× rule, the harness's topology, and fidelity for small datasets (discussed and decided 2026-10-10; the fidelity tooling on the backlog)
+
+**The question (the user's).** The dataset sizing rule (`PROJECT_BRIEF.md` §5: capacity at
+least five times the clients' total DRAM) exists so the workload's randomness overwhelms the
+clients' page caches and the load reaches the storage. `O_DIRECT` and object APIs do not go
+through the page cache, so for them the rule seems to add only a longer run. Should it bend
+for them, and how? The discussion that followed corrected two of my assumptions and turned up
+a question the rule was never meant to answer.
+
+**Caching inside the solution is fair (decided).** By the interposition test (§5 of the brief)
+and the WG's long-standing line that the POSIX layer is the boundary between benchmark and
+storage solution, a cache in the kernel's file-system client, in a user-space object client,
+or in a shim under an unmodified application is the solution's. I had proposed checking a
+measured client hit ratio against a target; that would prohibit caching the solution is
+entitled to, and would also penalize hits the application really gets (KV reuse, DiskANN's hot
+nodes, a restore of what was just written). Struck: the hit ratio is **reported**, never
+capped. The WG's stance is the same: any cache in the storage architecture is fair game, its
+cost visible in the rack units and power a submission reports (MLPerf cannot ask for prices).
+
+**Why the 5× rule exists (corrected).** I first argued the rule protects against hits that
+exist only because a benchmark dataset is smaller than the corpus it stands for. Both halves of
+that were wrong:
+
+1. **Small datasets are real.** At a research institution many researchers share one storage
+   system, each with a small dataset, and when the others are away one job may have every
+   cache in the architecture to itself. Dataset size is a fact of the use case (kind (a) of
+   §3.66), and a use case whose working set fits in cache is legitimate. The busy-term version
+   of that site, many small jobs competing for the same caches, is a different workload: a mix
+   of cases run concurrently, which aeiou cannot express yet and must eventually (the user:
+   critical, not yet).
+2. **The rule's reason is the client, not the dataset.** The benchmark's clients are not
+   production machines. A real node carries at most eight GPUs (NVIDIA's practical limit),
+   but a submitter emulates as many GPUs per client as it can, 64 on one host being a
+   realistic choice and an unrealistic node, so that few clients load the system under test.
+   The number of clients is then the submitter's choice, and each brings its DRAM: without the
+   rule, adding clients adds cache and raises the score. Tying the dataset to the clients'
+   total DRAM keeps the saturation point a function of the GPU count, not the client count.
+
+**What the rule does not cover.** Only memory. Client count also sets NIC bandwidth, client
+CPU, and the kernel client's own limits (one NFS client per host, its slots and connections).
+The WG relies on self-interest there: a client-bound submission understates its storage, so a
+savvy submitter rebalances (the user; MLPerf's accelerator-utilization threshold catches part
+of it). Accepted as the WG's answer.
+
+**Fidelity: what the rule costs small workloads.** The rule serves **comparability** (a score
+must not move with the harness's choices). It works against **fidelity** (a result should
+predict what a real deployment of the workload sees from storage), and for small datasets the
+distortion runs the other way from the one the rule guards against: at eight GPUs per real
+node, a real cluster has about eight times the client DRAM per GPU that a benchmark at 64 GPUs
+per host has, so with a dataset that fits, the real cluster caches far more than the benchmark
+and asks far less of the storage. The WG has worried about submitters scoring too high; the
+accuracy of the benchmark's predictions for small workloads was not in scope (the user: not
+something the WG had considered). Proposed to bring it in scope without giving up
+comparability:
+
+- **Name the two goals** in the brief, and have every rule say which it serves, so a rule that
+  helps one at the other's expense is a visible trade.
+- **Measure cache-defeated, predict through a model of the clients' caches.** The 5× run
+  measures what the storage can deliver; a real cluster asks it only for what its clients
+  miss. GPUs the storage can feed ≈ measured capability ÷ (storage demand per GPU × client miss
+  ratio). The miss ratio is computable without I/O: for an LRU cache the reuse-distance
+  histogram the dry run already computes is the miss-ratio curve (Mattson's stack algorithm),
+  and grouping GPU ids into simulated nodes (`--gpus-per-node`, 8 by default) gives each node's
+  curve at any cache size. A catalog case can then say "at 8 GPUs and 512 GiB of usable cache
+  per node, storage sees 3 % of reads after the first epoch".
+- **When the dataset fits, the question changes.** After the first epoch the miss ratio is
+  near zero; what storage must deliver is the cold load, checkpoints, and writes. The fidelity
+  answer for such a case is the cold-start time, which the benchmark measures directly, not a
+  steady state that never reaches storage.
+- **Validate the model before trusting it.** Linux's page cache is not an exact LRU
+  (active and inactive lists, readahead, the multi-generation LRU), so the curve is an
+  estimate: one realistic node (8 GPUs on one host, the application's memory held by a
+  ballast) is run and its measured storage traffic compared with the prediction.
+- **Storage-side caches** have the same question (the researcher alone on the system gets all
+  of it) and wait for concurrent mixes, which are what make contention for them honest.
+
+**Simulated nodes on one host: not in general.** Grouping simulated GPUs into nodes, each with
+a realistic cache budget (a cgroup's `memory.max`, which the kernel charges page cache to),
+fails because the groups share one page cache: a block one group reads is a hit for the others,
+which separate nodes would never get. NFS can separate them with one mount per group under
+`nosharecache`; most clients cannot. This is why the 5× rule is the general fallback, and why
+the prediction above is computed, not emulated.
+
+**What changes (decided 2026-10-10).**
+
+- The 5× rule is the WG's run rule, justified by the non-representative client; listed in
+  `PROJECT_BRIEF.md` §8, and the brief's §5 row says so. aeiou keeps dataset size a parameter.
+- aeiou reports what a reader needs to judge a result: client hosts, GPUs per client, client
+  memory, dataset bytes against it, and the client hit ratio where the client exposes counters.
+- §3.66's use-case test is corrected: a use case declares its GPU counts, as MLPerf Storage's
+  CLOSED division fixes the GPU count by model size.
+- The catalog gains a derived attribute: whether a case's working set fits in a reference
+  node's memory.
+- On the backlog (`PROJECT_BRIEF.md` §6 items 28–30): the two goals and the fidelity tooling
+  (per-node miss-ratio curves, cold-start time, the validation run); the harness's topology
+  in the report; concurrent mixes of cases.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
