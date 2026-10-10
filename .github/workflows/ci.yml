@@ -95,4 +95,7 @@ jobs:
         working-directory: builder
         run: |
           command -v strace || sudo apt-get install -y strace
-          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs tests/test_formats.py tests/test_trace.py
+          AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs tests/test_formats.py tests/test_trace.py tests/test_catalog.py
+      - name: The workload catalog, every shape re-measured at its check length
+        working-directory: builder
+        run: .venv/bin/aeiou-catalog check --workloads ../workloads --runner ../runner/target/release/aeiou

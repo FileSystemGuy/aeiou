@@ -1,0 +1,9 @@
+# The capture (DESIGN_REVIEW.md §3.66): what `aeiou-trace compare --judge` gives on each of its traces against
+# the case's abstract at the capture's parameters, at the case's first GPU count, the abstract at three
+# other seeds as its own spread (builder/tests/test_trace.py walks these files).
+raw_trace = "not retained"   # a scratch capture: the metrics are kept, never the trace
+
+[[pair]]
+trace = "trace"   # trace.metrics.json
+ast = "dcp_save"
+verdict = "accepted"

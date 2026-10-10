@@ -1,0 +1,148 @@
+{
+  "shape_version": 1,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "lmcache_shared_fs",
+      "ast_sha256": "681c7cfaed851e4b9fa17b53de4b37f5906a3e8abe66afa48fc55cffea9d00a3",
+      "params": "writer.params.json",
+      "params_sha256": "ee966aee4a9cf31527587cd989e781eac4f1719bc823c310a208a37e8f65f84e",
+      "gpus": 1,
+      "block": 3145728,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": {
+        "param": "requests",
+        "case": 300,
+        "check": 300
+      },
+      "stable": false,
+      "moving": [
+        "read_share",
+        "reread"
+      ],
+      "ops": 8549,
+      "attributes": {
+        "run_length_read": {
+          "value": 3145728,
+          "spread": 0,
+          "class": "medium"
+        },
+        "run_length_write": {
+          "value": 3145728,
+          "spread": 0,
+          "class": "medium"
+        },
+        "request_size_read": {
+          "value": 2097152,
+          "spread": 0,
+          "class": "medium"
+        },
+        "request_size_write": {
+          "value": 3145728,
+          "spread": 0,
+          "class": "medium"
+        },
+        "read_share": {
+          "value": 0.655142,
+          "spread": 0.0724649,
+          "class": "mixed"
+        },
+        "metadata": {
+          "value": 2.2992,
+          "spread": 0.0892176,
+          "class": "high"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.746504,
+          "spread": 0.0547599,
+          "class": "repeated"
+        },
+        "skew": {
+          "value": 0.0499317,
+          "spread": 0.00656661,
+          "class": "uniform"
+        }
+      }
+    },
+    {
+      "ast": "lmcache_shared_fs_reader",
+      "ast_sha256": "217271d191f764d74c9873d42a8a534052d6d00c0c2e3c0da2107a2724e5b902",
+      "params": "reader.params.json",
+      "params_sha256": "62b0d01bdd72f6c55ba725e86ff139eb7a459f79a56e67fe1f0cc7735a3073e7",
+      "gpus": 1,
+      "block": 3145728,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": {
+        "param": "requests",
+        "case": 300,
+        "check": 300
+      },
+      "stable": false,
+      "moving": [
+        "metadata",
+        "reread"
+      ],
+      "ops": 7813,
+      "attributes": {
+        "run_length_read": {
+          "value": 3145728,
+          "spread": 0,
+          "class": "medium"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 2097152,
+          "spread": 0,
+          "class": "medium"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 2.22585,
+          "spread": 0.117095,
+          "class": "high"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.769396,
+          "spread": 0.0534754,
+          "class": "repeated"
+        },
+        "skew": {
+          "value": 0.0352698,
+          "spread": 0.00302669,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

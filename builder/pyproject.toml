@@ -19,6 +19,7 @@ aeiou-build = "aeiou.cli:main"
 aeiou-params = "aeiou.params:main"
 aeiou-datagen = "aeiou.datagen:main"
 aeiou-trace = "aeiou.trace:main"
+aeiou-catalog = "aeiou.catalog:main"
 
 [build-system]
 requires = ["hatchling"]

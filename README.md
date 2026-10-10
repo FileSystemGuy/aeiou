@@ -126,6 +126,7 @@ An abstract goes through five stages, each a tool of the suite.
 | `aeiou-params` | Python | parameter files: defaults, check, from real shards and archives | [aeiou-params(1)](man/aeiou-params.1.md) |
 | `aeiou-datagen` | Python | container datasets through their format classes | [aeiou-datagen(1)](man/aeiou-datagen.1.md) |
 | `aeiou-trace` | Python | metrics of an strace, comparison, the `trace` node's file | [aeiou-trace(1)](man/aeiou-trace.1.md) |
+| `aeiou-catalog` | Python | the workload catalog: records against their dictionary, each case's shape, `CATALOG.md` | [aeiou-catalog(1)](man/aeiou-catalog.1.md) |
 | `aeiou-launch` | sh | one `aeiou run` or `aeiou datagen` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
 
 The option layers and the config file are [aeiou-config(5)](man/aeiou-config.5.md); the
@@ -165,7 +166,7 @@ checks before its gate.
 builds it and `uv` locks it. The `formats` extra brings the libraries of the format
 classes, `pyarrow`, `h5py`, `numpy`, `crc32c`, `xxhash`, and `dgen-py`, the Python wheel
 that reproduces the Rust generator's bytes. PEP 578 audit hooks make the hermetic build.
-`aeiou-trace` is standard library only.
+`aeiou-trace` and `aeiou-catalog` are standard library only.
 
 **Contract.** JSON Schema draft 2020-12 for the AST and the parameter file; canonical JSON
 (sorted keys, no whitespace, shortest-round-trip floats) under SHA-256 for identities.
@@ -220,16 +221,15 @@ multi-host coordinator (two ranks on `localhost`), the limit checks, the cold-st
 controls, the JSON report, the locality metrics on both sides with tolerances, the `trace`
 node under every backend, the option layers, the usage-error frame, and `datagen` across
 hosts with `O_DIRECT` (each host its slice of the ids, one manifest once every host has
-reported; the launcher takes host files and `pdsh`-style ranges).
+reported; the launcher takes host files and `pdsh`-style ranges). The workload catalog
+(2026-10-10, `workloads/CATALOG.md`): thirteen mechanisms and sixteen cases under
+`workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
+its dry run measures, checked in CI by `aeiou-catalog`.
 
 Not built, in rough order of interest:
 
-- The workload catalog's dictionary (`PROJECT_BRIEF.md` §6 item 26, `DESIGN_REVIEW.md`
-  §3.66): the tree `workloads/<category>/…/<mechanism>/cases/<case>` is built (2026-10-10,
-  in place of `builder/abstracts/`, `builder/traces/`, and `schema/examples/`, every AST
-  renamed for its directory); the enforced dictionary of attributes, each case's measured
-  shape, and `aeiou-catalog` are next, before `aeiou-datagen` to object stores. Later: the
-  abstract rendered as prose (item 27).
+- The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's
+  measured shape; the workload catalog it would join is built (2026-10-10, below).
 - The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included; the API
   and the cache mode as separate axes, contract 0.6, and the protocol and `--endpoint` per
   dataset and namespace built the same day, the mount counters still `--root`'s alone):

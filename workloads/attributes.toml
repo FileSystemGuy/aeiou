@@ -1,0 +1,254 @@
+# The dictionary of the workload catalog (DESIGN_REVIEW.md §3.66): every attribute a
+# mechanism, a case, or a capture is labeled with, what it means, and its allowed values.
+# `aeiou-catalog check` refuses an attribute or a value not defined here, and renders this
+# file as the glossary of CATALOG.md. Adding a value is a one-line change; renaming or
+# removing one is a recorded decision.
+#
+# source:  curated   written by a person in mechanism.toml or case.toml
+#          derived   read by aeiou-catalog from the AST, the parameter file, or the captures
+#          measured  computed by aeiou-catalog from `aeiou dry-run --metrics-json` of the case
+#                    at the smallest length where the numbers are stable (shape.json)
+# level:   mechanism | case
+# A measured attribute's classes are tried in order; the first whose bounds hold is the
+# class (`min` and `max` inclusive; a class with neither takes the rest). Its `tolerance` is
+# how far two measurements may differ and still be the same number (`relative` to the larger,
+# `absolute`, or both, either bound being enough); a flag has none and must be equal. `search` lists
+# words a reader may look for; they change nothing any tool accepts.
+
+attributes_version = 1
+
+# ---- curated: the mechanism ----
+
+[attribute.category]
+meaning = "What the job is, the tree's first level."
+source = "curated"
+level = "mechanism"
+required = true
+[attribute.category.values]
+training = { meaning = "A training job's input pipeline: samples read for steps on accelerators.", search = ["dataloader", "input pipeline"] }
+inference = { meaning = "Serving a model: loading its weights.", search = ["serving", "model loading"] }
+checkpointing = { meaning = "Saving and restoring a training job's state.", search = ["checkpoint", "restore", "resume"] }
+vdb = { meaning = "A vector database: building an index and searching it.", search = ["vector search", "ann", "rag", "retrieval"] }
+kvcache = { meaning = "An inference engine's KV cache offloaded to storage and loaded back.", search = ["kv cache", "prefix cache", "kv offload"] }
+synthetic = { meaning = "A benchmark that is not an application (IO500 and the like): its defined operations, never a trace." }
+
+[attribute.access]
+meaning = "How a training job's loader takes its samples, the tree's second level under training."
+source = "curated"
+level = "mechanism"
+required = false
+[attribute.access.values]
+map = { meaning = "Map-style: each sample by its id, in a shuffled order without replacement.", search = ["random access", "map-style"] }
+stream = { meaning = "Streaming: whole shards in a shuffled order, records taken in shard order.", search = ["iterable", "sharded", "webdataset"] }
+
+[attribute.application]
+meaning = "The library or program whose I/O the mechanism reproduces, as traced."
+source = "curated"
+level = "mechanism"
+required = true
+[attribute.application.values]
+pytorch-dataloader = { meaning = "PyTorch's DataLoader with worker processes over a map-style Dataset.", search = ["pytorch", "torchvision"] }
+numpy = { meaning = "NumPy's np.load of .npz archives." }
+h5py = { meaning = "h5py over libhdf5." }
+tf-data = { meaning = "TensorFlow's tf.data pipeline.", search = ["tensorflow"] }
+pyarrow = { meaning = "Apache Arrow's Parquet reader.", search = ["arrow"] }
+torch-dcp = { meaning = "torch.distributed.checkpoint (DCP), save and load.", search = ["fsdp", "pytorch"] }
+transformers-safetensors = { meaning = "Hugging Face from_pretrained over safetensors shards.", search = ["hugging face", "huggingface"] }
+faiss = { meaning = "FAISS (Meta)." }
+diskann = { meaning = "DiskANN (Microsoft), through diskannpy." }
+vllm-lmcache = { meaning = "vLLM with LMCache's storage backends.", search = ["vllm", "lmcache"] }
+
+[attribute.format]
+meaning = "How the data is laid out in files."
+source = "curated"
+level = "mechanism"
+required = true
+[attribute.format.values]
+file-per-sample = { meaning = "One file per sample, read whole (JPEG and the like).", search = ["jpeg", "imagefolder", "small files"] }
+npz = { meaning = "One NumPy .npz archive per sample." }
+hdf5 = { meaning = "HDF5 containers of fixed-size rows." }
+tfrecord = { meaning = "TFRecord shards of length-prefixed records." }
+parquet = { meaning = "Parquet shards of row groups." }
+dcp = { meaning = "DCP shard files (one per rank) and a .metadata file.", search = ["distcp"] }
+safetensors = { meaning = "safetensors shards: a JSON header and the tensors' bytes." }
+faiss-ivf-ondisk = { meaning = "A FAISS index file and an inverted-lists file mapped whole." }
+diskann-index = { meaning = "DiskANN's disk index of 4 KiB sectors, its PQ file, and build temporaries." }
+lmcache-chunks = { meaning = "One file per KV chunk of a fixed number of tokens, named by prefix hash.", search = ["kv chunks"] }
+
+# ---- curated: the case ----
+
+[attribute.kind]
+meaning = "What a case is for."
+source = "curated"
+level = "case"
+required = true
+[attribute.kind.values]
+example = { meaning = "An example case: a configuration small enough to trace, showing that the abstract issues the application's calls. Not a job anyone runs as a benchmark." }
+use = { meaning = "A use case: a configuration describing a real job, valid at the GPU counts it declares." }
+unsettled = { meaning = "Not yet decided between the two; the case's README says why." }
+
+[attribute.modality]
+meaning = "What the job's data is, as its users name it."
+source = "curated"
+level = "case"
+required = false
+[attribute.modality.values]
+image = { meaning = "Still images.", search = ["vision", "cv"] }
+volume = { meaning = "Dense arrays per sample (scientific volumes, tensors).", search = ["scientific", "3d"] }
+text = { meaning = "Conversations and documents, as tokens.", search = ["chat", "llm", "nlp"] }
+agentic = { meaning = "An agent's sessions: long contexts reused across many requests.", search = ["agents", "coding agent"] }
+vectors = { meaning = "Embedding vectors.", search = ["embeddings"] }
+model-state = { meaning = "A model's weights or a training job's state." , search = ["weights", "optimizer state"] }
+
+# ---- derived ----
+
+[attribute.api]
+meaning = "The API the abstract declares for its POSIX names (`posix` key; sync when it declares none), the S3 client's when it has object names. Another API is another workload (CLOSED)."
+source = "derived"
+level = "case"
+[attribute.api.values]
+sync = { meaning = "Blocking system calls, one thread per actor." }
+mmap = { meaning = "Mapped files: reads are page faults." }
+libaio = { meaning = "Linux kernel AIO on O_DIRECT descriptors.", search = ["aio", "o_direct"] }
+posix-aio = { meaning = "glibc's POSIX AIO." }
+io_uring = { meaning = "io_uring." }
+
+[attribute.writes]
+meaning = "Whether the abstract writes (declares an output namespace)."
+source = "derived"
+level = "case"
+[attribute.writes.values]
+yes = { meaning = "It writes files of its own." }
+no = { meaning = "It only reads." }
+
+[attribute.inputs]
+meaning = "Whether it reads what another run wrote (an `input` namespace)."
+source = "derived"
+level = "case"
+[attribute.inputs.values]
+yes = { meaning = "It reads another run's output: a restore, a cold KV reader." }
+no = { meaning = "It reads datasets and what it wrote itself." }
+
+[attribute.status]
+meaning = "What the captures say: the best verdict of `aeiou-trace compare --judge` over the case's captures."
+source = "derived"
+level = "case"
+[attribute.status.values]
+untraced = { meaning = "No capture." }
+accepted = { meaning = "A capture is within the tolerances." }
+not-accepted = { meaning = "Captured, but rows are outside; each has its recorded reason." }
+nothing-judged = { meaning = "Captured, but the trace cannot see the data path (a mapped file)." }
+
+# ---- measured (shape.json) ----
+
+[attribute.run_length_read]
+meaning = "Contiguous bytes read: the byte-weighted median of read run lengths (half the bytes read move in runs at least this long)."
+source = "measured"
+level = "case"
+unit = "bytes"
+tolerance = { relative = 0.25 }
+classes = [
+  { name = "large", min = 33554432, meaning = "32 MiB or more." },
+  { name = "medium", min = 1048576, meaning = "1 MiB to 32 MiB." },
+  { name = "small", min = 16384, meaning = "16 KiB to 1 MiB." },
+  { name = "tiny", meaning = "Under 16 KiB." },
+]
+
+[attribute.run_length_write]
+meaning = "Contiguous bytes written: the byte-weighted median of write run lengths."
+source = "measured"
+level = "case"
+unit = "bytes"
+tolerance = { relative = 0.25 }
+classes = [
+  { name = "large", min = 33554432, meaning = "32 MiB or more." },
+  { name = "medium", min = 1048576, meaning = "1 MiB to 32 MiB." },
+  { name = "small", min = 16384, meaning = "16 KiB to 1 MiB." },
+  { name = "tiny", meaning = "Under 16 KiB." },
+]
+
+[attribute.request_size_read]
+meaning = "The byte-weighted median of read request sizes, as the application asks; a request larger than the file returns short."
+source = "measured"
+level = "case"
+unit = "bytes"
+tolerance = { relative = 0.25 }
+classes = [
+  { name = "large", min = 33554432, meaning = "32 MiB or more." },
+  { name = "medium", min = 1048576, meaning = "1 MiB to 32 MiB." },
+  { name = "small", min = 16384, meaning = "16 KiB to 1 MiB." },
+  { name = "tiny", meaning = "Under 16 KiB." },
+]
+
+[attribute.request_size_write]
+meaning = "The byte-weighted median of write request sizes."
+source = "measured"
+level = "case"
+unit = "bytes"
+tolerance = { relative = 0.25 }
+classes = [
+  { name = "large", min = 33554432, meaning = "32 MiB or more." },
+  { name = "medium", min = 1048576, meaning = "1 MiB to 32 MiB." },
+  { name = "small", min = 16384, meaning = "16 KiB to 1 MiB." },
+  { name = "tiny", meaning = "Under 16 KiB." },
+]
+
+[attribute.read_share]
+meaning = "Bytes read over bytes moved."
+source = "measured"
+level = "case"
+unit = "share"
+tolerance = { absolute = 0.02 }
+classes = [
+  { name = "write-only", max = 0.0, meaning = "No reads." },
+  { name = "read-only", min = 1.0, meaning = "No writes." },
+  { name = "read-mostly", min = 0.8, meaning = "At least 80 % of the bytes read." },
+  { name = "mixed", min = 0.2, meaning = "20 % to 80 % read." },
+  { name = "write-mostly", meaning = "Under 20 % read." },
+]
+
+[attribute.metadata]
+meaning = "Metadata calls (open, close, stat, fstat, readdir, mkdir, rmdir, unlink, rename, ftruncate, fallocate) per data call (read, write)."
+source = "measured"
+level = "case"
+unit = "ratio"
+tolerance = { relative = 0.05, absolute = 0.005 }
+classes = [
+  { name = "high", min = 2.0, meaning = "Two or more per data call." },
+  { name = "medium", min = 0.5, meaning = "0.5 to 2." },
+  { name = "low", min = 0.01, meaning = "0.01 to 0.5." },
+  { name = "none", meaning = "Under one in a hundred data calls." },
+]
+
+[attribute.reads_own_writes]
+meaning = "Whether any read follows a write of the same block (read after write)."
+source = "measured"
+level = "case"
+unit = "flag"
+classes = [
+  { name = "yes", min = 1.0, meaning = "Some reads read back what the run wrote." },
+  { name = "no", meaning = "No read reads what the run wrote." },
+]
+
+[attribute.reread]
+meaning = "Block reads that read a block again, over all block reads. A training job's value is its epoch count's, a parameter."
+source = "measured"
+level = "case"
+unit = "share"
+tolerance = { absolute = 0.02 }
+classes = [
+  { name = "repeated", min = 0.5, meaning = "Half the reads or more read a block again." },
+  { name = "some", min = 0.05, meaning = "5 % to 50 %." },
+  { name = "none", meaning = "Under 5 %." },
+]
+
+[attribute.skew]
+meaning = "The share of block accesses on the busiest 1 % of blocks."
+source = "measured"
+level = "case"
+unit = "share"
+tolerance = { absolute = 0.02 }
+classes = [
+  { name = "skewed", min = 0.1, meaning = "10 % or more of the accesses on 1 % of the blocks." },
+  { name = "uniform", meaning = "Under 10 %." },
+]

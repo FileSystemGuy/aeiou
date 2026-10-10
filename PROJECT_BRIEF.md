@@ -560,7 +560,11 @@ numbers; the order is this note's.
     are labeled from an enforced dictionary (`workloads/attributes.toml`): curated, derived
     from the AST, and measured from the dry run at the smallest length where the numbers are
     stable. A separate tool, `aeiou-catalog`, checks and generates the catalog. Before
-    `aeiou-datagen` to S3 (item 17).
+    `aeiou-datagen` to S3 (item 17). **Built 2026-10-10** (`builder/REFERENCE.md` §8,
+    `man/aeiou-catalog.1.md`, `DESIGN_REVIEW.md` §3.66): the tree, the dictionary, the
+    records (`mechanism.toml`, `case.toml`, `capture.toml`), `shape.json` per case, and
+    `CATALOG.md`; the shape is measured at the case's own length, not a shorter one (a short
+    run's reuse is not the case's), and re-checked at the smallest length that reproduces it.
 27. **The abstract in prose (backlog, raised by the user 2026-10-10).** An AST is a compact,
     machine-readable account of a workload's I/O, so it can be rendered as English: a
     literal abstract, in the sense of a paper's, of the workload's patterns, for readers who
@@ -654,7 +658,8 @@ line says:
   `dry-run` exist since 2026-09-30; `runner/REFERENCE.md`.)
 - The Python authoring tools are dash-suffixed helpers in the same family, one per job:
   `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
-  2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01), and later
+  2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01),
+  `aeiou-catalog` (the workload catalog's records, shapes, and `CATALOG.md`, 2026-10-10), and later
   `aeiou-verify` (the offline content verifier) and `aeiou-fit` (trace fitting). Dash-suffixed because they live in
   a separate install from the runner and must not fight it for one `aeiou` command.
 - The Python package is `aeiou`; Rust crates are `aeiou` and `aeiou-<part>`.

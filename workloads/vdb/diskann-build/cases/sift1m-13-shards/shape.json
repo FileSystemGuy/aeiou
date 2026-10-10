@@ -1,0 +1,70 @@
+{
+  "shape_version": 1,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "diskann_build",
+      "ast_sha256": "be0ac448af43071ca3cddf4609e69e67a790acd230b221609b8774d5c0b4f693",
+      "params": "params.json",
+      "params_sha256": "bbdf672025fbf3170ebf8e5e89f2ee564cc04b27f8f7999ab7cbb01d67442cb5",
+      "gpus": 1,
+      "block": 4096,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": true,
+      "moving": [],
+      "ops": 1293972,
+      "attributes": {
+        "run_length_read": {
+          "value": 469762048,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": 67108864,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_read": {
+          "value": 1879048192,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_write": {
+          "value": 8192,
+          "spread": 0,
+          "class": "tiny"
+        },
+        "read_share": {
+          "value": 0.773284,
+          "spread": 0.0,
+          "class": "mixed"
+        },
+        "metadata": {
+          "value": 0.000666019,
+          "spread": 0.0,
+          "class": "none"
+        },
+        "reads_own_writes": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "yes"
+        },
+        "reread": {
+          "value": 0.836969,
+          "spread": 0.0,
+          "class": "repeated"
+        },
+        "skew": {
+          "value": 0.0563473,
+          "spread": 0.0,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

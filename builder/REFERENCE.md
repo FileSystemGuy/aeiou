@@ -11,16 +11,15 @@ publishes with a hash. Nothing here runs on a client node.
 builder/
   aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli,
              params (parameter files, `aeiou-params`), formats (the format classes), datagen
-             (`aeiou-datagen`), trace (`aeiou-trace`, §7), and the ports of the runner's definitions
-             it needs: rng, pattern, layout
-  abstracts/         the ABSTRACTS.md workloads as authoring scripts (§1–§8; §4 is two scripts), and the
-                     container workloads train_stream_shards.py (TFRecord and Parquet) and hdf5_map.py
+             (`aeiou-datagen`), trace (`aeiou-trace`, §7), catalog (`aeiou-catalog`, §8), and the ports
+             of the runner's definitions it needs: rng, pattern, layout
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds;
                      the parameter files fit their abstracts; the format classes write files the
                      libraries read back and the runner executes to the dry-run fingerprint; the
                      trace metrics against hand-written traces and against the runner under `strace`
   pyproject.toml     dep: jsonschema; extras `test` and `formats` (pyarrow, h5py, numpy, crc32c, dgen-py,
-                     xxhash); `aeiou-build`, `aeiou-params`, `aeiou-datagen`, `aeiou-trace` entry points
+                     xxhash); `aeiou-build`, `aeiou-params`, `aeiou-datagen`, `aeiou-trace`, `aeiou-catalog`
+                     entry points
 ```
 
 ```
@@ -29,7 +28,11 @@ uv run aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -pat
 uv run pytest
 uv run aeiou-build --check $(find ../workloads -name '*.py' -not -path '*/kit/*')     # drift check (CI)
 uv run aeiou-params check ../workloads/inference/safetensors-load/safetensors_load.ast.json ../workloads/inference/safetensors-load/params/synthetic.params.json
+uv run aeiou-catalog check --workloads ../workloads --runner ../runner/target/release/aeiou   # the catalog (CI)
 ```
+
+The authoring scripts and their ASTs live under `workloads/` (`DESIGN_REVIEW.md` §3.66), one
+directory per I/O mechanism.
 
 ## 1. Writing an abstract
 
@@ -484,7 +487,92 @@ dry-run --metrics` gives for an abstract that is that one node. Under `io_submit
 members are placed at the submission (the runner issues them there) where `metrics` counts
 them at the reap, so the reuse-distance histogram of that pair differs within a round.
 
-## 8. Not yet
+## 8. `aeiou-catalog`: the workload catalog (2026-10-10)
+
+`workloads/` holds one directory per I/O mechanism and, under `cases/`, one per case: an AST
+and a parameter set, the unit a user asks for and the catalog's row (`DESIGN_REVIEW.md`
+§3.66). Building is a compiler's job, a script to an AST; the catalog is data management:
+curated records, the vocabulary they are written in, and their consistency with the
+abstracts. `aeiou/catalog.py` is that tool, standard library only (`tomllib`), never writing
+an AST or a parameter file.
+
+**The records.** TOML, written by a person:
+
+| File | Holds |
+|---|---|
+| `<mechanism>/mechanism.toml` | `category`, `access` (training), `application`, `format`; a `[defaults]` table (`ast`, `gpus`, `length`) while the mechanism has no case, so its row is the abstract at its defaults |
+| `cases/<case>/case.toml` | `kind`, `modality`; `gpus` (the counts its parameters hold at; the shape uses the first); `length` (the parameter that only lengthens the run: `requests`, `queries`, `calls`); `metrics_block` (a KV chunk for the KV cases, so every access is one block); one `[[run]]` (`ast`, `params`) per AST |
+| `captures/<capture>/capture.toml` | `raw_trace` (a pointer, or `"not retained"`); one `[[pair]]` per trace (`trace` stem, `ast`, `params` when the capture's fit differs, `verdict`) |
+
+`test_trace.py` reads its pairs from the capture records (`catalog.capture_pairs`), so a
+verdict lives beside the trace it is about; the list kept in the test is gone.
+
+**The dictionary.** `workloads/attributes.toml`: per attribute its meaning, source
+(`curated`, `derived`, `measured`), level (`mechanism`, `case`), and values, or for a measured
+one its unit, tolerance, and classes (first match, bounds inclusive). A record may state only
+curated attributes of its level, with defined values, and the tool refuses the rest: an
+unknown key or value, a derived or measured attribute stated by hand, a missing required one,
+a category or access other than the directory's, a run of an AST the mechanism does not have,
+a parameter file no run names, a trace no pair judges, a tolerance file without its trace,
+two ASTs of one name, a mechanism with neither a case nor `[defaults]`.
+
+**Derived.** `api` (the AST's `posix` key, `sync` without one), `writes` (a namespace not
+`input`), `inputs` (an `input` namespace), `status` (the best verdict of the captures of that
+run: accepted, then not accepted, then nothing judged; untraced without one).
+
+**Measured: the shape.** From `aeiou dry-run --metrics-json` of each run, its `total`:
+
+| Attribute | From the metrics |
+|---|---|
+| `run_length_read`, `_write` | byte-weighted median of `run_length.<kind>.bytes` |
+| `request_size_read`, `_write` | byte-weighted median of `request_size.<kind>` (as asked) |
+| `read_share` | `bytes_read / (bytes_read + bytes_written)` |
+| `metadata` | open, close, stat, fstat, readdir, mkdir, rmdir, unlink, rename, ftruncate, fallocate per read and write (lseek, ioctl, fsync, fadvise are neither) |
+| `reads_own_writes` | 1 when `read_after_write.n` > 0 |
+| `reread` | `read_after_read.n` over the block reads (first touches and both reuse kinds) |
+| `skew` | `popularity_blocks.top_1_pct` |
+
+A byte-weighted median is the bucket at or above which half the bytes lie, so a size is a
+quarter-octave bucket's lower bound; a count median is wrong here (the header reads of
+`np.load` would make 140 MiB samples 112-byte runs).
+
+The shape is measured **at the case's own parameters** and first GPU count, seeds 1, 2, and
+3, the median of the three recorded with its spread and the measures on which the seeds
+differ by more than the tolerance (named in the catalog: the case's numbers carry that
+error). The user's rule (2026-10-10) was the smallest length at which the numbers are
+stable; building it showed that a shorter run is not a cheaper measurement of the same
+numbers. Shortening `steps` drops a training job's second epoch (ImageFolder's `reread` 0.00
+at 14 of 400 steps, 0.50 at 400); on a fixed index a search's reuse climbs with the run
+(DiskANN over SIFT1M re-reads 0.2 % of its block reads at 8 queries, 24 % at 500, 59 % at
+2,000, 97 % at 32,000, and its 2 GiB PQ load dominates the read request sizes until about
+8,000 queries), and a test of agreement between successive doublings accepts such a slow
+trend at the short end, where it barely moves. So the length is the case's, and the rule
+serves the cost instead: for a case with a `length`, `write` halves it (down to 1/64) while
+the medians stay the case's within their tolerances and records the smallest such length as
+`length.check`, and `check` re-measures there. The full AgentX corpus costs its 98,827
+requests once, when its shape is written; CI re-measures it at a fraction of that.
+
+`shape.json` (`shape.defaults.json` for a defaults row): per run the AST and parameter
+file with their SHA-256, the GPU count, the block, the seeds, the length (`param`, `case`,
+`check`), `stable` and `moving`, one seed's op count, and per attribute `value`, `spread`,
+`class`.
+
+**The commands.** `check` validates the records, re-measures every shape at its check
+length against the recorded numbers (their tolerances), renders `CATALOG.md`, and fails on
+any difference; with `--no-shapes` (the builder's tests, no runner) it checks instead that
+each shape is there and was measured on the AST, parameter file, GPU count, block, and length
+parameter committed now. `write` measures and writes the shapes and `CATALOG.md`. CI runs
+`check` with the runner in the job that builds it.
+
+*Choices made in the build, open to revision:* the shape at the case's own length, re-checked
+at a shorter one (above); KV cases measured in chunk-sized blocks (the shares are those at
+4 KiB, the work far less); a training job's `steps` is never a `length`; a tolerance may give
+both a relative and an absolute bound, either enough (`metadata`: 5 % or 0.005, since a ratio
+near zero moves by more than 5 % with no class seeing it); a case with two runs is two rows;
+the derived attributes per run; `metrics_block`, `gpus`, and the length in `case.toml`
+rather than the dictionary, being what the case runs rather than what it is.
+
+## 9. Not yet
 
 - Format classes for Arrow IPC, MDS, and Megatron `.bin`/`.idx`; the Parquet→Arrow conversion
   abstract (`GRAMMAR_OPTIONS.md` §6.5).

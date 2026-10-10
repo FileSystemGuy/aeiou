@@ -1,0 +1,70 @@
+{
+  "shape_version": 1,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "hdf5_map",
+      "ast_sha256": "8a14673708340030f433655ceb3aca9ef76f64e20d5bc9dd9fbeab6f50e8d1f5",
+      "params": null,
+      "params_sha256": null,
+      "gpus": 1,
+      "block": 4096,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": true,
+      "moving": [],
+      "ops": 192000,
+      "attributes": {
+        "run_length_read": {
+          "value": 196608,
+          "spread": 0,
+          "class": "small"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 196608,
+          "spread": 0,
+          "class": "small"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 0.333333,
+          "spread": 0.0,
+          "class": "low"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.138523,
+          "spread": 3.72807e-05,
+          "class": "some"
+        },
+        "skew": {
+          "value": 0.147138,
+          "spread": 3.69079e-05,
+          "class": "skewed"
+        }
+      }
+    }
+  ]
+}

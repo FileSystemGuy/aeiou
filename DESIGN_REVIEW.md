@@ -4731,12 +4731,16 @@ like 112-byte runs. The column on the right places each traced workload, from it
    that the reported numbers carry as little statistical error as the measurement needs and no
    more cost.* What that means in the tool (proposed): a case names its length parameter (the
    one that only makes the run longer: `steps`, `queries`, `requests`), never one that
-   changes the pattern (epochs, file sizes, a pool's size); `aeiou-catalog` dry-runs the case
+   changes the pattern (epochs, file sizes, a pool's size); ~~`aeiou-catalog` dry-runs the case
    at growing lengths (doubling) and at a few seeds, and stops at the first length where every
    measured number moves less than its class tolerance between one length and the next and
-   between seeds; `shape.json` records that length and the spread. A number that keeps moving
+   between seeds; `shape.json` records that length and the spread.~~ A number that keeps moving
    with length (a reuse distance bounded by the run, `reread` under a growing working set) is
-   a property of the length, and the case says what length it is reported at.
+   a property of the length, and the case says what length it is reported at. *Revised in
+   the build, 2026-10-10 (open to revision; the evidence is in "Built 2026-10-10: the catalog"
+   below): the shape is measured at the case's own length, and the smallest length that still
+   reproduces it is where `check` re-measures, so the rule serves the cost and no short run
+   stands for the case.*
 6. ~~A new tool `aeiou-catalog` rather than a flag of `aeiou-build`.~~ *Decided 2026-10-10:
    a separate tool. The user's reason: building is a compiler's problem (a script to an AST),
    the catalog a data-management problem (curated records, their vocabulary, their
@@ -4771,6 +4775,47 @@ traced at that scale), every other case an example case; (5) the verdicts stay i
 `builder/tests/test_trace.py` (`CAPTURE_PAIRS`) until `capture.toml` holds them; (6) the
 `provenance.ast_sha256` of the two safetensors parameter files is left as recorded: it says
 which AST the tool read when it wrote them, and it was already older than the current one.
+
+**Built 2026-10-10: the catalog (the second of the two commits).** The dictionary
+(`workloads/attributes.toml`: four curated attributes of a mechanism, two of a case, four
+derived, nine measured), the records (`mechanism.toml` ×13, `case.toml` ×16,
+`capture.toml` ×17), `shape.json` per case and `shape.defaults.json` for the three
+mechanisms with no case, `workloads/CATALOG.md`, and the tool `aeiou-catalog check|write`
+(`builder/aeiou/catalog.py`, `builder/REFERENCE.md` §8, `man/aeiou-catalog.1.md`). The verdicts
+moved from `CAPTURE_PAIRS` in `test_trace.py` into the capture records, which the test now
+reads. CI's integration job runs `aeiou-catalog check` with the runner; the builder's tests run
+it with `--no-shapes`.
+
+*What building the shape taught (the revision of item 5 above).* The doubling search was
+built first and gave wrong labels. Shortening `steps` drops a training job's later epochs:
+ImageFolder's `reread` came out 0.00 at 14 of its 400 steps, where the two epochs give 0.50,
+and 7 and 14 steps agreed with each other, so the search stopped there. On a fixed dataset a
+search's reuse grows with the run: DiskANN over SIFT1M (the `sift1m-nocache` parameters)
+re-reads 0.2 % of its block reads at 8 queries, 1.6 % at 32, 7 % at 128, 24 % at 500, 59 % at
+2,000, 88 % at 8,000, 97 % at 32,000, and the 2 GiB PQ load holds the byte-weighted read
+request size at 1.8 GiB until about 8,000 queries. A test of agreement between successive
+lengths, even over three of them, accepts the short end of such a trend, where it moves by
+less than its tolerance per doubling. So no length below the case's is a measurement of the
+case, and the numbers are the case's own: the median of seeds 1, 2, and 3 at its parameters.
+The user's rule then governs the cost: `write` halves the length while the medians stay the
+case's within their tolerances and records the smallest such length, and `check` re-measures
+there (the full AgentX corpus, 98,827 requests, takes five minutes on three cores once, when
+written). The traced example cases are small, and some carry seed spreads larger than a
+tolerance at their own length (the ShareGPT replay's `read_share` moves by 0.07 over three
+seeds at 300 requests); the catalog names those numbers rather than lengthening the run,
+which would describe another workload. *Choices made in the build, open to revision:* (1)
+the above; (2) KV cases measured in blocks of one chunk (`metrics_block` in `case.toml`, the
+shares those at 4 KiB, the work far less); (3) a training job's `steps` is never a case's
+`length`; (4) a tolerance may give a relative and an absolute bound, either enough
+(`metadata`: 5 % or 0.005, since a ratio near zero, DiskANN's 5·10⁻⁵, moves by more than 5 %
+with no class seeing it); (5) a case of two runs is two rows, and the derived attributes are
+per run (the shared-FS reader has inputs, the writer does not); (6) `gpus`, `length`, and
+`metrics_block` live in `case.toml` as what the case runs, not in the dictionary as what it
+is; (7) a capture's GPU count is its case's first; (8) the dictionary keeps the classes of
+the proposal and leaves out `sharing` (the derived `writes` and `inputs` say it for every
+case so far) and `concurrency` (an actor count is a parameter, read from the case); (9)
+`status` is the best verdict over a run's captures, so `agentx` reads accepted on its 6 GiB
+replay though its 2 GiB one is not.
 
 ### 3.67 Client caches, the 5× rule, the harness's topology, and fidelity for small datasets (discussed and decided 2026-10-10; the fidelity tooling on the backlog)
 

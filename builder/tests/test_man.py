@@ -23,9 +23,10 @@ TOOLS = {
     "aeiou-params": ("params", ["defaults", "check", "safetensors", "npz"]),
     "aeiou-datagen": ("datagen", []),
     "aeiou-trace": ("trace", ["metrics", "export", "compare"]),
+    "aeiou-catalog": ("catalog", ["check", "write"]),
 }
 PAGES = ["aeiou.1.md", "aeiou-build.1.md", "aeiou-params.1.md", "aeiou-datagen.1.md", "aeiou-trace.1.md",
-         "aeiou-launch.1.md", "aeiou-config.5.md", "aeiou-abstract.7.md"]
+         "aeiou-catalog.1.md", "aeiou-launch.1.md", "aeiou-config.5.md", "aeiou-abstract.7.md"]
 
 OPTION_LINE = re.compile(r"^ {2,6}(?:-\w, )?--([a-z0-9\[\]-]+)")
 DEFINED_LINE = re.compile(r"^- \*\*(?:-\w\*\*, \*\*)?--([a-z0-9\[\]-]+)\*\*")

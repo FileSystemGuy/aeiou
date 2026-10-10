@@ -1,0 +1,70 @@
+{
+  "shape_version": 1,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "safetensors_load",
+      "ast_sha256": "148fcd9e0198e707eda7826c2443989e5b8e86804688c11b5d94519ab7a7b05a",
+      "params": "params.json",
+      "params_sha256": "24a110e88506d3e65b6b8a6956537231d43a78a86c5c0383cabaa75c5d66bc7c",
+      "gpus": 1,
+      "block": 4096,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": true,
+      "moving": [],
+      "ops": 156,
+      "attributes": {
+        "run_length_read": {
+          "value": 83886080,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 16777216,
+          "spread": 0,
+          "class": "medium"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 0.543478,
+          "spread": 0.0,
+          "class": "medium"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.000757569,
+          "spread": 0.0,
+          "class": "none"
+        },
+        "skew": {
+          "value": 0.01075,
+          "spread": 0.0,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

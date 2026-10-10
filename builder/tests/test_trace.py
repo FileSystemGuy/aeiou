@@ -19,7 +19,7 @@ BUILDER = HERE.parent
 ROOT = BUILDER.parent
 sys.path.insert(0, str(BUILDER))
 
-from aeiou import trace  # noqa: E402
+from aeiou import catalog, trace  # noqa: E402
 from aeiou.nodes import BuildError  # noqa: E402
 from aeiou.trace import Instance, LogHist, compare, metrics_of, split_args  # noqa: E402
 
@@ -735,76 +735,31 @@ def test_judge_classes_spread_and_the_tolerance_file(tmp_path):
 # metrics, the abstract, the fitted parameters, `--gpus`, and the verdict. A pair's
 # tolerance file, beside its trace document, names the rows the trace cannot show and
 # records, with the reason, the rows that are outside.
-CAPTURE_PAIRS = [   # (capture under workloads/, trace document's stem, AST, parameter file under workloads/, GPUs, verdict)
-    ("training/map/file-per-sample/cases/imagefolder-jpeg/captures/2026-10-01", "trace", "file_per_sample",
-     "training/map/file-per-sample/cases/imagefolder-jpeg/params.json", 1, "accepted"),
-    ("training/map/npy-per-sample/cases/npy-140mib/captures/2026-10-01", "trace", "npy_per_sample",
-     "training/map/npy-per-sample/cases/npy-140mib/params.json", 1, "accepted"),
-    ("training/map/npy-per-sample/cases/npy-8mib/captures/2026-10-01", "trace", "npy_per_sample",
-     "training/map/npy-per-sample/cases/npy-8mib/params.json", 1, "accepted"),
-    ("checkpointing/dcp-save/cases/toy-6-items/captures/2026-10-01", "trace", "dcp_save",
-     "checkpointing/dcp-save/cases/toy-6-items/params.json", 2, "accepted"),
-    ("checkpointing/dcp-load/cases/mixed-9-items/captures/2026-10-01", "trace", "dcp_load",
-     "checkpointing/dcp-load/cases/mixed-9-items/params.json", 2, "accepted"),
-    ("checkpointing/dcp-load/cases/small-last-6-items/captures/2026-10-01", "trace", "dcp_load",
-     "checkpointing/dcp-load/cases/small-last-6-items/params.json", 2, "accepted"),
-    ("checkpointing/dcp-load/cases/name-order-17-items/captures/2026-10-01", "trace", "dcp_load",
-     "checkpointing/dcp-load/cases/name-order-17-items/params.json", 2, "accepted"),
-    ("inference/safetensors-load/cases/gpt2-random/captures/2026-10-01", "trace", "safetensors_load",
-     "inference/safetensors-load/cases/gpt2-random/params.json", 1, "nothing judged"),
-    ("vdb/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/captures/2026-10-01", "trace", "faiss_ivf_ondisk",
-     "vdb/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json", 1, "nothing judged"),
-    ("vdb/diskann-search/cases/sift1m-nocache/captures/2026-10-02", "trace", "diskann_search",
-     "vdb/diskann-search/cases/sift1m-nocache/params.json", 1, "accepted"),
-    ("vdb/diskann-search/cases/sift1m-cache/captures/2026-10-02", "trace", "diskann_search",
-     "vdb/diskann-search/cases/sift1m-cache/params.json", 1, "accepted"),
-    ("vdb/diskann-build/cases/sift1m-13-shards/captures/2026-10-02", "trace", "diskann_build",
-     "vdb/diskann-build/cases/sift1m-13-shards/params.json", 1, "not accepted"),
-    # the three KV-cache pairs are the ShareGPT replay (DESIGN_REVIEW.md §3.56); with one `keep` draw per round of
-    # conversations (§3.57) the reuse distance is within, and only the writer's store order (two threads) stays outside
-    ("kvcache/lmcache-local-disk/cases/sharegpt-chat/captures/2026-10-02", "trace", "lmcache_local_disk",
-     "kvcache/lmcache-local-disk/cases/sharegpt-chat/params.json", 1, "accepted"),
-    # the AgentX replay (§3.63): the system prompt read when the engine holds none of the conversation, one per slot;
-    # not accepted since the replay was corrected (2026-10-08); the two-prefix model since the same day, four rows outside
-    ("kvcache/lmcache-local-disk/cases/agentx/captures/replay-2gib-pool", "trace", "lmcache_local_disk",
-     "kvcache/lmcache-local-disk/cases/agentx/captures/replay-2gib-pool/fitted.params.json", 1, "not accepted"),
-    # the same replay with LMCache's use_odirect (`direct`): read-after-write distance outside, the server's admission order
-    ("kvcache/lmcache-local-disk/cases/agentx-odirect/captures/replay-2gib-pool", "trace", "lmcache_local_disk",
-     "kvcache/lmcache-local-disk/cases/agentx-odirect/params.json", 1, "not accepted"),
-    # the same replay at 6 GiB of engine KV, three times the tokens (§3.64): fewer reads, the writes the same; the abstract
-    # follows through keep, sys_held, and sub_held alone, refitted (the 2 GiB values give three to five times the reads)
-    ("kvcache/lmcache-local-disk/cases/agentx/captures/replay-6gib-pool", "trace", "lmcache_local_disk",
-     "kvcache/lmcache-local-disk/cases/agentx/captures/replay-6gib-pool/fitted.params.json", 1, "accepted"),
-    ("kvcache/lmcache-shared-fs/cases/sharegpt-chat/captures/2026-10-02", "writer.trace", "lmcache_shared_fs",
-     "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json", 1, "not accepted"),
-    ("kvcache/lmcache-shared-fs/cases/sharegpt-chat/captures/2026-10-02", "reader.trace", "lmcache_shared_fs_reader",
-     "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json", 1, "accepted"),
-]
+# every trace of a capture with the verdict `compare --judge` gives on it, from the captures' capture.toml
+# (DESIGN_REVIEW.md §3.66; aeiou-catalog checks that every trace has one): (capture, trace document's stem, AST,
+# parameter file, GPUs, verdict)
+CAPTURE_PAIRS = catalog.capture_pairs(WORKLOADS)
 
 
 def test_every_trace_of_a_capture_is_a_pair():
-    rel = lambda p, suffix: (str(p.parent.relative_to(WORKLOADS)), p.name[: -len(suffix)])
-    have = {rel(p, ".metrics.json") for p in WORKLOADS.rglob("captures/*/*.metrics.json")}
+    have = {(p.parent, p.name[: -len(".metrics.json")]) for p in WORKLOADS.rglob("captures/*/*.metrics.json")}
     assert have == {(c, t) for c, t, *_ in CAPTURE_PAIRS}
-    files = {rel(p, ".tolerances.json") for p in WORKLOADS.rglob("captures/*/*.tolerances.json")}
-    assert files <= have
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 @pytest.mark.parametrize("capture, which, ast, params, gpus, verdict", CAPTURE_PAIRS,
-                         ids=[f"{c.split('/cases/')[1]}:{t}" for c, t, *_ in CAPTURE_PAIRS])
+                         ids=[f"{str(c).split('/cases/')[1]}:{t}" for c, t, *_ in CAPTURE_PAIRS])
 def test_capture_pair_against_the_tolerances(tmp_path, capsys, capture, which, ast, params, gpus, verdict):
     """`aeiou-trace compare --judge` on a committed trace and its abstract at the fitted
     parameters, with the abstract at three other seeds as its own spread. The verdict is
     the recorded one, every row outside has its reason in the pair's file, and the file
     has no entry that matches nothing."""
-    capture = WORKLOADS / capture
     # the trace's own unit: the KV captures measure in chunks, every access being one whole chunk (the
     # shares and distances are those at 4 KiB, the counts 768 times fewer, and so the work)
     block = json.loads((capture / f"{which}.metrics.json").read_text())["block"]
     docs = [tmp_path / f"dry.{seed}.json" for seed in (1, 2, 3, 4)]
     runs = [subprocess.Popen([str(RUNNER), "dry-run", str(ast_path(ast)), "--gpus", str(gpus), "--seed", str(seed),
-                              "--params-file", str(WORKLOADS / params), "--metrics-json", str(doc), "--metrics-block", str(block)],
+                              "--params-file", str(params), "--metrics-json", str(doc), "--metrics-block", str(block)],
                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             for seed, doc in zip((1, 2, 3, 4), docs)]               # the seeds at once: a dry run's metrics take one core
     for p in runs:

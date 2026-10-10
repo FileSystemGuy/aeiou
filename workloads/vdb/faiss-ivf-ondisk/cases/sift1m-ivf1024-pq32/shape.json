@@ -1,0 +1,74 @@
+{
+  "shape_version": 1,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "faiss_ivf_ondisk",
+      "ast_sha256": "60d770cc614a4a80e135e5d47029bdd8c75a1b945063426c87df2ff3e2ef3c74",
+      "params": "params.json",
+      "params_sha256": "95d10a9abfd2a16ead39bc0a5ac5f35108445561c45aea3e11db0cac31c9ba21",
+      "gpus": 1,
+      "block": 4096,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": {
+        "param": "calls",
+        "case": 20,
+        "check": 20
+      },
+      "stable": true,
+      "moving": [],
+      "ops": 2572,
+      "attributes": {
+        "run_length_read": {
+          "value": 28672,
+          "spread": 0,
+          "class": "small"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 28672,
+          "spread": 0,
+          "class": "small"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 0.0019478,
+          "spread": 0.0,
+          "class": "none"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.475574,
+          "spread": 0.0110262,
+          "class": "some"
+        },
+        "skew": {
+          "value": 0.0401783,
+          "spread": 0.000471316,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "shape_version": 1,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "tfrecord_stream",
+      "ast_sha256": "84c05954f912be40416f20b3b0a9a50d18137b8fba3651c4c295f09e2044505b",
+      "params": null,
+      "params_sha256": null,
+      "gpus": 1,
+      "block": 4096,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": true,
+      "moving": [],
+      "ops": 61308,
+      "attributes": {
+        "run_length_read": {
+          "value": 117440512,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 262144,
+          "spread": 0,
+          "class": "small"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 0.00409319,
+          "spread": 1.1435e-05,
+          "class": "none"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "none"
+        },
+        "skew": {
+          "value": 0.01,
+          "spread": 0.0,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

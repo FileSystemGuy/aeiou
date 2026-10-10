@@ -1,0 +1,8 @@
+# The case (workloads/attributes.toml, DESIGN_REVIEW.md §3.66): its curated attributes and what it runs.
+kind = "example"
+modality = "model-state"
+gpus = [2]          # the GPU counts its parameters hold at; the shape is measured at the first
+
+[[run]]
+ast = "dcp_load"
+params = "params.json"

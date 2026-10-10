@@ -1,0 +1,9 @@
+# The case (workloads/attributes.toml, DESIGN_REVIEW.md §3.66): its curated attributes and what it runs.
+kind = "example"
+modality = "vectors"
+gpus = [1]          # the GPU counts its parameters hold at; the shape is measured at the first
+length = "calls"   # the parameter that only makes the run longer: check re-measures the shape at the smallest value that still gives it
+
+[[run]]
+ast = "faiss_ivf_ondisk"
+params = "params.json"

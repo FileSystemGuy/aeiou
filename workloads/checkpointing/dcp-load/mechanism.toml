@@ -1,0 +1,4 @@
+# The curated attributes of the mechanism (workloads/attributes.toml).
+category = "checkpointing"
+application = "torch-dcp"
+format = "dcp"

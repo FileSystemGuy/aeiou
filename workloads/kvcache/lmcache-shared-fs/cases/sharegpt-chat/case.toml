@@ -1,0 +1,14 @@
+# The case (workloads/attributes.toml, DESIGN_REVIEW.md §3.66): its curated attributes and what it runs.
+kind = "example"
+modality = "text"
+gpus = [1]          # the GPU counts its parameters hold at; the shape is measured at the first
+length = "requests"   # the parameter that only makes the run longer: check re-measures the shape at the smallest value that still gives it
+metrics_block = 3145728   # one KV chunk: every access is a whole chunk
+
+[[run]]
+ast = "lmcache_shared_fs"
+params = "writer.params.json"
+
+[[run]]
+ast = "lmcache_shared_fs_reader"
+params = "reader.params.json"
