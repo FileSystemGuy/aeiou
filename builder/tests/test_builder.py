@@ -385,6 +385,40 @@ def test_protocol_per_dataset_and_namespace():
     assert "protocol" not in resolved_dataset(ast, "d", {})["files"]
 
 
+def test_v18_an_object_is_written_once_in_order():
+    """V18: an object of a namespace in an object store is written once, in order from 0, by
+    one upload, so `O_APPEND`, `O_RDWR`, `O_EXCL`, `ftruncate`, and `fallocate` on one are
+    refused, by the builder and by the reference checker; a posix namespace keeps them."""
+    import copy
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def build(protocol, body):
+        w = Workload("v18")
+        ns = w.namespace("o", pattern="o/{k:04}", fields={"k": int}, size="as_written", seed=1, protocol=protocol)
+        with w.actor("x", count=1) as x:
+            body(x, ns.object(k=0))
+        return w.build()
+
+    def plain(x, f):
+        x.open(f, "WRONLY|CREAT|TRUNC")
+        x.write(f, 4096)
+        x.close(f)
+
+    for bad in ("APPEND", "RDWR", "EXCL"):
+        with pytest.raises(BuildError, match="V18"):
+            build("object", lambda x, f: x.open(f, f"WRONLY|CREAT|{bad}"))
+    with pytest.raises(BuildError, match="V18"):
+        build("object", lambda x, f: x.ftruncate(f, 0))
+    with pytest.raises(BuildError, match="V18"):
+        build("object", lambda x, f: x.fallocate(f, 4096))
+    build(None, lambda x, f: x.open(f, "RDWR|CREAT"))
+    ast = build("object", plain)
+    assert not check.Check(copy.deepcopy(ast), "x").run()
+    ast["actors"]["x"]["body"][0]["open"]["flags"].append("APPEND")
+    assert any("V18" in e for e in check.Check(ast, "x").run())
+
+
 def test_same_run_needs_input():
     """Contract 0.4, V15: `same_run` compares a run with the writer's manifest, which only an
     input namespace has; with `input` it is emitted on the namespace."""

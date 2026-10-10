@@ -145,8 +145,9 @@ drew, so a run without the writer's seed, instance count, and common parameters 
 system) or `object` (an object store), where the traced application reads or writes it. A run
 places each one with `--endpoint` (**aeiou**(1) ENDPOINTS), so one run may mix protocols; the
 operation stream, the fingerprint, and the dataset ids do not depend on it. The runner reads
-an `object` dataset through its object engine (**aeiou**(1) OBJECT STORES) and refuses an
-`object` namespace until the engine writes.
+an `object` dataset or namespace through its object engine (**aeiou**(1) OBJECT STORES),
+where an object is written once, in order from 0, by one upload that its `close` completes
+(V18).
 
 **Actors**: `{count, body}`; `count` defaults to `{param: gpus}`. Instances have global ids
 `0..count`.
@@ -175,6 +176,9 @@ these, and the builder enforces most of them at construction:
 - **V15** `same_run` needs `input`.
 - **V16** (runner) A `trace` that creates files runs in one instance only.
 - **V17** Namespaces sharing a root declare one `protocol`.
+- **V18** An object of a namespace declared `protocol: object` is written once, in order from
+  0: no `open` with `APPEND`, `RDWR`, or `EXCL`, no `ftruncate`, no `fallocate`. Offsets are
+  positional, so a write the upload has not reached fails the run when it comes.
 
 ## PARAMETER FILES
 

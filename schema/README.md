@@ -242,8 +242,17 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   no such rule, since their roots are distinct (V13). The protocol is not part of a dataset
   id or a namespace's resolved definition: where a corpus lives is not what it is. ~~The
   runner refuses `object` until its object engine is built~~ The runner reads an `object`
-  dataset through its object engine (`runner/REFERENCE.md` §16, 2026-10-09) and refuses an
-  `object` namespace until the engine writes (`DESIGN_REVIEW.md` §3.65).
+  dataset through its object engine (`runner/REFERENCE.md` §16, 2026-10-09) ~~and refuses an
+  `object` namespace until the engine writes~~ and, since the engine writes (the same night),
+  reads and writes an `object` namespace too, under V18 (`DESIGN_REVIEW.md` §3.65).
+- **V18 an object is written once, in order** (added 2026-10-09, contract 0.6, before any
+  committed AST declared an object namespace). An object of a namespace declared `protocol:
+  object` is made by one upload: the writes of one handle, each at the end of the last, sent
+  at its `close` (`runner/REFERENCE.md` §16). So the forms that rewrite, extend, or read an
+  object in place have no object form and are refused: `open` with `APPEND`, `RDWR`, or
+  `EXCL` (a conditional create the engine does not send), `ftruncate`, and `fallocate`. The
+  validator sees the ops, not the offsets, which are positional expressions: a write the
+  upload has not reached fails the run when it comes (`ESPIPE`), as a structural check does.
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -396,3 +405,4 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
   ASTs declared only `mmap` and `libaio`. The same day, before any user: the optional key
   `protocol` on `files` and `regions` datasets and on namespaces, and rule V17 (§4); no
   committed AST declares it. Every committed AST was regenerated; no fingerprint changed.
+  Later the same night, rule V18 (§4), with the object engine's writes; no AST changed.

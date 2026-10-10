@@ -2,7 +2,10 @@
 //! datagen` writes a dataset declared `protocol: object` into a MinIO bucket, the bytes of
 //! each object are the bytes the POSIX writer puts in the file of the same name (a multipart
 //! upload included), and `aeiou run` reads it back to the dry run's fingerprint, every read
-//! returning the computed count. The refusals need no server.
+//! returning the computed count; a run writes a namespace into a bucket (uploads, multipart
+//! ones included, `rename` as a copy and a `DELETE`, the namespace manifest as an object), its
+//! objects the bytes a POSIX run writes, and a second abstract reads it back as its input. The
+//! refusals need no server.
 //!
 //! The tests that need a server start their own MinIO from the binary `TEST_MINIO_BIN` names
 //! (CI downloads the pinned release; `runner/REFERENCE.md` §16), and are skipped, saying so,
@@ -30,10 +33,15 @@ fn examples() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
 }
 
-/// A committed example with its datasets `names` declared `protocol: object`, as a file in `dir`.
+/// A committed example with its datasets and namespaces `names` declared `protocol: object`,
+/// as a file in `dir`.
 fn object_variant(example: &str, names: &[&str], dir: &Path) -> PathBuf {
     let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(examples().join(format!("{example}.ast.json"))).unwrap()).unwrap();
     for n in names {
+        if let Some(ns) = d.get_mut("namespaces").and_then(|v| v.get_mut(*n)) {
+            ns["protocol"] = "object".into();
+            continue;
+        }
         let ds = d["datasets"][*n].as_object_mut().unwrap();
         let (_, body) = ds.iter_mut().next().unwrap();
         body["protocol"] = "object".into();
@@ -54,6 +62,7 @@ impl Drop for Minio {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self._dir);
     }
 }
 
@@ -166,6 +175,7 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
         a.extend(params);
         assert!(ok(&aeiou(Some(&m), &a)).contains("fingerprint matches"), "{api}");
     }
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -194,6 +204,103 @@ fn listings_and_stats_of_prefixes_read_like_directories() {
     let mut a = vec!["run", ast, "--gpus", "2", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/elsewhere"];
     a.extend(params);
     refused(&aeiou(Some(&m), &a), "no manifest at s3://bench/elsewhere/.aeiou-dataset.json");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
+    let Some(m) = minio("a_namespace_is_written_as_objects_and_read_back_by_another_run") else { return };
+    let dir = tmpdir("kv");
+    // the shared KV store: every chunk file a header and a 6 MiB chunk written under a temporary
+    // name and renamed, so with 5 MiB parts each is a multipart upload of two parts and a copy;
+    // the system prompts (datasets inside the namespace's root) live under the same prefix
+    let objects = ["sysp", "subp", "kv"];
+    let writer = object_variant("kv_cache_shared", &objects, &dir);
+    let reader = object_variant("kv_cache_shared_reader", &objects, &dir);
+    let (writer, reader) = (writer.to_str().unwrap(), reader.to_str().unwrap());
+    let reuse = r#"reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}"#;
+    let keep = r#"keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}"#;
+    let mut params = vec!["--seed", "5"];
+    for p in ["sys_prompts=2", "sys_tokens=2", "chunk_bytes=6291456", "buf=65536", "concurrency=2", "warm=2", "requests=4", reuse, keep, "retain=6", "sys_local=false", "prefill_per_token=0", "decode_per_token=0"] {
+        params.extend(["--param", p]);
+    }
+    let with = |cmd: &str, ast: &str, extra: &[&str]| {
+        let mut a = vec![cmd, ast];
+        if cmd != "datagen" {
+            a.extend(["--gpus", "1"]);
+        }
+        a.extend(params.iter().copied().filter(|p| cmd != "datagen" || *p != "--seed" && *p != "5"));
+        a.extend(extra);
+        a.into_iter().map(String::from).collect::<Vec<_>>()
+    };
+    let call = |m: Option<&Minio>, a: Vec<String>| aeiou(m, &a.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    let root = dir.join("root");
+    let root = root.to_str().unwrap();
+    let at = ["--root", root, "--endpoint", "kv=s3://bench/kvs"];
+    ok(&call(Some(&m), with("datagen", writer, &at)));
+
+    let want = fingerprint(&ok(&call(None, with("dry-run", writer, &[]))));
+    let mut a = at.to_vec();
+    a.extend(["--expect-fingerprint", &want, "--object-part-mib", "5"]);
+    let out = ok(&call(Some(&m), with("run", writer, &a)));
+    assert!(out.contains("fingerprint matches"), "{out}");
+    assert!(out.contains("runtime threads 2  part 5 MiB"), "{out}");
+    assert!(out.contains("namespace manifest s3://bench/kvs/.aeiou-namespace.json"), "{out}");
+    // a namespace root holds what a run wrote: a second run is refused, or empties it first,
+    // leaving the datasets inside it alone
+    refused(&call(Some(&m), with("run", writer, &at)), "namespace `kv` root s3://bench/kvs is not empty");
+    let mut a = at.to_vec();
+    a.extend(["--expect-fingerprint", &want, "--clean-namespaces"]);
+    let out = ok(&call(Some(&m), with("run", writer, &a)));
+    assert!(out.contains("namespace root kv/ emptied") && out.contains("fingerprint matches"), "{out}");
+
+    // the same run on a directory: its files are the objects, name for name and byte for byte
+    let posix = dir.join("posix");
+    let plain = examples().join("kv_cache_shared.ast.json");
+    let plain = plain.to_str().unwrap();
+    ok(&call(None, with("datagen", plain, &["--root", posix.to_str().unwrap()])));
+    ok(&call(None, with("run", plain, &["--root", posix.to_str().unwrap()])));
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(posix.join("kv/.aeiou-namespace.json")).unwrap()).unwrap();
+    let names: Vec<&str> = manifest["objects"].as_array().unwrap().iter().map(|o| o[0].as_str().unwrap()).collect();
+    assert!(!names.is_empty() && names.iter().all(|n| n.ends_with(".data")), "{names:?}");
+    let listed = String::from_utf8_lossy(&curl(&m, &[&format!("{}/bench?list-type=2&prefix=kvs/", m.url)]).stdout).to_string();
+    for n in &names {
+        let rest = n.strip_prefix("kv/").unwrap();
+        assert!(listed.contains(&format!("<Key>kvs/{rest}</Key>")), "{rest} not in the bucket");
+    }
+    assert_eq!(listed.matches(".data</Key>").count(), names.len(), "only the renamed chunks remain: {listed}");
+    for n in names.iter().take(3) {
+        let rest = n.strip_prefix("kv/").unwrap();
+        let obj = curl(&m, &[&format!("{}/bench/kvs/{rest}", m.url)]);
+        assert!(obj.stdout == std::fs::read(posix.join(n)).unwrap(), "{n}: the object's bytes differ from the POSIX run's file");
+    }
+
+    // the reader: the namespace is its input, its manifest an object, read to the fingerprint
+    let want = fingerprint(&ok(&call(None, with("dry-run", reader, &[]))));
+    let mut a = at.to_vec();
+    a.extend(["--expect-fingerprint", &want]);
+    let out = ok(&call(Some(&m), with("run", reader, &a)));
+    assert!(out.contains("input namespace(s) kv at kv/: written by `kv_cache_shared`"), "{out}");
+    assert!(out.contains("fingerprint matches"), "{out}");
+
+    // a write the upload has not reached is refused when it comes (V18: offsets are positional,
+    // so the order is known at the write), and the upload is abandoned
+    let skip = dir.join("skip.ast.json");
+    std::fs::write(
+        &skip,
+        r#"{"ast": "0.6", "name": "skip",
+            "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "object"}},
+            "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": 1, "body": [
+                {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
+                {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}},
+                {"write": {"file": {"ref": "f"}, "len": 4096}},
+                {"write": {"file": {"ref": "f"}, "len": 4096, "offset": 8192}},
+                {"close": {"file": {"ref": "f"}}}]}}]}}}"#,
+    )
+    .unwrap();
+    let o = aeiou(Some(&m), &["run", skip.to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "o=s3://bench/skip"]);
+    refused(&o, "write o/0 at 8192: the object has 4096 bytes written; an upload is written in order from 0 (V18)");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -212,13 +319,17 @@ fn object_names_need_object_endpoints_and_thread_per_actor_apis() {
     refused(&run(&["--endpoint", "train=/somewhere"]), "`train` is declared `protocol: object`; its endpoint is s3://BUCKET[/PREFIX]");
     refused(&run(&["--endpoint", "train=s3://bench/t", "--io-api", "io_uring"]), "--io-api io_uring: an event loop cannot wait on the object engine yet");
     refused(&run(&["--endpoint", "train=s3://bench/t", "--object-threads", "0"]), "--object-threads 0");
+    refused(&run(&["--endpoint", "train=s3://bench/t", "--object-part-mib", "4"]), "--object-part-mib 4: S3 takes parts of 5 MiB to 5 GiB");
     // a posix abstract has no use for the engine's threads or an object endpoint
     let plain = examples().join("train_small_files.ast.json");
     let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--object-threads", "4"]);
     refused(&o, "--object-threads: no dataset or namespace is placed in an object store");
+    let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--object-part-mib", "8"]);
+    refused(&o, "--object-part-mib: no dataset or namespace is placed in an object store");
     let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "train=s3://bench/t"]);
     refused(&o, "`train` is a `posix` dataset or namespace; its endpoint is a directory");
     // a regions file has no object form
     let vdb = object_variant("vdb_search_diskann", &["index"], &dir);
     refused(&aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb"]), "dataset `index`: a `regions` dataset is a sparse layout written at offsets and has no object form");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

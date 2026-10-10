@@ -1499,7 +1499,11 @@ pub fn check_input_namespaces(loaded: &crate::Loaded, cfg: &Config, root: &(impl
     let mut objects: HashMap<String, Option<String>> = HashMap::new();
     for (rel, names) in by_root {
         let dir = root.at(&rel);
-        let m = NamespaceManifest::read(&dir).with_context(|| format!("input namespace(s) {} at {}: no run has written this root", names.join(", "), dir.display()))?;
+        let m = match root.object(&rel) {
+            Some((store, rest)) => NamespaceManifest::read_object(&store, &rest),
+            None => NamespaceManifest::read(&dir),
+        }
+        .with_context(|| format!("input namespace(s) {} at {}: no run has written this root", names.join(", "), dir.display()))?;
         for name in &names {
             let want = payload::resolved_namespace(&loaded.doc, name, cfg)?;
             let Some(have) = m.namespaces.get(name) else {
@@ -1610,14 +1614,18 @@ pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &(i
             bytes_written: report.stats.bytes_written,
             objects: if objects.len() <= payload::NAMESPACE_OBJECT_LIMIT { Some(objects) } else { None },
         };
-        written.push(m.write(&root.at(&rel))?);
+        written.push(match root.object(&rel) {
+            Some((store, rest)) => PathBuf::from(m.write_object(&store, &rest)?),
+            None => m.write(&root.at(&rel))?,
+        });
     }
     Ok(written)
 }
 
 /// Output namespace roots must be empty (`--clean-namespaces` empties them); input roots
 /// are left as they are; dataset roots inside a namespace root are left alone. Creates the
-/// output roots.
+/// output roots; one in an object store is a prefix, which a `LIST` finds empty or a
+/// `DELETE` of every key below it empties.
 pub fn prepare_namespaces(ast: &Ast, root: &(impl Place + ?Sized), clean: bool) -> Result<Vec<String>> {
     let mut dataset_roots: Vec<PathBuf> = Vec::new();
     for name in ast.datasets.keys() {
@@ -1632,6 +1640,26 @@ pub fn prepare_namespaces(ast: &Ast, root: &(impl Place + ?Sized), clean: bool) 
             continue;
         }
         if !seen.insert(rel.clone()) {
+            continue;
+        }
+        if let Some((store, rest)) = root.object(&rel) {
+            // the keys of a dataset placed under this prefix are the dataset's
+            let mut skip: Vec<String> = Vec::new();
+            for d in ast.datasets.keys() {
+                if let Some((s, r)) = root.object(&payload::dataset_root(ast, d)?) {
+                    if Arc::ptr_eq(&s, &store) {
+                        skip.push(format!("{r}/"));
+                    }
+                }
+            }
+            let stale: Vec<String> = store.keys_below(&rest)?.into_iter().filter(|k| !skip.iter().any(|d| k.starts_with(d.as_str()))).collect();
+            if !stale.is_empty() {
+                if !clean {
+                    bail!("namespace `{name}` root {} is not empty ({} objects, e.g. {}); pass --clean-namespaces to empty it", store.show(&rest), stale.len(), store.show(&stale[0]));
+                }
+                store.delete_all(&stale)?;
+                cleaned.push(rel.clone());
+            }
             continue;
         }
         let dir = root.at(&rel);

@@ -10,15 +10,22 @@
 //! `AWS_ALLOW_HTTP`, read by `AmazonS3Builder::from_env`), with path-style requests unless
 //! `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` says otherwise.
 //!
-//! **The mapping** (§3.65's table), reads only so far: `open` sends nothing (the handle is
-//! the key); a read at an offset is one ranged `GET` streamed into the actor's buffer, a
-//! range past the end of the object a read of 0 bytes, a range over the end a short read;
-//! `stat` and `fstat` are a `HEAD`, and for a path that is no object a `LIST` of the prefix
-//! below it, which succeeds (size 0) when there is one, as `stat` of a directory does;
-//! `readdir` is a `LIST` with the delimiter `/`, its objects and common prefixes the entries;
-//! `lseek`, `fadvise`, `fsync`, and `fdatasync` are local and send nothing, and `ioctl` is
-//! local with a regular file's answers (`TCGETS` is `ENOTTY`). Every op that would change the
-//! store fails with `EROFS` until the object writes are built.
+//! **The mapping** (§3.65's table): `open` for reading sends nothing (the handle is the key);
+//! a read at an offset is one ranged `GET` streamed into the actor's buffer, a range past the
+//! end of the object a read of 0 bytes, a range over the end a short read; `stat` and `fstat`
+//! are a `HEAD`, and for a path that is no object a `LIST` of the prefix below it, which
+//! succeeds (size 0) when there is one, as `stat` of a directory does; `readdir` is a `LIST`
+//! with the delimiter `/`, its objects and common prefixes the entries; `lseek`, `fadvise`,
+//! `fsync`, and `fdatasync` are local and send nothing, and `ioctl` is local with a regular
+//! file's answers (`TCGETS` is `ENOTTY`). An `open` for writing begins an upload (`Upload`):
+//! the writes, each at the end of what the handle has written (V18), fill a part of
+//! `--object-part-size` bytes from the payload, a full part is sent as a part of a multipart
+//! upload before the write returns, and `close` sends the object, one `PUT` when it fits in
+//! a part and the last part and the completion otherwise, so an object exists from its
+//! `close`; `fstat` of a handle being written is its written size, sent nothing. `unlink` is
+//! a `DELETE`, `rename` a copy and a `DELETE` (not atomic), `mkdir` and `rmdir` send nothing
+//! (a prefix is no object), and `ftruncate`, `fallocate`, and `O_APPEND` are refused by V18
+//! before a run (`validate.rs`), and here with `EOPNOTSUPP` should one come.
 //!
 //! **Threads.** One multi-thread tokio runtime per process, built on the first object call
 //! with `--object-threads` workers (`set_threads`), parked until the process exits. An
@@ -37,8 +44,24 @@ pub const LIBRARY_VERSION: &str = "0.14.2";
 pub const DEFAULT_THREADS: usize = 2;
 
 /// The part size of a multipart upload: an object larger than this is sent in parts of it
-/// (8 MiB, as `s3dlio`; `object_store`'s own writer uses 10 MiB).
+/// (8 MiB, as `s3dlio`; `object_store`'s own writer uses 10 MiB). `aeiou datagen` uses it;
+/// a run uses `--object-part-size`.
 pub const DEFAULT_PART: u64 = 8 << 20;
+
+/// The bounds S3 sets on a part: at least 5 MiB (but the last), at most 5 GiB.
+pub const MIN_PART: u64 = 5 << 20;
+pub const MAX_PART: u64 = 5 << 30;
+
+static PART: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(DEFAULT_PART);
+
+/// The part size of the run's uploads (`--object-part-size`), set before the first open.
+pub fn set_part_size(n: u64) {
+    PART.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn part_size() -> u64 {
+    PART.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// An error of the engine as the run sees it: an errno for the statement's `expect` list
 /// and the structural check, with the store's message.
@@ -66,13 +89,15 @@ pub fn errno_of(e: &io::Error) -> Option<i32> {
 }
 
 /// A file of the abstract that lives in an object store, as an actor holds it open: the
-/// store and the key's part below the endpoint's prefix.
+/// store, the key's part below the endpoint's prefix, and the upload when it was opened for
+/// writing.
 pub struct Handle {
     pub store: Arc<Store>,
     pub rest: String,
+    pub upload: Option<std::sync::Mutex<Upload>>,
 }
 
-pub use imp::{set_threads, threads, Store};
+pub use imp::{set_threads, threads, Store, Upload};
 
 /// Is `uri` an object endpoint (rather than a directory)?
 pub fn is_uri(uri: &str) -> bool {
@@ -89,22 +114,54 @@ fn writes(flags: u64) -> bool {
 /// Issue `op`, whose path lives at `rest` of `store`, the object engine's way (see the module
 /// comment); `Ok(n)` is what the op returned, as from `run::issue_blocking`.
 pub(crate) fn issue(store: &Arc<Store>, rest: String, sh: &crate::run::Shared, a: &mut crate::run::ActorState, rbuf: &mut crate::run::Ring, op: &crate::vm::Op) -> io::Result<i64> {
+    use crate::ast::OpenFlag;
     use crate::vm::OpKind;
-    let erofs = || Err(error(libc::EROFS, format!("{} {}: the object engine does not write yet (DESIGN_REVIEW.md §3.65)", op.kind.name(), op.path)));
+    let refused = |what: &str| Err(error(libc::EOPNOTSUPP, format!("{} {}: {what} has no object form (V18, DESIGN_REVIEW.md §3.65)", op.kind.name(), op.path)));
     match op.kind {
         OpKind::Open => {
-            if writes(op.aux & 0xffff_ffff) {
-                return erofs();
+            let flags = op.aux & 0xffff_ffff;
+            let bit = |f: OpenFlag| flags & (1 << (f as u8)) != 0;
+            if bit(OpenFlag::APPEND) || bit(OpenFlag::RDWR) || bit(OpenFlag::EXCL) {
+                return refused("O_APPEND, O_RDWR, or O_EXCL");
             }
-            let file = crate::backend::OpenFile::object(Handle { store: store.clone(), rest });
+            let upload = writes(flags).then(|| std::sync::Mutex::new(store.upload(&rest)));
+            let file = crate::backend::OpenFile::object(Handle { store: store.clone(), rest, upload });
             a.opened(sh, op.path, op.aux, file);
             Ok(0)
         }
-        OpKind::Close => a.close(op.path).map(|_| 0),
+        OpKind::Close => {
+            // the owner's close sends the object; a sub-actor closing what it inherited does not
+            if let Some(f) = a.fds.own.get(op.path).cloned() {
+                if let Some(up) = f.as_object().and_then(|h| h.upload.as_ref()) {
+                    let r = up.lock().unwrap().finish(store);
+                    a.close(op.path)?;
+                    return r.map(|_| 0);
+                }
+            }
+            a.close(op.path).map(|_| 0)
+        }
         OpKind::Read => {
-            a.fd(op.path)?;
+            let f = a.fd(op.path)?;
+            if f.as_object().is_some_and(|h| h.upload.is_some()) {
+                return Err(io::Error::from_raw_os_error(libc::EBADF));
+            }
             let buf = rbuf.slice(op.len as usize);
             store.read_into(&rest, op.offset as u64, buf).map(|n| n as i64)
+        }
+        OpKind::Write => {
+            let f = a.fd(op.path)?;
+            let Some(up) = f.as_object().and_then(|h| h.upload.as_ref()) else {
+                return Err(io::Error::from_raw_os_error(libc::EBADF));
+            };
+            let seed = crate::payload::object_seed(op.seed, op.path);
+            let filler = &mut a.filler;
+            let mut up = up.lock().unwrap();
+            up.write(store, op.offset as u64, op.len as u64, &mut |at, b| filler.fill_range(|blk| crate::payload::block_seed(seed, 0, blk), at, b))
+                .map(|n| n as i64)
+                .map_err(|e| match e.raw_os_error() {
+                    Some(libc::ESPIPE) => error(libc::ESPIPE, format!("write {} at {}: the object has {} bytes written; an upload is written in order from 0 (V18)", op.path, op.offset, up.written())),
+                    _ => e,
+                })
         }
         OpKind::Lseek | OpKind::Fadvise | OpKind::Fsync | OpKind::Fdatasync => a.fd(op.path).map(|_| 0),
         OpKind::Ioctl => {
@@ -115,15 +172,38 @@ pub(crate) fn issue(store: &Arc<Store>, rest: String, sh: &crate::run::Shared, a
             }
         }
         OpKind::Fstat => {
-            a.fd(op.path)?;
-            store.stat(&rest)
+            let f = a.fd(op.path)?;
+            match f.as_object().and_then(|h| h.upload.as_ref()) {
+                Some(up) => Ok(up.lock().unwrap().written() as i64),
+                None => store.stat(&rest),
+            }
         }
         OpKind::Stat => store.stat(&rest),
         OpKind::Readdir => {
             a.fd(op.path)?;
             store.list_dir(&rest).map(|n| n as i64)
         }
-        OpKind::Write | OpKind::Unlink | OpKind::Ftruncate | OpKind::Fallocate | OpKind::Mkdir | OpKind::Rmdir | OpKind::Rename => erofs(),
+        OpKind::Unlink => {
+            store.delete(&rest)?;
+            a.removed.push(op.path.to_string());
+            Ok(0)
+        }
+        OpKind::Rename => {
+            let to = op.path2.unwrap_or("");
+            let Some((to_store, to_rest)) = sh.opts.endpoints.object(to) else {
+                return Err(error(libc::EXDEV, format!("rename {} to {to}: the target is not in the object store", op.path)));
+            };
+            if !Arc::ptr_eq(store, &to_store) {
+                return Err(error(libc::EXDEV, format!("rename {} to {to}: the target is in another object store", op.path)));
+            }
+            store.rename(&rest, &to_rest)?;
+            a.removed.push(op.path.to_string());
+            a.created.push((to.to_string(), a.actor));
+            Ok(0)
+        }
+        OpKind::Mkdir | OpKind::Rmdir => Ok(0),
+        OpKind::Ftruncate => refused("ftruncate"),
+        OpKind::Fallocate => refused("fallocate"),
     }
 }
 
@@ -137,7 +217,7 @@ mod imp {
     use futures::StreamExt;
     use object_store::aws::{AmazonS3, AmazonS3Builder};
     use object_store::path::Path;
-    use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt, PutPayload};
+    use object_store::{GetOptions, GetRange, MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload};
 
     use super::error;
 
@@ -163,6 +243,102 @@ mod imp {
                 .expect("building the object engine's runtime")
         });
         rt.handle().block_on(f)
+    }
+
+    /// An object being written through one handle: the part being filled, what has been
+    /// written, and the multipart upload once a part has gone out. Dropped unfinished (a
+    /// run that failed), it aborts the upload, so the store keeps no parts.
+    pub struct Upload {
+        key: Path,
+        show: String,
+        part: usize,
+        buf: Vec<u8>,
+        written: u64,
+        multi: Option<Box<dyn MultipartUpload>>,
+        done: bool,
+    }
+
+    impl Upload {
+        /// The object's size so far: every byte written through the handle.
+        pub fn written(&self) -> u64 {
+            self.written
+        }
+
+        /// `len` bytes at `offset`, which must be the end of what is written (else
+        /// `ESPIPE`), made by `fill(offset, bytes)` into the part being filled; a part that
+        /// fills is sent before this returns, the first one starting the multipart upload.
+        pub fn write(&mut self, store: &Store, offset: u64, len: u64, fill: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<u64> {
+            if self.done {
+                return Err(io::Error::from_raw_os_error(libc::EBADF));
+            }
+            if offset != self.written {
+                return Err(io::Error::from_raw_os_error(libc::ESPIPE));
+            }
+            let mut at = 0u64;
+            while at < len {
+                if self.buf.capacity() == 0 {
+                    self.buf = Vec::with_capacity(self.part);
+                }
+                let take = ((len - at) as usize).min(self.part - self.buf.len());
+                let from = self.buf.len();
+                self.buf.resize(from + take, 0);
+                fill(offset + at, &mut self.buf[from..]);
+                at += take as u64;
+                self.written += take as u64;
+                if self.buf.len() == self.part {
+                    self.send_part(store)?;
+                }
+            }
+            Ok(len)
+        }
+
+        fn send_part(&mut self, store: &Store) -> io::Result<()> {
+            let data = PutPayload::from(std::mem::take(&mut self.buf));
+            block(async {
+                if self.multi.is_none() {
+                    self.multi = Some(store.s3.put_multipart(&self.key).await.map_err(|e| io_err(&self.show, e))?);
+                }
+                let up = self.multi.as_mut().expect("started");
+                up.put_part(data).await.map_err(|e| io_err(&self.show, e))
+            })
+        }
+
+        /// The `close`: one `PUT` of what is written when no part has gone out, else the
+        /// last part and the completion.
+        pub fn finish(&mut self, store: &Store) -> io::Result<()> {
+            if self.done {
+                return Ok(());
+            }
+            self.done = true;
+            if self.multi.is_none() {
+                let data = PutPayload::from(std::mem::take(&mut self.buf));
+                return block(async { store.s3.put(&self.key, data).await.map(|_| ()).map_err(|e| io_err(&self.show, e)) });
+            }
+            if !self.buf.is_empty() {
+                self.send_part(store)?;
+            }
+            let mut up = self.multi.take().expect("started");
+            block(async {
+                match up.complete().await {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        let _ = up.abort().await;
+                        Err(io_err(&self.show, e))
+                    }
+                }
+            })
+        }
+    }
+
+    impl Drop for Upload {
+        fn drop(&mut self) {
+            if let Some(mut up) = self.multi.take() {
+                // never on one of the runtime's own threads, where `block_on` panics
+                if tokio::runtime::Handle::try_current().is_err() {
+                    let _ = block(up.abort());
+                }
+            }
+        }
     }
 
     /// One endpoint's store: a bucket and the prefix the name's root is placed at.
@@ -307,6 +483,57 @@ mod imp {
             })
         }
 
+        /// An upload of the object at `rest`, in parts of `--object-part-size`; nothing is
+        /// sent until a part fills or the handle closes.
+        pub fn upload(&self, rest: &str) -> Upload {
+            Upload { key: self.key(rest), show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None, done: false }
+        }
+
+        /// `DELETE` (a missing key is no error, as S3 has it).
+        pub fn delete(&self, rest: &str) -> io::Result<()> {
+            let key = self.key(rest);
+            block(async { self.s3.delete(&key).await.map_err(|e| io_err(&self.show(rest), e)) })
+        }
+
+        /// A copy on the server and a `DELETE` of the source.
+        pub fn rename(&self, from: &str, to: &str) -> io::Result<()> {
+            let (f, t) = (self.key(from), self.key(to));
+            block(async {
+                self.s3.copy(&f, &t).await.map_err(|e| io_err(&self.show(from), e))?;
+                self.s3.delete(&f).await.map_err(|e| io_err(&self.show(from), e))
+            })
+        }
+
+        /// Every key below `rest` (a recursive `LIST`), as paths below the endpoint's prefix.
+        pub fn keys_below(&self, rest: &str) -> io::Result<Vec<String>> {
+            let key = self.key(rest);
+            let strip = if self.prefix.is_empty() { String::new() } else { format!("{}/", self.prefix) };
+            block(async {
+                let prefix = if key.as_ref().is_empty() { None } else { Some(&key) };
+                let mut out = Vec::new();
+                let mut l = self.s3.list(prefix);
+                while let Some(m) = l.next().await {
+                    let m = m.map_err(|e| io_err(&self.show(rest), e))?;
+                    let k = m.location.as_ref();
+                    out.push(k.strip_prefix(strip.as_str()).unwrap_or(k).to_string());
+                }
+                out.sort();
+                Ok(out)
+            })
+        }
+
+        /// `DELETE` every key of `rests` (paths below the endpoint's prefix), in batches.
+        pub fn delete_all(&self, rests: &[String]) -> io::Result<()> {
+            let keys: Vec<object_store::Result<Path>> = rests.iter().map(|r| Ok(self.key(r))).collect();
+            block(async {
+                let mut s = self.s3.delete_stream(futures::stream::iter(keys).boxed());
+                while let Some(r) = s.next().await {
+                    r.map_err(|e| io_err(&self.uri, e))?;
+                }
+                Ok(())
+            })
+        }
+
         /// One `PUT` of the whole object.
         pub fn put(&self, rest: &str, data: Vec<u8>) -> io::Result<()> {
             let key = self.key(rest);
@@ -357,6 +584,20 @@ mod imp {
     /// No store: this build has no object engine, and `open` says so.
     pub enum Store {}
 
+    pub enum Upload {}
+
+    impl Upload {
+        pub fn written(&self) -> u64 {
+            match *self {}
+        }
+        pub fn write(&mut self, _: &Store, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<u64> {
+            match *self {}
+        }
+        pub fn finish(&mut self, _: &Store) -> io::Result<()> {
+            match *self {}
+        }
+    }
+
     impl Store {
         pub fn open(uri: &str) -> anyhow::Result<Store> {
             anyhow::bail!("{uri}: this aeiou was built without the object engine (cargo feature `object`, DESIGN_REVIEW.md §3.65)")
@@ -383,6 +624,21 @@ mod imp {
             match *self {}
         }
         pub fn put(&self, _: &str, _: Vec<u8>) -> io::Result<()> {
+            match *self {}
+        }
+        pub fn upload(&self, _: &str) -> Upload {
+            match *self {}
+        }
+        pub fn delete(&self, _: &str) -> io::Result<()> {
+            match *self {}
+        }
+        pub fn rename(&self, _: &str, _: &str) -> io::Result<()> {
+            match *self {}
+        }
+        pub fn keys_below(&self, _: &str) -> io::Result<Vec<String>> {
+            match *self {}
+        }
+        pub fn delete_all(&self, _: &[String]) -> io::Result<()> {
             match *self {}
         }
         pub fn put_parts(&self, _: &str, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<()> {

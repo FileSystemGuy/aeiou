@@ -440,9 +440,11 @@ leave it out for a file system. Namespaces sharing a root declare one protocol (
 places each with `--endpoint` (`runner/REFERENCE.md` §4), and `aeiou-datagen` takes the same
 flag; the protocol is not part of a dataset id. ~~The runner refuses `object` until its object
 engine is built~~ The runner reads an `object` dataset through its object engine and writes one
-with `aeiou datagen` (`runner/REFERENCE.md` §16, 2026-10-09); an `object` namespace waits for
-the engine's writes, and `aeiou-datagen` writes container datasets to directories only
-(`DESIGN_REVIEW.md` §3.65).
+with `aeiou datagen` (`runner/REFERENCE.md` §16, 2026-10-09); ~~an `object` namespace waits for
+the engine's writes,~~ it writes and reads an `object` namespace too (the same night), where
+V18 refuses `open` with `APPEND`, `RDWR`, or `EXCL`, `ftruncate`, and `fallocate` on its
+objects (`namespace(..., protocol="object")` raises at the op); `aeiou-datagen` writes
+container datasets to directories only (`DESIGN_REVIEW.md` §3.65).
 
 **The application's API is declared in the script** (contract 0.3, 2026-10-01; `api` and
 `cache` since contract 0.6, 2026-10-09): `Workload("model_load", api="mmap")`. Leave it out

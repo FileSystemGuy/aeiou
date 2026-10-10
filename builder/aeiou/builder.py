@@ -815,6 +815,22 @@ class Cursor:
             raise BuildError(f"{what} on input namespace {ns}: input namespaces are read-only "
                              f"(schema/README.md V14)")
 
+    def _object_store_namespace(self, h):
+        """Namespace name if the handle is (a binding to) an object of a namespace declared
+        `protocol: object`."""
+        if isinstance(h, Ref):
+            return self._object_store_namespace(self._lookup(h.name))
+        if isinstance(h, ObjectHandle) and self.wl._namespaces[h.namespace].spec.get("protocol") == "object":
+            return h.namespace
+        return None
+
+    def _once_in_order(self, h, what):
+        """V18: an object in an object store is written once, in order from 0, by one upload."""
+        ns = self._object_store_namespace(h)
+        if ns:
+            raise BuildError(f"{what} on namespace {ns}, declared protocol object: an object is written once, "
+                             f"in order from 0, and has no {what} (schema/README.md V18)")
+
     def _input_namespace_of(self, h):
         if isinstance(h, Ref):
             return self._input_namespace_of(self._lookup(h.name))
@@ -826,6 +842,9 @@ class Cursor:
         flags = _flags(flags)
         if set(flags) & WRITE_FLAGS:
             self._read_only(file, "open for writing")
+        for f in flags:
+            if f in ("APPEND", "RDWR", "EXCL"):
+                self._once_in_order(file, f"open with {f}")
         self._op("open", {"file": _handle(file).ast(), "flags": flags, "mode": mode,
                           "expect": _expect(expect)})
 
@@ -906,11 +925,13 @@ class Cursor:
 
     def ftruncate(self, file, len, *, expect=None):
         self._read_only(file, "ftruncate")
+        self._once_in_order(file, "ftruncate")
         self._op("ftruncate", {"file": _handle(file).ast(), "len": ast_of(lift(len, "len")),
                                "expect": _expect(expect)})
 
     def fallocate(self, file, len, *, offset=None, expect=None):
         self._read_only(file, "fallocate")
+        self._once_in_order(file, "fallocate")
         self._op("fallocate", {"file": _handle(file).ast(),
                                "offset": None if offset is None else ast_of(lift(offset, "offset")),
                                "len": ast_of(lift(len, "len")), "expect": _expect(expect)})

@@ -446,8 +446,11 @@ numbers; the order is this note's.
     `object_store` backend does not compile), and it is measured against an S3 server, not
     over `file://` (`DESIGN_REVIEW.md` §3.65). *Built the same night, reads first:* object
     datasets written by `aeiou datagen` and read by `aeiou run` against MinIO, to the dry
-    run's fingerprint (`runner/REFERENCE.md` §16); next, object namespaces (the writes,
-    `--object-part-size`, V18) and the event loops.
+    run's fingerprint (`runner/REFERENCE.md` §16); ~~next, object namespaces (the writes,
+    `--object-part-size`, V18) and the event loops.~~ *The writes the same night:* object
+    namespaces written as uploads (multipart in parts of `--object-part-mib`, sent by
+    `close`), `rename` as copy and `DELETE`, the namespace manifest as an object, rule V18;
+    next, the event loops.
 18. **JSON report (built and decided 2026-10-01, `DESIGN_REVIEW.md` §3.41,
     `runner/REFERENCE.md` §12).** `aeiou run --report-json FILE` writes the
     run's identity, results (latency histograms in full), and verdict as format
@@ -498,6 +501,13 @@ numbers; the order is this note's.
     on reducing storage); growth is a resume under a larger count; a run over the first *S*
     ids of a larger corpus relaxes the manifest's `count` comparison to "at least". Names,
     sizes, directories, and payload groups are already functions of the id alone. Not built.
+    *Noted 2026-10-09, with the object engine's writes (`runner/REFERENCE.md` §16):* in an
+    object store the same arithmetic differs twice. No object is ever short, since an upload
+    that dies before its completion leaves no object, so resume looks for missing keys only,
+    and one paged `LIST` of the prefix gives every key's size, with no `HEAD` per file. And a
+    crashed writer can leave a multipart upload's parts behind, invisible to `LIST` but
+    stored (and billed): resume lists them (`ListMultipartUploads` below the prefix) and
+    aborts them, which POSIX has no counterpart for.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

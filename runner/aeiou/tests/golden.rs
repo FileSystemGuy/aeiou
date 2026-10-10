@@ -374,6 +374,18 @@ fn validator_rejects_what_check_py_rejects() {
     };
     rejects(&two(r#", "protocol": "object""#, ""), "`protocol` differs (V17)");
     aeiou::load_str(&two(r#", "protocol": "object""#, r#", "protocol": "object""#)).unwrap();
+    // V18: an object in an object store is written once, in order from 0, by one upload
+    let v18 = |protocol: &str, op: &str| {
+        two(protocol, protocol).replacen(r#""body": []"#, &format!(r#""body": [{{"loop": {{"index": "i", "to": 1, "body": [{{"let": {{"name": "f", "value": {{"object": {{"namespace": "a", "fields": {{"k": {{"index": "i"}}}}}}}}}}}}, {op}]}}}}]"#), 1)
+    };
+    let obj = r#", "protocol": "object""#;
+    for flag in ["APPEND", "RDWR", "EXCL"] {
+        rejects(&v18(obj, &format!(r#"{{"open": {{"file": {{"ref": "f"}}, "flags": ["WRONLY", "CREAT", "{flag}"]}}}}"#)), "(V18)");
+    }
+    rejects(&v18(obj, r#"{"ftruncate": {"file": {"ref": "f"}, "len": 0}}"#), "has no ftruncate (V18)");
+    rejects(&v18(obj, r#"{"fallocate": {"file": {"ref": "f"}, "len": 4096}}"#), "has no fallocate (V18)");
+    aeiou::load_str(&v18(obj, r#"{"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}}"#)).unwrap();
+    aeiou::load_str(&v18("", r#"{"open": {"file": {"ref": "f"}, "flags": ["RDWR", "CREAT"]}}"#)).unwrap();
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 1, "body": [{"stat": {"file": {"ref": "nope"}}}]}}"#), "not in scope");
     rejects(&base(ds, r#"{"compute": {"ns": {"param": "missing"}}}"#), "unknown param");
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 4, "body": [{"let": {"name": "x", "value": {"cond": {"if": true, "then": {"at": {"ref": "x", "index": {"index": "i"}}}, "else": 1}}}}]}}"#), "provably >= 1");

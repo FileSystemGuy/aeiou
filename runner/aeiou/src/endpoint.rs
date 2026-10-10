@@ -9,13 +9,12 @@
 //! The protocol a name declares decides what an endpoint may be: a directory for `posix`,
 //! `s3://BUCKET[/PREFIX]` for `object` (`object.rs`, built with the cargo feature `object`).
 //! An object name has no default place, so every one needs an endpoint, and a name may not
-//! fall under a root placed for the other protocol. Object namespaces wait for the object
-//! writes (§3.65, step 3): only datasets, which are read, may be objects so far.
+//! fall under a root placed for the other protocol.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use crate::object::Store;
 
@@ -88,17 +87,6 @@ fn lookup(ast: &Ast, name: &str) -> Result<Option<(Protocol, String)>> {
         return Ok(Some((n.protocol.unwrap_or_default(), payload::namespace_root(ast, name)?)));
     }
     Ok(None)
-}
-
-/// Refuse an abstract that declares what the object engine does not do yet: an object
-/// namespace (the engine reads, and writes come next).
-pub fn check_protocols(ast: &Ast) -> Result<()> {
-    for name in ast.namespaces.keys() {
-        if let Some((Protocol::Object, _)) = lookup(ast, name)? {
-            bail!("namespace `{name}` is declared `protocol: object`, and the object engine does not write yet: only datasets may be objects so far (DESIGN_REVIEW.md §3.65, step 3)");
-        }
-    }
-    Ok(())
 }
 
 impl Endpoints {
@@ -292,7 +280,6 @@ mod tests {
         assert!(err(&["kv"]).contains("expected NAME=DIR"));
         assert!(err(&["kv=s3://b/kv"]).contains("`kv` is a `posix` dataset or namespace; its endpoint is a directory"));
         assert!(err(&["obj=/o"]).contains("`obj` is declared `protocol: object`; its endpoint is s3://BUCKET[/PREFIX]"));
-        assert!(format!("{:#}", check_protocols(&a).unwrap_err()).contains("namespace `obj` is declared `protocol: object`, and the object engine does not write yet"));
     }
 
     #[cfg(not(feature = "object"))]

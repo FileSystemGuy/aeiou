@@ -1555,8 +1555,10 @@ the same bytes for the same mistake but for the command's name.
 object`): the ops of a dataset declared `protocol: object` (contract 0.6) issued to an S3
 store through Apache `object_store` 0.14.2 (`aws` feature, pinned), the library chosen over
 `s3dlio` by measurement (`DESIGN_REVIEW.md` §3.65). The default build has no tokio, no
-`object_store`, and refuses an object endpoint (`Store` is an empty enum there). Reads first:
-object namespaces, and every op that would change a store, wait for the engine's writes.
+`object_store`, and refuses an object endpoint (`Store` is an empty enum there). ~~Reads first:
+object namespaces, and every op that would change a store, wait for the engine's writes.~~
+Reads first; the writes (object namespaces, every op that changes a store, the namespace
+manifest as an object) the same night.
 
 **Where.** `--endpoint NAME=s3://BUCKET[/PREFIX]` places an object name's root at a prefix,
 as a directory endpoint places a `posix` name's (§4, `endpoint.rs`): the path `ROOT/a/b` is
@@ -1572,22 +1574,41 @@ system for a path asks them first: the driver (`issue_blocking` routes an object
 (`Manifest::read_object`), the residency sample (skipped: no page cache of this host's to
 sample), and `aeiou datagen`.
 
-**The mapping** (the table of §3.65; reads):
+**The mapping** (the table of §3.65):
 
 | Op | Request |
 |---|---|
 | `open` (read) | none: the handle (`OpenFile::object`) is the store and the key, no descriptor, not counted among the open files |
+| `open` for writing (`WRONLY`, `CREAT`, `TRUNC`) | none: the handle carries an `Upload`, empty; the object is new whatever was at its key (a POSIX `open` without `CREAT` of a missing file would fail; the engine does not ask) |
+| `write` at the effective offset | the bytes, made from the payload (`run::fill`'s positional content), appended to the part being filled; a part of `--object-part-mib` that fills goes out before the write returns, the first starting a multipart upload (`CreateMultipartUpload`, `UploadPart`). An offset other than the bytes written so far is `ESPIPE` (V18) |
+| `close` of a handle opened for writing | one `PUT` of what was written when no part went out (an empty object for no writes), else the last part and `CompleteMultipartUpload`, so the close is a timed op that can carry most of an object's transfer; a sub-actor closing a handle it inherited sends nothing, as it closes no descriptor. An upload dropped unfinished (a failed run) is aborted |
 | `read` at the effective offset | one `GET` of `bytes=off-(off+len-1)` streamed into the actor's buffer ring (one copy, from the HTTP client's buffers); a range over the end is a short read, a start at or past it the server's 416, a read of 0 bytes |
-| `stat`, `fstat` | `HEAD`; a 404 is followed by a `LIST` below the key, size 0 when it finds one (a directory), `ENOENT` otherwise |
+| `stat`, `fstat` | `HEAD`; a 404 is followed by a `LIST` below the key, size 0 when it finds one (a directory), `ENOENT` otherwise. `fstat` of a handle being written is its written size, sent nothing; `stat` of an object not yet closed is `ENOENT`, as the store has none |
 | `readdir` | `LIST` with the delimiter `/` (`list_with_delimiter`, every page): objects plus common prefixes, names beginning `.aeiou` not counted |
-| `lseek`, `fadvise`, `fsync`, `fdatasync` | none |
+| `lseek`, `fadvise`, `fsync`, `fdatasync` | none (an upload is durable at its `close`; a seek away from the end shows at the next write) |
 | `ioctl` | none; `TCGETS` is `ENOTTY`, as for a regular file |
-| `open` for writing, `write`, `unlink`, `ftruncate`, `fallocate`, `mkdir`, `rmdir`, `rename` | `EROFS` |
+| `unlink` | `DELETE`; a missing key is no error, as S3 has it, so an `expect: [ENOENT]` is never used |
+| `rename` | a copy on the server (`CopyObject`) and a `DELETE` of the source: two requests, not atomic, a reader between them sees both names; a target outside the store is `EXDEV` |
+| `mkdir`, `rmdir` | none: a prefix is no object (and is not recorded among the objects created) |
+| `read` of a handle opened for writing | `EBADF`, as for `O_WRONLY` |
+| `open` with `APPEND`, `RDWR`, `EXCL`; `ftruncate`; `fallocate` | refused by V18 at `aeiou check` (`schema/README.md` §4); `EOPNOTSUPP` here should one come |
 
 The structural checks are the POSIX ones: a read returns the computed count, `readdir` the
 computed entries. Errors carry an errno for `expect` lists and the check (`object::errno_of`):
 `NotFound` is `ENOENT`, `PermissionDenied` and `Unauthenticated` `EACCES`, the rest `EIO`, with
 the store's message.
+
+**Namespaces.** An object namespace's root is a prefix (`run::prepare_namespaces`): rank 0
+`LIST`s every key below it before the gate and refuses a non-empty one, or, with
+`--clean-namespaces`, `DELETE`s them in batches (`delete_stream`), leaving the keys of a
+dataset placed below it; there is nothing to create. The namespace manifest is one `PUT` of
+`.aeiou-namespace.json` at the prefix after the run (`NamespaceManifest::write_object`),
+atomic as the rename into place is for a directory, and a run reading the namespace as
+`input` `GET`s it (`read_object`) for the same checks (V14, V15, `--max-gap`). The objects a
+run records as created are the ones it opened with `CREAT` or renamed to, as under POSIX.
+`--object-part-mib` (default 8, 5 to 5120, S3's bounds on a part; `run` only, layered,
+refused without an object name) sets the part size; `aeiou datagen` keeps 8 MiB. Memory: one
+part per handle open for writing, allocated at its first write.
 
 **Threads.** One multi-thread tokio runtime per process, built on the first object call
 with `--object-threads` workers (default 2; `run` and `datagen`, layered, refused when no
@@ -1600,7 +1621,7 @@ to its `posix` names) and refuses `io_uring` and `libaio` until a completion on 
 can wake an event loop. The limits check counts the workers among the threads (§11). The
 run prints `object engine: object_store 0.14.2  runtime threads N` and, under each object
 endpoint, that the mount counters and the residency sample do not cover it; the JSON report
-records `object_threads` and each endpoint's `uri`.
+records `object_threads`, `object_part_mib`, and each endpoint's `uri`.
 
 **`aeiou datagen`.** A `files` dataset declared `object`: the prefix must hold no key (a
 `LIST`); each file (or chunk object) is one `PUT`, or a multipart upload in parts of
@@ -1618,4 +1639,11 @@ that need one start MinIO from the binary `TEST_MINIO_BIN` names, on a free port
 directory of their own, and create the bucket with `curl --aws-sigv4`; they are skipped,
 saying so, when it is unset. CI's `runner-object` job downloads the last MinIO release that
 has binaries (`RELEASE.2025-09-07T16-13-09Z`; the project stopped publishing them and archived
-its repository) and checks its SHA-256 before running them.
+its repository) and checks its SHA-256 before running them. Since the writes: the shared KV
+store (`kv_cache_shared`) written into a bucket with 6 MiB chunks in 5 MiB parts (every chunk
+file a two-part upload, then a copy and a `DELETE`), to the dry run's fingerprint; a second
+run refused on the non-empty prefix and one with `--clean-namespaces` that empties it but the
+system prompts' keys; each object's bytes equal to the file a POSIX run of the same
+abstract writes under the same name, and no temporary name left; the reader
+(`kv_cache_shared_reader`) reading the namespace as `input` from its manifest object, to its
+fingerprint; and a write past the upload's end failing the run under V18.

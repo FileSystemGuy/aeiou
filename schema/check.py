@@ -234,6 +234,25 @@ class Check:
                         self.err(p + [key], f"{kind} on input namespace `{ns}`: input namespaces are read-only (V14)")
         if kind == "open" and set(a["flags"]) & WRITE_FLAGS and self.input_namespace_of(a["file"], scope):
             self.err(p + ["flags"], f"open for writing on input namespace `{self.input_namespace_of(a['file'], scope)}`: input namespaces are read-only (V14)")
+        # V18: an object in an object store is written once, in order from 0, by one upload
+        v18 = None
+        if kind == "open":
+            bad = [f for f in a["flags"] if f in ("APPEND", "RDWR", "EXCL")]
+            if bad:
+                v18 = ("flags", f"open with {bad[0]}")
+        elif kind in ("ftruncate", "fallocate"):
+            v18 = ("file", kind)
+        if v18:
+            ns = self.object_store_namespace(a["file"], scope)
+            if ns:
+                self.err(p + [v18[0]], f"{v18[1]} on namespace `{ns}`, declared `protocol: object`: an object is written once, in order from 0, and has no {v18[1]} (V18)")
+
+    def object_store_namespace(self, h, scope):
+        """Namespace name if the handle is (a binding to) an object of a namespace declared `protocol: object`."""
+        ns = self.object_namespace(h, scope) if isinstance(h, dict) else None
+        if ns and self.namespaces.get(ns, {}).get("protocol") == "object":
+            return ns
+        return None
 
     def input_namespace_of(self, h, scope):
         """Namespace name if the handle is (a binding to) an object of an `input` namespace."""

@@ -133,7 +133,7 @@ sides may come from different layers.
 `--ignore-limits`. Layered: `--root`, `--endpoint`, `--threads`, `--buffer-mib`, `--write-compress`,
 `--time-scale`, the io_uring knobs (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`,
 `--defer-taskrun`, `--coop-taskrun`), `--aio-depth`, `--mmap-mode`, `--mmap-consume`,
-`--object-threads`, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`, `--require-cold`,
+`--object-threads`, `--object-part-mib`, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`, `--require-cold`,
 `--drop-caches`, `--report-json`, `--report-takes`.
 
 **aeiou datagen** and **aeiou-datagen.** Fixed: the abstract, `--gpus`, `--param`,

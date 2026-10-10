@@ -624,6 +624,26 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        // V18: an object of a namespace in an object store is written once, in order, by one
+        // upload; the forms that would rewrite, extend, or read it in place have no object form
+        let v18 = match node {
+            Node::Open { file, flags, .. } => flags.iter().find(|f| matches!(f, OpenFlag::APPEND | OpenFlag::RDWR | OpenFlag::EXCL)).map(|f| (file, format!("open with {f:?}"), "flags")),
+            Node::Ftruncate { file, .. } => Some((file, "ftruncate".to_string(), "file")),
+            Node::Fallocate { file, .. } => Some((file, "fallocate".to_string(), "file")),
+            _ => None,
+        };
+        if let Some((h, what, key)) = v18 {
+            if let Some(ns) = self.object_store_namespace(h, scope) {
+                self.err(&p(pp, &[key]), format!("{what} on namespace `{ns}`, declared `protocol: object`: an object is written once, in order from 0, and has no {what} (V18)"));
+            }
+        }
+    }
+
+    /// Namespace name if the handle is (a binding to) an object of a namespace declared
+    /// `protocol: object`.
+    fn object_store_namespace(&self, h: &'a Handle, scope: &Scope<'a>) -> Option<&'a str> {
+        let ns = self.object_namespace(h, scope)?;
+        if self.ast.namespaces.get(ns).and_then(|n| n.protocol) == Some(Protocol::Object) { Some(ns) } else { None }
     }
 
     /// Namespace name if the handle is (a binding to) an object of an `input` namespace.

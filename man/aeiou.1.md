@@ -372,6 +372,12 @@ turns it off, and the last one on the line wins.
   Worker threads of the object engine's runtime, which drive its connections; each actor
   makes its requests on its own thread, one at a time. Only with a name placed in an
   object store; see OBJECT STORES. Default 2. *Layered.*
+- **--object-part-mib** *MIB*
+
+  Part size of the run's uploads to an object store, MiB (5 to 5120): an object written
+  through one handle goes out in parts of this size as it is written, and as one `PUT` at
+  its close when it fits in one. Only with a name placed in an object store; see OBJECT
+  STORES. Default 8. *Layered.*
 
 **Several hosts**
 
@@ -480,7 +486,7 @@ key `imagenet/00001/img_000001300.jpg` of the bucket `data`.
 
 ## OBJECT STORES
 
-A name declared `protocol: object` is read through the object engine, built on Apache
+A name declared `protocol: object` is read and written through the object engine, built on Apache
 `object_store` with the cargo feature `object` (a build without it refuses an object
 endpoint). The store is the one the environment names: `AWS_ENDPOINT_URL`,
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_ALLOW_HTTP=true` for a
@@ -490,12 +496,15 @@ same as under a directory.
 
 | Operation | Request |
 |---|---|
-| `open` | none: the handle is the key |
+| `open` for reading | none: the handle is the key |
 | `read` at an offset | one ranged `GET`, streamed into the actor's buffer; a short read at the object's end, 0 bytes past it |
-| `stat`, `fstat` | `HEAD`; for a key that is no object, a `LIST` below it, which succeeds (size 0) when there is a key there |
+| `open` for writing, `write`, `close` | an upload: the writes, each at the end of what the handle has written, fill a part of `--object-part-mib`; a full part goes out as a part of a multipart upload before the write returns; the `close` sends one `PUT` when no part has gone out, else the last part and the completion. The object exists from its `close` |
+| `stat`, `fstat` | `HEAD`; for a key that is no object, a `LIST` below it, which succeeds (size 0) when there is a key there; `fstat` of a handle being written is its written size, sent nothing |
 | `readdir` | `LIST` with the delimiter `/`: the objects and common prefixes, not counting names that begin with `.aeiou` |
-| `lseek`, `fadvise`, `fsync`, `fdatasync`, `ioctl` | none (an `ioctl` answers as for a regular file: `TCGETS` is `ENOTTY`) |
-| anything that writes | `EROFS`: the object engine reads datasets only, so far |
+| `unlink` | `DELETE` (a missing key is no error, as S3 has it) |
+| `rename` | a copy on the server and a `DELETE` of the source; not atomic |
+| `lseek`, `fadvise`, `fsync`, `fdatasync`, `ioctl`, `mkdir`, `rmdir` | none (an `ioctl` answers as for a regular file: `TCGETS` is `ENOTTY`; a prefix is no object) |
+| `O_APPEND`, `O_RDWR`, `O_EXCL`, `ftruncate`, `fallocate` | refused by rule V18 at `aeiou check` (**aeiou-abstract**(7)) |
 
 Each actor runs its requests on its own thread, one at a time (`Handle::block_on` on the
 engine's runtime, whose `--object-threads` workers drive the connections), so a run with
@@ -503,9 +512,14 @@ an object name uses an API with a thread per actor (`sync`, `posix-aio`, `mmap`;
 applies to the `posix` names) and refuses `io_uring` and `libaio`. **aeiou datagen**
 writes each file of an object dataset as one `PUT`, or as a multipart upload in 8 MiB
 parts when it is larger, and the manifest as one `PUT` at the prefix's root; the prefix
-must hold no key. A `regions` dataset has no object form. An object namespace is refused
-until the engine writes. The report's mount counters and the residency sample of
-`--require-cold` do not cover an object store, and the run says so.
+must hold no key. A `regions` dataset has no object form. An object namespace's root is a
+prefix: rank 0 finds it empty with a `LIST` (`--clean-namespaces` sends a `DELETE` of every
+key below it but those of a dataset placed there), and writes the namespace manifest as one
+`PUT` at it, where a run that reads the namespace as `input` finds it. A write at an offset
+the upload has not reached fails the run with `ESPIPE`: V18 refuses what it can see in the
+abstract, and offsets are positional, so the order is checked at the write. The report's
+mount counters and the residency sample of `--require-cold` do not cover an object store,
+and the run says so.
 
 ## METRICS
 

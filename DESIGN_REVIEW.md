@@ -4345,9 +4345,39 @@ datagen` writes object datasets as `PUT`s and 8 MiB multipart uploads, the manif
 to revision: `--object-threads` defaults to 2 (the workers only drive connections; the
 actor threads sign and build the requests), a directory `stat` costs a `HEAD` and a `LIST`
 (a real client checking a prefix does the same), and `aeiou-datagen` (the Python container
-writer) still writes to directories only. Not yet: object namespaces and every write (V18,
-`--object-part-size`), the event-loop bridge, the input-namespace manifest as an object, and
+writer) still writes to directories only. Not yet: ~~object namespaces and every write (V18,
+`--object-part-size`),~~ the event-loop bridge, ~~the input-namespace manifest as an object,~~ and
 a measurement against a real store (`runner/REFERENCE.md` §16).
+
+**Built (2026-10-09, later the same night), step 3 writes.** Object namespaces, by the table
+above: an `open` for writing gives the handle an upload; its writes fill a part of
+`--object-part-mib` (default 8) from the payload, a full part goes out before the write
+returns (the first starting the multipart upload), and the `close` sends one `PUT` when no
+part went out, else the last part and the completion, so an object exists from its `close`
+and the close is timed like any op; `unlink` is a `DELETE`, `rename` a server copy and a
+`DELETE`, `mkdir` and `rmdir` send nothing. A namespace root is a prefix: rank 0 refuses a
+non-empty one or, with `--clean-namespaces`, `DELETE`s its keys but a placed dataset's; the
+namespace manifest is one `PUT` at it, which an `input` reader `GET`s for V14, V15, and
+`--max-gap`. V18 in the three checkers (`validate.rs`, `schema/check.py`, the builder): no
+`open` with `APPEND`, `RDWR`, or `EXCL`, no `ftruncate`, no `fallocate` on an object
+namespace. Tested against MinIO with the shared KV pair: the writer's chunks (6 MiB, in two
+5 MiB parts, then renamed) reach the dry run's fingerprint and equal a POSIX run's files byte
+for byte, and the reader reads them back as its input to its own. *Choices made here, open to
+revision:* (1) V18 sees ops, not offsets, which are positional expressions, so "a write not
+sequential from 0" is refused at the write (`ESPIPE`, failing the run like a structural
+check) rather than at `aeiou check`; `dry-run` could find it before a run, since the op
+stream is fixed, but it knows no endpoints and would need the namespace of each path. (2)
+`O_EXCL` is refused rather than sent as a conditional create (`If-None-Match: *`), which
+`object_store` has for a single `PUT` but not for a multipart one; no traced application
+uses it. (3) An `open` for writing without `CREAT` sends nothing, so it never fails with
+`ENOENT` as POSIX would for a missing file, and `unlink` of a missing key succeeds, as S3
+has it: answering as POSIX would cost a `HEAD` each, a request no S3 application makes
+(charge the API only its own work). (4) `fstat` of a handle being written answers its
+written size locally; `stat` of an object before its `close` is `ENOENT`. (5) The option is
+`--object-part-mib`, after `--buffer-mib`, not the `--object-part-size` named above; it is
+the run's only, and `aeiou datagen` keeps 8 MiB parts (a dataset's part size is not what a
+run measures). Not yet: the event-loop bridge, `aeiou-datagen` to object stores, a
+measurement against a real store.
 
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's

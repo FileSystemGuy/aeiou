@@ -223,6 +223,11 @@ struct RunCmd {
     /// store. Default 2.
     #[arg(long, value_name = "N", help_heading = "Object engine")]
     object_threads: Option<usize>,
+    /// Part size of the run's uploads to an object store, MiB (5 to 5120): an object written
+    /// through one handle goes out in parts of this size as it is written, and as one PUT at
+    /// its close when it fits in one. Only with a name placed in an object store. Default 8.
+    #[arg(long, value_name = "MIB", help_heading = "Object engine")]
+    object_part_mib: Option<u64>,
     /// This host's index among --ranks hosts. Default 0.
     #[arg(long, value_name = "R", help_heading = "Several hosts")]
     rank: Option<i64>,
@@ -304,6 +309,7 @@ struct RunOptions {
     mmap_mode: Option<String>,
     mmap_consume: Option<String>,
     object_threads: Option<usize>,
+    object_part_mib: Option<u64>,
     rank: i64,
     ranks: i64,
     coordinator: Option<String>,
@@ -362,6 +368,7 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         mmap_mode: l.layered("mmap-mode", a.mmap_mode, None)?,
         mmap_consume: l.layered("mmap-consume", a.mmap_consume, None)?,
         object_threads: l.layered("object-threads", a.object_threads, None)?,
+        object_part_mib: l.layered("object-part-mib", a.object_part_mib, None)?,
         rank: l.layered("rank", a.rank, Some(0))?.unwrap_or(0),
         ranks: l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1),
         coordinator: l.layered("coordinator", a.coordinator, None)?,
@@ -532,7 +539,6 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
-    aeiou::endpoint::check_protocols(&loaded.ast)?;
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
@@ -647,6 +653,22 @@ fn object_engine(endpoints: &aeiou::endpoint::Endpoints, given: Option<usize>, l
     Ok(Some(n))
 }
 
+/// The part size of a run's uploads, MiB, when a name is placed in an object store.
+fn object_part(endpoints: &aeiou::endpoint::Endpoints, given: Option<u64>, l: &Layers) -> Result<Option<u64>> {
+    if !endpoints.any_object() {
+        if given.is_some() {
+            aeiou::usage!("--object-part-mib: no dataset or namespace is placed in an object store{}", l.from(&["object-part-mib"]));
+        }
+        return Ok(None);
+    }
+    let mib = given.unwrap_or(aeiou::object::DEFAULT_PART >> 20);
+    if !(aeiou::object::MIN_PART >> 20..=aeiou::object::MAX_PART >> 20).contains(&mib) {
+        aeiou::usage!("--object-part-mib {mib}: S3 takes parts of 5 MiB to 5 GiB{}", l.from(&["object-part-mib"]));
+    }
+    aeiou::object::set_part_size(mib << 20);
+    Ok(Some(mib))
+}
+
 /// What a run or a datagen prints of the object engine.
 fn object_line(threads: Option<usize>) -> Option<String> {
     threads.map(|n| format!("object engine: object_store {}  runtime threads {n}", aeiou::object::LIBRARY_VERSION))
@@ -669,11 +691,11 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     let cfg = parse_config(&a.run.shape, a.gpus, a.run.seed)?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
-    aeiou::endpoint::check_protocols(&loaded.ast)?;
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &a.endpoints)?;
     let declared = aeiou::backend::declared(&loaded.ast)?;
     let backend = run_backend(a, declared)?;
     let object_threads = object_engine(&endpoints, a.object_threads, layers)?;
+    let object_part = object_part(&endpoints, a.object_part_mib, layers)?;
     if endpoints.any_object() && backend.event_loop() {
         aeiou::usage!("--io-api {}: an event loop cannot wait on the object engine yet; the names placed in an object store run under a thread-per-actor API (`sync`, `posix-aio`, `mmap`; DESIGN_REVIEW.md §3.65)", backend.api.name());
     }
@@ -744,10 +766,13 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
         writeln!(out, "{line}")?;
     }
     if let Some(line) = object_line(object_threads) {
-        writeln!(out, "{line}")?;
+        writeln!(out, "{line}  part {} MiB", object_part.unwrap_or(0))?;
     }
     if let Some(n) = object_threads {
         doc.set("object_threads", serde_json::json!(n));
+    }
+    if let Some(n) = object_part {
+        doc.set("object_part_mib", serde_json::json!(n));
     }
 
     let checks = run::check_datasets(loaded, cfg, &(a.root.as_path(), &endpoints))?;

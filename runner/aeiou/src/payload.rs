@@ -292,11 +292,30 @@ impl NamespaceManifest {
     pub fn read(dir: &Path) -> Result<NamespaceManifest> {
         let path = dir.join(NAMESPACE_MANIFEST_NAME);
         let text = std::fs::read_to_string(&path).with_context(|| format!("no namespace manifest at {}", path.display()))?;
-        let m: NamespaceManifest = serde_json::from_str(&text).with_context(|| format!("{}: not a namespace manifest", path.display()))?;
+        NamespaceManifest::parse(&text, &path.display().to_string())
+    }
+
+    /// The manifest object at the root `rest` of an object store.
+    pub fn read_object(store: &crate::object::Store, rest: &str) -> Result<NamespaceManifest> {
+        let key = join_key(rest, NAMESPACE_MANIFEST_NAME);
+        let what = store.show(&key);
+        let bytes = store.get(&key)?.ok_or_else(|| anyhow!("no namespace manifest at {what}"))?;
+        NamespaceManifest::parse(&String::from_utf8_lossy(&bytes), &what)
+    }
+
+    fn parse(text: &str, what: &str) -> Result<NamespaceManifest> {
+        let m: NamespaceManifest = serde_json::from_str(text).with_context(|| format!("{what}: not a namespace manifest"))?;
         if m.manifest_version != NAMESPACE_MANIFEST_VERSION {
-            bail!("{}: manifest_version {} (this runner writes {})", path.display(), m.manifest_version, NAMESPACE_MANIFEST_VERSION);
+            bail!("{what}: manifest_version {} (this runner writes {})", m.manifest_version, NAMESPACE_MANIFEST_VERSION);
         }
         Ok(m)
+    }
+
+    /// One `PUT` at the root `rest` of an object store, which no reader sees half written.
+    pub fn write_object(&self, store: &crate::object::Store, rest: &str) -> Result<String> {
+        let key = join_key(rest, NAMESPACE_MANIFEST_NAME);
+        store.put(&key, serde_json::to_string_pretty(self)?.into_bytes())?;
+        Ok(store.show(&key))
     }
 
     pub fn write(&self, dir: &Path) -> Result<PathBuf> {
