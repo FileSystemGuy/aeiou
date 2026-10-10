@@ -4405,6 +4405,55 @@ second op on it meanwhile (two actors writing one object at once, which V18's or
 could meet only by timing) fails with `EBUSY`, under every API; before, `sync` serialized
 them on a lock. (4) The report counts no object op in the ring's in-flight peak.
 
+**Decided (2026-10-09, after the bridge), an API per protocol; contract 0.7.** The bridge
+showed that `--io-api io_uring` never named what carried an object op: the S3 requests went
+through `object_store` over tokio and `epoll` on the runtime's workers, the ring only waking
+the loop, and the run printed `io-api io_uring` all the same. One API flag pretended there
+was one choice where there is one per protocol (no POSIX API carries a `GET`, no S3 client a
+`pread`). Decided with the user:
+- **A flag per protocol, its value the API on it.** `--posix sync|posix-aio|libaio|io_uring|mmap`
+  replaces `--io-api` (renamed outright, no alias); `--s3 blocking|async` names how the
+  application's S3 client uses the store: a thread blocked per request (boto3) or an async
+  client with many requests in flight per thread (aiobotocore, the CRT). The value names the
+  client's behaviour, which changes the requests the store sees; the library that emulates
+  it (`object_store`) is the runner's tooling, printed and recorded, never chosen. `--posix`
+  with no value fails loudly (the short form chosen over `--posix-api`).
+- **Dialects are protocols.** `protocol: s3` replaces `protocol: object` (and `azblob`, `gcs`
+  come with their engines, never before: no flag or value for an engine not built). Their
+  write paths differ (multipart, put-block and commit-list, resumable uploads), and §3.65's
+  mapping table and V18 are S3's. An endpoint's scheme must agree with its name's protocol.
+- **`--cache` is POSIX-only.** Given to a run with no POSIX name it fails loudly; in a run with
+  both it applies to the POSIX names and says nothing. The same holds for `--posix` and the
+  ring knobs; `--s3` and the object options fail loudly with no S3 name.
+- **Scheduling follows the APIs.** A run uses event loops when any protocol's API is
+  event-driven (`io_uring`, `libaio`, `async`), a thread per actor otherwise; a run with both
+  protocols whose APIs disagree (`--posix sync --s3 async`, `--posix io_uring --s3 blocking`)
+  is refused until a traced application shows that mix. A run of S3 names alone under `async`
+  waits on its eventfd alone, with no ring.
+- **The abstract declares both, mirroring the flags (contract 0.7).** Its top-level keys
+  `posix`, `cache`, and `s3` replace `api` and `cache`; an undeclared one defaults (`sync`,
+  `per-open`, `blocking`); a run under another value of a declared one is another workload,
+  as for the POSIX API since §3.48. The report and the output name each: `posix`, `cache`,
+  `s3`, each with its declared value.
+
+*Built the same night.* Contract 0.7 in the schema, `check.py`, the builder
+(`Workload(posix=, cache=, s3=)`), and the runner; every committed AST regenerated, no
+fingerprint changed; rule V19 in the three checkers; `--posix` and `--s3` on `aeiou run`
+(fixed options, as the API always was); the report's `posix`, `cache`, `s3` and their
+`_declared` twins; the run's line `posix X  cache Y  s3 Z  root …` naming only the protocols
+with names, and `s3 engine: object_store 0.14.2 on tokio (epoll sockets)  runtime threads N`.
+Tested against MinIO: S3 names alone under `blocking` and `async`, the KV namespace written
+under `async`, and a mixed run (the system prompts in directories, the chunks in the bucket)
+under `--posix io_uring --s3 async`, each to the dry run's fingerprint, and the refusals.
+*Choices made here, open to revision:* (1) a `trace` node counts as a POSIX name (its files
+are under `--root`), and an abstract with no dataset or namespace at all is POSIX; (2) S3
+names alone under `async` run on loops with no ring (`uring::WaitIo`, a `poll(2)` of the
+loop's eventfd), so such a run needs no io_uring in the kernel; (3) "POSIX options" refused
+without a `posix` name are `--posix`, `--cache`, the ring knobs, `--aio-depth`, and the
+`mmap` knobs, listed together in one message; (4) the report's fields for a protocol
+without names are `null`, not absent; (5) the old flag and key are gone, not aliased (no
+users).
+
 ~~**Open for the user.** Whether the axes and their owners are right; whether mixed protocols
 are designed in now (proposed) or deferred; the contract change; which real application's
 object I/O the first object abstract stands for, since under CLOSED a run over S3 of an

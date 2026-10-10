@@ -205,7 +205,7 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
     # the thread-per-actor backends and both event-loop engines issue the same ops over the same corpus
     for backend in ("sync", "io_uring", "posix-aio", "libaio", "mmap"):
         run = subprocess.run([RUNNER, "run", ast_path, "--root", root, "--gpus", "2", "--seed", "3", "--time-scale", "0",
-                              "--io-api", backend, "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
+                              "--posix", backend, "--expect-fingerprint", fp, *flags], capture_output=True, text=True)
         assert run.returncode == 0, backend + ": " + run.stdout + run.stderr
         assert "fingerprint matches" in run.stdout
         if name == "train_stream_parquet":
@@ -240,7 +240,7 @@ def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(
 @needs_runner
 def test_size_draws_match_the_runner(tmp_path):
     """The Python `sample_size` port against sizes the Rust datagen wrote."""
-    ast = {"ast": "0.6", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,
+    ast = {"ast": "0.7", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,
            "size": {"mixture": [{"weight": 1, "dist": {"normal": {"mean": 50000, "sd": 20000, "min": 100}}},
                                 {"weight": 1, "dist": {"lognormal": {"median": 30000, "sigma": 0.7, "min": 1, "max": 90000}}},
                                 {"weight": 1, "dist": {"uniform": {"lo": 10, "hi": 5000}}},

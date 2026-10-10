@@ -1,5 +1,5 @@
 //! The object engine (`object.rs`, the cargo feature `object`) through the binary: `aeiou
-//! datagen` writes a dataset declared `protocol: object` into a MinIO bucket, the bytes of
+//! datagen` writes a dataset declared `protocol: s3` into a MinIO bucket, the bytes of
 //! each object are the bytes the POSIX writer puts in the file of the same name (a multipart
 //! upload included), and `aeiou run` reads it back to the dry run's fingerprint, every read
 //! returning the computed count; a run writes a namespace into a bucket (uploads, multipart
@@ -33,18 +33,25 @@ fn examples() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/examples")
 }
 
-/// A committed example with its datasets and namespaces `names` declared `protocol: object`,
-/// as a file in `dir`.
+/// A committed example with its datasets and namespaces `names` declared `protocol: s3`, as a
+/// file in `dir`; when no name is left `posix`, its declared POSIX API and cache mode go too
+/// (V19: an API only for a protocol with names).
 fn object_variant(example: &str, names: &[&str], dir: &Path) -> PathBuf {
     let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(examples().join(format!("{example}.ast.json"))).unwrap()).unwrap();
     for n in names {
         if let Some(ns) = d.get_mut("namespaces").and_then(|v| v.get_mut(*n)) {
-            ns["protocol"] = "object".into();
+            ns["protocol"] = "s3".into();
             continue;
         }
         let ds = d["datasets"][*n].as_object_mut().unwrap();
         let (_, body) = ds.iter_mut().next().unwrap();
-        body["protocol"] = "object".into();
+        body["protocol"] = "s3".into();
+    }
+    let all = d.get("datasets").and_then(|v| v.as_object()).map_or(0, |m| m.len()) + d.get("namespaces").and_then(|v| v.as_object()).map_or(0, |m| m.len());
+    if names.len() == all {
+        let top = d.as_object_mut().unwrap();
+        top.remove("posix");
+        top.remove("cache");
     }
     let p = dir.join(format!("{example}.object.ast.json"));
     std::fs::write(&p, serde_json::to_string(&d).unwrap()).unwrap();
@@ -139,7 +146,7 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
         aeiou(Some(&m), &a)
     };
     let out = ok(&gen(&root, "train=s3://bench/large"));
-    assert!(out.contains("object engine: object_store 0.14.2  runtime threads 2"), "{out}");
+    assert!(out.contains("s3 engine: object_store 0.14.2 on tokio (epoll sockets)  runtime threads 2"), "{out}");
     assert!(out.contains("at s3://bench/large  id "), "{out}");
     // a dataset is written once: the prefix is not empty now
     refused(&gen(&root, "train=s3://bench/large"), "s3://bench/large is not empty");
@@ -169,12 +176,13 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
     let out = ok(&aeiou(Some(&m), &a));
     assert!(out.contains("fingerprint matches"), "{out}");
     assert!(out.contains("s3://bench/large is an object store: the report's mount counters and the residency sample do not cover it"), "{out}");
-    // the run's other APIs leave the object engine's ops alone, the event loops waiting on it
-    for api in ["posix-aio", "mmap", "io_uring", "libaio"] {
-        let mut a = vec!["run", ast, "--gpus", "1", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/large", "--expect-fingerprint", &want, "--io-api", api];
-        a.extend(params);
-        assert!(ok(&aeiou(Some(&m), &a)).contains("fingerprint matches"), "{api}");
-    }
+    assert!(out.contains("s3 blocking  root") && out.contains("s3 engine: object_store") && !out.contains("cache per-open"), "{out}");
+    // the async client: event loops waiting on the engine's answers, with no ring
+    let mut a = vec!["run", ast, "--gpus", "1", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/large", "--expect-fingerprint", &want, "--s3", "async"];
+    a.extend(params);
+    let out = ok(&aeiou(Some(&m), &a));
+    assert!(out.contains("fingerprint matches") && out.contains("s3 async  root"), "{out}");
+    assert!(out.contains("s3 async is not the abstract's (s3 blocking)"), "{out}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -201,7 +209,7 @@ fn listings_and_stats_of_prefixes_read_like_directories() {
     assert!(out.contains("fingerprint matches"), "{out}");
     assert!(out.contains("readdir=8"), "{out}");
     // the same under an event loop: stats, listings, and short reads come back to the loop
-    let mut a = vec!["run", ast, "--gpus", "2", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/small/t", "--expect-fingerprint", &want, "--io-api", "io_uring", "--threads", "1"];
+    let mut a = vec!["run", ast, "--gpus", "2", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/small/t", "--expect-fingerprint", &want, "--s3", "async", "--threads", "1"];
     a.extend(params);
     let out = ok(&aeiou(Some(&m), &a));
     assert!(out.contains("fingerprint matches") && out.contains("readdir=8"), "{out}");
@@ -256,7 +264,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     // POSIX run's files are compared with below
     refused(&call(Some(&m), with("run", writer, &at)), "namespace `kv` root s3://bench/kvs is not empty");
     let mut a = at.to_vec();
-    a.extend(["--expect-fingerprint", &want, "--clean-namespaces", "--object-part-mib", "5", "--io-api", "io_uring"]);
+    a.extend(["--expect-fingerprint", &want, "--clean-namespaces", "--object-part-mib", "5", "--s3", "async"]);
     let out = ok(&call(Some(&m), with("run", writer, &a)));
     assert!(out.contains("namespace root kv/ emptied") && out.contains("fingerprint matches"), "{out}");
 
@@ -288,16 +296,31 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     let out = ok(&call(Some(&m), with("run", reader, &a)));
     assert!(out.contains("input namespace(s) kv at kv/: written by `kv_cache_shared`"), "{out}");
     assert!(out.contains("fingerprint matches"), "{out}");
-    a.extend(["--io-api", "libaio"]);
+    a.extend(["--s3", "async"]);
     assert!(ok(&call(Some(&m), with("run", reader, &a))).contains("fingerprint matches"));
+
+    // both protocols in one run: the system prompts in a directory, the chunks in the bucket,
+    // on the ring and through the engine from the same loops
+    std::fs::create_dir_all(dir.join("mixed")).unwrap();
+    let mixed = object_variant("kv_cache_shared", &["kv"], &dir.join("mixed"));
+    let mixed = mixed.to_str().unwrap();
+    let mroot = dir.join("mixed/root");
+    let mroot = mroot.to_str().unwrap();
+    // the prompts' roots lie inside the namespace's: they are placed in directories of their own
+    let (sysp, subp) = (format!("sysp={mroot}/sysp"), format!("subp={mroot}/subp"));
+    let mat = ["--root", mroot, "--endpoint", "kv=s3://bench/kvmix", "--endpoint", &sysp, "--endpoint", &subp];
+    ok(&call(Some(&m), with("datagen", mixed, &mat)));
+    let want = fingerprint(&ok(&call(None, with("dry-run", mixed, &[]))));
+    let out = ok(&call(Some(&m), with("run", mixed, &[&mat[..], &["--expect-fingerprint", &want, "--posix", "io_uring", "--s3", "async"]].concat())));
+    assert!(out.contains("fingerprint matches") && out.contains("posix io_uring  cache per-open  s3 async  root"), "{out}");
 
     // a write the upload has not reached is refused when it comes (V18: offsets are positional,
     // so the order is known at the write), and the upload is abandoned
     let skip = dir.join("skip.ast.json");
     std::fs::write(
         &skip,
-        r#"{"ast": "0.6", "name": "skip",
-            "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "object"}},
+        r#"{"ast": "0.7", "name": "skip",
+            "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": 1, "body": [
                 {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
                 {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}},
@@ -323,8 +346,20 @@ fn object_names_need_object_endpoints() {
         a.extend(extra);
         aeiou(None, &a)
     };
-    refused(&run(&[]), "`train` is declared `protocol: object` and has no object endpoint: give it --endpoint train=s3://BUCKET[/PREFIX]");
-    refused(&run(&["--endpoint", "train=/somewhere"]), "`train` is declared `protocol: object`; its endpoint is s3://BUCKET[/PREFIX]");
+    refused(&run(&[]), "`train` is declared `protocol: s3` and has no object endpoint: give it --endpoint train=s3://BUCKET[/PREFIX]");
+    refused(&run(&["--endpoint", "train=/somewhere"]), "`train` is declared `protocol: s3`; its endpoint is s3://BUCKET[/PREFIX]");
+    // an option for a protocol without names changes nothing, and is refused (§3.65)
+    refused(&run(&["--endpoint", "train=s3://bench/t", "--posix", "io_uring"]), "--posix: POSIX options, and every dataset and namespace is `protocol: s3`");
+    refused(&run(&["--endpoint", "train=s3://bench/t", "--cache", "direct", "--sqpoll", "10"]), "--cache, --sqpoll: POSIX options, and every dataset and namespace is `protocol: s3`");
+    refused(&run(&["--endpoint", "train=s3://bench/t", "--s3", "threads"]), "--s3 threads: not one of blocking, async");
+    refused(&run(&["--endpoint", "train=s3://bench/t", "--threads", "2"]), "--threads sets the event-loop threads");
+    // both protocols: their APIs are of one kind
+    let mixed = object_variant("kv_cache_shared", &["kv"], &dir);
+    let at = ["run", mixed.to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "kv=s3://bench/x", "--endpoint", "sysp=/p/sysp", "--endpoint", "subp=/p/subp"];
+    let o = aeiou(None, &[&at[..], &["--posix", "io_uring"]].concat());
+    refused(&o, "--posix io_uring with --s3 blocking: one is event-driven and the other a thread per actor");
+    let o = aeiou(None, &[&at[..], &["--s3", "async", "--posix", "mmap"]].concat());
+    refused(&o, "--posix mmap with --s3 async");
     refused(&run(&["--endpoint", "train=s3://bench/t", "--object-threads", "0"]), "--object-threads 0");
     refused(&run(&["--endpoint", "train=s3://bench/t", "--object-part-mib", "4"]), "--object-part-mib 4: S3 takes parts of 5 MiB to 5 GiB");
     // a posix abstract has no use for the engine's threads or an object endpoint
@@ -335,8 +370,16 @@ fn object_names_need_object_endpoints() {
     refused(&o, "--object-part-mib: no dataset or namespace is placed in an object store");
     let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "train=s3://bench/t"]);
     refused(&o, "`train` is a `posix` dataset or namespace; its endpoint is a directory");
+    let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--s3", "async"]);
+    refused(&o, "--s3: no dataset or namespace is `protocol: s3`");
+    let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--posix"]);
+    refused(&o, "a value is required for '--posix <API>'");
     // a regions file has no object form
     let vdb = object_variant("vdb_search_diskann", &["index"], &dir);
+    // its other names stay posix under its declared `libaio`, so the S3 client is async (V19)
+    let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&vdb).unwrap()).unwrap();
+    d["s3"] = "async".into();
+    std::fs::write(&vdb, d.to_string()).unwrap();
     refused(&aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb"]), "dataset `index`: a `regions` dataset is a sparse layout written at offsets and has no object form");
     std::fs::remove_dir_all(&dir).unwrap();
 }

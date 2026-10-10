@@ -29,7 +29,7 @@ python3 schema/check.py path/to/x.ast.json   # one file
   distribution parameters.
 - **Identifiers** are `[a-z_][a-z0-9_]*`. `gpus` is a reserved parameter set by `--gpus`.
 - **One format: JSON.** The on-disk form is JSON, pretty-printed with two-space indentation
-  and the builder's key order (`ast`, `name`, `doc`, `api`, `cache`, `params`, `datasets`, `namespaces`,
+  and the builder's key order (`ast`, `name`, `doc`, `posix`, `cache`, `s3`, `params`, `datasets`, `namespaces`,
   `actors`, `provenance`), file suffix `.ast.json`. The identity of an AST is the SHA-256 of
   its canonical form: the same JSON with keys sorted, no whitespace, ASCII escapes, floats in
   Python `repr` (shortest round-trip), and the `provenance` block removed. `check.py` prints
@@ -38,13 +38,17 @@ python3 schema/check.py path/to/x.ast.json   # one file
   (PyYAML) and YAML 1.2 (the Rust crates) parse the same bytes differently, `serde_yaml` is
   unmaintained, and nobody hand-writes ASTs, so the readability YAML bought was not worth a
   second grammar on the contract.
-- **Declared backend** (0.3, 2026-10-01; two keys since 0.6, 2026-10-09). ~~The optional
+- **Declared backend** (0.3, 2026-10-01; two keys since 0.6, three since 0.7, 2026-10-09). ~~The optional
   root key `backend` names the API the traced application issues its I/O through, as a
-  runner backend name (`sync`, `mmap`, …); absent means `sync`.~~ The optional root key `api`
-  names the API the traced application issues its I/O through (`sync`, `io_uring`,
+  runner backend name (`sync`, `mmap`, …); absent means `sync`.~~ ~~The optional root key `api`
+  names the API the traced application issues its I/O through~~ One API per protocol, the
+  keys mirroring the runner's options: the optional root key `posix` names the API the
+  traced application issues the I/O of its `posix` names through (`sync`, `io_uring`,
   `posix-aio`, `libaio`, `mmap`); absent means `sync`. The optional `cache` is `direct` for
   an application that opens every regular file `O_DIRECT`, never under `mmap` (the schema
   and the validator refuse the pair); absent means `per-open`, the open flags of the ops.
+  The optional `s3` says how its S3 client uses the store for its `s3` names: `blocking`
+  (absent) or `async`. V19 (§4) relates the three to the protocols the abstract has names on.
   They are part of the document and of its hash, and of nothing else: the op stream and the
   fingerprint are the same under every backend. `aeiou run` uses them by default, and a run
   under another backend reports both (`DESIGN_REVIEW.md` §3.48, §3.65).
@@ -236,23 +240,31 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   (`DESIGN_REVIEW.md` §3.52, §3.54).
 
 - **V17 namespaces sharing a root declare one protocol** (added 2026-10-09, contract 0.6). A
-  dataset or namespace may declare `protocol: object` (absent: `posix`): where it lives, which
+  dataset or namespace may declare `protocol: s3` (`object` until 0.7; absent: `posix`): where it lives, which
   a run places with `--endpoint` (`runner/REFERENCE.md` §4). Namespaces sharing a root share
   its place as they share its manifest (V14), so they agree on the protocol. Datasets need
   no such rule, since their roots are distinct (V13). The protocol is not part of a dataset
   id or a namespace's resolved definition: where a corpus lives is not what it is. ~~The
-  runner refuses `object` until its object engine is built~~ The runner reads an `object`
+  runner refuses `object` until its object engine is built~~ The runner reads an `s3`
   dataset through its object engine (`runner/REFERENCE.md` §16, 2026-10-09) ~~and refuses an
   `object` namespace until the engine writes~~ and, since the engine writes (the same night),
-  reads and writes an `object` namespace too, under V18 (`DESIGN_REVIEW.md` §3.65).
+  reads and writes an `s3` namespace too, under V18 (`DESIGN_REVIEW.md` §3.65).
 - **V18 an object is written once, in order** (added 2026-10-09, contract 0.6, before any
   committed AST declared an object namespace). An object of a namespace declared `protocol:
-  object` is made by one upload: the writes of one handle, each at the end of the last, sent
+  s3` is made by one upload: the writes of one handle, each at the end of the last, sent
   at its `close` (`runner/REFERENCE.md` §16). So the forms that rewrite, extend, or read an
   object in place have no object form and are refused: `open` with `APPEND`, `RDWR`, or
   `EXCL` (a conditional create the engine does not send), `ftruncate`, and `fallocate`. The
   validator sees the ops, not the offsets, which are positional expressions: a write the
   upload has not reached fails the run when it comes (`ESPIPE`), as a structural check does.
+- **V19 an API for each protocol with names, of one kind** (added 2026-10-09, contract 0.7).
+  `posix` and `cache` are declared only when the abstract has a `posix` name (a dataset or
+  namespace declaring it or none, or a `trace` node, whose files are under `--root`), `s3`
+  only when it has an `s3` name: an API for a protocol without names would change nothing.
+  With both, the declared APIs, defaults counted, are of one kind: `async` with `io_uring`
+  or `libaio`, `blocking` with `sync`, `posix-aio`, or `mmap`. A run puts its actors on event
+  loops when either API is event-driven, and a mix (a thread blocked on S3 while a loop runs
+  its POSIX ops) waits for a traced application that shows it (`DESIGN_REVIEW.md` §3.65).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -406,3 +418,10 @@ examples; the reasoning is `DESIGN_REVIEW.md` §3.27.
   `protocol` on `files` and `regions` datasets and on namespaces, and rule V17 (§4); no
   committed AST declares it. Every committed AST was regenerated; no fingerprint changed.
   Later the same night, rule V18 (§4), with the object engine's writes; no AST changed.
+- **0.7** (2026-10-09, the same night): an API per protocol (`DESIGN_REVIEW.md` §3.65). The
+  root key `api` renamed `posix`, a new root key `s3` (`blocking`, `async`), the protocol
+  `object` renamed `s3` (the dialects are protocols of their own: `azblob` and `gcs` come
+  with their engines), and rule V19 (§4). A 0.6 document maps by renaming (`api` to `posix`,
+  `protocol: object` to `protocol: s3`); the committed ASTs declared `api` in three
+  (`model_load`, `vdb_search_ivf`, `vdb_search_diskann`) and no protocol. Every committed AST
+  was regenerated; no fingerprint changed.

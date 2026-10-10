@@ -758,6 +758,96 @@ impl Objects {
     }
 }
 
+/// The engine of a loop with no POSIX API: a run of S3 names alone under `--s3 async`.
+/// Every op goes to the object engine, so this carries none; it only waits for the loop's
+/// eventfd (`poll(2)`), which the runtime's workers write, or for the next timer.
+pub(crate) struct WaitIo {
+    efd: Option<RawFd>,
+}
+
+impl Engine for WaitIo {
+    fn issue(&mut self, _: &Shared, _: &mut TaskIo, op: &Op) -> Result<Issued> {
+        bail!("{} {}: a POSIX op on a loop with no POSIX API (every name of the abstract is `protocol: s3`)", op.kind.name(), op.path)
+    }
+
+    fn complete(&mut self, _: &Shared, _: &mut TaskIo, op: &Op, _: i32) -> std::io::Result<i64> {
+        unreachable!("{} {}: no op is in flight on a loop with no POSIX API", op.kind.name(), op.path)
+    }
+
+    fn in_flight(&self) -> usize {
+        0
+    }
+
+    fn post_wake(&mut self, efd: RawFd, _: *mut u64) -> Result<()> {
+        self.efd = Some(efd);
+        Ok(())
+    }
+
+    fn wait(&mut self, timeout: Duration, out: &mut Vec<(u64, i32)>) -> Result<()> {
+        let Some(efd) = self.efd else {
+            std::thread::sleep(timeout);
+            return Ok(());
+        };
+        let mut p = libc::pollfd { fd: efd, events: libc::POLLIN, revents: 0 };
+        let ms = timeout.as_millis().clamp(0, i32::MAX as u128) as i32;
+        // SAFETY: one live pollfd
+        let n = unsafe { libc::poll(&mut p, 1, ms) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            return if e.raw_os_error() == Some(libc::EINTR) { Ok(()) } else { Err(e).context("poll") };
+        }
+        if n > 0 {
+            // take the count, so the next poll waits for the next write
+            let mut v = 0u64;
+            unsafe { libc::read(efd, &mut v as *mut u64 as *mut libc::c_void, 8) };
+            self.efd = None;
+            out.push((EFD, 0));
+        }
+        Ok(())
+    }
+}
+
+/// Run this host's instances over loops of `WaitIo`; returns how many loop threads ran.
+pub(crate) fn run_s3(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<usize> {
+    let per = spread(sh, counts, ranges);
+    let loops = per.len();
+    std::thread::scope(|s| {
+        let handles: Vec<_> = per
+            .into_iter()
+            .enumerate()
+            .map(|(i, insts)| {
+                let sh = sh.clone();
+                std::thread::Builder::new()
+                    .name(format!("s3 loop {i}"))
+                    .spawn_scoped(s, move || {
+                        let r = Loop::with(sh.clone(), i, WaitIo { efd: None }).and_then(|mut l| l.run(model, insts));
+                        if r.is_err() {
+                            sh.aborted.store(true, Ordering::Relaxed);
+                        }
+                        r
+                    })
+                    .expect("spawn event loop")
+            })
+            .collect();
+        let mut first: Option<anyhow::Error> = None;
+        for h in handles {
+            match h.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    first.get_or_insert(e);
+                }
+                Err(_) => {
+                    first.get_or_insert(anyhow!("an event loop panicked"));
+                }
+            }
+        }
+        match first {
+            Some(e) => Err(e),
+            None => Ok(loops),
+        }
+    })
+}
+
 /// Issue `op` through the object engine when its path lives in an object store, through the
 /// loop's engine otherwise.
 fn issue<E: Engine>(io: &mut E, objects: &mut Objects, sh: &Shared, t: &mut TaskIo, op: &Op) -> Result<Issued> {

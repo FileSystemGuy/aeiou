@@ -49,12 +49,14 @@ of the operation's kind, actor, indices, effective offset, length, flags, and pa
 order, phases, `expect` lists, and results are not hashed. Two runs with the same
 fingerprint executed the same multiset of positioned operations.
 
-**Backend.** The optional root key `api` names the API the traced application issues its
-I/O through (`sync`, `io_uring`, `posix-aio`, `libaio`, `mmap`); absent means `sync`. The
-optional `cache` is `direct` for an application that opens every regular file `O_DIRECT`
-(not under `mmap`); absent means `per-open`, the open flags of the operations. The runner
-uses both by default; the operation stream and the fingerprint are the same under every
-backend. (Contract 0.6; one key `backend` from 0.3 until then.)
+**Backend.** One API per protocol, mirroring the runner's options. The optional root key
+`posix` names the API the traced application issues the I/O of its `posix` names through
+(`sync`, `io_uring`, `posix-aio`, `libaio`, `mmap`); absent means `sync`. The optional
+`cache` is `direct` for an application that opens every regular file `O_DIRECT` (not under
+`mmap`); absent means `per-open`, the open flags of the operations. The optional `s3` says
+how its S3 client uses the store for its `s3` names: `blocking` (absent) or `async`. The
+runner uses all three by default; the operation stream and the fingerprint are the same
+under every backend. (Contract 0.7; `api` in 0.6, one key `backend` from 0.3.)
 
 ## FORM
 
@@ -63,7 +65,7 @@ its kind: `{"read": {...}}`, `{"add": [a, b]}`, `{"zipf": {"s": 1.1}}`, `{"ref":
 Sizes are byte integers, durations nanosecond integers; floats appear only as
 probabilities, exponents, and distribution parameters. Identifiers are
 `[a-z_][a-z0-9_]*`. The top-level keys, in the builder's order: `ast` (the contract
-version), `name`, `doc`, `api`, `cache`, `params`, `datasets`, `namespaces`, `actors`,
+version), `name`, `doc`, `posix`, `cache`, `s3`, `params`, `datasets`, `namespaces`, `actors`,
 `provenance`.
 
 The on-disk form is pretty-printed JSON, two-space indentation, suffix `.ast.json`. JSON
@@ -142,10 +144,11 @@ run wrote, read-only here; `same_run` marks a namespace read under names the wri
 drew, so a run without the writer's seed, instance count, and common parameters is refused.
 
 **Protocol.** A dataset or namespace may declare `protocol`: `posix` (the default, a file
-system) or `object` (an object store), where the traced application reads or writes it. A run
+system) or `s3` (an S3 object store; `object` until contract 0.7), where the traced
+application reads or writes it. A run
 places each one with `--endpoint` (**aeiou**(1) ENDPOINTS), so one run may mix protocols; the
 operation stream, the fingerprint, and the dataset ids do not depend on it. The runner reads
-an `object` dataset or namespace through its object engine (**aeiou**(1) OBJECT STORES),
+an `s3` dataset or namespace through its object engine (**aeiou**(1) OBJECT STORES),
 where an object is written once, in order from 0, by one upload that its `close` completes
 (V18).
 
@@ -176,9 +179,12 @@ these, and the builder enforces most of them at construction:
 - **V15** `same_run` needs `input`.
 - **V16** (runner) A `trace` that creates files runs in one instance only.
 - **V17** Namespaces sharing a root declare one `protocol`.
-- **V18** An object of a namespace declared `protocol: object` is written once, in order from
+- **V18** An object of a namespace declared `protocol: s3` is written once, in order from
   0: no `open` with `APPEND`, `RDWR`, or `EXCL`, no `ftruncate`, no `fallocate`. Offsets are
   positional, so a write the upload has not reached fails the run when it comes.
+- **V19** `posix` and `cache` are declared only with a `posix` name (a `trace` counts, its
+  files being under `--root`), `s3` only with an `s3` name; with both, the APIs are of one
+  kind, defaults counted: `async` with `io_uring` or `libaio`, `blocking` with the others.
 
 ## PARAMETER FILES
 

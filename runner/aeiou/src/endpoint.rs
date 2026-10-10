@@ -7,8 +7,8 @@
 //! `--root`. Namespaces sharing a root share its place (V14, V17).
 //!
 //! The protocol a name declares decides what an endpoint may be: a directory for `posix`,
-//! `s3://BUCKET[/PREFIX]` for `object` (`object.rs`, built with the cargo feature `object`).
-//! An object name has no default place, so every one needs an endpoint, and a name may not
+//! `s3://BUCKET[/PREFIX]` for `s3` (`object.rs`, built with the cargo feature `object`).
+//! An s3 name has no default place, so every one needs an endpoint, and a name may not
 //! fall under a root placed for the other protocol.
 
 use std::path::{Path, PathBuf};
@@ -103,7 +103,7 @@ impl Endpoints {
             let uri = crate::object::is_uri(dir);
             match protocol {
                 Protocol::Posix if uri => crate::usage!("--endpoint {g}: `{name}` is a `posix` dataset or namespace; its endpoint is a directory"),
-                Protocol::Object if !uri => crate::usage!("--endpoint {g}: `{name}` is declared `protocol: object`; its endpoint is s3://BUCKET[/PREFIX]"),
+                Protocol::S3 if !uri => crate::usage!("--endpoint {g}: `{name}` is declared `protocol: s3`; its endpoint is s3://BUCKET[/PREFIX]"),
                 _ => {}
             }
             if dir.is_empty() {
@@ -133,8 +133,8 @@ impl Endpoints {
             let Some((protocol, root)) = lookup(ast, name)? else { continue };
             let under = e.placement(&root);
             match (protocol, under.map(|p| p.store.is_some())) {
-                (Protocol::Object, None | Some(false)) => crate::usage!(
-                    "`{name}` is declared `protocol: object` and has no object endpoint{}: give it --endpoint {name}=s3://BUCKET[/PREFIX]",
+                (Protocol::S3, None | Some(false)) => crate::usage!(
+                    "`{name}` is declared `protocol: s3` and has no object endpoint{}: give it --endpoint {name}=s3://BUCKET[/PREFIX]",
                     under.map(|p| format!(" (it falls under `{}`, placed at {})", p.names.join("`, `"), p.dir.display())).unwrap_or_default()
                 ),
                 (Protocol::Posix, Some(true)) => {
@@ -231,9 +231,9 @@ mod tests {
 
     /// With the object namespace `obj` when `object`.
     fn ast_with(object: bool) -> Ast {
-        let obj = if object { r#", "obj": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 5, "protocol": "object"}"# } else { "" };
+        let obj = if object { r#", "obj": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 5, "protocol": "s3"}"# } else { "" };
         crate::load_str(&format!(
-            r#"{{"ast": "0.6", "name": "t",
+            r#"{{"ast": "0.7", "name": "t",
                 "datasets": {{"sysp": {{"files": {{"pattern": "kv/sys/{{id:04}}/blk", "count": 2, "size": {{"const": 1}}, "seed": 1}}}},
                              "flat": {{"files": {{"pattern": "flat/f_{{id}}", "count": 2, "size": {{"const": 1}}, "seed": 2}}}}}},
                 "namespaces": {{"kv": {{"pattern": "kv/{{c}}.pt", "fields": {{"c": "int"}}, "size": 1, "seed": 3}},
@@ -273,13 +273,13 @@ mod tests {
         let a = ast_with(true);
         let err = |g: &[&str]| format!("{:#}", Endpoints::parse(&a, &g.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_err());
         // `obj` is an object namespace: without its endpoint nothing parses
-        assert!(err(&["kv=/n"]).contains("`obj` is declared `protocol: object` and has no object endpoint"));
+        assert!(err(&["kv=/n"]).contains("`obj` is declared `protocol: s3` and has no object endpoint"));
         assert!(err(&["kv=/n", "kw=/m"]).contains("a root is in one place"));
         assert!(err(&["kv=/n", "kv=/n"]).contains("given twice"));
         assert!(err(&["nope=/n"]).contains("no dataset or namespace `nope`"));
         assert!(err(&["kv"]).contains("expected NAME=DIR"));
         assert!(err(&["kv=s3://b/kv"]).contains("`kv` is a `posix` dataset or namespace; its endpoint is a directory"));
-        assert!(err(&["obj=/o"]).contains("`obj` is declared `protocol: object`; its endpoint is s3://BUCKET[/PREFIX]"));
+        assert!(err(&["obj=/o"]).contains("`obj` is declared `protocol: s3`; its endpoint is s3://BUCKET[/PREFIX]"));
     }
 
     #[cfg(not(feature = "object"))]
@@ -294,9 +294,9 @@ mod tests {
     #[test]
     fn a_posix_name_never_falls_under_an_object_root_and_a_key_keeps_its_rest() {
         let a = crate::load_str(
-            r#"{"ast": "0.6", "name": "t",
+            r#"{"ast": "0.7", "name": "t",
                 "datasets": {"inner": {"files": {"pattern": "o/in/f_{id}", "count": 2, "size": {"const": 1}, "seed": 1}}},
-                "namespaces": {"outer": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 2, "protocol": "object"}},
+                "namespaces": {"outer": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 2, "protocol": "s3"}},
                 "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "inner", "id": 0}}}}]}}}"#,
         )
         .unwrap()

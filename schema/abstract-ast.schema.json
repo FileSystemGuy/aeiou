@@ -11,10 +11,10 @@
   ],
   "if": {
     "required": [
-      "api"
+      "posix"
     ],
     "properties": {
-      "api": {
+      "posix": {
         "const": "mmap"
       }
     }
@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.6",
+      "const": "0.7",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -38,7 +38,7 @@
     "doc": {
       "type": "string"
     },
-    "api": {
+    "posix": {
       "enum": [
         "sync",
         "posix-aio",
@@ -46,14 +46,21 @@
         "io_uring",
         "mmap"
       ],
-      "description": "The API the application this abstract was traced from issues its I/O through (contract 0.6; `backend` before). Absent: sync. A run uses it by default; a run under another API imposes another workload on the storage. Not part of the op stream or the fingerprint."
+      "description": "The API the application this abstract was traced from issues the I/O of its `posix` names through (contract 0.7; `api` in 0.6, `backend` before). Absent: sync. A run uses it by default (`--posix`); a run under another API imposes another workload on the storage. Declared only with a `posix` name (V19). Not part of the op stream or the fingerprint."
     },
     "cache": {
       "enum": [
         "per-open",
         "direct"
       ],
-      "description": "The application's cache mode (contract 0.6): `direct` when it opens every regular file O_DIRECT; absent: `per-open`, the open flags of the op stream. Not `direct` under api `mmap`. A run uses it by default; another is another workload. Not part of the op stream or the fingerprint."
+      "description": "The application's cache mode on its `posix` names (contract 0.6): `direct` when it opens every regular file O_DIRECT; absent: `per-open`, the open flags of the op stream. Not `direct` under posix `mmap`. A run uses it by default (`--cache`); another is another workload. Declared only with a `posix` name (V19). Not part of the op stream or the fingerprint."
+    },
+    "s3": {
+      "enum": [
+        "blocking",
+        "async"
+      ],
+      "description": "How the application's S3 client uses the store for its `s3` names (contract 0.7): `blocking`, a thread waiting on each request, or `async`, many requests in flight per thread. Absent: blocking. A run uses it by default (`--s3`); another is another workload. Declared only with an `s3` name; with `posix` names too, `async` goes with posix `io_uring` or `libaio` and `blocking` with the others (V19). Not part of the op stream or the fingerprint."
     },
     "params": {
       "type": "object",
@@ -1686,9 +1693,9 @@
     "protocol": {
       "enum": [
         "posix",
-        "object"
+        "s3"
       ],
-      "description": "Where a dataset or namespace lives (contract 0.6): a file system (`posix`, absent) or an object store (`object`), each run giving it an endpoint (`--endpoint NAME=...`, default under `--root`). Not part of the dataset id or the namespace's resolved definition; datasets and namespaces sharing a root declare the same protocol (V17). The runner reads an `object` dataset through its object engine (cargo feature `object`) and refuses an `object` namespace until the engine writes."
+      "description": "Where a dataset or namespace lives (contract 0.6; `s3` was `object` until 0.7): a file system (`posix`, absent) or an S3 store (`s3`), each run giving it an endpoint (`--endpoint NAME=DIR`, default under `--root`, or `--endpoint NAME=s3://BUCKET[/PREFIX]`, required for `s3`). Not part of the dataset id or the namespace's resolved definition; datasets and namespaces sharing a root declare the same protocol (V17). The runner reaches an `s3` name through its object engine (cargo feature `object`); an `s3` namespace is written once, in order, per object (V18)."
     }
   }
 }

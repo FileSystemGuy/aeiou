@@ -53,7 +53,7 @@ pub enum Cache {
     Direct,
 }
 
-/// A backend: an API and a cache mode, given apart (`--io-api`, `--cache`). The constants
+/// A run's POSIX backend: an API and a cache mode, given apart (`--posix`, `--cache`). The constants
 /// below are the code's and the tests' shorthand for the valid pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendKind {
@@ -76,6 +76,47 @@ impl BackendKind {
 
 pub const API_NAMES: &str = "sync, posix-aio, libaio, io_uring, mmap";
 pub const CACHE_NAMES: &str = "per-open, direct";
+pub const S3_NAMES: &str = "blocking, async";
+
+/// How the application's S3 client uses the store (`--s3`, `DESIGN_REVIEW.md` §3.65): the
+/// API axis of the `s3` protocol. Either way the requests are made by `object_store` on the
+/// engine's tokio runtime (`object.rs`); the value says how the actors wait for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum S3Api {
+    /// A thread per actor, blocked on each request (boto3).
+    Blocking,
+    /// Event loops, many actors' requests in flight per thread (aiobotocore, the CRT).
+    Async,
+}
+
+impl S3Api {
+    pub fn parse(s: &str) -> Option<S3Api> {
+        match s {
+            "blocking" => Some(S3Api::Blocking),
+            "async" => Some(S3Api::Async),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            S3Api::Blocking => "blocking",
+            S3Api::Async => "async",
+        }
+    }
+
+    pub fn event_loop(self) -> bool {
+        self == S3Api::Async
+    }
+}
+
+/// The S3 API an abstract declares: its `s3`, `blocking` when it names none.
+pub fn declared_s3(ast: &crate::ast::Ast) -> anyhow::Result<S3Api> {
+    match &ast.s3 {
+        None => Ok(S3Api::Blocking),
+        Some(s) => S3Api::parse(s).ok_or_else(|| anyhow::anyhow!("s3 `{s}` is not one of {S3_NAMES}")),
+    }
+}
 
 impl Api {
     pub fn parse(s: &str) -> Option<Api> {
@@ -198,9 +239,9 @@ impl BackendKind {
         (api != Api::Mmap || cache == Cache::PerOpen).then_some(BackendKind { api, cache })
     }
 
-    /// What a run prints and records: `io-api API  cache MODE`.
+    /// What a run prints and records: `posix API  cache MODE`.
     pub fn describe(self) -> String {
-        format!("io-api {}  cache {}", self.api.name(), self.cache.name())
+        format!("posix {}  cache {}", self.api.name(), self.cache.name())
     }
 
     /// `O_DIRECT` on every regular-file open.
@@ -240,18 +281,18 @@ impl BackendKind {
     }
 }
 
-/// The backend an abstract declares: its `api` and `cache`, `sync` and `per-open` when
+/// The POSIX backend an abstract declares: its `posix` and `cache`, `sync` and `per-open` when
 /// it names neither (`aeiou check` has refused names that are not, and the pair no backend is).
 pub fn declared(ast: &crate::ast::Ast) -> anyhow::Result<BackendKind> {
-    let api = match &ast.api {
+    let api = match &ast.posix {
         None => Api::Sync,
-        Some(a) => Api::parse(a).ok_or_else(|| anyhow::anyhow!("api `{a}` is not one of {API_NAMES}"))?,
+        Some(a) => Api::parse(a).ok_or_else(|| anyhow::anyhow!("posix `{a}` is not one of {API_NAMES}"))?,
     };
     let cache = match &ast.cache {
         None => Cache::PerOpen,
         Some(c) => Cache::parse(c).ok_or_else(|| anyhow::anyhow!("cache `{c}` is not one of {CACHE_NAMES}"))?,
     };
-    BackendKind::of(api, cache).ok_or_else(|| anyhow::anyhow!("cache `direct` under api `mmap`"))
+    BackendKind::of(api, cache).ok_or_else(|| anyhow::anyhow!("cache `direct` under posix `mmap`"))
 }
 
 pub const ALIGN: usize = 4096;

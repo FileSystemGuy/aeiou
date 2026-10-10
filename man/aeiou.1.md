@@ -224,7 +224,7 @@ turns it off, and the last one on the line wins.
 - **--endpoint** *NAME=DIR|URI*
 
   Puts the root directory of the abstract's dataset NAME at DIR instead of under `--root`,
-  or, for a dataset declared `protocol: object`, at `s3://BUCKET[/PREFIX]` (repeatable); see
+  or, for a dataset declared `protocol: s3`, at `s3://BUCKET[/PREFIX]` (repeatable); see
   ENDPOINTS. From the command line, else `$AEIOU_ENDPOINT`, else `endpoint` in the
   `[datagen]` table of the config file. *Layered.*
 - **--threads** *THREADS*
@@ -285,17 +285,28 @@ turns it off, and the last one on the line wins.
 
 **Backend**
 
-- **--io-api** *API*
+- **--posix** *API*
 
-  The I/O API the operations are issued through: `sync`, `io_uring`, `posix-aio`,
-  `libaio`, or `mmap`; see BACKENDS. Default: the API the abstract declares, `sync` when it
-  declares none. Any other is a different workload on the storage, and the run says so and
-  records both.
+  The API the operations on `posix` names are issued through: `sync`, `io_uring`,
+  `posix-aio`, `libaio`, or `mmap`; see BACKENDS. Default: the API the abstract declares,
+  `sync` when it declares none. Any other is a different workload on the storage, and the
+  run says so and records both. Refused when no dataset or namespace is `posix`; the value
+  is required.
 - **--cache** *MODE*
 
-  `per-open` (each open's own flags decide whether it bypasses the page cache) or `direct` (`O_DIRECT` on
-  every regular-file open; not with `mmap`). Default: the abstract's, `per-open` when it
-  declares none. Any other is a different workload on the storage, as for `--io-api`.
+  The `posix` names' cache mode: `per-open` (each open's own flags decide whether it
+  bypasses the page cache) or `direct` (`O_DIRECT` on every regular-file open; not with
+  `mmap`). Default: the abstract's, `per-open` when it declares none. Any other is a
+  different workload on the storage, as for `--posix`. Refused when no dataset or
+  namespace is `posix`.
+- **--s3** *API*
+
+  How the application's S3 client uses the store for the `s3` names: `blocking` (a thread
+  per actor, waiting on each request) or `async` (event loops, many actors' requests in
+  flight per thread); see BACKENDS and OBJECT STORES. Default: the abstract's, `blocking`
+  when it declares none. Any other is a different workload, as for `--posix`. With `posix`
+  names too, both APIs are event-driven (`io_uring` or `libaio` with `async`) or neither.
+  Refused when no dataset or namespace is `s3`.
 - **--root** *DIR*
 
   Required, from some layer. The directory the abstract's paths are relative to; datasets
@@ -304,7 +315,7 @@ turns it off, and the last one on the line wins.
 - **--endpoint** *NAME=DIR|URI*
 
   Puts the root directory of the abstract's dataset or namespace NAME at DIR instead of
-  under `--root`, or, for a name declared `protocol: object`, at `s3://BUCKET[/PREFIX]`
+  under `--root`, or, for a name declared `protocol: s3`, at `s3://BUCKET[/PREFIX]`
   (repeatable); see ENDPOINTS. From the command line, else
   `$AEIOU_ENDPOINT`, else `endpoint` in the `[run]` table of the config file. *Layered.*
 - **--threads** *THREADS*
@@ -446,11 +457,12 @@ turns it off, and the last one on the line wins.
 ## BACKENDS
 
 The abstract is identical under every backend; a backend maps operations to an API and
-never changes the stream or the fingerprint. A backend is two independent choices, the API
-(`--io-api`) and the cache mode (`--cache`), and a run compares only with runs under the
-same pair.
+never changes the stream or the fingerprint. Each protocol has its own API: `--posix` for
+the `posix` names, with the cache mode `--cache`, and `--s3` for the `s3` names. A run
+compares only with runs under the same choices. An option for a protocol the abstract has
+no names on is refused, since it would change nothing.
 
-| `--io-api` | API |
+| `--posix` | API |
 |---|---|
 | `sync` | POSIX calls on one thread per actor. The fidelity reference. |
 | `io_uring` | An event loop per thread multiplexing its actors over one ring, one operation in flight per actor. |
@@ -462,6 +474,17 @@ same pair.
 |---|---|
 | `per-open` | Each open's own flags decide whether it bypasses the page cache. |
 | `direct` | `O_DIRECT` on every regular-file open; an unaligned read is rounded out to 4 KiB and the requested part counted, an unaligned write is refused. Not with `mmap`. |
+
+| `--s3` | Client |
+|---|---|
+| `blocking` | A thread per actor, waiting on each request (as boto3 does). |
+| `async` | Event loops, many actors' requests in flight per thread (as aiobotocore or the AWS CRT do). |
+
+The actors run on event loops when either API is event-driven (`io_uring`, `libaio`,
+`async`), on a thread each otherwise; a run with both protocols whose APIs disagree is
+refused. A run of `s3` names alone under `async` has loops that wait on the engine's
+answers, with no ring. Under either `--s3` value the requests themselves are made by the
+object engine on its runtime threads, never by the POSIX API (OBJECT STORES).
 
 ## ENDPOINTS
 
@@ -476,9 +499,9 @@ endpoints for one root must agree. The run prints each endpoint, and warns when 
 another file system than `--root`: the report's mount counters cover `--root`'s mount
 only. Placement never changes the operation stream, the fingerprint, or a dataset id.
 
-A dataset or namespace declares its protocol (`posix`, the default, or `object`;
+A dataset or namespace declares its protocol (`posix`, the default, or `s3`;
 **aeiou-abstract**(7)), and its endpoint fits it: a directory for `posix`,
-`s3://BUCKET[/PREFIX]` for `object`. An object name has no default place, so every one
+`s3://BUCKET[/PREFIX]` for `s3`. An `s3` name has no default place, so every one
 needs an endpoint, and a `posix` name may not fall under a root placed in an object store
 (give it its own directory). The paths below an object endpoint are keys below its prefix:
 under `--endpoint train=s3://data/imagenet` the file `train/00001/img_000001300.jpg` is the
@@ -486,7 +509,7 @@ key `imagenet/00001/img_000001300.jpg` of the bucket `data`.
 
 ## OBJECT STORES
 
-A name declared `protocol: object` is read and written through the object engine, built on Apache
+A name declared `protocol: s3` is read and written through the object engine, built on Apache
 `object_store` with the cargo feature `object` (a build without it refuses an object
 endpoint). The store is the one the environment names: `AWS_ENDPOINT_URL`,
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_ALLOW_HTTP=true` for a
@@ -506,12 +529,13 @@ same as under a directory.
 | `lseek`, `fadvise`, `fsync`, `fdatasync`, `ioctl`, `mkdir`, `rmdir` | none (an `ioctl` answers as for a regular file: `TCGETS` is `ENOTTY`; a prefix is no object) |
 | `O_APPEND`, `O_RDWR`, `O_EXCL`, `ftruncate`, `fallocate` | refused by rule V18 at `aeiou check` (**aeiou-abstract**(7)) |
 
-Each actor has one request in flight. Under an API with a thread per actor (`sync`,
-`posix-aio`, `mmap`) the actor's thread builds and signs it and waits, the engine's
-`--object-threads` workers driving the connections; under an event loop (`io_uring`,
-`libaio`) the workers do all of it and the loop goes on with its other actors until the
-answer wakes it. The API applies to the `posix` names only. Two actors writing one object
-at once (a sub-actor and the actor it was forked from) fail the run with `EBUSY`. **aeiou datagen**
+The requests go over ordinary sockets (`epoll`) on the engine's `--object-threads` tokio
+workers, whatever `--posix` says; the run prints `s3 engine: object_store VERSION on tokio
+(epoll sockets)`. Each actor has one request in flight. Under `--s3 blocking` the actor's
+thread builds and signs it and waits, the workers driving the connections; under `--s3
+async` the workers do all of it and the loop goes on with its other actors until the
+answer wakes it. Two actors writing one object at once (a sub-actor and the actor it was
+forked from) fail the run with `EBUSY`. **aeiou datagen**
 writes each file of an object dataset as one `PUT`, or as a multipart upload in 8 MiB
 parts when it is larger, and the manifest as one `PUT` at the prefix's root; the prefix
 must hold no key. A `regions` dataset has no object form. An object namespace's root is a
@@ -635,7 +659,7 @@ aeiou run schema/examples/train_small_files.ast.json --root /mnt/sut --gpus 8 --
 The same run on io_uring with a capped io-wq, the metrics of the stream to a file:
 
 ```
-aeiou run ... --io-api io_uring --threads 4 --iowq-max-workers 2
+aeiou run ... --posix io_uring --threads 4 --iowq-max-workers 2
 aeiou dry-run schema/examples/train_small_files.ast.json --gpus 8 --metrics-json abstract.metrics.json
 ```
 

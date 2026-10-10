@@ -93,7 +93,7 @@ range of a mapping. This reverses the 2026-09-25 exclusion.
     none (page fault);
   - *memory target*: pageable host · pinned host · GPU memory.
 
-  Required backends, ~~`--io-backend`~~ (since 2026-10-09 `--io-api` and `--cache`, `DESIGN_REVIEW.md` §3.65; a `-direct` name below is the API with `--cache direct`):
+  Required backends, ~~`--io-backend`~~ (since 2026-10-09 ~~`--io-api`~~ `--posix` and `--cache` for the POSIX names, `--s3 blocking|async` for the S3 names, `DESIGN_REVIEW.md` §3.65; a `-direct` name below is the API with `--cache direct`):
 
   | Backend | Initiation / completion | Notes |
   |---|---|---|
@@ -532,7 +532,7 @@ numbers; the order is this note's.
     test (§5): protocol family (POSIX or object) and endpoint per namespace, so a run may mix
     protocols (built now, decided: KV caches mix tiers today, NVIDIA's G3 POSIX and G4 object
     by the user's account [verify]); the API per run as the abstract declares it; `--cache` as the run-wide
-    modifier §4 planned, ~~with the nine names as aliases~~ (aliases removed the same day: `--io-api` and `--cache` alone); transport (TCP or RDMA) the
+    modifier §4 planned, ~~with the nine names as aliases~~ (aliases removed the same day: `--io-api` and `--cache` alone; *later the same night* an API per protocol, `--posix` (renamed from `--io-api`) and `--s3`, the protocol `object` renamed `s3`, contract 0.7); transport (TCP or RDMA) the
     solution's, a mount option under a kernel client and a library option under a user-space
     one; the buffer axis with GDS and `nixl-posix`. The object mapping drafted with a validity
     rule (~~V16~~ V18; V16 is the `trace` rule); ~~contract 0.6 keeps every AST, fingerprint, and dataset id.~~ contract 0.6

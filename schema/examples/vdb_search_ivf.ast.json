@@ -1,8 +1,8 @@
 {
-  "ast": "0.6",
+  "ast": "0.7",
   "name": "vdb_search_ivf",
   "doc": "Per search call and OpenMP slice, prefetch threads touch every inverted list the slice's queries probe; lists chosen by popularity.",
-  "api": "mmap",
+  "posix": "mmap",
   "params": {
     "threads": {
       "default": 32,
@@ -366,16 +366,15 @@
   "provenance": {
     "generator": {
       "script": "vdb_search_ivf.py",
-      "sha256": "e90f77f8f5a127c8f7b7914d57bb4eac7d6c043741365e0a80841708ed7cdcf1",
+      "sha256": "fedcfd31f1a3471fd95c8a873a00daadf50426a6c47125660c7110f17517ba38",
       "builder_version": "0.1.0",
-      "git": "26415a1be282"
+      "git": "cfc20054c22c-dirty"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
       "sha256": "f58ab2f23f8662236112836645f4d863a3a44858a5ea36281605f35ea08e77bd"
     },
-    "built_twice_identical": true,
-    "ast_sha256": "66355d0edec4b539b1d6b8bf0067bf99854f8d6c0e36b123bc936abea30d3750"
+    "ast_sha256": "45ece2e4ae9f899a704602c598ae420206e5c47074947923e87826abb36fbe37"
   }
 }

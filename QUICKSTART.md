@@ -67,7 +67,7 @@ in `share/man/man1/`.
 
 Send the command line, everything the tool printed (the options block at the top
 included), `run.json` when there is one, and `uname -r`. For a run on a network mount,
-`mount | grep sut` and the API and cache mode you used (`--io-api`, `--cache`, printed in the options block)
+`mount | grep sut` and the API and cache mode you used (`--posix`, `--cache`, printed in the options block)
 decide what the numbers mean, so include them.
 
 ## From source instead

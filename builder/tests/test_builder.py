@@ -346,42 +346,72 @@ def test_check_mode_reports_drift(tmp_path):
     assert r.returncode == 1 and "DRIFT" in r.stdout
 
 
-def test_a_workload_may_declare_its_api_and_cache():
-    """Contract 0.6 (`backend` from 0.3 until then): the API of the traced application and its
-    cache mode, a run's default backend; `direct` under `mmap` is no backend."""
-    with pytest.raises(BuildError, match="api must be one of"):
-        Workload("w", api="pread")
+def test_a_workload_may_declare_its_apis_and_cache():
+    """Contract 0.7 (`api` in 0.6, `backend` from 0.3): the APIs of the traced application, one
+    per protocol, and its cache mode, a run's defaults; `direct` under `mmap` is no backend."""
+    with pytest.raises(BuildError, match="posix must be one of"):
+        Workload("w", posix="pread")
     with pytest.raises(BuildError, match="cache must be one of"):
         Workload("w", cache="dontcache")
+    with pytest.raises(BuildError, match="s3 must be one of"):
+        Workload("w", s3="threads")
     with pytest.raises(BuildError, match="page faults"):
-        Workload("w", api="mmap", cache="direct")
-    w = Workload("w", api="libaio", cache="direct")
+        Workload("w", posix="mmap", cache="direct")
+    w = Workload("w", posix="libaio", cache="direct")
     d = w.dataset("d", pattern="d/f_{id:06}", count=1, size=const(1), seed=1)
     with w.actor("a", count=1) as a:
         a.stat(d.file(0))
     ast = w.build()
-    assert ast["api"] == "libaio" and ast["cache"] == "direct" and list(ast)[:2] == ["ast", "name"]
+    assert ast["posix"] == "libaio" and ast["cache"] == "direct" and list(ast)[:2] == ["ast", "name"]
     examples = pathlib.Path(__file__).resolve().parents[2] / "schema" / "examples"
     small = json.loads((examples / "train_small_files.ast.json").read_text())
-    assert "api" not in small and "cache" not in small and "backend" not in small
-    assert json.loads((examples / "model_load.ast.json").read_text())["api"] == "mmap"
+    assert not {"posix", "api", "cache", "s3", "backend"} & set(small)
+    assert json.loads((examples / "model_load.ast.json").read_text())["posix"] == "mmap"
+
+
+def test_v19_apis_follow_the_protocols():
+    """V19: an API is declared only for a protocol with names, and posix and s3 names together
+    take APIs of one kind (event-driven or a thread per actor), defaults counted."""
+    def build(protocols, **apis):
+        w = Workload("v19", **apis)
+        ds = [w.dataset(f"d{i}", pattern=f"d{i}/f_{{id:06}}", count=1, size=const(1), seed=1, protocol=p)
+              for i, p in enumerate(protocols)]
+        with w.actor("a", count=1) as a:
+            for d in ds:
+                a.stat(d.file(0))
+        return w.build()
+
+    with pytest.raises(BuildError, match=r"no dataset or namespace is `protocol: s3` \(V19\)"):
+        build(["posix"], s3="async")
+    with pytest.raises(BuildError, match=r"every dataset and namespace is `protocol: s3` \(V19\)"):
+        build(["s3"], posix="io_uring")
+    with pytest.raises(BuildError, match=r"every dataset and namespace is `protocol: s3` \(V19\)"):
+        build(["s3"], cache="direct")
+    with pytest.raises(BuildError, match="one is event-driven and the other a thread per actor"):
+        build(["posix", "s3"], posix="io_uring")
+    with pytest.raises(BuildError, match="one is event-driven and the other a thread per actor"):
+        build(["posix", "s3"], s3="async")
+    assert build(["s3"], s3="async")["s3"] == "async"
+    assert build(["posix", "s3"], posix="libaio", s3="async")["posix"] == "libaio"
+    assert "s3" not in build(["posix", "s3"], posix="mmap")
 
 
 def test_protocol_per_dataset_and_namespace():
-    """Contract 0.6: a dataset or namespace may live in an object store; namespaces sharing a root
-    declare one protocol (V17); the protocol is not part of a dataset's identity."""
+    """Contract 0.6 (`s3` was `object` until 0.7): a dataset or namespace may live in an S3
+    store; namespaces sharing a root declare one protocol (V17); the protocol is not part of a
+    dataset's identity."""
     from aeiou.datagen import resolved_dataset
-    with pytest.raises(BuildError, match="protocol must be posix or object"):
-        Workload("p").namespace("n", pattern="o/{k:04}", fields={"k": int}, size=1, seed=1, protocol="s3")
+    with pytest.raises(BuildError, match="protocol must be posix or s3"):
+        Workload("p").namespace("n", pattern="o/{k:04}", fields={"k": int}, size=1, seed=1, protocol="object")
     w = Workload("p")
-    d = w.dataset("d", pattern="d/f_{id:06}", count=1, size=const(1), seed=1, protocol="object")
-    w.namespace("a", pattern="o/{k:04}.a", fields={"k": int}, size=1, seed=2, protocol="object")
+    d = w.dataset("d", pattern="d/f_{id:06}", count=1, size=const(1), seed=1, protocol="s3")
+    w.namespace("a", pattern="o/{k:04}.a", fields={"k": int}, size=1, seed=2, protocol="s3")
     with pytest.raises(BuildError, match="V17"):
         w.namespace("b", pattern="o/{k:04}.b", fields={"k": int}, size=1, seed=3)
     with w.actor("x", count=1) as x:
         x.stat(d.file(0))
     ast = w.build()
-    assert ast["datasets"]["d"]["files"]["protocol"] == "object" and ast["namespaces"]["a"]["protocol"] == "object"
+    assert ast["datasets"]["d"]["files"]["protocol"] == "s3" and ast["namespaces"]["a"]["protocol"] == "s3"
     assert "protocol" not in resolved_dataset(ast, "d", {})["files"]
 
 
@@ -407,13 +437,13 @@ def test_v18_an_object_is_written_once_in_order():
 
     for bad in ("APPEND", "RDWR", "EXCL"):
         with pytest.raises(BuildError, match="V18"):
-            build("object", lambda x, f: x.open(f, f"WRONLY|CREAT|{bad}"))
+            build("s3", lambda x, f: x.open(f, f"WRONLY|CREAT|{bad}"))
     with pytest.raises(BuildError, match="V18"):
-        build("object", lambda x, f: x.ftruncate(f, 0))
+        build("s3", lambda x, f: x.ftruncate(f, 0))
     with pytest.raises(BuildError, match="V18"):
-        build("object", lambda x, f: x.fallocate(f, 4096))
+        build("s3", lambda x, f: x.fallocate(f, 4096))
     build(None, lambda x, f: x.open(f, "RDWR|CREAT"))
-    ast = build("object", plain)
+    ast = build("s3", plain)
     assert not check.Check(copy.deepcopy(ast), "x").run()
     ast["actors"]["x"]["body"][0]["open"]["flags"].append("APPEND")
     assert any("V18" in e for e in check.Check(ast, "x").run())

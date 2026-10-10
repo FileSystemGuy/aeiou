@@ -119,7 +119,7 @@ fn every_subcommand_prints_the_block_with_sources() {
     assert_eq!(row(&rows, "buffer-mib"), &("buffer-mib".into(), "16".into(), format!("config {}", cfg.display())));
     assert_eq!(row(&rows, "require-cold"), &("require-cold".into(), "false".into(), "cli".into()));
     assert_eq!(row(&rows, "time-scale"), &("time-scale".into(), "0".into(), "cli".into()));
-    assert_eq!(row(&rows, "io-api"), &("io-api".into(), "the abstract's".into(), "default".into()));
+    assert_eq!(row(&rows, "posix"), &("posix".into(), "the abstract's".into(), "default".into()));
     assert_eq!(row(&rows, "cache"), &("cache".into(), "the abstract's".into(), "default".into()));
     assert_eq!(row(&rows, "root").2, "env AEIOU_ROOT");
     let doc = read(&json);
@@ -165,14 +165,14 @@ fn fixed_options_are_refused_from_the_environment_and_the_file() {
     std::fs::write(&cfg, "[run]\naio-depth = 64\n").unwrap();
     let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
     assert!(!ok);
-    assert!(err.contains(&format!("--aio-depth is a libaio knob; --io-api sync has no AIO context (--aio-depth from config {})", cfg.display())), "{err}");
+    assert!(err.contains(&format!("--aio-depth is a libaio knob; --posix sync has no AIO context (--aio-depth from config {})", cfg.display())), "{err}");
     std::fs::write(&cfg, "[run]\n").unwrap();
     let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
     assert!(!ok);
-    assert!(err.contains("runs one thread per actor (--threads from env AEIOU_THREADS)"), "{err}");
+    assert!(err.contains("has one thread per actor (--threads from env AEIOU_THREADS)"), "{err}");
     let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2", "--threads", "4"]).arg("--root").arg(&d));
     assert!(!ok);
-    assert!(err.lines().next().unwrap().ends_with("runs one thread per actor"), "{err}");
+    assert!(err.lines().next().unwrap().ends_with("has one thread per actor"), "{err}");
     // --root is required, from any layer: listed as missing (tests/usage.rs has the frame)
     let (ok, _, err) = out(aeiou("run", "train_small_files.ast.json", &SMALL).args(["--gpus", "2"]));
     assert!(!ok);

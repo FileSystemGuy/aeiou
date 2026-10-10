@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.6";
+pub const AST_VERSION: &str = "0.7";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,15 +20,21 @@ pub struct Ast {
     pub name: String,
     #[serde(default)]
     pub doc: Option<String>,
-    /// The API the application this abstract was traced from issues its I/O through, an
-    /// `--io-api` name; absent: `sync`. A run uses it unless told otherwise (v0.6, `backend`
-    /// before, v0.3).
+    /// The API the application this abstract was traced from issues its POSIX I/O through, a
+    /// `--posix` name; absent: `sync`. A run uses it unless told otherwise (v0.7; `api` in
+    /// v0.6, `backend` before, v0.3).
     #[serde(default)]
-    pub api: Option<String>,
-    /// The application's cache mode, an `--cache` name: `direct` when it opens every regular
-    /// file `O_DIRECT`; absent: `per-open`, the open flags of the op stream (v0.6).
+    pub posix: Option<String>,
+    /// The application's cache mode on its POSIX names, a `--cache` name: `direct` when it
+    /// opens every regular file `O_DIRECT`; absent: `per-open`, the open flags of the op
+    /// stream (v0.6).
     #[serde(default)]
     pub cache: Option<String>,
+    /// How the application's S3 client uses the store, an `--s3` name: `blocking` (a thread
+    /// waiting on each request) or `async` (many requests in flight per thread); absent:
+    /// `blocking` (v0.7).
+    #[serde(default)]
+    pub s3: Option<String>,
     #[serde(default)]
     pub params: BTreeMap<String, Param>,
     #[serde(default)]
@@ -400,20 +406,21 @@ pub struct RegionsDataset {
     pub doc: Option<String>,
 }
 
-/// The protocol a dataset or namespace is reached through (contract 0.6).
+/// The protocol a dataset or namespace is reached through (contract 0.6; `object` became
+/// `s3` in 0.7, the dialects being protocols of their own).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
     #[default]
     Posix,
-    Object,
+    S3,
 }
 
 impl Protocol {
     pub fn name(self) -> &'static str {
         match self {
             Protocol::Posix => "posix",
-            Protocol::Object => "object",
+            Protocol::S3 => "s3",
         }
     }
 }

@@ -8,12 +8,12 @@ lists file whole; a search issues no call on it at all. `search` cuts its batch 
 slice per OpenMP thread, and each slice starts `prefetch` threads
 (`OnDiskInvertedLists::prefetch_nthread`, 32) that touch every byte of every list its
 queries probe while the slice's own thread scans them. The reads below are what the prefetch
-threads touch through the mapping, and `--io-api mmap` is the application's own API here.
+threads touch through the mapping, and `--posix mmap` is the application's own API here.
 Popularity and the list-size spread are measured on one corpus (SIFT1M, IVF1024,PQ32).
 """
 from aeiou import *
 
-w = Workload("vdb_search_ivf", api="mmap",   # FAISS maps the lists file and never calls read on it
+w = Workload("vdb_search_ivf", posix="mmap",   # FAISS maps the lists file and never calls read on it
              doc="Per search call and OpenMP slice, prefetch threads touch every inverted list the slice's queries probe; lists chosen by popularity.")
 P = w.P
 w.param("threads", 32, unit="count", doc="[config] OpenMP threads: a search call of n queries runs min(threads, n) slices")

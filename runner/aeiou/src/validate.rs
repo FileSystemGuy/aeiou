@@ -10,15 +10,44 @@ use crate::ast::*;
 
 pub const RESERVED_PREFIX: &str = ".aeiou";
 
+/// The protocols an abstract has names on: `s3` when a dataset or namespace declares it,
+/// `posix` when one declares it (or none), when a `trace` node runs (its files are under
+/// `--root`), or when no name is `s3`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Protocols {
+    pub posix: bool,
+    pub s3: bool,
+}
+
+pub fn protocols(ast: &Ast, traces: bool) -> Protocols {
+    let declared = ast
+        .datasets
+        .values()
+        .map(|d| match d {
+            crate::ast::Dataset::Files(f) => f.protocol,
+            crate::ast::Dataset::Regions(r) => r.protocol,
+        })
+        .chain(ast.namespaces.values().map(|n| n.protocol))
+        .map(|p| p.unwrap_or_default());
+    let (mut posix, mut s3) = (traces, false);
+    for p in declared {
+        match p {
+            Protocol::Posix => posix = true,
+            Protocol::S3 => s3 = true,
+        }
+    }
+    Protocols { posix: posix || !s3, s3 }
+}
+
 pub fn check(ast: &Ast) -> Vec<String> {
-    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new() };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false };
     c.run();
     c.errors
 }
 
 /// Validate and return the op-kind counts (as `check.py` prints them) when there are no errors.
 pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<String>> {
-    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new() };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false };
     c.run();
     if c.errors.is_empty() {
         Ok(c.ops)
@@ -32,7 +61,7 @@ pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<St
 /// replace that distribution with one whose minimum is lower. Without this an `at` offset
 /// of zero is a loop in the VM. Called from `Params::new`, so every subcommand gets it.
 pub fn check_given(ast: &Ast, given: &BTreeMap<String, PValue>) -> Vec<String> {
-    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new() };
+    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new(), traces: false };
     c.run();
     c.errors
 }
@@ -43,6 +72,8 @@ struct Checker<'a> {
     given: Option<&'a BTreeMap<String, PValue>>,
     errors: Vec<String>,
     ops: BTreeMap<&'static str, usize>,
+    /// A `trace` node was seen: its files are under `--root`, POSIX names (V19).
+    traces: bool,
 }
 
 #[derive(Clone)]
@@ -139,10 +170,15 @@ impl<'a> Checker<'a> {
         if !is_ident(&ast.name) {
             self.err(&vec!["name".into()], "not an identifier");
         }
-        let api = ast.api.as_deref().map(|a| (a, crate::backend::Api::parse(a)));
+        let api = ast.posix.as_deref().map(|a| (a, crate::backend::Api::parse(a)));
         let cache = ast.cache.as_deref().map(|c| (c, crate::backend::Cache::parse(c)));
         if let Some((a, None)) = api {
-            self.err(&vec!["api".into()], format!("`{a}` is not one of {}", crate::backend::API_NAMES));
+            self.err(&vec!["posix".into()], format!("`{a}` is not one of {}", crate::backend::API_NAMES));
+        }
+        if let Some(s) = ast.s3.as_deref() {
+            if crate::backend::S3Api::parse(s).is_none() {
+                self.err(&vec!["s3".into()], format!("`{s}` is not one of {}", crate::backend::S3_NAMES));
+            }
         }
         if let Some((c, None)) = cache {
             self.err(&vec!["cache".into()], format!("`{c}` is not one of {}", crate::backend::CACHE_NAMES));
@@ -321,6 +357,32 @@ impl<'a> Checker<'a> {
             }
             self.body(&a.body, &p(&path, &["body"]), &scope, &mut st);
         }
+        self.v19();
+    }
+
+    /// V19: the abstract declares an API only for a protocol it has names on, and an abstract
+    /// with both declares APIs of one scheduling (event-driven or a thread per actor),
+    /// defaults counted (`DESIGN_REVIEW.md` §3.65).
+    fn v19(&mut self) {
+        let ast = self.ast;
+        let used = protocols(ast, self.traces);
+        if ast.s3.is_some() && !used.s3 {
+            self.err(&vec!["s3".into()], "declared, but no dataset or namespace is `protocol: s3` (V19)");
+        }
+        for (key, v) in [("posix", &ast.posix), ("cache", &ast.cache)] {
+            if v.is_some() && !used.posix {
+                self.err(&vec![key.into()], "declared, but every dataset and namespace is `protocol: s3` (V19)");
+            }
+        }
+        if used.posix && used.s3 {
+            let (Ok(b), Ok(s)) = (crate::backend::declared(ast), crate::backend::declared_s3(ast)) else { return };
+            if b.event_loop() != s.event_loop() {
+                self.err(
+                    &vec![if ast.s3.is_some() { "s3" } else { "posix" }.into()],
+                    format!("posix `{}` and s3 `{}`: one is event-driven and the other a thread per actor; an abstract with both protocols declares APIs of one kind (V19)", b.api.name(), s.name()),
+                );
+            }
+        }
     }
 
     fn reserved(&mut self, pattern: &str, path: &P) {
@@ -461,6 +523,7 @@ impl<'a> Checker<'a> {
                 self.body(body, &p(pp, &["body"]), scope, st);
             }
             Node::Trace { sha256, .. } => {
+                self.traces = true;
                 if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
                     self.err(&p(pp, &["sha256"]), "not a lowercase hex sha256");
                 }
@@ -634,16 +697,16 @@ impl<'a> Checker<'a> {
         };
         if let Some((h, what, key)) = v18 {
             if let Some(ns) = self.object_store_namespace(h, scope) {
-                self.err(&p(pp, &[key]), format!("{what} on namespace `{ns}`, declared `protocol: object`: an object is written once, in order from 0, and has no {what} (V18)"));
+                self.err(&p(pp, &[key]), format!("{what} on namespace `{ns}`, declared `protocol: s3`: an object is written once, in order from 0, and has no {what} (V18)"));
             }
         }
     }
 
     /// Namespace name if the handle is (a binding to) an object of a namespace declared
-    /// `protocol: object`.
+    /// `protocol: s3`.
     fn object_store_namespace(&self, h: &'a Handle, scope: &Scope<'a>) -> Option<&'a str> {
         let ns = self.object_namespace(h, scope)?;
-        if self.ast.namespaces.get(ns).and_then(|n| n.protocol) == Some(Protocol::Object) { Some(ns) } else { None }
+        if self.ast.namespaces.get(ns).and_then(|n| n.protocol) == Some(Protocol::S3) { Some(ns) } else { None }
     }
 
     /// Namespace name if the handle is (a binding to) an object of an `input` namespace.

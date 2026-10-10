@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-use aeiou::backend::{Api, BackendKind, Cache, MmapConsume, MmapMode};
+use aeiou::backend::{Api, BackendKind, Cache, MmapConsume, MmapMode, S3Api};
 use aeiou::coord::{Coordinator, Local, Server, Tcp};
 use aeiou::datagen::{self, DatagenOpts, Hosts};
 use aeiou::dryrun;
@@ -105,7 +105,7 @@ struct DatagenArgs {
     root: Option<PathBuf>,
     /// Place a dataset or namespace somewhere other than under --root: NAME=DIR puts the root
     /// directory of the abstract's dataset or namespace NAME at DIR, and NAME=s3://BUCKET[/PREFIX]
-    /// puts a name declared `protocol: object` at that prefix of a bucket, the store named by the
+    /// puts a name declared `protocol: s3` at that prefix of a bucket, the store named by the
     /// AWS_* environment (a build with the object engine; every object name needs one). Repeatable;
     /// names sharing a root share its place. From the command line, else $AEIOU_ENDPOINT
     /// (whitespace-separated), else `endpoint` in the config file (an array).
@@ -142,19 +142,31 @@ struct DatagenArgs {
 struct RunCmd {
     #[command(flatten)]
     run: RunArgs,
-    /// The API the ops are issued through: `sync` (POSIX calls on one thread per actor),
-    /// `io_uring` (an event loop per thread multiplexing the actors over one ring), `posix-aio`
-    /// (glibc aio_read/aio_write on one thread per actor), `libaio` (the kernel AIO calls on the
-    /// event loop; asynchronous only with --cache direct), `mmap` (reads are page faults on a
-    /// mapping of the file). Default: the API the abstract declares (`sync` when it declares
-    /// none). Any other is a different workload on the storage, and the run says so.
-    #[arg(long = "io-api", value_name = "API", help_heading = "Backend")]
-    io_api: Option<String>,
-    /// `per-open` (each open's own flags decide whether it bypasses the page cache) or `direct` (O_DIRECT on every
-    /// regular-file open; not with `mmap`). Default: the abstract's (`per-open` when it
+    /// The API the POSIX names' ops are issued through: `sync` (POSIX calls on one thread per
+    /// actor), `io_uring` (an event loop per thread multiplexing the actors over one ring),
+    /// `posix-aio` (glibc aio_read/aio_write on one thread per actor), `libaio` (the kernel AIO
+    /// calls on the event loop; asynchronous only with --cache direct), `mmap` (reads are page
+    /// faults on a mapping of the file). Default: the API the abstract declares (`sync` when it
     /// declares none). Any other is a different workload on the storage, and the run says so.
+    /// Refused when no dataset or namespace is `protocol: posix`.
+    #[arg(long = "posix", value_name = "API", help_heading = "Backend")]
+    posix: Option<String>,
+    /// The POSIX names' cache mode: `per-open` (each open's own flags decide whether it
+    /// bypasses the page cache) or `direct` (O_DIRECT on every regular-file open; not with
+    /// `mmap`). Default: the abstract's (`per-open` when it declares none). Any other is a
+    /// different workload on the storage, and the run says so. Refused when no dataset or
+    /// namespace is `protocol: posix`.
     #[arg(long, value_name = "MODE", help_heading = "Backend")]
     cache: Option<String>,
+    /// How the application's S3 client uses the store for the `protocol: s3` names: `blocking`
+    /// (a thread per actor, waiting on each request) or `async` (event loops, many actors'
+    /// requests in flight per thread). Either way the requests are made by object_store on the
+    /// engine's runtime threads (--object-threads). Default: the abstract's (`blocking` when it
+    /// declares none). Any other is a different workload on the storage, and the run says so.
+    /// With POSIX names too, both APIs are event-driven or neither. Refused when no dataset or
+    /// namespace is `protocol: s3`.
+    #[arg(long = "s3", value_name = "API", help_heading = "Backend")]
+    s3: Option<String>,
     /// Required: directory the abstract's paths are relative to (datasets and namespaces live
     /// under it). From the command line, else $AEIOU_ROOT, else `root` in the [run] table of
     /// the config file.
@@ -162,7 +174,7 @@ struct RunCmd {
     root: Option<PathBuf>,
     /// Place a dataset or namespace somewhere other than under --root: NAME=DIR puts the root
     /// directory of the abstract's dataset or namespace NAME at DIR, and NAME=s3://BUCKET[/PREFIX]
-    /// puts a name declared `protocol: object` at that prefix of a bucket, the store named by the
+    /// puts a name declared `protocol: s3` at that prefix of a bucket, the store named by the
     /// AWS_* environment (a build with the object engine; every object name needs one). Repeatable;
     /// names sharing a root share its place. From the command line, else $AEIOU_ENDPOINT
     /// (whitespace-separated), else `endpoint` in the config file (an array).
@@ -292,8 +304,9 @@ struct RunOptions {
     run: RunArgs,
     abstract_path: PathBuf,
     gpus: i64,
-    io_api: Option<String>,
+    posix: Option<String>,
     cache: Option<String>,
+    s3: Option<String>,
     root: PathBuf,
     endpoints: Vec<String>,
     threads: Option<usize>,
@@ -341,8 +354,9 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     fix_shape(&mut l, &a.run.shape)?;
     l.fixed("gpus", &a.run.gpus, a.run.gpus.is_some())?;
     l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
-    l.fixed("io-api", &a.io_api.clone().unwrap_or_else(|| "the abstract's".into()), a.io_api.is_some())?;
+    l.fixed("posix", &a.posix.clone().unwrap_or_else(|| "the abstract's".into()), a.posix.is_some())?;
     l.fixed("cache", &a.cache.clone().unwrap_or_else(|| "the abstract's".into()), a.cache.is_some())?;
+    l.fixed("s3", &a.s3.clone().unwrap_or_else(|| "the abstract's".into()), a.s3.is_some())?;
     l.fixed("expect-fingerprint", &a.expect_fingerprint, a.expect_fingerprint.is_some())?;
     l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
     l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces || a.no_clean_namespaces)?;
@@ -379,8 +393,9 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         report_json: l.layered("report-json", a.report_json, None)?,
         report_takes: l.flag("report-takes", neg(a.report_takes, a.no_report_takes), false)?,
         run: a.run,
-        io_api: a.io_api,
+        posix: a.posix,
         cache: a.cache,
+        s3: a.s3,
         expect_fingerprint: a.expect_fingerprint,
         expect_dataset_ids: a.expect_dataset_ids,
         clean_namespaces: a.clean_namespaces,
@@ -669,22 +684,31 @@ fn object_part(endpoints: &aeiou::endpoint::Endpoints, given: Option<u64>, l: &L
     Ok(Some(mib))
 }
 
-/// What a run or a datagen prints of the object engine.
+/// What a run or a datagen prints of the object engine: what carries the S3 names' requests,
+/// whatever the POSIX API.
 fn object_line(threads: Option<usize>) -> Option<String> {
-    threads.map(|n| format!("object engine: object_store {}  runtime threads {n}", aeiou::object::LIBRARY_VERSION))
+    threads.map(|n| format!("s3 engine: object_store {} on tokio (epoll sockets)  runtime threads {n}", aeiou::object::LIBRARY_VERSION))
 }
 
-/// The run's backend: --io-api and --cache, each defaulting to the abstract's.
+/// The run's POSIX backend: --posix and --cache, each defaulting to the abstract's.
 fn run_backend(a: &RunOptions, declared: BackendKind) -> Result<BackendKind> {
-    let api = match &a.io_api {
+    let api = match &a.posix {
         None => declared.api,
-        Some(n) => Api::parse(n).ok_or_else(|| usage::err(format!("--io-api {n}: not one of {}", aeiou::backend::API_NAMES)))?,
+        Some(n) => Api::parse(n).ok_or_else(|| usage::err(format!("--posix {n}: not one of {}", aeiou::backend::API_NAMES)))?,
     };
     let cache = match &a.cache {
         None => declared.cache,
         Some(n) => Cache::parse(n).ok_or_else(|| usage::err(format!("--cache {n}: not one of {}", aeiou::backend::CACHE_NAMES)))?,
     };
-    BackendKind::of(api, cache).ok_or_else(|| usage::err(format!("--cache direct under --io-api {}: its reads are page faults on a mapping", api.name())))
+    BackendKind::of(api, cache).ok_or_else(|| usage::err(format!("--cache direct under --posix {}: its reads are page faults on a mapping", api.name())))
+}
+
+/// The run's S3 API: --s3, defaulting to the abstract's.
+fn run_s3(a: &RunOptions, declared: S3Api) -> Result<S3Api> {
+    match &a.s3 {
+        None => Ok(declared),
+        Some(n) => S3Api::parse(n).ok_or_else(|| usage::err(format!("--s3 {n}: not one of {}", aeiou::backend::S3_NAMES))),
+    }
 }
 
 fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
@@ -692,8 +716,44 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &a.endpoints)?;
+    let used = aeiou::validate::protocols(&loaded.ast, !loaded.traces.is_empty());
+    // an option for a protocol the abstract has no names on would change nothing: refused
+    if !used.posix {
+        let given: Vec<&str> = [
+            ("posix", a.posix.is_some()),
+            ("cache", a.cache.is_some()),
+            ("iowq-max-workers", a.iowq_max_workers.is_some()),
+            ("sqpoll", a.sqpoll.is_some() || a.sqpoll_shared),
+            ("defer-taskrun", a.defer_taskrun),
+            ("coop-taskrun", a.coop_taskrun),
+            ("aio-depth", a.aio_depth.is_some()),
+            ("mmap-mode", a.mmap_mode.is_some()),
+            ("mmap-consume", a.mmap_consume.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(n, g)| g.then_some(n))
+        .collect();
+        if !given.is_empty() {
+            let flags: Vec<String> = given.iter().map(|n| format!("--{n}")).collect();
+            aeiou::usage!("{}: POSIX options, and every dataset and namespace is `protocol: s3`{}", flags.join(", "), layers.from(&given));
+        }
+    }
+    if !used.s3 && a.s3.is_some() {
+        aeiou::usage!("--s3: no dataset or namespace is `protocol: s3`{}", layers.from(&["s3"]));
+    }
     let declared = aeiou::backend::declared(&loaded.ast)?;
     let backend = run_backend(a, declared)?;
+    let declared_s3 = aeiou::backend::declared_s3(&loaded.ast)?;
+    let s3 = if used.s3 { run_s3(a, declared_s3)? } else { S3Api::Blocking };
+    if used.posix && used.s3 && backend.event_loop() != s3.event_loop() {
+        aeiou::usage!(
+            "--posix {} with --s3 {}: one is event-driven and the other a thread per actor; a run with both protocols takes APIs of one kind until a traced application shows the mix (DESIGN_REVIEW.md §3.65){}",
+            backend.api.name(),
+            s3.name(),
+            layers.from(&["posix", "s3"])
+        );
+    }
+    let event_loop = backend.event_loop() || s3.event_loop();
     let object_threads = object_engine(&endpoints, a.object_threads, layers)?;
     let object_part = object_part(&endpoints, a.object_part_mib, layers)?;
     let expect_fingerprint = match &a.expect_fingerprint {
@@ -702,26 +762,26 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     };
     let uring = UringOpts { iowq_max_workers: a.iowq_max_workers.unwrap_or(0), sqpoll_idle_ms: a.sqpoll, sqpoll_shared: a.sqpoll_shared, defer_taskrun: a.defer_taskrun, coop_taskrun: a.coop_taskrun };
     if uring.any() && !backend.uring() {
-        aeiou::usage!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --io-api {} has no ring{}", backend.api.name(), layers.from(&["iowq-max-workers", "sqpoll", "defer-taskrun", "coop-taskrun"]));
+        aeiou::usage!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --posix {} has no ring{}", backend.api.name(), layers.from(&["iowq-max-workers", "sqpoll", "defer-taskrun", "coop-taskrun"]));
     }
     uring.check().map_err(|e| usage::err(format!("{e}{}", layers.from(&["sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "iowq-max-workers"]))))?;
     if a.aio_depth.is_some() && !backend.libaio() {
-        aeiou::usage!("--aio-depth is a libaio knob; --io-api {} has no AIO context{}", backend.api.name(), layers.from(&["aio-depth"]));
+        aeiou::usage!("--aio-depth is a libaio knob; --posix {} has no AIO context{}", backend.api.name(), layers.from(&["aio-depth"]));
     }
     if a.aio_depth == Some(0) {
         aeiou::usage!("--aio-depth 0: a context needs room for a request{}", layers.from(&["aio-depth"]));
     }
-    if a.threads.is_some() && !backend.event_loop() {
-        aeiou::usage!("--threads sets the event-loop threads of io_uring and libaio; --io-api {} runs one thread per actor{}", backend.api.name(), layers.from(&["threads"]));
+    if a.threads.is_some() && !event_loop {
+        aeiou::usage!("--threads sets the event-loop threads of --posix io_uring and libaio and --s3 async; this run has one thread per actor{}", layers.from(&["threads"]));
     }
     let mmap = match &a.mmap_mode {
         None => MmapMode::default(),
-        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-mode is an mmap knob; --io-api {} maps nothing{}", backend.api.name(), layers.from(&["mmap-mode"])),
+        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-mode is an mmap knob; --posix {} maps nothing{}", backend.api.name(), layers.from(&["mmap-mode"])),
         Some(m) => MmapMode::parse(m).ok_or_else(|| usage::err(format!("--mmap-mode {m}: not one of fault, populate, willneed{}", layers.from(&["mmap-mode"]))))?,
     };
     let mmap_consume = match &a.mmap_consume {
         None => MmapConsume::default(),
-        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-consume is an mmap knob; --io-api {} maps nothing{}", backend.api.name(), layers.from(&["mmap-consume"])),
+        Some(_) if !backend.mmap() => aeiou::usage!("--mmap-consume is an mmap knob; --posix {} maps nothing{}", backend.api.name(), layers.from(&["mmap-consume"])),
         Some(c) => MmapConsume::parse(c).ok_or_else(|| usage::err(format!("--mmap-consume {c}: not one of touch, copy{}", layers.from(&["mmap-consume"]))))?,
     };
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
@@ -734,10 +794,13 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     doc.set("seed", serde_json::json!(cfg.seed));
     doc.set("gpus", serde_json::json!(cfg.gpus));
     doc.set("params", payload::params_json(&loaded.doc, cfg, params)?);
-    doc.set("io_api", serde_json::json!(backend.api.name()));
-    doc.set("cache", serde_json::json!(backend.cache.name()));
-    doc.set("io_api_declared", serde_json::json!(declared.api.name()));
-    doc.set("cache_declared", serde_json::json!(declared.cache.name()));
+    // each protocol's API, null for a protocol the abstract has no names on
+    doc.set("posix", serde_json::json!(used.posix.then(|| backend.api.name())));
+    doc.set("cache", serde_json::json!(used.posix.then(|| backend.cache.name())));
+    doc.set("s3", serde_json::json!(used.s3.then(|| s3.name())));
+    doc.set("posix_declared", serde_json::json!(used.posix.then(|| declared.api.name())));
+    doc.set("cache_declared", serde_json::json!(used.posix.then(|| declared.cache.name())));
+    doc.set("s3_declared", serde_json::json!(used.s3.then(|| declared_s3.name())));
     doc.set("host", serde_json::json!(run::hostname()));
     doc.set("rank", serde_json::json!(a.rank));
     doc.set("ranks", serde_json::json!(a.ranks));
@@ -749,10 +812,20 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     layers.print(&mut out)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
-    if backend != declared {
-        writeln!(out, "{} is not the abstract's ({}): the storage sees another workload, and this run is not comparable with runs of the abstract as declared", backend.describe(), declared.describe())?;
+    let apis = |b: BackendKind, s: S3Api| -> String {
+        let mut parts = Vec::new();
+        if used.posix {
+            parts.push(b.describe());
+        }
+        if used.s3 {
+            parts.push(format!("s3 {}", s.name()));
+        }
+        parts.join("  ")
+    };
+    if (used.posix && backend != declared) || (used.s3 && s3 != declared_s3) {
+        writeln!(out, "{} is not the abstract's ({}): the storage sees another workload, and this run is not comparable with runs of the abstract as declared", apis(backend, s3), apis(declared, declared_s3))?;
     }
-    writeln!(out, "{}  root {}{}", backend.describe(), a.root.display(), if uring.any() {
+    writeln!(out, "{}  root {}{}", apis(backend, s3), a.root.display(), if uring.any() {
         format!("  io_uring knobs: {}", uring.describe())
     } else if backend.mmap() {
         format!("  mmap mode: {}  consume: {}", mmap.name(), mmap_consume.name())
@@ -810,6 +883,7 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
         root: a.root.clone(),
         endpoints: endpoints.clone(),
         backend,
+        s3,
         buffer_bytes: a.buffer_mib.max(1) << 20,
         threads: a.threads.unwrap_or(0),
         write_compress: a.write_compress,
@@ -833,7 +907,7 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
 
     // the limits, before any other host is kept waiting: soft limits raised to the hard ones,
     // the estimated open files and threads against them
-    let loops = if backend.event_loop() { run::loop_count(model, &opts)? } else { 0 };
+    let loops = if opts.event_loop() { run::loop_count(model, &opts)? } else { 0 };
     let limits = aeiou::limits::check(model, &opts, loops, a.ignore_limits)?;
     for line in limits.lines() {
         writeln!(out, "{line}")?;
@@ -890,8 +964,9 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
                 "gpus": cfg.gpus,
                 "params": payload::params_json(&loaded.doc, cfg, params)?,
                 "dataset_ids": dataset_ids,
-                "io_api": backend.api.name(),
+                "posix": backend.api.name(),
                 "cache": backend.cache.name(),
+                "s3": s3.name(),
                 "mmap_mode": mmap.name(),
                 "mmap_consume": mmap_consume.name(),
                 "rank_rotate": a.rank_rotate,
@@ -1214,8 +1289,11 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     let mut out = std::io::BufWriter::new(stdout.lock());
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     l.print(&mut out)?;
-    if loaded.ast.api.is_some() || loaded.ast.cache.is_some() {
+    if loaded.ast.posix.is_some() || loaded.ast.cache.is_some() {
         writeln!(out, "declared {}", aeiou::backend::declared(&loaded.ast)?.describe())?;
+    }
+    if loaded.ast.s3.is_some() {
+        writeln!(out, "declared s3 {}", aeiou::backend::declared_s3(&loaded.ast)?.name())?;
     }
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(&cfg))?;
     for line in report.total.take_lines() {

@@ -47,6 +47,7 @@ fn opts(root: &PathBuf, rank: i64, ranks: i64) -> RunOpts {
         root: root.clone(),
         endpoints: Default::default(),
         backend: BackendKind::Sync,
+        s3: aeiou::backend::S3Api::Blocking,
         buffer_bytes: 1 << 20,
         threads: 0,
         write_compress: 1,

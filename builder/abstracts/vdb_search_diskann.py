@@ -12,7 +12,7 @@ the nodes holds exactly those two rounds.
 """
 from aeiou import *
 
-w = Workload("vdb_search_diskann", api="libaio",   # DiskANN on Linux: io_submit on an O_DIRECT descriptor
+w = Workload("vdb_search_diskann", posix="libaio",   # DiskANN on Linux: io_submit on an O_DIRECT descriptor
              doc="Beam search over a sector-packed graph index: dependent rounds of `beam` concurrent 4 KiB reads per query.")
 P = w.P
 w.param("threads", 32, unit="count", doc="search threads per node (an actor is a search node)")

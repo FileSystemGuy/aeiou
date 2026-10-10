@@ -35,6 +35,16 @@ def dataset_root(d: dict) -> str:
     return prefix.rpartition("/")[0]
 
 
+def protocols(ast: dict, traces: bool) -> tuple:
+    """(posix, s3): the protocols an abstract has names on. `posix` when a dataset or namespace
+    declares it (or none), when a `trace` node runs (its files are under --root), or when no
+    name is `s3`."""
+    declared = [next(iter(d.values())).get("protocol", "posix") for d in ast.get("datasets", {}).values()]
+    declared += [n.get("protocol", "posix") for n in ast.get("namespaces", {}).values()]
+    s3 = "s3" in declared
+    return ("posix" in declared or traces or not s3), s3
+
+
 def canonical(ast: dict) -> bytes:
     """Canonical form: sorted keys, no whitespace, ASCII escapes, provenance removed. Floats
     serialize with Python's repr (shortest round-trip), which is what the builder emits. The
@@ -51,6 +61,7 @@ class Check:
         self.datasets = ast.get("datasets", {})
         self.namespaces = ast.get("namespaces", {})
         self.ops = Counter()
+        self.traces = False
 
     def err(self, path, msg):
         self.errors.append(f"{self.name}: {'/'.join(map(str, path))}: {msg}")
@@ -120,7 +131,25 @@ class Check:
             if "count" in a:
                 self.expr(a["count"], ["actors", aname, "count"], scope)
             self.body(a["body"], ["actors", aname, "body"], scope)
+        self.v19()
         return self.errors
+
+    def v19(self):
+        """V19: an API is declared only for a protocol the abstract has names on, and an
+        abstract with both declares APIs of one scheduling (event-driven or a thread per actor),
+        defaults counted."""
+        posix, s3 = protocols(self.ast, self.traces)
+        if "s3" in self.ast and not s3:
+            self.err(["s3"], "declared, but no dataset or namespace is `protocol: s3` (V19)")
+        for key in ("posix", "cache"):
+            if key in self.ast and not posix:
+                self.err([key], "declared, but every dataset and namespace is `protocol: s3` (V19)")
+        if posix and s3:
+            api, s = self.ast.get("posix", "sync"), self.ast.get("s3", "blocking")
+            if (api in ("io_uring", "libaio")) != (s == "async"):
+                self.err(["s3" if "s3" in self.ast else "posix"],
+                         f"posix `{api}` and s3 `{s}`: one is event-driven and the other a thread per actor; "
+                         "an abstract with both protocols declares APIs of one kind (V19)")
 
     def reserved(self, pattern, path):
         for comp in pattern.split("/"):
@@ -201,7 +230,7 @@ class Check:
         self.body(a["body"], p + ["body"], scope)
 
     def n_trace(self, a, p, scope):
-        pass
+        self.traces = True
 
     def n_op(self, a, p, scope):
         kind = p[-1]
@@ -245,12 +274,12 @@ class Check:
         if v18:
             ns = self.object_store_namespace(a["file"], scope)
             if ns:
-                self.err(p + [v18[0]], f"{v18[1]} on namespace `{ns}`, declared `protocol: object`: an object is written once, in order from 0, and has no {v18[1]} (V18)")
+                self.err(p + [v18[0]], f"{v18[1]} on namespace `{ns}`, declared `protocol: s3`: an object is written once, in order from 0, and has no {v18[1]} (V18)")
 
     def object_store_namespace(self, h, scope):
-        """Namespace name if the handle is (a binding to) an object of a namespace declared `protocol: object`."""
+        """Namespace name if the handle is (a binding to) an object of a namespace declared `protocol: s3`."""
         ns = self.object_namespace(h, scope) if isinstance(h, dict) else None
-        if ns and self.namespaces.get(ns, {}).get("protocol") == "object":
+        if ns and self.namespaces.get(ns, {}).get("protocol") == "s3":
             return ns
         return None
 

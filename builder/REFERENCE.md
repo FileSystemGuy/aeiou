@@ -434,24 +434,28 @@ without the writer's `--seed`, `--gpus`, and parameters is refused before the ga
 (`DESIGN_REVIEW.md` §3.52, decided 2026-10-02).
 
 **Where a dataset or namespace lives is declared in the script** (contract 0.6,
-2026-10-09): `w.dataset(..., protocol="object")`, `w.regions(..., protocol=...)`,
-`w.namespace(..., protocol=...)` for one the application reaches through an object store;
+2026-10-09; `s3` was `object` until contract 0.7): `w.dataset(..., protocol="s3")`,
+`w.regions(..., protocol=...)`, `w.namespace(..., protocol=...)` for one the application
+reaches through an S3 store;
 leave it out for a file system. Namespaces sharing a root declare one protocol (V17). A run
 places each with `--endpoint` (`runner/REFERENCE.md` §4), and `aeiou-datagen` takes the same
 flag; the protocol is not part of a dataset id. ~~The runner refuses `object` until its object
-engine is built~~ The runner reads an `object` dataset through its object engine and writes one
+engine is built~~ The runner reads an `s3` dataset through its object engine and writes one
 with `aeiou datagen` (`runner/REFERENCE.md` §16, 2026-10-09); ~~an `object` namespace waits for
-the engine's writes,~~ it writes and reads an `object` namespace too (the same night), where
+the engine's writes,~~ it writes and reads an `s3` namespace too (the same night), where
 V18 refuses `open` with `APPEND`, `RDWR`, or `EXCL`, `ftruncate`, and `fallocate` on its
-objects (`namespace(..., protocol="object")` raises at the op); `aeiou-datagen` writes
+objects (`namespace(..., protocol="s3")` raises at the op); `aeiou-datagen` writes
 container datasets to directories only (`DESIGN_REVIEW.md` §3.65).
 
-**The application's API is declared in the script** (contract 0.3, 2026-10-01; `api` and
-`cache` since contract 0.6, 2026-10-09): `Workload("model_load", api="mmap")`. Leave it out
-for an application that calls `read` and `write`. `cache="direct"` declares an application
-that opens every regular file `O_DIRECT` (refused under `mmap`); leave it out when the open
-flags of the ops say what it does. The runner uses both as the default backend
-(`runner/REFERENCE.md` §4).
+**The application's APIs are declared in the script** (contract 0.3, 2026-10-01; `api` and
+`cache` since contract 0.6, `posix`, `cache`, and `s3` since 0.7, 2026-10-09):
+`Workload("model_load", posix="mmap")`. Leave `posix` out for an application that calls
+`read` and `write`. `cache="direct"` declares an application that opens every regular file
+`O_DIRECT` (refused under `mmap`); leave it out when the open flags of the ops say what it
+does. `s3="async"` declares an application whose S3 client keeps many requests in flight
+per thread; leave it out for one that blocks on each. V19 refuses an API for a protocol the
+workload has no names on, and, with both, APIs of different kinds. The runner uses them as
+the default backend (`runner/REFERENCE.md` §4).
 
 **`aeiou-trace export`: the trace file of the `trace` node (added 2026-10-02;
 `DESIGN_REVIEW.md` §3.58, `runner/REFERENCE.md` §13).** The same `strace`, through the same

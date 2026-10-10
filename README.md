@@ -102,14 +102,15 @@ An abstract goes through five stages, each a tool of the suite.
   storage and the run says so. Anything an `LD_PRELOAD` shim could do under an unmodified
   application belongs to the system under test.
 - **Access is layered, and one run may mix protocols.** Formats sit above the access APIs,
-  and below them each choice is a separate axis: the protocol (POSIX or object) and the
-  endpoint of each dataset and namespace, the API (`sync`, `io_uring`, `libaio`, …), the cache
-  mode (`--cache per-open` or `direct`), the transport (TCP or RDMA), and the buffer (host or
+  and below them each choice is a separate axis: the protocol (POSIX or S3) and the
+  endpoint of each dataset and namespace, the API, one per protocol (`--posix sync`,
+  `io_uring`, `libaio`, …; `--s3 blocking` or `async`), the cache mode of the POSIX names
+  (`--cache per-open` or `direct`), the transport (TCP or RDMA), and the buffer (host or
   GPU memory). Since the protocol belongs to a dataset or namespace rather than to the run,
   one run can read its prompts from a POSIX tier and its KV chunks from an object tier, as
   KV-cache engines with several storage tiers do, with the same op stream and fingerprint
   either way (decided 2026-10-09; the API and cache axes and the per-namespace protocol and
-  `--endpoint` built, and the object engine's reads and writes on Apache `object_store`, under every API;
+  `--endpoint` built, and the object engine's reads and writes on Apache `object_store`, blocking or async, beside any POSIX API;
   `PROJECT_BRIEF.md` §6 item 25).
 - **Every option has a provenance.** Options resolve through the command line, the
   environment, a TOML file, and the default; what the identity depends on is the command
@@ -228,7 +229,7 @@ Not built, in rough order of interest:
   transport and buffer beside them; ~~then object storage through Apache `object_store` behind a feature flag (item 17; ~~`s3dlio`~~ decided 2026-10-09, `DESIGN_REVIEW.md` §3.65),~~
   ~~the object engine's writes (object namespaces, multipart at `close`, V18) and~~ ~~the object engine's event-loop
   bridge,~~ its reads of datasets and its writes of namespaces (multipart at `close`, V18) on Apache `object_store` behind the cargo feature `object`,
-  under every API including the event loops, built 2026-10-09 (item 17, `runner/REFERENCE.md` §16); `aeiou-datagen` (the Python container writer) to object stores and a measurement against a real store not yet; and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
+  under `--s3 blocking` or `async` (an API per protocol, contract 0.7), built 2026-10-09 (item 17, `runner/REFERENCE.md` §16); `aeiou-datagen` (the Python container writer) to object stores and a measurement against a real store not yet; and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only
   met `localhost`), and tensor-parallel sharding of a KV chunk, where `--gpus` is today
   independent engines rather than one TP group (`PROJECT_BRIEF.md` §6 item 20).

@@ -1,5 +1,5 @@
 {
-  "ast": "0.6",
+  "ast": "0.7",
   "name": "train_stream_parquet",
   "doc": "pyarrow over Parquet shards: footer read, then WILLNEED and one pread per coalesced run of row groups.",
   "params": {
@@ -792,14 +792,13 @@
       "script": "train_stream_shards.py",
       "sha256": "cd091d66f4c3fcf5e7b7e78767aaca769aa0e1934825362154f45397eea1f441",
       "builder_version": "0.1.0",
-      "git": "26415a1be282"
+      "git": "cfc20054c22c"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
       "sha256": "f58ab2f23f8662236112836645f4d863a3a44858a5ea36281605f35ea08e77bd"
     },
-    "built_twice_identical": true,
-    "ast_sha256": "8a5964f62866522cfe3adb7fa96593ced9ae1f58c3324db4e4336e786faee889"
+    "ast_sha256": "5872fa913593acf45298b6e2053f58dc7d9d3249ed037152546420902fc579da"
   }
 }

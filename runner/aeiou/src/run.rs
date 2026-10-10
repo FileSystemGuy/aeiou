@@ -221,7 +221,10 @@ pub struct RunOpts {
     pub root: PathBuf,
     /// The datasets and namespaces placed elsewhere (`endpoint.rs`).
     pub endpoints: crate::endpoint::Endpoints,
+    /// The POSIX names' API and cache mode (`--posix`, `--cache`).
     pub backend: BackendKind,
+    /// How the S3 names' client waits (`--s3`): `Async` puts the run on event loops.
+    pub s3: crate::backend::S3Api,
     /// Per-thread read and write buffer ring, bytes.
     pub buffer_bytes: usize,
     /// Event-loop threads for the `io_uring` and `libaio` backends (0: one per core, at most
@@ -261,6 +264,13 @@ pub struct RunOpts {
 }
 
 impl RunOpts {
+    /// The actors run on event loops (`uring.rs`) rather than a thread each: the POSIX API is
+    /// event-driven, or the S3 one is (V19 and the run's checks keep the two agreeing when
+    /// both protocols have names).
+    pub fn event_loop(&self) -> bool {
+        self.backend.event_loop() || self.s3.event_loop()
+    }
+
     /// Where the abstract's path `rel` lives: under its endpoint, or under `--root`.
     pub fn path(&self, rel: &str) -> PathBuf {
         self.endpoints.path(&self.root, rel)
@@ -1842,7 +1852,7 @@ pub fn participants(model: &Model<'_>, opts: &RunOpts) -> Result<Vec<(String, us
 /// of the process; a run is the process).
 pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>) -> Result<Report> {
     if opts.uring.any() && !opts.backend.uring() {
-        bail!("io_uring knobs ({}) under --io-api {}, which has no ring", opts.uring.describe(), opts.backend.api.name());
+        bail!("io_uring knobs ({}) under --posix {}, which has no ring", opts.uring.describe(), opts.backend.api.name());
     }
     let p = participants(model, &opts)?;
     run_with(model, opts, input_objects, Arc::new(Local::new(&p)), Arc::new(AtomicBool::new(false)))
@@ -1874,11 +1884,14 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
     crate::backend::open_files_reset();
     let sampler = Sampler::start(&sh.opts.root);
     let t0 = Instant::now();
-    if sh.opts.backend.event_loop() {
+    if sh.opts.event_loop() {
         let loops = if sh.opts.backend.uring() {
             crate::uring::run(model, &sh, &counts, &ranges).map(|(u, sqpoll)| (u.loops, Some(u), None, sqpoll))
-        } else {
+        } else if sh.opts.backend.libaio() {
             crate::aio::run(model, &sh, &counts, &ranges).map(|a| (a.loops, None, Some(a), 0))
+        } else {
+            // S3 names alone under `--s3 async`: loops that wait on their eventfd, no ring
+            crate::uring::run_s3(model, &sh, &counts, &ranges).map(|n| (n as _, None, None, 0))
         };
         let elapsed = t0.elapsed();
         let mut counters = sampler.finish();

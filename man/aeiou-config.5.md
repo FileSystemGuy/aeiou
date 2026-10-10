@@ -49,8 +49,9 @@ options (cli > env > config > default)
   param = files=4000 steps=50                                [cli]
   gpus = 8                                                   [cli]
   seed = 1                                                   [cli]
-  io-api = the abstract's                                    [default]
+  posix = the abstract's                                     [default]
   cache = the abstract's                                     [default]
+  s3 = the abstract's                                        [default]
   root = /mnt/sut                                            [config /etc/aeiou.toml]
   threads = 8                                                [env AEIOU_THREADS]
   rank = 2                                                   [env AEIOU_RANK]
@@ -59,7 +60,7 @@ options (cli > env > config > default)
 ```
 
 A refusal or cross-check of a layered option names the layer that set it when that was not
-the command line: `--aio-depth is a libaio knob; --io-api sync has no AIO context
+the command line: `--aio-depth is a libaio knob; --posix sync has no AIO context
 (--aio-depth from config /etc/aeiou.toml)`. A value the user typed gets no suffix. The
 checks made during the run name the flag only; its source is in the block above them.
 
@@ -129,7 +130,7 @@ sides may come from different layers.
 ## OPTIONS BY KIND
 
 **aeiou run.** Fixed: the abstract, `--gpus`, `--seed`, `--param`, `--params-file`,
-`--io-api`, `--cache`, `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`,
+`--posix`, `--cache`, `--s3`, `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`,
 `--ignore-limits`. Layered: `--root`, `--endpoint`, `--threads`, `--buffer-mib`, `--write-compress`,
 `--time-scale`, the io_uring knobs (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`,
 `--defer-taskrun`, `--coop-taskrun`), `--aio-depth`, `--mmap-mode`, `--mmap-consume`,

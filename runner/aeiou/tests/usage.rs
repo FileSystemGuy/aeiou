@@ -91,9 +91,9 @@ fn the_parsers_own_errors_and_the_layers_refusals_wear_the_frame() {
     assert_eq!(message, "--defer-taskrun and --sqpoll exclude each other");
     // a backend is an API and a cache mode, each its own flag (DESIGN_REVIEW §3.65)
     let run = |extra: &[&str]| frame(&mut aeiou(&[&["run", &ast, "--gpus", "1", "--root", "/tmp"], extra].concat()), "aeiou run").0;
-    assert!(run(&["--io-api", "nope"]).starts_with("--io-api nope: not one of "));
+    assert!(run(&["--posix", "nope"]).starts_with("--posix nope: not one of "));
     assert!(run(&["--cache", "nope"]).starts_with("--cache nope: not one of "));
-    assert_eq!(run(&["--io-api", "mmap", "--cache", "direct"]), "--cache direct under --io-api mmap: its reads are page faults on a mapping");
+    assert_eq!(run(&["--posix", "mmap", "--cache", "direct"]), "--cache direct under --posix mmap: its reads are page faults on a mapping");
 }
 
 #[test]

@@ -157,8 +157,8 @@ def placement(ast: dict, root: pathlib.Path, given: list):
     runner's object engine (`aeiou datagen`) writes plain datasets, not containers."""
     roots = _roots(ast)
     for name, (proto, _) in roots.items():
-        if proto == "object":
-            raise BuildError(f"`{name}` is declared `protocol: object`: aeiou-datagen writes to directories only; a plain dataset in an object store is written by `aeiou datagen`, and container datasets in one are not written yet (DESIGN_REVIEW.md §3.65)")
+        if proto == "s3":
+            raise BuildError(f"`{name}` is declared `protocol: s3`: aeiou-datagen writes to directories only; a plain dataset in an object store is written by `aeiou datagen`, and container datasets in one are not written yet (DESIGN_REVIEW.md §3.65)")
     placed: dict[str, tuple[list, pathlib.Path]] = {}
     for g in given:
         name, sep, d = g.partition("=")

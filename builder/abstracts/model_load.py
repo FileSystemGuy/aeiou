@@ -6,11 +6,11 @@ are the trace of `safetensors.safe_open(framework="pt")` under `from_pretrained`
 safetensors 0.8, builder/traces/model_load): the library maps each shard twice, once to parse
 the header and once as the tensors' storage, advises the kernel that access is sequential, and
 closes both descriptors before any tensor byte is touched. It issues no `read`: the reads
-below are what the mappings touch, and `--io-api mmap` is the application's own API here.
+below are what the mappings touch, and `--posix mmap` is the application's own API here.
 Which bytes of a tensor a process touches is still the draft's [verify] (a serving engine with
 GPUs was not traced): the traced loader touches none until the tensor is used. Tensor-parallel rank `gpu mod tp` takes a 1/TP slice: contiguous for
 column-parallel weights, one piece per row for row-parallel ones (a page-fault storm under
-`--io-api mmap`), and the whole tensor for replicated ones (norms, biases). The tensor
+`--posix mmap`), and the whole tensor for replicated ones (norms, biases). The tensor
 table is a set of parallel parameter arrays indexed by t; `tensors_in(s)` of the paper form is
 a loop over all tensors guarded by `shard[t] == s`. The defaults are a five-tensor stand-in; a
 real model's table is a parameter file built by `aeiou-params safetensors` from its shards
@@ -19,7 +19,7 @@ real model's table is a parameter file built by `aeiou-params safetensors` from 
 """
 from aeiou import *
 
-w = Workload("model_load", api="mmap",     # safetensors maps the shards and never calls read
+w = Workload("model_load", posix="mmap",     # safetensors maps the shards and never calls read
              doc="Every process reads every safetensors shard, touching its tensor-parallel slice of each tensor (fan-in G).")
 P = w.P
 w.param("shards", 2, unit="count", doc="[config]; 4 here would be a 20 GiB model, 2 keeps the example short")

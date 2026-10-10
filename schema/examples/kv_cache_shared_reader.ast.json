@@ -1,5 +1,5 @@
 {
-  "ast": "0.6",
+  "ast": "0.7",
   "name": "kv_cache_shared_reader",
   "doc": "A cold engine in front of the store a kv_cache_shared run filled: every lookup hits, every chunk it does not hold is read, nothing is written.",
   "params": {
@@ -2097,14 +2097,13 @@
       "script": "kv_cache_shared.py",
       "sha256": "d7c704efddfb31dbab566d0d0aae22eac7f6cb49e268d89789ded1e838364531",
       "builder_version": "0.1.0",
-      "git": "26415a1be282"
+      "git": "cfc20054c22c"
     },
     "python": "3.12.13",
     "lock": {
       "file": "uv.lock",
       "sha256": "f58ab2f23f8662236112836645f4d863a3a44858a5ea36281605f35ea08e77bd"
     },
-    "built_twice_identical": true,
-    "ast_sha256": "70461a42a9b959c92f7cb21b677e0b3e6ef8bb05fb84df40fee71d9936c93bf3"
+    "ast_sha256": "7afe4b7290b89ac854c1c58bf2aa3f4277efb20017a93e8832b8996fa0744c8d"
   }
 }

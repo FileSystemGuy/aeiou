@@ -77,9 +77,10 @@ def _reserved(pattern: str, what: str):
 
 
 def _protocol(protocol, what: str) -> None:
-    """A dataset's or namespace's protocol (contract 0.6): `posix` (absent) or `object`."""
-    if protocol is not None and protocol not in ("posix", "object"):
-        raise BuildError(f"{what}: protocol must be posix or object")
+    """A dataset's or namespace's protocol (contract 0.6; `s3` was `object` until 0.7): `posix`
+    (absent) or `s3`."""
+    if protocol is not None and protocol not in ("posix", "s3"):
+        raise BuildError(f"{what}: protocol must be posix or s3")
 
 def _root(pattern: str) -> str:
     return pattern.split("{", 1)[0].rpartition("/")[0]
@@ -175,29 +176,35 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.6"
+    AST_VERSION = "0.7"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
-    APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
+    POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
     CACHES = ("per-open", "direct")
+    S3_APIS = ("blocking", "async")
 
-    def __init__(self, name: str, doc: str | None = None, *, api: str | None = None, cache: str | None = None,
-                 lint: bool = True):
-        """`api`: the API the traced application issues its I/O through (a runner `--io-api`
-        name); a run uses it by default. Leave it out for an application that calls read and
-        write (`sync`). `cache`: `direct` for an application that opens every regular file
-        `O_DIRECT`; leave it out when the open flags of the ops say what it does (contract
-        0.6, `DESIGN_REVIEW.md` §3.65)."""
+    def __init__(self, name: str, doc: str | None = None, *, posix: str | None = None, cache: str | None = None,
+                 s3: str | None = None, lint: bool = True):
+        """`posix`: the API the traced application issues the I/O of its `posix` names through
+        (a runner `--posix` name); a run uses it by default. Leave it out for an application
+        that calls read and write (`sync`). `cache`: `direct` for an application that opens
+        every regular file `O_DIRECT`; leave it out when the open flags of the ops say what it
+        does. `s3`: how its S3 client uses the store for its `s3` names, `blocking` (left out)
+        or `async` (contract 0.7, `DESIGN_REVIEW.md` §3.65; V19 relates the three to the
+        protocols the workload has names on)."""
         self.name = check_ident(name, "workload name")
         self.doc = doc
-        if api is not None and api not in self.APIS:
-            raise BuildError(f"workload {name}: api must be one of {self.APIS}")
+        if posix is not None and posix not in self.POSIX_APIS:
+            raise BuildError(f"workload {name}: posix must be one of {self.POSIX_APIS}")
         if cache is not None and cache not in self.CACHES:
             raise BuildError(f"workload {name}: cache must be one of {self.CACHES}")
-        if api == "mmap" and cache == "direct":
-            raise BuildError(f"workload {name}: cache `direct` under api `mmap`: its reads are page faults on a mapping")
-        self.api = api
+        if s3 is not None and s3 not in self.S3_APIS:
+            raise BuildError(f"workload {name}: s3 must be one of {self.S3_APIS}")
+        if posix == "mmap" and cache == "direct":
+            raise BuildError(f"workload {name}: cache `direct` under posix `mmap`: its reads are page faults on a mapping")
+        self.posix = posix
         self.cache = cache
+        self.s3 = s3
         self.lint = lint
         self._params: dict[str, Param] = {}
         self._param_specs: dict[str, dict] = {}
@@ -359,10 +366,12 @@ class Workload:
         ast = {"ast": self.AST_VERSION, "name": self.name}
         if self.doc:
             ast["doc"] = self.doc
-        if self.api:
-            ast["api"] = self.api
+        if self.posix:
+            ast["posix"] = self.posix
         if self.cache:
             ast["cache"] = self.cache
+        if self.s3:
+            ast["s3"] = self.s3
         if self._param_specs:
             ast["params"] = {k: _strip_none({**v, "default": _ast_value(v["default"])})
                              for k, v in self._param_specs.items()}
@@ -817,10 +826,10 @@ class Cursor:
 
     def _object_store_namespace(self, h):
         """Namespace name if the handle is (a binding to) an object of a namespace declared
-        `protocol: object`."""
+        `protocol: s3`."""
         if isinstance(h, Ref):
             return self._object_store_namespace(self._lookup(h.name))
-        if isinstance(h, ObjectHandle) and self.wl._namespaces[h.namespace].spec.get("protocol") == "object":
+        if isinstance(h, ObjectHandle) and self.wl._namespaces[h.namespace].spec.get("protocol") == "s3":
             return h.namespace
         return None
 

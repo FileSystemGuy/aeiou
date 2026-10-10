@@ -1,5 +1,5 @@
 //! The object engine (`DESIGN_REVIEW.md` §3.65): the ops of a dataset or namespace declared
-//! `protocol: object`, issued to an S3 store through Apache `object_store`, the library chosen
+//! `protocol: s3`, issued to an S3 store through Apache `object_store`, the library chosen
 //! over `s3dlio` by measurement (the same entry). It is built with the cargo feature
 //! `object`; the default build has no tokio and refuses an object endpoint.
 //!
@@ -19,7 +19,7 @@
 //! `fsync`, and `fdatasync` are local and send nothing, and `ioctl` is local with a regular
 //! file's answers (`TCGETS` is `ENOTTY`). An `open` for writing begins an upload (`Upload`):
 //! the writes, each at the end of what the handle has written (V18), fill a part of
-//! `--object-part-size` bytes from the payload, a full part is sent as a part of a multipart
+//! `--object-part-mib` MiB from the payload, a full part is sent as a part of a multipart
 //! upload before the write returns, and `close` sends the object, one `PUT` when it fits in
 //! a part and the last part and the completion otherwise, so an object exists from its
 //! `close`; `fstat` of a handle being written is its written size, sent nothing. `unlink` is
@@ -31,11 +31,12 @@
 //! with `--object-threads` workers (`set_threads`), parked until the process exits. An op is
 //! begun on the actor's thread (`start`: what is local, the payload of a write, the actor's
 //! tables) and what it sends is a future that owns what it needs; its answer is settled on
-//! the actor's thread again (`settle`). Under a thread-per-actor API the actor's thread runs
-//! the future with `Handle::block_on` (`issue`), so the request is built and signed there and
-//! the workers drive the connections; an event loop (`uring.rs`, for `io_uring` and
-//! `libaio`) `spawn`s it instead, so the workers do all of it, and goes on with its other
-//! actors until the answer wakes it. Either way an actor has one op in flight. An op on an
+//! the actor's thread again (`settle`). Under `--s3 blocking` the actor's thread runs the
+//! future with `Handle::block_on` (`issue`), so the request is built and signed there and the
+//! workers drive the connections; under `--s3 async` an event loop (`uring.rs`: one of
+//! `io_uring` or `libaio` beside POSIX names, one with no ring for S3 names alone) `spawn`s
+//! it instead, so the workers do all of it, and goes on with its other actors until the
+//! answer wakes it. The sockets are tokio's (`epoll`) whatever the POSIX API. Either way an actor has one op in flight. An op on an
 //! upload another op has on the runtime (two actors writing one object at once) is `EBUSY`.
 
 use std::io;
@@ -49,7 +50,7 @@ pub const DEFAULT_THREADS: usize = 2;
 
 /// The part size of a multipart upload: an object larger than this is sent in parts of it
 /// (8 MiB, as `s3dlio`; `object_store`'s own writer uses 10 MiB). `aeiou datagen` uses it;
-/// a run uses `--object-part-size`.
+/// a run uses `--object-part-mib`.
 pub const DEFAULT_PART: u64 = 8 << 20;
 
 /// The bounds S3 sets on a part: at least 5 MiB (but the last), at most 5 GiB.
@@ -58,7 +59,7 @@ pub const MAX_PART: u64 = 5 << 30;
 
 static PART: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(DEFAULT_PART);
 
-/// The part size of the run's uploads (`--object-part-size`), set before the first open.
+/// The part size of the run's uploads (`--object-part-mib`), set before the first open.
 pub fn set_part_size(n: u64) {
     PART.store(n, std::sync::atomic::Ordering::Relaxed);
 }
@@ -626,7 +627,7 @@ mod imp {
             })
         }
 
-        /// An upload of the object at `rest`, in parts of `--object-part-size`; nothing is
+        /// An upload of the object at `rest`, in parts of `--object-part-mib`; nothing is
         /// sent until a part fills or the handle closes.
         pub fn upload(&self, rest: &str) -> Upload {
             Upload { s3: self.s3.clone(), key: self.key(rest), show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None }

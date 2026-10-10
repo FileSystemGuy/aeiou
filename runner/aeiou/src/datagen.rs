@@ -22,7 +22,7 @@
 //! leaves a strict prefix of every file: a file of the right size is a whole file, which is
 //! what a later `--resume` will rely on.
 //!
-//! **Object datasets** (`protocol: object`, `object.rs`): each file is one object, sent as
+//! **Object datasets** (`protocol: s3`, `object.rs`): each file is one object, sent as
 //! one `PUT` or, when larger than `object::DEFAULT_PART`, a multipart upload in parts of
 //! that size, each part made and sent before the next; the root's emptiness is a `LIST`, the
 //! manifest one `PUT` (atomic, so no temporary name), and there is no `syncfs`. A `regions`

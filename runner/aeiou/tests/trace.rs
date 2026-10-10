@@ -33,7 +33,7 @@ fn abstract_with(dir: &Path, lines: &str, count: Option<i64>) -> PathBuf {
     std::fs::write(dir.join("t.jsonl"), &text).unwrap();
     let count = count.map(|c| format!(r#""count": {c},"#)).unwrap_or_default();
     let ast = format!(
-        r#"{{"ast": "0.6", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
+        r#"{{"ast": "0.7", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
             "actors": {{"app": {{{count} "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{}"}}}}]}}}}}}"#,
         sha(text.as_bytes())
     );
@@ -56,6 +56,7 @@ fn opts(root: &Path, backend: BackendKind, clean: bool) -> RunOpts {
         root: root.to_path_buf(),
         endpoints: Default::default(),
         backend,
+        s3: aeiou::backend::S3Api::Blocking,
         buffer_bytes: 1 << 20,
         threads: 0,
         write_compress: 1,

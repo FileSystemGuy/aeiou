@@ -36,23 +36,24 @@ fn hashes_match_check_py() {
     // then kv_cache_serving for `direct`, LMCache's O_DIRECT calls (its fingerprints at `direct` false unchanged), §3.63;
     // the three again 2026-10-08 for the sub-agent prefix, `kind`, `first_in`, `sys_held`, and `sub_held`, whose defaults
     // leave every fingerprint unchanged; all again 2026-10-09 for contract 0.6, `api` and `cache` in place of
-    // `backend`, DESIGN_REVIEW §3.65, every fingerprint unchanged).
+    // `backend`, DESIGN_REVIEW §3.65, every fingerprint unchanged; all again the same day for contract 0.7,
+    // `posix` in place of `api` and `s3` in place of the protocol `object`, every fingerprint unchanged).
     let want = [
-        ("ckpt_restore", "8a06812f10d24d676225484116d838aec5ee37e8058a6ee8dac7be04fb6f4403"),
-        ("ckpt_write_dcp", "298facc756c4c805de2c64023208119bfde336bf9200adaea01b1f4ade381e7c"),
-        ("kv_cache_serving", "3b35072b98ee1d7f010c9b69c2ae3011982f890809a636d647336c626a6f8ae8"),
-        ("model_load", "0b9cb416d5abc1149617ae6dc3db5d3216943a21cd58c9d7f6b7cd02c1d8b254"),
-        ("train_large_samples", "1db27fd452f787fecb99f0fdcc475a18101dbe7bdfd9dfd8764577952dde00d0"),   // 2026-10-02: the `enumerate` phase, on by default
-        ("train_small_files", "1d51b91e4782858173a837e792008a770d079a0d7544e36d95c9d8cf32f151e6"),   // 2026-10-02: `enumerate` on by default
-        ("vdb_build_diskann", "737bb3111de1c0c4a4d387f962e8562ede8c2e35ce2236198f125ee6f31b3377"),
-        ("vdb_search_diskann", "d956c30a9708e91bd5433c6b947aff309ec588f411bf715435f3f3afc94e8b9a"),
-        ("train_stream_tfrecord", "ca53b14f141f1af78462d9edc9561c12160e733326f6705ea931d2b7fdadac1b"),
-        ("train_stream_parquet", "8a5964f62866522cfe3adb7fa96593ced9ae1f58c3324db4e4336e786faee889"),
-        ("train_map_hdf5", "426a38f27393a07a22b2c2d6cdf70e85fd82ad87e205c5a4465e7166bda3e63c"),
-        ("vdb_search_ivf", "66355d0edec4b539b1d6b8bf0067bf99854f8d6c0e36b123bc936abea30d3750"),
+        ("ckpt_restore", "f1d6a4b44da1eff83592b13b02f8bc4b042d3a68873957ecb9d1fbede6f104d1"),
+        ("ckpt_write_dcp", "0bda0a37d52b51e00793870694818f7f5ca20030fb8eeedb7eea858658e3aec9"),
+        ("kv_cache_serving", "a511dadf0cdf7347f63ddaff5d630439b01c298dd278152433a4eec38653b96f"),
+        ("model_load", "8cc6aec86d80257d96b903926b8a46b06427c34ceb3eb6e6ca5bce21c5082fef"),
+        ("train_large_samples", "b1bc4e0488d38b8fe3c7e18ed438bd17311f01eb67f8c2d0e8e5f44ded413fd8"),   // 2026-10-02: the `enumerate` phase, on by default
+        ("train_small_files", "2eea7e658144075ebd4c5ee0dec952d3fe6dbb37f900d07f23bbee5ab7321146"),   // 2026-10-02: `enumerate` on by default
+        ("vdb_build_diskann", "488f947a1208ce9d05c9fae6d060488ff93f461c078f6fb0b911863cbd534409"),
+        ("vdb_search_diskann", "569e26a7a183333cc11faf45fff880cf5f7a1323fbcc14ceb8bbf2393b1d3a02"),
+        ("train_stream_tfrecord", "d78ffeb96e1dc626005cb016d7e3bb7d708d2a4f2593c12af39420f96d3b4ebd"),
+        ("train_stream_parquet", "5872fa913593acf45298b6e2053f58dc7d9d3249ed037152546420902fc579da"),
+        ("train_map_hdf5", "799d0cca43191e4767c671d9fc27aef5cd74c47b3b8b5d6350b9d7c848dc34d9"),
+        ("vdb_search_ivf", "45ece2e4ae9f899a704602c598ae420206e5c47074947923e87826abb36fbe37"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("kv_cache_shared", "b9cccc204897662a7ab7fca38421640b45ee80a255d566f81f2c4b012a197f7f"),
-        ("kv_cache_shared_reader", "70461a42a9b959c92f7cb21b677e0b3e6ef8bb05fb84df40fee71d9936c93bf3"),
+        ("kv_cache_shared", "6b1f98ea0364c49ec86f3ec11001f26d9582e75d61c92633c9328f02719e2834"),
+        ("kv_cache_shared_reader", "7afe4b7290b89ac854c1c58bf2aa3f4277efb20017a93e8832b8996fa0744c8d"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&examples().join(format!("{name}.ast.json"))).unwrap();
@@ -217,7 +218,7 @@ fn collect(text: &str, cfg: &Config, template: &str, count: i64) -> Vec<(i64, Ve
 }
 
 const CONSUME: &str = r#"{
-  "ast": "0.6", "name": "consume_test",
+  "ast": "0.7", "name": "consume_test",
   "params": {"batches": {"default": 24}, "batch": {"default": 4}},
   "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}}},
   "actors": {"gpu": {"body": [
@@ -256,7 +257,7 @@ fn consume_is_a_permutation_per_epoch_across_actors() {
 }
 
 const CHAIN: &str = r#"{
-  "ast": "0.6", "name": "chain_test",
+  "ast": "0.7", "name": "chain_test",
   "params": {"reuse": {"default": {"mixture": [{"weight": 0.4, "dist": null}, {"weight": 0.6, "dist": {"uniform": {"lo": 1, "hi": 5}}}]}}},
   "namespaces": {"kv": {"pattern": "kv/{conv:016x}/d{d}", "fields": {"conv": "int", "d": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
@@ -297,7 +298,7 @@ fn at_chains_reach_the_original_conversation() {
 }
 
 const UNTIL_EOF: &str = r#"{
-  "ast": "0.6", "name": "eof_test",
+  "ast": "0.7", "name": "eof_test",
   "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 1, "body": [
@@ -344,7 +345,7 @@ fn rejects(text: &str, needle: &str) {
 fn validator_rejects_what_check_py_rejects() {
     let base = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.6", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.7", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{{datasets}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )
@@ -355,12 +356,16 @@ fn validator_rejects_what_check_py_rejects() {
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 1, "body": [{"open": {"file": {"file": {"dataset": "d", "id": 0}}, "flags": ["WRONLY"]}}]}}"#), "read-only (V12)");
     rejects(&base(r#""d": {"files": {"pattern": ".aeiou-x/{id}", "count": 10, "size": {"const": 1}, "seed": 1}}"#, ""), ".aeiou");
     rejects(&base(ds, r#"{"let": {"name": "f", "value": {"consume": "d"}}}"#), "outside any loop");
-    // contract 0.6: the declared API and cache mode, each a name, and never `direct` under `mmap`
+    // contract 0.7: the declared APIs (one per protocol) and cache mode, each a name, and never
+    // `direct` under `mmap`; `api` (0.6) and `backend` (0.3) are gone
     let declared = |kv: &str| base(ds, "").replacen(r#""name": "t","#, &format!(r#""name": "t", {kv},"#), 1);
-    rejects(&declared(r#""api": "pread""#), "is not one of");
+    rejects(&declared(r#""posix": "pread""#), "is not one of");
     rejects(&declared(r#""cache": "dontcache""#), "is not one of");
-    rejects(&declared(r#""api": "mmap", "cache": "direct""#), "page faults on a mapping");
+    rejects(&declared(r#""posix": "mmap", "cache": "direct""#), "page faults on a mapping");
+    rejects(&declared(r#""api": "sync""#), "api");
     rejects(&declared(r#""backend": "sync""#), "backend");
+    // V19: an API only for a protocol with names (the dataset `d` is posix)
+    rejects(&declared(r#""s3": "async""#), "no dataset or namespace is `protocol: s3` (V19)");
     // V17: namespaces sharing a root share its place, so they declare one protocol
     let two = |pa: &str, pb: &str| {
         base(ds, "").replacen(
@@ -372,13 +377,20 @@ fn validator_rejects_what_check_py_rejects() {
             1,
         )
     };
-    rejects(&two(r#", "protocol": "object""#, ""), "`protocol` differs (V17)");
-    aeiou::load_str(&two(r#", "protocol": "object""#, r#", "protocol": "object""#)).unwrap();
+    rejects(&two(r#", "protocol": "s3""#, ""), "`protocol` differs (V17)");
+    aeiou::load_str(&two(r#", "protocol": "s3""#, r#", "protocol": "s3""#)).unwrap();
+    rejects(&two(r#", "protocol": "object""#, r#", "protocol": "object""#), "unknown variant `object`");
+    // V19: posix and s3 names together take APIs of one kind, defaults counted
+    let both = |kv: &str| two(r#", "protocol": "s3""#, r#", "protocol": "s3""#).replacen(r#""name": "t","#, &format!(r#""name": "t", {kv},"#), 1);
+    rejects(&both(r#""posix": "io_uring""#), "one is event-driven and the other a thread per actor");
+    rejects(&both(r#""s3": "async""#), "one is event-driven and the other a thread per actor");
+    aeiou::load_str(&both(r#""posix": "libaio", "s3": "async""#)).unwrap();
+    aeiou::load_str(&both(r#""posix": "mmap""#)).unwrap();
     // V18: an object in an object store is written once, in order from 0, by one upload
     let v18 = |protocol: &str, op: &str| {
         two(protocol, protocol).replacen(r#""body": []"#, &format!(r#""body": [{{"loop": {{"index": "i", "to": 1, "body": [{{"let": {{"name": "f", "value": {{"object": {{"namespace": "a", "fields": {{"k": {{"index": "i"}}}}}}}}}}}}, {op}]}}}}]"#), 1)
     };
-    let obj = r#", "protocol": "object""#;
+    let obj = r#", "protocol": "s3""#;
     for flag in ["APPEND", "RDWR", "EXCL"] {
         rejects(&v18(obj, &format!(r#"{{"open": {{"file": {{"ref": "f"}}, "flags": ["WRONLY", "CREAT", "{flag}"]}}}}"#)), "(V18)");
     }
@@ -466,7 +478,7 @@ fn parameters_given_are_held_to_the_at_rule() {
 #[test]
 fn a_long_at_chain_is_one_link_per_iteration() {
     let text = r#"{
-  "ast": "0.6", "name": "long_chain",
+  "ast": "0.7", "name": "long_chain",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "k", "to": 200000, "body": [
