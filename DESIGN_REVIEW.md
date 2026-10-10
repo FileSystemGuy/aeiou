@@ -4231,7 +4231,7 @@ The protocol is left out of a dataset id and of a namespace's resolved definitio
 writers: where a corpus lives is not what it is. *The runner:* `--endpoint NAME=DIR`
 (repeatable, layered like `--root`, the first list among the layered options: a higher
 layer's list replaces a lower one's whole) on `aeiou run`, `aeiou datagen`, and
-`aeiou-datagen`. Choices made here, open to revision: an endpoint places the name's *root
+`aeiou-datagen`. Choices made here, ~~open to revision~~ confirmed by the user 2026-10-09: an endpoint places the name's *root
 directory*, not a second `--root` (a path keeps its part below the root); a path falls under
 the longest placed root that is a prefix of it, so a dataset rooted inside a placed namespace
 moves with it unless placed itself (the KV abstracts' `kv/sys` inside `kv`); names sharing a
@@ -4341,8 +4341,8 @@ tokio runtime per process (`--object-threads`, default 2), each actor's op run w
 `block_on` on its own thread, so the event loops refuse object names for now; `aeiou
 datagen` writes object datasets as `PUT`s and 8 MiB multipart uploads, the manifest as one
 `PUT`. MinIO tests: the objects' bytes equal the POSIX writer's files, and runs under
-`sync`, `posix-aio`, and `mmap` reproduce the dry run's fingerprint. Choices made here, open
-to revision: `--object-threads` defaults to 2 (the workers only drive connections; the
+`sync`, `posix-aio`, and `mmap` reproduce the dry run's fingerprint. Choices made here, ~~open
+to revision~~ confirmed by the user 2026-10-09: `--object-threads` defaults to 2 (the workers only drive connections; the
 actor threads sign and build the requests), a directory `stat` costs a `HEAD` and a `LIST`
 (a real client checking a prefix does the same), and `aeiou-datagen` (the Python container
 writer) still writes to directories only. Not yet: ~~object namespaces and every write (V18,
@@ -4362,8 +4362,8 @@ namespace manifest is one `PUT` at it, which an `input` reader `GET`s for V14, V
 `open` with `APPEND`, `RDWR`, or `EXCL`, no `ftruncate`, no `fallocate` on an object
 namespace. Tested against MinIO with the shared KV pair: the writer's chunks (6 MiB, in two
 5 MiB parts, then renamed) reach the dry run's fingerprint and equal a POSIX run's files byte
-for byte, and the reader reads them back as its input to its own. *Choices made here, open to
-revision:* (1) V18 sees ops, not offsets, which are positional expressions, so "a write not
+for byte, and the reader reads them back as its input to its own. *Choices made here, ~~open to
+revision~~ confirmed by the user 2026-10-09:* (1) V18 sees ops, not offsets, which are positional expressions, so "a write not
 sequential from 0" is refused at the write (`ESPIPE`, failing the run like a structural
 check) rather than at `aeiou check`; `dry-run` could find it before a run, since the op
 stream is fixed, but it knows no endpoints and would need the namespace of each path. (2)
@@ -4395,7 +4395,7 @@ the engine's inline calls non-blocking, so the ring and the AIO context stay obj
 Tested against MinIO: the 20 MiB dataset under both loops, the listing walk with its short
 reads under `io_uring`, the shared KV writer under `io_uring` (its objects byte-equal to a
 POSIX run's files) and its reader under `libaio`, each to the dry run's fingerprint. *Choices
-made here, open to revision:* (1) under a loop the workers build and sign the requests as
+made here, ~~open to revision~~ confirmed by the user 2026-10-09:* (1) under a loop the workers build and sign the requests as
 well as drive the connections, so `--object-threads` bounds the CPU object ops get, as it
 would in an asynchronous application; under `sync` the actor's thread signs, as before. (2) A
 read's buffer under a loop is plain heap memory owned by the op while in flight, from a FIFO
@@ -4445,7 +4445,7 @@ with names, and `s3 engine: object_store 0.14.2 on tokio (epoll sockets)  runtim
 Tested against MinIO: S3 names alone under `blocking` and `async`, the KV namespace written
 under `async`, and a mixed run (the system prompts in directories, the chunks in the bucket)
 under `--posix io_uring --s3 async`, each to the dry run's fingerprint, and the refusals.
-*Choices made here, open to revision:* (1) a `trace` node counts as a POSIX name (its files
+*Choices made here, ~~open to revision~~ confirmed by the user 2026-10-09:* (1) a `trace` node counts as a POSIX name (its files
 are under `--root`), and an abstract with no dataset or namespace at all is POSIX; (2) S3
 names alone under `async` run on loops with no ring (`uring::WaitIo`, a `poll(2)` of the
 loop's eventfd), so such a run needs no io_uring in the kernel; (3) "POSIX options" refused
