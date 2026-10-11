@@ -250,7 +250,10 @@ and `io_uring` backends. `--root` and `--threads` come through the runner's opti
 command line, else `AEIOU_ROOT`/`AEIOU_THREADS`, else the `[datagen]` table of the TOML file
 `--config` or `AEIOU_CONFIG` names, else the default), the rest is the command line's alone,
 and the block of what was resolved, with each value's source, is printed as `aeiou datagen`
-prints it (`tests/test_options.py`; 2026-10-04).
+prints it (`tests/test_options.py`; 2026-10-04). The writers are processes, not threads
+(2026-10-11, `DESIGN_REVIEW.md` §3.69): a `forkserver` that imported the libraries once
+forks them, each rebuilds its `Job` (and opens its own object store) from what pickles, and
+`map` hands them file ids; one writer, or one file, runs in the process itself.
 
 **To an object store (2026-10-11, `DESIGN_REVIEW.md` §3.69).** A writer writes into a byte
 stream, never a path: `write_file(out, first_id, sizes, payload, geo)` takes a `Sink` (it

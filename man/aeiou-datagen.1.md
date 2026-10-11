@@ -85,7 +85,11 @@ every missing argument listed at once.
   *Layered.*
 - **--threads** *THREADS*
 
-  Writer threads. Default all cores. *Layered.*
+  Writers, each a process: the writers' Python holds its interpreter lock between the
+  library calls, so threads write no faster than one. The name and its layers
+  (`AEIOU_THREADS`, `threads` in the `[datagen]` table) are `aeiou datagen`'s. A file is a
+  pure function of its id, so the writers share nothing; one writer, or one file, runs in
+  the process itself. Default all cores. *Layered.*
 - **--dedupe** *DEDUPE*
 
   Dedupe ratio: every *DEDUPE* files share content. Default 1. Recorded in the manifest's

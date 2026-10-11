@@ -5097,6 +5097,40 @@ serialized them. Now:
   6.1 GiB); Parquet 1 thread 0.40 GiB peak (was 4.0 GiB), 4 threads 3.3–4.8 s and 1.4 GiB
   (was 8.7 s and 9.5 GiB). Times on this WSL host vary by up to a factor of three between
   runs; step 2 (throughput against `aeiou datagen`) is the real measurement.
+- **Throughput against `aeiou datagen`, and processes for threads** (step 2 of the same
+  plan). 8 GiB per run to tmpfs (`/dev/shm`; this host's 20 cores), 64 files of about
+  128 MiB, the median of three on a monotonic clock (the WSL wall clock steps backwards);
+  the Rust writer over plain files of the same bytes; samples as each abstract has them
+  (TFRecord and Parquet about 120 KiB, HDF5 192 KiB rows). With threads every Python
+  writer stayed at about 1 GB/s at 1, 4, and 16 (HDF5 fell to 0.4 GB/s at 16) while Rust
+  went 2.3 → 10 → 11.6 GB/s: dgen releases the interpreter lock (5.7 GB/s a thread, 22 at
+  four), the writers' Python between the calls does not. So the writers are processes from a
+  `forkserver` (the parent may hold the object store's runtime threads, which a `fork` must
+  not copy; the server preloads numpy, h5py, pyarrow, crc32c, dgen once); each rebuilds its
+  `Job` from what pickles and opens its own store. Two more findings on the way: h5py's
+  `d[0] = 0` broadcasts a scalar across a row in 0.6 s, so every process's first HDF5 file
+  (and the build's `data_offset` probe) paid it; a zero row costs 1 ms. And the payload now
+  hands out views of its 1 MiB blocks (`pieces`), so HDF5 writes the blocks as dgen fills
+  them; a copy is made only for a request that spans blocks. Result, GB/s at 1 / 4 / 16
+  writers:
+
+  | writer | 1 | 4 | 16 |
+  |---|---|---|---|
+  | `aeiou datagen` (Rust, plain files) | 2.3 | 10.2 | 9.5–11.6 |
+  | TFRecord | 1.2 | 3.4 | 5.1 |
+  | HDF5 | 1.3 | 3.7 | 5.3 |
+  | Parquet | 0.7 | 1.7 | 2.1 |
+
+  The Python times include about 0.5 s of interpreter start and validation, a large share
+  of an 8 GiB run and none of a real one. Bare Python processes generating with dgen and
+  writing 1 MiB blocks reach 9–11 GB/s at 16, as Rust does, so the remaining gap is the
+  writers' own work. Parquet is bounded by memory traffic, not the interpreter: a row group
+  (70 MB here) is copied whole into one buffer, through pyarrow into one page per column
+  chunk (the layout's contract), and out, each pass through DRAM where HDF5's 1 MiB blocks
+  stay in cache; its footer-sizing pass is about a quarter of its time. Not pursued (each a
+  trade the user has not asked for): a Rust container writer from captured headers (a second
+  implementation of the formats), smaller pages (a different layout). Peak memory of a
+  writer process: 130 MiB (Parquet), 65 MiB (HDF5), 33 MiB (TFRecord).
 - *Found, not fixed (recorded for the user):* a Parquet file whose last row group is short
   fails the layout check, in the old writer as in the new: the layout gives each column one
   page-header size, and a short group's headers are shorter (with 64 rows a group, a row

@@ -181,7 +181,8 @@ class FormatClass:
     def write_file(self, out, first_id: int, sizes: list, payload, geo):
         """Write one container holding samples `first_id …` of the given payload sizes into
         `out`, a writable byte stream that need not seek (a `Sink`); `payload(logical_offset,
-        n)` returns the sample bytes of the file's payload stream. Returns what `check_file`
+        n)` returns the sample bytes of the file's payload stream (`payload.pieces(offset, n)`
+        the same bytes as views of its blocks, with no copy). Returns what `check_file`
         needs of the writer beyond the byte count (the library's own record of the layout)."""
         raise NotImplementedError
 
@@ -363,7 +364,7 @@ class Hdf5(FormatClass):
             h5py = _lib("h5py")
             with h5py.File(f"aeiou-probe-{os.getpid()}.h5", "w", driver="core", backing_store=False) as h:
                 d = h.create_dataset(self.dataset, shape=(4, *self.shape), dtype=self.dtype)
-                d[0] = 0
+                d[0] = _lib("numpy").zeros(self.shape, self.dtype)   # a scalar broadcasts slowly (0.6 s a row)
                 self._offset = int(d.id.get_offset())
         return self._offset
 
@@ -421,7 +422,7 @@ class Hdf5(FormatClass):
         try:
             with h5py.File(path, "w") as h:
                 d = h.create_dataset(self.dataset, shape=(n, *self.shape), dtype=self.dtype)
-                d[0] = 0
+                d[0] = _lib("numpy").zeros(self.shape, self.dtype)   # a scalar broadcasts slowly (0.6 s a row)
                 off = int(d.id.get_offset())
             with open(path, "rb") as f:
                 got = f.read(off)
@@ -434,8 +435,8 @@ class Hdf5(FormatClass):
         return got
 
     def write_file(self, out, first_id, sizes, payload, geo):
-        """The header from libhdf5 (`header`), then the rows straight from the payload in
-        pieces of about 8 MiB: libhdf5 seeks back over what it writes, so it cannot write
+        """The header from libhdf5 (`header`), then the rows straight from the payload's
+        blocks: libhdf5 seeks back over what it writes, so it cannot write
         into a stream itself, and h5py's Python file-object driver lays the file out otherwise
         (the data at 1400, not 2048, for the default shape; measured 2026-10-11, h5py 3.16)."""
         row = self.row_bytes
@@ -444,10 +445,8 @@ class Hdf5(FormatClass):
         if len(head) != geo.layout.file_header:
             raise BuildError(f"the dataset's data starts at {len(head)}, the layout says {geo.layout.file_header}")
         out.write(head)
-        step = max(1, (8 * MiB) // row)
-        for i in range(0, n, step):
-            j = min(n, i + step)
-            out.write(payload(i * row, (j - i) * row))
+        for piece in payload.pieces(0, n * row):
+            out.write(piece)
 
 
 # ----------------------------------------------------------------------------------------------

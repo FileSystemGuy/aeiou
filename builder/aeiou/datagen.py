@@ -22,15 +22,17 @@ object engine has it, `runner/REFERENCE.md` §16) through `obstore`, the Python 
 the runner's `object_store`: each file streams from its format class's writer into an upload
 (one `PUT`, or a multipart upload in parts of 8 MiB), never through a local file system, and
 the manifest is one `PUT` at the prefix (`DESIGN_REVIEW.md` §3.69). Every writer streams,
-so what a thread holds is a piece of its file (a Parquet row group, 8 MiB of HDF5 rows), never
+so what a writer holds is a piece of its file (a Parquet row group, a 1 MiB payload block), never
 the file.
 """
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import copy
 import hashlib
 import json
+import multiprocessing
 import os
 import pathlib
 import platform
@@ -122,7 +124,7 @@ class Payload:
         self.seed, self.unit, self.compress = seed, unit, compress
         self._b, self._block = None, b""
 
-    def block(self, b: int) -> bytes:
+    def block(self, b: int) -> bytearray:
         if self._b != b:
             import dgen_py
             g = dgen_py.Generator(size=BLOCK, dedup_ratio=1.0, compress_ratio=float(self.compress), numa_mode="disabled",
@@ -131,17 +133,29 @@ class Payload:
             n = g.fill_chunk(buf)
             if n != BLOCK:
                 raise BuildError(f"dgen filled {n} of {BLOCK} bytes")
-            self._b, self._block = b, bytes(buf)
+            # a new buffer per block, never refilled, so the views handed out stay valid
+            self._b, self._block = b, buf
         return self._block
 
-    def __call__(self, off: int, n: int) -> bytearray:
+    def pieces(self, off: int, n: int):
+        """The bytes at `off` as views of the blocks, no copy."""
+        while n > 0:
+            b, i = divmod(off, BLOCK)
+            take = min(n, BLOCK - i)
+            yield memoryview(self.block(b))[i:i + take]
+            off += take
+            n -= take
+
+    def __call__(self, off: int, n: int):
+        """The bytes at `off`, contiguous: a view when they lie in one block, else a copy."""
+        b, i = divmod(off, BLOCK)
+        if i + n <= BLOCK:
+            return memoryview(self.block(b))[i:i + n]
         out = bytearray(n)
         at = 0
-        while at < n:
-            b, i = divmod(off + at, BLOCK)
-            take = min(n - at, BLOCK - i)
-            out[at:at + take] = memoryview(self.block(b))[i:i + take]
-            at += take
+        for p in self.pieces(off, n):
+            out[at:at + len(p)] = p
+            at += len(p)
         return out
 
 
@@ -338,6 +352,31 @@ class Job:
         return hashlib.sha256(canonical_json(normative).encode()).hexdigest()
 
 
+# ---- writer processes ----
+
+_job = None
+
+
+def _start(spec):
+    """A writer process's job, rebuilt from what pickles (the store is opened again here)."""
+    global _job
+    ast, name, values, root, endpoints, dedupe, compress = spec
+    _job = Job(ast, name, values, placement(ast, root, endpoints), dedupe, compress)
+
+
+def _write(file: int) -> tuple:
+    return _job.write(file)
+
+
+def _context():
+    """Writers forked from a server process that imported the libraries once, before any
+    thread existed (this process may hold the object store's runtime threads, which a fork
+    must not copy)."""
+    ctx = multiprocessing.get_context("forkserver")
+    ctx.set_forkserver_preload(["numpy", "h5py", "pyarrow.parquet", "crc32c", "dgen_py"])
+    return ctx
+
+
 class opened:
     """A file to write: a `pathlib.Path` opened `wb` (its directory made first), or an `Obj`'s
     upload, one `PUT` when it fits in a part and a multipart upload in parts of `PART`
@@ -395,7 +434,7 @@ def parser() -> usage.Parser:
     ap.add_argument("--gpus", type=int, default=1, help="Instance count, for dataset definitions that reference `gpus` [default: 1]")
     ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="Required: directory the abstract's paths are relative to. From the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
     ap.add_argument("--endpoint", action="append", metavar="NAME=DIR", help="Put the root directory of the abstract's dataset NAME at DIR instead of under --root, or, for a name declared `protocol: s3`, at s3://BUCKET[/PREFIX] in the store the AWS_* environment names (repeatable; names sharing a root share its place). From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the [datagen] table of the config file (an array)")
-    ap.add_argument("--threads", type=int, help="Writer threads (default: all cores)")
+    ap.add_argument("--threads", type=int, help="Writers, each a process (Python holds its lock between the library calls); the name is the runner's (default: all cores)")
     ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` consecutive files share content [default: 1]")
     ap.add_argument("--compress", type=int, default=1, help="Compression ratio: the last (C−1)/C of every 1 MiB block is zeros [default: 1]")
     ap.add_argument("--dataset", action="append", default=[], metavar="NAME", help="Only these datasets (default: all)")
@@ -486,9 +525,20 @@ def _main(a, ap: usage.Parser) -> int:
             root.mkdir(parents=True, exist_ok=True)
         started = time.time()
         files_written = bytes_written = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.threads)) as ex:
+        # processes, not threads: the writers' Python holds the GIL between the library
+        # calls, so threads write no faster than one (DESIGN_REVIEW.md §3.69, measured
+        # 2026-10-11); a file is a pure function of its id, so the processes share nothing
+        workers = max(1, min(a.threads, job.files))
+        with contextlib.ExitStack() as stack:
+            if workers == 1:
+                results = map(job.write, range(job.files))
+            else:
+                ex = stack.enter_context(concurrent.futures.ProcessPoolExecutor(
+                    workers, mp_context=_context(), initializer=_start,
+                    initargs=((ast, name, values, a.root, a.endpoint, a.dedupe, a.compress),)))
+                results = ex.map(_write, range(job.files))
             last = time.time()
-            for i, (n, b) in enumerate(ex.map(job.write, range(job.files))):
+            for i, (n, b) in enumerate(results):
                 files_written += 1
                 bytes_written += b
                 if time.time() - last > 5:
