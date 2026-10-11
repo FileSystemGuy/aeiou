@@ -130,8 +130,8 @@ every missing argument listed at once.
 ## EXAMPLES
 
 ```
-aeiou-datagen workloads/training/stream/parquet/parquet_stream.ast.json --root /mnt/sut --param shards=64
-AEIOU_ROOT=/mnt/sut aeiou-datagen workloads/training/map/hdf5/hdf5_map.ast.json --dataset train
+aeiou-datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut --param shards=64
+AEIOU_ROOT=/mnt/sut aeiou-datagen workloads/input-pipeline/map/hdf5/hdf5_map.ast.json --dataset train
 ```
 
 ## SEE ALSO

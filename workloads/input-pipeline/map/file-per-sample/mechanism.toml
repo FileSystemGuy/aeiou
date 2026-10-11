@@ -1,0 +1,7 @@
+# The curated attributes of the mechanism (workloads/attributes.toml).
+category = "input-pipeline"
+class = "map"
+application = "pytorch-dataloader"
+format = "file-per-sample"
+phase = ["training"]
+domain = ["ai"]

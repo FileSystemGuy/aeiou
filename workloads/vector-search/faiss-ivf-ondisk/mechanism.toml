@@ -1,0 +1,6 @@
+# The curated attributes of the mechanism (workloads/attributes.toml).
+category = "vector-search"
+application = "faiss"
+format = "faiss-ivf-ondisk"
+phase = ["inference"]
+domain = ["ai"]

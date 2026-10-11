@@ -13,33 +13,90 @@
 # class (`min` and `max` inclusive; a class with neither takes the rest). Its `tolerance` is
 # how far two measurements may differ and still be the same number (`relative` to the larger,
 # `absolute`, or both, either bound being enough); a flag has none and must be equal. `search` lists
-# words a reader may look for; they change nothing any tool accepts.
+# words a reader may look for; they change nothing any tool accepts. An attribute marked
+# `multiple = true` takes a list of distinct values in a record; every other takes one. A value of
+# `class` names the category it belongs to.
 
 attributes_version = 1
 
 # ---- curated: the mechanism ----
+#
+# The tree's first level is a class of system whose I/O is reproduced, named in the words storage
+# people use for it: a subsystem for AI (kvcache, checkpointing), the application class elsewhere
+# (software-build, database). Names are hyphenated nouns that avoid overloaded words (container,
+# image, object, cache alone). There is no level for AI as such: `domain` says it, and a search
+# filters by it. A second level, `class`, exists only where a category is large enough to need
+# one, its values defined per category below. Every value has its directory, a mechanism or not,
+# so the tree shows what the catalog means to cover and where a contribution goes
+# (DESIGN_REVIEW.md §3.68).
 
 [attribute.category]
-meaning = "What the job is, the tree's first level."
+meaning = "The class of system whose I/O the mechanism reproduces: the tree's first level."
 source = "curated"
 level = "mechanism"
 required = true
 [attribute.category.values]
-training = { meaning = "A training job's input pipeline: samples read for steps on accelerators.", search = ["dataloader", "input pipeline"] }
-inference = { meaning = "Serving a model: loading its weights.", search = ["serving", "model loading"] }
-checkpointing = { meaning = "Saving and restoring a training job's state.", search = ["checkpoint", "restore", "resume"] }
-vdb = { meaning = "A vector database: building an index and searching it.", search = ["vector search", "ann", "rag", "retrieval"] }
-kvcache = { meaning = "An inference engine's KV cache offloaded to storage and loaded back.", search = ["kv cache", "prefix cache", "kv offload"] }
-synthetic = { meaning = "A benchmark that is not an application (IO500 and the like): its defined operations, never a trace." }
+input-pipeline = { meaning = "The read path that feeds a model its samples: a training job's loader, or batch inference reading a dataset the same way.", search = ["training", "dataloader", "data loading", "batch inference"] }
+dataprep = { meaning = "Preparing data for training: curation, filtering, deduplication, shuffling, packing, tokenization, ingest.", search = ["data preparation", "etl", "curation", "preprocessing"] }
+checkpointing = { meaning = "Saving and restoring a job's state: a training run's, or a simulation's checkpoint and restart.", search = ["checkpoint", "restore", "resume", "checkpoint/restart"] }
+model-loading = { meaning = "Loading a model's weights to serve it: start-up, scale-out, failover, a model swap.", search = ["inference", "serving", "cold start", "weights"] }
+kvcache = { meaning = "An inference engine's KV cache offloaded to storage and loaded back.", search = ["kv cache", "prefix cache", "kv offload", "inference"] }
+vector-search = { meaning = "Nearest-neighbour search over vectors: building an index and searching it, as a library or a vector database does.", search = ["vector database", "vdb", "ann", "rag", "retrieval", "embeddings"] }
+embedding-tables = { meaning = "Embedding tables larger than memory, looked up by id (recommender models), in training and in serving.", search = ["recommender", "recsys", "dlrm", "embeddings", "parameter server"] }
+rl = { meaning = "Reinforcement learning: rollouts and a trainer, the weights pushed between them, replay buffers.", search = ["reinforcement learning", "rollouts", "rlhf"] }
+agentic = { meaning = "AI agents' own tool I/O: checkouts, builds, scratch file systems of agent sandboxes (an agent's KV cache is kvcache).", search = ["agents", "sandbox", "coding agent"] }
+software-build = { meaning = "Building software: checkouts, compiles, links, incremental rebuilds.", search = ["compile", "build", "swbuild", "ci"] }
+eda = { meaning = "Electronic design automation: chip design's front-end (many small files) and back-end (large files).", search = ["chip design", "semiconductor"] }
+vdi = { meaning = "Virtual desktops: their images at boot, at login, and in steady use.", search = ["virtual desktop", "boot storm"] }
+media-ingest = { meaning = "Media and sensor streams written as they arrive: video acquisition, surveillance, instruments.", search = ["video", "vda", "surveillance", "streaming write"] }
+database = { meaning = "Database engines' I/O: data pages and a write-ahead log, a key-value store's compaction.", search = ["oltp", "wal", "key-value store", "lsm"] }
+genomics = { meaning = "Sequencing pipelines: alignment, sorting, variant calling.", search = ["bioinformatics", "life sciences", "sequencing"] }
+hpc = { meaning = "Scientific simulation and analysis: N-to-N and N-to-1 output, analysis reads (checkpoint and restart are checkpointing).", search = ["simulation", "scientific computing", "mpi-io"] }
+benchmarks = { meaning = "Benchmarks whose definition is the workload (IO500, SPECstorage): their defined operations, never a trace of an application.", search = ["synthetic", "io500", "spec", "mdtest", "ior"] }
 
-[attribute.access]
-meaning = "How a training job's loader takes its samples, the tree's second level under training."
+[attribute.class]
+meaning = "The second level, inside a category large enough to need one; each value belongs to one category, and a category with values has no mechanism outside them."
 source = "curated"
 level = "mechanism"
 required = false
-[attribute.access.values]
-map = { meaning = "Map-style: each sample by its id, in a shuffled order without replacement.", search = ["random access", "map-style"] }
-stream = { meaning = "Streaming: whole shards in a shuffled order, records taken in shard order.", search = ["iterable", "sharded", "webdataset"] }
+[attribute.class.values]
+map = { category = "input-pipeline", meaning = "Map-style: each sample by its id, in a shuffled order without replacement.", search = ["random access", "map-style"] }
+stream = { category = "input-pipeline", meaning = "Streaming: whole shards in a shuffled order, records taken in shard order.", search = ["iterable", "sharded", "webdataset"] }
+scan-filter = { category = "dataprep", meaning = "Long sequential reads of a raw corpus, a smaller sequential write: language identification, quality filters, PII scrubbing." }
+shuffle = { category = "dataprep", meaning = "All-to-all: wide temporary spill, many-to-many reads and writes: global shuffles, repartitioning, exact deduplication by hash." }
+dedup-index = { category = "dataprep", meaning = "An index built, then random lookups against it: fuzzy and near-duplicate deduplication.", search = ["minhash", "lsh"] }
+repack = { category = "dataprep", meaning = "Many small files into large shards or back, metadata-heavy on one side: tar and WebDataset packing, frame extraction." }
+tokenize-pack = { category = "dataprep", meaning = "Text in, large binary token files and their index out (Megatron-style .bin and .idx).", search = ["tokenization"] }
+ingest = { category = "dataprep", meaning = "Many writers landing raw data, often as object PUTs: web crawls, sensor dumps.", search = ["crawl", "landing"] }
+io500 = { category = "benchmarks", meaning = "The IO500 suite: IOR easy and hard, mdtest easy and hard, find." }
+specstorage = { category = "benchmarks", meaning = "SPECstorage Solution: its workloads' defined operation mixes (SWBUILD, VDA, EDA, AI_IMAGE, GENOMICS, …)." }
+
+[attribute.phase]
+meaning = "When in a system's life the mechanism's I/O happens; several when its cases span them."
+source = "curated"
+level = "mechanism"
+required = true
+multiple = true
+[attribute.phase.values]
+training = { meaning = "A model being trained (its input, its checkpoints)." }
+inference = { meaning = "A model serving requests (its weights loaded, its KV cache, its retrieval).", search = ["serving"] }
+indexing = { meaning = "Building an index offline for later search." }
+preparation = { meaning = "Preparing data before a job uses it." }
+production = { meaning = "A non-AI system doing its work (a build, a database, a simulation)." }
+
+[attribute.domain]
+meaning = "The field the mechanism's applications come from; several when it serves more than one (a filter, in place of a directory per field)."
+source = "curated"
+level = "mechanism"
+required = true
+multiple = true
+[attribute.domain.values]
+ai = { meaning = "Machine learning and AI systems.", search = ["ml", "machine learning", "llm"] }
+hpc = { meaning = "Scientific and technical computing.", search = ["scientific"] }
+enterprise = { meaning = "Business systems: databases, virtual desktops, file serving." }
+media = { meaning = "Media capture, production, and delivery." }
+life-sciences = { meaning = "Genomics and other life-science pipelines.", search = ["bioinformatics"] }
+software-development = { meaning = "Building and testing software.", search = ["devops", "ci"] }
 
 [attribute.application]
 meaning = "The library or program whose I/O the mechanism reproduces, as traced."
@@ -99,6 +156,18 @@ text = { meaning = "Conversations and documents, as tokens.", search = ["chat", 
 agentic = { meaning = "An agent's sessions: long contexts reused across many requests.", search = ["agents", "coding agent"] }
 vectors = { meaning = "Embedding vectors.", search = ["embeddings"] }
 model-state = { meaning = "A model's weights or a training job's state." , search = ["weights", "optimizer state"] }
+
+[attribute.model-family]
+meaning = "The kind of model the case's job trains or serves, when there is one."
+source = "curated"
+level = "case"
+required = false
+[attribute.model-family.values]
+llm = { meaning = "A large language model, generating text.", search = ["language model", "transformer", "gpt"] }
+vision = { meaning = "An image or video model: classification, detection, segmentation.", search = ["cnn", "resnet", "unet"] }
+speech = { meaning = "A speech or audio model." }
+recommender = { meaning = "A recommender model with embedding tables.", search = ["dlrm"] }
+discriminative = { meaning = "A model returning typed decisions with their probabilities rather than generated text.", search = ["classifier", "decision model"] }
 
 # ---- derived ----
 

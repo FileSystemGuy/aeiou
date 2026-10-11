@@ -71,8 +71,8 @@ jobs:
           mkdir smoke && tar xzf "$DIST.tar.gz" -C smoke && cd "smoke/$DIST"
           bin/aeiou --version
           bin/aeiou check $(find workloads -name '*.ast.json')
-          bin/aeiou dry-run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 1 \
-            --params-file workloads/training/map/file-per-sample/params/smoke.params.json | tail -3
+          bin/aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 1 \
+            --params-file workloads/input-pipeline/map/file-per-sample/params/smoke.params.json | tail -3
           man -l share/man/man1/aeiou.1 | head -5
           uv venv -q .venv && uv pip install -q --python .venv/bin/python "aeiou[formats] @ $(ls wheel/*.whl)"
           .venv/bin/aeiou-build --help | head -2

@@ -1,4 +1,0 @@
-# The curated attributes of the mechanism (workloads/attributes.toml).
-category = "inference"
-application = "transformers-safetensors"
-format = "safetensors"

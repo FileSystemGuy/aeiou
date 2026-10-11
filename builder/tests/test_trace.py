@@ -333,7 +333,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
-    """`workloads/training/map/file-per-sample`: DataLoader + ImageFolder on NFS, traced 2026-10-01.
+    """`workloads/input-pipeline/map/file-per-sample`: DataLoader + ImageFolder on NFS, traced 2026-10-01.
     The abstract at the fitted parameters has the application's op mix exactly but for the
     one listing of the dataset root; the corpus of real JPEGs is near the abstract's size
     distribution, not equal to it, and the order differs."""
@@ -356,7 +356,7 @@ def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 @pytest.mark.parametrize("which, reuse", [("140MiB", 0.3), ("8MiB", 0.07)])
 def test_large_sample_abstract_matches_the_trace_of_np_load(tmp_path, which, reuse):
-    """`workloads/training/map/npy-per-sample`: `np.load(...)["x"]` on NFS, traced 2026-10-01.
+    """`workloads/input-pipeline/map/npy-per-sample`: `np.load(...)["x"]` on NFS, traced 2026-10-01.
     The abstract draws its sizes, the corpus has its own, so the counts are near, not equal
     (they are exact per file: `ABSTRACTS.md` §2). Sixteen files say little about the reuse
     distance; 256 say more."""
@@ -420,7 +420,7 @@ def test_checkpoint_restore_abstract_matches_the_trace_of_dcp_load(tmp_path, whi
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_model_load_abstract_matches_the_trace_of_from_pretrained(tmp_path):
-    """`workloads/inference/safetensors-load`: `from_pretrained` on five safetensors shards, traced
+    """`workloads/model-loading/safetensors-load`: `from_pretrained` on five safetensors shards, traced
     2026-10-01. The library maps the shards and issues no `read` on them, so the trace has the
     calls around the mappings and the small JSON files, and nothing of the tensor bytes
     (`ABSTRACTS.md` §4)."""
@@ -438,7 +438,7 @@ def test_model_load_abstract_matches_the_trace_of_from_pretrained(tmp_path):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_ivf_abstract_matches_the_trace_of_faiss_search(tmp_path):
-    """`workloads/vdb/faiss-ivf-ondisk`: `faiss.read_index` and 20 searches over
+    """`workloads/vector-search/faiss-ivf-ondisk`: `faiss.read_index` and 20 searches over
     `OnDiskInvertedLists`, traced 2026-10-01. FAISS maps the lists file and issues no call on
     it, so the trace has the index file's reads and the two opens, and nothing of the lists
     (`ABSTRACTS.md` §6)."""
@@ -455,7 +455,7 @@ def test_ivf_abstract_matches_the_trace_of_faiss_search(tmp_path):
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 @pytest.mark.parametrize("which, reads_off", [("nocache", 0.02), ("cache", 0.04)])
 def test_diskann_search_abstract_matches_the_trace(tmp_path, which, reads_off):
-    """`workloads/vdb/diskann-search`: 1,000 queries through DiskANN's `PQFlashIndex`,
+    """`workloads/vector-search/diskann-search`: 1,000 queries through DiskANN's `PQFlashIndex`,
     traced 2026-10-02 without a node cache and with 10,000 nodes cached. The abstract issues
     full rounds of `beam` reads where the search skips nodes it already holds, so it reads a
     little more; the load's small files (pivots, medoids, centroids, metadata) are not
@@ -480,7 +480,7 @@ def test_diskann_search_abstract_matches_the_trace(tmp_path, which, reads_off):
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_diskann_build_abstract_matches_the_trace(tmp_path):
-    """`workloads/vdb/diskann-build`: `build_disk_index` on SIFT1M in 13 shards, traced
+    """`workloads/vector-search/diskann-build`: `build_disk_index` on SIFT1M in 13 shards, traced
     2026-10-02. The data path agrees to a part in a thousand; the shards are modeled at one
     size and the files' small headers and probes are not modeled (`ABSTRACTS.md` §7)."""
     case = case_dir("diskann_build", "sift1m-13-shards")

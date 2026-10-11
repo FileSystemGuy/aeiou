@@ -98,7 +98,7 @@ fn the_parsers_own_errors_and_the_layers_refusals_wear_the_frame() {
 
 #[test]
 fn a_wrong_file_for_the_abstract_says_what_an_abstract_is() {
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workloads/training/map/file-per-sample/file_per_sample.py").display().to_string();
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workloads/input-pipeline/map/file-per-sample/file_per_sample.py").display().to_string();
     let (message, _) = frame(&mut aeiou(&["datagen", "--root", "/tmp", &script]), "aeiou datagen");
     assert_eq!(message, format!("{script}: a builder script, not an abstract; `aeiou-build {script}` writes the abstracts it authors (`<name>.ast.json`) next to it, and those are what the runner takes"));
     let (message, _) = frame(&mut aeiou(&["datagen", "--root", "/tmp", "file_per_sample"]), "aeiou datagen");

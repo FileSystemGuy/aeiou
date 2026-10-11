@@ -10,14 +10,14 @@ cd runner
 cargo build --release
 cargo test --release
 ./target/release/aeiou check $(find ../workloads -name '*.ast.json')
-./target/release/aeiou dry-run ../workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
+./target/release/aeiou dry-run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
 ./target/release/aeiou dry-run ../workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json --gpus 1 \
     --param concurrency=2 --param requests=20 --gpu 0 --steps 1..2 --limit 50
-./target/release/aeiou datagen ../workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
-./target/release/aeiou run ../workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+./target/release/aeiou datagen ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+./target/release/aeiou run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50 --posix sync
-./target/release/aeiou dry-run ../workloads/inference/safetensors-load/safetensors_load.ast.json --gpus 8 \
-    --params-file ../workloads/inference/safetensors-load/params/synthetic.params.json      # a parameter file (§4)
+./target/release/aeiou dry-run ../workloads/model-loading/safetensors-load/safetensors_load.ast.json --gpus 8 \
+    --params-file ../workloads/model-loading/safetensors-load/params/synthetic.params.json      # a parameter file (§4)
 ```
 
 ## 1. What exists (2026-09-30)
@@ -1241,7 +1241,7 @@ instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_recor
   the end of §10). A change that removes or renames a field raises `aeiou_report`.
 
 ```
-aeiou run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 7 --root DIR --report-json r.json
+aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 7 --root DIR --report-json r.json
 python3 -c 'import json; d = json.load(open("r.json")); print(d["verdict"]["ok"], d["result"]["latency"]["read"]["p99_ns"])'
 ```
 
@@ -1440,7 +1440,7 @@ warning, then an empty line (there is no `--show-config`: the block is always th
 
 ```
 options (cli > env > config > default)
-  abstract = ../workloads/training/map/file-per-sample/file_per_sample.ast.json   [cli]
+  abstract = ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json   [cli]
   param = files=4000 steps=50                                [cli]
   params-file = none                                         [default]
   gpus = 8                                                   [cli]

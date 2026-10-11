@@ -140,7 +140,7 @@ one frame, listing every missing argument at once, and exits 2.
 |---|---|
 | `builder/` | The Python package `aeiou` and its four tools; `abstracts/` holds the twelve authoring scripts of the fourteen committed workloads; `traces/` the capture kit and trace metrics of each real application traced. [README](builder/README.md), [reference](builder/REFERENCE.md). |
 | `schema/` | The AST contract: the JSON Schema, the reference validator `check.py`, and the parameter-file schema. [README](schema/README.md). |
-| `workloads/` | The committed abstracts, one directory per I/O mechanism under its category (`training/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …): the authoring script and the AST generated beside it (never edited by hand), the capture kit, and the cases, each a parameter set describing one workload with the captures of the traced application under it (`DESIGN_REVIEW.md` §3.66). |
+| `workloads/` | The committed abstracts, one directory per I/O mechanism under its category (`input-pipeline/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …): the authoring script and the AST generated beside it (never edited by hand), the capture kit, and the cases, each a parameter set describing one workload with the captures of the traced application under it (`DESIGN_REVIEW.md` §3.66). |
 | `runner/` | The Rust workspace: the `aeiou` binary and `aeiou-launch`. [README](runner/README.md), [reference](runner/REFERENCE.md). |
 | `man/` | The manual pages, in Markdown with man-page sections; the test suites hold them to the tools' `--help`. [index](man/README.md). |
 | `QUICKSTART.md` | The guide shipped in the release tarball: first run, first bug report. |
@@ -196,9 +196,9 @@ cd builder && uv sync --extra test --extra formats && uv run pytest && cd ..
 
 # check, dry-run, generate, run
 runner/target/release/aeiou check $(find workloads -name '*.ast.json')
-runner/target/release/aeiou dry-run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
-runner/target/release/aeiou datagen workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
-runner/target/release/aeiou run workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+runner/target/release/aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
+runner/target/release/aeiou datagen workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+runner/target/release/aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50 --report-json run.json
 ```
 
@@ -212,7 +212,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-10)
+## Status (2026-10-11)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -222,7 +222,8 @@ controls, the JSON report, the locality metrics on both sides with tolerances, t
 node under every backend, the option layers, the usage-error frame, and `datagen` across
 hosts with `O_DIRECT` (each host its slice of the ids, one manifest once every host has
 reported; the launcher takes host files and `pdsh`-style ranges). The workload catalog
-(2026-10-10, `workloads/CATALOG.md`): thirteen mechanisms and sixteen cases under
+(2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
+with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
 its dry run measures, checked in CI by `aeiou-catalog`.
 

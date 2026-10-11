@@ -1,5 +1,0 @@
-# The curated attributes of the mechanism (workloads/attributes.toml).
-category = "training"
-access = "map"
-application = "pytorch-dataloader"
-format = "file-per-sample"

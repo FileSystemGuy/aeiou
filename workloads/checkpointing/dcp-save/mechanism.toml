@@ -2,3 +2,5 @@
 category = "checkpointing"
 application = "torch-dcp"
 format = "dcp"
+phase = ["training"]
+domain = ["ai"]

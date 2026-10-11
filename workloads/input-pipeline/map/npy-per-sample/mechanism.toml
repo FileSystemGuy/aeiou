@@ -1,0 +1,7 @@
+# The curated attributes of the mechanism (workloads/attributes.toml).
+category = "input-pipeline"
+class = "map"
+application = "numpy"
+format = "npz"
+phase = ["training"]
+domain = ["ai"]

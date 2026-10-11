@@ -141,7 +141,7 @@ def test_safetensors_table_matches_committed(tmp_path):
     made = params.load(out)
     committed = params.load(ast_path("safetensors_load").parent / "params" / "synthetic.params.json")
     assert made["params"] == committed["params"], \
-        "regenerate with: aeiou-params safetensors ../workloads/inference/safetensors-load/safetensors_load.ast.json <the fixture's shards> -o ../workloads/inference/safetensors-load/params/synthetic.params.json"
+        "regenerate with: aeiou-params safetensors ../workloads/model-loading/safetensors-load/safetensors_load.ast.json <the fixture's shards> -o ../workloads/model-loading/safetensors-load/params/synthetic.params.json"
     t = made["params"]
     assert t["shards"] == 2 and len(t["hdr_len"]) == 2 and t["tp"] == 8
     assert len(t["shard"]) == 21 and set(t["split"]) == {"column", "row", "full"}

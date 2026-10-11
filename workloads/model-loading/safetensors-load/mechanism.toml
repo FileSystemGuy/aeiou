@@ -1,0 +1,6 @@
+# The curated attributes of the mechanism (workloads/attributes.toml).
+category = "model-loading"
+application = "transformers-safetensors"
+format = "safetensors"
+phase = ["inference"]
+domain = ["ai"]

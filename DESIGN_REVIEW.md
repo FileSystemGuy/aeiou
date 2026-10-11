@@ -4914,6 +4914,91 @@ the prediction above is computed, not emulated.
   (per-node miss-ratio curves, cold-start time, the validation run); the harness's topology
   in the report; concurrent mixes of cases.
 
+### 3.68 The catalog's first level: classes of system, not lifecycle phases; every category a directory from the start (discussed and decided 2026-10-11)
+
+**The question (the user's).** Why were `kvcache` and `vdb` not under `inference`? There was no
+reason beyond the user's first list (§3.66: `training`, `checkpointing`, `vdb`, `kvcache`, with
+`inference` added for model loading). Drawing out the inconsistencies, the user observed that
+checkpointing runs only in training yet a checkpoint read does what model loading does; that
+`inference` held the model while the KV cache and the vector database it uses stood beside it as
+peers; that a pure taxonomy would be five layers deep with multi-homed topics, which is overkill,
+and that a broad, shallow hierarchy with a loose taxonomic structure is easier for people.
+
+**The diagnosis.** The first level mixed two axes: the lifecycle phase (`training`,
+`inference`) and the subsystem (`checkpointing`, `kvcache`, `vdb`). A phase contains subsystems,
+so with both at one level every oddity above follows. And the rule of §3.66 already answers the
+fear of a deep `training` tree: a directory is a mechanism, never a model or a use case, so an
+image classifier and an audio classifier over one file per sample are one directory with two
+cases, and the model's purpose and data are attributes. Jev (TypeSafe AI's discriminative model,
+2026-09-15; closed weights, served as an API) was the test: to storage its serving is model
+loading and perhaps a KV cache, so it would be cases of those mechanisms with its family an
+attribute, and no category of its own.
+
+**Decided by the user, 2026-10-11.**
+
+1. **The first level is a class of system whose I/O is reproduced**, named in the words storage
+   people use for it: a subsystem for AI, the application class elsewhere. The lifecycle phase
+   becomes an attribute (`phase`: training, inference, indexing, preparation, production),
+   several values allowed, so that multi-homing lives in attributes and never in duplicated
+   directories (a DCP load used for serving is a `dcp-load` case; a vector index build has phase
+   indexing).
+2. **`input-pipeline`** in place of `training` (`data-loading` was accurate but said neither
+   training nor batch inference; `input-pipeline` is TensorFlow's and the field's name for the
+   read path that feeds a model, in both). `inference` becomes **`model-loading`** (what is in it:
+   weights loaded to serve). `vdb` becomes **`vector-search`**: FAISS and DiskANN are libraries,
+   not databases, and VDB is the name of a working group's workload (`PROJECT_BRIEF.md` §8).
+3. **New AI categories:** `dataprep`, `embedding-tables` (recommender tables larger than
+   memory, looked up by id in tiny random reads with a power-law skew, in training and serving: a
+   shape of its own; generating embeddings is batch inference, searching them is
+   `vector-search`), `rl` (rollouts, a trainer, weights pushed between them, replay buffers),
+   `agentic` (agents' own tool I/O; an agent's KV cache stays `kvcache`). A category for pulling
+   runtime images at cluster start was left out (not AI-specific), and if ever added avoids
+   "container" and "image", both overloaded here.
+4. **`dataprep` splits by the shape of its load**, not by tool, into six classes: `scan-filter`,
+   `shuffle`, `dedup-index`, `repack`, `tokenize-pack`, `ingest` (each defined in the
+   dictionary). Frameworks such as Spark are hard to trace into compact abstracts; some of these
+   may begin as reproductions of a documented shape.
+5. **The second level generalizes:** `access` (training's `map`/`stream`) becomes `class`, its
+   values defined per category in the dictionary, used only where a category is large
+   (`input-pipeline`, `dataprep`, `benchmarks`).
+6. **Non-AI workloads at the same level, and no `ai/` directory.** `software-build`, `eda`,
+   `vdi`, `media-ingest` (SPEC's VDA, named for the mechanism), `database`, `genomics`, `hpc`
+   (whose checkpoint and restart go in `checkpointing`). A `domain` attribute (ai, hpc,
+   enterprise, media, life-sciences, software-development; several values) makes "only AI" a
+   filter.
+7. **`synthetic` becomes `benchmarks`**, with the suite as its class (`io500`, `specstorage`):
+   a benchmark whose definition is the workload, reproduced from its specification and never
+   presented as an application's I/O. SPECstorage's workloads are themselves emulations of
+   applications (as DLIO's are, §3.46), so a traced real build goes in `software-build` and
+   SPEC's SWBUILD in `benchmarks/specstorage`, side by side for comparison.
+8. **`model-family`** per case (llm, vision, speech, recommender, discriminative) beside
+   `modality`.
+9. **Every category and class has its directory from the start**, empty or not (the user: it
+   shows the intended coverage of the tool and where an external contributor's pull request
+   puts its files). The naming rule is in the dictionary: hyphenated nouns, the words storage
+   people use, avoiding overloaded ones (container, image, object, cache alone).
+
+**Built 2026-10-11.** `git mv` of `training`, `inference`, `vdb` to `input-pipeline`,
+`model-loading`, `vector-search`; the dictionary's `category` (seventeen values), `class` (ten,
+each naming its category), `phase` and `domain` (`multiple = true`, a list of distinct values),
+`model-family`; `aeiou-catalog` checks that the first level is the categories and nothing else,
+that a category with classes holds only them and its mechanisms name one, and lists where
+marked; `write` makes any missing category or class directory and generates every category's
+and class's `README.md` from the dictionary (what belongs there, what is there, where a first
+mechanism goes), which `check` holds as it does `CATALOG.md`; `CATALOG.md` opens with the
+coverage (every category and class, its counts, empty ones included) and a table of mechanisms
+with phase and domain. No AST, fingerprint, dataset id, or shape changed (the authoring scripts'
+docstrings name their directories but are not in the AST). *Choices made in the build, open to
+revision:* (1) `phase` and `domain` at the mechanism's level, the phases its cases span, rather
+than per case; (2) the phase `production` for non-AI systems doing their work, a value the
+discussion did not name; (3) `model-family` set only where the traced model is known (the
+ImageFolder classifier, the GPT-2-shaped model, the KV loads' LLMs), absent for the toy
+checkpoints, the NumPy volumes, and the vector indexes; (4) the category and class READMEs
+generated rather than written, so they cannot drift from the dictionary; (5) the earlier
+sections keep the old names as written, this section being the map (`training` →
+`input-pipeline`, `inference` → `model-loading`, `vdb` → `vector-search`, `synthetic` →
+`benchmarks`, `access` → `class`).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

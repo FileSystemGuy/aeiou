@@ -637,7 +637,7 @@ aeiou check $(find workloads -name '*.ast.json')
 The fingerprint and totals of eight instances of a training workload at seed 1:
 
 ```
-aeiou dry-run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
+aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
 ```
 
 One instance's stream, the first fifty operations of its second step:
@@ -651,8 +651,8 @@ Generate a small corpus, then run against it under the abstract's own backend, h
 run to the dry run's fingerprint:
 
 ```
-aeiou datagen workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
-aeiou run workloads/training/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+aeiou datagen workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50 --expect-fingerprint 3f1c... --report-json run.json
 ```
 
@@ -660,14 +660,14 @@ The same run on io_uring with a capped io-wq, the metrics of the stream to a fil
 
 ```
 aeiou run ... --posix io_uring --threads 4 --iowq-max-workers 2
-aeiou dry-run workloads/training/map/file-per-sample/file_per_sample.ast.json --gpus 8 --metrics-json abstract.metrics.json
+aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --metrics-json abstract.metrics.json
 ```
 
 A parameter file over the defaults:
 
 ```
-aeiou dry-run workloads/inference/safetensors-load/safetensors_load.ast.json --gpus 8 \
-    --params-file workloads/inference/safetensors-load/params/synthetic.params.json
+aeiou dry-run workloads/model-loading/safetensors-load/safetensors_load.ast.json --gpus 8 \
+    --params-file workloads/model-loading/safetensors-load/params/synthetic.params.json
 ```
 
 ## SEE ALSO

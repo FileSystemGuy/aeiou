@@ -11,8 +11,9 @@ in, and their consistency with the abstracts they describe.
 
 The records, each a TOML file:
 
-- `<mechanism>/mechanism.toml`: the mechanism's curated attributes (`category`, `access`,
-  `application`, `format`), and a `[defaults]` table (`ast`, `gpus`, `length`) when it has no
+- `<category>/[<class>/]<mechanism>/mechanism.toml`: the mechanism's curated attributes
+  (`category`, `class` where the category has classes, `application`, `format`, `phase`,
+  `domain`), and a `[defaults]` table (`ast`, `gpus`, `length`) when it has no
   case yet, so the catalog still shows it, at the abstract's defaults.
 - `cases/<case>/case.toml`: the case's curated attributes (`kind`, `modality`), the GPU counts
   its parameters hold at (`gpus`), its `length` parameter (the one that only makes the run
@@ -88,6 +89,12 @@ def load_dictionary(root: pathlib.Path) -> dict:
                 raise BuildError(f"{path}: attribute {name}: a measured attribute needs classes, each with a name")
         elif not a.get("values"):
             raise BuildError(f"{path}: attribute {name}: needs values")
+        if a.get("multiple") and a["source"] != "curated":
+            raise BuildError(f"{path}: attribute {name}: only a curated attribute takes several values")
+    cats = attrs.get("category", {}).get("values", {})
+    for v, d in attrs.get("class", {}).get("values", {}).items():
+        if d.get("category") not in cats:
+            raise BuildError(f"{path}: class {v}: its category {d.get('category')!r} is not a value of category")
     missing = sorted(set(MEASURES) - {n for n, a in attrs.items() if a["source"] == "measured"})
     if missing:
         raise BuildError(f"{path}: aeiou-catalog measures {', '.join(missing)}, which the dictionary does not define")
@@ -197,14 +204,48 @@ def _attributes(rec: dict, level: str, structural: set, attrs: dict, path, root,
             problems.add(path, root, f"`{key}` is {a['source']}: aeiou-catalog computes it, a record never states it")
         elif a["level"] != level:
             problems.add(path, root, f"`{key}` is an attribute of a {a['level']}, not of a {level}")
+        elif a.get("multiple") and isinstance(value, list):
+            bad = [v for v in value if not isinstance(v, str) or v not in a["values"]]
+            if not value or bad or len(set(value)) != len(value):
+                problems.add(path, root, f"`{key}` = {value!r}: a list of distinct values among {', '.join(a['values'])}")
+            else:
+                out[key] = value
         elif not isinstance(value, str) or value not in a["values"]:
-            problems.add(path, root, f"`{key}` = {value!r}: not one of {', '.join(a['values'])}")
+            several = " (or a list of them)" if a.get("multiple") else ""
+            problems.add(path, root, f"`{key}` = {value!r}: not one of {', '.join(a['values'])}{several}")
         else:
-            out[key] = value
+            out[key] = [value] if a.get("multiple") else value
     for key, a in attrs.items():
         if a["source"] == "curated" and a["level"] == level and a.get("required") and key not in rec:
             problems.add(path, root, f"`{key}` is required")
     return out
+
+
+def classes_of(attrs: dict, category: str) -> list[str]:
+    """The class values of a category, in the dictionary's order."""
+    return [v for v, d in attrs.get("class", {}).get("values", {}).items() if d.get("category") == category]
+
+
+def check_tree(root: pathlib.Path, attrs: dict, problems: Problems) -> None:
+    """Every directory of the tree's first level is a category, every category has its directory
+    (with no mechanism yet, its README says what belongs there), and a category with classes holds
+    nothing but its class directories."""
+    have = {d.name for d in root.iterdir() if d.is_dir() and not d.name.startswith((".", "_"))}
+    cats = list(attrs["category"]["values"])
+    for d in sorted(have - set(cats)):
+        problems.add(root / d, root, f"not a category of workloads/attributes.toml ({', '.join(cats)})")
+    for c in cats:
+        if c not in have:
+            problems.add(root / c, root, "a category without its directory (aeiou-catalog write makes it)")
+            continue
+        classes = classes_of(attrs, c)
+        if classes:
+            sub = {d.name for d in (root / c).iterdir() if d.is_dir() and not d.name.startswith((".", "_"))}
+            for d in sorted(sub - set(classes)):
+                problems.add(root / c / d, root, f"not a class of {c} ({', '.join(classes)})")
+            for k in classes:
+                if k not in sub:
+                    problems.add(root / c / k, root, "a class without its directory (aeiou-catalog write makes it)")
 
 
 def _sha256(path: pathlib.Path) -> str:
@@ -223,6 +264,7 @@ def _length_ok(ast: dict, name: str) -> bool:
 def load(root: pathlib.Path, attrs: dict) -> tuple[list[dict], Problems]:
     """Every mechanism with its cases and their captures, checked; the problems found."""
     problems = Problems()
+    check_tree(root, attrs, problems)
     mech_dirs = sorted({p.parent for p in root.rglob("*.ast.json") if "kit" not in p.relative_to(root).parts})
     recorded = sorted(p.parent for p in root.rglob("mechanism.toml"))
     for d in sorted(set(recorded) - set(mech_dirs)):
@@ -239,11 +281,16 @@ def load(root: pathlib.Path, attrs: dict) -> tuple[list[dict], Problems]:
         m = {"dir": d, "rel": _rel(d, root), "attributes": _attributes(rec, "mechanism", MECHANISM_KEYS, attrs, path, root, problems),
              "asts": {}, "cases": [], "defaults": None}
         parts = d.relative_to(root).parts
-        cat, acc = m["attributes"].get("category"), m["attributes"].get("access")
-        want = (cat, acc, None) if acc else (cat, None)
-        if cat and (len(parts) != len(want) or parts[0] != cat or (acc and parts[1] != acc)):
-            problems.add(path, root, f"category {cat!r}" + (f" and access {acc!r}" if acc else "") +
-                         f" say workloads/{cat}/{acc + '/' if acc else ''}<mechanism>, not workloads/{m['rel']}")
+        cat, cls = m["attributes"].get("category"), m["attributes"].get("class")
+        if cat and cls and classes_of(attrs, cat) and cls not in classes_of(attrs, cat):
+            problems.add(path, root, f"class {cls!r} is not a class of {cat} ({', '.join(classes_of(attrs, cat))})")
+        elif cat and cls and not classes_of(attrs, cat):
+            problems.add(path, root, f"class {cls!r}: {cat} has no classes")
+        elif cat and classes_of(attrs, cat) and not cls:
+            problems.add(path, root, f"{cat} has classes ({', '.join(classes_of(attrs, cat))}): the mechanism names its class")
+        elif cat and (parts[:-1] != ((cat, cls) if cls else (cat,))):
+            problems.add(path, root, f"category {cat!r}" + (f" and class {cls!r}" if cls else "") +
+                         f" say workloads/{cat}/{cls + '/' if cls else ''}<mechanism>, not workloads/{m['rel']}")
         for a in sorted(d.glob("*.ast.json")):
             try:
                 doc = json.loads(a.read_text())
@@ -577,8 +624,8 @@ def render_catalog(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Pat
             d = derived(run["abstract"], verdicts)
             ca = case["attributes"] if case else {}
             gp = ", ".join(map(str, case["gpus"])) if case else str(gpus)
-            rows.append(f"| {where} | {name} | {ca.get('kind', '—')} | {ca.get('modality', '—')} | {m['attributes'].get('application', '—')} | "
-                        f"{m['attributes'].get('format', '—')} | `{run['ast']}` | {d['api']} | {d['writes']} | {d['inputs']} | {d['status']} | {gp} |")
+            rows.append(f"| {where} | {name} | {ca.get('kind', '—')} | {ca.get('modality', '—')} | {ca.get('model-family', '—')} | "
+                        f"`{run['ast']}` | {d['api']} | {d['writes']} | {d['inputs']} | {d['status']} | {gp} |")
             s = by_ast.get(run["ast"])
             if s is None:
                 shape_rows.append(f"| {where} | {name} | not measured |" + " |" * len(measured))
@@ -588,14 +635,34 @@ def render_catalog(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Pat
             if not s["stable"]:
                 ln += f"; seeds differ: {', '.join(s['moving'])}"
             shape_rows.append(f"| {where} | {name} | {ln} | " + " | ".join(_shown(attrs[n], s["attributes"][n]) for n in measured) + " |")
+    joined = lambda v: ", ".join(v) if isinstance(v, list) else (v or "—")
+    coverage = []
+    for cat, d in attrs["category"]["values"].items():
+        for cls in classes_of(attrs, cat) or [None]:
+            ms = [m for m in mechanisms if m["attributes"].get("category") == cat and m["attributes"].get("class") == cls]
+            where = f"`{cat}/{cls}/`" if cls else f"`{cat}/`"
+            what = attrs["class"]["values"][cls]["meaning"] if cls else d["meaning"]
+            coverage.append(f"| {where} | {len(ms) or '—'} | {sum(len(m['cases']) for m in ms) or '—'} | {what} |")
+    mech_rows = [f"| `{m['rel']}` | {m['attributes'].get('application', '—')} | {m['attributes'].get('format', '—')} | "
+                 f"{joined(m['attributes'].get('phase'))} | {joined(m['attributes'].get('domain'))} | "
+                 f"{', '.join(c['name'] for c in m['cases']) or '*defaults*'} |" for m in mechanisms]
     out = ["# The workload catalog", "",
            "Generated by `aeiou-catalog write` from the records under `workloads/` (`mechanism.toml`, `case.toml`,",
            "`capture.toml`), the shapes measured from each case's dry run (`shape.json`), and the dictionary",
-           "(`attributes.toml`); never edited by hand (`DESIGN_REVIEW.md` §3.66). A row is a case: an AST and",
-           "a parameter set; a mechanism with no case yet shows its abstract at the defaults.", "",
+           "(`attributes.toml`); never edited by hand (`DESIGN_REVIEW.md` §3.66, §3.68). A mechanism is a",
+           "directory: an authoring script and its ASTs. A case is an AST and a parameter set; a mechanism",
+           "with no case yet shows its abstract at the defaults.", "",
+           "## Coverage", "",
+           "Every category of the dictionary and its classes, with what is in each so far: the tree's",
+           "directories, a contribution going in the one whose description fits.", "",
+           "| Directory | Mechanisms | Cases | What belongs here |",
+           "|---|---|---|---|", *coverage, "",
+           "## Mechanisms", "",
+           "| Mechanism | Application | Format | Phase | Domain | Cases |",
+           "|---|---|---|---|---|---|", *mech_rows, "",
            "## Cases", "",
-           "| Mechanism | Case | Kind | Modality | Application | Format | AST | API | Writes | Inputs | Status | GPUs |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|", *rows, "",
+           "| Mechanism | Case | Kind | Modality | Model family | AST | API | Writes | Inputs | Status | GPUs |",
+           "|---|---|---|---|---|---|---|---|---|---|---|", *rows, "",
            "## Shape", "",
            "Measured by `aeiou dry-run --metrics-json` of the case at its own parameters and first GPU count,",
            "the median of seeds 1, 2, and 3. Each cell is the class and its number; sizes are byte-weighted",
@@ -610,7 +677,7 @@ def render_catalog(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Pat
            "Every attribute and value a record may use (`attributes.toml`). Curated attributes are written in the",
            "records, derived ones read from the AST and the captures, measured ones computed from the dry run.", ""]
     for name, a in attrs.items():
-        req = ", required" if a.get("required") else ""
+        req = (", required" if a.get("required") else "") + (", several values" if a.get("multiple") else "")
         out += [f"### `{name}`", "", f"{a['meaning']} *({a['source']}, {a['level']}{req})*", ""]
         if a["source"] == "measured":
             tol = a.get("tolerance")
@@ -622,9 +689,54 @@ def render_catalog(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Pat
         else:
             for v, d in a["values"].items():
                 search = f" *Also: {', '.join(d['search'])}.*" if d.get("search") else ""
-                out.append(f"- `{v}`: {d['meaning']}{search}")
+                within = f" *(In `{d['category']}`.)*" if "category" in d else ""
+                out.append(f"- `{v}`: {d['meaning']}{within}{search}")
         out.append("")
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------- the directories' READMEs
+
+def make_tree(root: pathlib.Path, attrs: dict) -> None:
+    """Every category's directory, and its classes', so the tree shows what the catalog covers."""
+    for cat in attrs["category"]["values"]:
+        (root / cat).mkdir(exist_ok=True)
+        for cls in classes_of(attrs, cat):
+            (root / cat / cls).mkdir(exist_ok=True)
+
+
+def render_readmes(root: pathlib.Path, attrs: dict, mechanisms: list[dict]) -> dict[pathlib.Path, str]:
+    """The README of every category and class directory: what belongs there, from the dictionary,
+    and what is there now."""
+    out = {}
+    head = "Generated by `aeiou-catalog write` from `workloads/attributes.toml`; never edited by hand."
+
+    def mech_list(cat, cls):
+        ms = [m for m in mechanisms if m["attributes"].get("category") == cat and m["attributes"].get("class") == cls]
+        if not ms:
+            where = f"workloads/{cat}/{cls + '/' if cls else ''}<mechanism>/"
+            return [f"None yet. A mechanism goes in `{where}` (`workloads/README.md`, \"Adding one\")."]
+        return [f"- [`{m['dir'].name}`]({m['dir'].name}/): {m['attributes'].get('application', '—')}, "
+                f"{m['attributes'].get('format', '—')}; cases: {', '.join(c['name'] for c in m['cases']) or 'none yet'}" for m in ms]
+
+    for cat, d in attrs["category"]["values"].items():
+        search = [f"Also searched for as: {', '.join(d['search'])}.", ""] if d.get("search") else []
+        lines = [f"# `{cat}`", "", head, "", d["meaning"], "", *search]
+        classes = classes_of(attrs, cat)
+        if classes:
+            lines += ["## Classes", ""]
+            for cls in classes:
+                n = sum(1 for m in mechanisms if m["attributes"].get("category") == cat and m["attributes"].get("class") == cls)
+                lines.append(f"- [`{cls}`]({cls}/): {attrs['class']['values'][cls]['meaning']} ({n or 'no'} mechanism{'' if n == 1 else 's'})")
+                c = attrs["class"]["values"][cls]
+                cs = [f"Also searched for as: {', '.join(c['search'])}.", ""] if c.get("search") else []
+                out[root / cat / cls / "README.md"] = "\n".join([f"# `{cat}/{cls}`", "", head, "", c["meaning"], "", *cs,
+                                                               "## Mechanisms", "", *mech_list(cat, cls), ""])
+        else:
+            lines += ["## Mechanisms", "", *mech_list(cat, None)]
+        lines += ["", "The catalog of every case: [`CATALOG.md`](../CATALOG.md).", ""]
+        out[root / cat / "README.md"] = "\n".join(lines)
+    return out
 
 
 # ---------------------------------------------------------------- the command
@@ -668,6 +780,8 @@ def _main(a) -> int:
     if not a.no_shapes and shutil.which(a.runner) is None:
         raise BuildError(f"the runner {a.runner!r} is not there (--runner PATH; --no-shapes to skip the dry runs)")
     attrs = load_dictionary(root)
+    if a.cmd == "write":
+        make_tree(root, attrs)
     mechanisms, problems = load(root, attrs)
     if problems:
         for p in problems:
@@ -682,6 +796,7 @@ def _main(a) -> int:
         shapes = {_shape_path(m, c): _shape_path(m, c).read_text() for m, c, _ in _targets(mechanisms) if _shape_path(m, c).exists()}
     files = dict(shapes) if a.cmd == "write" else {}
     files[root / "CATALOG.md"] = render_catalog(mechanisms, attrs, shapes)
+    files.update(render_readmes(root, attrs, mechanisms))
     if a.cmd == "write":
         for path, text in files.items():
             if not path.exists() or path.read_text() != text:

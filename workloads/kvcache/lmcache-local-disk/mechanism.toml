@@ -2,3 +2,5 @@
 category = "kvcache"
 application = "vllm-lmcache"
 format = "lmcache-chunks"
+phase = ["inference"]
+domain = ["ai"]

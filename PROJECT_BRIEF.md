@@ -305,12 +305,12 @@ numbers; the order is this note's.
     distance per metric. Checked against traces of the runner itself. ~~Still to do: a trace
     of a real application, the tolerances, the `trace` node.~~
     **First real application traced 2026-10-01** (`ABSTRACTS.md` §1 "Trace",
-    `DESIGN_REVIEW.md` §3.43, `workloads/training/map/file-per-sample`): PyTorch `DataLoader` +
+    `DESIGN_REVIEW.md` §3.43, `workloads/input-pipeline/map/file-per-sample`): PyTorch `DataLoader` +
     `ImageFolder` on loopback NFS; the abstract gained the second `lseek` per file and the
     walk's `stat`/`fstat`, after which every op share and request size is equal and the
     largest distance is 0.048 (reuse distance, the order). Choices confirmed by the user (**decided 2026-10-01**). 
     **Second, 2026-10-01** (`ABSTRACTS.md` §2 "Trace", `DESIGN_REVIEW.md` §3.44,
-    `workloads/training/map/npy-per-sample`): `np.load(...)["x"]` as upstream DLIO and any NumPy user issues it. The
+    `workloads/input-pipeline/map/npy-per-sample`): `np.load(...)["x"]` as upstream DLIO and any NumPy user issues it. The
     drafted abstract was wrong in shape (two members, header reads, no read at 0) and was
     rewritten from the trace; largest distance 0.040 on a 256-file corpus. Explicit seeks
     confirmed by the user (**decided 2026-10-01**); the other choices not yet.
@@ -320,7 +320,7 @@ numbers; the order is this note's.
     bytes now equal but for 10 path calls the contract cannot express. The traced writes are
     unaligned, so a direct backend cannot run them. ~~Choices not yet confirmed.~~ Choices decided 2026-10-02.
     **Fourth, 2026-10-01** (`ABSTRACTS.md` §4 "Trace", `DESIGN_REVIEW.md` §3.47,
-    `workloads/checkpointing/dcp-load`, `workloads/inference/safetensors-load`): `dcp.load` on two ranks and
+    `workloads/checkpointing/dcp-load`, `workloads/model-loading/safetensors-load`): `dcp.load` on two ranks and
     safetensors `from_pretrained`. The restore's item loop was rewritten (six reads and 34
     seeks per item through one 1 MiB buffer; counts now equal). The model load issues no
     `read`: two mappings per shard, `fadvise(SEQUENTIAL)`, and nothing touched until a tensor
@@ -335,13 +335,13 @@ numbers; the order is this note's.
     to do: ~~rows 5 to 8~~ ~~rows 5, 7, and 8~~ ~~row 8~~ ~~a chat replay for row 8 of `ABSTRACTS.md` §11,~~ ~~the tolerances,~~ the `trace` node.
     **Tolerances built 2026-10-02** (`aeiou-trace compare --judge`, `builder/REFERENCE.md` §7, `DESIGN_REVIEW.md` §3.55; decided 2026-10-02: the class values and the two thin margins are fine for now): a tolerance per class of metric (0.05 for the op mix, request sizes, and popularity; 0.10 for run lengths, reuse, fan-out, and depth), raised by what the abstract differs from itself by at other seeds; rows the trace cannot show are named per pair and not judged. Of the fifteen committed pairs ~~nine are accepted, four are not (the DiskANN build and the three KV-cache pairs, each row with its recorded reason; the KV pairs' rows are those of the replay since §3.56)~~ eleven are accepted, two are not (the DiskANN build and the KV-cache writer, each row with its recorded reason; since §3.57 and one `keep` draw per round, 2026-10-02), and the two applications that read through a mapping cannot be judged from an `strace` at all.
     **Sixth row, 2026-10-01** (`ABSTRACTS.md` §6 "Trace", `DESIGN_REVIEW.md` §3.49,
-    `workloads/vdb/faiss-ivf-ondisk`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
+    `workloads/vector-search/faiss-ivf-ondisk`): FAISS `IndexIVFPQ` over `OnDiskInvertedLists` on SIFT1M.
     FAISS maps the lists file and issues no call on it; 32 prefetch threads per search slice
     touch every probed list, ids before codes. The abstract declares `mmap` and gained the
     index file, the prefetch fan-out, and that order; list-size spread and popularity are
     now SIFT1M's. ~~Choices not yet confirmed.~~ Choices decided 2026-10-01.
     **Fifth and seventh rows, 2026-10-02** (`ABSTRACTS.md` §5 and §7 "Trace", `DESIGN_REVIEW.md`
-    §3.50, `workloads/vdb/diskann-search`, `workloads/vdb/diskann-build`): DiskANN
+    §3.50, `workloads/vector-search/diskann-search`, `workloads/vector-search/diskann-build`): DiskANN
     through diskannpy on SIFT1M. Search: 28 dependent rounds and 108 sector reads per query
     (the draft had 3 to 8 rounds), the first two rounds on the medoids and their neighbours,
     which a 1 % node cache holds; the abstract declares `libaio` and opens once per process.
@@ -553,7 +553,7 @@ numbers; the order is this note's.
     abstract is another workload). Decided the same day: `--cache` defaults to the abstract's
     flags as written.
 26. **A catalog of workloads (proposed 2026-10-10, `DESIGN_REVIEW.md` §3.66).** One tree,
-    `workloads/<category>/[<access>/]<mechanism>/cases/<case>/captures/<capture>`, replaces
+    `workloads/<category>/[<class>/]<mechanism>/cases/<case>/captures/<capture>`, replaces
     `builder/abstracts/`, `builder/traces/`, and `schema/examples/`: a directory per I/O
     mechanism (one authoring script and its ASTs, named alike), a case per workload a user
     would ask for (an AST and a parameter set), captures under the case that was traced. Cases
@@ -565,6 +565,13 @@ numbers; the order is this note's.
     records (`mechanism.toml`, `case.toml`, `capture.toml`), `shape.json` per case, and
     `CATALOG.md`; the shape is measured at the case's own length, not a shorter one (a short
     run's reuse is not the case's), and re-checked at the smallest length that reproduces it.
+    **Restructured 2026-10-11** (decided by the user, `DESIGN_REVIEW.md` §3.68): the first
+    level is a class of system named as storage people name it, seventeen categories
+    (`input-pipeline`, `dataprep`, `checkpointing`, `model-loading`, `kvcache`, `vector-search`,
+    `embedding-tables`, `rl`, `agentic`, `software-build`, `eda`, `vdi`, `media-ingest`,
+    `database`, `genomics`, `hpc`, `benchmarks`), each with its directory from the start; a
+    `class` level only where a category is large; `phase` and `domain` as attributes of
+    several values in place of an AI directory; `model-family` per case.
 27. **The abstract in prose (backlog, raised by the user 2026-10-10).** An AST is a compact,
     machine-readable account of a workload's I/O, so it can be rendered as English: a
     literal abstract, in the sense of a paper's, of the workload's patterns, for readers who

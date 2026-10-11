@@ -27,7 +27,7 @@ cd builder && uv sync --extra test --extra formats     # or: pip install -e '.[t
 uv run aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')   # each AST beside its script
 uv run pytest
 uv run aeiou-build --check $(find ../workloads -name '*.py' -not -path '*/kit/*')     # drift check (CI)
-uv run aeiou-params check ../workloads/inference/safetensors-load/safetensors_load.ast.json ../workloads/inference/safetensors-load/params/synthetic.params.json
+uv run aeiou-params check ../workloads/model-loading/safetensors-load/safetensors_load.ast.json ../workloads/model-loading/safetensors-load/params/synthetic.params.json
 uv run aeiou-catalog check --workloads ../workloads --runner ../runner/target/release/aeiou   # the catalog (CI)
 ```
 
@@ -116,7 +116,7 @@ row (a hand-unrolled iteration); `Workload(..., lint=False)` allows it.
 Sugar that never reaches the AST: `every(n)` (a `cond` on `mod`), `repeat=n` on `read`/`write`
 (a `loop` with a generated index `rep`, so a drawn length is re-drawn per repetition),
 parameter tables (parallel arrays), `draw(name, dist)`, unit multipliers, and any helper
-function an author writes over nodes (`chunks(f)` in `workloads/training/map/npy-per-sample/npy_per_sample.py`).
+function an author writes over nodes (`chunks(f)` in `workloads/input-pipeline/map/npy-per-sample/npy_per_sample.py`).
 `x @ (i − d)` is spelled `cursor.ref("x").at(i - d)`; `recent` is not a construct.
 
 Namespaces are always explicit (`w.namespace(...)` then `ns.object(...)`); the paper form's
@@ -174,10 +174,10 @@ shape live in a **parameter file** (`schema/README.md` §8, `schema/params.schem
 the shape is published once and its parameter sets separately. `aeiou-params` is the helper:
 
 ```
-uv run aeiou-params defaults ../workloads/training/map/file-per-sample/file_per_sample.ast.json -o tsf.params.json --pin
-uv run aeiou-params check ../workloads/training/map/file-per-sample/file_per_sample.ast.json tsf.params.json
-uv run aeiou-params safetensors ../workloads/inference/safetensors-load/safetensors_load.ast.json model-0000?-of-00004.safetensors -o llama.params.json --tp 8
-uv run aeiou-params npz ../workloads/training/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_00000000?.npz [-o corpus.params.json]
+uv run aeiou-params defaults ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json -o tsf.params.json --pin
+uv run aeiou-params check ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json tsf.params.json
+uv run aeiou-params safetensors ../workloads/model-loading/safetensors-load/safetensors_load.ast.json model-0000?-of-00004.safetensors -o llama.params.json --tp 8
+uv run aeiou-params npz ../workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_00000000?.npz [-o corpus.params.json]
 ```
 
 `npz` (2026-10-02) reads `framing` and `cd_len`, the two archive numbers `npy_per_sample`
@@ -500,8 +500,8 @@ an AST or a parameter file.
 
 | File | Holds |
 |---|---|
-| `<mechanism>/mechanism.toml` | `category`, `access` (training), `application`, `format`; a `[defaults]` table (`ast`, `gpus`, `length`) while the mechanism has no case, so its row is the abstract at its defaults |
-| `cases/<case>/case.toml` | `kind`, `modality`; `gpus` (the counts its parameters hold at; the shape uses the first); `length` (the parameter that only lengthens the run: `requests`, `queries`, `calls`); `metrics_block` (a KV chunk for the KV cases, so every access is one block); one `[[run]]` (`ast`, `params`) per AST |
+| `<category>/[<class>/]<mechanism>/mechanism.toml` | `category`, `class` (where the category has classes), `application`, `format`, `phase` and `domain` (one value or a list); a `[defaults]` table (`ast`, `gpus`, `length`) while the mechanism has no case, so its row is the abstract at its defaults |
+| `cases/<case>/case.toml` | `kind`, `modality`, `model-family`; `gpus` (the counts its parameters hold at; the shape uses the first); `length` (the parameter that only lengthens the run: `requests`, `queries`, `calls`); `metrics_block` (a KV chunk for the KV cases, so every access is one block); one `[[run]]` (`ast`, `params`) per AST |
 | `captures/<capture>/capture.toml` | `raw_trace` (a pointer, or `"not retained"`); one `[[pair]]` per trace (`trace` stem, `ast`, `params` when the capture's fit differs, `verdict`) |
 
 `test_trace.py` reads its pairs from the capture records (`catalog.capture_pairs`), so a
@@ -512,9 +512,20 @@ verdict lives beside the trace it is about; the list kept in the test is gone.
 one its unit, tolerance, and classes (first match, bounds inclusive). A record may state only
 curated attributes of its level, with defined values, and the tool refuses the rest: an
 unknown key or value, a derived or measured attribute stated by hand, a missing required one,
-a category or access other than the directory's, a run of an AST the mechanism does not have,
-a parameter file no run names, a trace no pair judges, a tolerance file without its trace,
-two ASTs of one name, a mechanism with neither a case nor `[defaults]`.
+a list where the dictionary does not mark the attribute `multiple`, a category or class
+other than the directory's, a directory of the first level that is not a category (or a
+category without its directory, or a class directory its category does not define), a run
+of an AST the mechanism does not have, a parameter file no run names, a trace no pair judges,
+a tolerance file without its trace, two ASTs of one name, a mechanism with neither a case nor
+`[defaults]`.
+
+**The tree.** The first level is the dictionary's `category` values and nothing else, the
+second level (where a category has one) its `class` values (`DESIGN_REVIEW.md` §3.68). Every
+category and class has its directory from the start: `write` makes a missing one and writes
+its `README.md` from the dictionary (the meaning, the words it is searched for as, the
+classes, the mechanisms there now, or where a first one goes), and `check` holds those READMEs
+to what it renders, as it does `CATALOG.md`. `CATALOG.md` opens with the coverage: every
+category and class with its mechanism and case counts, empty ones included.
 
 **Derived.** `api` (the AST's `posix` key, `sync` without one), `writes` (a namespace not
 `input`), `inputs` (an `input` namespace), `status` (the best verdict of the captures of that

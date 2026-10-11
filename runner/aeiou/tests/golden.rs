@@ -129,7 +129,7 @@ fn golden_fingerprints() {
 fn parameter_files_apply_over_defaults_and_under_overrides() {
     use aeiou::eval::ParamSet;
     let text = std::fs::read_to_string(crate::common::workload_ast("file_per_sample.ast.json")).unwrap();
-    let set = ParamSet::load(&crate::common::workloads().join("training/map/file-per-sample/params/smoke.params.json")).unwrap();
+    let set = ParamSet::load(&crate::common::workloads().join("input-pipeline/map/file-per-sample/params/smoke.params.json")).unwrap();
     assert_eq!(set.abstract_name, "file_per_sample");
     // the set (files 4000, steps 50) under --param steps=10 equals the same values given as overrides
     let mut cfg = config(2, 1, &[("steps", "10")]);
@@ -167,7 +167,7 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
     assert!(Params::new(&loaded.ast, &config(2, 1, &[("steps", "[1]")])).is_err());
     // the committed synthetic tensor table drives safetensors_load
     let text = std::fs::read_to_string(crate::common::workload_ast("safetensors_load.ast.json")).unwrap();
-    let set = ParamSet::load(&crate::common::workloads().join("inference/safetensors-load/params/synthetic.params.json")).unwrap();
+    let set = ParamSet::load(&crate::common::workloads().join("model-loading/safetensors-load/params/synthetic.params.json")).unwrap();
     let mut cfg = config(2, 1, &[]);
     cfg.sets = vec![set];
     let r = dry(&text, &cfg, 1);

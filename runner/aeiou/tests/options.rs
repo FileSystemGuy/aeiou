@@ -77,7 +77,7 @@ fn every_subcommand_prints_the_block_with_sources() {
     let cfg = d.join("aeiou.toml");
     std::fs::write(&cfg, "[dry-run]\nthreads = 2\n\n[datagen]\nthreads = 3\n\n[run]\nbuffer-mib = 16\nrequire-cold = true\n").unwrap();
     // check: the files and the config file
-    let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("check").arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workloads/training/map/file-per-sample/file_per_sample.ast.json")).env_remove("AEIOU_CONFIG"));
+    let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("check").arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json")).env_remove("AEIOU_CONFIG"));
     assert!(ok, "{err}");
     let rows = block(&text);
     assert_eq!(row(&rows, "config").2, "default");

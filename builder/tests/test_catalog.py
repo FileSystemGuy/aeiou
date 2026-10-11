@@ -91,10 +91,12 @@ def test_measures_of_a_dry_runs_totals():
 
 @pytest.fixture
 def tree(tmp_path):
-    """A workload tree of one mechanism, a copy of checkpointing/dcp-save with its case and capture."""
+    """A workload tree of one mechanism, a copy of checkpointing/dcp-save with its case and capture,
+    and every other category's and class's directory empty."""
     root = tmp_path / "workloads"
-    (root / "checkpointing").mkdir(parents=True)
+    root.mkdir()
     shutil.copy(WORKLOADS / "attributes.toml", root)
+    catalog.make_tree(root, ATTRS)
     shutil.copytree(WORKLOADS / "checkpointing" / "dcp-save", root / "checkpointing" / "dcp-save", ignore=shutil.ignore_patterns("kit"))
     return root
 
@@ -153,8 +155,54 @@ def test_a_trace_without_a_pair(tree):
 
 
 def test_the_category_is_the_directory(tree):
-    shutil.move(tree / "checkpointing", tree / "inference")
+    shutil.move(tree / "checkpointing" / "dcp-save", tree / "kvcache" / "dcp-save")
     assert any("category 'checkpointing' say workloads/checkpointing/<mechanism>" in p for p in problems(tree))
+
+
+MECH = "checkpointing/dcp-save/mechanism.toml"
+
+
+@pytest.mark.parametrize("old, new, message", [
+    ('category = "checkpointing"', 'category = "checkpointing"\nclass = "map"', "class 'map': checkpointing has no classes"),
+    ('phase = ["training"]', 'phase = ["training", "training"]', "a list of distinct values"),
+    ('phase = ["training"]', 'phase = []', "a list of distinct values"),
+    ('domain = ["ai"]', 'domain = ["ai", "astrology"]', "a list of distinct values"),
+    ('phase = ["training"]', 'phase = "training"', None),                       # one value needs no list
+    ('phase = ["training"]', 'phase = ["training", "inference"]', None),
+    ('application = "torch-dcp"', 'application = ["torch-dcp"]', "not one of"),  # one value only
+    ('domain = ["ai"]\n', '', "`domain` is required"),
+])
+def test_mechanism_records(tree, old, new, message):
+    edit(tree / MECH, old, new)
+    found = problems(tree)
+    assert (not found) if message is None else any(message in p for p in found), found
+
+
+def test_a_category_with_classes_takes_its_mechanisms_inside_them(tree):
+    shutil.move(tree / "checkpointing" / "dcp-save", tree / "input-pipeline" / "dcp-save")
+    edit(tree / "input-pipeline" / "dcp-save" / "mechanism.toml", 'category = "checkpointing"', 'category = "input-pipeline"')
+    assert any("input-pipeline has classes (map, stream): the mechanism names its class" in p for p in problems(tree))
+    edit(tree / "input-pipeline" / "dcp-save" / "mechanism.toml", 'category = "input-pipeline"', 'category = "input-pipeline"\nclass = "map"')
+    assert any("say workloads/input-pipeline/map/<mechanism>" in p for p in problems(tree))
+    assert any("input-pipeline/dcp-save: not a class of input-pipeline" in p for p in problems(tree))
+    shutil.move(tree / "input-pipeline" / "dcp-save", tree / "input-pipeline" / "map" / "dcp-save")
+    assert problems(tree) == []
+
+
+def test_every_category_has_its_directory_and_no_other(tree):
+    shutil.rmtree(tree / "rl")
+    (tree / "training").mkdir()
+    found = problems(tree)
+    assert any(p.startswith("rl: a category without its directory") for p in found)
+    assert any(p.startswith("training: not a category") for p in found)
+
+
+def test_write_makes_the_tree_and_its_readmes(tree, capsys):
+    shutil.rmtree(tree / "dataprep")
+    assert catalog.main(["write", "--workloads", str(tree), "--no-shapes"]) == 0
+    readme = (tree / "dataprep" / "shuffle" / "README.md").read_text()
+    assert readme.startswith("# `dataprep/shuffle`") and "workloads/dataprep/shuffle/<mechanism>/" in readme
+    assert "[`dcp-save`](dcp-save/)" in (tree / "checkpointing" / "README.md").read_text()
 
 
 def test_a_mechanism_with_no_case_needs_its_defaults(tree):

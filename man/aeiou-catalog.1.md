@@ -23,11 +23,12 @@ describe, and renders the catalog a reader searches. Building an abstract is
 
 The records are TOML files a person writes:
 
-- `<mechanism>/mechanism.toml`: the curated attributes that hold for every case
-  (`category`, `access` under training, `application`, `format`), and a `[defaults]` table
+- `<category>/[<class>/]<mechanism>/mechanism.toml`: the curated attributes that hold for
+  every case (`category`; `class` where the category has classes; `application`, `format`;
+  `phase` and `domain`, each one value or a list), and a `[defaults]` table
   (`ast`, `gpus`, `length`) when the mechanism has no case yet, so that its row shows the
   abstract at its defaults.
-- `cases/<case>/case.toml`: `kind` and `modality`; `gpus`, the GPU counts its parameters
+- `cases/<case>/case.toml`: `kind`, `modality`, and `model-family`; `gpus`, the GPU counts its parameters
   hold at (the shape is measured at the first); `length`, the parameter that only makes the
   run longer (`requests`, `queries`, `calls`), absent when none does (a training job's `steps`
   is not one: fewer steps than an epoch drop the next epoch's re-reads);
@@ -39,11 +40,19 @@ The records are TOML files a person writes:
   **aeiou-trace**(1) `compare --judge` gives on it (the builder's tests check it).
 
 `workloads/attributes.toml` is the dictionary: every attribute with its meaning, its source
-(curated, derived, measured), its level (mechanism, case), and its values or classes. A
-record may state only curated attributes of its level, with defined values; an unknown key,
-an unknown value, a missing required attribute, a category or access that does not match the
-directory, a parameter file no run names, a trace no pair judges, and two ASTs of one name
-are refused.
+(curated, derived, measured), its level (mechanism, case), and its values or classes. An
+attribute marked `multiple` takes a list of distinct values (a mechanism serving two phases
+lives in one directory); every other takes one. A record may state only curated attributes
+of its level, with defined values; an unknown key, an unknown value, a missing required
+attribute, a category or class that does not match the directory, a parameter file no run
+names, a trace no pair judges, and two ASTs of one name are refused.
+
+The tree follows the dictionary. Every value of `category` is a directory of the tree's first
+level and nothing else is; a value of `class` names its category, and a category with classes
+holds only their directories. Every category and class has its directory from the start,
+with a `README.md` **write** generates from the dictionary (what belongs there, the
+mechanisms there now), so that the tree shows what the catalog means to cover and where a
+contribution goes.
 
 The **derived** attributes are read from the AST (`api` from its `posix` key, `writes` and
 `inputs` from its namespaces) and the captures (`status`, the best verdict). The
@@ -84,8 +93,9 @@ measured on another AST, parameter file, or case record than the one committed.
 
 ### aeiou-catalog write
 
-Validate the records, measure every shape at the case's own parameters and find its check
-length, and write the shapes and `CATALOG.md` where they changed.
+Make any category or class directory the dictionary defines and the tree lacks, validate
+the records, measure every shape at the case's own parameters and find its check length,
+and write the shapes, `CATALOG.md`, and the category and class READMEs where they changed.
 
 - **--workloads** *DIR*
 
@@ -95,7 +105,7 @@ length, and write the shapes and `CATALOG.md` where they changed.
   The runner binary. Default `aeiou`, found on the `PATH`.
 - **--no-shapes**
 
-  Write `CATALOG.md` alone, from the committed shapes; a shape measured on another AST or
+  Write `CATALOG.md` and the READMEs alone, from the committed shapes; a shape measured on another AST or
   parameter file is reported.
 
 ### Common
@@ -115,7 +125,8 @@ length, and write the shapes and `CATALOG.md` where they changed.
 - `mechanism.toml`, `case.toml`, `capture.toml`
 
   The records, curated.
-- `shape.json`, `shape.defaults.json`, `workloads/CATALOG.md`
+- `shape.json`, `shape.defaults.json`, `workloads/CATALOG.md`, the `README.md` of every category
+  and class directory
 
   Generated; never edited by hand.
 

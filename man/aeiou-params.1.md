@@ -165,12 +165,12 @@ the abstract reads none of those shapes.
 ## EXAMPLES
 
 ```
-aeiou-params defaults workloads/training/map/file-per-sample/file_per_sample.ast.json -o tsf.params.json --pin
-aeiou-params check workloads/training/map/file-per-sample/file_per_sample.ast.json tsf.params.json
-aeiou-params safetensors workloads/inference/safetensors-load/safetensors_load.ast.json model-0000?-of-00004.safetensors \
+aeiou-params defaults workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json -o tsf.params.json --pin
+aeiou-params check workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json tsf.params.json
+aeiou-params safetensors workloads/model-loading/safetensors-load/safetensors_load.ast.json model-0000?-of-00004.safetensors \
     -o llama.params.json --tp 8
-aeiou-params npz workloads/training/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_0000000?.npz
-aeiou run workloads/inference/safetensors-load/safetensors_load.ast.json --gpus 8 --root /mnt/sut --params-file llama.params.json
+aeiou-params npz workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_0000000?.npz
+aeiou run workloads/model-loading/safetensors-load/safetensors_load.ast.json --gpus 8 --root /mnt/sut --params-file llama.params.json
 ```
 
 ## SEE ALSO

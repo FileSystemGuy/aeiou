@@ -11,7 +11,7 @@ and, for the runner alone, no Python.
 | `bin/aeiou-launch` | One `aeiou run` or `aeiou datagen` rank per host over ssh. A POSIX shell script. |
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
 | `man/` | The same pages as Markdown. |
-| `workloads/` | The committed abstracts (`*.ast.json`), the only thing the runner executes, one directory per I/O mechanism under its category (`training/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …), each with its README, its cases (`cases/<case>/params.json`: a parameter set describing one workload), and test-sized parameter files in `params/`. |
+| `workloads/` | The committed abstracts (`*.ast.json`), the only thing the runner executes, one directory per I/O mechanism under its category (`input-pipeline/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …), each with its README, its cases (`cases/<case>/params.json`: a parameter set describing one workload), and test-sized parameter files in `params/`. |
 | `wheel/` | The Python builder, for those who want to author or change workloads, generate container datasets, or compare an `strace` of a real application with an abstract. Python 3.12 or newer. |
 
 ## First run
@@ -24,7 +24,7 @@ export PATH=$PWD/bin:$PATH
 aeiou check $(find workloads -name '*.ast.json')
 
 # 2. walk the small-file training workload without I/O: op counts, bytes, the fingerprint
-W=workloads/training/map/file-per-sample
+W=workloads/input-pipeline/map/file-per-sample
 aeiou dry-run $W/file_per_sample.ast.json --gpus 2 --seed 1 \
     --params-file $W/params/smoke.params.json
 
@@ -58,7 +58,7 @@ workloads read container files (TFRecord, Parquet, HDF5) that the Python side wr
 ```
 python3 -m venv .venv && .venv/bin/pip install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
 # or: uv tool install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
-.venv/bin/aeiou-datagen workloads/training/stream/tfrecord/tfrecord_stream.ast.json --root /mnt/sut/aeiou
+.venv/bin/aeiou-datagen workloads/input-pipeline/stream/tfrecord/tfrecord_stream.ast.json --root /mnt/sut/aeiou
 ```
 
 `aeiou-build`, `aeiou-params`, `aeiou-datagen`, and `aeiou-trace` each have a manual page

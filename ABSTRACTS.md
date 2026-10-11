@@ -178,7 +178,7 @@ workload train_small_files {
   separately reported phase, ~~off by default~~ **on by default since 2026-10-02**: the run stays as close to the
   metadata load a real job puts on the storage as to its data load (`DESIGN_REVIEW.md` §3.54).
 
-**Trace (2026-10-01).** `workloads/training/map/file-per-sample`: `ImageFolder` + `DataLoader`,
+**Trace (2026-10-01).** `workloads/input-pipeline/map/file-per-sample`: `ImageFolder` + `DataLoader`,
 batch 16, 2 workers, 2 epochs over 3,200 real JPEGs (median 111 KiB) on the loopback NFS
 mount (v4.2, rsize 1 MiB); torch 2.14.1, torchvision 0.29.1, Pillow 12.3.0, Python 3.12.3.
 Reasoning in `DESIGN_REVIEW.md` §3.43.
@@ -299,7 +299,7 @@ reads and `11 + chunks(f)` seeks, checked against every file of both traced corp
 the trace; `step_time` from the accelerator. ~~`members` and `lh_len`~~ are gone (2026-10-01):
 the reader takes one member and never reads a local header as a request of its own.
 
-**Trace (2026-10-01).** `workloads/training/map/npy-per-sample`: upstream DLIO's read call (argonne-lcf
+**Trace (2026-10-01).** `workloads/input-pipeline/map/npy-per-sample`: upstream DLIO's read call (argonne-lcf
 `npz_reader.py`; the MLCommons fork reads differently and is not modeled, `DESIGN_REVIEW.md`
 §3.46) through a
 `DataLoader`, 2 workers, 2 epochs, on the loopback NFS mount, over corpora written the way
@@ -688,7 +688,7 @@ shards by `aeiou-params safetensors` (`schema/README.md` §8); the five-tensor d
 script are a stand-in. Shards are modeled at the largest shard's size (`shard_bytes`), and the
 dataset pattern is ~~`model-{id:05}.safetensors`~~ `model/model-{id:05}.safetensors` since 2026-10-01 (the names are the dataset's, not the model's).
 
-**Trace (2026-10-01).** `workloads/inference/safetensors-load`: `AutoModelForCausalLM.from_pretrained`
+**Trace (2026-10-01).** `workloads/model-loading/safetensors-load`: `AutoModelForCausalLM.from_pretrained`
 on a local directory of five safetensors shards (GPT-2 shape, random weights, 437 MB) on the
 loopback NFS mount; safetensors 0.8.0, transformers 5.18, torch 2.14.1 on CPU. Reasoning in
 `DESIGN_REVIEW.md` §3.47. ~~**The choices other than the backend are not yet confirmed by the user.**~~ **Decided 2026-10-02:** the user confirmed the choices that need no GPU; the tensor table and the copy's thread count wait for one (`DESIGN_REVIEW.md` §3.54).
@@ -806,7 +806,7 @@ workload vdb_search_diskann backend libaio {
 
 **Trace (2026-10-02).** DiskANN's `PQFlashIndex` through diskannpy 0.7.0 over SIFT1M (degree
 64, five nodes to a sector, 200,001 sectors, 13 medoids from a 13-shard build), search list
-100, beam 4, on the loopback NFS mount; kit in `workloads/vdb/diskann-search`, reasoning
+100, beam 4, on the loopback NFS mount; kit in `workloads/vector-search/diskann-search`, reasoning
 in `DESIGN_REVIEW.md` §3.50.
 
 - **Load.** The PQ-compressed vectors (32 MB) are read through a C++ stream: three `lseek`s,
@@ -914,7 +914,7 @@ workload vdb_search_ivf backend mmap {
 
 **Trace (2026-10-01).** faiss-cpu 1.15.1, `IndexIVFPQ` built as `IVF1024,PQ32` over SIFT1M by
 the documented route (shard indexes, then `merge_ondisk`), searched with `nprobe = 64` on the
-loopback NFS mount; kit in `workloads/vdb/faiss-ivf-ondisk`, reasoning in `DESIGN_REVIEW.md`
+loopback NFS mount; kit in `workloads/vector-search/faiss-ivf-ondisk`, reasoning in `DESIGN_REVIEW.md`
 §3.49.
 
 - **`read_index` reads the index file and maps the lists file.** `open`, `fstat`, seven
@@ -1055,7 +1055,7 @@ close; `shard_bytes` is `overlap · n / shards` rows.)
 
 **Trace (2026-10-02).** `build_disk_index` through diskannpy 0.7.0 on SIFT1M (512 MB of
 vectors), degree 64, 20 threads, a memory budget that gives 13 shards; 407 s; kit in
-`workloads/vdb/diskann-build`, reasoning in `DESIGN_REVIEW.md` §3.50.
+`workloads/vector-search/diskann-build`, reasoning in `DESIGN_REVIEW.md` §3.50.
 
 - **The base file is read whole twenty times** (10.2 GB for a 512 MB file): five passes
   through a block reader and fifteen loads into memory, one of them per shard. The draft
@@ -1704,7 +1704,7 @@ Three workloads over container datasets, written straight in builder form (no pa
 the shapes are the loaders' and the format classes carry the readers' protocols,
 `GRAMMAR_OPTIONS.md` §6, `DESIGN_REVIEW.md` §3.28):
 
-- **`train_stream_tfrecord`, `train_stream_parquet`** (`workloads/training/stream/tfrecord/tfrecord_stream.py`,
+- **`train_stream_tfrecord`, `train_stream_parquet`** (`workloads/input-pipeline/stream/tfrecord/tfrecord_stream.py`,
   `PROJECT_BRIEF.md` §6 item 15): the tf.data shape, and HF `streaming=True`, Ray Data, DALI
   over shards. The input pipeline shuffles the shard list and interleaves `cycle` shards; each
   is streamed whole by its reader library; the training loop takes a shard every
@@ -1712,7 +1712,7 @@ the shapes are the loaders' and the format classes carry the readers' protocols,
   CPU is one `compute` per shard; the shuffle buffer and in-shard batch boundaries are
   application memory. What it stresses: large sequential reads (TFRecord: positioned 256 KiB
   reads; Parquet: `fadvise(WILLNEED)` readahead then multi-MiB `pread`s), few opens.
-- **`train_map_hdf5`** (`workloads/training/map/hdf5/hdf5_map.py`): a DataLoader whose
+- **`train_map_hdf5`** (`workloads/input-pipeline/map/hdf5/hdf5_map.py`): a DataLoader whose
   `__getitem__` opens the container holding sample `i`, reads row `i` through libhdf5's
   sieve, and closes it. Cut: an open-file cache (the per-item open is the fork-safe shape).
   What it stresses: an open, eight small metadata reads, and one 192 KiB positioned read per

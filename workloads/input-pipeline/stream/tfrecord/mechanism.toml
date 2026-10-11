@@ -1,0 +1,12 @@
+# The curated attributes of the mechanism (workloads/attributes.toml).
+category = "input-pipeline"
+class = "stream"
+application = "tf-data"
+format = "tfrecord"
+phase = ["training"]
+domain = ["ai"]
+
+# No case yet: the catalog's row is the abstract at its defaults (shape.defaults.json).
+[defaults]
+ast = "tfrecord_stream"
+gpus = 1
