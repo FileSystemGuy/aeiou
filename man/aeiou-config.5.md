@@ -86,7 +86,7 @@ report-json = "/var/tmp/aeiou-run.json"
 
 [datagen]
 root = "/mnt/sut"
-threads = 16
+writers = 16
 
 [dry-run]
 threads = 4
@@ -139,7 +139,7 @@ sides may come from different layers.
 
 **aeiou datagen** and **aeiou-datagen.** Fixed: the abstract, `--gpus`, `--param`,
 `--params-file`, `--dedupe`, `--compress`, `--dataset` (the payload is part of what the
-run compares). Layered: `--root`, `--endpoint`, `--threads`, and for **aeiou datagen**
+run compares). Layered: `--root`, `--endpoint`, `--writers`, and for **aeiou datagen**
 `--object-threads`.
 
 **aeiou dry-run.** Fixed: the identity (the abstract, `--gpus`, `--seed`, `--param`,

@@ -26,7 +26,7 @@ cargo test --release
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
-| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--threads N] [--dataset NAME]… [--ranks R --rank r --coordinator HOST:PORT]` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, then the manifest `.aeiou-dataset.json` at each dataset root. On several hosts each rank writes its slice of the ids and rank 0 writes the manifests once every rank has reported (§5). Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
+| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--ranks R --rank r --coordinator HOST:PORT]` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, then the manifest `.aeiou-dataset.json` at each dataset root. On several hosts each rank writes its slice of the ids and rank 0 writes the manifests once every rank has reported (§5). Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
@@ -454,12 +454,12 @@ as root). The same runs on the loopback NFS mount are §7.
   rank's host and counts (`hosts`), and the totals. The coordinator's identity check covers
   the abstract's hash, `--gpus`, the parameters, `--dedupe`, `--compress`, and the
   `--dataset` list, so one host with a different ratio cannot poison the corpus. Within a
-  rank, ids go to threads in runs aligned to the pattern's directories (a run is a directory
-  under `{id div N}`, shrunk so every thread has several): Linux takes the parent directory's
+  rank, ids go to its writers (`--writers`, a thread each) in runs aligned to the pattern's
+  directories (a run is a directory under `{id div N}`, shrunk so every writer has several): Linux takes the parent directory's
   lock exclusively for every create, and on NFS the `OPEN` round trip runs under it, so
   threads creating in one directory serialize at one create per round trip, and a flat
   pattern is bounded that way on the server whatever the host count. A regions file is cut
-  into 64 MiB pieces for the owner's threads. Datagen is a tool, not a benchmark: there is no
+  into 64 MiB pieces for the owner's writers. Datagen is a tool, not a benchmark: there is no
   aggregate rate, only each rank's counts and the totals.
 - **Containers** are written by the Python side: `aeiou-datagen` (`builder/REFERENCE.md` §6)
   writes every dataset that has a format class, with the same names, sizes, payload, and
@@ -1407,7 +1407,7 @@ the output and metrics flags. A *layered* option may come from any layer: for `r
 `--threads`, `--buffer-mib`, `--write-compress`, `--time-scale`, the io_uring, libaio, and
 mmap knobs, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`,
 `--require-cold`, `--drop-caches`, `--report-json`, `--report-takes`; for `datagen` `--root`, `--endpoint`,
-`--threads`, `--rank`, `--ranks`, `--coordinator`; for `dry-run` `--threads` and `--ranks`. `--rank` from the environment is
+`--writers`, `--rank`, `--ranks`, `--coordinator`; for `dry-run` `--threads` and `--ranks`. `--rank` from the environment is
 the case the layers exist for: a launcher sets `AEIOU_RANK` from its own rank variable and
 the same command line runs on every host. ("Replace" is the only merge rule: `--endpoint`, the one
 list, is replaced whole by a higher layer's, whitespace-separated in `AEIOU_ENDPOINT` and an
@@ -1470,7 +1470,7 @@ above them. An `AEIOU_*` that is no option of any subcommand warns (`AEIOU_CONFI
 `AEIOU_RUNNER`, and `AEIOU_RSH` are the family's own and do not); one that is another
 subcommand's option is left alone. `aeiou check` prints the block too (its files and the
 config file), so CI's diff of its output against `schema/check.py` skips past the first
-empty line. `aeiou-datagen` resolves `--root`, `--endpoint`, and `--threads` through the same layers
+empty line. `aeiou-datagen` resolves `--root`, `--endpoint`, and `--writers` through the same layers
 (`builder/aeiou/options.py`, the `[datagen]` table) and prints the same block.
 
 **The record.** `aeiou run` writes the block to the report as `layers` (§12: the config
@@ -1663,7 +1663,7 @@ records `object_threads`, `object_part_mib`, and each endpoint's `uri`.
 `object::DEFAULT_PART` (8 MiB) when larger, each part made from the payload and sent before
 the next; the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix (atomic, so no
 temporary name), and there is no `syncfs`. A `regions` dataset is refused: a sparse layout
-written at offsets has no object form. The writer threads make the requests, as actors do.
+written at offsets has no object form. The writers' threads make the requests, as actors do.
 A container dataset in a store is `aeiou-datagen`'s, which streams each file from its format
 class's writer into an upload in the same 8 MiB parts, through `obstore` over the same
 `object_store` (`builder/REFERENCE.md` §6, `DESIGN_REVIEW.md` §3.69, 2026-10-11).

@@ -3,10 +3,10 @@ classes, with the runner's payload (`runner/REFERENCE.md` §5: `aeiou-positional
 `dgen-data` 0.3.0), and the manifest `aeiou run` checks (`schema/README.md` §6).
 
     aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G]
-                      [--dedupe D] [--compress C] [--threads N] [--dataset NAME]… [--config FILE]
+                      [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--config FILE]
 
-`--root` and `--threads` come through the runner's option layers (`options.py`: the command
-line, else `AEIOU_ROOT`/`AEIOU_THREADS`, else the `[datagen]` table of the TOML file `--config`
+`--root` and `--writers` come through the runner's option layers (`options.py`: the command
+line, else `AEIOU_ROOT`/`AEIOU_WRITERS`, else the `[datagen]` table of the TOML file `--config`
 or `AEIOU_CONFIG` names, else the default); the rest is the command line's alone, and the
 block of what was resolved, with each value's source, is printed as `aeiou datagen` prints it.
 
@@ -434,7 +434,7 @@ def parser() -> usage.Parser:
     ap.add_argument("--gpus", type=int, default=1, help="Instance count, for dataset definitions that reference `gpus` [default: 1]")
     ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="Required: directory the abstract's paths are relative to. From the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
     ap.add_argument("--endpoint", action="append", metavar="NAME=DIR", help="Put the root directory of the abstract's dataset NAME at DIR instead of under --root, or, for a name declared `protocol: s3`, at s3://BUCKET[/PREFIX] in the store the AWS_* environment names (repeatable; names sharing a root share its place). From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the [datagen] table of the config file (an array)")
-    ap.add_argument("--threads", type=int, help="Writers, each a process (Python holds its lock between the library calls); the name is the runner's (default: all cores)")
+    ap.add_argument("--writers", type=int, metavar="N", help="Files written at once, a process each (Python holds its lock between the library calls) (default: all cores)")
     ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` consecutive files share content [default: 1]")
     ap.add_argument("--compress", type=int, default=1, help="Compression ratio: the last (C−1)/C of every 1 MiB block is zeros [default: 1]")
     ap.add_argument("--dataset", action="append", default=[], metavar="NAME", help="Only these datasets (default: all)")
@@ -456,8 +456,8 @@ def main(argv=None) -> int:
 
 def resolve(a, ap: usage.Parser | None = None) -> options.Layers:
     """`aeiou datagen`'s layers (main.rs `datagen_cmd`): the shape and the writer's fixed
-    options first, then `root` and `threads` through the layers; what is missing from every
-    layer is listed in one usage error (`usage.Missing`). Sets `a.root` and `a.threads` to
+    options first, then `root` and `writers` through the layers; what is missing from every
+    layer is listed in one usage error (`usage.Missing`). Sets `a.root` and `a.writers` to
     the values in effect."""
     missing = usage.Missing(ap or parser())
     missing.want(a.ast, *usage.ABSTRACT)
@@ -471,9 +471,9 @@ def resolve(a, ap: usage.Parser | None = None) -> options.Layers:
     layers.fixed("dataset", a.dataset, bool(a.dataset))
     a.root = missing.want(layers.layered("root", a.root, pathlib.Path), *usage.root("datagen"))
     a.endpoint = layers.layered("endpoint", a.endpoint, list) or []
-    a.threads = layers.layered("threads", a.threads, int)
-    if a.threads is None:
-        a.threads = os.cpu_count() or 1
+    a.writers = layers.layered("writers", a.writers, int)
+    if a.writers is None:
+        a.writers = os.cpu_count() or 1
     missing.check()
     layers.finish()
     return layers
@@ -528,7 +528,7 @@ def _main(a, ap: usage.Parser) -> int:
         # processes, not threads: the writers' Python holds the GIL between the library
         # calls, so threads write no faster than one (DESIGN_REVIEW.md §3.69, measured
         # 2026-10-11); a file is a pure function of its id, so the processes share nothing
-        workers = max(1, min(a.threads, job.files))
+        workers = max(1, min(a.writers, job.files))
         with contextlib.ExitStack() as stack:
             if workers == 1:
                 results = map(job.write, range(job.files))

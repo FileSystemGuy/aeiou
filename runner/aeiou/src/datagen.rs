@@ -28,11 +28,11 @@
 //! manifest one `PUT` (atomic, so no temporary name), and there is no `syncfs`. A `regions`
 //! dataset, a sparse layout written at offsets, has no object form and is refused.
 //!
-//! **Threads.** A rank's ids are handed to its threads in runs aligned to the pattern's
-//! directories (`{id div N}`: a run is a directory, shrunk so that every thread has several),
-//! because Linux takes the parent directory's lock exclusively for every create, and on NFS
-//! the `OPEN` round trip runs under it: threads creating in one directory serialize. A regions
-//! file is cut into 64 MiB pieces for the owner's threads (`pwrite` at disjoint offsets).
+//! **Writers.** A rank's ids are handed to its writers (`--writers`, a thread each) in runs
+//! aligned to the pattern's directories (`{id div N}`: a run is a directory, shrunk so that
+//! every writer has several), because Linux takes the parent directory's lock exclusively for
+//! every create, and on NFS the `OPEN` round trip runs under it: threads creating in one
+//! directory serialize. A regions file is cut into 64 MiB pieces for the owner's writers (`pwrite` at disjoint offsets).
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::collections::BTreeMap;
@@ -55,7 +55,7 @@ use crate::payload::{self, Filler, Manifest, PayloadSpec, BLOCK};
 
 /// The alignment `O_DIRECT` wants of a buffer and a length (the largest common logical block).
 pub const ALIGN: usize = 4096;
-/// A regions file is written in pieces of this many bytes, one per thread at a time.
+/// A regions file is written in pieces of this many bytes, one per writer at a time.
 const REGIONS_PIECE: u64 = 64 << 20;
 
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ pub struct DatagenOpts {
     pub root: PathBuf,
     /// The datasets placed elsewhere (`endpoint.rs`).
     pub endpoints: crate::endpoint::Endpoints,
-    pub threads: usize,
+    pub writers: usize,
     pub dedupe: u64,
     pub compress: u64,
     /// Only these datasets (all when empty).
@@ -111,14 +111,14 @@ pub fn regions_owner(index: usize, ranks: i64) -> i64 {
     (index as i64).rem_euclid(ranks.max(1))
 }
 
-/// Ids are handed to threads in runs: a directory each for `{id div N}`, shrunk so that a
-/// slice of `len` ids gives every thread several runs; one id otherwise.
-pub fn run_size(dirs: &DirScheme, len: i64, threads: usize) -> i64 {
+/// Ids are handed to writers in runs: a directory each for `{id div N}`, shrunk so that a
+/// slice of `len` ids gives every writer several runs; one id otherwise.
+pub fn run_size(dirs: &DirScheme, len: i64, writers: usize) -> i64 {
     let per_dir = match dirs {
         DirScheme::Div(n) => (*n).max(1),
         _ => 1,
     };
-    let target = (len / (4 * threads.max(1) as i64)).max(1);
+    let target = (len / (4 * writers.max(1) as i64)).max(1);
     per_dir.min(target).max(1)
 }
 
@@ -300,7 +300,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
     let meta = plan.meta;
     let started = Instant::now();
     let start_secs = now_secs();
-    let threads = opts.threads.max(1);
+    let writers = opts.writers.max(1);
     let seed = meta.dataset_seed();
     let dedupe = spec.dedupe;
     let files = AtomicU64::new(0);
@@ -323,11 +323,11 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
             let (lo, hi) = (*lo, *hi);
             let len = hi - lo;
             if len > 0 {
-                let run = run_size(dirs, len, threads);
+                let run = run_size(dirs, len, writers);
                 let (first, last) = (lo / run, (hi - 1) / run);
                 let next = AtomicI64::new(first);
                 let done_ids = AtomicU64::new(0);
-                let nthreads = threads.min((last - first + 1).max(1) as usize);
+                let nthreads = writers.min((last - first + 1).max(1) as usize);
                 std::thread::scope(|s| {
                     for _ in 0..nthreads {
                         s.spawn(|| {
@@ -394,7 +394,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
             let (f, direct) = create(&full, mode)?;
             let pieces = (size + REGIONS_PIECE - 1) / REGIONS_PIECE;
             let next = AtomicU64::new(0);
-            let nthreads = threads.min(pieces.max(1) as usize);
+            let nthreads = writers.min(pieces.max(1) as usize);
             let seed_of = |blk: u64| payload::regions_block_seed(seed, blk, dedupe);
             std::thread::scope(|s| {
                 for _ in 0..nthreads {

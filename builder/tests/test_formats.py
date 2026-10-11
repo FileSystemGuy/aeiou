@@ -121,7 +121,7 @@ CASES = {
 
 def _datagen(name, tmp_path, params):
     root = tmp_path / "root"
-    r = _tool("datagen", [ast_path(name), "--root", root, "--threads", "3", *sum([["--param", p] for p in params], [])])
+    r = _tool("datagen", [ast_path(name), "--root", root, "--writers", "3", *sum([["--param", p] for p in params], [])])
     assert r.returncode == 0, r.stdout + r.stderr
     return root, r.stdout
 
@@ -298,7 +298,7 @@ def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(
     flags = sum([["--param", p] for p in params], [])
     root, elsewhere = tmp_path / "root", tmp_path / "elsewhere"
     root.mkdir()
-    r = _tool("datagen", [ast_path(name), "--root", root, "--endpoint", f"shards={elsewhere}", "--threads", "3", *flags])
+    r = _tool("datagen", [ast_path(name), "--root", root, "--endpoint", f"shards={elsewhere}", "--writers", "3", *flags])
     assert r.returncode == 0, r.stdout + r.stderr
     assert (elsewhere / ".aeiou-dataset.json").exists() and not any(root.iterdir())
     ast_file = ast_path(name)

@@ -227,12 +227,13 @@ turns it off, and the last one on the line wins.
   or, for a dataset declared `protocol: s3`, at `s3://BUCKET[/PREFIX]` (repeatable); see
   ENDPOINTS. From the command line, else `$AEIOU_ENDPOINT`, else `endpoint` in the
   `[datagen]` table of the config file. *Layered.*
-- **--threads** *THREADS*
+- **--writers** *N*
 
-  Writer threads; default all cores. *Layered.*
+  Writer threads: files, or 64 MiB pieces of a `regions` file, written at once; default all
+  cores. *Layered.*
 - **--object-threads** *N*
 
-  Worker threads of the object engine's runtime, which drive its connections (the writer
+  Worker threads of the object engine's runtime, which drive its connections (the writers'
   threads make the requests); see OBJECT STORES. Only with a dataset placed in an object
   store. Default 2. *Layered.*
 - **--dedupe** *DEDUPE*

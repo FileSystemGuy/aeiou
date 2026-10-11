@@ -39,7 +39,7 @@ the check runs before the upload is completed so a file that fails it leaves no 
 and the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix. The client is
 `obstore`, the Python bindings of the runner's `object_store`, and the store comes from the
 same `AWS_*` environment the runner reads. Every writer streams, whatever the destination,
-so a thread holds a piece of its file, never the file: Parquet a row group at a time, and
+so a writer holds a piece of its file, never the file: Parquet a row group at a time, and
 HDF5 as the header libhdf5 writes for the file's row count (taken from a sparse scratch
 file in `/dev/shm`, a few hundred KiB however large the file) followed by the rows.
 
@@ -47,7 +47,7 @@ The format classes and their reader protocols are in the `aeiou.formats` module 
 builder: `tfrecord`, `parquet`, `hdf5`, `webdataset`. Their libraries are the `formats`
 extra of the Python package; `obstore` is the `s3` extra.
 
-`--root` and `--threads` are resolved through the suite's option layers
+`--root` and `--writers` are resolved through the suite's option layers
 (**aeiou-config**(5)): the command line, else the environment, else the `[datagen]` table
 of the config file, else the default. Every other option is the command line's alone. The
 block of what was resolved, with each value's source, is printed as `aeiou datagen` prints
@@ -83,13 +83,14 @@ every missing argument listed at once.
   store. From the command line, else
   `$AEIOU_ENDPOINT`, else `endpoint` in the `[datagen]` table of the config file.
   *Layered.*
-- **--threads** *THREADS*
+- **--writers** *N*
 
-  Writers, each a process: the writers' Python holds its interpreter lock between the
-  library calls, so threads write no faster than one. The name and its layers
-  (`AEIOU_THREADS`, `threads` in the `[datagen]` table) are `aeiou datagen`'s. A file is a
-  pure function of its id, so the writers share nothing; one writer, or one file, runs in
-  the process itself. Default all cores. *Layered.*
+  Files written at once, each writer a process: the writers' Python holds its interpreter
+  lock between the library calls, so threads would write no faster than one. The name and
+  its layers (`AEIOU_WRITERS`, `writers` in the `[datagen]` table) are `aeiou datagen`'s,
+  whose writers are threads. A file is a pure function of its id, so the writers share
+  nothing; one writer, or one file, runs in the process itself. Default all cores.
+  *Layered.*
 - **--dedupe** *DEDUPE*
 
   Dedupe ratio: every *DEDUPE* files share content. Default 1. Recorded in the manifest's
@@ -115,7 +116,7 @@ every missing argument listed at once.
 
 ## ENVIRONMENT
 
-- **AEIOU_ROOT**, **AEIOU_THREADS**
+- **AEIOU_ROOT**, **AEIOU_WRITERS**
 
   The layered options, when not on the command line.
 - **AEIOU_CONFIG**

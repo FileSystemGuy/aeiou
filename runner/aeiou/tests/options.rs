@@ -75,7 +75,7 @@ const SMALL: [&str; 6] = ["files=600", "batch=4", "workers=2", "prefetch=2", "st
 fn every_subcommand_prints_the_block_with_sources() {
     let d = tmpdir("block");
     let cfg = d.join("aeiou.toml");
-    std::fs::write(&cfg, "[dry-run]\nthreads = 2\n\n[datagen]\nthreads = 3\n\n[run]\nbuffer-mib = 16\nrequire-cold = true\n").unwrap();
+    std::fs::write(&cfg, "[dry-run]\nthreads = 2\n\n[datagen]\nwriters = 3\n\n[run]\nbuffer-mib = 16\nrequire-cold = true\n").unwrap();
     // check: the files and the config file
     let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("check").arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json")).env_remove("AEIOU_CONFIG"));
     assert!(ok, "{err}");
@@ -97,13 +97,13 @@ fn every_subcommand_prints_the_block_with_sources() {
     let (ok, text, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_CONFIG", &cfg));
     assert!(ok, "{err}");
     assert_eq!(row(&block(&text), "config").2, "env AEIOU_CONFIG");
-    // datagen: root from the environment, threads from the file
+    // datagen: root from the environment, writers from the file
     let root = d.join("root");
     let (ok, text, err) = out(aeiou("datagen", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_ROOT", &root).env("AEIOU_CONFIG", &cfg));
     assert!(ok, "{err}");
     let rows = block(&text);
     assert_eq!(row(&rows, "root"), &("root".into(), root.display().to_string(), "env AEIOU_ROOT".into()));
-    assert_eq!(row(&rows, "threads").1, "3");
+    assert_eq!(row(&rows, "writers").1, "3");
     assert_eq!(row(&rows, "dedupe"), &("dedupe".into(), "1".into(), "default".into()));
     // run: the file turns require-cold on and sets the buffer, the command line turns it off
     // again; the report records the layers

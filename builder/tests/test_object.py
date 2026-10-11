@@ -126,11 +126,11 @@ def test_containers_stream_into_the_bucket_as_the_directory_writer_writes_them(n
     ast = object_variant(name, tmp_path, names)
     prefix = f"{name}/data"
     endpoints = sum([["--endpoint", f"{n}=s3://bench/{prefix}"] for n in names], [])
-    r = _datagen([ast, "--root", tmp_path / "unused", *endpoints, "--threads", "3", *flags], minio.env)
+    r = _datagen([ast, "--root", tmp_path / "unused", *endpoints, "--writers", "3", *flags], minio.env)
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "unused").exists(), "nothing written to a local file system"
     on_disk = tmp_path / "posix"
-    r2 = _datagen([ast_path(name), "--root", on_disk, "--threads", "3", *flags])
+    r2 = _datagen([ast_path(name), "--root", on_disk, "--writers", "3", *flags])
     assert r2.returncode == 0, r2.stdout + r2.stderr
     disk_root = next(p.parent for p in on_disk.rglob(".aeiou-dataset.json"))
     files = sorted(p for p in disk_root.rglob("*") if p.is_file() and p.name != ".aeiou-dataset.json")

@@ -111,11 +111,12 @@ struct DatagenArgs {
     /// (whitespace-separated), else `endpoint` in the config file (an array).
     #[arg(long = "endpoint", value_name = "NAME=DIR|URI", help_heading = "Writer")]
     endpoints: Vec<String>,
-    /// Writer threads (default: all cores).
-    #[arg(long, help_heading = "Writer")]
-    threads: Option<usize>,
+    /// Writer threads: files, or 64 MiB pieces of a regions file, written at once (default: all
+    /// cores).
+    #[arg(long, value_name = "N", help_heading = "Writer")]
+    writers: Option<usize>,
     /// Worker threads of the object engine's runtime, which drive its connections (the
-    /// requests are made on the writer threads). Default 2.
+    /// requests are made on the writers' threads). Default 2.
     #[arg(long, value_name = "N", help_heading = "Writer")]
     object_threads: Option<usize>,
     /// Dedupe ratio: every `dedupe` consecutive files (or 1 MiB blocks of a regions file) share content.
@@ -527,7 +528,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let r = usage::root("datagen");
     let root = miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2));
     let endpoints = l.layered::<Vec<String>>("endpoint", (!a.endpoints.is_empty()).then_some(a.endpoints.clone()), None)?.unwrap_or_default();
-    let threads = l.layered::<usize>("threads", a.threads, None)?;
+    let writers = l.layered::<usize>("writers", a.writers, None)?;
     let object_threads = l.layered::<usize>("object-threads", a.object_threads, None)?;
     let rank = l.layered("rank", a.rank, Some(0))?.unwrap_or(0);
     let ranks = l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1);
@@ -556,13 +557,13 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     model.traces = loaded.traces.clone();
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
-    let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, endpoints, threads, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks };
+    let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+    let opts = DatagenOpts { root, endpoints, writers, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks };
     let mut out = std::io::stdout();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     l.print(&mut out)?;
     writeln!(out, "gpus {}  params: {}", cfg.gpus, params_line(&cfg))?;
-    writeln!(out, "host {}  rank {} of {}  threads {}", aeiou::run::hostname(), rank, ranks, threads)?;
+    writeln!(out, "host {}  rank {} of {}  writers {}", aeiou::run::hostname(), rank, ranks, writers)?;
     if let Some(line) = object_line(object_threads) {
         writeln!(out, "{line}")?;
     }

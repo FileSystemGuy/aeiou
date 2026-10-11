@@ -245,13 +245,14 @@ manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names 
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
 ones with a class. `tests/test_formats.py` reads the files back with pyarrow and h5py and,
 when the runner is built, runs the three container abstracts over them under the `sync`
-and `io_uring` backends. `--root` and `--threads` come through the runner's option layers
+and `io_uring` backends. `--root` and `--writers` come through the runner's option layers
 (`aeiou/options.py` mirrors `runner/aeiou/src/options.rs`, `runner/REFERENCE.md` §14: the
-command line, else `AEIOU_ROOT`/`AEIOU_THREADS`, else the `[datagen]` table of the TOML file
+command line, else `AEIOU_ROOT`/`AEIOU_WRITERS`, else the `[datagen]` table of the TOML file
 `--config` or `AEIOU_CONFIG` names, else the default), the rest is the command line's alone,
 and the block of what was resolved, with each value's source, is printed as `aeiou datagen`
-prints it (`tests/test_options.py`; 2026-10-04). The writers are processes, not threads
-(2026-10-11, `DESIGN_REVIEW.md` §3.69): a `forkserver` that imported the libraries once
+prints it (`tests/test_options.py`; 2026-10-04). The writers (`--writers`, files written at once;
+the name since 2026-10-11, `--threads` before) are processes, not threads (2026-10-11,
+`DESIGN_REVIEW.md` §3.69): a `forkserver` that imported the libraries once
 forks them, each rebuilds its `Job` (and opens its own object store) from what pickles, and
 `map` hands them file ids; one writer, or one file, runs in the process itself.
 

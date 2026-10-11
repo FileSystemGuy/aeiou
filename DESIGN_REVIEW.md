@@ -5137,6 +5137,16 @@ serialized them. Now:
   count below 64 is one varint byte, not two, in every column's header). With the default 64 rows a
   group, any `samples_per_file` that is not a multiple of 64, or a `count` that leaves a
   short last file, is refused at datagen time. The committed abstracts use multiples.
+- **`--threads` renamed `--writers` on both datagen tools** (decided by the user 2026-10-11,
+  built 2026-10-11). Once `aeiou-datagen`'s writers were processes, `--threads` named a
+  mechanism one of the two tools no longer used; `--writers N` names what happens, files
+  written at once (or, for `aeiou datagen`, 64 MiB pieces of a `regions` file), true of the
+  Rust writer's threads and the Python writer's processes alike. Renamed with its layers
+  (`AEIOU_WRITERS`, `writers` in the `[datagen]` table) on `aeiou datagen` and
+  `aeiou-datagen` together, since the table is shared; no alias (no users yet). `run
+  --threads` (event-loop threads), `dry-run --threads` (walk workers), and `--object-threads`
+  are threads and keep their names. Earlier sections keep `--threads` where they record what
+  was decided then.
 
 ## 4. Plan changes
 
