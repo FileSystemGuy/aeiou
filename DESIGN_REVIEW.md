@@ -5147,6 +5147,20 @@ serialized them. Now:
   --threads` (event-loop threads), `dry-run --threads` (walk workers), and `--object-threads`
   are threads and keep their names. Earlier sections keep `--threads` where they record what
   was decided then.
+- **`aeiou-datagen` on several hosts** (proposed and approved by the user 2026-10-11, built
+  the same day; `builder/REFERENCE.md` §6). `--ranks`, `--rank`, `--coordinator`, layered,
+  as `aeiou datagen` has them. The coordinator is the runner's protocol spoken from Python
+  (`builder/aeiou/coord.py`, under 400 lines: the frames, the datagen's messages, the
+  server's checks and refusals, the heartbeat), chosen over two alternatives: a runner
+  subcommand that Python ranks would join (the Python tool would depend on the Rust binary
+  for a few hundred lines of its own, and the runner would gain a subcommand for the
+  other's sake), and no coordinator at all, ranks leaving part files on the shared storage
+  for rank 0 to poll (a second mechanism, and files inside a dataset root). The flow is
+  the runner's step for step, so the manifests mean the same thing: every rank checks its
+  roots before the gate, rank 0 writes the manifests once every rank has reported. Two
+  changes on one host follow from it: the manifests are written after every dataset rather
+  than after each, and the file systems written are `syncfs`ed before them, as the Rust
+  writer always did.
 
 ## 4. Plan changes
 

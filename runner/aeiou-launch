@@ -1,8 +1,8 @@
 #!/bin/sh
-# aeiou-launch: start one `aeiou run` or `aeiou datagen` rank per host over ssh (the `pdsh`/ssh
+# aeiou-launch: start one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh (the `pdsh`/ssh
 # loop of `NAPKIN_MATH.md` §8.A), rank 0 first, with --ranks, --rank, and --coordinator appended.
 #
-#   aeiou-launch [-p PORT] [-f FILE] [HOST...] -- aeiou run|datagen ABSTRACT --root DIR [ARGS...]
+#   aeiou-launch [-p PORT] [-f FILE] [HOST...] -- aeiou run|datagen|aeiou-datagen ABSTRACT --root DIR [ARGS...]
 #
 # The hosts are the command line's, then the file's (one or more per line, `#` comments); a
 # name may carry one pdsh-style bracket range, `n[1-4]`, `n[01-10]` (zero-padded to the width
@@ -15,15 +15,15 @@
 # Usage errors are printed in the suite's frame (runner/REFERENCE.md §15): the command, what is
 # missing, the usage line, the pointer to the help; exit status 2.
 set -u
-USAGE="Usage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen <ARGS>..."
+USAGE="Usage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen <ARGS>..."
 usage_error() {
     printf '%s\n\n%s\n\nFor more information, try '"'"'aeiou-launch --help'"'"'.\n' "aeiou-launch: $1" "$USAGE" >&2
     exit 2
 }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     cat <<EOT
-Start one \`aeiou run\` or \`aeiou datagen\` rank per host over ssh, rank 0 first, with --ranks, --rank, and
---coordinator appended
+Start one \`aeiou run\`, \`aeiou datagen\`, or \`aeiou-datagen\` rank per host over ssh, rank 0 first, with
+--ranks, --rank, and --coordinator appended
 
 $USAGE
 
@@ -31,8 +31,8 @@ Arguments:
   [HOSTS]...  The hosts, one rank each, the command line's then the file's; the first is rank 0 and the
               coordinator (HOST0:PORT), so it must be reachable from the others under that name. A name may
               carry one bracket range as pdsh writes it: n[1-4], n[01-10] (zero-padded), n[1,3,5-7], n[1-4]-ib
-  <ARGS>...   After --: the \`aeiou run\` or \`aeiou datagen\` command line every host runs (--ranks, --rank,
-              --coordinator are appended)
+  <ARGS>...   After --: the \`aeiou run\`, \`aeiou datagen\`, or \`aeiou-datagen\` command line every host runs
+              (--ranks, --rank, --coordinator are appended)
 
 Options:
   -p <PORT>   The coordinator's port [default: 7311]

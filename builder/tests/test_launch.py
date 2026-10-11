@@ -55,7 +55,7 @@ def test_usage_errors_are_the_frame(tmp_path):
     def frame(*args):
         r = subprocess.run([str(LAUNCH), *args], capture_output=True, text=True)
         assert r.returncode == 2, r.stderr
-        assert "\nUsage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen <ARGS>...\n" in r.stderr
+        assert "\nUsage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen <ARGS>...\n" in r.stderr
         assert r.stderr.rstrip().endswith("For more information, try 'aeiou-launch --help'.")
         return r.stderr.split("\n\n", 1)[0]
 

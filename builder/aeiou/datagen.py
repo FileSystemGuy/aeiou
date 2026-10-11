@@ -3,10 +3,11 @@ classes, with the runner's payload (`runner/REFERENCE.md` §5: `aeiou-positional
 `dgen-data` 0.3.0), and the manifest `aeiou run` checks (`schema/README.md` §6).
 
     aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G]
-                      [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--config FILE]
+                      [--dedupe D] [--compress C] [--writers N] [--dataset NAME]…
+                      [--ranks R --rank r --coordinator HOST:PORT] [--config FILE]
 
-`--root` and `--writers` come through the runner's option layers (`options.py`: the command
-line, else `AEIOU_ROOT`/`AEIOU_WRITERS`, else the `[datagen]` table of the TOML file `--config`
+`--root`, `--endpoint`, `--writers`, `--rank`, `--ranks`, and `--coordinator` come through the
+runner's option layers (`options.py`: the command line, else `AEIOU_<FLAG>`, else the `[datagen]` table of the TOML file `--config`
 or `AEIOU_CONFIG` names, else the default); the rest is the command line's alone, and the
 block of what was resolved, with each value's source, is printed as `aeiou datagen` prints it.
 
@@ -24,12 +25,19 @@ the runner's `object_store`: each file streams from its format class's writer in
 the manifest is one `PUT` at the prefix (`DESIGN_REVIEW.md` §3.69). Every writer streams,
 so what a writer holds is a piece of its file (a Parquet row group, a 1 MiB payload block), never
 the file.
+
+On several hosts (`--ranks`, 2026-10-11) each rank writes its contiguous slice of every
+dataset's file ids, as `aeiou datagen` does (`runner/REFERENCE.md` §5), through the runner's
+coordinator protocol (`coord.py`): every rank's identity is checked before anything is
+written, no rank writes before every rank has checked its roots, and rank 0 writes the
+manifests once every rank has reported, so a manifest means the whole corpus is there.
 """
 from __future__ import annotations
 
 import concurrent.futures
 import contextlib
 import copy
+import ctypes
 import hashlib
 import json
 import multiprocessing
@@ -41,7 +49,7 @@ import sys
 import tempfile
 import time
 
-from . import __version__, emit, options, params as params_mod, usage
+from . import __version__, coord, emit, options, params as params_mod, usage
 from .formats import FormatClass, Sink
 from .layout import FileGeometry, Layout
 from .nodes import BuildError
@@ -335,14 +343,15 @@ class Job:
             self.klass.check_file(str(place), sink.n, sizes, geo, info)
         return len(sizes), geo.file_size
 
-    def manifest(self, files_written: int, bytes_written: int, started: float, provenance: dict) -> dict:
+    def manifest(self, files_written: int, bytes_written: int, started: float, provenance: dict, finished: float | None = None) -> dict:
         m = {"manifest_version": MANIFEST_VERSION, "dataset": self.resolved,
              "payload": {"generator": GENERATOR, "version": GENERATOR_VERSION, "wrapper": WRAPPER, "block": BLOCK,
                          "dedupe": self.dedupe, "compress": self.compress},
              "format": {"class": self.fmt["class"], "reader": self.fmt.get("reader"), "version": self.fmt.get("version"),
                         "writer": self.klass.library()}}
         m["provenance"] = {**provenance, "datagen": f"aeiou-datagen {__version__}", "host": socket.gethostname(),
-                           "python": platform.python_version(), "started": int(started), "finished": int(time.time()),
+                           "python": platform.python_version(), "started": int(started),
+                           "finished": int(time.time() if finished is None else finished),
                            "files_written": files_written, "bytes_written": bytes_written}
         return m
 
@@ -409,6 +418,28 @@ def is_empty(root) -> bool:
     return not (root.exists() and any(root.iterdir()))
 
 
+def file_slice(files: int, ranks: int, rank: int) -> tuple:
+    """Rank `rank`'s ids of `files`, `[lo, hi)`, contiguous and possibly empty (`datagen.rs`
+    `file_slice`, over `run.rs` `gpu_range`)."""
+    per = -(-files // ranks)
+    return min(rank * per, files), min((rank + 1) * per, files)
+
+
+def syncfs(path) -> None:
+    """The file system holding `path` to stable storage, as `aeiou datagen` leaves it before
+    it reports (`syncfs(2)`; `sync(2)` where libc has no `syncfs`)."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if not hasattr(libc, "syncfs"):
+            os.sync()
+        elif libc.syncfs(fd) != 0:
+            e = ctypes.get_errno()
+            raise BuildError(f"syncfs {path}: {os.strerror(e)}")
+    finally:
+        os.close(fd)
+
+
 def write_manifest(dir_, m: dict):
     """In a directory, through a temporary name renamed into place; in a bucket, one `PUT`
     at the prefix, atomic as the rename is."""
@@ -438,6 +469,9 @@ def parser() -> usage.Parser:
     ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` consecutive files share content [default: 1]")
     ap.add_argument("--compress", type=int, default=1, help="Compression ratio: the last (C−1)/C of every 1 MiB block is zeros [default: 1]")
     ap.add_argument("--dataset", action="append", default=[], metavar="NAME", help="Only these datasets (default: all)")
+    ap.add_argument("--rank", type=int, metavar="R", help="This host's index among --ranks hosts (default: 0)")
+    ap.add_argument("--ranks", type=int, metavar="N", help="Hosts the datagen is spread over: each writes its slice of every dataset's file ids, and rank 0 writes the manifests once every rank has reported (default: 1)")
+    ap.add_argument("--coordinator", metavar="HOST:PORT", help="With --ranks above 1: the coordinator's address. Rank 0 listens on it (in process); every rank connects to it")
     ap.add_argument("--config", type=pathlib.Path, metavar="FILE", help="A TOML config file (else $AEIOU_CONFIG, else none; never searched for): one table per subcommand, keys spelled as the long flags (runner/REFERENCE.md §14)")
     ap.version(f"aeiou-datagen {__version__}")
     return ap
@@ -474,8 +508,17 @@ def resolve(a, ap: usage.Parser | None = None) -> options.Layers:
     a.writers = layers.layered("writers", a.writers, int)
     if a.writers is None:
         a.writers = os.cpu_count() or 1
+    a.rank = layers.layered("rank", a.rank, int, 0)
+    a.ranks = layers.layered("ranks", a.ranks, int, 1)
+    a.coordinator = layers.layered("coordinator", a.coordinator, str)
+    because = layers.from_plain(["ranks"])
+    missing.need(not (a.ranks > 1 and a.coordinator is None), "--coordinator <HOST:PORT>",
+                 "the coordinator's address: rank 0 listens on it, every rank connects to it",
+                 f"needed with --ranks {a.ranks}" + (f", {because}" if because else ""))
     missing.check()
     layers.finish()
+    if a.ranks < 1 or not 0 <= a.rank < a.ranks:
+        raise usage.UsageError(f"--rank {a.rank} of --ranks {a.ranks}: rank must be in [0, ranks){layers.from_(['rank', 'ranks'])}")
     return layers
 
 
@@ -504,10 +547,97 @@ def _main(a, ap: usage.Parser) -> int:
     print(f"abstract {ast['name']}  sha256 {sha}")
     layers.print()
     at = placement(ast, a.root, a.endpoint)
+    host = socket.gethostname()
     provenance = {"abstract": ast["name"], "ast_sha256": sha, "params": values,
                   "param_files": [{"path": str(p), "sha256": params_mod.file_sha256(p)} for p in a.params_file]}
+
+    # several hosts: rank 0 listens, every rank connects and has its identity checked before
+    # anything is written; a host that fails tells the others through it
+    server = client = None
+    if a.ranks > 1:
+        if a.rank == 0:
+            server = coord.Server(a.coordinator, a.ranks)
+            print(f"coordinator listening on {server.addr}", flush=True)
+        identity = {"ast_sha256": sha, "gpus": a.gpus, "params": values, "dedupe": a.dedupe, "compress": a.compress,
+                    "datasets": a.dataset}
+        client = coord.Client(a.coordinator, a.rank, a.ranks, host, identity, layers.json())
+        print(f"coordinator {client.addr}: connected as rank {a.rank} of {a.ranks}  identity {coord.identity_hash(identity)[:16]}…", flush=True)
+    try:
+        jobs = _plan(a, ast, values, at)
+        for job, root, lo, hi in jobs:
+            print(f"dataset {job.name}: files [{lo}, {hi}) of {job.files} on this rank")
+        sys.stdout.flush()
+        # the gate: no rank writes before every rank has checked its roots
+        if client is not None:
+            _, names = client.ready()
+            print(f"start gate: {len(names)} host(s) ready ({', '.join(names)})", flush=True)
+        parts = {}
+        for job, root, lo, hi in jobs:
+            parts[job.name] = _write_share(a, ast, values, job, lo, hi)
+        # the metadata to stable storage before this rank reports
+        for root in {str(root) for _, root, _, _ in jobs if not isinstance(root, Obj)}:
+            syncfs(root)
+        # one rank's part of each dataset, as rank 0 records it (`datagen.rs` `part_json`)
+        mine = {"host": host, "datasets": {n: {"rank": a.rank, "host": host, **{k: v for k, v in w.items() if k != "elapsed"}}
+                                           for n, w in parts.items()}}
+        gathered = {0: mine}
+        if client is not None:
+            client.done(mine)
+            if server is not None:
+                gathered = server.gathered()
+            else:
+                ok, _, error = client.result()
+                if not ok:
+                    raise BuildError(error or "rank 0 failed")
+    except BaseException as e:
+        reason = str(e) or type(e).__name__
+        if server is not None:
+            server.stop(reason)
+        elif client is not None:
+            client.stop(reason)
+        raise
+
+    # the manifests: rank 0's, once every rank's part is in; on one host, now
+    error = None
+    for job, root, lo, hi in jobs:
+        w = parts[job.name]
+        hosts = [d["datasets"][job.name] for _, d in sorted(gathered.items()) if job.name in d.get("datasets", {})]
+        if a.rank == 0 and len(hosts) != a.ranks:
+            error = f"dataset `{job.name}`: {len(hosts)} of {a.ranks} ranks reported"
+            break
+        total_files = sum(h["files_written"] for h in hosts)
+        total_bytes = sum(h["bytes_written"] for h in hosts)
+        prov = {**provenance, "ranks": a.ranks, "hosts": hosts}
+        m = job.manifest(total_files, total_bytes, min(h["started"] for h in hosts), prov,
+                         finished=max(h["finished"] for h in hosts))
+        mine_line = f"{w['files_written']} file(s), {w['bytes_written'] / 2**20:.2f} MiB in {w['elapsed']:.2f}s"
+        if a.ranks == 1:
+            write_manifest(root, m)
+            print(f"dataset {job.name}: {mine_line} at {root}  id {Job.manifest_id(m)}  ({job.klass.name}, {job.klass.library()})")
+        elif a.rank == 0:
+            try:
+                write_manifest(root, m)
+            except (OSError, BuildError) as e:
+                error = f"dataset `{job.name}`: {e}"
+                break
+            print(f"dataset {job.name}: this rank {mine_line}; all {a.ranks} hosts {total_files} file(s), {total_bytes / 2**20:.2f} MiB "
+                  f"at {root}  id {Job.manifest_id(m)}  manifest written")
+        else:
+            print(f"dataset {job.name}: this rank {mine_line} at {root}  id {Job.manifest_id(m)}  (manifest by rank 0)")
+    if server is not None:
+        # the verdict: every rank exits with it
+        server.finish(error is None, error)
+    if error is not None:
+        raise BuildError(error)
+    return 0
+
+
+def _plan(a, ast, values, at) -> list:
+    """Every dataset this tool writes, its root checked empty and made, and this rank's slice
+    of its ids: `(job, root, lo, hi)`. Every rank checks before the gate, so no rank sees
+    another's files."""
     wanted = set(a.dataset)
-    done = 0
+    jobs = []
     for name, d in ast.get("datasets", {}).items():
         has_format = "files" in d and "format" in d["files"]
         if wanted and name not in wanted:
@@ -523,36 +653,38 @@ def _main(a, ap: usage.Parser) -> int:
             raise BuildError(f"dataset `{name}`: {root} is not empty; datasets are read-only, remove it first")
         if not isinstance(root, Obj):
             root.mkdir(parents=True, exist_ok=True)
-        started = time.time()
-        files_written = bytes_written = 0
-        # processes, not threads: the writers' Python holds the GIL between the library
-        # calls, so threads write no faster than one (DESIGN_REVIEW.md §3.69, measured
-        # 2026-10-11); a file is a pure function of its id, so the processes share nothing
-        workers = max(1, min(a.writers, job.files))
-        with contextlib.ExitStack() as stack:
-            if workers == 1:
-                results = map(job.write, range(job.files))
-            else:
-                ex = stack.enter_context(concurrent.futures.ProcessPoolExecutor(
-                    workers, mp_context=_context(), initializer=_start,
-                    initargs=((ast, name, values, a.root, a.endpoint, a.dedupe, a.compress),)))
-                results = ex.map(_write, range(job.files))
-            last = time.time()
-            for i, (n, b) in enumerate(results):
-                files_written += 1
-                bytes_written += b
-                if time.time() - last > 5:
-                    last = time.time()
-                    print(f"  {name}: {i + 1}/{job.files} files, {bytes_written / 2**20:.1f} MiB written")
-        m = job.manifest(files_written, bytes_written, started, provenance)
-        write_manifest(root, m)
-        print(f"dataset {name}: {files_written} file(s), {bytes_written / 2**20:.2f} MiB in {time.time() - started:.2f}s at {root}  "
-              f"id {Job.manifest_id(m)}  ({job.klass.name}, {job.klass.library()})")
-        done += 1
-    if wanted and done < len(wanted):
+        jobs.append((job, root, *file_slice(job.files, a.ranks, a.rank)))
+    if wanted and len(jobs) < len(wanted):
         raise BuildError(f"not every --dataset was found: {sorted(wanted)}")
-    return 0
+    return jobs
 
+
+def _write_share(a, ast, values, job: Job, lo: int, hi: int) -> dict:
+    """Write ids `[lo, hi)` of one dataset; this rank's part of it, as rank 0 records it."""
+    started = time.time()
+    t0 = time.monotonic()
+    files_written = bytes_written = 0
+    # processes, not threads: the writers' Python holds the GIL between the library
+    # calls, so threads write no faster than one (DESIGN_REVIEW.md §3.69, measured
+    # 2026-10-11); a file is a pure function of its id, so the processes share nothing
+    workers = max(1, min(a.writers, hi - lo))
+    with contextlib.ExitStack() as stack:
+        if workers == 1:
+            results = map(job.write, range(lo, hi))
+        else:
+            ex = stack.enter_context(concurrent.futures.ProcessPoolExecutor(
+                workers, mp_context=_context(), initializer=_start,
+                initargs=((ast, job.name, values, a.root, a.endpoint, a.dedupe, a.compress),)))
+            results = ex.map(_write, range(lo, hi))
+        last = time.time()
+        for i, (n, b) in enumerate(results):
+            files_written += 1
+            bytes_written += b
+            if time.time() - last > 5:
+                last = time.time()
+                print(f"  {job.name}: {i + 1}/{hi - lo} files, {bytes_written / 2**20:.1f} MiB written", flush=True)
+    return {"files_written": files_written, "bytes_written": bytes_written, "started": int(started),
+            "finished": int(time.time()), "elapsed": time.monotonic() - t0}
 
 if __name__ == "__main__":
     sys.exit(main())

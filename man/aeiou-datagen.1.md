@@ -47,7 +47,18 @@ The format classes and their reader protocols are in the `aeiou.formats` module 
 builder: `tfrecord`, `parquet`, `hdf5`, `webdataset`. Their libraries are the `formats`
 extra of the Python package; `obstore` is the `s3` extra.
 
-`--root` and `--writers` are resolved through the suite's option layers
+On several hosts (`--ranks`, `--rank`, `--coordinator`, as for `aeiou datagen`;
+**aeiou-launch**(1) starts them) rank *r* writes its contiguous slice of every dataset's
+file ids. Every rank checks the roots are empty before the start gate, writes after it,
+brings the file systems it wrote to stable storage, and sends its counts; rank 0 writes the
+manifests once every rank has reported, so a manifest means the whole corpus is there, and
+records every rank's host and counts in the provenance (`ranks`, `hosts`). The coordinator
+is `aeiou datagen`'s protocol, spoken by rank 0 in process: it refuses a host whose
+abstract, parameters, `--gpus`, `--dedupe`, `--compress`, or `--dataset` list differ from
+rank 0's, naming each difference, and a failure on any host stops every host. The corpus is
+the one a single host writes, byte for byte, with the same dataset ids.
+
+`--root`, `--endpoint`, `--writers`, `--rank`, `--ranks`, and `--coordinator` are resolved through the suite's option layers
 (**aeiou-config**(5)): the command line, else the environment, else the `[datagen]` table
 of the config file, else the default. Every other option is the command line's alone. The
 block of what was resolved, with each value's source, is printed as `aeiou datagen` prints
@@ -102,6 +113,17 @@ every missing argument listed at once.
 - **--dataset** *NAME*
 
   Write only these datasets; repeatable. Default all.
+- **--rank** *R*
+
+  This host's index among `--ranks` hosts. Default 0. *Layered.*
+- **--ranks** *N*
+
+  Hosts the datagen is spread over: each writes its slice of every dataset's file ids, and
+  rank 0 writes the manifests once every rank has reported. Default 1. *Layered.*
+- **--coordinator** *HOST:PORT*
+
+  With `--ranks` above 1, required: the coordinator's address. Rank 0 listens on it (in
+  process); every rank connects to it. *Layered.*
 - **--config** *FILE*
 
   A TOML config file, else the one `$AEIOU_CONFIG` names, else none; never searched for.
@@ -116,7 +138,7 @@ every missing argument listed at once.
 
 ## ENVIRONMENT
 
-- **AEIOU_ROOT**, **AEIOU_WRITERS**
+- **AEIOU_ROOT**, **AEIOU_ENDPOINT**, **AEIOU_WRITERS**, **AEIOU_RANK**, **AEIOU_RANKS**, **AEIOU_COORDINATOR**
 
   The layered options, when not on the command line.
 - **AEIOU_CONFIG**
@@ -146,7 +168,8 @@ every missing argument listed at once.
 
   A failure during the work: an invalid abstract, a dataset with no format class, a
   non-empty root or prefix, a file whose geometry differs from its layout, a library that
-  is not installed, a request the store refused.
+  is not installed, a request the store refused, a host the coordinator refused or lost
+  (on every host).
 - **2**
 
   A usage error.
@@ -157,11 +180,12 @@ every missing argument listed at once.
 aeiou-datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut --param shards=64
 AEIOU_ROOT=/mnt/sut aeiou-datagen workloads/input-pipeline/map/hdf5/hdf5_map.ast.json --dataset train
 AWS_ENDPOINT_URL=http://store:9000 aeiou-datagen my_s3_variant.ast.json --root /unused --endpoint shards=s3://bench/train
+aeiou-launch -f hosts -- aeiou-datagen workloads/input-pipeline/stream/tfrecord/tfrecord_stream.ast.json --root /mnt/sut
 ```
 
 ## SEE ALSO
 
-**aeiou**(1), **aeiou-build**(1), **aeiou-params**(1), **aeiou-config**(5),
+**aeiou**(1), **aeiou-build**(1), **aeiou-launch**(1), **aeiou-params**(1), **aeiou-config**(5),
 **aeiou-abstract**(7).
 
 The reference: `builder/REFERENCE.md` §6 (the format classes and this tool),

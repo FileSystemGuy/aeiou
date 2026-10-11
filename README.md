@@ -221,7 +221,9 @@ multi-host coordinator (two ranks on `localhost`), the limit checks, the cold-st
 controls, the JSON report, the locality metrics on both sides with tolerances, the `trace`
 node under every backend, the option layers, the usage-error frame, and `datagen` across
 hosts with `O_DIRECT` (each host its slice of the ids, one manifest once every host has
-reported; the launcher takes host files and `pdsh`-style ranges). The workload catalog
+reported; the launcher takes host files and `pdsh`-style ranges), and `aeiou-datagen`, the
+container writer, across hosts the same way, speaking the same coordinator protocol
+(2026-10-11). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape

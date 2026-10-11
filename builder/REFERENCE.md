@@ -245,9 +245,10 @@ manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names 
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
 ones with a class. `tests/test_formats.py` reads the files back with pyarrow and h5py and,
 when the runner is built, runs the three container abstracts over them under the `sync`
-and `io_uring` backends. `--root` and `--writers` come through the runner's option layers
+and `io_uring` backends. `--root`, `--endpoint`, `--writers`, `--rank`, `--ranks`, and
+`--coordinator` come through the runner's option layers
 (`aeiou/options.py` mirrors `runner/aeiou/src/options.rs`, `runner/REFERENCE.md` §14: the
-command line, else `AEIOU_ROOT`/`AEIOU_WRITERS`, else the `[datagen]` table of the TOML file
+command line, else `AEIOU_<FLAG>`, else the `[datagen]` table of the TOML file
 `--config` or `AEIOU_CONFIG` names, else the default), the rest is the command line's alone,
 and the block of what was resolved, with each value's source, is printed as `aeiou datagen`
 prints it (`tests/test_options.py`; 2026-10-04). The writers (`--writers`, files written at once;
@@ -255,6 +256,31 @@ the name since 2026-10-11, `--threads` before) are processes, not threads (2026-
 `DESIGN_REVIEW.md` §3.69): a `forkserver` that imported the libraries once
 forks them, each rebuilds its `Job` (and opens its own object store) from what pickles, and
 `map` hands them file ids; one writer, or one file, runs in the process itself.
+
+**On several hosts (2026-10-11, `DESIGN_REVIEW.md` §3.69).** `--ranks R --rank r
+--coordinator HOST:PORT`, as `aeiou datagen` has them (`runner/REFERENCE.md` §5, §6), and
+started the same way (`aeiou-launch … -- aeiou-datagen …`). `aeiou/coord.py` speaks the
+runner's coordinator protocol: a frame is a big-endian `u32` length and a JSON body, the
+messages serde's externally tagged form of `coord.rs`'s `Msg`, of which a datagen uses
+`Hello`, `Welcome`, `Ready`, `Start`, `Done`, `Result`, `Stop`, and `Heartbeat`, with the
+runner's windows (120 s to connect, a heartbeat after 5 s idle, a peer silent for 30 s
+gone). Rank 0 runs the `Server` on threads and connects to it as every rank does. The
+identity is the abstract's hash, `--gpus`, the parameters, `--dedupe`, `--compress`, and
+`--dataset`, compared by its canonical hash and, when it differs, field by field. The order
+is the runner's: every rank checks its roots are empty and makes them, the gate opens once
+every rank is ready, rank *r* writes ids `[r·⌈N/R⌉, (r+1)·⌈N/R⌉)` of every dataset with
+its writers, `syncfs`es the file systems it wrote, and sends its counts (`Done`); rank 0
+gathers them, writes the manifests with `ranks` and `hosts` (each rank's host, files,
+bytes, start, and end) in the provenance, and sends the verdict every rank exits with. A
+failure on any host stops every host. On one host the provenance has `ranks: 1` and one
+entry in `hosts`, and the manifests are written after every dataset, not after each.
+`tests/test_coord.py`: four ranks over six files (one slice empty) write the one host's
+tree byte for byte with the same id; a rank with another `--dedupe` fails both before a
+byte is written; the server's refusals in process; and a Python rank's `Hello` read and
+refused by `aeiou datagen`'s coordinator, naming the difference, so the frames are the
+runner's. `tests/test_object.py`: two ranks into one bucket prefix write the objects
+of one host, with the same id. A Python rank cannot join a Rust corpus: the identities differ (the runner's
+parameter document is not the Python's), and the two tools write different datasets.
 
 **To an object store (2026-10-11, `DESIGN_REVIEW.md` §3.69).** A writer writes into a byte
 stream, never a path: `write_file(out, first_id, sizes, payload, geo)` takes a `Sink` (it

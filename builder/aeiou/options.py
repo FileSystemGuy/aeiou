@@ -191,6 +191,24 @@ class Layers:
         v = self.layered(name, cli, bool, default)
         return default if v is None else v
 
+    def from_plain(self, names) -> str:
+        """`--x from env AEIOU_X, --y by default`, or nothing when the command line set them
+        (options.rs `from_plain`)."""
+        parts = []
+        for n in names:
+            for name, _, _, source in self.entries:
+                if name != n or source == "cli":
+                    continue
+                d = f"--{n} by default" if source == "default" else f"--{n} from {source}"
+                if d not in parts:
+                    parts.append(d)
+        return ", ".join(parts)
+
+    def from_(self, names) -> str:
+        """`from_plain` in parentheses after a space, or nothing (options.rs `from`)."""
+        plain = self.from_plain(names)
+        return f" ({plain})" if plain else ""
+
     def finish(self) -> None:
         if self.config is not None:
             for k in self.config.table(self.sub):

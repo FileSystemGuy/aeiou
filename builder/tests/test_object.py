@@ -119,6 +119,35 @@ def _has_object_engine():
     return "--object-threads" in r.stdout
 
 
+
+def test_two_ranks_write_one_bucket_prefix(minio, tmp_path):
+    """`--ranks 2` into a bucket: each rank its slice of the objects, rank 0 the manifest,
+    the objects those of one host (`test_coord.py` has the protocol)."""
+    import socket
+    flags = sum([["--param", p] for p in CASES["tfrecord_stream"]], [])
+    ast = object_variant("tfrecord_stream", tmp_path)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        addr = f"127.0.0.1:{s.getsockname()[1]}"
+    common = [sys.executable, "-m", "aeiou.datagen", str(ast), "--root", str(tmp_path / "unused"), *flags, "--writers", "2",
+              "--ranks", "2", "--coordinator", addr]
+    procs = [subprocess.Popen([*common, "--rank", str(r), "--endpoint", "shards=s3://bench/ranks/data"], stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, cwd=str(BUILDER), env=minio.env) for r in (0, 1)]
+    outs = [p.communicate(timeout=300) for p in procs]
+    for p, (o, e) in zip(procs, outs):
+        assert p.returncode == 0, o + e
+    assert "manifest written" in outs[0][0] and "(manifest by rank 0)" in outs[1][0]
+    one = _datagen([ast, "--root", tmp_path / "unused", "--endpoint", "shards=s3://bench/one/data", *flags], minio.env)
+    assert one.returncode == 0, one.stdout + one.stderr
+    two, single = minio.objects("ranks/data"), minio.objects("one/data")
+    assert sorted(k[len("ranks/"):] for k in two) == sorted(k[len("one/"):] for k in single)
+    for k in two:
+        if not k.endswith(".aeiou-dataset.json"):
+            assert minio.get(k) == minio.get("one/" + k[len("ranks/"):]), k
+    m2, m1 = json.loads(minio.get("ranks/data/.aeiou-dataset.json")), json.loads(minio.get("one/data/.aeiou-dataset.json"))
+    assert datagen.Job.manifest_id(m2) == datagen.Job.manifest_id(m1)
+    assert m2["provenance"]["ranks"] == 2 and [h["files_written"] for h in m2["provenance"]["hosts"]] == [3, 3]
+
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_containers_stream_into_the_bucket_as_the_directory_writer_writes_them(name, minio, tmp_path):
     flags = sum([["--param", p] for p in CASES[name]], [])

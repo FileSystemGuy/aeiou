@@ -2,21 +2,22 @@
 
 ## NAME
 
-aeiou-launch - start one `aeiou run` or `aeiou datagen` rank per host over ssh
+aeiou-launch - start one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh
 
 ## SYNOPSIS
 
 ```
 aeiou-launch [-p PORT] [-f FILE] [HOSTS...] -- aeiou run ARGS...
 aeiou-launch [-p PORT] [-f FILE] [HOSTS...] -- aeiou datagen ARGS...
+aeiou-launch [-p PORT] [-f FILE] [HOSTS...] -- aeiou-datagen ARGS...
 aeiou-launch --help
 ```
 
 ## DESCRIPTION
 
 **aeiou-launch** is the multi-host launcher of the suite, a POSIX shell script. It starts
-the `aeiou run` or `aeiou datagen` command line given after `--` on every host named, rank
-0 first, appending `--ranks`, `--rank`, and `--coordinator` to each: the *i*-th host is rank
+the `aeiou run`, `aeiou datagen`, or `aeiou-datagen` command line given after `--` on every
+host named, rank 0 first, appending `--ranks`, `--rank`, and `--coordinator` to each: the *i*-th host is rank
 *i*, and `HOST0:PORT` is the coordinator address rank 0 listens on and every rank connects
 to, so the first host must be reachable from the others under that name. Each host's output
 is prefixed with its rank and host. The exit status is non-zero if any rank's is.
@@ -27,7 +28,9 @@ as **pdsh**(1) writes it: `n[1-4]` is `n1` to `n4`, `n[01-10]` keeps the zero pa
 it is expanded before this script runs.) Two hundred hosts are a short line or a file.
 
 A `datagen` on several hosts writes the corpus once, each host its slice (**aeiou**(1),
-datagen); it is the same loop with the same three flags appended.
+datagen); it is the same loop with the same three flags appended. **aeiou-datagen**(1), the
+writer of container datasets, takes the same three flags and speaks the same coordinator
+protocol.
 
 There is no MPI. Cross-host coordination is the runner's own TCP coordinator
 (**aeiou**(1), SEVERAL HOSTS); this script is the ssh loop around it. The remote shell is
@@ -43,7 +46,8 @@ the gate, show what each host resolved.
   then the file's) is rank 0 and the coordinator.
 - *ARGS...*
 
-  After `--`: the `aeiou run` or `aeiou datagen` command line every host runs. `--ranks`,
+  After `--`: the `aeiou run`, `aeiou datagen`, or `aeiou-datagen` command line every host
+  runs. `--ranks`,
   `--rank`, and `--coordinator` are appended.
 - **-p** *PORT*
 
@@ -101,7 +105,7 @@ aeiou-launch -f hosts.txt -- aeiou run safetensors_load.ast.json --gpus 1600 --r
 
 ## SEE ALSO
 
-**aeiou**(1), **aeiou-config**(5), **pdsh**(1).
+**aeiou**(1), **aeiou-datagen**(1), **aeiou-config**(5), **pdsh**(1).
 
 The reference: `runner/REFERENCE.md` §6 (the coordinator), §14 (the option layers across
 hosts).

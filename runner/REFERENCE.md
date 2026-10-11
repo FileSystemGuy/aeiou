@@ -465,7 +465,11 @@ as root). The same runs on the loopback NFS mount are §7.
   writes every dataset that has a format class, with the same names, sizes, payload, and
   manifest form (its `format` block records the class and writer library); `aeiou datagen`
   refuses such a dataset. A corpus with both kinds is written by both tools, each dataset by
-  one of them.
+  one of them. `aeiou-datagen` takes the same `--ranks`, `--rank`, and `--coordinator`, splits
+  the ids the same way, and speaks this coordinator's protocol from Python
+  (`builder/aeiou/coord.py`, 2026-10-11: the frames of §6, the datagen's subset of `Msg`, the
+  identity compared by the same canonical hash and named field by field); rank 0 writes the
+  manifests once every rank has reported, with `ranks` and `hosts` in the provenance.
 - Because the corpus is sized per submission (`PROJECT_BRIEF.md` §5, dataset sizing rule),
   the count of every committed corpus is a parameter (`files`, `nodes`, `lists`,
   `sys_prompts`, `shards`, `n`), and so are the size parameters a small test corpus needs
@@ -517,7 +521,7 @@ building it is `DESIGN_REVIEW.md` §3.25.
   missed heartbeat sends `Stop` to every host; actors see it at their next op or wait, and
   the run fails on every host naming the originating rank and reason.
 - **`aeiou-launch`** (`runner/aeiou-launch`, POSIX sh): `aeiou-launch [-p PORT] [-f FILE]
-  [HOST…] -- aeiou run|datagen ARGS…` starts rank *i* on the *i*-th host over ssh with
+  [HOST…] -- aeiou run|datagen|aeiou-datagen ARGS…` starts rank *i* on the *i*-th host over ssh with
   `--ranks`, `--rank`, and `--coordinator HOST0:PORT` (port 7311 by default) appended,
   prefixes each host's output with its rank and host, and exits non-zero if any rank did.
   `AEIOU_RSH` replaces `ssh`. The hosts are the command line's then the file's (one or more
@@ -1470,7 +1474,7 @@ above them. An `AEIOU_*` that is no option of any subcommand warns (`AEIOU_CONFI
 `AEIOU_RUNNER`, and `AEIOU_RSH` are the family's own and do not); one that is another
 subcommand's option is left alone. `aeiou check` prints the block too (its files and the
 config file), so CI's diff of its output against `schema/check.py` skips past the first
-empty line. `aeiou-datagen` resolves `--root`, `--endpoint`, and `--writers` through the same layers
+empty line. `aeiou-datagen` resolves `--root`, `--endpoint`, `--writers`, `--rank`, `--ranks`, and `--coordinator` through the same layers
 (`builder/aeiou/options.py`, the `[datagen]` table) and prints the same block.
 
 **The record.** `aeiou run` writes the block to the report as `layers` (§12: the config
