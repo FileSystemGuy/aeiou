@@ -138,6 +138,7 @@ fn loads_against_its_sha256_and_indexes_lanes_opens_and_dependencies() {
         Err(e) => e.to_string(),
     };
     assert!(e.contains("sha256"), "{e}");
+    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -166,6 +167,7 @@ fn dry_run_walks_in_line_order_with_lane_and_ordinal_as_indices() {
     let mm = m.total.metrics.as_ref().unwrap();
     assert_eq!(mm.fan_out.get(&3), Some(&1));
     assert!(mm.depth.is_empty());
+    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -195,6 +197,7 @@ fn runs_with_the_dry_runs_fingerprint_under_every_backend() {
             assert_eq!(rep.stats.threads, 1, "{}", be.describe());
         }
     }
+    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -225,6 +228,7 @@ fn path_order_makes_a_reader_wait_for_the_writer_whatever_the_lanes_timing() {
             assert_eq!(rep.stats.bytes_read, 8192, "{}", be.describe());
         }
     }
+    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -254,6 +258,7 @@ fn root_checks_before_the_gate_and_clean_namespaces() {
     assert_eq!(aeiou::trace::clean(tf, &root).unwrap(), 1);
     assert!(root.join("keep").exists() && !root.join("out/final").exists());
     aeiou::trace::check_root(tf, &root).unwrap();
+    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -267,4 +272,5 @@ fn v16_a_writing_trace_needs_one_instance() {
     let (loaded, model) = leaked(&p, 1);
     let counts = aeiou::vm::actor_counts(model).unwrap();
     aeiou::trace::check_counts(&loaded.ast, &loaded.traces, &counts).unwrap();
+    std::fs::remove_dir_all(&d).unwrap();
 }

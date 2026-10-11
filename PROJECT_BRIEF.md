@@ -615,6 +615,15 @@ numbers; the order is this note's.
     small jobs share the storage and compete for its caches, which a single case (one job
     with every cache to itself) cannot show. Needs a run of several ASTs under one
     coordinator, each with its own seed, GPUs, and report, and a fingerprint per case.
+31. **A Parquet file with a short last row group (queued by the user 2026-10-11, soon but not
+    now; `DESIGN_REVIEW.md` §3.69).** The layout gives each column one page-header size, and
+    a row group of fewer rows has shorter headers (with 64 rows a group, a row count below 64
+    is one varint byte, not two), so `aeiou-datagen` refuses such a file at its layout check,
+    in the old writer and the streaming one alike. Today `samples_per_file` must be a
+    multiple of `rows_per_group` and `count` must leave no short last file; the committed
+    abstracts comply. The fix is a choice: the builder refuses those sizes at build time, or
+    the layout gives a short last group its own header size (the runner's offset formula
+    changes, and so does every Parquet dataset id).
 
 ## 7. Environment
 
