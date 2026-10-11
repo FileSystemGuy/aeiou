@@ -25,7 +25,6 @@ pytest.importorskip("dgen_py")
 obstore = pytest.importorskip("obstore")
 
 from aeiou import datagen  # noqa: E402
-from aeiou.nodes import BuildError  # noqa: E402
 
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 USER, SECRET = "aeiou", "aeiou-secret"
@@ -193,13 +192,3 @@ def test_object_endpoints_are_placed_as_the_runner_places_them(tmp_path):
     assert r.returncode == 2 and "`shards` is declared `protocol: s3`; its endpoint is s3://BUCKET[/PREFIX]" in r.stderr
     r = _datagen([ast_path(name), "--root", tmp_path / "r", "--endpoint", "shards=s3://bench/x", *flags])
     assert r.returncode == 2 and "`shards` is a `posix` dataset or namespace; its endpoint is a directory" in r.stderr
-
-
-def test_the_memory_budget_waits_and_refuses():
-    b = datagen.Budget(100)
-    with b.hold(60, "a"):
-        assert b.used == 60
-    assert b.used == 0
-    with pytest.raises(BuildError, match="more than the budget"):
-        with b.hold(101, "big"):
-            pass

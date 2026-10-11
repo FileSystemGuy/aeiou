@@ -21,10 +21,9 @@ A dataset declared `protocol: s3` is written to the object store its endpoint na
 object engine has it, `runner/REFERENCE.md` §16) through `obstore`, the Python bindings of
 the runner's `object_store`: each file streams from its format class's writer into an upload
 (one `PUT`, or a multipart upload in parts of 8 MiB), never through a local file system, and
-the manifest is one `PUT` at the prefix (`DESIGN_REVIEW.md` §3.69). A writer that holds a
-file whole in memory (HDF5's image, Parquet's table) holds it within a budget of half the
-memory available at the start; a thread waits for room, and a file larger than the budget is
-refused.
+the manifest is one `PUT` at the prefix (`DESIGN_REVIEW.md` §3.69). Every writer streams,
+so what a thread holds is a piece of its file (a Parquet row group, 8 MiB of HDF5 rows), never
+the file.
 """
 from __future__ import annotations
 
@@ -38,7 +37,6 @@ import platform
 import socket
 import sys
 import tempfile
-import threading
 import time
 
 from . import __version__, emit, options, params as params_mod, usage
@@ -136,15 +134,15 @@ class Payload:
             self._b, self._block = b, bytes(buf)
         return self._block
 
-    def __call__(self, off: int, n: int) -> bytes:
-        out = []
-        while n > 0:
-            b, i = divmod(off, BLOCK)
-            take = min(n, BLOCK - i)
-            out.append(self.block(b)[i:i + take])
-            off += take
-            n -= take
-        return b"".join(out)
+    def __call__(self, off: int, n: int) -> bytearray:
+        out = bytearray(n)
+        at = 0
+        while at < n:
+            b, i = divmod(off + at, BLOCK)
+            take = min(n - at, BLOCK - i)
+            out[at:at + take] = memoryview(self.block(b))[i:i + take]
+            at += take
+        return out
 
 
 # ---- where each dataset lives (the runner's endpoint.rs) ----
@@ -279,53 +277,12 @@ def placement(ast: dict, root: pathlib.Path, given: list):
     return at
 
 
-# ---- memory ----
-
-def available_memory() -> int:
-    """`MemAvailable` from /proc/meminfo, else the physical memory."""
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) * 1024
-    except OSError:
-        pass
-    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-
-
-class Budget:
-    """Bytes the writer threads may hold in memory at once: a thread waits until its file fits;
-    a file larger than the whole budget is refused."""
-
-    def __init__(self, total: int):
-        self.total, self.used = total, 0
-        self.cv = threading.Condition()
-
-    def hold(self, n: int, name: str):
-        budget = self
-
-        class Held:
-            def __enter__(self):
-                if n > budget.total:
-                    raise BuildError(f"{name}: its writer holds {n / 2**20:.1f} MiB in memory, more than the budget of "
-                                     f"{budget.total / 2**20:.1f} MiB (half the memory available at the start)")
-                with budget.cv:
-                    budget.cv.wait_for(lambda: budget.used + n <= budget.total)
-                    budget.used += n
-
-            def __exit__(self, *exc):
-                with budget.cv:
-                    budget.used -= n
-                    budget.cv.notify_all()
-        return Held()
-
-
 # ---- one dataset ----
 
 class Job:
-    def __init__(self, ast, name, values, at, dedupe: int, compress: int, budget: Budget):
+    def __init__(self, ast, name, values, at, dedupe: int, compress: int):
         """`at`: where a path relative to --root lives (`placement`)."""
-        self.ast, self.name, self.values, self.at, self.budget = ast, name, values, at, budget
+        self.ast, self.name, self.values, self.at = ast, name, values, at
         self.resolved = resolved_dataset(ast, name, values)
         body = self.resolved["files"]
         self.fmt = body["format"]
@@ -354,7 +311,7 @@ class Job:
         place = self.at(rel)
         # `aeiou-positional/2`: `dedupe` consecutive files share a unit, whatever the count
         payload = Payload(self.seed, file // self.dedupe, self.compress)
-        with self.budget.hold(self.klass.held(geo), str(place)), opened(place) as out:
+        with opened(place) as out:
             sink = Sink(out)
             try:
                 info = self.klass.write_file(sink, file * self.spf, sizes, payload, geo)
@@ -508,8 +465,6 @@ def _main(a, ap: usage.Parser) -> int:
     print(f"abstract {ast['name']}  sha256 {sha}")
     layers.print()
     at = placement(ast, a.root, a.endpoint)
-    budget = Budget(available_memory() // 2)
-    print(f"memory for files held whole: {budget.total / 2**20:.0f} MiB (half of what was available)")
     provenance = {"abstract": ast["name"], "ast_sha256": sha, "params": values,
                   "param_files": [{"path": str(p), "sha256": params_mod.file_sha256(p)} for p in a.params_file]}
     wanted = set(a.dataset)
@@ -523,7 +478,7 @@ def _main(a, ap: usage.Parser) -> int:
                 raise BuildError(f"dataset `{name}` has no format class: `aeiou datagen` (the Rust writer) writes it")
             print(f"dataset {name}: no format class, left to `aeiou datagen`")
             continue
-        job = Job(ast, name, values, at, a.dedupe, a.compress, budget)
+        job = Job(ast, name, values, at, a.dedupe, a.compress)
         root = at(job.rel_root)
         if not is_empty(root):
             raise BuildError(f"dataset `{name}`: {root} is not empty; datasets are read-only, remove it first")

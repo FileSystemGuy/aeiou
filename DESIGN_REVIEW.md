@@ -5027,9 +5027,9 @@ local file system on the path, because none of the four writers needs one.
    configuration, missing from some distributions' pyarrow). It is the builder's `s3` extra.
 2. **A writer writes into a byte stream, never a path.** TFRecord, tar, and Parquet append, so
    they stream into the upload (one `PUT`, or a multipart upload in the runner's 8 MiB parts,
-   each sent before the next is filled). HDF5 cannot stream (libhdf5 seeks back over its
-   metadata), so it is built whole in memory with the `core` driver and the image written out.
-   Measured the same day: the `core` driver's image is byte for byte the disk driver's file,
+   each sent before the next is filled). ~~HDF5 cannot stream (libhdf5 seeks back over its
+   metadata), so it is built whole in memory with the `core` driver and the image written out.~~
+   (Revised the same day, below: HDF5 and Parquet stream too.) Measured the same day: the `core` driver's image is byte for byte the disk driver's file,
    while h5py's Python file-object driver lays the file out otherwise (the default shape's
    data at 1400, not 2048), so the file-object route was not taken. The same path serves a
    directory, so the two destinations write the same bytes by construction (the test compares
@@ -5039,13 +5039,14 @@ local file system on the path, because none of the four writers needs one.
    back before; a library's own record of the layout is the same evidence and needs no `GET`).
    A file that fails it aborts its upload, and so does any exception, so no partial object is
    left; content verification stays the separate tool's.
-4. **A memory budget, never a fallback to local disk.** What a writer holds whole (HDF5: its
+4. ~~**A memory budget, never a fallback to local disk.**~~ (Superseded the same day: no
+   writer holds a file whole, so there is no budget; see *Revised* below.) ~~What a writer holds whole (HDF5: its
    image and the copy out, twice the file; Parquet: its table, the file) is held within half
    of `MemAvailable` at the start; a thread waits until its file fits, and a file larger than
    the budget is refused with its size and the budget. No option: the budget is a property of
    the host, as the default thread count is, and a flag in the `[datagen]` table would be one
    the Rust `aeiou datagen` shares a table with and does not know. *Open to revision:* a
-   `--memory-mib` if a shared writer host needs it.
+   `--memory-mib` if a shared writer host needs it.~~
 5. **Placement as the runner's.** `--endpoint NAME=s3://BUCKET[/PREFIX]`, an object name with
    no default place, an endpoint of its name's protocol's kind, a `posix` name never under a
    root placed in a store, each refused in `endpoint.rs`'s words; the prefix must hold no key;
@@ -5061,6 +5062,47 @@ three-part upload, an aborted one, the refusals), CI's `runner-object` job runs 
 memory too (it wrote to disk in 8 MiB slices before): one path, at the cost of holding a
 file, within the budget. Not measured: datagen throughput into a real store (the measurement
 of brief item 17 is still to come).
+
+**Revised 2026-10-11, later (the user approved it): every writer streams, and the budget is
+gone.** Measured before the change, four 1 GiB files on this host: the in-memory HDF5
+writer peaked at 2.1 GiB with one thread and 6.1 GiB with four, and Parquet, whose table
+the budget counted once, at 4.0 GiB and 9.5 GiB. Memory held per writer caps how many
+writers run at once, and so the bandwidth datagen can offer a store; a budget only
+serialized them. Now:
+- **HDF5**: the file's first `data_offset` bytes come from libhdf5 itself: the same dataset
+  of `n` rows created in a sparse scratch file (in `/dev/shm` where there is one, else the
+  temporary directory), one row stored, the metadata read back, the file removed; cached per
+  row count, so once or twice per dataset. Then the rows go out straight from the payload.
+  For a contiguous dataset with no filter and no fill the metadata does not depend on the
+  rows' bytes (only the superblock's end of file depends on `n`), so the header followed by
+  the rows is byte for byte the file libhdf5 writes with every row stored: an 18 GiB file
+  costs 260 KiB of tmpfs, 44 MiB of memory, and 0.65 s. Rejected on the way: `memfd_create`
+  (absent from this Python build), a `/proc/self/fd` path (HDF5 2.0 refuses it, "can't
+  retrieve real path"), the `core` driver's VFD handle (crashes or a truncated image), and
+  h5py's file-object driver (its own layout). The header is still libhdf5's, not a second
+  implementation of the format.
+- **Parquet**: one row group at a time through `ParquetWriter.write_table`, in two passes as
+  before; the first writes zero bytes in the samples' sizes (one zero buffer, no payload),
+  valid because with no statistics the footer's bytes do not depend on the samples' bytes.
+  pyarrow holds about three copies of a row group while writing it (one page per column
+  chunk, the layout's contract), so a thread's memory follows the row group, not the file.
+- The payload fills one buffer per call instead of joining slices, and `Sink` passes the
+  writer's buffers through without copying them.
+- Gone: `Budget`, `available_memory`, `held`, the printed budget, the refusal of a file
+  larger than the budget, and its test. Added: the streamed files compared with the
+  libraries' own (HDF5 at 1, 6, and 16 rows; Parquet over four row groups), and a memory test
+  (two 256 MiB files raise the peak 4 MiB over a warm process; the limit is 64 MiB).
+- Measured after, same four 1 GiB files to tmpfs, two runs each: HDF5 1 thread 3.8–4.1 s
+  and 72 MiB peak (was 7.8 s and 2.1 GiB), 4 threads 1.8–4.9 s and 108 MiB (was 5.5 s and
+  6.1 GiB); Parquet 1 thread 0.40 GiB peak (was 4.0 GiB), 4 threads 3.3–4.8 s and 1.4 GiB
+  (was 8.7 s and 9.5 GiB). Times on this WSL host vary by up to a factor of three between
+  runs; step 2 (throughput against `aeiou datagen`) is the real measurement.
+- *Found, not fixed (recorded for the user):* a Parquet file whose last row group is short
+  fails the layout check, in the old writer as in the new: the layout gives each column one
+  page-header size, and a short group's headers are shorter (with 64 rows a group, a row
+  count below 64 is one varint byte, not two, in every column's header). With the default 64 rows a
+  group, any `samples_per_file` that is not a multiple of 64, or a `count` that leaves a
+  short last file, is refused at datagen time. The committed abstracts use multiples.
 
 ## 4. Plan changes
 

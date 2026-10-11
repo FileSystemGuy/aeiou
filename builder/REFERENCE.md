@@ -226,7 +226,7 @@ with gpu.loader("shards", workers=P.cycle, prefetch=1, batches=ceil_div(P.steps 
 |---|---|---|---|
 | `tfrecord(xfer=256 KiB)` | `tf.data.TFRecordDataset`, `stream` | `stream(cur, f)`: open, positioned reads of `xfer` to EOF [verify: from source] | 12-byte row header, 4-byte row footer |
 | `parquet(rows_per_group, columns)` | `pyarrow.parquet.ParquetFile`, `stream` | `open_reads`, `read_all(columns=None)`, `close`: fstat ×2, 64 KiB footer read, `fadvise(WILLNEED)` then one `pread` per range; adjacent row groups coalesce to ≤ 32 MiB; a projection reads each run of adjacent projected chunks per group | 4-byte magic; page header 16 + 3 varints (probed); footer declared with a margin and padded exactly; one binary column carries the sample |
-| `hdf5(dataset, shape, dtype)` | h5py `f[name][i]`, `map` | `open_reads`, `read_sample`, `close`: fstat, eight metadata reads, one `pread` per row through the 64 KiB sieve | data offset probed with the `core` driver; samples are fixed-size rows (`size` must be `const`) |
+| `hdf5(dataset, shape, dtype)` | h5py `f[name][i]`, `map` | `open_reads`, `read_sample`, `close`: fstat, eight metadata reads, one `pread` per row through the 64 KiB sieve | data offset probed with the `core` driver, the header from a sparse scratch file at write time; samples are fixed-size rows (`size` must be `const`) |
 | `webdataset(members, xfer)` | CPython `tarfile` streaming, `stream` | `stream(cur, f)`: open, fstat, `ioctl`, `lseek`, `read(xfer)` to EOF | 512-byte member headers and alignment, 1024 footer, 10240 file alignment |
 
 `spec(access, size, params)` is what `w.dataset(format=…)` calls; it refuses an access mode
@@ -264,14 +264,23 @@ through `obstore` (the `s3` extra; the Python bindings of the runner's `object_s
 each file goes out as one `PUT` or a multipart upload in 8 MiB parts, each sent before the
 next is filled, as `aeiou datagen` sends them. The check runs before the close, so a file
 that fails it, like any exception, aborts its upload and leaves no object; the prefix must
-hold no key, and the manifest is one `PUT` at it. TFRecord, tar, and Parquet's second pass
-stream; HDF5 cannot (libhdf5 seeks back over its metadata), so it is built with the `core`
-driver, whose image is byte for byte the disk driver's file (h5py's Python file-object
-driver is not: it put the default shape's data at 1400, not 2048), and the image is written
-out, to a directory as to a store. `held(geo)` is what a writer holds whole (HDF5 twice its
-file, the image and its copy; Parquet its file, the table), and the threads hold it within
-a budget of half of `MemAvailable` at the start, printed; a file larger than the budget is
-refused. `tests/test_object.py` (MinIO from `TEST_MINIO_BIN`, skipped without it) writes each
+hold no key, and the manifest is one `PUT` at it. Every writer streams, so a thread holds a
+piece of its file, never the file (`DESIGN_REVIEW.md` §3.69, revised the same day). TFRecord
+and tar append. Parquet writes one row group at a time, twice: the first pass, of zero bytes
+in the samples' sizes into a counting `Sink`, measures the natural footer (its bytes do not
+depend on the samples' bytes, since no statistics are written) so the second can pad it to
+the declared size; pyarrow holds about three copies of a row group while it writes it (one
+page per column chunk). HDF5 cannot be written into a stream by libhdf5 (it seeks back over
+its metadata), and h5py's Python file-object driver lays the file out otherwise (the default
+shape's data at 1400, not 2048), so `Hdf5.header(n)` takes the file's first `data_offset`
+bytes from libhdf5: the same dataset of `n` rows created in a sparse scratch file (in
+`/dev/shm` where there is one), one row stored, the metadata read back, the file removed,
+cached per row count (a dataset has at most two). A contiguous dataset with no filter and
+no fill has metadata independent of the rows' bytes, so the header followed by the rows is
+byte for byte the file libhdf5 writes with every row (an 18 GiB file costs 260 KiB of
+scratch). `tests/test_formats.py` compares both writers with their library handed every row
+at once and checks that writing two 256 MiB files raises the peak memory by far less than
+either. `tests/test_object.py` (MinIO from `TEST_MINIO_BIN`, skipped without it) writes each
 class into a bucket, compares every object with the directory writer's file of the same
 name and the manifests' ids, runs the abstracts over the bucket to the dry run's fingerprint
 under `--s3 blocking` and `async` when the runner is built with `object`, and checks a

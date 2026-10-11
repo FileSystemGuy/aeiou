@@ -36,6 +36,8 @@ from __future__ import annotations
 import math
 import os
 import struct
+import tempfile
+import threading
 
 from .nodes import BuildError, Dist, Handle, Node, Param, ast_of, lift
 from .units import KiB, MiB
@@ -113,12 +115,12 @@ class Sink:
         self.out, self.n, self.tail = out, 0, b""
 
     def write(self, b):
-        b = bytes(b)
+        m = memoryview(b).cast("B")
         if self.out is not None:
-            self.out.write(b)
-        self.n += len(b)
-        self.tail = (self.tail + b[-8:])[-8:]
-        return len(b)
+            self.out.write(m)
+        self.n += len(m)
+        self.tail = (self.tail + bytes(m[-8:]))[-8:]
+        return len(m)
 
     def tell(self):
         return self.n
@@ -175,11 +177,6 @@ class FormatClass:
     # ---- writer ----
     def library(self) -> str:
         raise NotImplementedError
-
-    def held(self, geo) -> int:
-        """Bytes this writer holds in memory at once for a file of this geometry beyond a
-        stream's buffer: 0 for a writer that streams (`aeiou-datagen` budgets the rest)."""
-        return 0
 
     def write_file(self, out, first_id: int, sizes: list, payload, geo):
         """Write one container holding samples `first_id …` of the given payload sizes into
@@ -347,6 +344,7 @@ class Hdf5(FormatClass):
         self.dtype = str(dtype)
         self.sieve = _plain_int(sieve, "hdf5 sieve", 1)
         self._offset = None
+        self._headers, self._lock = {}, threading.Lock()
 
     @property
     def row_bytes(self) -> int:
@@ -403,31 +401,53 @@ class Hdf5(FormatClass):
     def library(self):
         return self.version()
 
-    def held(self, geo):
-        # the image and its copy out of the library
-        return 2 * geo.file_size
+    def header(self, n: int) -> bytes:
+        """The file's first `data_offset` bytes for `n` rows, from libhdf5: a file of the same
+        dataset written to a sparse scratch file (in /dev/shm where there is one) with one row
+        stored, its metadata read back, the file removed. The metadata of a contiguous dataset
+        with no filter and no fill does not depend on the rows' bytes (the superblock records
+        the end of file, so it depends on `n`), so this is byte for byte the start of the file
+        with every row written (verified 2026-10-11, h5py 3.16 / HDF5 2.0: an 18 GiB file
+        costs 260 KiB of scratch and 0.65 s). Cached per row count: a dataset has at most two."""
+        with self._lock:
+            got = self._headers.get(n)
+        if got is not None:
+            return got
+        h5py = _lib("h5py")
+        shm = "/dev/shm"
+        fd, path = tempfile.mkstemp(prefix="aeiou-", suffix=".h5",
+                                    dir=shm if os.path.isdir(shm) and os.access(shm, os.W_OK) else None)
+        os.close(fd)
+        try:
+            with h5py.File(path, "w") as h:
+                d = h.create_dataset(self.dataset, shape=(n, *self.shape), dtype=self.dtype)
+                d[0] = 0
+                off = int(d.id.get_offset())
+            with open(path, "rb") as f:
+                got = f.read(off)
+        finally:
+            os.unlink(path)
+        if len(got) != off:
+            raise BuildError(f"hdf5: read {len(got)} bytes of the {off}-byte header back from the scratch file")
+        with self._lock:
+            self._headers[n] = got
+        return got
 
     def write_file(self, out, first_id, sizes, payload, geo):
-        """Built whole in memory with the `core` driver, whose image is byte for byte the file
-        the disk driver writes, then written to `out`: libhdf5 seeks back over what it wrote,
-        so it cannot stream, and h5py's Python file-object driver lays the file out otherwise
+        """The header from libhdf5 (`header`), then the rows straight from the payload in
+        pieces of about 8 MiB: libhdf5 seeks back over what it writes, so it cannot write
+        into a stream itself, and h5py's Python file-object driver lays the file out otherwise
         (the data at 1400, not 2048, for the default shape; measured 2026-10-11, h5py 3.16)."""
-        h5py, np = _lib("h5py"), _lib("numpy")
         row = self.row_bytes
         n = len(sizes)
-        with h5py.File(f"aeiou-{os.getpid()}-{first_id}.h5", "w", driver="core", backing_store=False) as h:
-            d = h.create_dataset(self.dataset, shape=(n, *self.shape), dtype=self.dtype)
-            step = max(1, (8 * MiB) // row)
-            for i in range(0, n, step):
-                j = min(n, i + step)
-                buf = payload(i * row, (j - i) * row)
-                d[i:j] = np.frombuffer(buf, dtype=self.dtype).reshape((j - i, *self.shape))
-            got = d.id.get_offset()
-            h.flush()
-            image = h.id.get_file_image()
-        if got != geo.layout.file_header:
-            raise BuildError(f"the dataset's data starts at {got}, the layout says {geo.layout.file_header}")
-        out.write(image)
+        head = self.header(n)
+        if len(head) != geo.layout.file_header:
+            raise BuildError(f"the dataset's data starts at {len(head)}, the layout says {geo.layout.file_header}")
+        out.write(head)
+        step = max(1, (8 * MiB) // row)
+        for i in range(0, n, step):
+            j = min(n, i + step)
+            out.write(payload(i * row, (j - i) * row))
 
 
 # ----------------------------------------------------------------------------------------------
@@ -593,45 +613,52 @@ class Parquet(FormatClass):
     def library(self):
         return self.version()
 
-    def _table(self, first_id, sizes, payload):
+    def _schema(self):
+        pa = _lib("pyarrow")
+        return pa.schema([pa.field(n, pa.binary() if t == "binary" else getattr(pa, t)(), nullable=False)
+                          for n, t in self.columns])
+
+    def _group(self, schema, first_id, sizes, data):
+        """One row group's table: the samples are `data` (their bytes end to end) cut at `sizes`."""
         pa, np = _lib("pyarrow"), _lib("numpy")
         n = len(sizes)
-        arrays, fields = [], []
-        off = 0
+        offsets = np.zeros(n + 1, dtype=np.int32)
+        np.cumsum(sizes, out=offsets[1:])
+        arrays = []
         for name, t in self.columns:
             if t == "binary":
-                vals = []
-                for s in sizes:
-                    vals.append(payload(off, s))
-                    off += s
-                arrays.append(pa.array(vals, pa.binary()))
-                fields.append(pa.field(name, pa.binary(), nullable=False))
+                arrays.append(pa.Array.from_buffers(pa.binary(), n, [None, pa.py_buffer(offsets), pa.py_buffer(data)]))
             else:
                 dt = getattr(np, t)
                 ids = np.arange(first_id, first_id + n, dtype=np.int64)
                 arr = (ids % 1000).astype(dt) if t.startswith("int") or t.startswith("uint") else ids.astype(dt)
                 arrays.append(pa.array(arr))
-                fields.append(pa.field(name, getattr(pa, t)(), nullable=False))
-        return pa.table(dict(zip([f.name for f in fields], arrays)), schema=pa.schema(fields))
+        return pa.Table.from_arrays(arrays, schema=schema)
 
-    def _write(self, out, table, pad: int):
-        """Returns the footer's metadata as the writer wrote it."""
+    def _write(self, out, first_id, sizes, data, pad: int):
+        """Write the file one row group at a time, `data(offset, n)` giving each group's
+        sample bytes; returns the footer's metadata as the writer wrote it."""
         pa, pq = _lib("pyarrow"), _lib("pyarrow.parquet").parquet
-        w = pq.ParquetWriter(pa.PythonFile(out, mode="w"), table.schema, **self.writer_options())
-        w.write_table(table, row_group_size=self.rows)
+        schema = self._schema()
+        w = pq.ParquetWriter(pa.PythonFile(out, mode="w"), schema, **self.writer_options())
+        off = 0
+        for g in range(0, len(sizes), self.rows):
+            group = sizes[g:g + self.rows]
+            k = sum(group)
+            w.write_table(self._group(schema, first_id + g, group, data(off, k)), row_group_size=self.rows)
+            off += k
         w.add_key_value_metadata({"aeiou.pad": "p" * pad})
         w.close()
         return w.writer.metadata
 
-    def held(self, geo):
-        # the table: every sample of the file before the first byte is written
-        return geo.file_size
-
     def write_file(self, out, first_id, sizes, payload, geo):
-        table = self._table(first_id, sizes, payload)
-        # pass 1, into a counting sink: the natural footer with an empty pad entry
+        """Streamed a row group at a time, in two passes: the first, of zero bytes in the
+        samples' sizes into a counting sink, measures the natural footer (its bytes do not
+        depend on the samples' bytes, since no statistics are written), so the second can pad
+        it to the size the layout declares."""
+        zeros = bytes(max(sum(sizes[g:g + self.rows]) for g in range(0, len(sizes), self.rows)))
         sink = Sink()
-        self._write(sink, table, 0)
+        self._write(sink, first_id, sizes, lambda off, n: memoryview(zeros)[:n], 0)
         footer0 = int.from_bytes(sink.tail[:4], "little")
         target = geo.layout.file_footer - 8 + geo.layout.file_footer_per_unit * geo.units
         pad = target - footer0
@@ -639,7 +666,7 @@ class Parquet(FormatClass):
             pad = target - footer0 - (varint_len(pad) - 1)
         if pad < 0:
             raise BuildError(f"the natural footer ({footer0} bytes) exceeds the declared {target}: raise the class's footer margins")
-        return self._write(out, table, pad)
+        return self._write(out, first_id, sizes, payload, pad)
 
     def check_file(self, name, written, sizes, geo, m):
         """`m`: the footer's metadata as the writer wrote it."""

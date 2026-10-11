@@ -197,6 +197,76 @@ def test_datagen_hdf5_reads_back_with_h5py(tmp_path):
     assert files[3].stat().st_size == 2048 + 16 * 256 * 256 * 3
 
 
+def _geometry(klass, access, size, sizes):
+    from aeiou.datagen import ev
+    return FileGeometry(Layout.from_spec(klass.spec(access, size)["layout"], len(sizes), ev), sizes)
+
+
+def test_streamed_hdf5_and_parquet_are_the_files_the_libraries_write(tmp_path):
+    """The writers stream (DESIGN_REVIEW.md §3.69): HDF5 as libhdf5's header then the rows,
+    Parquet a row group at a time; each file is byte for byte the one the library writes
+    when handed every row at once."""
+    import io
+    import h5py
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from aeiou.datagen import Payload
+    h = formats.hdf5(shape=(16, 16, 3))
+    for n in (1, 6, 16):
+        sizes = [h.row_bytes] * n
+        out = io.BytesIO()
+        h.write_file(formats.Sink(out), 0, sizes, Payload(7, 0, 1), _geometry(h, "map", const(h.row_bytes), sizes))
+        path = tmp_path / f"whole-{n}.h5"
+        with h5py.File(path, "w") as f:
+            f.create_dataset("records", data=np.frombuffer(Payload(7, 0, 1)(0, n * h.row_bytes), dtype="u1").reshape((n, 16, 16, 3)))
+        assert out.getvalue() == path.read_bytes(), f"{n} rows"
+    p = formats.parquet(rows_per_group=8)
+    sizes = [sample_size({"lognormal": {"median": 3000, "sigma": 0.45}}, 11, i) for i in range(32)]
+    out = io.BytesIO()
+    m = p.write_file(formats.Sink(out), 100, sizes, Payload(7, 0, 1), _geometry(p, "stream", lognormal(3000, 0.45), sizes))
+    p.check_file("streamed", len(out.getvalue()), sizes, _geometry(p, "stream", lognormal(3000, 0.45), sizes), m)
+    streamed = out.getvalue()
+    t = pq.read_table(io.BytesIO(streamed))
+    whole = pa.BufferOutputStream()
+    w = pq.ParquetWriter(whole, t.schema, **p.writer_options())
+    w.write_table(t, row_group_size=8)
+    w.add_key_value_metadata({"aeiou.pad": pq.ParquetFile(io.BytesIO(streamed)).metadata.metadata[b"aeiou.pad"].decode()})
+    w.close()
+    assert streamed == whole.getvalue().to_pybytes()
+
+
+def test_the_writers_hold_a_piece_of_a_file_not_the_file():
+    """Peak memory while writing a 256 MiB file stays a small fraction of it."""
+    script = """
+import resource, sys
+sys.path.insert(0, %r)
+from aeiou import formats
+from aeiou.datagen import Payload, ev
+from aeiou.layout import FileGeometry, Layout
+from aeiou.dists import const, lognormal
+def peak():
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+def geo(k, access, size, sizes):
+    return FileGeometry(Layout.from_spec(k.spec(access, size)["layout"], len(sizes), ev), sizes)
+h = formats.hdf5()
+p = formats.parquet()
+small = [h.row_bytes] * 2
+h.write_file(formats.Sink(), 0, small, Payload(1, 0, 1), geo(h, "map", const(h.row_bytes), small))
+s = [64 * 1024] * 128
+p.write_file(formats.Sink(), 0, s, Payload(1, 0, 1), geo(p, "stream", lognormal(64 * 1024, 0.0001), s))
+base = peak()
+rows = [h.row_bytes] * ((256 << 20) // h.row_bytes)
+h.write_file(formats.Sink(), 0, rows, Payload(1, 0, 1), geo(h, "map", const(h.row_bytes), rows))
+s = [64 * 1024] * 4096
+p.write_file(formats.Sink(), 0, s, Payload(1, 0, 1), geo(p, "stream", lognormal(64 * 1024, 0.0001), s))
+print(peak() - base)
+""" % str(BUILDER)
+    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert int(r.stdout) < 64 << 20, f"{int(r.stdout) >> 20} MiB above the warm process for two 256 MiB files"
+
+
 @needs_runner
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_runner_executes_the_generated_corpus(name, tmp_path):

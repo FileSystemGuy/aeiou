@@ -237,7 +237,7 @@ Not built, in rough order of interest:
   transport and buffer beside them; ~~then object storage through Apache `object_store` behind a feature flag (item 17; ~~`s3dlio`~~ decided 2026-10-09, `DESIGN_REVIEW.md` §3.65),~~
   ~~the object engine's writes (object namespaces, multipart at `close`, V18) and~~ ~~the object engine's event-loop
   bridge,~~ its reads of datasets and its writes of namespaces (multipart at `close`, V18) on Apache `object_store` behind the cargo feature `object`,
-  under `--s3 blocking` or `async` (an API per protocol, contract 0.7), built 2026-10-09 (item 17, `runner/REFERENCE.md` §16); `aeiou-datagen` (the Python container writer) to object stores built 2026-10-11, each file streamed into an upload with no local copy (`DESIGN_REVIEW.md` §3.69); a measurement against a real store not yet; and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
+  under `--s3 blocking` or `async` (an API per protocol, contract 0.7), built 2026-10-09 (item 17, `runner/REFERENCE.md` §16); `aeiou-datagen` (the Python container writer) to object stores built 2026-10-11, each file streamed into an upload with no local copy, and every writer, HDF5 and Parquet included, holding a piece of its file rather than the file (`DESIGN_REVIEW.md` §3.69); a measurement against a real store not yet; and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only
   met `localhost`), and tensor-parallel sharding of a KV chunk, where `--gpus` is today
   independent engines rather than one TP group (`PROJECT_BRIEF.md` §6 item 20).

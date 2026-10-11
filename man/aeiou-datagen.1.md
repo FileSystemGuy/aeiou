@@ -38,11 +38,10 @@ names, with no copy on a local file system: each writer streams the file into an
 the check runs before the upload is completed so a file that fails it leaves no object,
 and the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix. The client is
 `obstore`, the Python bindings of the runner's `object_store`, and the store comes from the
-same `AWS_*` environment the runner reads. HDF5 is built whole in memory (libhdf5 seeks
-back over what it wrote, so it cannot stream) and Parquet holds its table, whatever the
-destination; those writers hold their files within a budget of half the memory available
-at the start, a thread waiting until its file fits, and a file larger than the budget is
-refused.
+same `AWS_*` environment the runner reads. Every writer streams, whatever the destination,
+so a thread holds a piece of its file, never the file: Parquet a row group at a time, and
+HDF5 as the header libhdf5 writes for the file's row count (taken from a sparse scratch
+file in `/dev/shm`, a few hundred KiB however large the file) followed by the rows.
 
 The format classes and their reader protocols are in the `aeiou.formats` module of the
 builder: `tfrecord`, `parquet`, `hdf5`, `webdataset`. Their libraries are the `formats`
@@ -141,8 +140,8 @@ every missing argument listed at once.
 - **1**
 
   A failure during the work: an invalid abstract, a dataset with no format class, a
-  non-empty root or prefix, a file whose geometry differs from its layout, a file larger
-  than the memory budget, a library that is not installed, a request the store refused.
+  non-empty root or prefix, a file whose geometry differs from its layout, a library that
+  is not installed, a request the store refused.
 - **2**
 
   A usage error.
