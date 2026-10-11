@@ -69,6 +69,15 @@ jobs:
       - name: Build with the object engine and test it
         working-directory: runner
         run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release --features object -E 'test(/object/) | test(/endpoint/)'
+      - uses: astral-sh/setup-uv@v5
+      - name: Builder with the format classes' libraries and the S3 client
+        working-directory: builder
+        run: uv sync --locked --extra test --extra formats --extra s3
+      - name: aeiou-datagen into the bucket, read back by the object engine to the dry-run fingerprint
+        working-directory: builder
+        run: |
+          cargo build --release --features object --bin aeiou --manifest-path ../runner/Cargo.toml
+          TEST_MINIO_BIN=/tmp/minio AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_object.py
 
   runner-integration:
     runs-on: ubuntu-latest

@@ -13,6 +13,8 @@ dependencies = [
 test = ["pytest>=8", "pytest-xdist>=3"]
 # the format classes' libraries (reader protocols are probed and real files written with them)
 formats = ["pyarrow>=25", "h5py>=3.16", "numpy>=2", "crc32c>=2.7", "dgen-py==0.3.0", "xxhash>=3.5"]
+# the object stores `aeiou-datagen` writes to: Python bindings to Apache `object_store`, the runner's engine
+s3 = ["obstore>=0.11"]
 
 [project.scripts]
 aeiou-build = "aeiou.cli:main"

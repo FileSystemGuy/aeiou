@@ -252,6 +252,31 @@ command line, else `AEIOU_ROOT`/`AEIOU_THREADS`, else the `[datagen]` table of t
 and the block of what was resolved, with each value's source, is printed as `aeiou datagen`
 prints it (`tests/test_options.py`; 2026-10-04).
 
+**To an object store (2026-10-11, `DESIGN_REVIEW.md` §3.69).** A writer writes into a byte
+stream, never a path: `write_file(out, first_id, sizes, payload, geo)` takes a `Sink` (it
+counts the bytes and answers `tell`, for `tarfile` and pyarrow) over an open file or an
+upload, and returns what `check_file(name, written, sizes, geo, info)` needs beyond the
+count (Parquet: the footer's metadata as the writer wrote it, where the check read the file
+back before). For a dataset declared `protocol: s3`, `--endpoint NAME=s3://BUCKET[/PREFIX]`
+places its root at a prefix as the runner places it (`datagen.placement` mirrors
+`endpoint.rs`, its refusals word for word), the store from the runner's `AWS_*` variables
+through `obstore` (the `s3` extra; the Python bindings of the runner's `object_store`), and
+each file goes out as one `PUT` or a multipart upload in 8 MiB parts, each sent before the
+next is filled, as `aeiou datagen` sends them. The check runs before the close, so a file
+that fails it, like any exception, aborts its upload and leaves no object; the prefix must
+hold no key, and the manifest is one `PUT` at it. TFRecord, tar, and Parquet's second pass
+stream; HDF5 cannot (libhdf5 seeks back over its metadata), so it is built with the `core`
+driver, whose image is byte for byte the disk driver's file (h5py's Python file-object
+driver is not: it put the default shape's data at 1400, not 2048), and the image is written
+out, to a directory as to a store. `held(geo)` is what a writer holds whole (HDF5 twice its
+file, the image and its copy; Parquet its file, the table), and the threads hold it within
+a budget of half of `MemAvailable` at the start, printed; a file larger than the budget is
+refused. `tests/test_object.py` (MinIO from `TEST_MINIO_BIN`, skipped without it) writes each
+class into a bucket, compares every object with the directory writer's file of the same
+name and the manifests' ids, runs the abstracts over the bucket to the dry run's fingerprint
+under `--s3 blocking` and `async` when the runner is built with `object`, and checks a
+three-part upload, an aborted one, and the placement refusals.
+
 **Usage errors (2026-10-04).** The four Python tools report a wrong command line in the
 suite's one frame (`aeiou/usage.py`, the mirror of `runner/aeiou/src/usage.rs`;
 `runner/REFERENCE.md` §15): the command as typed, the message, the usage line, the pointer to
@@ -447,8 +472,10 @@ engine is built~~ The runner reads an `s3` dataset through its object engine and
 with `aeiou datagen` (`runner/REFERENCE.md` §16, 2026-10-09); ~~an `object` namespace waits for
 the engine's writes,~~ it writes and reads an `s3` namespace too (the same night), where
 V18 refuses `open` with `APPEND`, `RDWR`, or `EXCL`, `ftruncate`, and `fallocate` on its
-objects (`namespace(..., protocol="s3")` raises at the op); `aeiou-datagen` writes
-container datasets to directories only (`DESIGN_REVIEW.md` §3.65).
+objects (`namespace(..., protocol="s3")` raises at the op); ~~`aeiou-datagen` writes
+container datasets to directories only (`DESIGN_REVIEW.md` §3.65).~~ `aeiou-datagen` writes
+container datasets to object stores too, streaming each file into an upload (§6,
+`DESIGN_REVIEW.md` §3.69, 2026-10-11).
 
 **The application's APIs are declared in the script** (contract 0.3, 2026-10-01; `api` and
 `cache` since contract 0.6, `posix`, `cache`, and `s3` since 0.7, 2026-10-09):

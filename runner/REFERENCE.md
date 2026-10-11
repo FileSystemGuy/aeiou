@@ -1664,6 +1664,9 @@ records `object_threads`, `object_part_mib`, and each endpoint's `uri`.
 the next; the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix (atomic, so no
 temporary name), and there is no `syncfs`. A `regions` dataset is refused: a sparse layout
 written at offsets has no object form. The writer threads make the requests, as actors do.
+A container dataset in a store is `aeiou-datagen`'s, which streams each file from its format
+class's writer into an upload in the same 8 MiB parts, through `obstore` over the same
+`object_store` (`builder/REFERENCE.md` §6, `DESIGN_REVIEW.md` §3.69, 2026-10-11).
 
 **Tests.** `tests/object.rs`, compiled with the feature: datagen into a MinIO bucket of 20
 MiB samples (three parts each) whose bytes equal the POSIX writer's files of the same names,

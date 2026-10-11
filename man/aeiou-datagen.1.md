@@ -32,9 +32,21 @@ written last at each dataset root, with the same normative content as the Rust w
 plus a `format` block naming the class and the writer library; `aeiou run` compares it
 before the gate.
 
+A dataset declared `protocol: s3` is written to the object store its `--endpoint`
+names, with no copy on a local file system: each writer streams the file into an upload
+(one `PUT`, or a multipart upload in 8 MiB parts, each sent before the next is filled),
+the check runs before the upload is completed so a file that fails it leaves no object,
+and the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix. The client is
+`obstore`, the Python bindings of the runner's `object_store`, and the store comes from the
+same `AWS_*` environment the runner reads. HDF5 is built whole in memory (libhdf5 seeks
+back over what it wrote, so it cannot stream) and Parquet holds its table, whatever the
+destination; those writers hold their files within a budget of half the memory available
+at the start, a thread waiting until its file fits, and a file larger than the budget is
+refused.
+
 The format classes and their reader protocols are in the `aeiou.formats` module of the
 builder: `tfrecord`, `parquet`, `hdf5`, `webdataset`. Their libraries are the `formats`
-extra of the Python package.
+extra of the Python package; `obstore` is the `s3` extra.
 
 `--root` and `--threads` are resolved through the suite's option layers
 (**aeiou-config**(5)): the command line, else the environment, else the `[datagen]` table
@@ -63,10 +75,13 @@ every missing argument listed at once.
   Required, from some layer. The directory the abstract's paths are relative to. From the
   command line, else `$AEIOU_ROOT`, else `root` in the `[datagen]` table of the config
   file. *Layered.*
-- **--endpoint** *NAME=DIR*
+- **--endpoint** *NAME=DIR* | *NAME=s3://BUCKET[/PREFIX]*
 
-  Puts the root directory of the abstract's dataset NAME at DIR instead of under `--root`
-  (repeatable), as **aeiou**(1) ENDPOINTS describes. From the command line, else
+  Puts the root directory of the abstract's dataset NAME at DIR instead of under `--root`,
+  or, for a name declared `protocol: s3`, at a prefix of a bucket (repeatable), as
+  **aeiou**(1) ENDPOINTS describes: an object name has no default place, an endpoint is of
+  its name's protocol's kind, and a `posix` name never falls under a root placed in a
+  store. From the command line, else
   `$AEIOU_ENDPOINT`, else `endpoint` in the `[datagen]` table of the config file.
   *Layered.*
 - **--threads** *THREADS*
@@ -103,6 +118,10 @@ every missing argument listed at once.
 - **AEIOU_CONFIG**
 
   The config file, when `--config` is not given.
+- **AWS_ENDPOINT_URL**, **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY**, **AWS_REGION**, **AWS_ALLOW_HTTP**, **AWS_VIRTUAL_HOSTED_STYLE_REQUEST**
+
+  The S3 store of an object endpoint, as **aeiou**(1) reads them; path-style requests
+  unless the last is set.
 - **AEIOU_SCHEMA_DIR**
 
   The directory holding the schemas, when the package is not run from the repository.
@@ -111,7 +130,8 @@ every missing argument listed at once.
 
 - `.aeiou-dataset.json`
 
-  The manifest at each dataset root. Its id is printed.
+  The manifest at each dataset root, an object at the prefix of one in a store. Its id is
+  printed.
 
 ## EXIT STATUS
 
@@ -121,8 +141,8 @@ every missing argument listed at once.
 - **1**
 
   A failure during the work: an invalid abstract, a dataset with no format class, a
-  non-empty root, a file whose geometry differs from its layout, a library that is not
-  installed.
+  non-empty root or prefix, a file whose geometry differs from its layout, a file larger
+  than the memory budget, a library that is not installed, a request the store refused.
 - **2**
 
   A usage error.
@@ -132,6 +152,7 @@ every missing argument listed at once.
 ```
 aeiou-datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut --param shards=64
 AEIOU_ROOT=/mnt/sut aeiou-datagen workloads/input-pipeline/map/hdf5/hdf5_map.ast.json --dataset train
+AWS_ENDPOINT_URL=http://store:9000 aeiou-datagen my_s3_variant.ast.json --root /unused --endpoint shards=s3://bench/train
 ```
 
 ## SEE ALSO

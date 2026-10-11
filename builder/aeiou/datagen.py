@@ -15,6 +15,16 @@ them, and `aeiou datagen` refuses the ones with a class, so a corpus is written 
 dataset by exactly one of them. Names, sizes, offsets, and bytes follow the runner's
 definitions bit for bit (`rng.py`, `pattern.py`, `layout.py`); every file is checked against
 the geometry its layout predicts before the manifest is written.
+
+A dataset declared `protocol: s3` is written to the object store its endpoint names
+(`--endpoint NAME=s3://BUCKET[/PREFIX]`, the store from the environment as the runner's
+object engine has it, `runner/REFERENCE.md` §16) through `obstore`, the Python bindings of
+the runner's `object_store`: each file streams from its format class's writer into an upload
+(one `PUT`, or a multipart upload in parts of 8 MiB), never through a local file system, and
+the manifest is one `PUT` at the prefix (`DESIGN_REVIEW.md` §3.69). A writer that holds a
+file whole in memory (HDF5's image, Parquet's table) holds it within a budget of half the
+memory available at the start; a thread waits for room, and a file larger than the budget is
+refused.
 """
 from __future__ import annotations
 
@@ -28,16 +38,18 @@ import platform
 import socket
 import sys
 import tempfile
+import threading
 import time
 
 from . import __version__, emit, options, params as params_mod, usage
-from .formats import FormatClass
+from .formats import FormatClass, Sink
 from .layout import FileGeometry, Layout
 from .nodes import BuildError
 from .pattern import Pattern
 from .rng import block_seed, sample_size
 
 MANIFEST_NAME = ".aeiou-dataset.json"
+PART = 8 << 20   # the runner's `object::DEFAULT_PART`: what `aeiou datagen` sends a part at
 MANIFEST_VERSION = 1
 BLOCK = 1 << 20
 GENERATOR, GENERATOR_VERSION, WRAPPER = "dgen-data", "0.3.0", "aeiou-positional/2"
@@ -149,25 +161,79 @@ def _roots(ast: dict) -> dict:
     return out
 
 
+def _obstore():
+    try:
+        import obstore
+    except ImportError:
+        raise BuildError("an object endpoint needs `obstore`: install the builder's `s3` extra "
+                         "(`uv sync --inexact --extra s3` or `pip install 'aeiou[s3]'`)") from None
+    return obstore
+
+
+class Bucket:
+    """An object endpoint, `s3://BUCKET[/PREFIX]` (the runner's `Store::open`): the store from
+    the environment (`AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+    `AWS_REGION`, `AWS_ALLOW_HTTP`), path-style unless `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` is
+    set."""
+
+    def __init__(self, uri: str):
+        rest = uri[len("s3://"):] if uri.startswith("s3://") else None
+        if rest is None:
+            raise BuildError(f"{uri}: an object endpoint is s3://BUCKET[/PREFIX]")
+        bucket, _, prefix = rest.partition("/")
+        if not bucket:
+            raise BuildError(f"{uri}: no bucket")
+        _obstore()
+        from obstore.store import S3Store
+        kw = {} if os.environ.get("AWS_VIRTUAL_HOSTED_STYLE_REQUEST") else {"virtual_hosted_style_request": False}
+        try:
+            self.store = S3Store(bucket, **kw)
+        except Exception as e:
+            raise BuildError(f"{uri}: {e}") from None
+        self.uri, self.bucket, self.prefix = uri.rstrip("/"), bucket, prefix.strip("/")
+
+    def __str__(self):
+        return self.uri
+
+    def key(self, rest: str) -> str:
+        rest = rest.strip("/")
+        return "/".join(x for x in (self.prefix, rest) if x)
+
+
+class Obj:
+    """A key in a `Bucket`: where a path of an object name lives."""
+
+    def __init__(self, bucket: Bucket, key: str):
+        self.bucket, self.key = bucket, key
+
+    def __truediv__(self, rel: str) -> "Obj":
+        return Obj(self.bucket, "/".join(x for x in (self.key, rel) if x))
+
+    def __str__(self):
+        return f"s3://{self.bucket.bucket}/{self.key}"
+
+
 def placement(ast: dict, root: pathlib.Path, given: list):
-    """`--endpoint NAME=DIR`: the function from a path relative to --root to where it lives.
-    An endpoint places a name's root directory; a path falls under the longest placed root
-    that is a prefix of it, else under --root; names sharing a root share its place
-    (DESIGN_REVIEW.md §3.65). Directories only: this writer has no object client, and the
-    runner's object engine (`aeiou datagen`) writes plain datasets, not containers."""
+    """`--endpoint NAME=DIR` or `NAME=s3://BUCKET[/PREFIX]`: the function from a path relative
+    to --root to where it lives, a `pathlib.Path` or an `Obj`. An endpoint places a name's root
+    directory; a path falls under the longest placed root that is a prefix of it, else under
+    --root; names sharing a root share its place (DESIGN_REVIEW.md §3.65). As the runner has
+    it, an object name has no default place, an endpoint's kind is its name's protocol's,
+    and a `posix` name never falls under a root placed in an object store."""
     roots = _roots(ast)
-    for name, (proto, _) in roots.items():
-        if proto == "s3":
-            raise BuildError(f"`{name}` is declared `protocol: s3`: aeiou-datagen writes to directories only; a plain dataset in an object store is written by `aeiou datagen`, and container datasets in one are not written yet (DESIGN_REVIEW.md §3.65)")
-    placed: dict[str, tuple[list, pathlib.Path]] = {}
+    placed: dict[str, tuple[list, object]] = {}
     for g in given:
         name, sep, d = g.partition("=")
         if not sep:
             raise usage.UsageError(f"--endpoint {g}: expected NAME=DIR")
         if name not in roots:
             raise usage.UsageError(f"--endpoint {g}: the abstract has no dataset or namespace `{name}`")
-        if "://" in d:
-            raise usage.UsageError(f"--endpoint {g}: aeiou-datagen writes to directories only; an object endpoint is `aeiou datagen`'s (DESIGN_REVIEW.md §3.65)")
+        uri = "://" in d
+        proto = roots[name][0]
+        if proto == "posix" and uri:
+            raise usage.UsageError(f"--endpoint {g}: `{name}` is a `posix` dataset or namespace; its endpoint is a directory")
+        if proto == "s3" and not uri:
+            raise usage.UsageError(f"--endpoint {g}: `{name}` is declared `protocol: s3`; its endpoint is s3://BUCKET[/PREFIX]")
         if not d:
             raise usage.UsageError(f"--endpoint {g}: no directory")
         r = roots[name][1]
@@ -175,31 +241,91 @@ def placement(ast: dict, root: pathlib.Path, given: list):
             names, at = placed[r]
             if name in names:
                 raise usage.UsageError(f"--endpoint {name}: given twice")
-            if at != pathlib.Path(d):
+            if (at.uri != d.rstrip("/")) if isinstance(at, Bucket) else (at != pathlib.Path(d)):
                 raise usage.UsageError(f"--endpoint {g}: `{name}` shares root `{r}/` with `{'`, `'.join(names)}`, placed at {at}; a root is in one place")
             names.append(name)
         else:
-            placed[r] = ([name], pathlib.Path(d))
+            try:
+                placed[r] = ([name], Bucket(d) if uri else pathlib.Path(d))
+            except BuildError as e:
+                raise usage.UsageError(f"--endpoint {g}: {e}") from None
     order = sorted(placed.items(), key=lambda kv: (-len(kv[0]), kv[0]))
 
-    def at(rel: str) -> pathlib.Path:
-        for r, (_, d) in order:
-            if r == "":
-                return d / rel
-            if rel == r:
-                return d
-            if rel.startswith(r + "/"):
-                return d / rel[len(r) + 1:]
-        return root / rel
+    def under(rel: str):
+        for r, (names, d) in order:
+            if r == "" or rel == r or rel.startswith(r + "/"):
+                return r, names, d
+        return None
+
+    for name in sorted(roots):
+        proto, r = roots[name]
+        u = under(r)
+        is_object = u is not None and isinstance(u[2], Bucket)
+        if proto == "s3" and not is_object:
+            where = f" (it falls under `{'`, `'.join(u[1])}`, placed at {u[2]})" if u else ""
+            raise usage.UsageError(f"`{name}` is declared `protocol: s3` and has no object endpoint{where}: give it --endpoint {name}=s3://BUCKET[/PREFIX]")
+        if proto == "posix" and is_object:
+            raise usage.UsageError(f"`{name}` is a `posix` dataset or namespace under `{'`, `'.join(u[1])}`, placed in the object store {u[2].uri}: give it a directory, --endpoint {name}=DIR")
+
+    def at(rel: str):
+        u = under(rel)
+        if u is None:
+            return root / rel
+        r, _, d = u
+        rest = rel if r == "" else rel[len(r):].lstrip("/")
+        if isinstance(d, Bucket):
+            return Obj(d, d.key(rest))
+        return d / rest if rest else d
     return at
+
+
+# ---- memory ----
+
+def available_memory() -> int:
+    """`MemAvailable` from /proc/meminfo, else the physical memory."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
+class Budget:
+    """Bytes the writer threads may hold in memory at once: a thread waits until its file fits;
+    a file larger than the whole budget is refused."""
+
+    def __init__(self, total: int):
+        self.total, self.used = total, 0
+        self.cv = threading.Condition()
+
+    def hold(self, n: int, name: str):
+        budget = self
+
+        class Held:
+            def __enter__(self):
+                if n > budget.total:
+                    raise BuildError(f"{name}: its writer holds {n / 2**20:.1f} MiB in memory, more than the budget of "
+                                     f"{budget.total / 2**20:.1f} MiB (half the memory available at the start)")
+                with budget.cv:
+                    budget.cv.wait_for(lambda: budget.used + n <= budget.total)
+                    budget.used += n
+
+            def __exit__(self, *exc):
+                with budget.cv:
+                    budget.used -= n
+                    budget.cv.notify_all()
+        return Held()
 
 
 # ---- one dataset ----
 
 class Job:
-    def __init__(self, ast, name, values, at, dedupe: int, compress: int):
+    def __init__(self, ast, name, values, at, dedupe: int, compress: int, budget: Budget):
         """`at`: where a path relative to --root lives (`placement`)."""
-        self.ast, self.name, self.values, self.at = ast, name, values, at
+        self.ast, self.name, self.values, self.at, self.budget = ast, name, values, at, budget
         self.resolved = resolved_dataset(ast, name, values)
         body = self.resolved["files"]
         self.fmt = body["format"]
@@ -225,12 +351,17 @@ class Job:
         sizes = self.sizes(file)
         geo = FileGeometry(self.layout, sizes)
         rel = self.pattern.format(id=file)
-        path = self.at(rel)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        place = self.at(rel)
         # `aeiou-positional/2`: `dedupe` consecutive files share a unit, whatever the count
         payload = Payload(self.seed, file // self.dedupe, self.compress)
-        self.klass.write_file(str(path), file * self.spf, sizes, payload, geo)
-        self.klass.check_file(str(path), sizes, geo)
+        with self.budget.hold(self.klass.held(geo), str(place)), opened(place) as out:
+            sink = Sink(out)
+            try:
+                info = self.klass.write_file(sink, file * self.spf, sizes, payload, geo)
+            except BuildError as e:
+                raise BuildError(f"{place}: {e}") from None
+            # checked before the file is closed, so an upload that fails it is aborted
+            self.klass.check_file(str(place), sink.n, sizes, geo, info)
         return len(sizes), geo.file_size
 
     def manifest(self, files_written: int, bytes_written: int, started: float, provenance: dict) -> dict:
@@ -250,11 +381,50 @@ class Job:
         return hashlib.sha256(canonical_json(normative).encode()).hexdigest()
 
 
-def write_manifest(dir_: pathlib.Path, m: dict) -> pathlib.Path:
+class opened:
+    """A file to write: a `pathlib.Path` opened `wb` (its directory made first), or an `Obj`'s
+    upload, one `PUT` when it fits in a part and a multipart upload in parts of `PART`
+    otherwise, each sent before the next is filled (as `aeiou datagen` sends them); an
+    exception before the close aborts the upload, so no object is left."""
+
+    def __init__(self, place):
+        self.place = place
+
+    def __enter__(self):
+        if isinstance(self.place, Obj):
+            self.f = _obstore().open_writer(self.place.bucket.store, self.place.key, buffer_size=PART, max_concurrency=1)
+        else:
+            self.place.parent.mkdir(parents=True, exist_ok=True)
+            self.f = open(self.place, "wb")
+        return self.f.__enter__()
+
+    def __exit__(self, *exc):
+        return self.f.__exit__(*exc)
+
+
+def is_empty(root) -> bool:
+    """No file below a directory, no key below a prefix (one `LIST` page)."""
+    if isinstance(root, Obj):
+        prefix = root.key + "/" if root.key else None
+        for chunk in _obstore().list(root.bucket.store, prefix=prefix, chunk_size=1):
+            if chunk:
+                return False
+        return True
+    return not (root.exists() and any(root.iterdir()))
+
+
+def write_manifest(dir_, m: dict):
+    """In a directory, through a temporary name renamed into place; in a bucket, one `PUT`
+    at the prefix, atomic as the rename is."""
+    text = json.dumps(m, indent=2) + "\n"
+    if isinstance(dir_, Obj):
+        obj = dir_ / MANIFEST_NAME
+        _obstore().put(obj.bucket.store, obj.key, text.encode(), use_multipart=False)
+        return obj
     path = dir_ / MANIFEST_NAME
     fd, tmp = tempfile.mkstemp(prefix=MANIFEST_NAME + ".tmp.", dir=str(dir_))
     with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(m, indent=2) + "\n")
+        f.write(text)
     os.replace(tmp, path)
     return path
 
@@ -267,7 +437,7 @@ def parser() -> usage.Parser:
     ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE", help="Override a parameter: `--param name=value` (JSON; a bare word is a string)")
     ap.add_argument("--gpus", type=int, default=1, help="Instance count, for dataset definitions that reference `gpus` [default: 1]")
     ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="Required: directory the abstract's paths are relative to. From the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
-    ap.add_argument("--endpoint", action="append", metavar="NAME=DIR", help="Put the root directory of the abstract's dataset NAME at DIR instead of under --root (repeatable; names sharing a root share its place). From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the [datagen] table of the config file (an array)")
+    ap.add_argument("--endpoint", action="append", metavar="NAME=DIR", help="Put the root directory of the abstract's dataset NAME at DIR instead of under --root, or, for a name declared `protocol: s3`, at s3://BUCKET[/PREFIX] in the store the AWS_* environment names (repeatable; names sharing a root share its place). From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the [datagen] table of the config file (an array)")
     ap.add_argument("--threads", type=int, help="Writer threads (default: all cores)")
     ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` consecutive files share content [default: 1]")
     ap.add_argument("--compress", type=int, default=1, help="Compression ratio: the last (C−1)/C of every 1 MiB block is zeros [default: 1]")
@@ -338,6 +508,8 @@ def _main(a, ap: usage.Parser) -> int:
     print(f"abstract {ast['name']}  sha256 {sha}")
     layers.print()
     at = placement(ast, a.root, a.endpoint)
+    budget = Budget(available_memory() // 2)
+    print(f"memory for files held whole: {budget.total / 2**20:.0f} MiB (half of what was available)")
     provenance = {"abstract": ast["name"], "ast_sha256": sha, "params": values,
                   "param_files": [{"path": str(p), "sha256": params_mod.file_sha256(p)} for p in a.params_file]}
     wanted = set(a.dataset)
@@ -351,11 +523,12 @@ def _main(a, ap: usage.Parser) -> int:
                 raise BuildError(f"dataset `{name}` has no format class: `aeiou datagen` (the Rust writer) writes it")
             print(f"dataset {name}: no format class, left to `aeiou datagen`")
             continue
-        job = Job(ast, name, values, at, a.dedupe, a.compress)
+        job = Job(ast, name, values, at, a.dedupe, a.compress, budget)
         root = at(job.rel_root)
-        if root.exists() and any(root.iterdir()):
+        if not is_empty(root):
             raise BuildError(f"dataset `{name}`: {root} is not empty; datasets are read-only, remove it first")
-        root.mkdir(parents=True, exist_ok=True)
+        if not isinstance(root, Obj):
+            root.mkdir(parents=True, exist_ok=True)
         started = time.time()
         files_written = bytes_written = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.threads)) as ex:

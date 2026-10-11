@@ -5,7 +5,9 @@ The **format contract** is what a trace of the named reader library shows regard
 application that drives it: the *layout* (`schema/README.md` §2, *Container layout*: how the
 file frames its samples, from which the runner computes every offset), the reader's fixed
 *protocol* as ordinary POSIX nodes emitted on a cursor, the *access modes* it supports (V9),
-and the *writer* that `aeiou-datagen` uses to produce real files with the runner's payload.
+and the *writer* that `aeiou-datagen` uses to produce real files with the runner's payload,
+into a byte stream, so a file goes to a directory or an object store with no copy on a local
+file system (`DESIGN_REVIEW.md` §3.69).
 The **loader contract** stays in the abstract: access mode, how many shards a worker streams,
 column projection, batch composition.
 
@@ -99,6 +101,41 @@ def expected_sample_bytes(size, params: dict | None) -> float:
     raise BuildError(f"cannot take the mean of a `{kind}` size distribution")
 
 
+class Sink:
+    """The byte stream a writer writes into: counts the bytes and answers `tell` for libraries
+    that ask (`tarfile`, pyarrow), over `out` (a file, an object upload) or over nothing (a
+    count alone); keeps the last 8 bytes (a Parquet footer's length)."""
+
+    closed = False
+    mode = "wb"
+
+    def __init__(self, out=None):
+        self.out, self.n, self.tail = out, 0, b""
+
+    def write(self, b):
+        b = bytes(b)
+        if self.out is not None:
+            self.out.write(b)
+        self.n += len(b)
+        self.tail = (self.tail + b[-8:])[-8:]
+        return len(b)
+
+    def tell(self):
+        return self.n
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+    def writable(self):
+        return True
+
+    def seekable(self):
+        return False
+
+
 class FormatClass:
     """Base of the format classes. Subclasses set `name`, `reader`, `modes`, and implement
     `layout`, the protocol methods, and the writer."""
@@ -139,16 +176,23 @@ class FormatClass:
     def library(self) -> str:
         raise NotImplementedError
 
-    def write_file(self, path: str, first_id: int, sizes: list, payload, geo) -> None:
-        """Write one container holding samples `first_id …` of the given payload sizes;
-        `payload(logical_offset, n)` returns the sample bytes of the file's payload stream."""
+    def held(self, geo) -> int:
+        """Bytes this writer holds in memory at once for a file of this geometry beyond a
+        stream's buffer: 0 for a writer that streams (`aeiou-datagen` budgets the rest)."""
+        return 0
+
+    def write_file(self, out, first_id: int, sizes: list, payload, geo):
+        """Write one container holding samples `first_id …` of the given payload sizes into
+        `out`, a writable byte stream that need not seek (a `Sink`); `payload(logical_offset,
+        n)` returns the sample bytes of the file's payload stream. Returns what `check_file`
+        needs of the writer beyond the byte count (the library's own record of the layout)."""
         raise NotImplementedError
 
-    def check_file(self, path: str, sizes: list, geo) -> None:
-        """Compare the written file with the geometry the layout predicts; raise on drift."""
-        real = os.path.getsize(path)
-        if real != geo.file_size:
-            raise BuildError(f"{path}: {real} bytes written, the layout predicts {geo.file_size}: the format class's layout "
+    def check_file(self, name: str, written: int, sizes: list, geo, info) -> None:
+        """Compare the file as written with the geometry the layout predicts; raise on drift.
+        `written` is the bytes the stream took, `info` what `write_file` returned."""
+        if written != geo.file_size:
+            raise BuildError(f"{name}: {written} bytes written, the layout predicts {geo.file_size}: the format class's layout "
                              f"does not match its writer (library version?)")
 
     @classmethod
@@ -203,17 +247,16 @@ class TfRecord(FormatClass):
     def library(self):
         return f"aeiou tfrecord writer (crc32c {_lib('crc32c').__version__})"
 
-    def write_file(self, path, first_id, sizes, payload, geo):
-        with open(path, "wb") as out:
-            off = 0
-            for s in sizes:
-                data = payload(off, s)
-                off += s
-                length = struct.pack("<Q", s)
-                out.write(length)
-                out.write(struct.pack("<I", _masked_crc32c(length)))
-                out.write(data)
-                out.write(struct.pack("<I", _masked_crc32c(data)))
+    def write_file(self, out, first_id, sizes, payload, geo):
+        off = 0
+        for s in sizes:
+            data = payload(off, s)
+            off += s
+            length = struct.pack("<Q", s)
+            out.write(length)
+            out.write(struct.pack("<I", _masked_crc32c(length)))
+            out.write(data)
+            out.write(struct.pack("<I", _masked_crc32c(data)))
 
 
 # ----------------------------------------------------------------------------------------------
@@ -261,10 +304,10 @@ class WebDataset(FormatClass):
         import platform
         return f"tarfile (CPython {platform.python_version()})"
 
-    def write_file(self, path, first_id, sizes, payload, geo):
+    def write_file(self, out, first_id, sizes, payload, geo):
         import io
         import tarfile
-        with tarfile.open(path, "w", format=tarfile.USTAR_FORMAT) as tf:
+        with tarfile.open(fileobj=out, mode="w", format=tarfile.USTAR_FORMAT) as tf:
             off = 0
             for i, s in enumerate(sizes):
                 sid = first_id + i
@@ -360,11 +403,19 @@ class Hdf5(FormatClass):
     def library(self):
         return self.version()
 
-    def write_file(self, path, first_id, sizes, payload, geo):
+    def held(self, geo):
+        # the image and its copy out of the library
+        return 2 * geo.file_size
+
+    def write_file(self, out, first_id, sizes, payload, geo):
+        """Built whole in memory with the `core` driver, whose image is byte for byte the file
+        the disk driver writes, then written to `out`: libhdf5 seeks back over what it wrote,
+        so it cannot stream, and h5py's Python file-object driver lays the file out otherwise
+        (the data at 1400, not 2048, for the default shape; measured 2026-10-11, h5py 3.16)."""
         h5py, np = _lib("h5py"), _lib("numpy")
         row = self.row_bytes
         n = len(sizes)
-        with h5py.File(path, "w") as h:
+        with h5py.File(f"aeiou-{os.getpid()}-{first_id}.h5", "w", driver="core", backing_store=False) as h:
             d = h.create_dataset(self.dataset, shape=(n, *self.shape), dtype=self.dtype)
             step = max(1, (8 * MiB) // row)
             for i in range(0, n, step):
@@ -372,8 +423,11 @@ class Hdf5(FormatClass):
                 buf = payload(i * row, (j - i) * row)
                 d[i:j] = np.frombuffer(buf, dtype=self.dtype).reshape((j - i, *self.shape))
             got = d.id.get_offset()
-            if got != geo.layout.file_header:
-                raise BuildError(f"{path}: the dataset's data starts at {got}, the layout says {geo.layout.file_header}")
+            h.flush()
+            image = h.id.get_file_image()
+        if got != geo.layout.file_header:
+            raise BuildError(f"the dataset's data starts at {got}, the layout says {geo.layout.file_header}")
+        out.write(image)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -560,71 +614,45 @@ class Parquet(FormatClass):
                 fields.append(pa.field(name, getattr(pa, t)(), nullable=False))
         return pa.table(dict(zip([f.name for f in fields], arrays)), schema=pa.schema(fields))
 
-    class _Counting:
-        """A write-only sink that counts bytes and keeps the last 8 (the footer length)."""
-
-        def __init__(self):
-            self.n, self.tail = 0, b""
-
-        def write(self, b):
-            b = bytes(b)
-            self.n += len(b)
-            self.tail = (self.tail + b)[-8:]
-            return len(b)
-
-        def tell(self):
-            return self.n
-
-        def flush(self):
-            pass
-
-        def close(self):
-            pass
-
-        closed = False
-        mode = "wb"
-
-        def writable(self):
-            return True
-
-        def seekable(self):
-            return False
-
-    def _write(self, where, table, pad: int):
-        pq = _lib("pyarrow.parquet").parquet
-        w = pq.ParquetWriter(where, table.schema, **self.writer_options())
+    def _write(self, out, table, pad: int):
+        """Returns the footer's metadata as the writer wrote it."""
+        pa, pq = _lib("pyarrow"), _lib("pyarrow.parquet").parquet
+        w = pq.ParquetWriter(pa.PythonFile(out, mode="w"), table.schema, **self.writer_options())
         w.write_table(table, row_group_size=self.rows)
         w.add_key_value_metadata({"aeiou.pad": "p" * pad})
         w.close()
+        return w.writer.metadata
 
-    def write_file(self, path, first_id, sizes, payload, geo):
-        pa = _lib("pyarrow")
+    def held(self, geo):
+        # the table: every sample of the file before the first byte is written
+        return geo.file_size
+
+    def write_file(self, out, first_id, sizes, payload, geo):
         table = self._table(first_id, sizes, payload)
         # pass 1, into a counting sink: the natural footer with an empty pad entry
-        sink = self._Counting()
-        self._write(pa.PythonFile(sink, mode="w"), table, 0)
+        sink = Sink()
+        self._write(sink, table, 0)
         footer0 = int.from_bytes(sink.tail[:4], "little")
         target = geo.layout.file_footer - 8 + geo.layout.file_footer_per_unit * geo.units
         pad = target - footer0
         for _ in range(4):
             pad = target - footer0 - (varint_len(pad) - 1)
         if pad < 0:
-            raise BuildError(f"{path}: the natural footer ({footer0} bytes) exceeds the declared {target}: raise the class's footer margins")
-        self._write(path, table, pad)
+            raise BuildError(f"the natural footer ({footer0} bytes) exceeds the declared {target}: raise the class's footer margins")
+        return self._write(out, table, pad)
 
-    def check_file(self, path, sizes, geo):
-        super().check_file(path, sizes, geo)
-        pq = _lib("pyarrow.parquet").parquet
-        m = pq.ParquetFile(path).metadata
+    def check_file(self, name, written, sizes, geo, m):
+        """`m`: the footer's metadata as the writer wrote it."""
+        super().check_file(name, written, sizes, geo, m)
         if m.num_row_groups != geo.units:
-            raise BuildError(f"{path}: {m.num_row_groups} row groups, the layout predicts {geo.units}")
+            raise BuildError(f"{name}: {m.num_row_groups} row groups, the layout predicts {geo.units}")
         for r in range(m.num_row_groups):
             rg = m.row_group(r)
             for c in range(rg.num_columns):
                 cc = rg.column(c)
                 want_off, want_len = geo.col_offset(r, c), geo.col_lens[r][c]
                 if (cc.data_page_offset, cc.total_compressed_size) != (want_off, want_len):
-                    raise BuildError(f"{path}: row group {r} column {c} at {cc.data_page_offset} for {cc.total_compressed_size} bytes; the layout "
+                    raise BuildError(f"{name}: row group {r} column {c} at {cc.data_page_offset} for {cc.total_compressed_size} bytes; the layout "
                                      f"predicts {want_off} for {want_len} (a page header outside the declared band? keep every "
                                      f"column chunk's bytes within one varint band of the expected size)")
 

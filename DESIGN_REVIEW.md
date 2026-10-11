@@ -4999,6 +4999,69 @@ sections keep the old names as written, this section being the map (`training` �
 `input-pipeline`, `inference` → `model-loading`, `vdb` → `vector-search`, `synthetic` →
 `benchmarks`, `access` → `class`).
 
+### 3.69 `aeiou-datagen` to object stores: each file streamed into an upload, never staged on a local file system (discussed and decided 2026-10-11; built the same day)
+
+**The question (the user's).** The format libraries write to a local path, and h5py needs a
+file it can seek in; the obvious port (write the file locally, upload it, delete the copy)
+was called absurd by the user: a benchmark of a storage system with an object API cannot mix
+a local file system's performance with the system under test's.
+
+**The answer.** Two facts and a change. First, the staging could never have reached a scored
+number: `aeiou-datagen` prepares a dataset before the run and nothing times it; the scored run
+reads the objects through the runner's object engine with plain ranged `GET`s at offsets the
+layout computes (§3.65), and a run's own writes (checkpoints, KV chunks into an `s3`
+namespace) go out from the Rust engine as one upload per handle, with no format library and
+no local file system in either. So staging would have cost setup time and scratch capacity
+(both real at 50M files), not fairness. Second, an application that does write a container
+locally and then uploads it (HDF5's S3 driver, ROS3, is read-only, so pipelines do) has that
+in its trace, and the local write is part of its I/O under the interposition test, CLOSED:
+the abstract keeps it; that is the workload's property, not the tool's. The change: no
+local file system on the path, because none of the four writers needs one.
+
+**Decided (the user agreed to the recommendation and asked for it built, 2026-10-11).**
+
+1. **The client is `obstore`**, the Python bindings of Apache `object_store`, the runner's
+   engine (§3.65): one reading of the `AWS_*` environment and one multipart behavior on both
+   sides, a small wheel, no AWS SDK. Rejected: `boto3` (heavy, and it reads endpoints and
+   addressing its own way) and pyarrow's `S3FileSystem` (the AWS C++ SDK, its own
+   configuration, missing from some distributions' pyarrow). It is the builder's `s3` extra.
+2. **A writer writes into a byte stream, never a path.** TFRecord, tar, and Parquet append, so
+   they stream into the upload (one `PUT`, or a multipart upload in the runner's 8 MiB parts,
+   each sent before the next is filled). HDF5 cannot stream (libhdf5 seeks back over its
+   metadata), so it is built whole in memory with the `core` driver and the image written out.
+   Measured the same day: the `core` driver's image is byte for byte the disk driver's file,
+   while h5py's Python file-object driver lays the file out otherwise (the default shape's
+   data at 1400, not 2048), so the file-object route was not taken. The same path serves a
+   directory, so the two destinations write the same bytes by construction (the test compares
+   them anyway).
+3. **The check runs on what the writer wrote, before the close**: the byte count the stream
+   took and, for Parquet, the footer's metadata as the writer wrote it (the check read the file
+   back before; a library's own record of the layout is the same evidence and needs no `GET`).
+   A file that fails it aborts its upload, and so does any exception, so no partial object is
+   left; content verification stays the separate tool's.
+4. **A memory budget, never a fallback to local disk.** What a writer holds whole (HDF5: its
+   image and the copy out, twice the file; Parquet: its table, the file) is held within half
+   of `MemAvailable` at the start; a thread waits until its file fits, and a file larger than
+   the budget is refused with its size and the budget. No option: the budget is a property of
+   the host, as the default thread count is, and a flag in the `[datagen]` table would be one
+   the Rust `aeiou datagen` shares a table with and does not know. *Open to revision:* a
+   `--memory-mib` if a shared writer host needs it.
+5. **Placement as the runner's.** `--endpoint NAME=s3://BUCKET[/PREFIX]`, an object name with
+   no default place, an endpoint of its name's protocol's kind, a `posix` name never under a
+   root placed in a store, each refused in `endpoint.rs`'s words; the prefix must hold no key;
+   the manifest one `PUT` at the prefix.
+
+**Built 2026-10-11.** `builder/aeiou/formats.py` (`Sink`, `held`, the stream writers, HDF5 by
+the `core` driver), `builder/aeiou/datagen.py` (`Bucket`, `Obj`, `placement`, `opened`,
+`is_empty`, `Budget`, the manifest as an object), `builder/tests/test_object.py` against MinIO
+(every class into a bucket, every object equal to the directory writer's file and the
+manifests' ids equal, the runner's fingerprint under `--s3 blocking` and `async`, a
+three-part upload, an aborted one, the refusals), CI's `runner-object` job runs it,
+`man/aeiou-datagen.1.md`, `builder/REFERENCE.md` §6. HDF5 to a directory now goes through
+memory too (it wrote to disk in 8 MiB slices before): one path, at the cost of holding a
+file, within the budget. Not measured: datagen throughput into a real store (the measurement
+of brief item 17 is still to come).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
