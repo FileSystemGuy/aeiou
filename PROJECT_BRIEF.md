@@ -527,6 +527,10 @@ numbers; the order is this note's.
     take `--subset` for a smaller count, whole directories from 0; an inventory variant for
     large corpora. The payload became `aeiou-positional/3` (SFC64 in 4 KiB pieces, built the
     same day). The rest is not built.
+    *Revised later the same day (§3.70):* ~~`O_DIRECT` in the Python writer~~ dropped; the
+    container formats move to `aeiou datagen` behind a cargo feature `formats` (TFRecord and
+    tar, then HDF5 with its header made by h5py, then Parquet through parquet-rs), and the
+    rest of this item is built in Rust only, after them.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

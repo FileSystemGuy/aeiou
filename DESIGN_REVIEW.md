@@ -5128,8 +5128,10 @@ serialized them. Now:
   (70 MB here) is copied whole into one buffer, through pyarrow into one page per column
   chunk (the layout's contract), and out, each pass through DRAM where HDF5's 1 MiB blocks
   stay in cache; its footer-sizing pass is about a quarter of its time. Not pursued (each a
-  trade the user has not asked for): a Rust container writer from captured headers (a second
-  implementation of the formats), smaller pages (a different layout). Peak memory of a
+  trade the user has not asked for): ~~a Rust container writer from captured headers (a second
+  implementation of the formats),~~ (decided later the same day, §3.70: the formats move to
+  `aeiou datagen` behind the feature `formats`, HDF5's header from h5py, Parquet through
+  parquet-rs) smaller pages (a different layout). Peak memory of a
   writer process: 130 MiB (Parquet), 65 MiB (HDF5), 33 MiB (TFRecord).
 - *Found, not fixed (recorded for the user):* a Parquet file whose last row group is short
   fails the layout check, in the old writer as in the new: the layout gives each column one
@@ -5211,7 +5213,8 @@ prefix compress at the ratio, and the files `aeiou datagen` writes with dedupe 2
 equal the Python payload byte for byte. dgen remains a fine generator; the change is that
 our definition now depends on one small, fixed algorithm we hold on both sides.
 
-**2. `O_DIRECT` in the Python writer, always (decided).** The user: `O_DIRECT` is almost
+**2. ~~`O_DIRECT` in the Python writer, always (decided).~~ Dropped 2026-10-11, later
+(below): the container formats move to the Rust writer, which already writes `O_DIRECT`.** The user: `O_DIRECT` is almost
 always faster than buffered, and §3.62 forbids filling the client's page cache. The Python
 `Sink` writes directory roots through a 4 KiB-aligned 1 MiB staging buffer, with the tail
 handled as the Rust writer does (tried unaligned, padded and truncated on `EINVAL`).
@@ -5283,10 +5286,62 @@ reference; a `regions` dataset or a dataset without an access mode (a DiskANN in
 graph over every node) is refused. Whether a scored step may run on a subset is the WG's
 question (`PROJECT_BRIEF.md` §8), not aeiou's.
 
-**Order.** (1) The payload (built). (2) `O_DIRECT` in the Python writer, measured. (3) The
+**Order.** ~~(1) The payload (built). (2) `O_DIRECT` in the Python writer, measured. (3) The
 manifest from the start, the progress messages, and resume, on both writers. (4) Whole
 directories and per-rank directories. (5) Grow and shrink. (6) Subset runs and the
-inventory variant. Each with tests on one host and on two ranks.
+inventory variant. Each with tests on one host and on two ranks.~~ Superseded 2026-10-11,
+later (below): the container formats move to Rust first, and items (3) to (6) are built in
+Rust only.
+
+**Revised 2026-10-11, later (decided with the user; nothing built): the container formats
+move to `aeiou datagen`, and item 23 is built in Rust alone.** Building resume, progress,
+and grow/shrink twice, once in each writer, raised the question of keeping two writers at
+all. The user: "attracted to the rust foundation, python is invariably slow" (the Python
+writer reached 8.2 GB/s at 16 writers for TFRecord, the Rust writer 22.5 for plain files;
+Parquet under `/2` 2.1). Decided:
+
+1. *A writer module beside `datagen.rs`, behind a cargo feature `formats`*, off by default
+   as `object` is. The runner proper (an AST executed by `run`) is not the basis, and the
+   user accepted why: an AST writes only positional payload, with no headers, CRCs, or
+   footers (the runner is format-ignorant); a namespace's rules (content keyed on the path
+   hash, `--seed` and `--gpus` in its identity) are not a dataset's; and progress, resume,
+   and `O_DIRECT` staging are datagen's logic, not the op language's. `aeiou datagen`
+   refuses format-class datasets today; that refusal is lifted per format as Rust takes it
+   over.
+2. *TFRecord and tar first.* TFRecord is our own framing (u64 length, masked crc32c of the
+   length, the data, masked crc32c of the data) with the crate `crc32c`; tar (WebDataset)
+   through the crate `tar` or our own 512-byte headers, at the offsets Python's `tarfile`
+   gives. Both byte-identical to the Python writer, which the tests compare against.
+3. *HDF5: the header from Python, the rows from Rust.* The header bytes are made by h5py,
+   the reader's own libhdf5, so their version always matches the reader's; Rust writes
+   header and rows. No C link: `hdf5-metno-src` 0.10.4 bundles HDF5 2.2.0 while the reader
+   here is h5py 3.16 on HDF5 2.0.0, and the header bytes may differ between them; the pure
+   Rust crates (`hdf5-pure`, `hdf5-writer`) are young and are not what real producers use.
+   So an HDF5 datagen has a Python step first (about 1 ms a header), carried in the
+   manifest written at the start (item 3 above). Open: who writes that manifest, and how
+   Rust receives the header.
+4. *Parquet through parquet-rs* (the arrow-rs crate `parquet`), not byte-identical to
+   pyarrow: PLAIN, uncompressed, no statistics, no page index (to verify: arrow-rs may write
+   them by default), one page per column chunk; the layout constants come from the Rust
+   writer, the manifest's `format.writer` names parquet-rs, so its dataset ids differ from
+   pyarrow-written ones. Checked with `aeiou-trace`: pyarrow reading Rust-written files,
+   compared with the abstract. Brief item 31 (the short last row group) is re-examined
+   there.
+5. *`O_DIRECT` in the Python writer is dropped* (item 2 above, superseded). The Python
+   `aeiou-datagen` stays as the byte and behaviour reference in tests until it is retired.
+6. *Order:* (a) TFRecord and tar in Rust; (b) HDF5 with the header from the start
+   manifest; (c) Parquet through parquet-rs with the pyarrow trace check; (d) items 3 to 6
+   above in Rust only: the manifest from the start with its state and per-writer progress,
+   resume, whole and per-rank directories, grow and shrink, `run --subset`, and the
+   inventory variant.
+
+Crates checked on crates.io 2026-10-11, for this and later formats: `parquet` 60.0.0,
+`arrow-ipc` 60.0.0, `tfrecord` 0.15.0, `tar` 0.4.46, `crc32c` 0.6.8, `safetensors` 0.8.0
+(Hugging Face's own), `zarrs` 0.23.14, `lance` 13.0.0, `orc-rust` 0.9.0, `apache-avro`
+0.22.0, `heed` 0.22.1 (LMDB), `npyz` 0.9.1, `zip` 9.0.2. The speeds to beat, 8 GiB to tmpfs
+at 1 / 4 / 16 writers under `/3`: Rust plain files 2.2 / 12.4 / 22.5 GB/s (`C = 1`), 3.2 /
+11.0 / 20.9 (`C = 2`); Python TFRecord 1.3 / 5.5 / 8.2. Parquet and HDF5 under `/3` are not
+measured (under `/2`: 0.7 / 1.7 / 2.1 and 1.3 / 3.7 / 5.3).
 
 ## 4. Plan changes
 

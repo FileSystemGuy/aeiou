@@ -255,7 +255,9 @@ Not built, in rough order of interest:
   not drawn at one reference engine.
 - `datagen --resume` (rewrite what is missing or short, by size alone), growing a corpus
   in place, and a run over the first *S* ids of a larger corpus (item 23): one long datagen
-  on a fleet, then a series of runs growing toward the saturation point.
+  on a fleet, then a series of runs growing toward the saturation point. First, decided
+  2026-10-11 (`DESIGN_REVIEW.md` §3.70): the container formats written by `aeiou datagen`
+  in Rust behind a cargo feature `formats`, so that item 23 is built once, in Rust.
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),
   and concurrent mixes of cases (item 30, critical but not yet; `DESIGN_REVIEW.md` §3.67).
