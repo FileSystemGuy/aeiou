@@ -3,9 +3,11 @@
 layout's geometry, and, when the runner binary is built (`AEIOU_RUNNER` or
 runner/target/release/aeiou), `aeiou run` executing the new abstracts over the generated
 corpus to the dry-run fingerprint."""
+import io
 import json
 import os
 import pathlib
+import re
 import struct
 import subprocess
 import sys
@@ -105,6 +107,9 @@ def test_specs_probes_and_v9():
     assert formats.tfrecord().spec("stream", lognormal(median=110 * KiB, sigma=0.45), {})["layout"]["columns"] == [{"row_header": 12, "row_footer": 4, "weight": 1}]
     with pytest.raises(BuildError, match="binary"):
         formats.parquet(columns=(("a", "int64"),))
+    # the narrow integers are INT32 in a PLAIN page, 4 bytes a row
+    narrow = formats.parquet(columns=(("image", "binary"), ("a", "int8"), ("b", "uint8"), ("c", "int16"))).spec("stream", const(1000), {})
+    assert [c["fixed"] for c in narrow["layout"]["columns"]] == [4, 4, 4, 4]
     assert formats.FormatClass.from_spec(spec).rows == 64
     assert formats.expected_sample_bytes(lognormal(median=1000, sigma=0.001), {}) == pytest.approx(1000.0, abs=0.01)
     assert formats.expected_sample_bytes({"normal": {"mean": {"param": "m"}, "sd": 1}}, {"m": 42}) == 42.0
@@ -285,10 +290,6 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
         assert "fingerprint matches" in run.stdout
         if name == "parquet_stream":
             assert "fadvise" in run.stdout
-    # the Rust writer refuses the format class it does not write yet (the others: below)
-    if name == "parquet_stream":
-        r = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "other", *flags], capture_output=True, text=True)
-        assert r.returncode != 0 and "aeiou-datagen" in r.stderr, r.stderr
 
 
 def webdataset_ast(tmp_path, members=(("jpg", None), ("cls", 4), ("json", 700))):
@@ -303,11 +304,26 @@ def webdataset_ast(tmp_path, members=(("jpg", None), ("cls", 4), ("json", 700)))
     return p
 
 
+def parquet_types_ast(tmp_path):
+    """`parquet_stream` with a column of every fixed-width type around the sample's."""
+    a = json.loads(ast_path("parquet_stream").read_text())
+    f = a["datasets"]["shards"]["files"]
+    cols = (("a", "int8"), ("b", "uint8"), ("c", "int16"), ("image", "binary"), ("d", "float32"), ("e", "int32"), ("g", "float64"), ("h", "int64"))
+    f["format"] = formats.parquet(rows_per_group=64, columns=cols).spec("stream", f["size"], {k: p["default"] for k, p in a["params"].items()})
+    a["name"] = "parquet_types"
+    p = tmp_path / "parquet_types.ast.json"
+    p.write_text(json.dumps(a))
+    return p
+
+
 # each writer's case: the abstract, its corpus parameters (a short last file), and the run's
 RUST_CASES = {
     "tfrecord": (lambda tmp: ast_path("tfrecord_stream"), ["samples=700", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
     "webdataset": (webdataset_ast, ["samples=700", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
     "hdf5": (lambda tmp: ast_path("hdf5_map"), ["samples=70", "per_file=16"], ["batch=4", "workers=2", "steps=4"]),
+    # whole row groups and no short last file (brief item 31)
+    "parquet": (lambda tmp: ast_path("parquet_stream"), ["samples=768", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    "parquet_types": (parquet_types_ast, ["samples=768", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
 }
 
 
@@ -319,7 +335,8 @@ def _params(names):
 @pytest.mark.parametrize("name", sorted(RUST_CASES))
 def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     """`aeiou datagen` built with the cargo feature `formats` (DESIGN_REVIEW.md §3.70): every
-    TFRecord, WebDataset, and HDF5 file is the Python writer's byte for byte, with dedupe,
+    TFRecord, WebDataset, HDF5, and Parquet file is the Python writer's byte for byte (a
+    Parquet footer but for its `created_by` and the pad that makes up for it), with dedupe,
     compression, and a short last file; the manifest the same definition and payload, its
     `format.writer` the Rust writer (so the dataset id differs). HDF5's headers come from
     `aeiou-header` beside the binary."""
@@ -331,7 +348,7 @@ def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     if "--features formats" in rs.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert rs.returncode == 0, rs.stdout + rs.stderr
-    assert f"({name}, aeiou datagen " in rs.stdout
+    assert f"({name.split('_')[0]}, aeiou datagen " in rs.stdout
     py = _tool("datagen", [ast_file, "--root", tmp_path / "py", "--writers", "3", *flags])
     assert py.returncode == 0, py.stdout + py.stderr
     _same_files(tmp_path / "rs", tmp_path / "py", 6 if name != "hdf5" else 5)
@@ -353,14 +370,34 @@ def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     assert "fingerprint matches" in run.stdout
 
 
+def _parquet_parts(b):
+    """A Parquet file as its row groups and its footer with `created_by` and the `aeiou.pad`
+    value taken out (the two things the Rust and Python writers' files differ in)."""
+    import pyarrow.parquet as pq
+    n = int.from_bytes(b[-8:-4], "little")
+    footer = b[-8 - n:-8]
+    created = pq.ParquetFile(io.BytesIO(b)).metadata.created_by.encode()
+    assert len(created) < 128 and footer.count(bytes([len(created)]) + created) == 1
+    footer = footer.replace(bytes([len(created)]) + created, b"")
+    footer, k = re.subn(rb"\taeiou\.pad\x18[\x80-\xff]*[\x00-\x7f]p*\x00", b"", footer)
+    assert k == 1
+    return b[:-8 - n], footer, b[-8:]
+
+
 def _same_files(a, b, n):
-    """The trees `a` and `b` hold the same `n` data files, byte for byte, and a manifest each."""
+    """The trees `a` and `b` hold the same `n` data files, byte for byte (Parquet: but for the
+    footer's `created_by` and pad), and a manifest each."""
     files = sorted(p.relative_to(a) for p in a.rglob("*") if p.is_file())
     assert files == sorted(p.relative_to(b) for p in b.rglob("*") if p.is_file())
     assert len(files) == n + 1
     for f in files:
-        if f.name != ".aeiou-dataset.json":
-            assert (a / f).read_bytes() == (b / f).read_bytes(), f
+        if f.name == ".aeiou-dataset.json":
+            continue
+        x, y = (a / f).read_bytes(), (b / f).read_bytes()
+        if f.suffix == ".parquet":
+            assert len(x) == len(y), f
+            x, y = _parquet_parts(x), _parquet_parts(y)
+        assert x == y, f
 
 
 @needs_runner

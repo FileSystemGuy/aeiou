@@ -453,7 +453,10 @@ class Hdf5(FormatClass):
 # Parquet
 # ----------------------------------------------------------------------------------------------
 
-FIXED_WIDTH = {"int64": 8, "int32": 4, "int16": 2, "int8": 1, "uint8": 1, "float64": 8, "float32": 4}
+# a fixed-width column's bytes per row in a Parquet PLAIN page: its physical type's width (int8,
+# int16, and uint8 are INT32 with a logical type, 4 bytes each; found 2026-10-12, when the
+# widths were the Arrow types' and the writer's own check refused such a column)
+FIXED_WIDTH = {"int64": 8, "int32": 4, "int16": 4, "int8": 4, "uint8": 4, "float64": 8, "float32": 4}
 
 
 def parquet_page_header(data_bytes: int, rows: int) -> int:

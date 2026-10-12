@@ -42,7 +42,7 @@ computes every offset of a framed container from `format.layout`, `consume` unde
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
 classes is the Python side (`aeiou-datagen`, `builder/REFERENCE.md`); ~~`aeiou datagen` refuses a
 dataset that has a format class~~ since 2026-10-12 `aeiou datagen` built with the cargo feature
-`formats` writes TFRecord and WebDataset itself (§5, *Containers*), and HDF5 since the same day, and refuses Parquet.
+`formats` writes TFRecord and WebDataset itself (§5, *Containers*), and HDF5 and Parquet since the same day.
 
 ```
 aeiou/src/
@@ -496,8 +496,16 @@ as root). The same runs on the loopback NFS mount are §7.
   The rows follow, contiguous, from the payload. `format.writer` names `aeiou datagen hdf5
   writer` and the header's library versions; the provenance records each header's SHA-256
   (`headers`). The release ships `aeiou-header` as one file in `bin/`; a source tree links the
-  venv's entry point beside `target/release/aeiou`. Parquet is refused (it comes next, §3.70);
-  without the feature, every format class is. A corpus with both kinds is written by both tools, each dataset by
+  venv's entry point beside `target/release/aeiou`. ~~Parquet is refused (it comes next, §3.70);~~
+  **Parquet** (the same day, §3.70 revised: our own writer, not parquet-rs): `PAR1`, per row
+  group per column one PLAIN, uncompressed page (the header in thrift's compact protocol,
+  an empty statistics struct), a binary row its 4-byte length and then the payload in place,
+  a fixed column's values the Python writer's; the footer (`FileMetaData`) made at the end
+  from the chunks as written and padded with the key `aeiou.pad` to the layout's size, then
+  its length and `PAR1`. Each chunk's header and each row group's offset is checked against
+  the layout. Byte for byte pyarrow's file with the class's options but for `created_by`,
+  `aeiou datagen parquet writer`, which `format.writer` names too. Without the feature,
+  every format class is refused. A corpus with both kinds is written by both tools, each dataset by
   one of them. `aeiou-datagen` takes the same `--ranks`, `--rank`, and `--coordinator`, splits
   the ids the same way, and speaks this coordinator's protocol from Python
   (`builder/aeiou/coord.py`, 2026-10-11: the frames of §6, the datagen's subset of `Msg`, the

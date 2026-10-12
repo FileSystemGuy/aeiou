@@ -78,8 +78,8 @@ root that refuses `O_DIRECT` falls back to the page cache, said once). The manif
 `.aeiou-dataset.json` is written last, atomically, at each dataset root, and its id is
 printed. A non-empty root is refused: datasets are read-only. A dataset that declares a
 container format class is written by **aeiou-datagen**(1); a build with the cargo feature
-`formats` (the release's) writes TFRecord, tar (WebDataset), and HDF5 here too, the same
-bytes, and refuses Parquet. An HDF5 file's header comes from **aeiou-header**(1), which must
+`formats` (the release's) writes TFRecord, tar (WebDataset), HDF5, and Parquet here too,
+the same bytes (a Parquet footer names this writer as `created_by`). An HDF5 file's header comes from **aeiou-header**(1), which must
 sit beside this binary; only rank 0 runs it.
 
 On several hosts (`--ranks`, `--rank`, `--coordinator`, as for `run`; **aeiou-launch**(1)

@@ -245,8 +245,9 @@ numbers; the order is this note's.
    format-class writers done the same day** as `aeiou-datagen` in Python (`builder/REFERENCE.md`
    §6, `DESIGN_REVIEW.md` §3.28): real Parquet, TFRecord, HDF5, and tar files with the same
    payload (~~the `dgen-py` wheel reproduces the Rust crate's bytes~~ numpy's `SFC64` since 2026-10-11), sizes, names, and manifest;
-   `aeiou datagen` refuses datasets with a format class (~~all~~ ~~HDF5 and Parquet~~ Parquet since
-   2026-10-12: built with the cargo feature `formats` it writes TFRecord, tar, and HDF5, `DESIGN_REVIEW.md` §3.70). The Python `aeiou-verify` tool is
+   `aeiou datagen` refuses datasets with a format class (~~all~~ ~~HDF5 and Parquet~~ ~~Parquet~~ none since
+   2026-10-12: built with the cargo feature `formats` it writes TFRecord, tar, HDF5, and, later the same
+   day, Parquet, `DESIGN_REVIEW.md` §3.70; without the feature, all). The Python `aeiou-verify` tool is
    still to come. **Extended 2026-10-04 (`DESIGN_REVIEW.md` §3.62):** `aeiou datagen` runs
    across hosts with the same `--ranks`/`--rank`/`--coordinator` as `run` (each rank its
    contiguous slice of the ids, a `regions` file by one rank, the manifest by rank 0 once
@@ -530,11 +531,13 @@ numbers; the order is this note's.
     same day). The rest is not built.
     *Revised later the same day (§3.70):* ~~`O_DIRECT` in the Python writer~~ dropped; the
     container formats move to `aeiou datagen` behind a cargo feature `formats` (TFRecord and
-    tar, then HDF5 with its header made by h5py, then Parquet through parquet-rs), and the
+    tar, then HDF5 with its header made by h5py, then Parquet ~~through parquet-rs~~ by our
+    own writer, revised 2026-10-12), and the
     rest of this item is built in Rust only, after them. TFRecord and tar **built
     2026-10-12** (byte for byte the Python writer's; 20.7 and 22.6 GB/s to tmpfs at 16
     writers against Python's 5.9 and 4.8); HDF5 the same day, its header from `aeiou-header`
-    beside `aeiou`, run by rank 0 alone (14.8 GB/s against 6.9).
+    beside `aeiou`, run by rank 0 alone (14.8 GB/s against 6.9); Parquet the same day, our
+    own writer, pyarrow's bytes but for `created_by` (22.6 GB/s against 4.5).
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

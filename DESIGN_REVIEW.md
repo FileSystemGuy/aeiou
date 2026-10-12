@@ -5130,8 +5130,8 @@ serialized them. Now:
   stay in cache; its footer-sizing pass is about a quarter of its time. Not pursued (each a
   trade the user has not asked for): ~~a Rust container writer from captured headers (a second
   implementation of the formats),~~ (decided later the same day, §3.70: the formats move to
-  `aeiou datagen` behind the feature `formats`, HDF5's header from h5py, Parquet through
-  parquet-rs) smaller pages (a different layout). Peak memory of a
+  `aeiou datagen` behind the feature `formats`, HDF5's header from h5py, Parquet ~~through
+  parquet-rs~~ by our own writer, revised 2026-10-12) smaller pages (a different layout). Peak memory of a
   writer process: 130 MiB (Parquet), 65 MiB (HDF5), 33 MiB (TFRecord).
 - *Found, not fixed (recorded for the user):* a Parquet file whose last row group is short
   fails the layout check, in the old writer as in the new: the layout gives each column one
@@ -5320,17 +5320,18 @@ Parquet under `/2` 2.1). Decided:
    So an HDF5 datagen has a Python step first (about 1 ms a header), carried in the
    manifest written at the start (item 3 above). Open: who writes that manifest, and how
    Rust receives the header.
-4. *Parquet through parquet-rs* (the arrow-rs crate `parquet`), not byte-identical to
+4. ~~*Parquet through parquet-rs* (the arrow-rs crate `parquet`), not byte-identical to
    pyarrow: PLAIN, uncompressed, no statistics, no page index (to verify: arrow-rs may write
    them by default), one page per column chunk; the layout constants come from the Rust
    writer, the manifest's `format.writer` names parquet-rs, so its dataset ids differ from
    pyarrow-written ones. Checked with `aeiou-trace`: pyarrow reading Rust-written files,
    compared with the abstract. Brief item 31 (the short last row group) is re-examined
-   there.
+   there.~~ Revised 2026-10-12: Parquet by our own writer, below.
 5. *`O_DIRECT` in the Python writer is dropped* (item 2 above, superseded). The Python
    `aeiou-datagen` stays as the byte and behaviour reference in tests until it is retired.
 6. *Order:* (a) TFRecord and tar in Rust; (b) HDF5 with the header from the start
-   manifest; (c) Parquet through parquet-rs with the pyarrow trace check; (d) items 3 to 6
+   manifest; (c) Parquet ~~through parquet-rs with the pyarrow trace check~~ by our own
+   writer (revised 2026-10-12, below); (d) items 3 to 6
    above in Rust only: the manifest from the start with its state and per-writer progress,
    resume, whole and per-rank directories, grow and shrink, `run --subset`, and the
    inventory variant.
@@ -5418,7 +5419,49 @@ the headers arriving with `Start`. 8 GiB to tmpfs, 64 files of 682 rows of 192 K
 1 / 4 / 16 writers: Python 2.0 / 5.3 / 6.9, Rust 2.8 / 8.4 / 14.8. At 16 the Rust figure is
 the 0.16 s of the tool on a 0.4 s write; 8 GiB at plain files' 21.2 GB/s plus 0.16 s is
 15.2, so the rows go as fast as plain files and the tool is a fixed cost a real corpus does
-not see. Next: (c), Parquet through parquet-rs.
+not see. ~~Next: (c), Parquet through parquet-rs.~~
+
+**Revised 2026-10-12: Parquet by our own writer, not parquet-rs (decision 4 above).**
+Before building (c) the question was who owns the layout's constants (the page header
+formula, the footer's size), which the Python class probes from pyarrow at build time. The
+footer pyarrow writes with the class's options, decoded, turned out small and of one shape:
+`FileMetaData` with the schema (the narrow integers with their converted and logical
+types), `num_rows`, per row group its chunks' `ColumnMetaData` (type, encodings
+`[RLE, PLAIN]`, path, codec, counts, sizes, `data_page_offset`, `encoding_stats`, and for
+the binary column `size_statistics`), the key `aeiou.pad`, `created_by`, `column_orders`;
+the page header `16 + 2 varints + 1`; every field a function of the sizes, none of the
+bytes. Recommended and decided by the user: write it ourselves, as tar and TFRecord are, for
+these reasons. It is about 200 lines (a compact-protocol encoder for these structs, the
+header, the footer). It is one pass: the footer follows from the chunks as written, where
+pyarrow needs a counting pass to size its pad and parquet-rs would hold a row group in
+memory and bring its own page and offset-index choices. The question of ownership goes
+away: the layout stays the Python class's (the AST's `format.layout`), and the Rust writer
+checks every chunk's header and every row group's offset against it and refuses a
+mismatch, the rule tar, TFRecord, and HDF5 follow. The files are pyarrow's byte for byte
+but for `created_by`, which names our writer rather than claim `parquet-cpp-arrow` (the
+pad takes up the difference in length, so the size and every offset are the same), so the
+tests compare bytes with the Python writer rather than only reading the files back. And it
+needs no arrow-rs dependency tree. Brief item 31 is not changed by either writer (the
+runner's layout gives a column one header size), so the refusal stays.
+
+**Built 2026-10-12: (c), Parquet.** `formats.rs`: `Thrift` (compact protocol: field
+deltas, zigzag varints, binaries, lists), `parquet_page_header`, `parquet_footer`,
+`parquet_tail` (the pad found in at most four tries, since its length prefix can grow), and
+the stream: `PAR1`, per row group per column the page header and the rows (a binary row its
+4-byte length, then the payload in place; a fixed column's values, the Python writer's
+`(id % 1000)` cast to the type, or the id as a float), the footer. `format.writer` and
+`created_by` are `aeiou datagen parquet writer`. Unit tests pin pyarrow 25.0.1's bytes: two
+page headers, and the footer of a file of six columns (every narrow type, a float, the
+binary) given pyarrow's `created_by`. The builder's tests compare `aeiou datagen` with
+`aeiou-datagen` on `parquet_stream` and on a variant with a column of every fixed type, to a
+directory and into MinIO (multipart), everything before the footer byte for byte and the
+footer with `created_by` and the pad taken out, then run the abstract over the files to the
+dry run's fingerprint. Found on the way: `FIXED_WIDTH` gave `int8`, `uint8`, and `int16`
+their Arrow widths (1, 1, 2), but a PLAIN page stores them as INT32, 4 bytes, so the
+Python writer's own check refused any such column; fixed in `formats.py` (no committed
+abstract had one). 8 GiB (9.5 GB, lognormal around 128 KiB, 64 files of 1024 rows) to
+tmpfs, GB/s at 1 / 4 / 16 writers: Python 0.7 / 1.8 / 4.5, Rust 2.2 / 12.1 / 22.6, plain
+files' speed. Next: (d), brief item 23 in Rust.
 
 ## 4. Plan changes
 

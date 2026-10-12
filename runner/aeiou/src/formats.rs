@@ -17,7 +17,12 @@
 //! - **HDF5**: the header from `aeiou-header` (the format's own libhdf5, a tool beside this
 //!   binary that rank 0 alone runs, §3.70 revised 2026-10-12), then the rows, contiguous.
 //!
-//! Parquet is still the Python writer's (`aeiou-datagen`).
+//! - **Parquet**: our own writer (§3.70, revised 2026-10-12, in place of parquet-rs): `PAR1`, row
+//!   groups of one PLAIN, uncompressed, statistics-free page per column chunk, the thrift
+//!   (compact protocol) footer padded to the layout's size, its length, `PAR1`. Byte for byte
+//!   what pyarrow writes with the class's options but for `created_by`, which names this writer
+//!   (the pad takes up the difference, so every offset is the same). The footer is a function
+//!   of the sizes alone, made at the end from the chunks as written.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -40,6 +45,82 @@ pub enum Writer {
     WebDataset { members: Vec<(String, Option<u64>)> },
     /// The header of a file of so many rows (`set_headers`), and the library that made it.
     Hdf5 { headers: BTreeMap<i64, Vec<u8>>, version: String },
+    /// `(name, type)` per column, exactly one `Binary` (the sample).
+    Parquet { columns: Vec<(String, PqType)> },
+}
+
+/// A Parquet column's type (`FIXED_WIDTH` in `builder/aeiou/formats.py`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PqType {
+    Binary,
+    Int64,
+    Int32,
+    Int16,
+    Int8,
+    UInt8,
+    Float64,
+    Float32,
+}
+
+impl PqType {
+    fn parse(t: &str) -> Option<PqType> {
+        Some(match t {
+            "binary" => PqType::Binary,
+            "int64" => PqType::Int64,
+            "int32" => PqType::Int32,
+            "int16" => PqType::Int16,
+            "int8" => PqType::Int8,
+            "uint8" => PqType::UInt8,
+            "float64" => PqType::Float64,
+            "float32" => PqType::Float32,
+            _ => return None,
+        })
+    }
+
+    /// The physical type (`parquet.thrift` `Type`): INT32 1, INT64 2, FLOAT 4, DOUBLE 5, BYTE_ARRAY 6.
+    fn physical(self) -> i32 {
+        match self {
+            PqType::Binary => 6,
+            PqType::Int64 => 2,
+            PqType::Float64 => 5,
+            PqType::Float32 => 4,
+            _ => 1,
+        }
+    }
+
+    /// Bytes a row takes in a PLAIN page (a fixed-width column).
+    fn width(self) -> u64 {
+        match self {
+            PqType::Int64 | PqType::Float64 => 8,
+            _ => 4,
+        }
+    }
+
+    /// `(converted type, bit width, signed)` of the narrow integers, written as INT32.
+    fn narrow(self) -> Option<(i32, i8, bool)> {
+        match self {
+            PqType::Int8 => Some((15, 8, true)),
+            PqType::Int16 => Some((16, 16, true)),
+            PqType::UInt8 => Some((11, 8, false)),
+            _ => None,
+        }
+    }
+
+    /// Sample `id`'s value, PLAIN: the Python writer's `(id % 1000).astype(t)` for the
+    /// integers (wrapping), `id.astype(t)` for the floats.
+    fn value(self, id: i64, out: &mut Vec<u8>) {
+        let m = id % 1000;
+        match self {
+            PqType::Int64 => out.extend_from_slice(&m.to_le_bytes()),
+            PqType::Int32 => out.extend_from_slice(&(m as i32).to_le_bytes()),
+            PqType::Int16 => out.extend_from_slice(&(m as i16 as i32).to_le_bytes()),
+            PqType::Int8 => out.extend_from_slice(&(m as i8 as i32).to_le_bytes()),
+            PqType::UInt8 => out.extend_from_slice(&(m as u8 as i32).to_le_bytes()),
+            PqType::Float64 => out.extend_from_slice(&(id as f64).to_le_bytes()),
+            PqType::Float32 => out.extend_from_slice(&(id as f32).to_le_bytes()),
+            PqType::Binary => unreachable!("the binary column is the sample"),
+        }
+    }
 }
 
 impl Writer {
@@ -64,7 +145,20 @@ impl Writer {
                 Ok(Writer::WebDataset { members })
             }
             "hdf5" => Ok(Writer::Hdf5 { headers: BTreeMap::new(), version: format["version"].as_str().unwrap_or("?").to_string() }),
-            "parquet" => bail!("dataset `{dataset}` is a `{class}` container: the Python writer writes it (`aeiou-datagen`; builder/REFERENCE.md §6), not yet `aeiou datagen`"),
+            "parquet" => {
+                let given = settings["columns"].as_array().cloned().unwrap_or_else(|| vec![json!(["image", "binary"]), json!(["label", "int64"])]);
+                let mut columns = Vec::new();
+                for c in &given {
+                    let (Some(name), Some(t)) = (c[0].as_str(), c[1].as_str().and_then(PqType::parse)) else {
+                        bail!("dataset `{dataset}`: parquet column {c}: expected [name, binary or a fixed-width type]")
+                    };
+                    columns.push((name.to_string(), t));
+                }
+                if columns.iter().filter(|(_, t)| *t == PqType::Binary).count() != 1 {
+                    bail!("dataset `{dataset}`: parquet: exactly one `binary` column carries the sample");
+                }
+                Ok(Writer::Parquet { columns })
+            }
             _ => bail!("dataset `{dataset}`: no writer for format class `{class}`"),
         }
     }
@@ -75,6 +169,7 @@ impl Writer {
             Writer::TfRecord => "aeiou datagen tfrecord writer".into(),
             Writer::WebDataset { .. } => "aeiou datagen ustar writer".into(),
             Writer::Hdf5 { version, .. } => format!("aeiou datagen hdf5 writer (header: aeiou-header, {version})"),
+            Writer::Parquet { .. } => PARQUET_CREATED_BY.into(),
         }
     }
 
@@ -175,6 +270,268 @@ fn tar_header(name: &str, size: u64) -> Result<[u8; 512]> {
     Ok(h)
 }
 
+/// The `created_by` of the files this writer makes, and its name in the manifest.
+const PARQUET_CREATED_BY: &str = "aeiou datagen parquet writer";
+
+/// Thrift's compact protocol, the parts a Parquet footer uses: struct fields by id delta,
+/// zigzag varints, binaries, lists.
+struct Thrift {
+    out: Vec<u8>,
+    /// The last field id of each open struct.
+    last: Vec<i16>,
+}
+
+const T_TRUE: u8 = 1;
+const T_FALSE: u8 = 2;
+const T_BYTE: u8 = 3;
+const T_I32: u8 = 5;
+const T_I64: u8 = 6;
+const T_BINARY: u8 = 8;
+const T_LIST: u8 = 9;
+const T_STRUCT: u8 = 12;
+
+impl Thrift {
+    fn new() -> Thrift {
+        Thrift { out: Vec::new(), last: vec![0] }
+    }
+
+    fn varint(&mut self, mut v: u64) {
+        while v >= 0x80 {
+            self.out.push(v as u8 | 0x80);
+            v >>= 7;
+        }
+        self.out.push(v as u8);
+    }
+
+    fn zigzag(&mut self, v: i64) {
+        self.varint(((v << 1) ^ (v >> 63)) as u64);
+    }
+
+    fn field(&mut self, id: i16, t: u8) {
+        let last = self.last.last_mut().expect("an open struct");
+        let d = id - *last;
+        *last = id;
+        if (1..=15).contains(&d) {
+            self.out.push((d as u8) << 4 | t);
+        } else {
+            self.out.push(t);
+            self.zigzag(id as i64);
+        }
+    }
+
+    fn i32(&mut self, id: i16, v: i32) {
+        self.field(id, T_I32);
+        self.zigzag(v as i64);
+    }
+
+    fn i64(&mut self, id: i16, v: i64) {
+        self.field(id, T_I64);
+        self.zigzag(v);
+    }
+
+    fn byte(&mut self, id: i16, v: i8) {
+        self.field(id, T_BYTE);
+        self.out.push(v as u8);
+    }
+
+    fn bool(&mut self, id: i16, v: bool) {
+        self.field(id, if v { T_TRUE } else { T_FALSE });
+    }
+
+    fn binary(&mut self, id: i16, b: &[u8]) {
+        self.field(id, T_BINARY);
+        self.elem_binary(b);
+    }
+
+    fn elem_binary(&mut self, b: &[u8]) {
+        self.varint(b.len() as u64);
+        self.out.extend_from_slice(b);
+    }
+
+    /// A list field of `n` elements of type `t`; the elements follow.
+    fn list(&mut self, id: i16, n: usize, t: u8) {
+        self.field(id, T_LIST);
+        if n < 15 {
+            self.out.push((n as u8) << 4 | t);
+        } else {
+            self.out.push(0xF0 | t);
+            self.varint(n as u64);
+        }
+    }
+
+    /// A struct field, or (`None`) a struct element of a list; closed by `end`.
+    fn begin(&mut self, id: Option<i16>) {
+        if let Some(id) = id {
+            self.field(id, T_STRUCT);
+        }
+        self.last.push(0);
+    }
+
+    fn end(&mut self) {
+        self.out.push(0);
+        self.last.pop();
+    }
+}
+
+/// The page header of one PLAIN, uncompressed data page of `rows` values in `data` bytes, as
+/// pyarrow writes it: an empty statistics struct, RLE level encodings.
+fn parquet_page_header(data: u64, rows: i64) -> Result<Vec<u8>> {
+    let data = i32::try_from(data).map_err(|_| anyhow!("a Parquet page of {data} bytes: more than a page holds (2 GiB)"))?;
+    let mut t = Thrift::new();
+    t.i32(1, 0);
+    t.i32(2, data);
+    t.i32(3, data);
+    t.begin(Some(5));
+    t.i32(1, rows as i32);
+    t.i32(2, 0);
+    t.i32(3, 3);
+    t.i32(4, 3);
+    t.begin(Some(5));
+    t.end();
+    t.end();
+    t.end();
+    Ok(t.out)
+}
+
+/// A column chunk as written: where, how long (header included), its rows, and (the binary
+/// column) the samples' bytes without their length prefixes.
+#[derive(Debug, Clone, Copy)]
+struct Chunk {
+    at: u64,
+    len: u64,
+    rows: i64,
+    raw: u64,
+}
+
+/// The thrift `FileMetaData` of a file of these chunks (row group by row group), with the
+/// key `aeiou.pad` holding `pad` bytes, as pyarrow writes it but for `created_by`.
+fn parquet_footer(columns: &[(String, PqType)], chunks: &[Chunk], pad: usize, created_by: &str) -> Vec<u8> {
+    let mut t = Thrift::new();
+    t.i32(1, 2);
+    t.list(2, columns.len() + 1, T_STRUCT);
+    t.begin(None);
+    t.i32(3, 0);
+    t.binary(4, b"schema");
+    t.i32(5, columns.len() as i32);
+    t.end();
+    for (name, ty) in columns {
+        t.begin(None);
+        t.i32(1, ty.physical());
+        t.i32(3, 0);
+        t.binary(4, name.as_bytes());
+        if let Some((converted, bits, signed)) = ty.narrow() {
+            t.i32(6, converted);
+            t.begin(Some(10));
+            t.begin(Some(10));
+            t.byte(1, bits);
+            t.bool(2, signed);
+            t.end();
+            t.end();
+        }
+        t.end();
+    }
+    let groups: Vec<&[Chunk]> = chunks.chunks(columns.len()).collect();
+    t.i64(3, groups.iter().map(|g| g[0].rows).sum());
+    t.list(4, groups.len(), T_STRUCT);
+    for g in &groups {
+        t.begin(None);
+        t.list(1, columns.len(), T_STRUCT);
+        for ((name, ty), c) in columns.iter().zip(g.iter()) {
+            t.begin(None);
+            t.i64(2, 0);
+            t.begin(Some(3));
+            t.i32(1, ty.physical());
+            t.list(2, 2, T_I32);
+            t.zigzag(3);
+            t.zigzag(0);
+            t.list(3, 1, T_BINARY);
+            t.elem_binary(name.as_bytes());
+            t.i32(4, 0);
+            t.i64(5, c.rows);
+            t.i64(6, c.len as i64);
+            t.i64(7, c.len as i64);
+            t.i64(9, c.at as i64);
+            t.list(13, 1, T_STRUCT);
+            t.begin(None);
+            t.i32(1, 0);
+            t.i32(2, 0);
+            t.i32(3, 1);
+            t.end();
+            if *ty == PqType::Binary {
+                t.begin(Some(16));
+                t.i64(1, c.raw as i64);
+                t.list(2, 0, T_I64);
+                t.list(3, 0, T_I64);
+                t.end();
+            }
+            t.end();
+            t.end();
+        }
+        let bytes: u64 = g.iter().map(|c| c.len).sum();
+        t.i64(2, bytes as i64);
+        t.i64(3, g[0].rows);
+        t.i64(5, g[0].at as i64);
+        t.i64(6, bytes as i64);
+        t.end();
+    }
+    t.list(5, 1, T_STRUCT);
+    t.begin(None);
+    t.binary(1, b"aeiou.pad");
+    t.field(2, T_BINARY);
+    t.varint(pad as u64);
+    t.out.resize(t.out.len() + pad, b'p');
+    t.end();
+    t.binary(6, created_by.as_bytes());
+    t.list(7, columns.len(), T_STRUCT);
+    for _ in columns {
+        t.begin(None);
+        t.begin(Some(1));
+        t.end();
+        t.end();
+    }
+    t.end();
+    t.out
+}
+
+/// The footer padded to `target` bytes (the layout's, without the length and `PAR1`), then
+/// its length and `PAR1`.
+fn parquet_tail(columns: &[(String, PqType)], chunks: &[Chunk], target: u64) -> Result<Vec<u8>> {
+    let natural = parquet_footer(columns, chunks, 0, PARQUET_CREATED_BY).len() as u64;
+    if natural > target {
+        bail!("the Parquet footer ({natural} bytes) exceeds the layout's {target}: the format class's footer margins are too small");
+    }
+    let mut pad = target - natural;
+    for _ in 0..4 {
+        let mut f = parquet_footer(columns, chunks, pad as usize, PARQUET_CREATED_BY);
+        let len = f.len() as u64;
+        if len == target {
+            f.extend_from_slice(&(len as u32).to_le_bytes());
+            f.extend_from_slice(b"PAR1");
+            return Ok(f);
+        }
+        // the pad's length prefix grew a byte
+        pad = (pad + target).checked_sub(len).ok_or_else(|| anyhow!("no pad makes a {target}-byte Parquet footer"))?;
+    }
+    bail!("no pad makes a {target}-byte Parquet footer")
+}
+
+/// Where a Parquet stream is.
+#[derive(Default)]
+struct PqAt {
+    started: bool,
+    /// The unit and column whose chunk is being sent, and (binary) its next row.
+    u: i64,
+    c: usize,
+    row: usize,
+    in_chunk: bool,
+    /// The sizes of the unit's samples.
+    sizes: Vec<u64>,
+    chunks: Vec<Chunk>,
+    /// Where each unit starts, by the layout.
+    unit_at: Vec<u64>,
+    ended: bool,
+}
+
 /// One container file as a byte stream.
 pub struct Stream<'s, 'a> {
     writer: &'s Writer,
@@ -201,6 +558,7 @@ pub struct Stream<'s, 'a> {
     /// The archive's end is queued (WebDataset).
     ended: bool,
     done: bool,
+    pq: PqAt,
 }
 
 #[derive(Clone, Copy)]
@@ -217,7 +575,7 @@ impl<'s, 'a> Stream<'s, 'a> {
             DsMeta::Regions { .. } => bail!("`{}` is a regions dataset: no container", meta.name()),
         };
         let n = meta.samples_in_file(file)?;
-        Ok(Stream { writer, meta, seed_of, filler, first: file * spf, n, sample: 0, member: 0, small: Vec::with_capacity(TAR_RECORD as usize), small_at: 0, pay_left: 0, pay_at: 0, crc: 0, after: After::Nothing, pos: 0, ended: false, done: false })
+        Ok(Stream { writer, meta, seed_of, filler, first: file * spf, n, sample: 0, member: 0, small: Vec::with_capacity(TAR_RECORD as usize), small_at: 0, pay_left: 0, pay_at: 0, crc: 0, after: After::Nothing, pos: 0, ended: false, done: false, pq: PqAt::default() })
     }
 
     /// Bytes sent so far.
@@ -250,6 +608,9 @@ impl<'s, 'a> Stream<'s, 'a> {
                 }
             }
             After::Nothing => {}
+        }
+        if let Writer::Parquet { columns } = self.writer {
+            return self.advance_parquet(columns);
         }
         if self.sample >= self.n {
             if let (Writer::WebDataset { .. }, false) = (self.writer, std::mem::replace(&mut self.ended, true)) {
@@ -289,6 +650,7 @@ impl<'s, 'a> Stream<'s, 'a> {
                 self.pay_left = total;
                 self.sample = self.n;
             }
+            Writer::Parquet { .. } => unreachable!("advance_parquet"),
             Writer::WebDataset { members } => {
                 let (ext, bytes) = &members[self.member];
                 let n = bytes.unwrap_or(size);
@@ -308,6 +670,92 @@ impl<'s, 'a> Stream<'s, 'a> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Parquet: `PAR1`; per row group, per column, the page header and the rows (a binary
+    /// row its 4-byte length, then the sample); the footer.
+    fn advance_parquet(&mut self, columns: &[(String, PqType)]) -> Result<()> {
+        let layout = self.meta.layout()?;
+        if self.pq.ended {
+            self.done = true;
+            return Ok(());
+        }
+        if !self.pq.started {
+            self.pq.started = true;
+            let DsMeta::Files { spf, .. } = self.meta else { bail!("a regions dataset has no container") };
+            let lens = self.meta.unit_lens(self.first / spf)?;
+            let mut at = 4u64;
+            for len in lens {
+                self.pq.unit_at.push(at);
+                at += len as u64;
+            }
+            self.set_small(b"PAR1");
+            return Ok(());
+        }
+        let pq = &mut self.pq;
+        if pq.in_chunk {
+            if columns[pq.c].1 == PqType::Binary && pq.row < pq.sizes.len() {
+                let size = pq.sizes[pq.row];
+                pq.row += 1;
+                let len = u32::try_from(size).map_err(|_| anyhow!("a sample of {size} bytes in a Parquet binary column (at most 4 GiB)"))?;
+                self.pay_left = size;
+                self.set_small(&len.to_le_bytes());
+                return Ok(());
+            }
+            let c = pq.chunks.last_mut().expect("the open chunk");
+            c.len = self.pos - c.at;
+            pq.in_chunk = false;
+            pq.c += 1;
+            if pq.c == columns.len() {
+                pq.c = 0;
+                pq.u += 1;
+            }
+        }
+        let units = pq.unit_at.len() as i64;
+        if pq.u < units {
+            let first = self.first + pq.u * layout.unit;
+            if pq.c == 0 {
+                if self.pos != pq.unit_at[pq.u as usize] {
+                    bail!("row group {} starts at {}, the layout predicts {}: the format class's layout does not match its writer", pq.u, self.pos, pq.unit_at[pq.u as usize]);
+                }
+                let rows = (self.n - pq.u * layout.unit).min(layout.unit);
+                pq.sizes.clear();
+                for i in 0..rows {
+                    pq.sizes.push(self.meta.sample_size(first + i)? as u64);
+                }
+            }
+            let rows = pq.sizes.len() as i64;
+            let ty = columns[pq.c].1;
+            let (data, raw) = match ty {
+                PqType::Binary => {
+                    let raw: u64 = pq.sizes.iter().sum();
+                    (raw + 4 * rows as u64, raw)
+                }
+                _ => (ty.width() * rows as u64, 0),
+            };
+            let head = parquet_page_header(data, rows)?;
+            let want = layout.columns.get(pq.c).map(|c| c.header).unwrap_or(-1);
+            if head.len() as i64 != want {
+                bail!("row group {} column {}: a {}-byte page header, the layout predicts {want} (a chunk outside the declared varint band; brief item 31 for a short last row group)", pq.u, pq.c, head.len());
+            }
+            pq.chunks.push(Chunk { at: self.pos, len: 0, rows, raw });
+            pq.in_chunk = true;
+            pq.row = 0;
+            self.small.clear();
+            self.small.extend_from_slice(&head);
+            if ty != PqType::Binary {
+                for i in 0..rows {
+                    ty.value(first + i, &mut self.small);
+                }
+            }
+            self.small_at = 0;
+            return Ok(());
+        }
+        let target = layout.file_footer + layout.file_footer_per_sample * self.n + layout.file_footer_per_unit * units - 8;
+        let tail = parquet_tail(columns, &pq.chunks, target.max(0) as u64)?;
+        pq.ended = true;
+        self.set_small(&tail);
         Ok(())
     }
 
@@ -361,5 +809,41 @@ mod tests {
         assert_eq!(&h[148..156], b"007410\0 ");
         assert_eq!(&h[257..265], b"ustar\x0000");
         assert!(h[329..345].iter().all(|&b| b == 0));
+    }
+
+    fn unhex_test(s: &str) -> Vec<u8> {
+        unhex(s).unwrap()
+    }
+
+    #[test]
+    fn parquet_page_header_is_pyarrows() {
+        // pyarrow 25.0.1, the class's options: 4 INT32 rows; 4 binary rows of 15 bytes in all
+        assert_eq!(parquet_page_header(16, 4).unwrap(), unhex_test("1500152015202c15081500150615061c000000"));
+        assert_eq!(parquet_page_header(31, 4).unwrap(), unhex_test("1500153e153e2c15081500150615061c000000"));
+        // the length `formats.parquet_page_header` predicts: 16 + 2 varints of 2·data + 1 of 2·rows
+        for (data, rows, len) in [(5, 1, 19), (64 * 12, 64, 22), (64 * 100004, 64, 26), (1000 * 1028, 1000, 24), (10000 * 1028, 10000, 27)] {
+            assert_eq!(parquet_page_header(data, rows).unwrap().len(), len);
+        }
+    }
+
+    #[test]
+    fn parquet_footer_is_pyarrows_but_for_created_by() {
+        // one row group of 4 rows (sample sizes 3, 5, 0, 7) over int8, uint8, int16, binary,
+        // float32, int32, `aeiou.pad` = "ppp": pyarrow 25.0.1's footer, from the file's byte 229
+        let cols: Vec<(String, PqType)> = [("a", PqType::Int8), ("b", PqType::UInt8), ("c", PqType::Int16), ("i", PqType::Binary), ("d", PqType::Float32), ("e", PqType::Int32)]
+            .iter().map(|(n, t)| (n.to_string(), *t)).collect();
+        let chunks: Vec<Chunk> = [(4, 35, 0), (39, 35, 0), (74, 35, 0), (109, 50, 15), (159, 35, 0), (194, 35, 0)]
+            .iter().map(|&(at, len, raw)| Chunk { at, len, rows: 4, raw }).collect();
+        let want = unhex_test(concat!(
+            "1504197c35001806736368656d61150c0015022500180161251e4cac1308110000001502250018016225164cac1308120000001502250018016325204cac131011000000150c250018016900150825001801640015022500180165001608191c196c26001c1502192506001918016115001608164616462608491c15001500150200000026001c150219250600191801621500160816461646264e491c15001500150200000026001c150219250600191801631500160816461646269401491c15001500150200000026001c150c1925060019180169150016081664166426da01491c150015001502003c161e1906190600000026001c15081925060019180164150016081646164626be02491c15001500150200000026001c150219250600191801651500160816461646268403491c15001500150200000016c2031608260816c20300191c18096165696f752e7061641803707070001820706172717565742d6370702d6172726f772076657273696f6e2032352e302e31196c1c00001c00001c00001c00001c00001c0000",
+            "008f01000050415231"));
+        let f = parquet_footer(&cols, &chunks, 3, "parquet-cpp-arrow version 25.0.1");
+        assert_eq!(hex(&f), hex(&want[..want.len() - 8]));
+        // padded to a size: the pad takes up the length of created_by and of its own prefix
+        for target in [f.len() as u64, f.len() as u64 + 200, f.len() as u64 + 20000] {
+            let t = parquet_tail(&cols, &chunks, target).unwrap();
+            assert_eq!(t.len() as u64, target + 8);
+            assert_eq!(&t[t.len() - 8..t.len() - 4], &(target as u32).to_le_bytes());
+        }
     }
 }

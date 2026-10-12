@@ -187,19 +187,22 @@ def test_containers_stream_into_the_bucket_as_the_directory_writer_writes_them(n
         assert "fingerprint matches" in run.stdout
 
 
-@pytest.mark.parametrize("name", ["tfrecord", "webdataset", "hdf5"])
+@pytest.mark.parametrize("name", ["tfrecord", "webdataset", "hdf5", "parquet"])
 def test_aeiou_datagen_streams_containers_into_the_bucket(name, minio, tmp_path):
     """`aeiou datagen` built with the cargo features `object` and `formats`: each TFRecord,
-    WebDataset, and HDF5 file streamed into an upload (files of 15 MiB or more, so multipart),
-    every object the Python writer's file byte for byte."""
+    WebDataset, HDF5, and Parquet file streamed into an upload (files of 15 MiB or more, so
+    multipart), every object the Python writer's file byte for byte (a Parquet footer but for
+    its `created_by` and pad)."""
     if not _has_object_engine():
         pytest.skip(f"{RUNNER} is not built with the cargo feature `object`")
     sys.path.insert(0, str(HERE))
-    from test_formats import webdataset_ast
+    from test_formats import _parquet_parts, webdataset_ast
     if name == "tfrecord":
         ast_file = ast_path("tfrecord_stream")
     elif name == "hdf5":
         ast_file = ast_path("hdf5_map")
+    elif name == "parquet":
+        ast_file = ast_path("parquet_stream")
     else:
         ast_file = webdataset_ast(tmp_path)
     obj = json.loads(pathlib.Path(ast_file).read_text())
@@ -211,6 +214,8 @@ def test_aeiou_datagen_streams_containers_into_the_bucket(name, minio, tmp_path)
     obj_file.write_text(json.dumps(obj))
     if name == "hdf5":
         flags = ["--param", "samples=560", "--param", "per_file=96"]   # 18 MiB files, the last short
+    elif name == "parquet":
+        flags = ["--param", "samples=768", "--param", "per_shard=128", "--param", "sample_median=120000"]   # whole row groups (brief item 31)
     else:
         flags = ["--param", "samples=700", "--param", "per_shard=128", "--param", "sample_median=120000"]
     flags += ["--dedupe", "2", "--compress", "3"]
@@ -228,7 +233,11 @@ def test_aeiou_datagen_streams_containers_into_the_bucket(name, minio, tmp_path)
     assert len(files) == 6 and max(p.stat().st_size for p in files) > 2 * datagen.PART
     assert set(minio.objects(prefix)) == {f"{prefix}/{p.name}" for p in files} | {f"{prefix}/.aeiou-dataset.json"}
     for p in files:
-        assert minio.get(f"{prefix}/{p.name}") == p.read_bytes(), p
+        got, want = minio.get(f"{prefix}/{p.name}"), p.read_bytes()
+        if name == "parquet":
+            assert len(got) == len(want), p
+            got, want = _parquet_parts(got), _parquet_parts(want)
+        assert got == want, p
 
 
 def test_a_multipart_upload_is_the_file(minio, tmp_path):
