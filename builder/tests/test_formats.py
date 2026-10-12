@@ -285,8 +285,8 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
         assert "fingerprint matches" in run.stdout
         if name == "parquet_stream":
             assert "fadvise" in run.stdout
-    # the Rust writer refuses the format classes it does not write yet (TFRecord and WebDataset: below)
-    if name != "tfrecord_stream":
+    # the Rust writer refuses the format class it does not write yet (the others: below)
+    if name == "parquet_stream":
         r = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "other", *flags], capture_output=True, text=True)
         assert r.returncode != 0 and "aeiou-datagen" in r.stderr, r.stderr
 
@@ -303,15 +303,29 @@ def webdataset_ast(tmp_path, members=(("jpg", None), ("cls", 4), ("json", 700)))
     return p
 
 
+# each writer's case: the abstract, its corpus parameters (a short last file), and the run's
+RUST_CASES = {
+    "tfrecord": (lambda tmp: ast_path("tfrecord_stream"), ["samples=700", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    "webdataset": (webdataset_ast, ["samples=700", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    "hdf5": (lambda tmp: ast_path("hdf5_map"), ["samples=70", "per_file=16"], ["batch=4", "workers=2", "steps=4"]),
+}
+
+
+def _params(names):
+    return sum([["--param", p] for p in names], [])
+
+
 @needs_runner
-@pytest.mark.parametrize("name", ["tfrecord", "webdataset"])
+@pytest.mark.parametrize("name", sorted(RUST_CASES))
 def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     """`aeiou datagen` built with the cargo feature `formats` (DESIGN_REVIEW.md §3.70): every
-    TFRecord and WebDataset file is the Python writer's byte for byte, with dedupe, compression,
-    and a short last shard; the manifest the same definition and payload, its `format.writer`
-    the Rust writer (so the dataset id differs)."""
-    ast_file = ast_path("tfrecord_stream") if name == "tfrecord" else webdataset_ast(tmp_path)
-    params = ["--param", "samples=700", "--param", "per_shard=128", "--param", "sample_median=20000"]
+    TFRecord, WebDataset, and HDF5 file is the Python writer's byte for byte, with dedupe,
+    compression, and a short last file; the manifest the same definition and payload, its
+    `format.writer` the Rust writer (so the dataset id differs). HDF5's headers come from
+    `aeiou-header` beside the binary."""
+    make, corpus, run_params = RUST_CASES[name]
+    ast_file = make(tmp_path)
+    params = _params(corpus)
     flags = [*params, "--dedupe", "2", "--compress", "3"]
     rs = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "rs", "--writers", "3", *flags], capture_output=True, text=True)
     if "--features formats" in rs.stderr:
@@ -320,19 +334,16 @@ def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     assert f"({name}, aeiou datagen " in rs.stdout
     py = _tool("datagen", [ast_file, "--root", tmp_path / "py", "--writers", "3", *flags])
     assert py.returncode == 0, py.stdout + py.stderr
-    files = sorted(p.relative_to(tmp_path / "py") for p in (tmp_path / "py").rglob("*") if p.is_file())
-    assert files == sorted(p.relative_to(tmp_path / "rs") for p in (tmp_path / "rs").rglob("*") if p.is_file())
-    assert len(files) == 7   # six shards, the last short, and the manifest
-    for f in files:
-        if f.name != ".aeiou-dataset.json":
-            assert (tmp_path / "rs" / f).read_bytes() == (tmp_path / "py" / f).read_bytes(), f
+    _same_files(tmp_path / "rs", tmp_path / "py", 6 if name != "hdf5" else 5)
     m_rs, m_py = (json.loads((tmp_path / w / "train" / ".aeiou-dataset.json").read_text()) for w in ("rs", "py"))
     for k in ("manifest_version", "dataset", "payload"):
         assert m_rs[k] == m_py[k], k
     assert {k: v for k, v in m_rs["format"].items() if k != "writer"} == {k: v for k, v in m_py["format"].items() if k != "writer"}
     assert m_rs["format"]["writer"].startswith("aeiou datagen ")
+    if name == "hdf5":
+        assert set(m_rs["provenance"]["headers"]["sha256"]) == {"16", "6"}
     # the runner reads what it wrote to the dry run's fingerprint
-    run_flags = [*params, "--param", "batch=32", "--param", "steps=4"]
+    run_flags = [*params, *_params(run_params)]
     dry = subprocess.run([RUNNER, "dry-run", ast_file, "--gpus", "2", "--seed", "3", *run_flags], capture_output=True, text=True)
     assert dry.returncode == 0, dry.stderr
     fp = [l.split()[1] for l in dry.stdout.splitlines() if l.startswith("fingerprint ")][0]
@@ -340,6 +351,62 @@ def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
                           "--expect-fingerprint", fp, *run_flags], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "fingerprint matches" in run.stdout
+
+
+def _same_files(a, b, n):
+    """The trees `a` and `b` hold the same `n` data files, byte for byte, and a manifest each."""
+    files = sorted(p.relative_to(a) for p in a.rglob("*") if p.is_file())
+    assert files == sorted(p.relative_to(b) for p in b.rglob("*") if p.is_file())
+    assert len(files) == n + 1
+    for f in files:
+        if f.name != ".aeiou-dataset.json":
+            assert (a / f).read_bytes() == (b / f).read_bytes(), f
+
+
+@needs_runner
+def test_hdf5_headers_come_from_rank_0_alone(tmp_path):
+    """`aeiou-header` is found beside the binary and nowhere else: a copy of `aeiou` alone in a
+    directory cannot write HDF5 on one host, yet runs rank 1 of two, since rank 0 makes the
+    headers and `Start` carries them (DESIGN_REVIEW.md §3.70, revised 2026-10-12)."""
+    import shutil
+    import socket
+    make, corpus, _ = RUST_CASES["hdf5"]
+    flags = _params(corpus)
+    if not (RUNNER.parent / "aeiou-header").exists():
+        pytest.skip(f"no aeiou-header beside {RUNNER}")
+    lone = tmp_path / "lone" / "aeiou"
+    lone.parent.mkdir()
+    shutil.copy2(RUNNER, lone)
+    alone = subprocess.run([lone, "datagen", make(tmp_path), "--root", tmp_path / "x", *flags], capture_output=True, text=True)
+    if "--features formats" in alone.stderr:
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+    assert alone.returncode == 1 and f"{lone.parent / 'aeiou-header'} not found" in alone.stderr, alone.stderr
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        addr = f"127.0.0.1:{s.getsockname()[1]}"
+    procs = [subprocess.Popen([exe, "datagen", make(tmp_path), "--root", tmp_path / "two", "--writers", "2", *flags, "--ranks", "2",
+                               "--rank", str(r), "--coordinator", addr], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+             for r, exe in ((0, RUNNER), (1, lone))]
+    outs = [p.communicate(timeout=120) for p in procs]
+    for p, (o, e) in zip(procs, outs):
+        assert p.returncode == 0, o + e
+    assert "header(s) from" in outs[0][0] and "header(s) from" not in outs[1][0]
+    one = subprocess.run([RUNNER, "datagen", make(tmp_path), "--root", tmp_path / "one", *flags], capture_output=True, text=True)
+    assert one.returncode == 0, one.stderr
+    _same_files(tmp_path / "two", tmp_path / "one", 5)
+
+
+def test_aeiou_header_refuses_another_library_version():
+    from aeiou import header
+    fmt = formats.hdf5(dataset="records", shape=(4, 4, 3), dtype="u1").spec("map", const(48), {})
+    assert len(header.header(fmt, 5)) == fmt["layout"]["file_header"]
+    with pytest.raises(BuildError, match="probed with h5py 0.0"):
+        header.header({**fmt, "version": "h5py 0.0, hdf5 0.0"}, 5)
+    with pytest.raises(BuildError, match="only hdf5"):
+        header.header({"class": "tfrecord"}, 5)
+    out = subprocess.run([sys.executable, "-m", "aeiou.header", "--format", json.dumps(fmt), "--rows", "5"], capture_output=True,
+                         cwd=str(BUILDER), env={**os.environ, "PYTHONPATH": str(BUILDER)})
+    assert out.returncode == 0 and out.stdout == header.header(fmt, 5) and out.stderr == b""
 
 
 @needs_runner

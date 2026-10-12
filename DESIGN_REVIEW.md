@@ -5374,6 +5374,52 @@ generator continued where the last range stopped (`payload.rs` `Cursor`; the byt
 unchanged, `a_range_read_in_order_is_the_blocks_bytes`), and at 16 writers containers write
 as fast as plain files. Next: (b), HDF5 with its header from h5py.
 
+**Revised 2026-10-12 (the user's proposal, decided): the HDF5 header from a tool beside
+`aeiou`, not from the start manifest.** Decision 3 above carried the header in the manifest
+written at the start, which tied HDF5 to item 23's manifest work. The user proposed instead
+that the HDF5 knowledge stay in a separate tool that does the one thing, `aeiou datagen`
+running it transparently (fork, exec, the header read from its stdout). The header is a pure
+function of the dataset's name, shape, dtype, and row count, so a dataset has at most two
+(the full files and a short last one), made before the start gate, where a missing or
+failing tool stops the run before a byte is written. Decided:
+
+- *`aeiou-header --format JSON --rows N`*: the dataset's resolved `format` entry and a row
+  count in, the raw header bytes on stdout and nothing else (warnings and errors on
+  stderr, which `aeiou datagen` relays). Named for what it does, so another format whose
+  bytes must come from its own library could use it; HDF5 is the only class it takes. It
+  refuses when its h5py and libhdf5 differ from the abstract's `format.version`, the
+  version the layout's data offset was probed with; `aeiou datagen` checks the length
+  against the layout's `file_header`.
+- *Found beside `aeiou`, never on `PATH`* (the user: a `PATH` search may find another
+  executable or another version). `std::env::current_exe()`, canonicalized, so beside the
+  real binary whatever symlink started it. In a source tree the builder's tests and CI put
+  a symlink named `aeiou-header` beside `runner/target/release/aeiou`, pointing at the
+  venv's entry point.
+- *A standalone executable in the release* (the user: someone copying `aeiou` to the
+  clients would not know to copy a second tool): the release builds it with PyInstaller,
+  one file carrying Python, numpy, h5py, and libhdf5 at the versions `uv.lock` pins, into
+  `bin/` beside `aeiou`.
+- *Only rank 0 runs it.* Rank 0 makes the headers before the gate and gives them to its
+  in-process coordinator, which sends them to every rank with `Start` (a field `share`, an
+  addition the Python coordinator ignores; `Ready` unchanged), so client hosts never need
+  the tool, and one source makes a header-hash identity check unnecessary. The manifest's
+  `format.writer` names the Rust writer and the header's versions; its provenance records
+  each header's SHA-256.
+
+**Built 2026-10-12: (b), HDF5.** As decided, with one refinement: `--rows` repeats, the
+headers coming back to back (each is the layout's `file_header` long, so they split by
+length), so a dataset with a short last file costs one run of the tool, not two. The bundled
+tool unpacks itself on every run: 0.56 s (35 MB, PyInstaller 6.22.3; it needed h5py and
+numpy named as hidden imports, since `formats.py` imports them by name), against 0.16 s for
+the venv's script. Byte for byte the Python writer's files, with dedupe 2, compression 3,
+and a short last file, to a directory and into MinIO (multipart); a copy of `aeiou` alone in
+a directory refuses HDF5 on one host, naming the path it looked at, and runs rank 1 of two,
+the headers arriving with `Start`. 8 GiB to tmpfs, 64 files of 682 rows of 192 KiB, GB/s at
+1 / 4 / 16 writers: Python 2.0 / 5.3 / 6.9, Rust 2.8 / 8.4 / 14.8. At 16 the Rust figure is
+the 0.16 s of the tool on a 0.4 s write; 8 GiB at plain files' 21.2 GB/s plus 0.16 s is
+15.2, so the rows go as fast as plain files and the tool is a fixed cost a real corpus does
+not see. Next: (c), Parquet through parquet-rs.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

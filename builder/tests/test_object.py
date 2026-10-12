@@ -187,28 +187,35 @@ def test_containers_stream_into_the_bucket_as_the_directory_writer_writes_them(n
         assert "fingerprint matches" in run.stdout
 
 
-@pytest.mark.parametrize("name", ["tfrecord", "webdataset"])
+@pytest.mark.parametrize("name", ["tfrecord", "webdataset", "hdf5"])
 def test_aeiou_datagen_streams_containers_into_the_bucket(name, minio, tmp_path):
-    """`aeiou datagen` built with the cargo features `object` and `formats`: each TFRecord and
-    WebDataset file streamed into an upload (shards of 15 MiB or more, so multipart), every
-    object the Python writer's file byte for byte."""
+    """`aeiou datagen` built with the cargo features `object` and `formats`: each TFRecord,
+    WebDataset, and HDF5 file streamed into an upload (files of 15 MiB or more, so multipart),
+    every object the Python writer's file byte for byte."""
     if not _has_object_engine():
         pytest.skip(f"{RUNNER} is not built with the cargo feature `object`")
+    sys.path.insert(0, str(HERE))
+    from test_formats import webdataset_ast
     if name == "tfrecord":
         ast_file = ast_path("tfrecord_stream")
+    elif name == "hdf5":
+        ast_file = ast_path("hdf5_map")
     else:
-        sys.path.insert(0, str(HERE))
-        from test_formats import webdataset_ast
         ast_file = webdataset_ast(tmp_path)
     obj = json.loads(pathlib.Path(ast_file).read_text())
-    obj["datasets"]["shards"]["files"]["protocol"] = "s3"
+    (ds,) = obj["datasets"]
+    obj["datasets"][ds]["files"]["protocol"] = "s3"
     obj.pop("posix", None)
     obj.pop("cache", None)
     obj_file = tmp_path / "object.ast.json"
     obj_file.write_text(json.dumps(obj))
-    flags = ["--param", "samples=700", "--param", "per_shard=128", "--param", "sample_median=120000", "--dedupe", "2", "--compress", "3"]
+    if name == "hdf5":
+        flags = ["--param", "samples=560", "--param", "per_file=96"]   # 18 MiB files, the last short
+    else:
+        flags = ["--param", "samples=700", "--param", "per_shard=128", "--param", "sample_median=120000"]
+    flags += ["--dedupe", "2", "--compress", "3"]
     prefix = f"rust-{name}/data"
-    r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"shards=s3://bench/{prefix}",
+    r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
                         "--writers", "3", *flags], capture_output=True, text=True, env=minio.env)
     if "--features formats" in r.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")

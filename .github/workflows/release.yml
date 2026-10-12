@@ -1,7 +1,8 @@
 name: release
 
 # A tag `vX.Y.Z` builds one tarball for x86_64 Linux and attaches it to a GitHub Release:
-# the runner binary and `aeiou-launch`, the manual pages as roff and as Markdown, the
+# the runner binary, `aeiou-header` beside it (one file carrying Python, numpy, h5py, and
+# libhdf5 at the versions uv.lock pins; DESIGN_REVIEW.md §3.70), and `aeiou-launch`, the manual pages as roff and as Markdown, the
 # committed abstracts under workloads/ with their parameter files, READMEs, and catalog records, the builder's wheel, and
 # QUICKSTART.md. Built on ubuntu-22.04 so the binary runs on glibc 2.34 and later (RHEL 9,
 # Ubuntu 22.04, Debian 12 and newer); the runner links nothing but libc. Nothing is
@@ -44,13 +45,22 @@ jobs:
         working-directory: builder
         run: uv build --wheel -o ../wheel
 
+      - name: Build aeiou-header, one file, for bin/ beside aeiou
+        working-directory: builder
+        run: |
+          printf 'import sys\nfrom aeiou.header import main\nsys.exit(main())\n' > /tmp/aeiou_header.py
+          # h5py and numpy are imported by name at run time, so PyInstaller is told of them
+          uv run --locked --extra formats --with pyinstaller==6.22.3 pyinstaller --onefile --name aeiou-header \
+            --hidden-import h5py --hidden-import numpy --distpath ../header-dist --workpath /tmp/pyi --specpath /tmp \
+            /tmp/aeiou_header.py
+
       - name: Assemble the tarball
         run: |
           command -v pandoc >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q pandoc; }
           d="$DIST"
           mkdir -p "$d/bin" "$d/share/man/man1" "$d/share/man/man5" "$d/share/man/man7" \
                    "$d/man" "$d/wheel"
-          cp runner/target/release/aeiou runner/aeiou-launch "$d/bin/"
+          cp runner/target/release/aeiou header-dist/aeiou-header runner/aeiou-launch "$d/bin/"
           for p in man/*.[157].md; do
             page=$(basename "${p%.md}")        # aeiou.1
             sec=${page##*.}                     # 1
@@ -70,6 +80,10 @@ jobs:
         run: |
           mkdir smoke && tar xzf "$DIST.tar.gz" -C smoke && cd "smoke/$DIST"
           bin/aeiou --version
+          bin/aeiou-header --version
+          # HDF5 through the aeiou-header beside aeiou, in an environment with no Python
+          env -i PATH=/usr/bin:/bin bin/aeiou datagen workloads/input-pipeline/map/hdf5/hdf5_map.ast.json --root /tmp/smoke-h5 \
+            --param samples=20 --param per_file=8 | grep "header(s) from"
           bin/aeiou check $(find workloads -name '*.ast.json')
           bin/aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 1 \
             --params-file workloads/input-pipeline/map/file-per-sample/params/smoke.params.json | tail -3

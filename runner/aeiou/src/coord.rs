@@ -184,8 +184,15 @@ enum Msg {
     Welcome,
     /// Client → server once its startup checks are done.
     Ready,
-    /// Server → all once every host is ready: the common start time and the host list by rank.
-    Start { t0: f64, hosts: Vec<String> },
+    /// Server → all once every host is ready: the common start time and the host list by rank;
+    /// `share`, what rank 0 made before the gate for every rank (a datagen's container
+    /// headers, `Server::share`), absent when there is none.
+    Start {
+        t0: f64,
+        hosts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Value::is_null")]
+        share: Value,
+    },
     Arrive { scope: String },
     Leave { scope: String },
     Release { scope: String, generation: u64 },
@@ -274,7 +281,7 @@ struct TBar {
 #[derive(Default)]
 struct Events {
     welcome: bool,
-    started: Option<(f64, Vec<String>)>,
+    started: Option<(f64, Vec<String>, Value)>,
     result: Option<(bool, u64, Option<String>)>,
 }
 
@@ -384,6 +391,11 @@ impl Tcp {
     /// Startup checks are done here; blocks until every host says so. Returns the common
     /// start time and the hosts by rank.
     pub fn ready(&self) -> Result<(f64, Vec<String>)> {
+        self.ready_shared().map(|(t0, hosts, _)| (t0, hosts))
+    }
+
+    /// `ready`, and what rank 0 shared with every rank (`Server::share`; null when nothing).
+    pub fn ready_shared(&self) -> Result<(f64, Vec<String>, Value)> {
         send(&self.st.writer, &Msg::Ready)?;
         self.st.wait_event(|e| e.started.clone())
     }
@@ -416,8 +428,8 @@ fn client_loop(st: &ClientState, stream: &mut TcpStream, live: &mut Liveness) ->
                 st.events.lock().unwrap().welcome = true;
                 st.ecv.notify_all();
             }
-            Msg::Start { t0, hosts } => {
-                st.events.lock().unwrap().started = Some((t0, hosts));
+            Msg::Start { t0, hosts, share } => {
+                st.events.lock().unwrap().started = Some((t0, hosts, share));
                 st.ecv.notify_all();
             }
             Msg::Release { scope, generation } => {
@@ -538,6 +550,8 @@ struct SState {
     layers: BTreeMap<i64, Value>,
     ready: HashSet<i64>,
     started: Option<f64>,
+    /// What `Start` carries to every rank (`Server::share`).
+    share: Value,
     bars: BTreeMap<String, SBar>,
     reports: BTreeMap<i64, Report>,
     /// Each host's `Done` document, by rank.
@@ -607,6 +621,12 @@ impl Server {
                 .expect("spawn coordinator accept thread");
         }
         Ok(Server { st, addr: bound })
+    }
+
+    /// Give every rank `v` with `Start`: rank 0 calls it before its own `ready`, so the gate
+    /// cannot open without it.
+    pub fn share(&self, v: Value) {
+        self.st.m.lock().unwrap().share = v;
     }
 
     /// Every host's rank, name, and options block (`Hello`), by rank; complete once the start
@@ -828,7 +848,7 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
                     let t0 = unix_now();
                     s.started = Some(t0);
                     let hosts: Vec<String> = s.hosts.values().cloned().collect();
-                    st.broadcast(&s, &Msg::Start { t0, hosts });
+                    st.broadcast(&s, &Msg::Start { t0, hosts, share: s.share.clone() });
                 }
             }
             Msg::Arrive { scope } => {

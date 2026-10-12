@@ -14,9 +14,15 @@
 //!   `tarfile` writes it: 512-byte headers with mode 0644, owner 0, mtime 0, no device numbers;
 //!   data padded to 512; two zero blocks; the archive padded to 10240.
 //!
-//! HDF5 and Parquet are still the Python writer's (`aeiou-datagen`).
+//! - **HDF5**: the header from `aeiou-header` (the format's own libhdf5, a tool beside this
+//!   binary that rank 0 alone runs, §3.70 revised 2026-10-12), then the rows, contiguous.
+//!
+//! Parquet is still the Python writer's (`aeiou-datagen`).
 
-use anyhow::{bail, Result};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
 use crate::eval::DsMeta;
@@ -32,6 +38,8 @@ pub enum Writer {
     TfRecord,
     /// `(extension, bytes)` per member; `None` is the sample itself, every other member zeros.
     WebDataset { members: Vec<(String, Option<u64>)> },
+    /// The header of a file of so many rows (`set_headers`), and the library that made it.
+    Hdf5 { headers: BTreeMap<i64, Vec<u8>>, version: String },
 }
 
 impl Writer {
@@ -55,19 +63,84 @@ impl Writer {
                 }
                 Ok(Writer::WebDataset { members })
             }
-            "hdf5" | "parquet" => bail!("dataset `{dataset}` is a `{class}` container: the Python writer writes it (`aeiou-datagen`; builder/REFERENCE.md §6), not yet `aeiou datagen`"),
+            "hdf5" => Ok(Writer::Hdf5 { headers: BTreeMap::new(), version: format["version"].as_str().unwrap_or("?").to_string() }),
+            "parquet" => bail!("dataset `{dataset}` is a `{class}` container: the Python writer writes it (`aeiou-datagen`; builder/REFERENCE.md §6), not yet `aeiou datagen`"),
             _ => bail!("dataset `{dataset}`: no writer for format class `{class}`"),
         }
     }
 
     /// What the manifest's `format.writer` names: this writer, whose bytes the id covers.
     pub fn library(&self) -> String {
-        let what = match self {
-            Writer::TfRecord => "tfrecord",
-            Writer::WebDataset { .. } => "ustar",
-        };
-        format!("aeiou datagen {what} writer")
+        match self {
+            Writer::TfRecord => "aeiou datagen tfrecord writer".into(),
+            Writer::WebDataset { .. } => "aeiou datagen ustar writer".into(),
+            Writer::Hdf5 { version, .. } => format!("aeiou datagen hdf5 writer (header: aeiou-header, {version})"),
+        }
     }
+
+    /// The row counts whose headers this writer needs, for a dataset of `count` samples in
+    /// files of `spf` (the full files and a short last one).
+    pub fn header_rows(&self, count: i64, spf: i64) -> Vec<i64> {
+        match self {
+            Writer::Hdf5 { .. } if count > 0 => {
+                let mut v = vec![spf.min(count)];
+                let last = count % spf;
+                if last != 0 && last != v[0] {
+                    v.push(last);
+                }
+                v
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn set_headers(&mut self, given: BTreeMap<i64, Vec<u8>>) {
+        if let Writer::Hdf5 { headers, .. } = self {
+            *headers = given;
+        }
+    }
+}
+
+/// Where `aeiou-header` is: beside this binary, the real file (symlinks resolved), never on
+/// `PATH` (a search could find another tool or another version).
+pub fn header_tool() -> Result<PathBuf> {
+    let exe = std::env::current_exe().and_then(|p| p.canonicalize()).context("locating this binary, to find aeiou-header beside it")?;
+    let tool = exe.with_file_name("aeiou-header");
+    if !tool.exists() {
+        bail!("{} not found: aeiou-header makes HDF5 headers and must sit beside aeiou (copy the release's bin/aeiou-header, or, in a source tree, symlink the builder's .venv/bin/aeiou-header there)", tool.display());
+    }
+    Ok(tool)
+}
+
+/// The headers of files of each of `rows` rows of the dataset whose resolved `format` entry
+/// is `format`, from one run of `aeiou-header`: back to back on its stdout, each the layout's
+/// `file_header` bytes.
+pub fn run_header_tool(tool: &std::path::Path, format: &Value, rows: &[i64]) -> Result<BTreeMap<i64, Vec<u8>>> {
+    let mut cmd = std::process::Command::new(tool);
+    cmd.arg("--format").arg(serde_json::to_string(format)?);
+    for n in rows {
+        cmd.arg("--rows").arg(n.to_string());
+    }
+    let out = cmd.output().with_context(|| format!("running {}", tool.display()))?;
+    if !out.status.success() {
+        bail!("{} failed ({}): {}", tool.display(), out.status, String::from_utf8_lossy(&out.stderr).trim());
+    }
+    let each = format["layout"]["file_header"].as_u64().ok_or_else(|| anyhow!("the layout has no file_header"))? as usize;
+    if out.stdout.len() != each * rows.len() {
+        bail!("{} gave {} bytes for {} header(s) of {each} bytes, the layout's file_header", tool.display(), out.stdout.len(), rows.len());
+    }
+    Ok(rows.iter().zip(out.stdout.chunks(each.max(1))).map(|(n, h)| (*n, h.to_vec())).collect())
+}
+
+pub fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+pub fn unhex(s: &str) -> Result<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        bail!("odd-length hex");
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| anyhow!("hex: {e}"))).collect()
 }
 
 fn masked_crc32c(c: u32) -> u32 {
@@ -204,6 +277,17 @@ impl<'s, 'a> Stream<'s, 'a> {
                 self.crc = 0;
                 self.after = After::Crc;
                 self.sample += 1;
+            }
+            Writer::Hdf5 { headers, .. } => {
+                // the header, then every row: one item for the whole file
+                let head = headers.get(&self.n).ok_or_else(|| anyhow!("no HDF5 header for a file of {} rows", self.n))?;
+                self.set_small(head);
+                let mut total = size;
+                for i in 1..self.n {
+                    total += self.meta.sample_size(self.first + i)? as u64;
+                }
+                self.pay_left = total;
+                self.sample = self.n;
             }
             Writer::WebDataset { members } => {
                 let (ext, bytes) = &members[self.member];

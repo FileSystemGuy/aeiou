@@ -257,11 +257,16 @@ fn write_at(f: &File, direct: bool, mode: &Mode, buf: &mut Aligned, n: usize, of
 
 // ---------------------------------------------------------------- containers
 
-/// A container dataset (one with a format class): its writer and the manifest's `format`.
+/// A container dataset (one with a format class): its writer, the manifest's `format`, the
+/// resolved `format` entry (what `aeiou-header` takes), and what the provenance records of
+/// the headers.
 struct Container {
     #[cfg(feature = "formats")]
     writer: crate::formats::Writer,
     format: Value,
+    #[cfg_attr(not(feature = "formats"), allow(dead_code))]
+    spec: Value,
+    headers: Value,
 }
 
 /// The writer of a format-class dataset, from its resolved definition.
@@ -274,13 +279,72 @@ fn container(name: &str, resolved: &Value) -> Result<Container> {
     {
         let writer = crate::formats::Writer::from_format(name, fmt)?;
         let format = json!({"class": fmt["class"], "reader": fmt["reader"], "version": fmt["version"], "writer": writer.library()});
-        Ok(Container { writer, format })
+        Ok(Container { writer, format, spec: fmt.clone(), headers: Value::Null })
     }
     #[cfg(not(feature = "formats"))]
     bail!(
-        "dataset `{name}` is a `{}` container: this build of aeiou has no container writers (the cargo feature `formats` adds TFRecord and WebDataset); the Python writer, `aeiou-datagen`, writes every format class (builder/REFERENCE.md §6)",
+        "dataset `{name}` is a `{}` container: this build of aeiou has no container writers (the cargo feature `formats` adds TFRecord, WebDataset, and HDF5); the Python writer, `aeiou-datagen`, writes every format class (builder/REFERENCE.md §6)",
         fmt["class"].as_str().unwrap_or("?")
     )
+}
+
+/// Rank 0, before the gate: every header a container needs, from `aeiou-header`, set on its
+/// writer and returned for `Start` to carry to every rank (`{dataset: {rows: hex}}`; null
+/// when no dataset needs one).
+#[cfg_attr(not(feature = "formats"), allow(unused_variables))]
+fn make_headers(plans: &mut [Plan<'_, '_>], log: &mut impl Write) -> Result<Value> {
+    #[cfg(feature = "formats")]
+    {
+        let mut share = serde_json::Map::new();
+        let mut tool = None;
+        for p in plans.iter_mut() {
+            let Some(c) = p.container.as_mut() else { continue };
+            let DsMeta::Files { count, spf, .. } = p.meta else { continue };
+            let rows = c.writer.header_rows(*count, *spf);
+            if rows.is_empty() {
+                continue;
+            }
+            if tool.is_none() {
+                tool = Some(crate::formats::header_tool()?);
+            }
+            let tool = tool.as_ref().unwrap();
+            let got = crate::formats::run_header_tool(tool, &c.spec, &rows).with_context(|| format!("dataset `{}`", p.name))?;
+            writeln!(log, "dataset {}: {} header(s) from {}", p.name, got.len(), tool.display())?;
+            share.insert(p.name.to_string(), Value::Object(got.iter().map(|(n, h)| (n.to_string(), json!(crate::formats::hex(h)))).collect()));
+            set_headers(c, got);
+        }
+        Ok(if share.is_empty() { Value::Null } else { Value::Object(share) })
+    }
+    #[cfg(not(feature = "formats"))]
+    Ok(Value::Null)
+}
+
+/// Every other rank, after the gate: the headers rank 0 sent with `Start`.
+#[cfg_attr(not(feature = "formats"), allow(unused_variables))]
+fn take_headers(plans: &mut [Plan<'_, '_>], shared: &Value) -> Result<()> {
+    #[cfg(feature = "formats")]
+    for p in plans.iter_mut() {
+        let Some(c) = p.container.as_mut() else { continue };
+        let DsMeta::Files { count, spf, .. } = p.meta else { continue };
+        let rows = c.writer.header_rows(*count, *spf);
+        if rows.is_empty() {
+            continue;
+        }
+        let mut got = BTreeMap::new();
+        for n in rows {
+            let hex = shared[p.name][n.to_string()].as_str().ok_or_else(|| anyhow::anyhow!("dataset `{}`: rank 0 sent no header for {n} rows", p.name))?;
+            got.insert(n, crate::formats::unhex(hex)?);
+        }
+        set_headers(c, got);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "formats")]
+fn set_headers(c: &mut Container, got: BTreeMap<i64, Vec<u8>>) {
+    use sha2::Digest;
+    c.headers = json!({"tool": "aeiou-header", "sha256": got.iter().map(|(n, h)| (n.to_string(), json!(format!("{:x}", sha2::Sha256::digest(h))))).collect::<serde_json::Map<_, _>>()});
+    c.writer.set_headers(got);
 }
 
 /// Write container file `file` to `path` (relative to its place), checked against the size
@@ -603,11 +667,22 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     }
     log.flush()?;
 
+    // the headers a container takes from its library: rank 0 makes them, Start carries them
+    if rank == 0 {
+        let share = make_headers(&mut plans, log)?;
+        if let Some(server) = hosts.and_then(|h| h.server) {
+            server.share(share);
+        }
+    }
+
     // the gate: no rank writes before every rank has checked
     if let Some(h) = hosts {
-        let (_t0, names) = h.tcp.ready()?;
+        let (_t0, names, shared) = h.tcp.ready_shared()?;
         writeln!(log, "start gate: {} host(s) ready ({})", names.len(), names.join(", "))?;
         log.flush()?;
+        if rank != 0 {
+            take_headers(&mut plans, &shared)?;
+        }
     }
 
     // the writes, then the metadata to stable storage
@@ -702,6 +777,10 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 "bytes_written": total_bytes,
             }),
         };
+        let mut manifest = manifest;
+        if let Some(c) = p.container.as_ref().filter(|c| !c.headers.is_null()) {
+            manifest.provenance["headers"] = c.headers.clone();
+        }
         if wrote_manifest {
             let w = match &p.object {
                 Some((store, rest)) => manifest.write_object(store, rest).map(|_| ()),

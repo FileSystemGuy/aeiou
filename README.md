@@ -224,7 +224,8 @@ hosts with `O_DIRECT` (each host its slice of the ids, one manifest once every h
 reported; the launcher takes host files and `pdsh`-style ranges), and `aeiou-datagen`, the
 container writer, across hosts the same way, speaking the same coordinator protocol
 (2026-10-11), and `aeiou datagen` writing TFRecord and tar itself behind the cargo feature
-`formats`, the Python writer's bytes at four times its speed (2026-10-12). The workload catalog
+`formats`, the Python writer's bytes at two to four times its speed, and HDF5 with its
+header from `aeiou-header`, a one-file tool beside `aeiou` that rank 0 alone runs (2026-10-12). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
@@ -259,7 +260,8 @@ Not built, in rough order of interest:
   on a fleet, then a series of runs growing toward the saturation point. First, decided
   2026-10-11 (`DESIGN_REVIEW.md` §3.70): the container formats written by `aeiou datagen`
   in Rust behind a cargo feature `formats`, so that item 23 is built once, in Rust;
-  TFRecord and tar built 2026-10-12, HDF5 and Parquet not yet.
+  TFRecord, tar, and HDF5 built 2026-10-12 (HDF5's header from `aeiou-header` beside
+  `aeiou`), Parquet not yet.
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),
   and concurrent mixes of cases (item 30, critical but not yet; `DESIGN_REVIEW.md` §3.67).

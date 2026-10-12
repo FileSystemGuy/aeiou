@@ -42,7 +42,7 @@ computes every offset of a framed container from `format.layout`, `consume` unde
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
 classes is the Python side (`aeiou-datagen`, `builder/REFERENCE.md`); ~~`aeiou datagen` refuses a
 dataset that has a format class~~ since 2026-10-12 `aeiou datagen` built with the cargo feature
-`formats` writes TFRecord and WebDataset itself (§5, *Containers*), and refuses HDF5 and Parquet.
+`formats` writes TFRecord and WebDataset itself (§5, *Containers*), and HDF5 since the same day, and refuses Parquet.
 
 ```
 aeiou/src/
@@ -486,8 +486,18 @@ as root). The same runs on the loopback NFS mount are §7.
   one-block cache (8 GiB to tmpfs at 16 writers: 12.1 GB/s through the cache, 20.7 in
   place). The manifest's `format.writer` names `aeiou datagen tfrecord writer` or
   `aeiou datagen ustar writer`, so the dataset id differs from the Python writer's for the
-  same bytes. HDF5 and Parquet are refused (they come next, §3.70); without the feature,
-  every format class is. A corpus with both kinds is written by both tools, each dataset by
+  same bytes. **HDF5** (the same day, §3.70 revised): the header bytes come from
+  `aeiou-header` (`man/aeiou-header.1.md`), the format's own libhdf5 in a tool found beside
+  this binary (`std::env::current_exe`, canonicalized; never the `PATH`), run once per
+  dataset by rank 0 alone before the start gate for the row counts its files have (the full
+  files and a short last one), the headers back to back on its stdout, each checked against
+  the layout's `file_header`; the coordinator's `Start` carries them to every other rank
+  (`share`, hex; `Server::share`, `Tcp::ready_shared`), so a client host needs `aeiou` alone.
+  The rows follow, contiguous, from the payload. `format.writer` names `aeiou datagen hdf5
+  writer` and the header's library versions; the provenance records each header's SHA-256
+  (`headers`). The release ships `aeiou-header` as one file in `bin/`; a source tree links the
+  venv's entry point beside `target/release/aeiou`. Parquet is refused (it comes next, §3.70);
+  without the feature, every format class is. A corpus with both kinds is written by both tools, each dataset by
   one of them. `aeiou-datagen` takes the same `--ranks`, `--rank`, and `--coordinator`, splits
   the ids the same way, and speaks this coordinator's protocol from Python
   (`builder/aeiou/coord.py`, 2026-10-11: the frames of §6, the datagen's subset of `Msg`, the

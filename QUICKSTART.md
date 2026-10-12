@@ -8,6 +8,7 @@ and, for the runner alone, no Python.
 | Path | What |
 |---|---|
 | `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 Linux, glibc 2.34 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. |
+| `bin/aeiou-header` | Made by `aeiou datagen`, never by you: the header of an HDF5 file, from libhdf5 (one file carrying Python, numpy, h5py). It must stay beside `bin/aeiou`; only the host of rank 0 runs it, so client hosts need `aeiou` alone. |
 | `bin/aeiou-launch` | One `aeiou run` or `aeiou datagen` rank per host over ssh. A POSIX shell script. |
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
 | `man/` | The same pages as Markdown. |
@@ -52,13 +53,14 @@ and the command line of a run never disagree.
 Every `workloads/**/*.ast.json` runs the same way. `aeiou dry-run ABSTRACT --gpus 1` with no
 parameter file uses the abstract's defaults, which for the training and checkpoint
 workloads are the sizes of a real job (thousands of files, hundreds of steps); scale them
-down with `--param k=v` or a parameter file. The `tfrecord_stream`, `parquet_stream`, and `hdf5_map`
-workloads read container files (TFRecord, Parquet, HDF5) that the Python side writes:
+down with `--param k=v` or a parameter file. The `tfrecord_stream` and `hdf5_map` workloads
+read container files (TFRecord, HDF5) that `aeiou datagen` writes as it writes any other.
+`parquet_stream` reads Parquet files, which the Python side writes:
 
 ```
 python3 -m venv .venv && .venv/bin/pip install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
 # or: uv tool install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
-.venv/bin/aeiou-datagen workloads/input-pipeline/stream/tfrecord/tfrecord_stream.ast.json --root /mnt/sut/aeiou
+.venv/bin/aeiou-datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut/aeiou
 ```
 
 `aeiou-build`, `aeiou-params`, `aeiou-datagen`, and `aeiou-trace` each have a manual page

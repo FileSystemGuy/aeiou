@@ -78,6 +78,7 @@ jobs:
         working-directory: builder
         run: |
           cargo build --release --features object,formats --bin aeiou --manifest-path ../runner/Cargo.toml
+          ln -sf ../../../builder/.venv/bin/aeiou-header ../runner/target/release/aeiou-header
           TEST_MINIO_BIN=/tmp/minio AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_object.py
 
   runner-integration:
@@ -96,6 +97,8 @@ jobs:
       - name: Builder with the format classes' libraries
         working-directory: builder
         run: uv sync --locked --extra test --extra formats
+      - name: aeiou-header beside the binary (the release ships one file there; here the venv's)
+        run: ln -sf ../../../builder/.venv/bin/aeiou-header runner/target/release/aeiou-header
       - name: Rust checker agrees with the reference checker on every committed AST
         run: |
           builder/.venv/bin/python schema/check.py > /tmp/check.py.out

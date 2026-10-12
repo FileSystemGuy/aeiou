@@ -245,8 +245,8 @@ numbers; the order is this note's.
    format-class writers done the same day** as `aeiou-datagen` in Python (`builder/REFERENCE.md`
    §6, `DESIGN_REVIEW.md` §3.28): real Parquet, TFRecord, HDF5, and tar files with the same
    payload (~~the `dgen-py` wheel reproduces the Rust crate's bytes~~ numpy's `SFC64` since 2026-10-11), sizes, names, and manifest;
-   `aeiou datagen` refuses datasets with a format class (~~all~~ HDF5 and Parquet since
-   2026-10-12: built with the cargo feature `formats` it writes TFRecord and tar, `DESIGN_REVIEW.md` §3.70). The Python `aeiou-verify` tool is
+   `aeiou datagen` refuses datasets with a format class (~~all~~ ~~HDF5 and Parquet~~ Parquet since
+   2026-10-12: built with the cargo feature `formats` it writes TFRecord, tar, and HDF5, `DESIGN_REVIEW.md` §3.70). The Python `aeiou-verify` tool is
    still to come. **Extended 2026-10-04 (`DESIGN_REVIEW.md` §3.62):** `aeiou datagen` runs
    across hosts with the same `--ranks`/`--rank`/`--coordinator` as `run` (each rank its
    contiguous slice of the ids, a `regions` file by one rank, the manifest by rank 0 once
@@ -533,7 +533,8 @@ numbers; the order is this note's.
     tar, then HDF5 with its header made by h5py, then Parquet through parquet-rs), and the
     rest of this item is built in Rust only, after them. TFRecord and tar **built
     2026-10-12** (byte for byte the Python writer's; 20.7 and 22.6 GB/s to tmpfs at 16
-    writers against Python's 5.9 and 4.8).
+    writers against Python's 5.9 and 4.8); HDF5 the same day, its header from `aeiou-header`
+    beside `aeiou`, run by rank 0 alone (14.8 GB/s against 6.9).
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool
@@ -694,7 +695,9 @@ line says:
 - The Python authoring tools are dash-suffixed helpers in the same family, one per job:
   `aeiou-build` (the builder; renamed from `abstract-build`), `aeiou-params` (parameter files,
   2026-09-30), `aeiou-trace` (the metrics of an `strace` and their comparison, 2026-10-01),
-  `aeiou-catalog` (the workload catalog's records, shapes, and `CATALOG.md`, 2026-10-10), and later
+  `aeiou-catalog` (the workload catalog's records, shapes, and `CATALOG.md`, 2026-10-10),
+  `aeiou-header` (a container header from the format's own library, run by `aeiou datagen`
+  from beside its binary, 2026-10-12), and later
   `aeiou-verify` (the offline content verifier) and `aeiou-fit` (trace fitting). Dash-suffixed because they live in
   a separate install from the runner and must not fight it for one `aeiou` command.
 - The Python package is `aeiou`; Rust crates are `aeiou` and `aeiou-<part>`.

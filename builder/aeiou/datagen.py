@@ -13,7 +13,7 @@ block of what was resolved, with each value's source, is printed as `aeiou datag
 
 Datasets without a format class are `aeiou datagen`'s (the Rust writer); this tool skips
 them, and `aeiou datagen` refuses the ones with a class (built with the cargo feature
-`formats`, it writes TFRecord and WebDataset too, these bytes), so a corpus is written by both, each
+`formats`, it writes TFRecord, WebDataset, and HDF5 too, these bytes), so a corpus is written by both, each
 dataset by exactly one of them. Names, sizes, offsets, and bytes follow the runner's
 definitions bit for bit (`rng.py`, `pattern.py`, `layout.py`); every file is checked against
 the geometry its layout predicts before the manifest is written.
