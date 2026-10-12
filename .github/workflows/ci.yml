@@ -4,7 +4,8 @@ on:
   push:
   pull_request:
 
-# Four jobs on four runners (4 cores each); the fourth, `runner-object`, builds the object engine. `abstracts` needs no Rust. The runner's own
+# Four jobs on four runners (4 cores each); the fourth, `runner-object`, builds the object engine
+# (its tests without the container writers, so the build without `formats` is compiled too). `abstracts` needs no Rust. The runner's own
 # tests and the Python tests that drive the built binary each build on their own runner from
 # one shared Rust cache: the test binaries are compiled only where they are run, and the
 # integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers, the
@@ -47,7 +48,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Build and test
         working-directory: runner
-        run: cargo nextest run --release
+        run: cargo nextest run --release --features formats
 
   # The object engine (cargo feature `object`, runner/REFERENCE.md §16) against MinIO: the last
   # release that has binaries (the project archived its repository), checked by SHA-256.
@@ -76,7 +77,7 @@ jobs:
       - name: aeiou-datagen into the bucket, read back by the object engine to the dry-run fingerprint
         working-directory: builder
         run: |
-          cargo build --release --features object --bin aeiou --manifest-path ../runner/Cargo.toml
+          cargo build --release --features object,formats --bin aeiou --manifest-path ../runner/Cargo.toml
           TEST_MINIO_BIN=/tmp/minio AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_object.py
 
   runner-integration:
@@ -90,7 +91,7 @@ jobs:
           shared-key: runner
       - name: Build the binary
         working-directory: runner
-        run: cargo build --release --bin aeiou
+        run: cargo build --release --features formats --bin aeiou
       - uses: astral-sh/setup-uv@v5
       - name: Builder with the format classes' libraries
         working-directory: builder

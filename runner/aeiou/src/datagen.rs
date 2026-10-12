@@ -94,6 +94,8 @@ pub struct DatasetResult {
     pub wrote_manifest: bool,
     /// A `regions` dataset another rank owns.
     pub owner: Option<i64>,
+    /// A container's class and writer, `class, writer`.
+    pub format: Option<String>,
 }
 
 fn now_secs() -> u64 {
@@ -224,31 +226,112 @@ fn write_range(f: &File, direct: bool, mode: &Mode, seed_of: &dyn Fn(u64) -> u64
     while done < len {
         let n = (len - done).min(BLOCK) as usize;
         filler.fill_range(seed_of, logical + done, &mut buf[..n]);
-        let off = at + done;
-        if direct && n % ALIGN != 0 {
-            if !mode.pad_tails.load(Ordering::Relaxed) {
-                match f.write_all_at(&buf[..n], off) {
-                    Ok(()) => {
-                        done += n as u64;
-                        continue;
-                    }
-                    Err(e) if is_einval(&e) => {
-                        mode.pad_tails.store(true, Ordering::Relaxed);
-                        mode.note("unaligned tails are refused under O_DIRECT here: padded and truncated".into());
-                    }
-                    Err(e) => return Err(e).with_context(|| format!("writing {}", what.display())),
-                }
-            }
-            let padded = (n + ALIGN - 1) / ALIGN * ALIGN;
-            buf[n..padded].fill(0);
-            f.write_all_at(&buf[..padded], off).with_context(|| format!("writing {}", what.display()))?;
-            f.set_len(off + n as u64).with_context(|| format!("truncating {} to {}", what.display(), off + n as u64))?;
-        } else {
-            f.write_all_at(&buf[..n], off).with_context(|| format!("writing {}", what.display()))?;
-        }
+        write_at(f, direct, mode, buf, n, at + done, what)?;
         done += n as u64;
     }
     Ok(())
+}
+
+/// Write the first `n` bytes of `buf` at `off`; only the file's last write may be unaligned.
+fn write_at(f: &File, direct: bool, mode: &Mode, buf: &mut Aligned, n: usize, off: u64, what: &Path) -> Result<()> {
+    if direct && n % ALIGN != 0 {
+        if !mode.pad_tails.load(Ordering::Relaxed) {
+            match f.write_all_at(&buf[..n], off) {
+                Ok(()) => return Ok(()),
+                Err(e) if is_einval(&e) => {
+                    mode.pad_tails.store(true, Ordering::Relaxed);
+                    mode.note("unaligned tails are refused under O_DIRECT here: padded and truncated".into());
+                }
+                Err(e) => return Err(e).with_context(|| format!("writing {}", what.display())),
+            }
+        }
+        let padded = (n + ALIGN - 1) / ALIGN * ALIGN;
+        buf[n..padded].fill(0);
+        f.write_all_at(&buf[..padded], off).with_context(|| format!("writing {}", what.display()))?;
+        f.set_len(off + n as u64).with_context(|| format!("truncating {} to {}", what.display(), off + n as u64))?;
+    } else {
+        f.write_all_at(&buf[..n], off).with_context(|| format!("writing {}", what.display()))?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- containers
+
+/// A container dataset (one with a format class): its writer and the manifest's `format`.
+struct Container {
+    #[cfg(feature = "formats")]
+    writer: crate::formats::Writer,
+    format: Value,
+}
+
+/// The writer of a format-class dataset, from its resolved definition.
+fn container(name: &str, resolved: &Value) -> Result<Container> {
+    let fmt = &resolved["files"]["format"];
+    if !resolved["files"]["chunk"].is_null() {
+        bail!("dataset `{name}`: a container dataset with `chunk` has no writer");
+    }
+    #[cfg(feature = "formats")]
+    {
+        let writer = crate::formats::Writer::from_format(name, fmt)?;
+        let format = json!({"class": fmt["class"], "reader": fmt["reader"], "version": fmt["version"], "writer": writer.library()});
+        Ok(Container { writer, format })
+    }
+    #[cfg(not(feature = "formats"))]
+    bail!(
+        "dataset `{name}` is a `{}` container: this build of aeiou has no container writers (the cargo feature `formats` adds TFRecord and WebDataset); the Python writer, `aeiou-datagen`, writes every format class (builder/REFERENCE.md §6)",
+        fmt["class"].as_str().unwrap_or("?")
+    )
+}
+
+/// Write container file `file` to `path` (relative to its place), checked against the size
+/// its layout predicts; returns the bytes written.
+#[cfg_attr(not(feature = "formats"), allow(unused_variables))]
+fn write_container(c: &Container, meta: &DsMeta<'_>, file: i64, seed_of: &dyn Fn(u64) -> u64, filler: &mut Filler, buf: &mut Aligned, path: &str, opts: &DatagenOpts, mode: &Mode) -> Result<u64> {
+    #[cfg(feature = "formats")]
+    {
+        let size = meta.file_size(file)? as u64;
+        let mut stream = crate::formats::Stream::new(&c.writer, meta, file, seed_of, filler)?;
+        let drift = |at: u64, what: &str| anyhow::anyhow!("{what}: the writer made {at} bytes, the layout predicts {size}: the format class's layout does not match its writer");
+        if let Some((store, rest)) = opts.endpoints.object(path) {
+            let mut failed: Option<anyhow::Error> = None;
+            store.put_parts(&rest, size, crate::object::DEFAULT_PART, &mut |_, b| {
+                if failed.is_some() {
+                    return;
+                }
+                match stream.read(b) {
+                    Ok(n) if n == b.len() => {}
+                    Ok(_) => failed = Some(drift(stream.pos(), path)),
+                    Err(e) => failed = Some(e),
+                }
+            })?;
+            if let Some(e) = failed {
+                return Err(e);
+            }
+            if stream.read(&mut buf[..1])? != 0 {
+                return Err(drift(stream.pos(), path));
+            }
+            return Ok(size);
+        }
+        let full = opts.endpoints.path(&opts.root, path);
+        let (f, direct) = create(&full, mode)?;
+        loop {
+            let n = stream.read(&mut buf[..BLOCK as usize])?;
+            if n == 0 {
+                break;
+            }
+            let at = stream.pos() - n as u64;
+            if at + n as u64 > size {
+                return Err(drift(stream.pos(), &full.display().to_string()));
+            }
+            write_at(&f, direct, mode, buf, n, at, &full)?;
+        }
+        if stream.pos() != size {
+            return Err(drift(stream.pos(), &full.display().to_string()));
+        }
+        Ok(size)
+    }
+    #[cfg(not(feature = "formats"))]
+    bail!("no container writers in this build")
 }
 
 /// Flush the filesystem holding `dir` (what `O_DIRECT` left to the page cache, the metadata).
@@ -283,6 +366,8 @@ struct Plan<'m, 'a> {
     root: PathBuf,
     /// The store and root key of an object dataset.
     object: Option<(std::sync::Arc<crate::object::Store>, String)>,
+    /// The writer of a format-class dataset.
+    container: Option<Container>,
     share: Share,
 }
 
@@ -349,6 +434,12 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         }
                                         let size = meta.file_size(file)? as u64;
                                         let seed_of = |blk: u64| payload::file_block_seed(seed, file as u64, blk, dedupe);
+                                        if let Some(c) = &plan.container {
+                                            let size = write_container(c, meta, file, &seed_of, &mut filler, &mut buf, &meta.file_path(file, None)?, opts, mode)?;
+                                            files.fetch_add(1, Ordering::Relaxed);
+                                            bytes.fetch_add(size, Ordering::Relaxed);
+                                            return Ok(());
+                                        }
                                         let objects: Vec<(String, u64, u64)> = match chunk {
                                             None => vec![(meta.file_path(file, None)?.to_string(), 0, size)],
                                             Some(c) => {
@@ -463,11 +554,10 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if !opts.datasets.is_empty() && !opts.datasets.iter().any(|d| d == name) {
             continue;
         }
-        if let Some(crate::ast::Dataset::Files(f)) = loaded.ast.datasets.get(name) {
-            if let Some(fm) = &f.format {
-                bail!("dataset `{name}` is a `{}` container: its format class writes it (the Python writer, `aeiou-datagen`; builder/REFERENCE.md), not `aeiou datagen`", fm.class);
-            }
-        }
+        let container = match loaded.ast.datasets.get(name) {
+            Some(crate::ast::Dataset::Files(f)) if f.format.is_some() => Some(container(name, &payload::resolved_dataset(&loaded.doc, name, cfg)?)?),
+            _ => None,
+        };
         let rel = payload::dataset_root(&loaded.ast, name)?;
         let root = opts.endpoints.path(&opts.root, &rel);
         let object = opts.endpoints.object(&rel);
@@ -502,7 +592,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 }
             }
         };
-        plans.push(Plan { meta, name, root, object, share });
+        plans.push(Plan { meta, name, root, object, container, share });
     }
     for p in &plans {
         match &p.share {
@@ -595,7 +685,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             manifest_version: payload::MANIFEST_VERSION,
             dataset: payload::resolved_dataset(&loaded.doc, p.name, cfg)?,
             payload: spec.clone(),
-            format: None,
+            format: p.container.as_ref().map(|c| c.format.clone()),
             provenance: json!({
                 "abstract": loaded.ast.name,
                 "ast_sha256": loaded.sha256,
@@ -639,6 +729,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 Share::Other { owner } => Some(owner),
                 _ => None,
             },
+            format: p.container.as_ref().map(|c| format!("{}, {}", c.format["class"].as_str().unwrap_or("?"), c.format["writer"].as_str().unwrap_or("?"))),
         });
     }
     if let Some(h) = hosts {

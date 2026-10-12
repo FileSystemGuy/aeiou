@@ -40,8 +40,9 @@ start gate with the residency check and the mount options line (decided 2026-10-
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
 computes every offset of a framed container from `format.layout`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
-classes is the Python side (`aeiou-datagen`, `builder/REFERENCE.md`); `aeiou datagen` refuses a
-dataset that has a format class.
+classes is the Python side (`aeiou-datagen`, `builder/REFERENCE.md`); ~~`aeiou datagen` refuses a
+dataset that has a format class~~ since 2026-10-12 `aeiou datagen` built with the cargo feature
+`formats` writes TFRecord and WebDataset itself (§5, *Containers*), and refuses HDF5 and Parquet.
 
 ```
 aeiou/src/
@@ -471,8 +472,22 @@ as root). The same runs on the loopback NFS mount are §7.
   aggregate rate, only each rank's counts and the totals.
 - **Containers** are written by the Python side: `aeiou-datagen` (`builder/REFERENCE.md` §6)
   writes every dataset that has a format class, with the same names, sizes, payload, and
-  manifest form (its `format` block records the class and writer library); `aeiou datagen`
-  refuses such a dataset. A corpus with both kinds is written by both tools, each dataset by
+  manifest form (its `format` block records the class and writer library); ~~`aeiou datagen`
+  refuses such a dataset~~. **Since 2026-10-12** (`DESIGN_REVIEW.md` §3.70) `aeiou datagen`
+  built with the cargo feature `formats` (off by default, as `object` is; it brings the
+  crate `crc32c`; the release binary is built with it) writes TFRecord and WebDataset (tar) itself (`formats.rs`), byte for byte
+  the Python writer's files: a file is a byte stream pulled in pieces (`Stream`), framing
+  made as it is reached (TFRecord's CRC taken as the data streams past; CPython `tarfile`'s
+  ustar headers, mode 0644, owner 0, mtime 0, no device numbers), the samples' payload
+  filled in place, so it goes to a file in `O_DIRECT` blocks or into an upload in 8 MiB
+  parts holding one piece, and each file is checked against the size its layout predicts.
+  The payload of a container starts anywhere in a block, so `Filler` makes a block read in
+  order from its start in place, continuing its generator, rather than through the
+  one-block cache (8 GiB to tmpfs at 16 writers: 12.1 GB/s through the cache, 20.7 in
+  place). The manifest's `format.writer` names `aeiou datagen tfrecord writer` or
+  `aeiou datagen ustar writer`, so the dataset id differs from the Python writer's for the
+  same bytes. HDF5 and Parquet are refused (they come next, §3.70); without the feature,
+  every format class is. A corpus with both kinds is written by both tools, each dataset by
   one of them. `aeiou-datagen` takes the same `--ranks`, `--rank`, and `--coordinator`, splits
   the ids the same way, and speaks this coordinator's protocol from Python
   (`builder/aeiou/coord.py`, 2026-10-11: the frames of §6, the datagen's subset of `Msg`, the

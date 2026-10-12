@@ -5343,6 +5343,37 @@ at 1 / 4 / 16 writers under `/3`: Rust plain files 2.2 / 12.4 / 22.5 GB/s (`C = 
 11.0 / 20.9 (`C = 2`); Python TFRecord 1.3 / 5.5 / 8.2. Parquet and HDF5 under `/3` are not
 measured (under `/2`: 0.7 / 1.7 / 2.1 and 1.3 / 3.7 / 5.3).
 
+**Built 2026-10-12: (a), TFRecord and WebDataset in Rust.** `formats.rs` behind the cargo
+feature `formats` (one dependency, `crc32c`; the tar headers are ours, 512 bytes as CPython
+3.12's `tarfile` writes a ustar member: mode `0000644`, owner 0, mtime 0, the checksum as
+`%06o\0 `, devmajor and devminor left NUL for a regular file). A file is a byte stream
+pulled in pieces of any size, framing made as it is reached and each sample's payload
+filled in place, so the directory writer takes 1 MiB `O_DIRECT` blocks from it and the
+object writer 8 MiB parts, holding a piece and never the file; every file is checked
+against the size its layout predicts, which caught the one bug on the way (the tar end
+padded again on every call). Both formats matched the Python writer byte for byte, with
+dedupe 2, compression 3, and a short last shard, into directories and into a MinIO bucket
+(multipart). The manifest's `format.writer` names the Rust writer, so its dataset ids
+differ from the Python writer's for the same bytes, as decided for Parquet; `aeiou run`
+compares the definition, not the id, so either corpus runs the same abstract.
+
+Speed, 8 GiB to tmpfs, 64 shards of about 128 MiB, samples of about 120 KiB, the median of
+three (GB/s at 1 / 4 / 16 writers, this session):
+
+| writer | TFRecord | WebDataset |
+|---|---|---|
+| `aeiou-datagen` (Python) | 1.4 / 4.8 / 5.9 | 0.8 / 2.9 / 4.8 |
+| `aeiou datagen`, first cut | 2.1 / 9.1 / 10.1 | 2.2 / 9.2 / 12.3 |
+| `aeiou datagen` | 2.2 / 9.9 / 20.7 | 2.7 / 12.3 / 22.6 |
+
+Plain files of the same shape: 2.7 / 8.3 / 21.2. The first cut was held at half that by
+the payload: a container's samples start anywhere in a block, so `Filler` made each block
+whole into its one-block cache and copied out of it, 2 MiB a writer and a copy more for
+every byte. A block read in order from its start is now made in place as it is read, the
+generator continued where the last range stopped (`payload.rs` `Cursor`; the bytes are
+unchanged, `a_range_read_in_order_is_the_blocks_bytes`), and at 16 writers containers write
+as fast as plain files. Next: (b), HDF5 with its header from h5py.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

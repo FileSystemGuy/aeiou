@@ -243,7 +243,9 @@ bytes under `aeiou-positional/3` (numpy's `SFC64` in 4 KiB pieces, `payload_bloc
 bit-identical to the Rust writer's, `tests/test_payload.py`), each file checked against the geometry its layout predicts (`layout.py`), then the
 manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names the writer
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
-ones with a class. `tests/test_formats.py` reads the files back with pyarrow and h5py and,
+ones with a class (since 2026-10-12, built with the cargo feature `formats`, it writes TFRecord
+and WebDataset itself, byte for byte this writer's files, `tests/test_formats.py` and
+`tests/test_object.py` comparing them; `runner/REFERENCE.md` §5). `tests/test_formats.py` reads the files back with pyarrow and h5py and,
 when the runner is built, runs the three container abstracts over them under the `sync`
 and `io_uring` backends. `--root`, `--endpoint`, `--writers`, `--rank`, `--ranks`, and
 `--coordinator` come through the runner's option layers

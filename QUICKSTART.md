@@ -74,5 +74,5 @@ decide what the numbers mean, so include them.
 ## From source instead
 
 To patch and rebuild, clone the repository and follow the quick start in its `README.md`:
-`cargo build --release` in `runner/` and `uv sync --extra test --extra formats` in
+`cargo build --release --features formats` in `runner/` (the release binary's features) and `uv sync --extra test --extra formats` in
 `builder/`.

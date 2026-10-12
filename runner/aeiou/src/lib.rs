@@ -15,6 +15,8 @@ pub mod coord;
 pub mod counters;
 pub mod datagen;
 pub mod endpoint;
+#[cfg(feature = "formats")]
+pub mod formats;
 pub mod dryrun;
 pub mod eval;
 pub mod limits;

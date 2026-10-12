@@ -188,8 +188,8 @@ builder's wheel, for x86_64 Linux) is attached to every tag; [QUICKSTART.md](QUI
 is the guide for it. From source:
 
 ```
-# the runner
-cd runner && cargo build --release && cargo test --release && cd ..
+# the runner (`formats`: aeiou datagen writes TFRecord and tar, as the release binary does)
+cd runner && cargo build --release --features formats && cargo test --release --features formats && cd ..
 
 # the builder (or: pip install -e 'builder[test,formats]')
 cd builder && uv sync --extra test --extra formats && uv run pytest && cd ..
@@ -212,7 +212,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-11)
+## Status (2026-10-12)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -223,7 +223,8 @@ node under every backend, the option layers, the usage-error frame, and `datagen
 hosts with `O_DIRECT` (each host its slice of the ids, one manifest once every host has
 reported; the launcher takes host files and `pdsh`-style ranges), and `aeiou-datagen`, the
 container writer, across hosts the same way, speaking the same coordinator protocol
-(2026-10-11). The workload catalog
+(2026-10-11), and `aeiou datagen` writing TFRecord and tar itself behind the cargo feature
+`formats`, the Python writer's bytes at four times its speed (2026-10-12). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
@@ -257,7 +258,8 @@ Not built, in rough order of interest:
   in place, and a run over the first *S* ids of a larger corpus (item 23): one long datagen
   on a fleet, then a series of runs growing toward the saturation point. First, decided
   2026-10-11 (`DESIGN_REVIEW.md` §3.70): the container formats written by `aeiou datagen`
-  in Rust behind a cargo feature `formats`, so that item 23 is built once, in Rust.
+  in Rust behind a cargo feature `formats`, so that item 23 is built once, in Rust;
+  TFRecord and tar built 2026-10-12, HDF5 and Parquet not yet.
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),
   and concurrent mixes of cases (item 30, critical but not yet; `DESIGN_REVIEW.md` §3.67).

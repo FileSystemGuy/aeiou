@@ -7,8 +7,8 @@ Nothing here depends on Python. The manual is [aeiou(1)](../man/aeiou.1.md) and
 fixes and every choice made in building it, is [REFERENCE.md](REFERENCE.md).
 
 ```
-cargo build --release
-cargo test --release
+cargo build --release --features formats   # formats: the TFRecord and tar writers of datagen
+cargo test --release --features formats
 ./target/release/aeiou check $(find ../workloads -name '*.ast.json')
 ./target/release/aeiou dry-run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
 ./target/release/aeiou run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \

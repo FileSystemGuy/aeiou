@@ -18,8 +18,9 @@ dataset of the abstract that declares a container **format class**: real Parquet
 TFRecord, or tar (WebDataset) files, written with the format's own library, uncompressed
 and plainly encoded, so that the real reader library issues against them the operation
 protocol the abstract models. Datasets without a format class are left to `aeiou datagen`,
-which in turn refuses the ones with a class; a corpus with both kinds is written by both
-tools, each dataset by one of them.
+which refuses the ones with a class unless built with the cargo feature `formats`, under
+which it writes TFRecord and tar files byte for byte as this tool does; a corpus with both
+kinds is written by both tools, each dataset by one of them.
 
 Names come from the dataset's pattern, sizes from the dataset seed (the Python port of the
 runner's sampler), and bytes from the same positional payload generator as the Rust writer:

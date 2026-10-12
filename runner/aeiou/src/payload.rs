@@ -167,17 +167,76 @@ pub fn random_per_piece(compress: u64) -> usize {
     PIECE.div_ceil(compress.max(1) as usize)
 }
 
-/// Generates block content, with a one-block cache for sub-block ranges.
+/// A block being made in order: the block offset of its next byte, and the generator there
+/// (with what is left of the last output, for a range that ended inside one).
+struct Cursor {
+    seed: u64,
+    at: usize,
+    g: Sfc64,
+    spare: [u8; 8],
+    spare_at: usize,
+}
+
+impl Cursor {
+    fn new(seed: u64) -> Cursor {
+        Cursor { seed, at: 0, g: Sfc64::new(seed), spare: [0; 8], spare_at: 8 }
+    }
+
+    /// The next `out.len()` bytes of the stream.
+    fn stream(&mut self, out: &mut [u8]) {
+        let k = (8 - self.spare_at).min(out.len());
+        out[..k].copy_from_slice(&self.spare[self.spare_at..self.spare_at + k]);
+        self.spare_at += k;
+        let rest = &mut out[k..];
+        let mut words = rest.chunks_exact_mut(8);
+        for w in &mut words {
+            w.copy_from_slice(&self.g.next_u64().to_le_bytes());
+        }
+        let tail = words.into_remainder();
+        if !tail.is_empty() {
+            let n = tail.len();
+            self.spare = self.g.next_u64().to_le_bytes();
+            tail.copy_from_slice(&self.spare[..n]);
+            self.spare_at = n;
+        }
+    }
+
+    /// The block's next `out.len()` bytes: per 4 KiB piece, `r` stream bytes then `FILL`.
+    fn fill(&mut self, r: usize, out: &mut [u8]) {
+        if r == PIECE {
+            self.stream(out);
+            self.at += out.len();
+            return;
+        }
+        let mut done = 0;
+        while done < out.len() {
+            let off = self.at % PIECE;
+            let k = if off < r { (r - off).min(out.len() - done) } else { (PIECE - off).min(out.len() - done) };
+            if off < r {
+                self.stream(&mut out[done..done + k]);
+            } else {
+                out[done..done + k].fill(FILL);
+            }
+            self.at += k;
+            done += k;
+        }
+    }
+}
+
+/// Generates block content: a block read in order from its start is made in place as it is
+/// read (a container's samples, which start anywhere in a block); any other sub-block range
+/// comes from a one-block cache.
 pub struct Filler {
     compress: u64,
     cache_seed: Option<u64>,
     cache: Vec<u8>,
     scratch: Vec<u8>,
+    cursor: Option<Cursor>,
 }
 
 impl Filler {
     pub fn new(compress: u64) -> Self {
-        Filler { compress: compress.max(1), cache_seed: None, cache: Vec::new(), scratch: Vec::new() }
+        Filler { compress: compress.max(1), cache_seed: None, cache: Vec::new(), scratch: Vec::new(), cursor: None }
     }
 
     /// The first `out.len()` bytes (≤ 1 MiB) of the block seeded `seed`.
@@ -218,8 +277,15 @@ impl Filler {
             let in_block = (pos % BLOCK) as usize;
             let n = ((BLOCK as usize) - in_block).min(buf.len() - done);
             let seed = seed_of(block);
+            let next = matches!(&self.cursor, Some(c) if c.seed == seed && c.at == in_block);
             if in_block == 0 && n as u64 == BLOCK {
                 self.fill_block(seed, &mut buf[done..done + n]);
+            } else if next || in_block == 0 {
+                if !next {
+                    self.cursor = Some(Cursor::new(seed));
+                }
+                let r = random_per_piece(self.compress);
+                self.cursor.as_mut().unwrap().fill(r, &mut buf[done..done + n]);
             } else {
                 if self.cache_seed != Some(seed) || self.cache.len() < in_block + n {
                     self.cache.resize(BLOCK as usize, 0);
@@ -544,6 +610,33 @@ mod tests {
         let mut mid = vec![0u8; 10000];
         f.fill_range(|_| 42, 5000, &mut mid);
         assert_eq!(&full[5000..15000], &mid[..]);
+    }
+
+    #[test]
+    fn a_range_read_in_order_is_the_blocks_bytes() {
+        // a container's payload: ranges of odd lengths back to back over block boundaries,
+        // made in place by the cursor, against whole blocks; then a jump back through the cache
+        for c in [1u64, 2, 3, 7] {
+            let seed_of = |b: u64| 100 + b;
+            let mut whole = vec![0u8; 3 * BLOCK as usize];
+            let mut f = Filler::new(c);
+            for b in 0..3 {
+                f.fill_block(seed_of(b as u64), &mut whole[b * BLOCK as usize..(b + 1) * BLOCK as usize]);
+            }
+            let mut f = Filler::new(c);
+            let mut got = vec![0u8; whole.len()];
+            let (mut at, mut k) = (0usize, 1usize);
+            while at < got.len() {
+                let n = (k * 7919 % 300_001 + 1).min(got.len() - at);
+                f.fill_range(seed_of, at as u64, &mut got[at..at + n]);
+                at += n;
+                k += 1;
+            }
+            assert!(got == whole, "C={c}");
+            let mut back = vec![0u8; 5000];
+            f.fill_range(seed_of, BLOCK + 123, &mut back);
+            assert_eq!(&back[..], &whole[BLOCK as usize + 123..BLOCK as usize + 5123], "C={c}");
+        }
     }
 
     #[test]

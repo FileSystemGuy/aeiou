@@ -285,9 +285,61 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
         assert "fingerprint matches" in run.stdout
         if name == "parquet_stream":
             assert "fadvise" in run.stdout
-    # the Rust writer refuses a dataset that has a format class
-    r = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "other", *flags], capture_output=True, text=True)
-    assert r.returncode != 0 and "format class" in r.stderr
+    # the Rust writer refuses the format classes it does not write yet (TFRecord and WebDataset: below)
+    if name != "tfrecord_stream":
+        r = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "other", *flags], capture_output=True, text=True)
+        assert r.returncode != 0 and "aeiou-datagen" in r.stderr, r.stderr
+
+
+def webdataset_ast(tmp_path, members=(("jpg", None), ("cls", 4), ("json", 700))):
+    """`tfrecord_stream` with its shards a WebDataset tar (no committed abstract has one)."""
+    a = json.loads(ast_path("tfrecord_stream").read_text())
+    f = a["datasets"]["shards"]["files"]
+    f["pattern"] = "train/shard-{id:05}.tar"
+    f["format"] = formats.webdataset(members=members).spec("stream", f["size"], {k: p["default"] for k, p in a["params"].items()})
+    a["name"] = "webdataset_stream"
+    p = tmp_path / "webdataset_stream.ast.json"
+    p.write_text(json.dumps(a))
+    return p
+
+
+@needs_runner
+@pytest.mark.parametrize("name", ["tfrecord", "webdataset"])
+def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
+    """`aeiou datagen` built with the cargo feature `formats` (DESIGN_REVIEW.md §3.70): every
+    TFRecord and WebDataset file is the Python writer's byte for byte, with dedupe, compression,
+    and a short last shard; the manifest the same definition and payload, its `format.writer`
+    the Rust writer (so the dataset id differs)."""
+    ast_file = ast_path("tfrecord_stream") if name == "tfrecord" else webdataset_ast(tmp_path)
+    params = ["--param", "samples=700", "--param", "per_shard=128", "--param", "sample_median=20000"]
+    flags = [*params, "--dedupe", "2", "--compress", "3"]
+    rs = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "rs", "--writers", "3", *flags], capture_output=True, text=True)
+    if "--features formats" in rs.stderr:
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+    assert rs.returncode == 0, rs.stdout + rs.stderr
+    assert f"({name}, aeiou datagen " in rs.stdout
+    py = _tool("datagen", [ast_file, "--root", tmp_path / "py", "--writers", "3", *flags])
+    assert py.returncode == 0, py.stdout + py.stderr
+    files = sorted(p.relative_to(tmp_path / "py") for p in (tmp_path / "py").rglob("*") if p.is_file())
+    assert files == sorted(p.relative_to(tmp_path / "rs") for p in (tmp_path / "rs").rglob("*") if p.is_file())
+    assert len(files) == 7   # six shards, the last short, and the manifest
+    for f in files:
+        if f.name != ".aeiou-dataset.json":
+            assert (tmp_path / "rs" / f).read_bytes() == (tmp_path / "py" / f).read_bytes(), f
+    m_rs, m_py = (json.loads((tmp_path / w / "train" / ".aeiou-dataset.json").read_text()) for w in ("rs", "py"))
+    for k in ("manifest_version", "dataset", "payload"):
+        assert m_rs[k] == m_py[k], k
+    assert {k: v for k, v in m_rs["format"].items() if k != "writer"} == {k: v for k, v in m_py["format"].items() if k != "writer"}
+    assert m_rs["format"]["writer"].startswith("aeiou datagen ")
+    # the runner reads what it wrote to the dry run's fingerprint
+    run_flags = [*params, "--param", "batch=32", "--param", "steps=4"]
+    dry = subprocess.run([RUNNER, "dry-run", ast_file, "--gpus", "2", "--seed", "3", *run_flags], capture_output=True, text=True)
+    assert dry.returncode == 0, dry.stderr
+    fp = [l.split()[1] for l in dry.stdout.splitlines() if l.startswith("fingerprint ")][0]
+    run = subprocess.run([RUNNER, "run", ast_file, "--root", tmp_path / "rs", "--gpus", "2", "--seed", "3", "--time-scale", "0",
+                          "--expect-fingerprint", fp, *run_flags], capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "fingerprint matches" in run.stdout
 
 
 @needs_runner

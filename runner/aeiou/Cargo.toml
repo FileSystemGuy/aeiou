@@ -25,9 +25,12 @@ toml = { version = "1.1.6", default-features = false, features = ["parse", "serd
 object_store = { version = "=0.14.2", default-features = false, features = ["aws"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
+# the container writers of `aeiou datagen` (DESIGN_REVIEW.md §3.70), behind the `formats` feature
+crc32c = { version = "0.6", optional = true }
 
 [features]
 object = ["dep:object_store", "dep:tokio", "dep:futures"]
+formats = ["dep:crc32c"]
 
 [[test]]
 name = "all"

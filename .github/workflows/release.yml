@@ -38,7 +38,7 @@ jobs:
 
       - name: Build the runner
         working-directory: runner
-        run: cargo build --release --bin aeiou
+        run: cargo build --release --features formats --bin aeiou   # the container writers (DESIGN_REVIEW.md §3.70)
 
       - name: Build the builder's wheel
         working-directory: builder
