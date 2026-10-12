@@ -46,7 +46,12 @@ pub const GENERATOR_VERSION: &str = "1";
 pub const PIECE: usize = 4096;
 pub const FILL: u8 = 0x5A;
 pub const MANIFEST_NAME: &str = ".aeiou-dataset.json";
-pub const MANIFEST_VERSION: u64 = 1;
+/// 2 since 2026-10-12: `state` and `progress` (`DESIGN_REVIEW.md` §3.70), so a reader that
+/// knows only 1 cannot take an unfinished corpus for a whole one.
+pub const MANIFEST_VERSION: u64 = 2;
+/// A dataset's `state`: written at the start as `writing`, `complete` once every file is.
+pub const STATE_WRITING: &str = "writing";
+pub const STATE_COMPLETE: &str = "complete";
 pub const NAMESPACE_MANIFEST_NAME: &str = ".aeiou-namespace.json";
 pub const NAMESPACE_MANIFEST_VERSION: u64 = 1;
 /// Above this many objects a namespace manifest records the count only.
@@ -304,6 +309,9 @@ impl Filler {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub manifest_version: u64,
+    /// `writing` from before the first file, `complete` once the last is (neither hashed).
+    #[serde(default)]
+    pub state: String,
     /// The resolved dataset definition: the `datasets` entry with parameters substituted,
     /// `doc` removed, canonical key order.
     pub dataset: Value,
@@ -312,6 +320,10 @@ pub struct Manifest {
     pub format: Option<Value>,
     #[serde(default)]
     pub provenance: Value,
+    /// While `writing`: what is not yet written and flushed (`unfinished`, id ranges), the
+    /// counts so far, and when it was recorded; absent once `complete`.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub progress: Value,
 }
 
 impl Manifest {

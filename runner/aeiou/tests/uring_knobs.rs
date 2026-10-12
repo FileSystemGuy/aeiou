@@ -37,7 +37,7 @@ fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Co
 
 fn gen(loaded: &aeiou::Loaded, cfg: &Config, model: &Model<'_>, root: &PathBuf) {
     let params = Params::new(&loaded.ast, cfg).unwrap();
-    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 };
+    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30) };
     let mut log = Vec::new();
     datagen(loaded, cfg, &params, model, &opts, None, &mut log).unwrap();
 }

@@ -184,7 +184,7 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
-    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1 }, None, &mut log).unwrap();
+    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30) }, None, &mut log).unwrap();
     let dry = dryrun::run(model, 2, None).unwrap();
 
     let server = Server::start("127.0.0.1:0", 2).unwrap();
@@ -328,7 +328,7 @@ fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
 // ---------------------------------------------------------------- datagen on several hosts
 
 fn dopts(root: &PathBuf, rank: i64, ranks: i64) -> DatagenOpts {
-    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks }
+    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20) }
 }
 
 /// Every data file under `root` (the `.aeiou*` metadata left out), by relative path.
@@ -439,11 +439,14 @@ fn datagen_ranks(root: &PathBuf, params: &[&str], ranks: i64, extra: impl Fn(i64
 #[test]
 fn datagen_on_two_processes_end_to_end() {
     let root = tmpdir("dg-e2e");
-    let outs = datagen_ranks(&root, &["files=100"], 2, |_| vec![]);
+    let outs = datagen_ranks(&root, &["files=100"], 2, |_| vec!["--progress-secs".into(), "0.01".into()]);
     for (ok, stdout, stderr) in &outs {
         assert!(*ok, "stdout:\n{stdout}\nstderr:\n{stderr}");
         assert!(stdout.contains("start gate: 2 host(s) ready"), "{stdout}");
     }
+    // rank 0 prints the progress of both, the other rank none
+    assert!(outs[0].1.contains("progress ") && outs[0].1.contains("/100 files"), "{}", outs[0].1);
+    assert!(!outs[1].1.contains("progress "), "{}", outs[1].1);
     assert!(outs[0].1.contains("files [0, 50) of 100 on this rank"), "{}", outs[0].1);
     assert!(outs[1].1.contains("files [50, 100) of 100 on this rank"), "{}", outs[1].1);
     assert!(outs[0].1.contains("all 2 hosts 100 file(s)") && outs[0].1.contains("manifest written"), "{}", outs[0].1);
@@ -451,6 +454,7 @@ fn datagen_on_two_processes_end_to_end() {
     let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert_eq!(m.provenance["ranks"], 2);
     assert_eq!(m.provenance["files_written"], 100);
+    assert_eq!((m.state.as_str(), &m.progress), ("complete", &serde_json::Value::Null));
     // a differing payload on one rank is refused on every rank before anything is written
     let root2 = tmpdir("dg-mixed");
     let outs = datagen_ranks(&root2, &["files=100"], 2, |rank| if rank == 1 { vec!["--dedupe".into(), "2".into()] } else { vec![] });
@@ -460,4 +464,66 @@ fn datagen_on_two_processes_end_to_end() {
     assert!(tree(&root2).is_empty(), "nothing written: {:?}", tree(&root2).keys().collect::<Vec<_>>());
     std::fs::remove_dir_all(&root).unwrap();
     std::fs::remove_dir_all(&root2).unwrap();
+}
+
+/// A datagen killed in the middle, on one host or two, leaves its manifest `writing`, and
+/// every id the manifest does not list as unfinished is a whole file (DESIGN_REVIEW.md
+/// §3.70: each rank notes, flushes, and tells rank 0, which merges); a run refuses it.
+#[test]
+fn a_killed_datagen_leaves_a_manifest_that_is_true() {
+    use std::io::BufRead;
+    let files = 20000i64;
+    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "20000")]));
+    let meta = &model.datasets[0];
+    for ranks in [1i64, 2] {
+        let root = tmpdir("dg-killed");
+        let port = free_port();
+        let mut children = Vec::new();
+        for rank in 0..ranks {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+            c.arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root);
+            c.args(["--writers", "2", "--progress-secs", "0.02", "--param", &format!("files={files}")]);
+            if ranks > 1 {
+                c.args(["--ranks", &ranks.to_string(), "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
+            }
+            children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap());
+            if rank == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+        // rank 0's lines: the first window that has seen a file finish, then two more
+        let mut lines = std::io::BufReader::new(children[0].stdout.take().unwrap()).lines();
+        let mut seen = 0;
+        while let Some(Ok(l)) = lines.next() {
+            if l.starts_with("progress ") && !l.contains(" 0/") {
+                seen += 1;
+                if seen == 3 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(seen, 3, "{ranks} rank(s): the datagen ended before three windows");
+        for c in children.iter_mut() {
+            c.kill().unwrap();
+            c.wait().unwrap();
+        }
+        let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+        assert_eq!(m.state, "writing");
+        let unfinished: Vec<(i64, i64)> = m.progress["unfinished"].as_array().unwrap().iter().map(|r| (r[0].as_i64().unwrap(), r[1].as_i64().unwrap())).collect();
+        let left: i64 = unfinished.iter().map(|(a, b)| b - a).sum();
+        assert!(left > 0 && left < files, "{ranks} rank(s): {unfinished:?}");
+        if ranks == 2 {
+            assert!(unfinished.iter().all(|(a, _)| *a != 0 && *a != files / 2), "both ranks have reported progress: {unfinished:?}");
+        }
+        for id in 0..files {
+            if unfinished.iter().any(|(a, b)| (*a..*b).contains(&id)) {
+                continue;
+            }
+            let path = root.join(meta.file_path(id, None).unwrap().to_string());
+            assert_eq!(std::fs::metadata(&path).map(|m| m.len()).ok(), Some(meta.file_size(id).unwrap() as u64), "{}: recorded as finished", path.display());
+        }
+        let e = run::check_datasets(loaded, cfg, &root).unwrap_err().to_string();
+        assert!(e.contains("the manifest says `writing`") && e.contains(&format!("{left} file(s) not written")), "{e}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

@@ -75,8 +75,12 @@ the pattern, sizes from the dataset seed, content from the positional payload ge
 pieces for the compression ratio, with the dedupe and compression ratios given), in parallel by id, with `O_DIRECT` (datagen never
 reads what it writes, and the client's page cache is what a benchmark must not have warm; a
 root that refuses `O_DIRECT` falls back to the page cache, said once). The manifest
-`.aeiou-dataset.json` is written last, atomically, at each dataset root, and its id is
-printed. A non-empty root is refused: datasets are read-only. A dataset that declares a
+`.aeiou-dataset.json` is written at each dataset root before the first file, its state
+`writing` and every id unfinished; every `--progress-secs` each rank flushes what it has
+written and reports it, and the manifest is rewritten (atomically, by rank 0) with the ids
+not yet written, and a progress line printed; once every file is written it says
+`complete`, and its id is printed. `run` refuses a dataset that is not `complete`. A
+non-empty root is refused: datasets are read-only. A dataset that declares a
 container format class is written by **aeiou-datagen**(1); a build with the cargo feature
 `formats` (the release's) writes TFRecord, tar (WebDataset), HDF5, and Parquet here too,
 the same bytes (a Parquet footer names this writer as `created_by`). An HDF5 file's header comes from **aeiou-header**(1), which must
@@ -86,8 +90,8 @@ On several hosts (`--ranks`, `--rank`, `--coordinator`, as for `run`; **aeiou-la
 starts them) rank *r* writes its contiguous slice of every `files` dataset's ids, and each
 `regions` dataset is written whole by one rank (the *i*-th by rank *i* mod *R*: several
 hosts writing one file serialize on the server). Every rank checks the roots are empty
-before the start gate, writes after it, and sends its counts; rank 0 writes the manifests
-once every rank has reported, so a manifest means the whole corpus is there, and records
+before the start gate, writes after it, reports its progress every window, and sends its
+counts at the end; rank 0 writes the manifests, `complete` once every rank has reported, and records
 every rank's host and counts in the provenance. The coordinator refuses a host whose
 abstract, parameters, `--gpus`, `--dedupe`, `--compress`, or `--dataset` list differ.
 
@@ -251,6 +255,11 @@ turns it off, and the last one on the line wins.
 - **--dataset** *NAME*
 
   Write only these datasets; repeatable. Default all.
+- **--progress-secs** *SECS*
+
+  Seconds between progress notes: each rank flushes what it has written and reports it,
+  and rank 0 rewrites each manifest with the ids not yet written and prints one line
+  (files, bytes, rate, time left). Default 30. *Layered.*
 
 **Several hosts**
 
@@ -600,7 +609,8 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
 
   The manifest `datagen` leaves at a dataset root and `run` compares. Its normative part
   (the resolved dataset definition, the payload block, the format block) hashes to the
-  dataset id.
+  dataset id; its `state` (`writing`, then `complete`) and, while writing, its `progress`
+  (the ids not yet written) are not hashed.
 - `.aeiou-namespace.json`
 
   The manifest `run` leaves at every namespace root it wrote, and requires at the root of

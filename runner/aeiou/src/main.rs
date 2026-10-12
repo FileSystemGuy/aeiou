@@ -128,6 +128,10 @@ struct DatagenArgs {
     /// Only these datasets (default: all).
     #[arg(long = "dataset", value_name = "NAME", help_heading = "Writer")]
     datasets: Vec<String>,
+    /// Seconds between progress notes: each rank flushes what it has written and reports it,
+    /// and rank 0 rewrites each manifest with what is not yet written and prints a line. Default 30.
+    #[arg(long, value_name = "SECS", help_heading = "Writer")]
+    progress_secs: Option<f64>,
     /// This host's index among --ranks hosts. Default 0.
     #[arg(long, value_name = "R", help_heading = "Several hosts")]
     rank: Option<i64>,
@@ -530,6 +534,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let endpoints = l.layered::<Vec<String>>("endpoint", (!a.endpoints.is_empty()).then_some(a.endpoints.clone()), None)?.unwrap_or_default();
     let writers = l.layered::<usize>("writers", a.writers, None)?;
     let object_threads = l.layered::<usize>("object-threads", a.object_threads, None)?;
+    let progress_secs = l.layered("progress-secs", a.progress_secs, Some(30.0))?.unwrap_or(30.0);
     let rank = l.layered("rank", a.rank, Some(0))?.unwrap_or(0);
     let ranks = l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1);
     let coordinator = l.layered::<String>("coordinator", a.coordinator, None)?;
@@ -548,6 +553,9 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     if ranks < 1 || rank < 0 || rank >= ranks {
         aeiou::usage!("--rank {rank} of --ranks {ranks}: rank must be in [0, ranks){}", l.from(&["rank", "ranks"]));
     }
+    if !(progress_secs > 0.0 && progress_secs.is_finite()) {
+        aeiou::usage!("--progress-secs {progress_secs}: a positive number of seconds{}", l.from(&["progress-secs"]));
+    }
     let (abstract_path, root) = (abstract_path.expect("checked"), root.expect("checked"));
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
     let loaded = aeiou::load(&abstract_path)?;
@@ -558,7 +566,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, endpoints, writers, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks };
+    let opts = DatagenOpts { root, endpoints, writers, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs) };
     let mut out = std::io::stdout();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     l.print(&mut out)?;

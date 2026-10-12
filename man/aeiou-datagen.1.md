@@ -31,7 +31,7 @@ compression ratios given. Every file is checked
 against the geometry its declared layout predicts (file and unit headers and footers,
 column chunks, row framing, alignment), since the runner computes every offset from that
 layout and never reads a container's metadata. The manifest `.aeiou-dataset.json` is
-written last at each dataset root, with the same normative content as the Rust writer's
+written last at each dataset root, its state `complete`, with the same normative content as the Rust writer's
 plus a `format` block naming the class and the writer library; `aeiou run` compares it
 before the gate.
 

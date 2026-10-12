@@ -200,6 +200,9 @@ enum Msg {
     /// Client → server: this host's part of a `datagen` is written (its counts and host); the
     /// reduction of a datagen, which has no report.
     Done(Value),
+    /// Client → server every `--progress-secs` of a datagen: what this host has finished and
+    /// flushed (`DESIGN_REVIEW.md` §3.70); the server keeps each host's latest.
+    Progress(Value),
     /// Server → all after the reduction: the verdict rank 0 reached on the merged report.
     Result { ok: bool, fingerprint: u64, error: Option<String> },
     Stop { reason: String },
@@ -405,6 +408,11 @@ impl Tcp {
         send(&self.st.writer, &Msg::Report(Box::new(r.clone())))
     }
 
+    /// Send rank 0 what this host has finished so far (a datagen's progress).
+    pub fn progress(&self, doc: &Value) -> Result<()> {
+        send(&self.st.writer, &Msg::Progress(doc.clone()))
+    }
+
     /// Send this host's `Done` document (a datagen's counts) for rank 0 to gather.
     pub fn done(&self, doc: &Value) -> Result<()> {
         send(&self.st.writer, &Msg::Done(doc.clone()))
@@ -556,6 +564,8 @@ struct SState {
     reports: BTreeMap<i64, Report>,
     /// Each host's `Done` document, by rank.
     done: BTreeMap<i64, Value>,
+    /// Each host's latest `Progress` document, by rank.
+    progress: BTreeMap<i64, Value>,
     failed: Option<String>,
     finished: bool,
     /// Connections that have gone away.
@@ -678,6 +688,11 @@ impl Server {
             }
             s = self.st.cv.wait_timeout(s, Duration::from_millis(50)).unwrap().0;
         }
+    }
+
+    /// Each host's latest `Progress` document, by rank (the hosts heard from so far).
+    pub fn progress(&self) -> BTreeMap<i64, Value> {
+        self.st.m.lock().unwrap().progress.clone()
     }
 
     fn departure_releases_locked(&self, s: &SState) -> Vec<(String, u64)> {
@@ -869,6 +884,9 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
             Msg::Done(d) => {
                 s.done.insert(rank, d);
                 st.cv.notify_all();
+            }
+            Msg::Progress(d) => {
+                s.progress.insert(rank, d);
             }
             Msg::Stop { reason } => {
                 st.fail(&mut s, format!("{who}: {reason}"));

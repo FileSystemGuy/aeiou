@@ -1,7 +1,9 @@
 //! `aeiou datagen`: write the corpus an abstract declares, from the same names, sizes, and
 //! dataset seeds the runner computes, with the payload of `payload.rs`, and a manifest at
 //! each dataset root (`schema/README.md` §6). Files are written in parallel by id with no
-//! per-file structure; the manifest is written last, atomically.
+//! per-file structure. The manifest is written first, `writing`, and rewritten every
+//! `--progress-secs` with the ids not yet written and flushed, and `complete` at the end
+//! (`DESIGN_REVIEW.md` §3.70), each time atomically.
 //!
 //! **Several hosts** (`--ranks R --rank r --coordinator`, 2026-10-04, `DESIGN_REVIEW.md`
 //! §3.62). Rank `r` writes the files of every `files` dataset whose ids fall in its slice of
@@ -71,6 +73,9 @@ pub struct DatagenOpts {
     /// This host among `ranks`.
     pub rank: i64,
     pub ranks: i64,
+    /// How often each rank flushes and reports what it has finished, and rank 0 rewrites the
+    /// manifests (`--progress-secs`).
+    pub progress: Duration,
 }
 
 /// The coordinator of a datagen on several hosts: this rank's client, and rank 0's server.
@@ -433,6 +438,101 @@ struct Plan<'m, 'a> {
     /// The writer of a format-class dataset.
     container: Option<Container>,
     share: Share,
+    /// The rank that writes a `regions` dataset.
+    owner: Option<i64>,
+    /// Ids per run handed to a writer (`run_size`).
+    run: i64,
+    track: Track,
+}
+
+/// What this rank has written of one dataset, kept by its writers and read every
+/// `--progress-secs` (`DESIGN_REVIEW.md` §3.70). Writers claim runs in id order and write a
+/// run in id order, so what is not finished is, per writer, the rest of its run, and every
+/// run not yet claimed.
+#[derive(Default)]
+struct Track {
+    files: AtomicU64,
+    bytes: AtomicU64,
+    claims: Mutex<Claims>,
+    /// The regions file is written.
+    whole: AtomicBool,
+}
+
+#[derive(Default)]
+struct Claims {
+    /// The next run to hand out.
+    next: i64,
+    /// Each writer's run `[start, end)` and the first id of it not yet written.
+    slots: Vec<(i64, i64, std::sync::Arc<AtomicI64>)>,
+}
+
+impl Plan<'_, '_> {
+    /// The id ranges of this rank's share not yet written, merged, in order (a regions file
+    /// is id 0).
+    fn unfinished(&self) -> Vec<(i64, i64)> {
+        let mut v = Vec::new();
+        match self.share {
+            Share::Other { .. } => {}
+            Share::Regions => {
+                if !self.track.whole.load(Ordering::Acquire) {
+                    v.push((0, 1));
+                }
+            }
+            Share::Files { lo, hi } => {
+                let c = self.track.claims.lock().unwrap();
+                for (_, end, cursor) in &c.slots {
+                    let at = cursor.load(Ordering::Acquire);
+                    if at < *end {
+                        v.push((at, *end));
+                    }
+                }
+                let rest = (c.next * self.run).max(lo);
+                if rest < hi {
+                    v.push((rest, hi));
+                }
+            }
+        }
+        merge_ranges(v)
+    }
+}
+
+/// Sorted, with touching and overlapping ranges joined.
+fn merge_ranges(mut v: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+    v.retain(|(a, b)| a < b);
+    v.sort();
+    let mut out: Vec<(i64, i64)> = Vec::new();
+    for (a, b) in v {
+        match out.last_mut() {
+            Some(l) if a <= l.1 => l.1 = l.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
+}
+
+/// What rank `r` is to write of a dataset, before it has said anything.
+fn share_of(meta: &DsMeta<'_>, owner: Option<i64>, ranks: i64, r: i64) -> Vec<(i64, i64)> {
+    match meta {
+        DsMeta::Files { .. } => {
+            let (lo, hi) = file_slice(meta.files(), ranks, r);
+            merge_ranges(vec![(lo, hi)])
+        }
+        DsMeta::Regions { .. } => {
+            if owner == Some(r) {
+                vec![(0, 1)]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+}
+
+fn ranges_json(v: &[(i64, i64)]) -> Value {
+    Value::Array(v.iter().map(|(a, b)| json!([a, b])).collect())
+}
+
+fn ranges_of(v: &Value) -> Vec<(i64, i64)> {
+    v.as_array().into_iter().flatten().filter_map(|x| Some((x[0].as_i64()?, x[1].as_i64()?))).collect()
 }
 
 struct Written {
@@ -444,53 +544,53 @@ struct Written {
 }
 
 /// Write this rank's share of one dataset.
-fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode: &Mode, log: &mut (impl Write + Send)) -> Result<Written> {
+fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode: &Mode) -> Result<Written> {
     let name = plan.name;
     let meta = plan.meta;
+    let track = &plan.track;
     let started = Instant::now();
     let start_secs = now_secs();
     let writers = opts.writers.max(1);
     let seed = meta.dataset_seed();
     let dedupe = spec.dedupe;
-    let files = AtomicU64::new(0);
-    let bytes = AtomicU64::new(0);
     let failed = AtomicBool::new(false);
     let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
-    let log_mutex: Mutex<&mut (dyn Write + Send)> = Mutex::new(log);
-    let last_log = Mutex::new(Instant::now());
-    let progress = |done: u64, total: u64, unit: &str| {
-        let mut ll = last_log.lock().unwrap();
-        if ll.elapsed().as_secs() >= 5 {
-            *ll = Instant::now();
-            let mut l = log_mutex.lock().unwrap();
-            let _ = writeln!(l, "  {name}: {done}/{total} {unit}, {} written", crate::dryrun::human_bytes(bytes.load(Ordering::Relaxed)));
-        }
-    };
+    let (files0, bytes0) = (track.files.load(Ordering::Relaxed), track.bytes.load(Ordering::Relaxed));
     match (&plan.share, meta) {
         (Share::Other { .. }, _) => {}
-        (Share::Files { lo, hi }, DsMeta::Files { spf, chunk, dirs, count, .. }) => {
+        (Share::Files { lo, hi }, DsMeta::Files { spf, chunk, count, .. }) => {
             let (lo, hi) = (*lo, *hi);
             let len = hi - lo;
             if len > 0 {
-                let run = run_size(dirs, len, writers);
-                let (first, last) = (lo / run, (hi - 1) / run);
-                let next = AtomicI64::new(first);
-                let done_ids = AtomicU64::new(0);
-                let nthreads = writers.min((last - first + 1).max(1) as usize);
+                let run = plan.run;
+                let last = (hi - 1) / run;
+                let nthreads = writers.min((last - lo / run + 1).max(1) as usize);
+                track.claims.lock().unwrap().slots = (0..nthreads).map(|_| (0, 0, std::sync::Arc::new(AtomicI64::new(0)))).collect();
                 std::thread::scope(|s| {
-                    for _ in 0..nthreads {
-                        s.spawn(|| {
+                    for w in 0..nthreads {
+                        let (failed, errors) = (&failed, &errors);
+                        s.spawn(move || {
                             let mut filler = Filler::new(spec.compress);
                             let mut buf = Aligned::new();
                             loop {
                                 if failed.load(Ordering::Relaxed) {
                                     break;
                                 }
-                                let j = next.fetch_add(1, Ordering::Relaxed);
-                                if j > last {
-                                    break;
-                                }
-                                let (a, b) = ((j * run).max(lo), ((j + 1) * run).min(hi));
+                                // claim the next run, and say so, under one lock
+                                let (a, b, cursor) = {
+                                    let mut c = track.claims.lock().unwrap();
+                                    let j = c.next;
+                                    if j > last {
+                                        break;
+                                    }
+                                    c.next += 1;
+                                    let (a, b) = ((j * run).max(lo), ((j + 1) * run).min(hi));
+                                    let cursor = c.slots[w].2.clone();
+                                    cursor.store(a, Ordering::Release);
+                                    c.slots[w].0 = a;
+                                    c.slots[w].1 = b;
+                                    (a, b, cursor)
+                                };
                                 for file in a..b {
                                     let r: Result<()> = (|| {
                                         if file * spf >= *count {
@@ -500,8 +600,8 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         let seed_of = |blk: u64| payload::file_block_seed(seed, file as u64, blk, dedupe);
                                         if let Some(c) = &plan.container {
                                             let size = write_container(c, meta, file, &seed_of, &mut filler, &mut buf, &meta.file_path(file, None)?, opts, mode)?;
-                                            files.fetch_add(1, Ordering::Relaxed);
-                                            bytes.fetch_add(size, Ordering::Relaxed);
+                                            track.files.fetch_add(1, Ordering::Relaxed);
+                                            track.bytes.fetch_add(size, Ordering::Relaxed);
                                             return Ok(());
                                         }
                                         let objects: Vec<(String, u64, u64)> = match chunk {
@@ -514,15 +614,15 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         for (path, logical, len) in objects {
                                             if let Some((store, rest)) = opts.endpoints.object(&path) {
                                                 store.put_parts(&rest, len, crate::object::DEFAULT_PART, &mut |at, b| filler.fill_range(&seed_of, logical + at, b))?;
-                                                files.fetch_add(1, Ordering::Relaxed);
-                                                bytes.fetch_add(len, Ordering::Relaxed);
+                                                track.files.fetch_add(1, Ordering::Relaxed);
+                                                track.bytes.fetch_add(len, Ordering::Relaxed);
                                                 continue;
                                             }
                                             let full = opts.endpoints.path(&opts.root, &path);
                                             let (f, direct) = create(&full, mode)?;
                                             write_range(&f, direct, mode, &seed_of, logical, 0, len, &mut filler, &mut buf, &full)?;
-                                            files.fetch_add(1, Ordering::Relaxed);
-                                            bytes.fetch_add(len, Ordering::Relaxed);
+                                            track.files.fetch_add(1, Ordering::Relaxed);
+                                            track.bytes.fetch_add(len, Ordering::Relaxed);
                                         }
                                         Ok(())
                                     })();
@@ -531,10 +631,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         failed.store(true, Ordering::Relaxed);
                                         break;
                                     }
-                                    let d = done_ids.fetch_add(1, Ordering::Relaxed) + 1;
-                                    if d % 256 == 0 {
-                                        progress(d, len as u64, "ids");
-                                    }
+                                    cursor.store(file + 1, Ordering::Release);
                                 }
                             }
                         });
@@ -571,16 +668,14 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                 failed.store(true, Ordering::Relaxed);
                                 break;
                             }
-                            bytes.fetch_add(len, Ordering::Relaxed);
-                            if p % 16 == 15 {
-                                progress(p + 1, pieces, "pieces");
-                            }
+                            track.bytes.fetch_add(len, Ordering::Relaxed);
                         }
                     });
                 }
             });
             if !failed.load(Ordering::Relaxed) {
-                files.fetch_add(1, Ordering::Relaxed);
+                track.files.fetch_add(1, Ordering::Relaxed);
+                track.whole.store(true, Ordering::Release);
             }
         }
         _ => bail!("dataset `{name}`: the plan does not match the dataset kind"),
@@ -588,12 +683,144 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
     if let Some(e) = errors.into_inner().unwrap().into_iter().next() {
         return Err(e.context(format!("dataset `{name}`")));
     }
-    Ok(Written { files: files.load(Ordering::Relaxed), bytes: bytes.load(Ordering::Relaxed), started: start_secs, finished: now_secs(), elapsed: started.elapsed() })
+    Ok(Written {
+        files: track.files.load(Ordering::Relaxed) - files0,
+        bytes: track.bytes.load(Ordering::Relaxed) - bytes0,
+        started: start_secs,
+        finished: now_secs(),
+        elapsed: started.elapsed(),
+    })
 }
 
 /// One rank's part of one dataset, as sent to rank 0 (`Done`) and recorded in the manifest.
 fn part_json(rank: i64, host: &str, w: &Written) -> Value {
     json!({"rank": rank, "host": host, "files_written": w.files, "bytes_written": w.bytes, "started": w.started, "finished": w.finished})
+}
+
+/// What the manifests say about the datasets, the same in every write: the normative part
+/// and the provenance known at the start.
+struct Base {
+    params_json: Value,
+    host: String,
+}
+
+impl Base {
+    fn manifest(&self, loaded: &crate::Loaded, cfg: &Config, spec: &PayloadSpec, p: &Plan<'_, '_>, ranks: i64, started: u64) -> Result<Manifest> {
+        let mut m = Manifest {
+            manifest_version: payload::MANIFEST_VERSION,
+            state: payload::STATE_WRITING.into(),
+            dataset: payload::resolved_dataset(&loaded.doc, p.name, cfg)?,
+            payload: spec.clone(),
+            format: p.container.as_ref().map(|c| c.format.clone()),
+            provenance: json!({
+                "abstract": loaded.ast.name,
+                "ast_sha256": loaded.sha256,
+                "params": self.params_json,
+                "param_files": cfg.sets.iter().map(|s| json!({"path": s.path, "sha256": s.sha256})).collect::<Vec<_>>(),
+                "datagen": format!("aeiou {}", env!("CARGO_PKG_VERSION")),
+                "host": self.host,
+                "ranks": ranks,
+                "started": started,
+            }),
+            progress: Value::Null,
+        };
+        if let Some(c) = p.container.as_ref().filter(|c| !c.headers.is_null()) {
+            m.provenance["headers"] = c.headers.clone();
+        }
+        Ok(m)
+    }
+}
+
+fn write_manifest(p: &Plan<'_, '_>, m: &Manifest) -> Result<()> {
+    match &p.object {
+        Some((store, rest)) => m.write_object(store, rest).map(|_| ()),
+        None => m.write(&p.root).map(|_| ()),
+    }
+    .with_context(|| format!("dataset `{}`: writing its manifest", p.name))
+}
+
+/// This rank's progress document: per dataset, what is not yet written and the counts.
+fn progress_doc(plans: &[Plan<'_, '_>]) -> Value {
+    json!({"datasets": plans.iter().map(|p| (p.name.to_string(), json!({
+        "unfinished": ranges_json(&p.unfinished()),
+        "files": p.track.files.load(Ordering::Relaxed),
+        "bytes": p.track.bytes.load(Ordering::Relaxed),
+    }))).collect::<serde_json::Map<_, _>>()})
+}
+
+/// Flush what this rank has written: what `O_DIRECT` left to the page cache, and the metadata.
+fn flush(opts: &DatagenOpts) -> Result<()> {
+    // --root holds nothing when every dataset is an object, and may not exist
+    if opts.root.exists() {
+        syncfs(&opts.root)?;
+    }
+    for p in opts.endpoints.placed() {
+        if p.store.is_none() {
+            syncfs(&p.dir)?;
+        }
+    }
+    Ok(())
+}
+
+/// The progress window: note what is finished, flush, and tell rank 0 (`DESIGN_REVIEW.md`
+/// §3.70); rank 0 merges every rank's latest note, rewrites each manifest once, and prints
+/// one line. A rank not heard from yet counts as having written nothing.
+struct Ticker<'p, 'm, 'a> {
+    plans: &'p [Plan<'m, 'a>],
+    manifests: &'p [Manifest],
+    opts: &'p DatagenOpts,
+    hosts: Option<&'p Hosts<'p>>,
+    t0: Instant,
+}
+
+impl Ticker<'_, '_, '_> {
+    fn tick(&self, log: &Mutex<&mut (dyn Write + Send)>) -> Result<()> {
+        let mine = progress_doc(self.plans);
+        flush(self.opts)?;
+        let mut docs = BTreeMap::new();
+        if let Some(h) = self.hosts {
+            h.tcp.progress(&mine)?;
+            match h.server {
+                Some(server) => docs = server.progress(),
+                None => return Ok(()),
+            }
+        }
+        docs.insert(self.opts.rank, mine);
+        let ranks = self.opts.ranks.max(1);
+        let (mut total, mut left, mut bytes) = (0i64, 0i64, 0u64);
+        for (p, base) in self.plans.iter().zip(self.manifests) {
+            let mut unfinished = Vec::new();
+            let (mut files, mut b) = (0u64, 0u64);
+            for r in 0..ranks {
+                match docs.get(&r) {
+                    Some(d) => {
+                        let d = &d["datasets"][p.name];
+                        unfinished.extend(ranges_of(&d["unfinished"]));
+                        files += d["files"].as_u64().unwrap_or(0);
+                        b += d["bytes"].as_u64().unwrap_or(0);
+                    }
+                    None => unfinished.extend(share_of(p.meta, p.owner, ranks, r)),
+                }
+            }
+            let unfinished = merge_ranges(unfinished);
+            total += match p.meta {
+                DsMeta::Files { .. } => p.meta.files(),
+                DsMeta::Regions { .. } => 1,
+            };
+            left += unfinished.iter().map(|(a, b)| b - a).sum::<i64>();
+            bytes += b;
+            let mut m = base.clone();
+            m.progress = json!({"unfinished": ranges_json(&unfinished), "files_written": files, "bytes_written": b, "updated": now_secs()});
+            write_manifest(p, &m)?;
+        }
+        let secs = self.t0.elapsed().as_secs_f64();
+        let done = total - left;
+        let eta = if done > 0 && left > 0 { format!(", about {:.0} s left", secs * left as f64 / done as f64) } else { String::new() };
+        let mut l = log.lock().unwrap();
+        writeln!(l, "progress {secs:.1} s: {done}/{total} files, {} written, {}/s{eta}", crate::dryrun::human_bytes(bytes), crate::dryrun::human_bytes((bytes as f64 / secs.max(1e-9)) as u64))?;
+        l.flush()?;
+        Ok(())
+    }
 }
 
 pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Model<'_>, opts: &DatagenOpts, hosts: Option<&Hosts<'_>>, log: &mut (impl Write + Send)) -> Result<Vec<DatasetResult>> {
@@ -606,11 +833,12 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     if ranks > 1 && hosts.is_none() {
         bail!("{ranks} ranks and no coordinator");
     }
-    let params_json = payload::params_json(&loaded.doc, cfg, params)?;
     let host = crate::run::hostname();
+    let base = Base { params_json: payload::params_json(&loaded.doc, cfg, params)?, host: host.clone() };
 
     // the plan: what each dataset is, where it goes, this rank's share; every rank checks
-    // the roots are empty before the gate, so no rank sees another's files
+    // the roots are empty before the gate, so no rank sees another's files (rank 0's
+    // manifest, written before the gate, aside)
     let mut plans = Vec::new();
     let mut regions_index = 0usize;
     for meta in model.datasets.iter() {
@@ -629,11 +857,14 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             if matches!(meta, DsMeta::Regions { .. }) {
                 bail!("dataset `{name}`: a `regions` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
             }
-            if store.non_empty(rest)? {
+            let busy = if rank == 0 { store.non_empty(rest)? } else { store.non_empty_except(rest, payload::MANIFEST_NAME)? };
+            if busy {
                 bail!("dataset `{name}`: {} is not empty; datasets are read-only, remove it first", store.show(rest));
             }
         } else if root.exists() {
-            let n = std::fs::read_dir(&root)?.count();
+            let n = std::fs::read_dir(&root)?
+                .filter(|e| rank == 0 || !e.as_ref().is_ok_and(|e| e.file_name().to_string_lossy().starts_with(payload::MANIFEST_NAME)))
+                .count();
             if n > 0 {
                 bail!("dataset `{name}`: {} is not empty ({n} entries); datasets are read-only, remove it first", root.display());
             }
@@ -641,22 +872,22 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if object.is_none() {
             std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         }
-        let share = match meta {
-            DsMeta::Files { .. } => {
+        let (share, owner, run) = match meta {
+            DsMeta::Files { dirs, .. } => {
                 let (lo, hi) = file_slice(meta.files(), ranks, rank);
-                Share::Files { lo, hi }
+                (Share::Files { lo, hi }, None, run_size(dirs, hi - lo, opts.writers))
             }
             DsMeta::Regions { .. } => {
                 let owner = regions_owner(regions_index, ranks);
                 regions_index += 1;
-                if owner == rank {
-                    Share::Regions
-                } else {
-                    Share::Other { owner }
-                }
+                (if owner == rank { Share::Regions } else { Share::Other { owner } }, Some(owner), 1)
             }
         };
-        plans.push(Plan { meta, name, root, object, container, share });
+        let track = Track::default();
+        if let Share::Files { lo, .. } = share {
+            track.claims.lock().unwrap().next = lo / run;
+        }
+        plans.push(Plan { meta, name, root, object, container, share, owner, run, track });
     }
     for p in &plans {
         match &p.share {
@@ -675,9 +906,37 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
     }
 
-    // the gate: no rank writes before every rank has checked
+    // the manifests from the start (DESIGN_REVIEW.md §3.70): `writing`, everything unfinished,
+    // so a corpus never holds a file without saying what it is meant to be
+    let started = now_secs();
+    let mut manifests = Vec::new();
+    for p in &plans {
+        let mut m = base.manifest(loaded, cfg, &spec, p, ranks, started)?;
+        let all = share_of(p.meta, Some(0), 1, 0);
+        m.progress = json!({"unfinished": ranges_json(&all), "files_written": 0, "bytes_written": 0, "updated": started});
+        if rank == 0 {
+            write_manifest(p, &m)?;
+        }
+        manifests.push(m);
+    }
+
+    // the gate: no rank writes before every rank has checked; when it does not open, nothing
+    // was written, and rank 0 takes back its manifests
     if let Some(h) = hosts {
-        let (_t0, names, shared) = h.tcp.ready_shared()?;
+        let (_t0, names, shared) = match h.tcp.ready_shared() {
+            Ok(x) => x,
+            Err(e) => {
+                if rank == 0 {
+                    for p in &plans {
+                        let _ = match &p.object {
+                            Some((store, rest)) => store.delete_all(&[payload::join_key(rest, payload::MANIFEST_NAME)]).map_err(anyhow::Error::from),
+                            None => std::fs::remove_file(p.root.join(payload::MANIFEST_NAME)).map_err(anyhow::Error::from),
+                        };
+                    }
+                }
+                return Err(e);
+            }
+        };
         writeln!(log, "start gate: {} host(s) ready ({})", names.len(), names.join(", "))?;
         log.flush()?;
         if rank != 0 {
@@ -685,58 +944,79 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
     }
 
-    // the writes, then the metadata to stable storage
+    // the writes, with a progress window beside them; then the metadata to stable storage, a
+    // last note, and (several hosts) this rank's part to rank 0, whose window runs until
+    // every part is in
     let mode = Mode::new();
-    let mut written = Vec::new();
-    for p in &plans {
-        let w = write_share(p, opts, &spec, &mode, log)?;
-        for n in mode.take_notes() {
-            writeln!(log, "  {n}")?;
-        }
-        written.push(w);
-    }
-    // --root holds nothing when every dataset is an object, and may not exist
-    if opts.root.exists() {
-        syncfs(&opts.root)?;
-    }
-    for p in opts.endpoints.placed() {
-        if p.store.is_none() {
-            syncfs(&p.dir)?;
-        }
-    }
-
-    // the manifests: rank 0's, once every rank's part is in; on one host, now
+    let ticker = Ticker { plans: &plans, manifests: &manifests, opts, hosts, t0: Instant::now() };
+    let log_m: Mutex<&mut (dyn Write + Send)> = Mutex::new(log);
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
     let mut parts: BTreeMap<i64, Value> = BTreeMap::new();
-    let mut wrote_manifest = false;
-    let mine = json!({
-        "host": host,
-        "direct": mode.direct(),
-        "datasets": plans.iter().zip(&written).map(|(p, w)| (p.name.to_string(), part_json(rank, &host, w))).collect::<serde_json::Map<_, _>>(),
-    });
-    match hosts {
-        None => {
-            parts.insert(0, mine);
-            wrote_manifest = true;
-        }
-        Some(h) => {
-            h.tcp.done(&mine)?;
-            match h.server {
-                Some(server) => {
-                    parts = server.gathered().context("gathering every rank's part")?;
-                    wrote_manifest = true;
+    let mut written = Vec::new();
+    let phase: Result<()> = std::thread::scope(|s| {
+        let (ticker, log_m) = (&ticker, &log_m);
+        s.spawn(move || loop {
+            match stopped.recv_timeout(opts.progress) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if let Err(e) = ticker.tick(&log_m) {
+                        let _ = writeln!(log_m.lock().unwrap(), "  progress: {e:#}");
+                    }
                 }
+                _ => break,
+            }
+        });
+        let r = (|| {
+            for p in &plans {
+                let w = write_share(p, opts, &spec, &mode);
+                for n in mode.take_notes() {
+                    writeln!(log_m.lock().unwrap(), "  {n}")?;
+                }
+                written.push(w?);
+            }
+            flush(opts)?;
+            let mine = json!({
+                "host": host,
+                "direct": mode.direct(),
+                "datasets": plans.iter().zip(&written).map(|(p, w)| (p.name.to_string(), part_json(rank, &host, w))).collect::<serde_json::Map<_, _>>(),
+            });
+            match hosts {
                 None => {
-                    let (ok, _, error) = h.tcp.result()?;
-                    if !ok {
-                        bail!("{}", error.unwrap_or_else(|| "rank 0 failed".into()));
+                    parts.insert(0, mine);
+                }
+                Some(h) => {
+                    // the last note, so rank 0's manifests do not wait a window for this rank
+                    h.tcp.progress(&progress_doc(&plans))?;
+                    h.tcp.done(&mine)?;
+                    if let Some(server) = h.server {
+                        parts = server.gathered().context("gathering every rank's part")?;
                     }
                 }
             }
+            Ok(())
+        })();
+        let _ = stop.send(());
+        r
+    });
+    let log = log_m.into_inner().unwrap();
+    if let Err(e) = phase {
+        // what is finished, recorded before the error is reported
+        if rank == 0 || hosts.is_some() {
+            let _ = ticker.tick(&Mutex::new(&mut std::io::sink() as &mut (dyn Write + Send)));
+        }
+        return Err(e);
+    }
+    let wrote_manifest = rank == 0;
+    if let (Some(h), false) = (hosts, wrote_manifest) {
+        let (ok, _, error) = h.tcp.result()?;
+        if !ok {
+            bail!("{}", error.unwrap_or_else(|| "rank 0 failed".into()));
         }
     }
+
+    // the manifests, `complete`: rank 0's, once every rank's part is in
     let mut results = Vec::new();
     let mut manifest_error = None;
-    for (p, w) in plans.iter().zip(&written) {
+    for ((p, w), base_m) in plans.iter().zip(&written).zip(&manifests) {
         let (mut total_files, mut total_bytes, mut started, mut finished) = (0u64, 0u64, u64::MAX, 0u64);
         let mut host_parts = Vec::new();
         let mut direct = true;
@@ -756,38 +1036,20 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             manifest_error = Some(format!("dataset `{}`: {} of {ranks} ranks reported", p.name, host_parts.len()));
             break;
         }
-        let manifest = Manifest {
-            manifest_version: payload::MANIFEST_VERSION,
-            dataset: payload::resolved_dataset(&loaded.doc, p.name, cfg)?,
-            payload: spec.clone(),
-            format: p.container.as_ref().map(|c| c.format.clone()),
-            provenance: json!({
-                "abstract": loaded.ast.name,
-                "ast_sha256": loaded.sha256,
-                "params": params_json,
-                "param_files": cfg.sets.iter().map(|s| json!({"path": s.path, "sha256": s.sha256})).collect::<Vec<_>>(),
-                "datagen": format!("aeiou {}", env!("CARGO_PKG_VERSION")),
-                "host": parts.get(&0).and_then(|d| d["host"].as_str()).unwrap_or(&host),
-                "ranks": ranks,
-                "hosts": host_parts,
-                "direct": direct,
-                "started": if started == u64::MAX { w.started } else { started },
-                "finished": finished.max(w.finished),
-                "files_written": total_files,
-                "bytes_written": total_bytes,
-            }),
-        };
-        let mut manifest = manifest;
-        if let Some(c) = p.container.as_ref().filter(|c| !c.headers.is_null()) {
-            manifest.provenance["headers"] = c.headers.clone();
-        }
+        let mut manifest = base_m.clone();
+        manifest.state = payload::STATE_COMPLETE.into();
+        manifest.progress = Value::Null;
+        let prov = &mut manifest.provenance;
+        prov["host"] = json!(parts.get(&0).and_then(|d| d["host"].as_str()).unwrap_or(&host));
+        prov["hosts"] = json!(host_parts);
+        prov["direct"] = json!(direct);
+        prov["started"] = json!(if started == u64::MAX { w.started } else { started });
+        prov["finished"] = json!(finished.max(w.finished));
+        prov["files_written"] = json!(total_files);
+        prov["bytes_written"] = json!(total_bytes);
         if wrote_manifest {
-            let w = match &p.object {
-                Some((store, rest)) => manifest.write_object(store, rest).map(|_| ()),
-                None => manifest.write(&p.root).map(|_| ()),
-            };
-            if let Err(e) = w {
-                manifest_error = Some(format!("dataset `{}`: {e:#}", p.name));
+            if let Err(e) = write_manifest(p, &manifest) {
+                manifest_error = Some(format!("{e:#}"));
                 break;
             }
         }
@@ -820,5 +1082,17 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     if let Some(e) = manifest_error {
         bail!("{e}");
     }
+    let _ = log;
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ranges_merge_in_order() {
+        assert_eq!(merge_ranges(vec![(5, 9), (0, 2), (2, 3), (8, 12), (4, 4)]), vec![(0, 3), (5, 12)]);
+        assert_eq!(merge_ranges(vec![]), vec![]);
+    }
 }

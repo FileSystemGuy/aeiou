@@ -263,7 +263,9 @@ Not built, in rough order of interest:
   in Rust behind a cargo feature `formats`, so that item 23 is built once, in Rust;
   TFRecord, tar, and HDF5 built 2026-10-12 (HDF5's header from `aeiou-header` beside
   `aeiou`), ~~Parquet not yet~~ Parquet the same day (our own writer, pyarrow's bytes but for
-  `created_by`).
+  `created_by`); the manifest written from the start, `writing` with the ids not yet
+  written, rewritten every `--progress-secs`, and `complete` at the end, the same day.
+  Resume, whole directories, grow and shrink, and subset runs not yet.
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),
   and concurrent mixes of cases (item 30, critical but not yet; `DESIGN_REVIEW.md` §3.67).

@@ -537,7 +537,10 @@ numbers; the order is this note's.
     2026-10-12** (byte for byte the Python writer's; 20.7 and 22.6 GB/s to tmpfs at 16
     writers against Python's 5.9 and 4.8); HDF5 the same day, its header from `aeiou-header`
     beside `aeiou`, run by rank 0 alone (14.8 GB/s against 6.9); Parquet the same day, our
-    own writer, pyarrow's bytes but for `created_by` (22.6 GB/s against 4.5).
+    own writer, pyarrow's bytes but for `created_by` (22.6 GB/s against 4.5). The manifest
+    from the start with its state and progress (§3.70 item 3) built the same day
+    (`manifest_version` 2, `--progress-secs`); resume, whole directories, grow and shrink,
+    and subset runs remain.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

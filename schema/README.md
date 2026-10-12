@@ -312,9 +312,16 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
 - **Identity.** The SHA-256 of the canonical form of the normative content is the dataset id.
   `aeiou run` prints it with every result, next to the AST hash and the parameters in effect;
   a result is those three things.
-- **Atomicity.** Written last, to a temporary name and renamed, so a datagen that did not
-  finish leaves no manifest and a run refuses. On several hosts rank 0 writes it once every
-  rank has reported its part, so it means the whole corpus.
+- **Atomicity.** ~~Written last, to a temporary name and renamed, so a datagen that did not
+  finish leaves no manifest and a run refuses.~~ Since 2026-10-12 (`DESIGN_REVIEW.md` §3.70,
+  `manifest_version` 2) written first and rewritten as the corpus is written, each time to a
+  temporary name and renamed: `state` is `writing` before the first file, with `progress`
+  (the id ranges not yet written and flushed, the counts, the time), rewritten once a
+  progress window, and `complete` with no `progress` once every file is; neither is part of
+  the normative content. A run refuses any state but `complete`. On several hosts rank 0
+  writes it, merging every rank's progress note, and says `complete` once every rank has
+  reported its part, so `complete` means the whole corpus. The Python writer writes it once,
+  last, `complete`.
 - **Exact match, no relaxation.** A larger dataset is not accepted for a smaller declared
   count: `dirs` and `readdir` would see extra entries, and `zipf`/`hotset` rank orders are
   permutations over the declared count. Any mismatch is a refusal with a field-by-field diff.

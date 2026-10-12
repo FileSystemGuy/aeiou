@@ -337,7 +337,7 @@ class Server:
                 elif name == "Stop":
                     self._fail(f"{who[0]}: {body['reason']}")
                     return
-                elif name != "Heartbeat":
+                elif name not in ("Heartbeat", "Progress"):   # a Rust datagen's progress: not kept here
                     raise Closed(f"unexpected message: {name}")
                 if self.finished:
                     return

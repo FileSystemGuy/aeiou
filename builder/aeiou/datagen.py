@@ -59,7 +59,7 @@ from .rng import block_seed, sample_size
 
 MANIFEST_NAME = ".aeiou-dataset.json"
 PART = 8 << 20   # the runner's `object::DEFAULT_PART`: what `aeiou datagen` sends a part at
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2   # `state` since 2026-10-12 (DESIGN_REVIEW.md §3.70); this writer writes it once, `complete`
 BLOCK = 1 << 20
 GENERATOR, GENERATOR_VERSION, WRAPPER = "sfc64", "1", "aeiou-positional/3"
 PIECE, FILL = 4096, 0x5A
@@ -372,7 +372,7 @@ class Job:
         return len(sizes), geo.file_size
 
     def manifest(self, files_written: int, bytes_written: int, started: float, provenance: dict, finished: float | None = None) -> dict:
-        m = {"manifest_version": MANIFEST_VERSION, "dataset": self.resolved,
+        m = {"manifest_version": MANIFEST_VERSION, "state": "complete", "dataset": self.resolved,
              "payload": {"generator": GENERATOR, "version": GENERATOR_VERSION, "wrapper": WRAPPER, "block": BLOCK,
                          "dedupe": self.dedupe, "compress": self.compress},
              "format": {"class": self.fmt["class"], "reader": self.fmt.get("reader"), "version": self.fmt.get("version"),

@@ -531,13 +531,18 @@ mod imp {
         s.contains("416") || s.contains("Range Not Satisfiable") || s.contains("InvalidRange")
     }
 
-    async fn any_below(s3: &AmazonS3, key: &Path) -> io::Result<bool> {
+    /// Some object below `key` other than one whose last component starts with `except`.
+    async fn any_below(s3: &AmazonS3, key: &Path, except: Option<&str>) -> io::Result<bool> {
         let prefix = if key.as_ref().is_empty() { None } else { Some(key) };
-        match s3.list(prefix).next().await {
-            None => Ok(false),
-            Some(Ok(_)) => Ok(true),
-            Some(Err(e)) => Err(io_err(key.as_ref(), e)),
+        let mut list = s3.list(prefix);
+        while let Some(o) = list.next().await {
+            let o = o.map_err(|e| io_err(key.as_ref(), e))?;
+            match except {
+                Some(x) if o.location.filename().is_some_and(|f| f.starts_with(x)) => continue,
+                _ => return Ok(true),
+            }
         }
+        Ok(false)
     }
 
     impl Store {
@@ -590,7 +595,7 @@ mod imp {
                 match s3.head(&key).await {
                     Ok(m) => Ok(m.size as i64),
                     Err(object_store::Error::NotFound { .. }) => {
-                        if any_below(&s3, &key).await? { Ok(0) } else { Err(error(libc::ENOENT, format!("{show}: no such object"))) }
+                        if any_below(&s3, &key, None).await? { Ok(0) } else { Err(error(libc::ENOENT, format!("{show}: no such object"))) }
                     }
                     Err(e) => Err(io_err(&show, e)),
                 }
@@ -612,7 +617,13 @@ mod imp {
         /// Is there any key below `rest`?
         pub fn non_empty(&self, rest: &str) -> io::Result<bool> {
             let key = self.key(rest);
-            block(any_below(&self.s3, &key))
+            block(any_below(&self.s3, &key, None))
+        }
+
+        /// `non_empty`, but for objects named `except…` (a manifest another rank wrote).
+        pub fn non_empty_except(&self, rest: &str, except: &str) -> io::Result<bool> {
+            let key = self.key(rest);
+            block(any_below(&self.s3, &key, Some(except)))
         }
 
         /// The whole object, or `None` when there is none.
@@ -785,6 +796,9 @@ mod imp {
             match *self {}
         }
         pub fn non_empty(&self, _: &str) -> io::Result<bool> {
+            match *self {}
+        }
+        pub fn non_empty_except(&self, _: &str, _: &str) -> io::Result<bool> {
             match *self {}
         }
         pub fn get(&self, _: &str) -> io::Result<Option<Vec<u8>>> {

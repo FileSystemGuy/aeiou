@@ -26,7 +26,7 @@ cargo test --release
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
-| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--ranks R --rank r --coordinator HOST:PORT]` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, then the manifest `.aeiou-dataset.json` at each dataset root. On several hosts each rank writes its slice of the ids and rank 0 writes the manifests once every rank has reported (§5). Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
+| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank writes its slice of the ids and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
@@ -427,9 +427,10 @@ as root). The same runs on the loopback NFS mount are §7.
 - **Manifest** (`schema/README.md` §6). `dataset` is the abstract's `datasets` entry with
   every `{"param": x}` replaced by the value in effect (`gpus` included) and `doc` removed,
   in canonical key order; `payload` is the block above (generator, version, wrapper, block
-  size, dedupe, compress); `manifest_version` is 1; `provenance` records the abstract's name
+  size, dedupe, compress); `manifest_version` is ~~1~~ 2 (2026-10-12); `provenance` records the abstract's name
   and hash, all parameter values, the datagen version, host, start and end times, and the
-  files and bytes written. The id is the SHA-256 of the canonical normative part. `run`
+  files and bytes written. The id is the SHA-256 of the canonical normative part. `state`
+  and `progress` are not part of it (below). `run`
   compares `dataset` field by field against what it resolves and prints the id; the payload
   block is recorded and printed, not derivable from the abstract, so a published id is what
   pins it (`--expect-dataset-id`).
@@ -446,9 +447,29 @@ as root). The same runs on the loopback NFS mount are §7.
   not). A root that refuses `O_DIRECT` at open (tmpfs before Linux 6.6) falls back to the page cache, said once, and
   the manifest records `direct`. Each direct write completes before the next, so a crash
   leaves a strict prefix of every file: a file of the right size is a whole file, which is
-  what a `--resume` (planned, `DESIGN_REVIEW.md` §3.62) will test, size alone; allocated
-  block counts are not evidence on storage that dedupes or compresses. Every rank `syncfs`es
-  its root before reporting.
+  ~~what a `--resume` (planned, `DESIGN_REVIEW.md` §3.62) will test, size alone; allocated
+  block counts are not evidence on storage that dedupes or compresses.~~ (decided otherwise
+  2026-10-11, §3.70: a resume rewrites whole everything after the last recorded point and
+  tests no sizes; below). Every rank `syncfs`es its root before reporting.
+- **The manifest from the start, and progress (2026-10-12, `DESIGN_REVIEW.md` §3.70).**
+  Rank 0 writes each manifest before the start gate (after its root's emptiness check and
+  the containers' headers): `state: writing`, the normative part, the provenance known so
+  far, and `progress.unfinished` every id; the other ranks' emptiness check ignores the
+  manifest's name, and if the gate does not open rank 0 removes the manifests again. While
+  the writers run, a thread on every rank wakes every `--progress-secs` (layered, default
+  30): it notes what is finished (`Plan::unfinished`: writers claim runs in id order under
+  one lock and advance a cursor after each file, so what is left is the rest of each
+  writer's run plus every run not yet claimed, a few ranges per writer), `syncfs`es, and
+  sends rank 0 the note (`Progress`, the coordinator keeping each rank's latest); rank 0
+  merges every rank's latest note (a rank not heard from yet counts as having written
+  nothing), rewrites each manifest once with `progress` (`unfinished` id ranges,
+  `files_written`, `bytes_written`, `updated`), and prints one line (files, bytes, rate,
+  time left). Each rank sends a last note before `Done`, rank 0's window runs until every
+  part is in, and the last write is `state: complete` with no `progress`. Since a note is
+  taken before the flush it reports, an id outside `unfinished` is a whole file on stable
+  storage; a datagen killed at any point leaves a manifest that is true
+  (`tests/coord.rs`, on one host and two). `run` refuses any state but `complete`, naming
+  how many files are not written. Resume itself is not built yet.
 - **Several hosts (2026-10-04).** `aeiou datagen … --ranks R --rank r --coordinator
   HOST:PORT` on each of R hosts (`aeiou-launch` starts them, §6). Rank `r` writes the files
   of every `files` dataset whose ids fall in its slice of `[0, files)`, the same contiguous
@@ -458,8 +479,9 @@ as root). The same runs on the loopback NFS mount are §7.
   file serialize on the server's inode, so the split buys nothing, and a regions corpus is
   bounded by one host's stream. Every rank checks the roots are empty before the start gate
   (so no rank sees another's files), writes after it, `syncfs`es, and sends its counts
-  (`Done`); rank 0 writes the manifests once every rank has reported (`Server::gathered`),
-  so a manifest means the whole corpus is there, and the provenance records `ranks`, every
+  (`Done`); rank 0 writes the manifests ~~once every rank has reported~~ (since 2026-10-12
+  from the start, and `complete` once every rank has reported, above) (`Server::gathered`),
+  so a `complete` manifest means the whole corpus is there, and the provenance records `ranks`, every
   rank's host and counts (`hosts`), and the totals. The coordinator's identity check covers
   the abstract's hash, `--gpus`, the parameters, `--dedupe`, `--compress`, and the
   `--dataset` list, so one host with a different ratio cannot poison the corpus. Within a

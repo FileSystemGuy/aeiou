@@ -5463,6 +5463,33 @@ abstract had one). 8 GiB (9.5 GB, lognormal around 128 KiB, 64 files of 1024 row
 tmpfs, GB/s at 1 / 4 / 16 writers: Python 0.7 / 1.8 / 4.5, Rust 2.2 / 12.1 / 22.6, plain
 files' speed. Next: (d), brief item 23 in Rust.
 
+**Built 2026-10-12: (d), part 1, the manifest from the start and progress (item 3 above;
+resume, whole directories, grow and shrink, and subsets not yet).** `manifest_version` 2
+(so a reader that knows 1 cannot take an unfinished corpus for a whole one; every dataset
+id changes once, none published), with `state` and `progress` outside the normative part.
+Rank 0 writes each manifest before the start gate, `writing` with every id unfinished, so
+a corpus never holds a file without saying what it is meant to be; the other ranks'
+emptiness check ignores the manifest's name, and rank 0 removes its manifests if the gate
+does not open. Every `--progress-secs` (layered, default 30) each rank notes what is
+finished, `syncfs`es, and sends rank 0 the note (`Progress`, a new coordinator message the
+Python coordinator ignores); rank 0 merges every rank's latest note (a rank not heard from
+counts as having written nothing), rewrites each manifest once, and prints one line
+(files, bytes, rate, time left). The note is per writer as decided: writers claim runs in
+id order under one lock and advance a cursor after each file, so what is left is the rest
+of each writer's run plus the runs not yet claimed. Each rank sends a last note before
+`Done`, and rank 0's window runs until every part is in, then writes `complete`. Choices
+made while building: the note is taken *before* the flush, so an id it calls finished is
+on stable storage; the old every-5-seconds line per dataset is replaced by rank 0's
+window line; a regions file is one id, unfinished until whole; on an error every rank
+makes one last note, so rank 0's record is as late as it can be. `run` refuses any state
+but `complete`, naming the files not written. The Python writer writes version 2, once,
+last, `complete`. Tested by killing a datagen, on one host and on two, after a few
+windows: every id outside `unfinished` is a file of its full size, and `run` refuses the
+corpus. The bookkeeping costs nothing measurable (8 GiB of TFRecord to tmpfs at 16
+writers: 14–17 GB/s against 11–15 for the previous build, this machine's tmpfs varying
+run to run). Next, before building: the command lines of resume, grow, and shrink, and
+the count rounding of whole directories.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
