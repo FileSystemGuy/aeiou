@@ -519,6 +519,11 @@ numbers; the order is this note's.
     crashed writer can leave a multipart upload's parts behind, invisible to `LIST` but
     stored (and billed): resume lists them (`ListMultipartUploads` below the prefix) and
     aborts them, which POSIX has no counterpart for.
+    *Design note 2026-10-11 (`DESIGN_REVIEW.md` §3.70), proposed, nothing decided:* the runner
+    checks every `readdir`'s entries, so a subset run of an abstract that lists its dataset
+    (ImageFolder's walk) is not the workload of a smaller corpus; an intent record at each root
+    for resume; and the Python writer's page-cache writes, which defeat the size test and break
+    §3.62's `O_DIRECT` rule.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool
