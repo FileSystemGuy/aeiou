@@ -17,7 +17,7 @@ builder/
                      the parameter files fit their abstracts; the format classes write files the
                      libraries read back and the runner executes to the dry-run fingerprint; the
                      trace metrics against hand-written traces and against the runner under `strace`
-  pyproject.toml     dep: jsonschema; extras `test` and `formats` (pyarrow, h5py, numpy, crc32c, dgen-py,
+  pyproject.toml     dep: jsonschema; extras `test` and `formats` (pyarrow, h5py, numpy, crc32c,
                      xxhash); `aeiou-build`, `aeiou-params`, `aeiou-datagen`, `aeiou-trace`, `aeiou-catalog`
                      entry points
 ```
@@ -239,8 +239,8 @@ written yet (`DESIGN_REVIEW.md` §3.28 says why).
 **`aeiou-datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--gpus G] [--dedupe D]
 [--compress C] [--threads N] [--dataset NAME]… [--config FILE]** writes every dataset that has a format class:
 names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
-bytes from `dgen-py` 0.3.0 under the `aeiou-positional/2` wrapper (bit-identical to the Rust
-writer's), each file checked against the geometry its layout predicts (`layout.py`), then the
+bytes under `aeiou-positional/3` (numpy's `SFC64` in 4 KiB pieces, `payload_block`;
+bit-identical to the Rust writer's, `tests/test_payload.py`), each file checked against the geometry its layout predicts (`layout.py`), then the
 manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names the writer
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
 ones with a class. `tests/test_formats.py` reads the files back with pyarrow and h5py and,

@@ -122,7 +122,7 @@ struct DatagenArgs {
     /// Dedupe ratio: every `dedupe` consecutive files (or 1 MiB blocks of a regions file) share content.
     #[arg(long, default_value_t = 1, help_heading = "Writer")]
     dedupe: u64,
-    /// Compression ratio: the last (C−1)/C of every 1 MiB block is zeros.
+    /// Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest 0x5A.
     #[arg(long, default_value_t = 1, help_heading = "Writer")]
     compress: u64,
     /// Only these datasets (default: all).

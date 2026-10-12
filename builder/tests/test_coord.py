@@ -4,6 +4,7 @@ reported, a host whose identity differs stops every host before anything is writ
 the frames are the runner's (a Python rank talks to `aeiou datagen`'s coordinator)."""
 import json
 import os
+import re
 import pathlib
 import socket
 import subprocess
@@ -71,7 +72,7 @@ def _id(stdout):
 
 
 def test_several_ranks_write_the_one_host_corpus(tmp_path):
-    pytest.importorskip("dgen_py")
+    pytest.importorskip("numpy")
     pytest.importorskip("crc32c")
     one = tmp_path / "one"
     r = subprocess.run(_cmd(one, "--writers", 2), capture_output=True, text=True, cwd=str(BUILDER), env=_env())
@@ -104,12 +105,13 @@ def test_several_ranks_write_the_one_host_corpus(tmp_path):
 
 
 def test_a_different_host_stops_every_host_before_anything_is_written(tmp_path):
-    pytest.importorskip("dgen_py")
+    pytest.importorskip("numpy")
     root = tmp_path / "root"
     out = _ranks(root, 2, lambda r: ["--dedupe", 2] if r == 1 else [])
     for rc, o, e in out:
         assert rc == 1, o + e
-        assert "dedupe 2 differs from rank 0's 1" in e, e
+        # the first Hello is the reference, and either rank's may arrive first
+        assert re.search(r"dedupe (2 differs from rank 0's 1|1 differs from rank 1's 2)", e), e
     assert not (root / "train" / ".aeiou-dataset.json").exists()
     assert not root.exists() or not any(p.is_file() for p in root.rglob("*"))
 

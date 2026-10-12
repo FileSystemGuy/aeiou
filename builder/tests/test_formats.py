@@ -24,7 +24,7 @@ def ast_path(name):
 sys.path.insert(0, str(BUILDER))
 pytest.importorskip("pyarrow")
 pytest.importorskip("h5py")
-pytest.importorskip("dgen_py")
+pytest.importorskip("numpy")
 
 from aeiou import *  # noqa: E402,F401
 from aeiou import emit, formats  # noqa: E402
@@ -152,7 +152,7 @@ def test_datagen_tfrecord_round_trip(tmp_path):
     sizes = _parse_tfrecord(files[2])
     assert sizes == [sample_size({"lognormal": {"median": 20000, "sigma": 0.45}}, seed, 2 * 128 + i) for i in range(128)]
     m = json.loads((root / "train" / ".aeiou-dataset.json").read_text())
-    assert m["manifest_version"] == 1 and m["format"]["class"] == "tfrecord" and m["payload"]["generator"] == "dgen-data"
+    assert m["manifest_version"] == 1 and m["format"]["class"] == "tfrecord" and m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/3"
     assert m["dataset"]["files"]["count"] == 768 and m["dataset"]["files"]["samples_per_file"] == 128
     assert "doc" not in m["dataset"]["files"]
     assert m["provenance"]["files_written"] == 6

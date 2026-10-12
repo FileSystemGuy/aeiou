@@ -2,12 +2,17 @@
 //!
 //! **Payload.** The bytes at `(seed, unit, block)` are a pure function of that tuple
 //! (`PROJECT_BRIEF.md` §5, *Data verification*; `DESIGN_REVIEW.md` §3.16–§3.17). Content is
-//! cut into 1 MiB blocks; block `b` of unit `u` is the prefix of a 1 MiB `dgen-data` stream
-//! seeded `labeled_key(seed, "payload", [u, b])`, with dgen's compression layout (the last
-//! `(C−1)/C` of the block zero-filled for ratio `C`) and no dgen dedupe: dedupe is this
-//! wrapper's, by seed reuse across units (`aeiou-positional/2`, 2026-10-04; `/1` grouped by
-//! `id mod ceil(count / D)`, which made the groups depend on the count, so that a prefix of
-//! the ids had a lower ratio and a dataset could not grow; `DESIGN_REVIEW.md` §3.62):
+//! cut into 1 MiB blocks; block `b` of unit `u` is the prefix of the 1 MiB block seeded
+//! `labeled_key(seed, "payload", [u, b])` (`aeiou-positional/3`, 2026-10-11, `DESIGN_REVIEW.md`
+//! §3.70): an SFC64 stream (`Sfc64`, numpy's bit generator, so the Python writer makes the
+//! same bytes) laid out in 4 KiB pieces, each the next `⌈4096 / C⌉` bytes of the stream and
+//! then `0x5A` to the end of the piece for compression ratio `C` (at `C = 1`, the stream as
+//! is). Any prefix of a few KiB, and any compression unit of 4 KiB or more, has ratio `C`,
+//! and no piece is all zeros (`/2` used `dgen-data`'s layout, the last `(C−1)/C` of the block
+//! zero-filled, so a file below `1/C` MiB did not compress at all). Dedupe is by seed reuse
+//! across units (`/2`, 2026-10-04; `/1` grouped by `id mod ceil(count / D)`, which made the
+//! groups depend on the count, so that a prefix of the ids had a lower ratio and a dataset
+//! could not grow; `DESIGN_REVIEW.md` §3.62):
 //! - a `files` dataset: `u = id div D`, `b` = logical offset in the file ÷ 1 MiB (a chunked
 //!   file is the logical file cut at `chunk`), so every run of `D` consecutive files carries
 //!   the same bytes block for block, whatever the count;
@@ -34,9 +39,12 @@ use crate::pattern::Pattern;
 use crate::rng::labeled_key;
 
 pub const BLOCK: u64 = 1 << 20;
-pub const WRAPPER: &str = "aeiou-positional/2";
-pub const GENERATOR: &str = "dgen-data";
-pub const GENERATOR_VERSION: &str = "0.3.0";
+pub const WRAPPER: &str = "aeiou-positional/3";
+pub const GENERATOR: &str = "sfc64";
+pub const GENERATOR_VERSION: &str = "1";
+/// The piece a compression ratio applies to, and its fill.
+pub const PIECE: usize = 4096;
+pub const FILL: u8 = 0x5A;
 pub const MANIFEST_NAME: &str = ".aeiou-dataset.json";
 pub const MANIFEST_VERSION: u64 = 1;
 pub const NAMESPACE_MANIFEST_NAME: &str = ".aeiou-namespace.json";
@@ -87,13 +95,13 @@ pub fn block_seed(seed: u64, unit: u64, block: u64) -> u64 {
 }
 
 /// The seed of logical block `block` of file `id` of a `files` dataset under dedupe ratio
-/// `dedupe`: `D` consecutive files share a unit (`aeiou-positional/2`).
+/// `dedupe`: `D` consecutive files share a unit (since `aeiou-positional/2`).
 pub fn file_block_seed(seed: u64, id: u64, block: u64, dedupe: u64) -> u64 {
     block_seed(seed, id / dedupe.max(1), block)
 }
 
 /// The seed of block `block` of a `regions` dataset's one file under dedupe ratio `dedupe`:
-/// `D` consecutive blocks are one block repeated (`aeiou-positional/2`).
+/// `D` consecutive blocks are one block repeated (since `aeiou-positional/2`).
 pub fn regions_block_seed(seed: u64, block: u64, dedupe: u64) -> u64 {
     block_seed(seed, 0, block / dedupe.max(1))
 }
@@ -103,41 +111,102 @@ pub fn object_seed(namespace_seed: u64, path: &str) -> u64 {
     labeled_key(namespace_seed, "object", &[xxhash_rust::xxh3::xxh3_64(path.as_bytes())])
 }
 
+/// Chris Doty-Humphrey's SFC64, as numpy's `SFC64` bit generator steps it: `(a, b, c)`
+/// and a counter, 64 bits each.
+pub struct Sfc64 {
+    s: [u64; 4],
+}
+
+impl Sfc64 {
+    /// The state for `seed`: `a`, `b`, `c` the first three SplitMix64 outputs from `seed`, the
+    /// counter 1, then twelve outputs discarded (numpy seeds it so, from its own seed
+    /// sequence).
+    pub fn new(seed: u64) -> Sfc64 {
+        let mut x = seed;
+        let mut next = || {
+            x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = x;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        let mut g = Sfc64 { s: [next(), next(), next(), 1] };
+        for _ in 0..12 {
+            g.next_u64();
+        }
+        g
+    }
+
+    #[inline]
+    pub fn next_u64(&mut self) -> u64 {
+        let s = &mut self.s;
+        let tmp = s[0].wrapping_add(s[1]).wrapping_add(s[3]);
+        s[3] = s[3].wrapping_add(1);
+        s[0] = s[1] ^ (s[1] >> 11);
+        s[1] = s[2].wrapping_add(s[2] << 3);
+        s[2] = s[2].rotate_left(24).wrapping_add(tmp);
+        tmp
+    }
+
+    /// The next `out.len()` bytes of the stream, each output little-endian.
+    pub fn fill(&mut self, out: &mut [u8]) {
+        let mut words = out.chunks_exact_mut(8);
+        for w in &mut words {
+            w.copy_from_slice(&self.next_u64().to_le_bytes());
+        }
+        let tail = words.into_remainder();
+        if !tail.is_empty() {
+            let n = tail.len();
+            tail.copy_from_slice(&self.next_u64().to_le_bytes()[..n]);
+        }
+    }
+}
+
+/// The stream bytes in each 4 KiB piece under compression ratio `compress`.
+pub fn random_per_piece(compress: u64) -> usize {
+    PIECE.div_ceil(compress.max(1) as usize)
+}
+
 /// Generates block content, with a one-block cache for sub-block ranges.
 pub struct Filler {
     compress: u64,
     cache_seed: Option<u64>,
     cache: Vec<u8>,
+    scratch: Vec<u8>,
 }
 
 impl Filler {
     pub fn new(compress: u64) -> Self {
-        Filler { compress: compress.max(1), cache_seed: None, cache: Vec::new() }
+        Filler { compress: compress.max(1), cache_seed: None, cache: Vec::new(), scratch: Vec::new() }
     }
 
     /// The first `out.len()` bytes (≤ 1 MiB) of the block seeded `seed`.
     pub fn fill_block(&mut self, seed: u64, out: &mut [u8]) {
-        Self::generate(self.compress, seed, out)
+        Self::generate(self.compress, seed, out, &mut self.scratch)
     }
 
-    fn generate(compress: u64, seed: u64, out: &mut [u8]) {
+    /// The block's layout: piece `k` holds stream bytes `[k·R, k·R + R)` and then `FILL`, so a
+    /// prefix needs only the stream bytes of its own pieces.
+    fn generate(compress: u64, seed: u64, out: &mut [u8], scratch: &mut Vec<u8>) {
         debug_assert!(out.len() as u64 <= BLOCK);
         if out.is_empty() {
             return;
         }
-        let cfg = dgen_data::GeneratorConfig {
-            size: BLOCK as usize,
-            dedup_factor: 1,
-            compress_factor: compress as usize,
-            numa_mode: dgen_data::NumaMode::Disabled,
-            max_threads: Some(1),
-            numa_node: None,
-            block_size: Some(BLOCK as usize),
-            seed: Some(seed),
-        };
-        let mut g = dgen_data::DataGenerator::new(cfg);
-        let n = g.fill_chunk(out);
-        debug_assert_eq!(n, out.len());
+        let mut g = Sfc64::new(seed);
+        let r = random_per_piece(compress);
+        if r == PIECE {
+            g.fill(out);
+            return;
+        }
+        let pieces = out.len().div_ceil(PIECE);
+        let last = out.len() - (pieces - 1) * PIECE;
+        scratch.resize((pieces - 1) * r + r.min(last), 0);
+        g.fill(scratch);
+        for (k, piece) in out.chunks_mut(PIECE).enumerate() {
+            let n = r.min(piece.len());
+            piece[..n].copy_from_slice(&scratch[k * r..k * r + n]);
+            piece[n..].fill(FILL);
+        }
     }
 
     /// Fill `buf` with the content at logical `offset` under `seed_of(block)`.
@@ -154,7 +223,7 @@ impl Filler {
             } else {
                 if self.cache_seed != Some(seed) || self.cache.len() < in_block + n {
                     self.cache.resize(BLOCK as usize, 0);
-                    Self::generate(self.compress, seed, &mut self.cache[..]);
+                    Self::generate(self.compress, seed, &mut self.cache[..], &mut self.scratch);
                     self.cache_seed = Some(seed);
                 }
                 buf[done..done + n].copy_from_slice(&self.cache[in_block..in_block + n]);
@@ -458,6 +527,7 @@ pub fn params_json(doc: &Value, cfg: &Config, _params: &Params) -> Result<Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
 
     #[test]
     fn block_prefix_is_chunk_size_independent() {
@@ -477,11 +547,46 @@ mod tests {
     }
 
     #[test]
-    fn compression_zero_fills_the_tail() {
-        let mut f = Filler::new(2);
-        let mut b = vec![1u8; BLOCK as usize];
-        f.fill_block(7, &mut b);
-        assert!(b[..1000].iter().any(|&x| x != 0));
-        assert!(b[BLOCK as usize - 1000..].iter().all(|&x| x == 0));
+    fn compression_fills_every_piece() {
+        for c in [2u64, 3, 4] {
+            let r = random_per_piece(c);
+            let mut f = Filler::new(c);
+            let mut b = vec![0u8; BLOCK as usize];
+            f.fill_block(7, &mut b);
+            for piece in b.chunks(PIECE) {
+                assert!(piece[r..].iter().all(|&x| x == FILL), "C={c}");
+                assert!(piece[..r].iter().any(|&x| x != FILL), "C={c}");
+            }
+            // the stream continues from piece to piece, and a prefix is the block's prefix
+            let mut s = vec![0u8; 2 * r];
+            Sfc64::new(7).fill(&mut s);
+            assert_eq!(&b[..r], &s[..r]);
+            assert_eq!(&b[PIECE..PIECE + r], &s[r..]);
+            let mut head = vec![0u8; 5000];
+            f.fill_block(7, &mut head);
+            assert_eq!(&b[..5000], &head[..]);
+        }
     }
+
+    /// The bytes numpy's `SFC64` makes from the same state (`builder/tests/test_payload.py`
+    /// pins the same values): the first outputs for seed 0 and the SHA-256 of whole blocks.
+    #[test]
+    fn the_stream_and_blocks_are_pinned() {
+        let mut g = Sfc64::new(0);
+        let first: Vec<u64> = (0..3).map(|_| g.next_u64()).collect();
+        assert_eq!(first, PINNED_FIRST);
+        for (c, want) in PINNED_BLOCKS {
+            let mut b = vec![0u8; BLOCK as usize];
+            Filler::new(c).fill_block(0x1234_5678_9ABC_DEF0, &mut b);
+            let hex: String = sha2::Sha256::digest(&b).iter().map(|x| format!("{x:02x}")).collect();
+            assert_eq!(hex, want, "C={c}");
+        }
+    }
+
+    const PINNED_FIRST: [u64; 3] = [0xeaf7_3661_f5e1_80bc, 0xbc90_4e12_62de_1088, 0x0653_8b07_830a_ee11];
+    const PINNED_BLOCKS: [(u64, &str); 3] = [
+        (1, "a2eb20e7d329c5ec5dddb0ccd476a040aea1b465701f0a7e1ec8d998a5804258"),
+        (2, "931796b308ff3de12bbecbb615e24e832ed6d21449decda560b566d4fc5e746b"),
+        (3, "f3d76909654cbbbe2e2f4daeba766978879f046852302ac27e63c6a99b1b2612"),
+    ];
 }

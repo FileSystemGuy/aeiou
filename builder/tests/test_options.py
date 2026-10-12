@@ -130,7 +130,7 @@ def _datagen(args, env):
 
 def test_aeiou_datagen_through_the_layers(tmp_path):
     pytest.importorskip("pyarrow")
-    pytest.importorskip("dgen_py")
+    pytest.importorskip("numpy")
     cfg = tmp_path / "aeiou.toml"
     cfg.write_text("[datagen]\nwriters = 2\n")
     root = tmp_path / "root"

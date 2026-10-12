@@ -5162,113 +5162,131 @@ serialized them. Now:
   than after each, and the file systems written are `syncfs`ed before them, as the Rust
   writer always did.
 
-### 3.70 Datagen resume, growth, and subset runs (proposed 2026-10-11; nothing decided)
+### 3.70 Datagen resume, growth, shrink, and subset runs; the payload `aeiou-positional/3` (proposed and decided with the user 2026-10-11; the payload built the same day)
 
 **The use.** `PROJECT_BRIEF.md` item 23 and §3.62: a submitter generates one corpus once, on
 the fleet it will run on, and then searches for the SUT's saturation point by running ever
 larger steps against it. Under the sizing rule (§3.67, at least five times the clients'
-DRAM) every step with more clients needs a larger dataset, so the corpus is sized for the
-largest step and every smaller step reads the first `S` of its `N` ids. Three operations
-share one arithmetic, since names, sizes, directories, and dedupe groups are functions of the
-id alone (§3.62): **resume** finishes a datagen that died, **growth** extends a corpus to a
-larger count, and a **subset run** reads the first `S` ids of a larger corpus. Looking at the
-code for this note turned up three things the 2026-10-04 sketch did not account for: the
-runner checks every `readdir`'s entry count, the Python writer does not use `O_DIRECT`, and
-a resume has no record of what an unfinished corpus was meant to be.
+DRAM) a step with more clients needs a larger dataset, so the corpus is sized for the
+largest step and a smaller step reads a prefix of it, or the corpus grows or shrinks between
+steps. Names, sizes, directories, and dedupe groups are functions of the id alone (§3.62).
+The first draft of this note (the same day, proposed) found three gaps: the runner checks
+every `readdir`'s entry count, the Python writer wrote through the page cache, and a resume
+had no record of what an unfinished corpus was meant to be. The decisions below came out of
+the discussion that followed; the user's corrections are marked.
 
-**1. A subset run (the questions for the user are here).**
+**1. The payload, `aeiou-positional/3` (decided and built).** Looking at the tail check the
+user proposed (read the last few transfers of a file after a crash) turned up two faults in
+`/2`. dgen-data's layout put the compressible part at the end of each 1 MiB block as zeros,
+and a file is a prefix of its blocks, so a file below `1/C` MiB did not compress at all
+(measured: a 110 KB image at `C = 2`, zlib ratio 1.00; 600 KB, 1.14; 1 MiB, 1.99), and
+storage that compresses in 8 to 32 KiB units saw pure noise and pure zeros, the zeros
+rewarding zero detection. (`PROJECT_BRIEF.md` §5 had recorded the bimodal 4 KiB pieces as
+the DLIO convention on 2026-09-29; the small-file effect had not been seen.) The user
+proposed `0x5A` for the compressible bytes, so that they compress and dedupe as zeros do
+but are never zeros, and asked whether dgen could make 4 KiB blocks: its streaming
+generator, the only one Python can seed, clamps blocks to at least 1 MiB
+(`generator.rs:1372`), and a generator per 4 KiB ran at 3.9 GB/s. Its random bytes are
+`Xoshiro256PlusPlus::seed_from_u64(seed + block)`, so the user asked whether we could make
+them ourselves. Decided: **SFC64**, numpy's bit generator in Python (`numpy.random.SFC64`,
+its stream fixed across numpy versions by NEP 19) and about forty lines of Rust
+(`payload.rs` `Sfc64`); a block's state is `a`, `b`, `c` the first three SplitMix64 outputs
+from the block seed (`labeled_key(seed, "payload", [u, b])`, unchanged), the counter 1, and
+twelve outputs discarded, each output little-endian; each 4 KiB piece is the next
+`⌈4096 / C⌉` bytes of the stream and then `0x5A`; at `C = 1` the stream as is. Dedupe is
+unchanged (`/2`'s units). `dgen-data` and `dgen-py` are no longer dependencies; the manifest
+says `generator: sfc64`, `version: 1`, `wrapper: aeiou-positional/3`, so every dataset id
+changed once (none published). Measured, a 110 KB prefix at `C = 2`, 3, 4: ratio 1.96, 2.92,
+3.87; 8 GiB to tmpfs, GB/s at 1 / 4 / 16 writers:
 
-- *The shuffle's domain is `S`.* The run's count parameter is `S`, so the Feistel shuffle,
-  the steps, and the fingerprint are those of a run on a corpus of exactly `S`; the ids at
-  and beyond `S` are never touched. The alternative, shuffling over `N` and stopping early,
-  makes the op stream depend on a corpus the run does not use and breaks `drop_last`
-  epochs; not proposed.
-- *The manifest check.* `check_datasets` compares the manifest's resolved definition to
-  the run's for equality (`run.rs`). A subset run compares it with `count` taken out and
-  requires the manifest's count to be at least the run's; the report records both, and
-  the dataset id (`--expect-dataset-id`) stays the corpus's, the `N` one. Proposed: an
-  explicit flag rather than accepting any smaller count, so a mistyped parameter is
-  refused, not silently a subset: `aeiou run --subset` (fixed, not layered: it decides what
-  the run accepts). The name is open.
-- *Containers: `S` must fill whole files.* With `samples_per_file` `k`, a corpus of exactly
-  `S` has a short last file when `k` does not divide `S`, and the `N` corpus has a full one
-  there, so the layout the runner computes (a Parquet footer's offset, an HDF5 dataset's
-  extent) is not the file on disk. Proposed: refuse unless `k` divides `S`.
-- *Directory listings: the main question.* The runner checks the entries of every
-  `readdir` against the definition (`run.rs:861`: "the corpus does not match the dataset
-  definition"), and the flagship `file_per_sample` (ImageFolder) and `npy_per_sample` walk
-  their dataset at startup by default (`enumerate`, on since 2026-10-02, because metadata
-  load matters). Against a corpus of `N`, such a walk lists `N`'s entries, so a subset run
-  of a listing abstract either fails that check or is not the workload of a corpus of `S`.
-  The options:
-  - (a) *Refuse a subset run of an abstract that lists a subset dataset* (with
-    `enumerate=false` it runs, as the different workload that parameter already is).
-    Simple and honest; the saturation search of a listing workload then regenerates per
-    step, or grows the corpus step by step (3 below), which writes each byte once in all.
-  - (b) *Expect the corpus's entries.* The walk is `N`'s and training is over `S`: no real
-    ImageFolder job does that (it trains on what it lists), so it is a third workload,
-    reported as such.
-  - (c) *Steps as grown corpora* (3 below): generate `S₁`, run, grow to `S₂`, run, and so on.
-    Every step is then an exact corpus, listings included, at the cost of one growth per
-    step and no step can go back to a smaller size without a second corpus.
-  
-  Recommended: (a) for subset runs, with (c) as the documented way to search saturation
-  under a listing abstract. Open for the user.
-- *`{id mod M}` directories.* Without a listing, a subset run opens files by name and passes
-  every check, but under `{id mod M}` its files are spread over all `M` directories, which
-  hold `N/M` entries rather than `S/M`; under `{id div D}` only the boundary directory
-  differs. Larger directories can cost a server more per lookup. Proposed: allowed, the
-  pattern recorded in the report, and the docs say so.
-- *`regions` datasets.* The one file's size is computed from the count, so a subset run
-  reads within a larger file. Whether the startup checks compare a regions file's size
-  exactly is to be checked when building; proposed: allowed, reads within the prefix.
-- *Comparability is the WG's question.* Untouched data beyond `S` occupies the SUT and is
-  cold; an appliance that tiers by capacity may behave differently with it present. Whether
-  a scored step may run on a subset is WG process (`PROJECT_BRIEF.md` §8) and is listed
-  there if the WG decides it; aeiou only makes the run possible and records it.
+| writer | `/2` (dgen) | `/3` (SFC64) |
+|---|---|---|
+| `aeiou datagen`, `C = 1` | 2.3 / 10.2 / 9.5–11.6 | 2.2 / 12.4 / 22.5 |
+| `aeiou datagen`, `C = 2` | | 3.2 / 11.0 / 20.9 |
+| `aeiou-datagen`, TFRecord | 1.2 / 3.4 / 5.1 | 1.3 / 5.5 / 8.2 |
 
-**2. Resume.** `--resume` on both datagen tools: the root may hold files, the ids in scope
-(the rank's slice under the `--ranks`/`--rank` of the resume, nothing persisted) are walked,
-and every file that is missing or not of its size is rewritten whole; then the manifest, as
-always, last. Two things the sketch lacked:
+Tests: `payload.rs` and `builder/tests/test_payload.py` pin the same stream and block hashes
+(numpy's values, which the Rust matched the first time), every piece and an image-sized
+prefix compress at the ratio, and the files `aeiou datagen` writes with dedupe 2 and ratio 3
+equal the Python payload byte for byte. dgen remains a fine generator; the change is that
+our definition now depends on one small, fixed algorithm we hold on both sides.
 
-- *An intent record.* Without a manifest nothing says what an unfinished corpus was meant
-  to be, so a resume with another `--dedupe`, payload version, or parameter would mix two
-  corpora under one manifest. Proposed: rank 0 writes `.aeiou-datagen.json` at each dataset
-  root before the gate (the definition, payload, format, and writer: the manifest's
-  normative part), every rank checks it, `--resume` requires it to match, and the manifest
-  replaces it at the end. Names beginning `.aeiou` are reserved (V13), so no generated file
-  can collide. A root holding files and no intent record is refused, as today.
-- *Size proves a whole file only after `O_DIRECT` writes.* The Rust writer's direct writes
-  complete in order, so a crash leaves a strict prefix (§3.62). The Python writer writes
-  through the page cache (`open(…, "wb")` in `datagen.py`): after a host crash a file can
-  have its full size and missing data (holes or zeros, by file system), and it also fills
-  the client's page cache, which §3.62 forbids. Proposed, independent of resume and first: the
-  Python `Sink` writes directory roots with `O_DIRECT` through a 4 KiB-aligned 1 MiB staging
-  buffer, padding and truncating the tail as the Rust writer does, measured against today's
-  throughput (§3.69's table) before it is kept. The alternatives, `fsync` and a rename
-  per file, or reading back each file's last block at resume, cost a round trip per file
-  or a regeneration per container file.
-- *Objects.* An upload that dies leaves no object, so resume looks for missing keys only,
-  one paged `LIST` giving every size; and it aborts the multipart uploads left below the
-  prefix (`ListMultipartUploads`), which hold stored (and billed) parts (item 23's note of
-  2026-10-09).
+**2. `O_DIRECT` in the Python writer, always (decided).** The user: `O_DIRECT` is almost
+always faster than buffered, and §3.62 forbids filling the client's page cache. The Python
+`Sink` writes directory roots through a 4 KiB-aligned 1 MiB staging buffer, with the tail
+handled as the Rust writer does (tried unaligned, padded and truncated on `EINVAL`).
 
-**3. Growth** is a resume under a larger count: the definition equal but for `count`, the new
-count larger. Rank 0 replaces the manifest with an intent record before the gate, so no run
-reads a half-grown corpus; the dataset id changes, since `count` is in the definition.
-Existing files keep their bytes (prefix-stable dedupe); the old last container file, short
-when `k` did not divide the old count, fails the size test and is rewritten; under
-`{id mod M}` the new files land in every directory. A `regions` file is extended rather
-than rewritten (its blocks are functions of their index). Growth never shrinks.
+**3. The manifest from the start, and progress (decided).** The user proposed writing the
+manifest at the start, with the parameters of the whole dataset, as the record of what an
+unfinished corpus is meant to be; it is one file, `.aeiou-dataset.json`, with a state
+(`writing`, `growing`, `shrinking`, `complete`) and the progress, and a run refuses
+anything not `complete`; the id is unchanged by the progress, since only the normative part
+is hashed. The user proposed a checkpoint every `N` files behind a global barrier and a
+check of the last few transfers of each file after it; decided instead, in the discussion:
 
-**Proposed order.** (1) `O_DIRECT` in the Python writer, with its measurement. (2) The intent
-record and `--resume` on both tools. (3) Growth. (4) Subset runs, once the listing question
-is decided. Each with tests on one host and on two ranks.
+- *No check after a checkpoint: rewrite.* Everything after the last recorded point is
+  rewritten whole, opened `O_CREAT|O_TRUNC` (never `O_EXCL`, the user's note), so a partial
+  or stale file loses its tail. With `O_DIRECT` a crash leaves a strict prefix anyway (XFS
+  and ext4 record an extending direct write's size at its completion, after the data; the
+  Linux NFS client commits a direct write before it returns; mechanisms, not tested here),
+  and with `0x5A` a hole could no longer pass for payload; the reads are not needed.
+- *No barrier: messages, and one manifest write per window.* Every `--progress-secs`
+  (layered, default 30) each rank notes what is finished, flushes (cheap under `O_DIRECT`),
+  and sends rank 0 that note; rank 0 keeps every rank's latest and rewrites the manifest
+  once per window. The user's point: one write per rank per window would be fifty writes;
+  a global low-water mark is one write but makes the leaders rewrite. The compromise keeps
+  per-writer precision at one write: each writer writes its run in id order, so a rank
+  reports its finished prefix plus one point per active run, a few bytes per writer. Rank 0
+  also prints one progress line per window (files, bytes, rate, time left).
+- *A different host count on resume* (the user: a case not thought of, and valuable): the
+  manifest holds the unfinished ranges, so the new ranks split them by whole directories.
+- *Objects:* a completed upload is the whole object, so resume looks for missing keys
+  (one paged `LIST`), and it aborts the multipart uploads left below the prefix.
 
-**For the user to decide.** The listing question (a, b, or c, or a and c as recommended); an
-explicit `--subset` flag and its name; that `k` must divide `S`; the intent record; and
-`O_DIRECT` in the Python writer, including whether it ships before resume.
+**4. Whole directories (the user's proposal, decided).** Every directory holds the same
+number of files, for an even load: the count is rounded up to a multiple of `D·k` under
+`{id div D}` (`k` the samples per file), `M·k` under `{id mod M}`, and `k` for a flat
+pattern; the requested and the rounded counts are printed and recorded. Work is handed to
+ranks by whole directories, so no two hosts create in one directory (§3.62 allowed one
+shared boundary directory), with a fallback when there are fewer directories than ranks.
+
+**5. Grow and shrink (the user's proposal, decided).** Explicit operations, separate because
+shrink deletes data (a single count that grows or shrinks could delete a corpus on a typo).
+Grow, shrink, and resume read everything but the target count from the manifest and need no
+abstract, and they refuse when this tool's payload version or container library version
+differs from the manifest's (a Parquet footer names the pyarrow version, so a newer pyarrow
+would change new files' footer size and break the layout every file shares). Grow adds
+whole directories; shrink removes trailing ids, whole trailing directories under `div`,
+with no hole in the sequence; each marks the manifest first and `complete` last. The
+dataset id changes with the count.
+
+**6. Walks, inventories, and subset runs (decided).** The user's correction: large shops do
+not walk a training corpus or `LIST` a bucket at 20 M files; they read an inventory captured
+once. The manifest cannot stand in for that: the walk in `file_per_sample` models the
+application's own walk, which under CLOSED is part of the workload. So the large-corpus
+workload is an inventory variant: the abstract reads a file of the size an inventory of the
+run's count would be (written by datagen as payload; nobody reads its content), and the
+names come from the patterns, as they always have. Small corpora keep the live walk, whose
+entries the runner checks and otherwise ignores. A run's parameters come from its command
+line (the user, narrowing an earlier over-generalization: reading parameters from the
+manifest is datagen's, for grow, shrink, and resume); the manifest only checks that the
+corpus fits the run: the definition equal but for the count, the run's count no larger, and
+`aeiou run --subset` required for a smaller count, so a typo is refused rather than run. A
+subset is a contiguous set of whole directories from 0, the count rounded up the same way
+and both counts printed; the directories beyond are ignored. A live walk on a subset walks
+those directories, and only the root listing differs from a corpus of exactly that size: it
+returns every directory's name, so the runner expects the corpus's count there and the
+subset's below, and the report says so. A flat pattern has no whole-directory subset, so a
+live-walk subset of a flat dataset is refused (no committed flat abstract walks). Subsets
+apply to sample spaces (`access: map` or `stream`) whose count is a bare parameter
+reference; a `regions` dataset or a dataset without an access mode (a DiskANN index is a
+graph over every node) is refused. Whether a scored step may run on a subset is the WG's
+question (`PROJECT_BRIEF.md` §8), not aeiou's.
+
+**Order.** (1) The payload (built). (2) `O_DIRECT` in the Python writer, measured. (3) The
+manifest from the start, the progress messages, and resume, on both writers. (4) Whole
+directories and per-rank directories. (5) Grow and shrink. (6) Subset runs and the
+inventory variant. Each with tests on one host and on two ranks.
 
 ## 4. Plan changes
 

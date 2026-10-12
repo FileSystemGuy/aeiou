@@ -21,7 +21,7 @@ ROOT = BUILDER.parent
 sys.path.insert(0, str(BUILDER))
 pytest.importorskip("pyarrow")
 pytest.importorskip("h5py")
-pytest.importorskip("dgen_py")
+pytest.importorskip("numpy")
 obstore = pytest.importorskip("obstore")
 
 from aeiou import datagen  # noqa: E402

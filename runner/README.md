@@ -83,7 +83,7 @@ operations, so they cannot deadlock.
 
 Rust 2021, one workspace, one crate. `clap` (derive, wrapped help) for the command line
 with the `--[no-]x` boolean convention; `serde`/`serde_json`; `toml`; `sha2`; `xxhash-rust`
-(xxh3) for keys and the fingerprint; `dgen-data` 0.3.0 for the payload stream; `libc` for
+(xxh3) for keys and the fingerprint; `libc` for
 the POSIX, AIO, and `mmap` calls; the `io-uring` crate for the rings; `anyhow`. Linux
 interfaces: `io_uring` with `IORING_SETUP_SQPOLL`, `IORING_SETUP_ATTACH_WQ`,
 `IORING_SETUP_SINGLE_ISSUER` with `DEFER_TASKRUN`, `COOP_TASKRUN`, and

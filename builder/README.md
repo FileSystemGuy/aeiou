@@ -85,8 +85,8 @@ option layers, used by `aeiou-datagen`.
 Python 3.12 or later. The package depends on `jsonschema` alone; `hatchling` builds it,
 `uv` locks it (`uv.lock`), `pytest` with `pytest-xdist` tests it. The `formats` extra
 installs the libraries of the format classes: `pyarrow` (Parquet), `h5py` (HDF5), `numpy`,
-`crc32c` (TFRecord framing), `xxhash`, and `dgen-py` 0.3.0, the wheel that reproduces the
-Rust payload generator's bytes. PEP 578 (`sys.addaudithook`) for the hermetic build;
+`crc32c` (TFRecord framing), and `xxhash`; numpy's `SFC64` makes the payload, the Rust
+writer's bytes. PEP 578 (`sys.addaudithook`) for the hermetic build;
 `tarfile`, `zipfile`, and `re` from the standard library for WebDataset, `.npz`, and the
 strace parser.
 

@@ -695,7 +695,7 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
 
 #[test]
 fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
-    // aeiou-positional/2: `dedupe` consecutive files share a unit, so a prefix of the ids has
+    // aeiou-positional/2 and /3: `dedupe` consecutive files share a unit, so a prefix of the ids has
     // the full ratio and a dataset can grow; file `id`'s bytes are the same under any count
     let six = tmpdir("dd6");
     let four = tmpdir("dd4");
@@ -719,7 +719,7 @@ fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
         assert_eq!(file(&six, id), file(&four, id), "file {id} under count 6 and count 4");
     }
     let m = aeiou::payload::Manifest::read(&six.join("train")).unwrap();
-    assert_eq!(m.payload.wrapper, "aeiou-positional/2");
+    assert_eq!(m.payload.wrapper, "aeiou-positional/3");
     assert_eq!(m.payload.dedupe, 2);
     std::fs::remove_dir_all(&six).unwrap();
     std::fs::remove_dir_all(&four).unwrap();

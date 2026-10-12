@@ -154,7 +154,7 @@ one frame, listing every missing argument at once, and exits 2.
 
 **Runner (Rust, edition 2021).** `clap` for the command line, `serde`/`serde_json` for the
 AST and the reports, `toml` for the config file, `sha2` for identities, `xxhash-rust`
-(xxh3) for positional keys and the fingerprint, `dgen-data` for the positional payload,
+(xxh3) for positional keys and the fingerprint, its own SFC64 for the positional payload,
 `libc` and the `io-uring` crate for the backends, `anyhow` for errors. Blocking `std::net`
 for the coordinator; no tokio, no MPI. Linux interfaces: `io_uring` (with `SQPOLL`,
 `DEFER_TASKRUN`, `COOP_TASKRUN`, io-wq worker caps), the kernel AIO calls, glibc POSIX AIO,
@@ -164,8 +164,8 @@ checks before its gate.
 
 **Builder (Python ≥ 3.12).** `jsonschema` is the only dependency of the package; `hatchling`
 builds it and `uv` locks it. The `formats` extra brings the libraries of the format
-classes, `pyarrow`, `h5py`, `numpy`, `crc32c`, `xxhash`, and `dgen-py`, the Python wheel
-that reproduces the Rust generator's bytes. PEP 578 audit hooks make the hermetic build.
+classes, `pyarrow`, `h5py`, `numpy` (whose `SFC64` makes the payload, the Rust writer's
+bytes), `crc32c`, and `xxhash`. PEP 578 audit hooks make the hermetic build.
 `aeiou-trace` and `aeiou-catalog` are standard library only.
 
 **Contract.** JSON Schema draft 2020-12 for the AST and the parameter file; canonical JSON

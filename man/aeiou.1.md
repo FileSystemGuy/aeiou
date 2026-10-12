@@ -71,8 +71,8 @@ application through **aeiou-trace**(1).
 
 Writes every `files` and `regions` dataset the abstract declares under `--root`: names from
 the pattern, sizes from the dataset seed, content from the positional payload generator
-(1 MiB blocks of a `dgen-data` stream keyed by dataset seed, unit, and block, with the
-dedupe and compression ratios given), in parallel by id, with `O_DIRECT` (datagen never
+(1 MiB blocks of an SFC64 stream keyed by dataset seed, unit, and block, laid out in 4 KiB
+pieces for the compression ratio, with the dedupe and compression ratios given), in parallel by id, with `O_DIRECT` (datagen never
 reads what it writes, and the client's page cache is what a benchmark must not have warm; a
 root that refuses `O_DIRECT` falls back to the page cache, said once). The manifest
 `.aeiou-dataset.json` is written last, atomically, at each dataset root, and its id is
@@ -243,8 +243,9 @@ turns it off, and the last one on the line wins.
   the payload the manifest records.
 - **--compress** *COMPRESS*
 
-  Compression ratio: the last (C-1)/C of every 1 MiB block is zeros. Default 1. Part of the
-  payload the manifest records.
+  Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest
+  0x5A, so every file and every piece compresses at C. Default 1. Part of the payload the
+  manifest records.
 - **--dataset** *NAME*
 
   Write only these datasets; repeatable. Default all.

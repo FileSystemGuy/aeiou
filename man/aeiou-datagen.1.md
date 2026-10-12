@@ -23,8 +23,9 @@ tools, each dataset by one of them.
 
 Names come from the dataset's pattern, sizes from the dataset seed (the Python port of the
 runner's sampler), and bytes from the same positional payload generator as the Rust writer:
-1 MiB blocks of a `dgen-py` stream keyed by dataset seed, unit, and block, bit-identical to
-the Rust crate's, with the dedupe and compression ratios given. Every file is checked
+1 MiB blocks of an SFC64 stream (numpy's bit generator) keyed by dataset seed, unit, and
+block and laid out in 4 KiB pieces, bit-identical to the Rust writer's, with the dedupe and
+compression ratios given. Every file is checked
 against the geometry its declared layout predicts (file and unit headers and footers,
 column chunks, row framing, alignment), since the runner computes every offset from that
 layout and never reads a container's metadata. The manifest `.aeiou-dataset.json` is
@@ -108,8 +109,9 @@ every missing argument listed at once.
   payload block.
 - **--compress** *COMPRESS*
 
-  Compression ratio: the last (C-1)/C of every 1 MiB block is zeros. Default 1. Recorded in
-  the manifest's payload block.
+  Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest
+  0x5A, so every file and every piece compresses at C. Default 1. Recorded in the manifest's
+  payload block.
 - **--dataset** *NAME*
 
   Write only these datasets; repeatable. Default all.

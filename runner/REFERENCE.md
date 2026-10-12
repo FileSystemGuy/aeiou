@@ -72,7 +72,7 @@ aeiou/src/
   limits.rs    the limits before the gate: the estimate of open files and threads from a bounded walk,
                the soft limits raised, the refusal that names the limit (§11)
   report.rs    `run --report-json`: the run's identity, results, and verdict as JSON (§12)
-  payload.rs   positional content (dgen-data behind the `aeiou-positional/1` wrapper), the manifest
+  payload.rs   positional content (SFC64 in 4 KiB pieces, `aeiou-positional/3`), the manifest
   datagen.rs   `aeiou datagen`
   main.rs      the CLI
 aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests, parameter files
@@ -401,12 +401,20 @@ as root). The same runs on the loopback NFS mount are §7.
 ## 5. `aeiou datagen`, the payload, and the manifest
 
 - **Payload** (`payload.rs`). Content is cut into 1 MiB blocks; block `b` of unit `u` under
-  seed `s` is the prefix of a 1 MiB `dgen-data` 0.3.0 stream seeded
-  `labeled_key(s, "payload", [u, b])`, with dgen's compression layout (the last `(C−1)/C` of
-  each block zero-filled for ratio `C`) and no dgen dedupe. The prefix of a block is
-  independent of how it is read out, so the verifier can regenerate any 4 KiB piece with
-  dgen-py's public API (`DESIGN_REVIEW.md` §3.17). Dedupe is the wrapper's, by seed reuse
-  (`aeiou-positional/2`, 2026-10-04): a `files` dataset uses `u = id div D` and `b` the
+  seed `s` is the prefix of the 1 MiB block seeded `labeled_key(s, "payload", [u, b])`
+  (`aeiou-positional/3`, 2026-10-11, `DESIGN_REVIEW.md` §3.70): an SFC64 stream (`Sfc64`, the
+  algorithm of numpy's `SFC64` bit generator, its state `a`, `b`, `c` the first three SplitMix64
+  outputs from the block seed, the counter 1, twelve outputs discarded; each output
+  little-endian) laid out in 4 KiB pieces, each the next `⌈4096 / C⌉` bytes of the stream and
+  then `0x5A` to the end of the piece for ratio `C`, and at `C = 1` the stream as is. Every
+  prefix of a few KiB and every compression unit of 4 KiB or more has ratio `C`, and no piece
+  is zeros, so zero detection gains nothing and a hole is never payload. ~~A 1 MiB `dgen-data`
+  0.3.0 stream with dgen's compression layout, the last `(C−1)/C` of each block zero-filled
+  (`/2`)~~: a file below `1/C` MiB then did not compress at all (a 110 KB image at `C = 2`
+  measured 1.00), and the generator was an external crate and wheel kept bit-identical. The
+  prefix of a block is independent of how it is read out, so a verifier can regenerate any
+  piece with numpy alone. Dedupe is the wrapper's, by seed reuse (`aeiou-positional/2`,
+  2026-10-04, unchanged in `/3`): a `files` dataset uses `u = id div D` and `b` the
   block of the logical offset (a chunked file is the logical file cut at `chunk`), so every
   run of `D` consecutive files carries the same bytes, whatever the count; a `regions`
   dataset (one file) uses `u = 0` and `b div D`; a namespace object written by `run` uses
