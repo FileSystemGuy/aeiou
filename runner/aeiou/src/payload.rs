@@ -52,6 +52,9 @@ pub const MANIFEST_VERSION: u64 = 2;
 /// A dataset's `state`: written at the start as `writing`, `complete` once every file is.
 pub const STATE_WRITING: &str = "writing";
 pub const STATE_COMPLETE: &str = "complete";
+/// `datagen --grow` / `--shrink` under way: the manifest already names the new count.
+pub const STATE_GROWING: &str = "growing";
+pub const STATE_SHRINKING: &str = "shrinking";
 pub const NAMESPACE_MANIFEST_NAME: &str = ".aeiou-namespace.json";
 pub const NAMESPACE_MANIFEST_VERSION: u64 = 1;
 /// Above this many objects a namespace manifest records the count only.

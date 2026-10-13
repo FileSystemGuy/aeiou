@@ -1463,10 +1463,11 @@ pub fn check_datasets(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place +
         if m.state != payload::STATE_COMPLETE {
             let left = m.progress["unfinished"].as_array().map(|r| r.iter().map(|x| x[1].as_i64().unwrap_or(0) - x[0].as_i64().unwrap_or(0)).sum::<i64>());
             bail!(
-                "dataset `{name}` at {}: the manifest says `{}`{}: a datagen did not finish it; remove it and run `aeiou datagen` again",
+                "dataset `{name}` at {}: the manifest says `{}`{}: a datagen did not finish it; finish it with `aeiou datagen --resume {}`",
                 dir.display(),
                 m.state,
-                left.map(|n| format!(", {n} file(s) not written")).unwrap_or_default()
+                left.map(|n| format!(", {n} file(s) not written")).unwrap_or_default(),
+                dir.display()
             );
         }
         let want = payload::resolved_dataset(&loaded.doc, name, cfg)?;

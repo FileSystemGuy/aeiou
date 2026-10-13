@@ -284,6 +284,48 @@ def test_aeiou_datagen_resumes_into_the_bucket(name, minio, tmp_path):
     assert after["provenance"]["resumes"][0]["files_written"] == 2, "the two missing, not the one there"
 
 
+@pytest.mark.parametrize("name", ["tfrecord", "plain"])
+def test_aeiou_datagen_grows_and_shrinks_in_the_bucket(name, minio, tmp_path):
+    """`aeiou datagen --grow N s3://BUCKET/PREFIX` and `--shrink` (DESIGN_REVIEW.md §3.70): the
+    new objects sent (the old short last shard again), the keys past a shrink deleted, and the
+    bucket ends as a datagen of the new count leaves it."""
+    if not _has_object_engine():
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `object`")
+    if name == "tfrecord":
+        ast_file, flags, count, sizes = ast_path("tfrecord_stream"), ["--param", "per_shard=128", "--param", "sample_median=20000"], "samples", (700, 900, 300)
+    else:
+        ast_file, flags, count, sizes = ast_path("file_per_sample"), [], "files", (40, 60, 25)
+    obj = json.loads(pathlib.Path(ast_file).read_text())
+    (ds,) = obj["datasets"]
+    obj["datasets"][ds]["files"]["protocol"] = "s3"
+    obj.pop("posix", None)
+    obj.pop("cache", None)
+    obj_file = tmp_path / "object.ast.json"
+    obj_file.write_text(json.dumps(obj))
+
+    def fresh(prefix, n):
+        r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
+                            "--writers", "3", *flags, "--param", f"{count}={n}"], capture_output=True, text=True, env=minio.env)
+        if "--features formats" in r.stderr:
+            pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    def contents(prefix):
+        return {k[len(prefix):]: minio.get(k) for k in minio.objects(prefix) if not k.endswith(".aeiou-dataset.json")}
+
+    prefix = f"resize-{name}/data"
+    fresh(prefix, sizes[0])
+    for op, n in zip(("--grow", "--shrink"), sizes[1:]):
+        r = subprocess.run([RUNNER, "datagen", op, str(n), f"s3://bench/{prefix}", "--writers", "2"], capture_output=True, text=True, env=minio.env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        want = f"resize-{name}-fresh{n}/data"
+        fresh(want, n)
+        assert contents(prefix) == contents(want), f"{op} {n}"
+        got, exp = (json.loads(minio.get(f"{p}/.aeiou-dataset.json")) for p in (prefix, want))
+        assert got["state"] == "complete" and got["dataset"] == exp["dataset"]
+        assert got["provenance"]["files_written"] == exp["provenance"]["files_written"]
+
+
 def test_a_multipart_upload_is_the_file(minio, tmp_path):
     """A file of several parts (the part is 8 MiB) arrives whole; an upload a writer fails
     before its close is aborted and leaves no object."""

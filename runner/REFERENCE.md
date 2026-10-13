@@ -499,6 +499,40 @@ as root). The same runs on the loopback NFS mount are §7.
   rewritten files' bytes; the builder's tests resume every container format (HDF5's headers
   made again and compared) and a bucket (only the missing objects sent), and refuse another
   writer's corpus.
+- **Grow and shrink (2026-10-12, `DESIGN_REVIEW.md` §3.70).** `aeiou datagen --grow N ROOT`
+  and `--shrink N ROOT` change the `count` of the complete `files` dataset at ROOT, N larger
+  for a grow, smaller and above 0 for a shrink (each refuses the other's direction; a
+  manifest not `complete` is told to `--resume` first). `datagen::resize_manifest` takes the
+  manifest, puts N in its resolved dataset's `count`, sets `growing` or `shrinking`, records
+  `progress.from` (the old count) and a `provenance.resizes` entry (`op`, `from`, `from_id`,
+  `to`, `started`); the abstract is made from it as a resume's is, so the dataset id is the new
+  count's. The old corpus's names and sizes come from the same `DsMeta` with the old count
+  (`DsMeta::with_count`): everything of an id but which samples a short last file holds is a
+  function of the id. The work is `[w0, files(N))` with `w0 = min(old, N) / samples_per_file`,
+  the first file whose bytes change (the old last file when it was short, which a grow fills
+  and a shrink cuts), split and cut as a resume's; before it, every rank removes its
+  `work_slice` of `[w0, files(old))`'s old names that the new count does not have
+  (`remove_old`: the files past N, a chunked file's extra chunks; `rmdir` of every directory
+  left empty, up to the dataset root; `delete_all` in batches of 1,000 keys for objects),
+  `ENOENT` no error. Rank 0 writes the new manifest before the gate, with `progress` holding
+  the work, `from`, and the counts the corpus keeps (its totals less the old ids from `w0`),
+  and puts the original back if the gate does not open. HDF5 headers are made for N; those
+  both counts have must agree with the provenance's, and the new count's replace them. At the
+  end `complete`, the `resizes` entry completed with ranks, hosts, counts, times, and
+  `direct`. A resume of a `growing` or `shrinking` manifest removes again (what is gone is no
+  error), writes the unfinished ids, and does not trust an object for the old short last file.
+  On several hosts the coordinator's identity is the old id and the new. Tests:
+  `tests/coord.rs` grows 3,000 files to 5,000 and shrinks them to 2,100 on one host and two
+  against fresh datagens of those counts (files, emptied directories, id, totals, `run`),
+  kills a grow and finishes it with `--resume` on two hosts, and the refusals; the builder's
+  tests grow and shrink every container format across short last files (HDF5 headers
+  included) and a bucket, each to the bytes of a fresh datagen.
+- **Counting a file once (fixed 2026-10-12).** A writer counted a file before advancing its
+  cursor, and a window read the cursor before the counts, so a file finished in between
+  was recorded both as unfinished and as counted, and a resume counted it twice
+  (`files_written` one high; seen once under a loaded test run). Now each writer adds a
+  file's counts and advances its cursor under its own lock, and the window holds every
+  writer's lock while it reads them; a regions file counts once whole.
 - **Several hosts (2026-10-04).** `aeiou datagen … --ranks R --rank r --coordinator
   HOST:PORT` on each of R hosts (`aeiou-launch` starts them, §6). Rank `r` writes the files
   of every `files` dataset whose ids fall in its slice of `[0, files)`, the same contiguous

@@ -44,7 +44,7 @@ use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -79,6 +79,15 @@ pub struct DatagenOpts {
     /// `--resume`: the manifest of the one dataset to finish (`DESIGN_REVIEW.md` §3.70); the
     /// ids it lists as unfinished are written again, whole, and nothing else.
     pub resume: Option<Manifest>,
+    /// `--grow` / `--shrink`, begun by this datagen: `resume` then holds `resize_manifest`'s
+    /// manifest, which names the new count.
+    pub resize: Option<Resize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Resize {
+    /// The complete corpus's manifest, put back when the start gate does not open.
+    pub original: Manifest,
 }
 
 /// The coordinator of a datagen on several hosts: this rank's client, and rank 0's server.
@@ -144,6 +153,27 @@ pub fn resume_abstract(m: &Manifest, root: &str) -> Result<(String, Vec<String>)
         "actors": {"resume": {"body": []}},
     });
     Ok((serde_json::to_string(&doc)?, vec![format!("{name}={root}")]))
+}
+
+/// The manifest `--grow` or `--shrink` starts from (`DESIGN_REVIEW.md` §3.70): the complete
+/// corpus's, its dataset's `count` replaced by `count`, `growing` or `shrinking`, the count it
+/// had in `progress.from` (what a resume of it needs to know what to remove), and the change
+/// begun recorded in `provenance.resizes`.
+pub fn resize_manifest(m: &Manifest, from: i64, count: i64) -> Result<Manifest> {
+    let mut r = m.clone();
+    let Some(files) = r.dataset.get_mut("files").and_then(Value::as_object_mut) else {
+        bail!("only a `files` dataset grows or shrinks");
+    };
+    files.insert("count".into(), json!(count));
+    let grow = count > from;
+    r.state = if grow { payload::STATE_GROWING } else { payload::STATE_SHRINKING }.into();
+    r.progress = json!({"from": from});
+    let this = json!({"op": if grow { "grow" } else { "shrink" }, "from": from, "from_id": m.id(), "to": count, "started": now_secs()});
+    match r.provenance["resizes"].as_array_mut() {
+        Some(a) => a.push(this),
+        None => r.provenance["resizes"] = json!([this]),
+    }
+    Ok(r)
 }
 
 /// Rank `rank`'s part of the ids `work` (sorted, disjoint ranges): the contiguous split of
@@ -514,9 +544,20 @@ struct Plan<'m, 'a> {
     /// Every rank's ids, before any has said anything: `[0, files)`, or a resume's unfinished
     /// ranges (a regions file is id 0).
     work: Vec<(i64, i64)>,
-    /// Files and bytes written and flushed before this datagen, by the one it resumes.
+    /// Files and bytes written and flushed before this datagen, by the one it resumes (a grow
+    /// or shrink: what the corpus keeps).
     before: (u64, u64),
+    /// A grow or shrink: the count the corpus had, and the old names to remove.
+    from: Option<i64>,
+    remove: Option<Remove<'a>>,
     track: Track,
+}
+
+/// What a grow or shrink removes: the names of ids `[ids.0, ids.1)` under the old count that
+/// the new count does not have (the ids past it; the extra chunks of a chunked file it cuts).
+struct Remove<'a> {
+    old: DsMeta<'a>,
+    ids: (i64, i64),
 }
 
 /// What this rank has written of one dataset, kept by its writers and read every
@@ -530,14 +571,18 @@ struct Track {
     claims: Mutex<Claims>,
     /// The regions file is written.
     whole: AtomicBool,
+    /// Names a grow or shrink removed.
+    removed: AtomicU64,
 }
 
 #[derive(Default)]
 struct Claims {
     /// The next run to hand out, an index into the plan's `runs`.
     next: usize,
-    /// Each writer's run `[start, end)` and the first id of it not yet written.
-    slots: Vec<(i64, i64, std::sync::Arc<AtomicI64>)>,
+    /// Each writer's run `[start, end)` and the first id of it not yet written, which the
+    /// writer advances under its lock together with the counts, so a window reads a file as
+    /// finished and counted, or as neither.
+    slots: Vec<(i64, i64, std::sync::Arc<Mutex<i64>>)>,
 }
 
 impl Plan<'_, '_> {
@@ -547,28 +592,34 @@ impl Plan<'_, '_> {
     }
 
     /// The id ranges of this rank's share not yet written, merged, in order (a regions file
-    /// is id 0).
-    fn unfinished(&self) -> Vec<(i64, i64)> {
+    /// is id 0), and the files and bytes of the rest, read together: every writer's lock is
+    /// held while its cursor and the counts are read, and a regions file counts once whole.
+    fn unfinished(&self) -> (Vec<(i64, i64)>, u64, u64) {
         let mut v = Vec::new();
-        match self.share {
-            Share::Other { .. } => {}
+        let counts = || (self.track.files.load(Ordering::Relaxed), self.track.bytes.load(Ordering::Relaxed));
+        let (files, bytes) = match self.share {
+            Share::Other { .. } => (0, 0),
             Share::Regions => {
-                if !self.track.whole.load(Ordering::Acquire) {
+                if self.track.whole.load(Ordering::Acquire) {
+                    counts()
+                } else {
                     v.push((0, 1));
+                    (0, 0)
                 }
             }
             Share::Files { .. } => {
                 let c = self.track.claims.lock().unwrap();
-                for (_, end, cursor) in &c.slots {
-                    let at = cursor.load(Ordering::Acquire);
-                    if at < *end {
-                        v.push((at, *end));
+                let held: Vec<_> = c.slots.iter().map(|(_, end, cursor)| (*end, cursor.lock().unwrap())).collect();
+                for (end, at) in &held {
+                    if **at < *end {
+                        v.push((**at, *end));
                     }
                 }
                 v.extend_from_slice(&self.runs[c.next.min(self.runs.len())..]);
+                counts()
             }
-        }
-        merge_ranges(v)
+        };
+        (merge_ranges(v), files, bytes)
     }
 }
 
@@ -608,6 +659,108 @@ fn ranges_of(v: &Value) -> Vec<(i64, i64)> {
     v.as_array().into_iter().flatten().filter_map(|x| Some((x[0].as_i64()?, x[1].as_i64()?))).collect()
 }
 
+/// The names of file `id`: its chunks', or its own.
+fn names(meta: &DsMeta<'_>, id: i64) -> Result<Vec<String>> {
+    match meta {
+        DsMeta::Files { chunk: Some(_), .. } => (0..meta.chunks(id)?).map(|k| Ok(meta.file_path(id, Some(k))?.to_string())).collect(),
+        _ => Ok(vec![meta.file_path(id, None)?.to_string()]),
+    }
+}
+
+/// The objects file `id` is: its chunks, or one.
+fn objects_of(meta: &DsMeta<'_>, id: i64) -> Result<u64> {
+    match meta {
+        DsMeta::Files { chunk: Some(_), .. } => Ok(meta.chunks(id)? as u64),
+        _ => Ok(1),
+    }
+}
+
+/// Remove `dir` and each parent below `root` while they are empty.
+fn prune(dir: &Path, root: &Path) {
+    let mut d = dir;
+    while d != root && d.starts_with(root) && std::fs::remove_dir(d).is_ok() {
+        match d.parent() {
+            Some(p) => d = p,
+            None => break,
+        }
+    }
+}
+
+/// A grow or shrink: remove this rank's part of the old names the new count does not have,
+/// and every directory that leaves empty, so the corpus is what a datagen of the new count
+/// writes (`DESIGN_REVIEW.md` §3.70). A name already gone is no error, so a resume removes
+/// again; objects go in batches of `DELETE_BATCH`.
+fn remove_old(plan: &Plan<'_, '_>, rm: &Remove<'_>, opts: &DatagenOpts) -> Result<()> {
+    const DELETE_BATCH: usize = 1000;
+    let DsMeta::Files { dirs, .. } = plan.meta else { return Ok(()) };
+    let new_files = plan.meta.files();
+    let mine = work_slice(&[rm.ids], opts.ranks.max(1), opts.rank);
+    let runs = cut_runs(&mine, run_size(dirs, mine.iter().map(|(a, b)| b - a).sum(), opts.writers));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
+    let removed = &plan.track.removed;
+    std::thread::scope(|s| {
+        for _ in 0..opts.writers.max(1).min(runs.len()) {
+            s.spawn(|| {
+                let r = (|| -> Result<()> {
+                    let mut batch: Option<(std::sync::Arc<crate::object::Store>, Vec<String>)> = None;
+                    let send = |b: &mut Option<(std::sync::Arc<crate::object::Store>, Vec<String>)>| -> Result<()> {
+                        if let Some((store, keys)) = b.as_mut().filter(|(_, k)| !k.is_empty()) {
+                            store.delete_all(keys)?;
+                            removed.fetch_add(keys.len() as u64, Ordering::Relaxed);
+                            keys.clear();
+                        }
+                        Ok(())
+                    };
+                    while let Some(&(a, b)) = runs.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        let mut last_dir: Option<PathBuf> = None;
+                        for id in a..b {
+                            let keep = if id < new_files { names(plan.meta, id)? } else { Vec::new() };
+                            for path in names(&rm.old, id)?.into_iter().filter(|n| !keep.contains(n)) {
+                                if let Some((store, rest)) = opts.endpoints.object(&path) {
+                                    batch.get_or_insert_with(|| (store, Vec::new())).1.push(rest);
+                                    if batch.as_ref().is_some_and(|(_, k)| k.len() >= DELETE_BATCH) {
+                                        send(&mut batch)?;
+                                    }
+                                    continue;
+                                }
+                                let full = opts.endpoints.path(&opts.root, &path);
+                                match std::fs::remove_file(&full) {
+                                    Ok(()) => {
+                                        removed.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                    Err(e) => return Err(e).with_context(|| format!("removing {}", full.display())),
+                                }
+                                let dir = full.parent().map(Path::to_path_buf);
+                                if dir != last_dir {
+                                    if let Some(d) = last_dir.take() {
+                                        prune(&d, &plan.root);
+                                    }
+                                    last_dir = dir;
+                                }
+                            }
+                        }
+                        if let Some(d) = last_dir {
+                            prune(&d, &plan.root);
+                        }
+                    }
+                    send(&mut batch)
+                })();
+                if let Err(e) = r {
+                    errors.lock().unwrap().push(e);
+                    // the others stop at their next run
+                    next.store(usize::MAX / 2, Ordering::Relaxed);
+                }
+            });
+        }
+    });
+    match errors.into_inner().unwrap().into_iter().next() {
+        Some(e) => Err(e.context(format!("dataset `{}`", plan.name))),
+        None => Ok(()),
+    }
+}
+
 struct Written {
     files: u64,
     bytes: u64,
@@ -632,10 +785,13 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
     match (&plan.share, meta) {
         (Share::Other { .. }, _) => {}
         (Share::Files { .. }, DsMeta::Files { spf, chunk, count, .. }) => {
+            if let Some(rm) = &plan.remove {
+                remove_old(plan, rm, opts)?;
+            }
             let runs = &plan.runs;
             if !runs.is_empty() {
                 let nthreads = writers.min(runs.len());
-                track.claims.lock().unwrap().slots = (0..nthreads).map(|_| (0, 0, std::sync::Arc::new(AtomicI64::new(0)))).collect();
+                track.claims.lock().unwrap().slots = (0..nthreads).map(|_| (0, 0, std::sync::Arc::new(Mutex::new(0)))).collect();
                 std::thread::scope(|s| {
                     for w in 0..nthreads {
                         let (failed, errors) = (&failed, &errors);
@@ -652,12 +808,14 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                     let Some(&(a, b)) = runs.get(c.next) else { break };
                                     c.next += 1;
                                     let cursor = c.slots[w].2.clone();
-                                    cursor.store(a, Ordering::Release);
+                                    *cursor.lock().unwrap() = a;
                                     c.slots[w].0 = a;
                                     c.slots[w].1 = b;
                                     (a, b, cursor)
                                 };
                                 for file in a..b {
+                                    // this file's objects and bytes, counted when it is whole
+                                    let mut got = (0u64, 0u64);
                                     let r: Result<()> = (|| {
                                         if file * spf >= *count {
                                             return Ok(());
@@ -669,9 +827,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                             if plan.present(opts, &path) {
                                                 return Ok(());
                                             }
-                                            let size = write_container(c, meta, file, &seed_of, &mut filler, &mut buf, &path, opts, mode)?;
-                                            track.files.fetch_add(1, Ordering::Relaxed);
-                                            track.bytes.fetch_add(size, Ordering::Relaxed);
+                                            got = (1, write_container(c, meta, file, &seed_of, &mut filler, &mut buf, &path, opts, mode)?);
                                             return Ok(());
                                         }
                                         let objects: Vec<(String, u64, u64)> = match chunk {
@@ -687,15 +843,13 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                             }
                                             if let Some((store, rest)) = opts.endpoints.object(&path) {
                                                 store.put_parts(&rest, len, crate::object::DEFAULT_PART, &mut |at, b| filler.fill_range(&seed_of, logical + at, b))?;
-                                                track.files.fetch_add(1, Ordering::Relaxed);
-                                                track.bytes.fetch_add(len, Ordering::Relaxed);
+                                                got = (got.0 + 1, got.1 + len);
                                                 continue;
                                             }
                                             let full = opts.endpoints.path(&opts.root, &path);
                                             let (f, direct) = create(&full, mode)?;
                                             write_range(&f, direct, mode, &seed_of, logical, 0, len, &mut filler, &mut buf, &full)?;
-                                            track.files.fetch_add(1, Ordering::Relaxed);
-                                            track.bytes.fetch_add(len, Ordering::Relaxed);
+                                            got = (got.0 + 1, got.1 + len);
                                         }
                                         Ok(())
                                     })();
@@ -704,7 +858,10 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         failed.store(true, Ordering::Relaxed);
                                         break;
                                     }
-                                    cursor.store(file + 1, Ordering::Release);
+                                    let mut at = cursor.lock().unwrap();
+                                    track.files.fetch_add(got.0, Ordering::Relaxed);
+                                    track.bytes.fetch_add(got.1, Ordering::Relaxed);
+                                    *at = file + 1;
                                 }
                             }
                         });
@@ -820,11 +977,10 @@ fn write_manifest(p: &Plan<'_, '_>, m: &Manifest) -> Result<()> {
 
 /// This rank's progress document: per dataset, what is not yet written and the counts.
 fn progress_doc(plans: &[Plan<'_, '_>]) -> Value {
-    json!({"datasets": plans.iter().map(|p| (p.name.to_string(), json!({
-        "unfinished": ranges_json(&p.unfinished()),
-        "files": p.track.files.load(Ordering::Relaxed),
-        "bytes": p.track.bytes.load(Ordering::Relaxed),
-    }))).collect::<serde_json::Map<_, _>>()})
+    json!({"datasets": plans.iter().map(|p| {
+        let (unfinished, files, bytes) = p.unfinished();
+        (p.name.to_string(), json!({"unfinished": ranges_json(&unfinished), "files": files, "bytes": bytes}))
+    }).collect::<serde_json::Map<_, _>>()})
 }
 
 /// Flush what this rank has written: what `O_DIRECT` left to the page cache, and the metadata.
@@ -891,6 +1047,9 @@ impl Ticker<'_, '_, '_> {
             bytes += b - p.before.1;
             let mut m = base.clone();
             m.progress = json!({"unfinished": ranges_json(&unfinished), "files_written": files, "bytes_written": b, "updated": now_secs()});
+            if let Some(from) = p.from {
+                m.progress["from"] = json!(from);
+            }
             write_manifest(p, &m)?;
         }
         let secs = self.t0.elapsed().as_secs_f64();
@@ -918,6 +1077,8 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     let host = crate::run::hostname();
     let base = Base { params_json: payload::params_json(&loaded.doc, cfg, params)?, host: host.clone() };
     let resume = opts.resume.as_ref();
+    // a grow or shrink, begun now or resumed: the count the corpus had
+    let from = resume.and_then(|m| m.progress["from"].as_i64());
     if let Some(m) = resume {
         if m.payload != spec {
             bail!("the corpus was written with the payload {} and this aeiou writes {}: a resume would mix them", payload_line(&m.payload), payload_line(&spec));
@@ -956,9 +1117,9 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             bail!("dataset `{name}`: a `regions` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
         }
         let mut present = std::collections::HashSet::new();
-        if let (Some((store, rest)), true) = (&object, resume.is_some()) {
+        if let (Some((store, rest)), true) = (&object, resume.is_some() && opts.resize.is_none()) {
             present = store.keys_below(rest)?.into_iter().collect();
-        } else if let Some((store, rest)) = &object {
+        } else if let (Some((store, rest)), true) = (&object, resume.is_none()) {
             let busy = if rank == 0 { store.non_empty(rest)? } else { store.non_empty_except(rest, payload::MANIFEST_NAME)? };
             if busy {
                 bail!("dataset `{name}`: {} is not empty; datasets are read-only, remove it first", store.show(rest));
@@ -974,10 +1135,38 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if object.is_none() {
             std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         }
+        let mut remove = None;
         let (work, before) = match resume {
-            Some(m) => (merge_ranges(m.unfinished()), (m.progress["files_written"].as_u64().unwrap_or(0), m.progress["bytes_written"].as_u64().unwrap_or(0))),
+            Some(m) if opts.resize.is_none() => (merge_ranges(m.unfinished()), (m.progress["files_written"].as_u64().unwrap_or(0), m.progress["bytes_written"].as_u64().unwrap_or(0))),
+            // a grow or shrink begun now: the ids from the first whose bytes change (the old last
+            // file when it was short) to the new count are written, and the corpus keeps the rest
+            Some(m) => {
+                let (Some(c0), DsMeta::Files { spf, .. }) = (from, meta) else { bail!("dataset `{name}`: only a `files` dataset grows or shrinks") };
+                let old = meta.with_count(c0);
+                let w0 = c0.min(meta.count()) / spf;
+                let (mut files, mut bytes) = (0u64, 0u64);
+                for id in w0..old.files() {
+                    files += objects_of(&old, id)?;
+                    bytes += old.file_size(id)? as u64;
+                }
+                let kept = (m.provenance["files_written"].as_u64().unwrap_or(0).saturating_sub(files), m.provenance["bytes_written"].as_u64().unwrap_or(0).saturating_sub(bytes));
+                (if w0 < meta.files() { vec![(w0, meta.files())] } else { Vec::new() }, kept)
+            }
             None => (vec![(0, if let DsMeta::Files { .. } = meta { meta.files() } else { 1 })], (0, 0)),
         };
+        if let (Some(c0), DsMeta::Files { spf, .. }) = (from, meta) {
+            let old = meta.with_count(c0);
+            let w0 = c0.min(meta.count()) / spf;
+            if c0 % spf != 0 && w0 < meta.files() {
+                // the old short last file is there whole but is not the new one's: write it again
+                for n in names(meta, w0)? {
+                    if let Some((_, rest)) = opts.endpoints.object(&n) {
+                        present.remove(&rest);
+                    }
+                }
+            }
+            remove = Some(Remove { ids: (w0, old.files()), old });
+        }
         let (share, owner, runs) = match meta {
             DsMeta::Files { dirs, .. } => {
                 let ranges = work_slice(&work, ranks, rank);
@@ -992,9 +1181,14 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 (if owner == rank && !work.is_empty() { Share::Regions } else { Share::Other { owner } }, Some(owner), Vec::new())
             }
         };
-        plans.push(Plan { meta, name, root, object, container, share, owner, present, runs, work, before, track: Track::default() });
+        plans.push(Plan { meta, name, root, object, container, share, owner, present, runs, work, before, from, remove, track: Track::default() });
     }
     for p in &plans {
+        if let (Some(c0), Some(rm)) = (p.from, &p.remove) {
+            let w = p.work.iter().map(|(a, b)| b - a).sum::<i64>();
+            let gone = if rm.ids.0 < rm.ids.1 { format!("; old names of ids [{}, {}) removed where the new count has none", rm.ids.0, rm.ids.1) } else { String::new() };
+            writeln!(log, "dataset {}: count {c0} -> {}: {w} file(s) to write{gone}", p.name, p.meta.count())?;
+        }
         match &p.share {
             Share::Files { ranges } if resume.is_some() => writeln!(log, "dataset {}: {} of {} unfinished file(s) on this rank, in {} range(s) from {}", p.name, ranges.iter().map(|(a, b)| b - a).sum::<i64>(), p.work.iter().map(|(a, b)| b - a).sum::<i64>(), ranges.len(), ranges.first().map(|r| r.0).unwrap_or(0))?,
             Share::Files { ranges } => {
@@ -1014,7 +1208,13 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             // the library that made the corpus's headers must make the same ones now
             for p in &plans {
                 let Some(c) = &p.container else { continue };
-                if !c.headers.is_null() && c.headers["sha256"] != m.provenance["headers"]["sha256"] {
+                // a grow or shrink changes the short last file's header alone: those both have must agree
+                let (now, was) = (&c.headers["sha256"], &m.provenance["headers"]["sha256"]);
+                let differ = match opts.resize {
+                    None => now != was,
+                    Some(_) => now.as_object().into_iter().flatten().any(|(k, v)| was.get(k).is_some_and(|w| w != v)),
+                };
+                if !c.headers.is_null() && differ {
                     bail!("dataset `{}`: aeiou-header made headers other than the corpus's ({} against {}): a resume would mix them", p.name, c.headers["sha256"], m.provenance["headers"]["sha256"]);
                 }
             }
@@ -1031,7 +1231,18 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     let mut manifests = Vec::new();
     for p in &plans {
         if let Some(m) = resume {
-            manifests.push(m.clone());
+            let mut m = m.clone();
+            if opts.resize.is_some() {
+                // the new count's manifest, before anything is removed or written
+                m.progress = json!({"unfinished": ranges_json(&p.work), "files_written": p.before.0, "bytes_written": p.before.1, "from": p.from, "updated": started});
+                if let Some(c) = p.container.as_ref().filter(|c| !c.headers.is_null()) {
+                    m.provenance["headers"] = c.headers.clone();
+                }
+                if rank == 0 {
+                    write_manifest(p, &m)?;
+                }
+            }
+            manifests.push(m);
             continue;
         }
         let mut m = base.manifest(loaded, cfg, &spec, p, ranks, started)?;
@@ -1048,7 +1259,12 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         let (_t0, names, shared) = match h.tcp.ready_shared() {
             Ok(x) => x,
             Err(e) => {
-                if rank == 0 && resume.is_none() {
+                if let (0, Some(rz)) = (rank, &opts.resize) {
+                    // nothing was removed or written: the corpus is the complete one it was
+                    for p in &plans {
+                        let _ = write_manifest(p, &rz.original);
+                    }
+                } else if rank == 0 && resume.is_none() {
                     for p in &plans {
                         let _ = match &p.object {
                             Some((store, rest)) => store.delete_all(&[payload::join_key(rest, payload::MANIFEST_NAME)]).map_err(anyhow::Error::from),
@@ -1092,6 +1308,9 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 let w = write_share(p, opts, &spec, &mode);
                 for n in mode.take_notes() {
                     writeln!(log_m.lock().unwrap(), "  {n}")?;
+                }
+                if p.remove.is_some() {
+                    writeln!(log_m.lock().unwrap(), "dataset {}: {} old name(s) removed on this rank", p.name, p.track.removed.load(Ordering::Relaxed))?;
                 }
                 written.push(w?);
             }
@@ -1163,7 +1382,18 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         manifest.progress = Value::Null;
         let prov = &mut manifest.provenance;
         let started = if started == u64::MAX { w.started } else { started };
-        if resume.is_some() {
+        if opts.resize.is_some() {
+            // the change begun completes its record; the totals are what the corpus holds
+            let finished = finished.max(w.finished);
+            if let Some(last) = prov["resizes"].as_array_mut().and_then(|a| a.last_mut()) {
+                for (k, v) in [("finished", json!(finished)), ("ranks", json!(ranks)), ("hosts", json!(host_parts)), ("direct", json!(direct)), ("files_written", json!(total_files)), ("bytes_written", json!(total_bytes))] {
+                    last[k] = v;
+                }
+            }
+            prov["finished"] = json!(finished);
+            prov["files_written"] = json!(total_files + p.before.0);
+            prov["bytes_written"] = json!(total_bytes + p.before.1);
+        } else if resume.is_some() {
             // the datagen resumed keeps its record; each resume adds its own, and the totals
             // count every file written and flushed once (what the last window recorded, then
             // this datagen's)

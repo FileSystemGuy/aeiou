@@ -5259,8 +5259,9 @@ shrink deletes data (a single count that grows or shrinks could delete a corpus 
 Grow, shrink, and resume read everything but the target count from the manifest and need no
 abstract, and they refuse when this tool's payload version or container library version
 differs from the manifest's (a Parquet footer names the pyarrow version, so a newer pyarrow
-would change new files' footer size and break the layout every file shares). Grow adds
-whole directories; shrink removes trailing ids, whole trailing directories under `div`,
+would change new files' footer size and break the layout every file shares). ~~Grow adds
+whole directories; shrink removes trailing ids, whole trailing directories under `div`,~~
+(revised 2026-10-12 with item 4: any count; below) Shrink removes trailing ids,
 with no hole in the sequence; each marks the manifest first and `complete` last. The
 dataset id changes with the count.
 
@@ -5537,6 +5538,58 @@ bytes of a datagen that ran through (HDF5's headers made again and compared), re
 manifest naming another writer, and resume a bucket, sending only the two missing objects.
 By hand: a 20,000-file `file_per_sample` corpus killed at 900 files and resumed on one host
 and on two is byte for byte the uninterrupted one. Next: grow and shrink.
+
+**Decided 2026-10-12 (the user, on the points proposed): grow and shrink.**
+
+1. *N is the dataset's `count`*, the quantity its parameter sets (samples where a file holds
+   several, files otherwise); the manifest's resolved `count` is replaced by the literal.
+2. *The short last file is work.* A corpus whose count is not a multiple of
+   `samples_per_file` ends in a short file; a grow from such a count fills it and a shrink to
+   one cuts the new last file, so that file is written again, whole. Without it a grown
+   corpus would not be a fresh datagen of N.
+3. *The manifest first.* The new count's manifest is written before anything is removed or
+   written, `growing` or `shrinking`, with the old count in `progress.from`, and `complete`
+   last; `run` refuses it meanwhile, and `--resume ROOT` finishes an interrupted change with
+   no machinery of its own (removing again is no error).
+4. *Direction guards:* a grow refuses N no larger than the count, a shrink N no smaller, and
+   both N of 0; no `--yes`, the two flags being the guard.
+5. *Directories a shrink empties are removed*, so the tree is a fresh datagen's.
+6. *`files` datasets only*; only the count changes, so the layout is fixed for the corpus's
+   life (§3.71).
+7. *Age, noted:* after a grow the trailing files are younger than the rest, the bias §3.71
+   states for subsets; recorded, not acted on.
+
+**Built 2026-10-12: (d), part 3, grow and shrink.** `aeiou datagen --grow N ROOT`,
+`--shrink N ROOT` (`runner/REFERENCE.md` §5). Choices made while building:
+
+- *The old corpus from the new one.* The old names and sizes come from the new `DsMeta`
+  with the old count (`DsMeta::with_count`), since everything of an id but a short last
+  file's samples is a function of the id; no second abstract is loaded.
+- *One formula for both.* The work is `[w0, files(N))`, `w0 = min(old, N) / samples_per_file`
+  (empty for a shrink to whole files), and the removal is the old names of `[w0, files(old))`
+  that the new count lacks: the files past N, and the extra chunks of a chunked file a shrink
+  cuts. Each rank removes its share of that range before writing; objects in batches of
+  1,000 keys.
+- *The counts.* The corpus keeps its totals less the old ids from `w0`, computed from the
+  old sizes, so `files_written` and `bytes_written` end equal to a fresh datagen's.
+- *Headers.* HDF5 headers are made for N; those both counts share must equal the
+  provenance's, and the new set replaces it.
+- *Resume of a change.* An object for the old short last file is in the bucket whole but is
+  not the new one's, so a resume does not skip it.
+
+Found on the way and fixed: a writer counted a file before advancing its cursor and a window
+read the two apart, so a resume could count a file twice (`files_written` one high, seen
+once under a loaded test run); the cursor and the counts now move under one lock per writer,
+read together, and a regions file counts once whole. Tests: `tests/coord.rs` grows 3,000
+files to 5,000 and shrinks to 2,100 on one host and two, each against a fresh datagen of the
+new count (files byte for byte, emptied directories gone, id, totals, `run` accepts it);
+kills a grow at its third window and finishes it with `--resume` on two hosts; refuses a
+count in the wrong direction, 0, a parameter beside it, and two operations at once. The
+builder's tests grow and shrink TFRecord, WebDataset, HDF5 across short last files (headers
+included) and Parquet (whole files, brief item 31) to the bytes of a fresh datagen, and a
+bucket of TFRecord shards and of plain files. By hand: a chunked dataset (`lmcache_local_disk`)
+grown and shrunk to a fresh datagen's tree. Next: subset runs (`run --subset`), then the
+§3.71 sizing step.
 
 ### 3.71 Sizing a training corpus: a sizing step that writes a parameter file, scale-free layout, and the step barrier (proposed 2026-10-12, discussed with the user; nothing built)
 

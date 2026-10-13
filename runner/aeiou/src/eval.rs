@@ -521,6 +521,7 @@ impl Layout {
     }
 }
 
+#[derive(Clone)]
 pub enum DsMeta<'a> {
     Files {
         name: &'a str,
@@ -570,6 +571,21 @@ impl<'a> DsMeta<'a> {
     }
 
     /// Files of a files dataset (its shards), one for a regions dataset.
+    /// The same dataset with `count` samples (files when there is one per file): what a corpus
+    /// was before `datagen --grow` or `--shrink` (`DESIGN_REVIEW.md` §3.70), every name, size,
+    /// and byte of an id the two share being the same.
+    pub fn with_count(&self, count: i64) -> DsMeta<'a> {
+        let mut m = self.clone();
+        match &mut m {
+            DsMeta::Files { count: c, pattern, dirs, ndirs, .. } => {
+                *c = count;
+                (*dirs, *ndirs) = Model::dir_scheme(pattern, count);
+            }
+            DsMeta::Regions { count: c, .. } => *c = count,
+        }
+        m
+    }
+
     pub fn files(&self) -> i64 {
         match self {
             DsMeta::Files { count, spf, .. } => (count + spf - 1) / spf,

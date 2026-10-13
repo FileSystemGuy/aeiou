@@ -311,7 +311,9 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
   `O_DIRECT` everywhere); since 2026-10-12 `dataset` (the dataset's name in the abstract, which
   `aeiou datagen --resume` uses) and, after a resume, `resumes` (each resume's ranks, hosts,
   counts, times, and `direct`), `files_written` and `bytes_written` then counting every
-  datagen's files once.
+  datagen's files once; after `aeiou datagen --grow` or `--shrink`, `resizes` (each change's
+  `op`, the count and dataset id it started `from`, the count it went `to`, ranks, hosts,
+  counts, and times), `files_written` and `bytes_written` then the corpus's own.
 - **Identity.** The SHA-256 of the canonical form of the normative content is the dataset id.
   `aeiou run` prints it with every result, next to the AST hash and the parameters in effect;
   a result is those three things.
@@ -321,7 +323,9 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
   temporary name and renamed: `state` is `writing` before the first file, with `progress`
   (the id ranges not yet written and flushed, the counts, the time), rewritten once a
   progress window, and `complete` with no `progress` once every file is; neither is part of
-  the normative content. A run refuses any state but `complete`. On several hosts rank 0
+  the normative content. A grow or shrink (`aeiou datagen --grow N ROOT`, `--shrink N ROOT`)
+  writes the new count's manifest first, `growing` or `shrinking`, its `progress` also holding
+  `from`, the count the corpus had, so a resume knows what to remove. A run refuses any state but `complete`. On several hosts rank 0
   writes it, merging every rank's progress note, and says `complete` once every rank has
   reported its part, so `complete` means the whole corpus. The Python writer writes it once,
   last, `complete`.

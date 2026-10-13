@@ -184,7 +184,7 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
-    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None }, None, &mut log).unwrap();
+    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None }, None, &mut log).unwrap();
     let dry = dryrun::run(model, 2, None).unwrap();
 
     let server = Server::start("127.0.0.1:0", 2).unwrap();
@@ -328,7 +328,7 @@ fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
 // ---------------------------------------------------------------- datagen on several hosts
 
 fn dopts(root: &PathBuf, rank: i64, ranks: i64) -> DatagenOpts {
-    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20), resume: None }
+    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20), resume: None, resize: None }
 }
 
 /// Every data file under `root` (the `.aeiou*` metadata left out), by relative path.
@@ -586,5 +586,145 @@ fn a_resume_takes_nothing_the_manifest_fixes() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(root.join("train")).output().unwrap();
     assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).contains("the manifest says `complete`; nothing to write"), "{o:?}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// `aeiou datagen --grow N ROOT` or `--shrink N ROOT` (`op`) on `ranks` processes, with `extra`.
+fn resize_ranks(op: &str, n: i64, at: &std::path::Path, ranks: i64, extra: &[&str]) -> Vec<(bool, String, String)> {
+    let port = free_port();
+    let mut children = Vec::new();
+    for rank in 0..ranks {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.arg("datagen").arg(op).arg(n.to_string()).arg(at).args(["--writers", "2"]).args(extra);
+        if ranks > 1 {
+            c.args(["--ranks", &ranks.to_string(), "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
+        }
+        children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap());
+    }
+    children.into_iter().map(|c| {
+        let o = c.wait_with_output().unwrap();
+        (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+    }).collect()
+}
+
+fn datagen_one(root: &PathBuf, files: i64) {
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(root).args(["--writers", "3", "--param", &format!("files={files}")]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
+/// A grow and a shrink (DESIGN_REVIEW.md §3.70), on one host and on two, leave the corpus a
+/// datagen of the new count writes: the same files, byte for byte, the directories a shrink
+/// empties gone, the same id and totals, the change recorded, and `run` accepts it.
+#[test]
+fn grow_and_shrink_make_the_corpus_of_the_new_count() {
+    // 1300 files a directory: 3000 has three, 5000 four, 2100 two
+    let fresh5 = tmpdir("dg-fresh5");
+    let fresh21 = tmpdir("dg-fresh21");
+    datagen_one(&fresh5, 5000);
+    datagen_one(&fresh21, 2100);
+    let id = |r: &PathBuf| aeiou::payload::Manifest::read(&r.join("train")).unwrap();
+    for ranks in [1i64, 2] {
+        let root = tmpdir("dg-resize");
+        datagen_one(&root, 3000);
+        let was = id(&root).id();
+        let outs = resize_ranks("--grow", 5000, &root.join("train"), ranks, &[]);
+        assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s): {outs:?}");
+        assert!(outs[0].1.contains("count 3000 -> 5000: 2000 file(s) to write"), "{}", outs[0].1);
+        assert!(tree(&root) == tree(&fresh5), "{ranks} rank(s): the grown corpus is not the 5000-file one");
+        let (m, f) = (id(&root), id(&fresh5));
+        assert_eq!((m.state.as_str(), m.id()), ("complete", f.id()));
+        assert_eq!((&m.provenance["files_written"], &m.provenance["bytes_written"]), (&f.provenance["files_written"], &f.provenance["bytes_written"]));
+        let r = &m.provenance["resizes"][0];
+        assert_eq!((r["op"].as_str(), r["from"].as_i64(), r["to"].as_i64(), r["from_id"].as_str(), r["files_written"].as_i64(), r["ranks"].as_i64()), (Some("grow"), Some(3000), Some(5000), Some(was.as_str()), Some(2000), Some(ranks)));
+        let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "5000")]));
+        run::check_datasets(loaded, cfg, &root).unwrap();
+
+        let outs = resize_ranks("--shrink", 2100, &root.join("train"), 3 - ranks, &[]);
+        assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s): {outs:?}");
+        assert!(tree(&root) == tree(&fresh21), "{ranks} rank(s): the shrunk corpus is not the 2100-file one");
+        assert!(!root.join("train/00002").exists() && !root.join("train/00003").exists(), "the emptied directories are removed");
+        let (m, f) = (id(&root), id(&fresh21));
+        assert_eq!((m.state.as_str(), m.id()), ("complete", f.id()));
+        assert_eq!((&m.provenance["files_written"], &m.provenance["bytes_written"]), (&f.provenance["files_written"], &f.provenance["bytes_written"]));
+        assert_eq!(m.provenance["resizes"][1]["op"], "shrink");
+        let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "2100")]));
+        run::check_datasets(loaded, cfg, &root).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    std::fs::remove_dir_all(&fresh5).unwrap();
+    std::fs::remove_dir_all(&fresh21).unwrap();
+}
+
+/// A grow killed in the middle leaves the manifest `growing`, naming the new count and the
+/// old one; `run` refuses it, a second grow is refused, and `--resume` finishes it on another
+/// host count to the corpus of the new count.
+#[test]
+fn a_killed_grow_is_finished_by_resume() {
+    use std::io::BufRead;
+    let (from, to) = (2000i64, 20000i64);
+    let root = tmpdir("dg-grow-killed");
+    datagen_one(&root, from);
+    let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+    c.args(["datagen", "--grow", &to.to_string()]).arg(root.join("train")).args(["--writers", "2", "--progress-secs", "0.02"]);
+    let mut child = c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut seen = 0;
+    while let Some(Ok(l)) = lines.next() {
+        if l.starts_with("progress ") && !l.contains(&format!(" {from}/")) {
+            seen += 1;
+            if seen == 3 {
+                break;
+            }
+        }
+    }
+    assert_eq!(seen, 3, "the grow ended before three windows");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+    assert_eq!((m.state.as_str(), m.progress["from"].as_i64(), m.dataset["files"]["count"].as_i64()), ("growing", Some(from), Some(to)));
+    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "20000")]));
+    let e = run::check_datasets(loaded, cfg, &root).unwrap_err().to_string();
+    assert!(e.contains("the manifest says `growing`") && e.contains("--resume"), "{e}");
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--grow", "30000"]).arg(root.join("train")).output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("finish it first with `aeiou datagen --resume"), "{o:?}");
+
+    let outs = resume_ranks(&root.join("train"), 2);
+    assert!(outs.iter().all(|(ok, _, _)| *ok), "{outs:?}");
+    assert!(outs[0].1.contains(&format!("(growing from count {from})")), "{}", outs[0].1);
+    let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+    assert_eq!((after.state.as_str(), after.id()), ("complete", m.id()));
+    assert_eq!(after.provenance["files_written"].as_i64(), Some(to), "every file counted once");
+    run::check_datasets(loaded, cfg, &root).unwrap();
+    let meta = &model.datasets[0];
+    let files = tree(&root);
+    assert_eq!(files.len() as i64, to);
+    for id in (0..to).step_by(997) {
+        let mut want = vec![0u8; meta.file_size(id).unwrap() as usize];
+        let seed = meta.dataset_seed();
+        aeiou::payload::Filler::new(1).fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk, 1), 0, &mut want);
+        assert!(files[&meta.file_path(id, None).unwrap().to_string()] == want, "id {id}: not the payload");
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// What a grow or shrink refuses: a count that does not grow or shrink, one of zero, anything
+/// the manifest fixes, two operations at once.
+#[test]
+fn grow_and_shrink_refuse_what_they_cannot_do() {
+    let root = tmpdir("dg-resize-usage");
+    datagen_one(&root, 30);
+    let at = root.join("train");
+    let refuse = |args: &[&str], want: &str| {
+        let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").args(args).output().unwrap();
+        let e = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.code() == Some(2) && e.contains(want), "{args:?}: {e}");
+    };
+    let a = at.to_str().unwrap();
+    refuse(&["--grow", "30", a], "the dataset's count is 30; a grow takes a larger one");
+    refuse(&["--shrink", "31", a], "the dataset's count is 30; a shrink takes a smaller one");
+    refuse(&["--shrink", "0", a], "a whole number above 0");
+    refuse(&["--grow", "40", a, "--param", "files=40"], "--grow takes the dataset, its place, the payload, and the format from the manifest at its root: --param given too");
+    refuse(&["--grow", "40", a, "--resume", a], "--resume, --grow: one at a time");
+    assert_eq!(tree(&root).len(), 30, "nothing changed");
     std::fs::remove_dir_all(&root).unwrap();
 }

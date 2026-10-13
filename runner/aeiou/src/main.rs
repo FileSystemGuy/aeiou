@@ -148,6 +148,17 @@ struct DatagenArgs {
     /// parameter, --gpus, --dedupe, --compress, or --dataset; any host count.
     #[arg(long, value_name = "ROOT", help_heading = "Resume")]
     resume: Option<String>,
+    /// Grow the complete dataset at ROOT to a count of N (samples, or files where a file is a
+    /// sample), larger than its own: the files past the old count are written, and the old last
+    /// file again when it was short. Everything else comes from the manifest, as for --resume;
+    /// the dataset id changes with the count. An interrupted grow is finished by --resume ROOT.
+    #[arg(long, num_args = 2, value_names = ["N", "ROOT"], help_heading = "Resume")]
+    grow: Option<Vec<String>>,
+    /// Shrink the complete dataset at ROOT to a count of N, smaller than its own and above 0: the
+    /// files past it are removed, with the directories that leaves empty, and the new last file
+    /// written again when it is short. As --grow otherwise.
+    #[arg(long, num_args = 2, value_names = ["N", "ROOT"], help_heading = "Resume")]
+    shrink: Option<Vec<String>>,
 }
 
 #[derive(Args)]
@@ -530,7 +541,26 @@ fn real_main(cli: Cli) -> Result<()> {
 fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut l = Layers::new("datagen", config)?;
     let mut miss = Missing::new();
-    if a.resume.is_some() {
+    // --resume, --grow, --shrink: the dataset at ROOT, from its manifest
+    let mut ops: Vec<(&str, Option<i64>, String)> = Vec::new();
+    if let Some(r) = &a.resume {
+        ops.push(("--resume", None, r.clone()));
+    }
+    for (flag, v) in [("--grow", &a.grow), ("--shrink", &a.shrink)] {
+        if let Some(v) = v {
+            let n = match v[0].parse::<i64>() {
+                Ok(n) if n > 0 => n,
+                _ => aeiou::usage!("{flag} {} {}: N is the dataset's new count, a whole number above 0", v[0], v[1]),
+            };
+            ops.push((flag, Some(n), v[1].clone()));
+        }
+    }
+    if ops.len() > 1 {
+        aeiou::usage!("{}: one at a time", ops.iter().map(|o| o.0).collect::<Vec<_>>().join(", "));
+    }
+    let op = ops.pop();
+    let at_root = op.as_ref().map(|o| o.2.clone());
+    if let Some((flag, ..)) = &op {
         // what the manifest fixes is not taken from anywhere else
         let given: Vec<&str> = [
             (a.shape.abstract_path.is_some(), "an abstract"),
@@ -547,23 +577,25 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
         .filter_map(|(g, n)| g.then_some(n))
         .collect();
         if !given.is_empty() {
-            aeiou::usage!("--resume takes the dataset, its place, the payload, and the format from the manifest at its root: {} given too", given.join(", "));
+            aeiou::usage!("{flag} takes the dataset, its place, the payload, and the format from the manifest at its root: {} given too", given.join(", "));
         }
     }
-    let abstract_path = if a.resume.is_some() { None } else { miss.want(a.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None) };
+    let abstract_path = if op.is_some() { None } else { miss.want(a.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None) };
     fix_shape(&mut l, &a.shape)?;
     l.fixed("gpus", &a.gpus, a.gpus != 1)?;
     l.fixed("dedupe", &a.dedupe, a.dedupe != 1)?;
     l.fixed("compress", &a.compress, a.compress != 1)?;
     l.fixed("dataset", &a.datasets, !a.datasets.is_empty())?;
     l.fixed("resume", &a.resume, a.resume.is_some())?;
+    l.fixed("grow", &a.grow, a.grow.is_some())?;
+    l.fixed("shrink", &a.shrink, a.shrink.is_some())?;
     let r = usage::root("datagen");
-    let root = match &a.resume {
+    let root = match &op {
         // the place is the manifest's root; an --root from the environment or the file is not used
         Some(_) => None,
         None => miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2)),
     };
-    let endpoints = match &a.resume {
+    let endpoints = match &op {
         Some(_) => Vec::new(),
         None => l.layered::<Vec<String>>("endpoint", (!a.endpoints.is_empty()).then_some(a.endpoints.clone()), None)?.unwrap_or_default(),
     };
@@ -593,15 +625,43 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     }
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
     // a resume: the abstract is the manifest's dataset alone, placed at the root given
-    let (loaded, root, endpoints, dedupe, compress, resume) = match &a.resume {
+    let mut resize = None;
+    let (loaded, root, endpoints, dedupe, compress, resume) = match &at_root {
         Some(at) => {
-            let m = datagen::resume_manifest(at)?;
-            if m.state == aeiou::payload::STATE_COMPLETE {
-                println!("resume {at}: the manifest says `complete`; nothing to write  id {}", m.id());
-                return Ok(());
-            }
-            if m.state != aeiou::payload::STATE_WRITING {
-                bail!("resume {at}: the manifest says `{}`, which this aeiou cannot finish", m.state);
+            let mut m = datagen::resume_manifest(at)?;
+            use aeiou::payload::{STATE_COMPLETE, STATE_GROWING, STATE_SHRINKING, STATE_WRITING};
+            match op.as_ref().and_then(|o| o.1) {
+                None => {
+                    if m.state == STATE_COMPLETE {
+                        println!("resume {at}: the manifest says `complete`; nothing to write  id {}", m.id());
+                        return Ok(());
+                    }
+                    if ![STATE_WRITING, STATE_GROWING, STATE_SHRINKING].contains(&m.state.as_str()) {
+                        bail!("resume {at}: the manifest says `{}`, which this aeiou cannot finish", m.state);
+                    }
+                }
+                Some(n) => {
+                    let (flag, grow) = (op.as_ref().unwrap().0, a.grow.is_some());
+                    if m.state != STATE_COMPLETE {
+                        bail!("{flag} {n} {at}: the manifest says `{}`; finish it first with `aeiou datagen --resume {at}`", m.state);
+                    }
+                    if m.dataset.get("files").is_none() {
+                        bail!("{flag} {n} {at}: only a `files` dataset grows or shrinks");
+                    }
+                    // the count it has, as the runner computes it from the manifest's dataset
+                    let (text, _) = datagen::resume_abstract(&m, at)?;
+                    let old = aeiou::load_str(&text).with_context(|| format!("{flag} {at}: the manifest's dataset"))?;
+                    let oparams = Params::new(&old.ast, &cfg)?;
+                    let from = build_model(&old.ast, &cfg, &oparams)?.datasets.first().map(|d| d.count()).unwrap_or(0);
+                    if grow && n <= from {
+                        aeiou::usage!("--grow {n} {at}: the dataset's count is {from}; a grow takes a larger one (--shrink makes it smaller)");
+                    }
+                    if !grow && n >= from {
+                        aeiou::usage!("--shrink {n} {at}: the dataset's count is {from}; a shrink takes a smaller one (--grow makes it larger)");
+                    }
+                    resize = Some(datagen::Resize { original: m.clone() });
+                    m = datagen::resize_manifest(&m, from, n)?;
+                }
             }
             let (text, endpoints) = datagen::resume_abstract(&m, at)?;
             let loaded = aeiou::load_str(&text).with_context(|| format!("resume {at}: the manifest's dataset"))?;
@@ -620,12 +680,19 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs), resume };
+    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs), resume, resize };
     let mut out = std::io::stdout();
     match &opts.resume {
+        Some(m) if opts.resize.is_some() => {
+            let (o, flag) = (&opts.resize.as_ref().unwrap().original, op.as_ref().unwrap().0);
+            writeln!(out, "{} {}: dataset {} of abstract {}  count {} -> {}  id {} -> {}", &flag[2..], at_root.as_deref().unwrap_or(""), m.provenance["dataset"].as_str().unwrap_or("?"), loaded.ast.name, m.progress["from"], op.as_ref().unwrap().1.unwrap_or(0), o.id(), m.id())?;
+            l.print(&mut out)?;
+            writeln!(out, "payload: dedupe {}  compress {}  (the manifest's)", dedupe, compress)?;
+        }
         Some(m) => {
             let left: i64 = m.unfinished().iter().map(|(a, b)| b - a).sum();
-            writeln!(out, "resume {}: dataset {} of abstract {}  id {}  {left} file(s) unfinished", a.resume.as_deref().unwrap_or(""), m.provenance["dataset"].as_str().unwrap_or("?"), loaded.ast.name, m.id())?;
+            let what = if m.state == aeiou::payload::STATE_WRITING { String::new() } else { format!(" ({} from count {})", m.state, m.progress["from"]) };
+            writeln!(out, "resume {}: dataset {} of abstract {}  id {}  {left} file(s) unfinished{what}", at_root.as_deref().unwrap_or(""), m.provenance["dataset"].as_str().unwrap_or("?"), loaded.ast.name, m.id())?;
             l.print(&mut out)?;
             writeln!(out, "payload: dedupe {}  compress {}  (the manifest's)", dedupe, compress)?;
         }
@@ -658,6 +725,8 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let tcp = match &coordinator {
         Some(addr) if ranks > 1 => {
             let identity = match &opts.resume {
+                // every rank grows or shrinks the same corpus to the same count
+                Some(m) if opts.resize.is_some() => serde_json::json!({"resize": opts.resize.as_ref().unwrap().original.id(), "to": m.id()}),
                 // every rank finishes the same corpus from the same record of it
                 Some(m) => serde_json::json!({"resume": m.id(), "unfinished": m.progress["unfinished"], "updated": m.progress["updated"]}),
                 None => serde_json::json!({

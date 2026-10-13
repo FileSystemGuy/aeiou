@@ -425,6 +425,46 @@ def test_aeiou_datagen_resumes_a_container_corpus(name, tmp_path):
     assert {p.name: p.read_bytes() for p in root.iterdir() if p.name != ".aeiou-dataset.json"} == whole
 
 
+# a grow from a short last file and a shrink to one (Parquet: whole files, brief item 31)
+RESIZES = {"tfrecord": (900, 300), "webdataset": (900, 300), "hdf5": (100, 40), "parquet": (1024, 512), "parquet_types": (1024, 512)}
+
+
+@needs_runner
+@pytest.mark.parametrize("name", sorted(RUST_CASES))
+def test_aeiou_datagen_grows_and_shrinks_a_container_corpus(name, tmp_path):
+    """`aeiou datagen --grow N ROOT` and `--shrink N ROOT` (DESIGN_REVIEW.md §3.70) leave the
+    corpus a datagen of the new count writes, byte for byte: the old short last file written
+    again with its new rows (an HDF5 header among them), the files past a shrink removed; the
+    manifest the new count's, its headers the new count's."""
+    make, corpus, _ = RUST_CASES[name]
+    ast_file = make(tmp_path)
+
+    def fresh(where, samples):
+        params = [p if not p.startswith("samples=") else f"samples={samples}" for p in corpus]
+        r = subprocess.run([RUNNER, "datagen", ast_file, "--root", where, "--writers", "3", *_params(params), "--dedupe", "2"], capture_output=True, text=True)
+        if "--features formats" in r.stderr:
+            pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+        assert r.returncode == 0, r.stdout + r.stderr
+        return where / "train"
+
+    def files(root):
+        return {p.name: p.read_bytes() for p in root.iterdir() if p.name != ".aeiou-dataset.json"}
+
+    root = fresh(tmp_path / "rs", int(next(p for p in corpus if p.startswith("samples=")).split("=")[1]))
+    for op, n in zip(("--grow", "--shrink"), RESIZES[name]):
+        r = subprocess.run([RUNNER, "datagen", op, str(n), root, "--writers", "2"], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+        want = fresh(tmp_path / f"fresh{n}", n)
+        assert files(root) == files(want), f"{op} {n}"
+        got, exp = (json.loads((d / ".aeiou-dataset.json").read_text()) for d in (root, want))
+        assert got["state"] == "complete" and "progress" not in got
+        assert {k: got[k] for k in ("dataset", "payload", "format")} == {k: exp[k] for k in ("dataset", "payload", "format")}
+        assert got["provenance"].get("headers") == exp["provenance"].get("headers")
+        assert got["provenance"]["files_written"] == exp["provenance"]["files_written"]
+        assert got["provenance"]["bytes_written"] == exp["provenance"]["bytes_written"]
+    assert [x["op"] for x in got["provenance"]["resizes"]] == ["grow", "shrink"]
+
+
 def _parquet_parts(b):
     """A Parquet file as its row groups and its footer with `created_by` and the `aeiou.pad`
     value taken out (the two things the Rust and Python writers' files differ in)."""

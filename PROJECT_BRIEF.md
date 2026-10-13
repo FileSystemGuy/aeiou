@@ -546,7 +546,11 @@ numbers; the order is this note's.
     2026-10-12:* resume, grow, and shrink are flags of `aeiou datagen` taking the dataset
     root in place of the abstract (`--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`).
     Resume **built 2026-10-12** (§3.70): the unfinished ids written again, whole, over any
-    host count, from the manifest alone; grow, shrink, and subset runs remain.
+    host count, from the manifest alone. Grow and shrink **built 2026-10-12** (§3.70): the
+    new count's manifest first, the files a fresh datagen of N would write and the corpus
+    lacks written (the old short last file among them), the names past N removed with the
+    directories they leave empty, so the corpus is a fresh datagen's byte for byte with its
+    id; an interrupted one finished by `--resume`. Subset runs remain.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

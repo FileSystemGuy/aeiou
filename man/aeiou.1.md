@@ -11,6 +11,8 @@ aeiou [--config FILE] check FILES...
 aeiou [--config FILE] dry-run [OPTIONS] --gpus GPUS ABSTRACT
 aeiou [--config FILE] datagen [OPTIONS] --root DIR ABSTRACT
 aeiou [--config FILE] datagen [OPTIONS] --resume ROOT
+aeiou [--config FILE] datagen [OPTIONS] --grow N ROOT
+aeiou [--config FILE] datagen [OPTIONS] --shrink N ROOT
 aeiou [--config FILE] run [OPTIONS] --gpus GPUS --root DIR ABSTRACT
 aeiou --help | --version
 ```
@@ -96,8 +98,8 @@ counts at the end; rank 0 writes the manifests, `complete` once every rank has r
 every rank's host and counts in the provenance. The coordinator refuses a host whose
 abstract, parameters, `--gpus`, `--dedupe`, `--compress`, or `--dataset` list differ.
 
-`datagen --resume ROOT` finishes a dataset a datagen left `writing` (killed, crashed, or
-failed), from the manifest at ROOT alone: the dataset, its place, the payload, and the
+`datagen --resume ROOT` finishes a dataset a datagen left `writing`, `growing`, or
+`shrinking` (killed, crashed, or failed), from the manifest at ROOT alone: the dataset, its place, the payload, and the
 format are the manifest's, so it takes no abstract. Every id the manifest lists as
 unfinished is written again, whole (a file opened with truncation, so a partial or stale one
 loses its tail); in an object store, where an upload that did not complete leaves no object,
@@ -110,6 +112,22 @@ dataset id; each resume's hosts and counts are added to the provenance (`resumes
 manifest already `complete` has nothing to write, and the command says so and exits 0. Not
 done: the parts of multipart uploads a crash left in a bucket are not aborted (the object
 engine has no call that lists them).
+
+`datagen --grow N ROOT` and `datagen --shrink N ROOT` change the count of the complete
+`files` dataset at ROOT to N (its `count`: samples where a file holds several, files
+otherwise), larger for a grow and smaller, above 0, for a shrink; each refuses the other's
+direction, so a typo cannot delete a corpus. Everything else comes from the manifest, as for
+`--resume`, and is refused beside it, as is a corpus not `complete`. The files a datagen of
+N would write and the corpus does not hold are written: a grow's new ids, and the old last
+file again when it was short (it gains samples, and an HDF5 file a header). A shrink removes
+the names past N (a chunked file's chunks; a key in an object store) and every directory that
+leaves empty, and writes the new last file again when it is short. The corpus is then, byte
+for byte, what a datagen of N writes, with that datagen's dataset id. The manifest is
+rewritten first, `growing` or `shrinking` with the new count and the old one
+(`progress.from`), so `run` refuses the corpus until the change is done and `--resume ROOT`
+finishes an interrupted one (removing again is no error); it ends `complete`, with the change
+recorded in the provenance (`resizes`: the old count and id, hosts, counts, times). The work
+splits over the hosts as a resume's does.
 
 ### run
 
@@ -301,6 +319,18 @@ turns it off, and the last one on the line wins.
   `--dataset` with it (a usage error); `--writers`, `--object-threads`, `--progress-secs`, and
   the several-hosts options as for any datagen. With several hosts, every host gives the same
   ROOT and the coordinator refuses one that read another record of the corpus.
+
+- **--grow** *N* *ROOT*
+
+  In place of *ABSTRACT*: grow the complete dataset at ROOT to a count of N, larger than its
+  own; see **datagen** above. As `--resume` for what may stand beside it; one of `--resume`,
+  `--grow`, `--shrink` at a time. With several hosts, the coordinator refuses a host growing
+  another corpus or to another count.
+
+- **--shrink** *N* *ROOT*
+
+  In place of *ABSTRACT*: shrink the complete dataset at ROOT to a count of N, smaller than
+  its own and above 0; as `--grow` otherwise.
 
 ### aeiou run
 
