@@ -184,7 +184,7 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
-    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30) }, None, &mut log).unwrap();
+    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None }, None, &mut log).unwrap();
     let dry = dryrun::run(model, 2, None).unwrap();
 
     let server = Server::start("127.0.0.1:0", 2).unwrap();
@@ -328,7 +328,7 @@ fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
 // ---------------------------------------------------------------- datagen on several hosts
 
 fn dopts(root: &PathBuf, rank: i64, ranks: i64) -> DatagenOpts {
-    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20) }
+    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20), resume: None }
 }
 
 /// Every data file under `root` (the `.aeiou*` metadata left out), by relative path.
@@ -524,6 +524,67 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
         }
         let e = run::check_datasets(loaded, cfg, &root).unwrap_err().to_string();
         assert!(e.contains("the manifest says `writing`") && e.contains(&format!("{left} file(s) not written")), "{e}");
+
+        // the resume, on the other host count: a stale file longer than its size is cut back
+        let first = root.join(meta.file_path(unfinished[0].0, None).unwrap().to_string());
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&first).unwrap();
+        std::io::Write::write_all(&mut f, &vec![7u8; 300_000]).unwrap();
+        drop(f);
+        let outs = resume_ranks(&root.join("train"), 3 - ranks);
+        assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s) killed: {outs:?}");
+        assert!(outs[0].1.contains(&format!("{left} file(s) unfinished")), "{}", outs[0].1);
+        let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+        assert_eq!((after.state.as_str(), after.id()), ("complete", m.id()));
+        assert_eq!(after.provenance["files_written"].as_i64(), Some(files), "every file counted once");
+        assert_eq!(after.provenance["resumes"][0]["ranks"].as_i64(), Some(3 - ranks));
+        run::check_datasets(loaded, cfg, &root).unwrap();
+        // the files written again are the payload's (the first few of every range)
+        let mut filler = aeiou::payload::Filler::new(1);
+        for (a, b) in &unfinished {
+            for id in *a..(*b).min(a + 20) {
+                let path = root.join(meta.file_path(id, None).unwrap().to_string());
+                let got = std::fs::read(&path).unwrap();
+                let mut want = vec![0u8; meta.file_size(id).unwrap() as usize];
+                let seed = meta.dataset_seed();
+                filler.fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk, 1), 0, &mut want);
+                assert!(got == want, "{}: not the payload", path.display());
+            }
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
+}
+
+/// `aeiou datagen --resume ROOT` on `ranks` processes.
+fn resume_ranks(at: &std::path::Path, ranks: i64) -> Vec<(bool, String, String)> {
+    let port = free_port();
+    let mut children = Vec::new();
+    for rank in 0..ranks {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.arg("datagen").arg("--resume").arg(at).args(["--writers", "2"]);
+        if ranks > 1 {
+            c.args(["--ranks", &ranks.to_string(), "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
+        }
+        children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap());
+    }
+    children.into_iter().map(|c| {
+        let o = c.wait_with_output().unwrap();
+        (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+    }).collect()
+}
+
+/// `--resume` takes everything from the manifest: what it fixes is refused beside it, and a
+/// complete corpus has nothing to write.
+#[test]
+fn a_resume_takes_nothing_the_manifest_fixes() {
+    let root = tmpdir("dg-resume-usage");
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(root.join("train")).args(["--param", "files=10", "--dedupe", "2"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(e.contains("--param, --dedupe given too"), "{e}");
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root).args(["--param", "files=30"]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(root.join("train")).output().unwrap();
+    assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).contains("the manifest says `complete`; nothing to write"), "{o:?}");
+    std::fs::remove_dir_all(&root).unwrap();
 }

@@ -542,7 +542,11 @@ numbers; the order is this note's.
     (`manifest_version` 2, `--progress-secs`); resume, whole directories, grow and shrink,
     and subset runs remain. *Revised 2026-10-12 (§3.71, proposed):* whole directories are
     not required of a corpus (only of a subset run's count); a sizing step writes a
-    parameter file with the count rounded up, the layout, and the steps.
+    parameter file with the count rounded up, the layout, and the steps. *Decided
+    2026-10-12:* resume, grow, and shrink are flags of `aeiou datagen` taking the dataset
+    root in place of the abstract (`--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`).
+    Resume **built 2026-10-12** (§3.70): the unfinished ids written again, whole, over any
+    host count, from the manifest alone; grow, shrink, and subset runs remain.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

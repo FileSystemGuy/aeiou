@@ -370,6 +370,61 @@ def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     assert "fingerprint matches" in run.stdout
 
 
+def _unfinish(root, ranges, delete=(), shorten=()):
+    """Make a complete corpus look like one a crash left: the manifest `writing` with `ranges`
+    unfinished, some of those files gone and some cut short."""
+    path = root / ".aeiou-dataset.json"
+    m = json.loads(path.read_text())
+    m["state"] = "writing"
+    m["progress"] = {"unfinished": ranges, "files_written": 0, "bytes_written": 0, "updated": 0}
+    path.write_text(json.dumps(m))
+    files = sorted(p for p in root.iterdir() if p.name != ".aeiou-dataset.json")
+    for i in delete:
+        files[i].unlink()
+    for i in shorten:
+        with open(files[i], "r+b") as f:
+            f.truncate(files[i].stat().st_size // 2)
+    return m
+
+
+@needs_runner
+@pytest.mark.parametrize("name", sorted(RUST_CASES))
+def test_aeiou_datagen_resumes_a_container_corpus(name, tmp_path):
+    """`aeiou datagen --resume ROOT` (DESIGN_REVIEW.md §3.70) rewrites the files the manifest
+    lists as unfinished, whole, from the manifest alone, the HDF5 headers made again by
+    `aeiou-header` and checked against the corpus's; the files are those of a datagen that ran
+    through, and the dataset id is unchanged. A manifest naming another format writer is
+    refused before anything is written."""
+    make, corpus, _ = RUST_CASES[name]
+    ast_file = make(tmp_path)
+    root = tmp_path / "rs" / "train"
+    rs = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "rs", "--writers", "3", *_params(corpus), "--dedupe", "2", "--compress", "3"],
+                        capture_output=True, text=True)
+    if "--features formats" in rs.stderr:
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+    assert rs.returncode == 0, rs.stdout + rs.stderr
+    whole = {p.name: p.read_bytes() for p in root.iterdir() if p.name != ".aeiou-dataset.json"}
+    before = json.loads((root / ".aeiou-dataset.json").read_text())
+    _unfinish(root, [[1, 3], [4, 5]], delete=[1], shorten=[2, 4])
+    r = subprocess.run([RUNNER, "datagen", "--resume", root, "--writers", "2"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "3 file(s) unfinished" in r.stdout
+    assert {p.name: p.read_bytes() for p in root.iterdir() if p.name != ".aeiou-dataset.json"} == whole
+    after = json.loads((root / ".aeiou-dataset.json").read_text())
+    assert after["state"] == "complete" and "progress" not in after
+    assert {k: after[k] for k in ("dataset", "payload", "format")} == {k: before[k] for k in ("dataset", "payload", "format")}
+    assert after["provenance"]["resumes"][0]["files_written"] == 3
+    if name == "hdf5":
+        assert after["provenance"]["headers"] == before["provenance"]["headers"]
+    # another writer's corpus is not finished by this one
+    m = _unfinish(root, [[0, 1]])
+    m["format"]["writer"] = "another writer"
+    (root / ".aeiou-dataset.json").write_text(json.dumps(m))
+    r = subprocess.run([RUNNER, "datagen", "--resume", root], capture_output=True, text=True)
+    assert r.returncode != 0 and "a resume would mix them" in r.stderr, r.stdout + r.stderr
+    assert {p.name: p.read_bytes() for p in root.iterdir() if p.name != ".aeiou-dataset.json"} == whole
+
+
 def _parquet_parts(b):
     """A Parquet file as its row groups and its footer with `created_by` and the `aeiou.pad`
     value taken out (the two things the Rust and Python writers' files differ in)."""

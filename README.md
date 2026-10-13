@@ -226,7 +226,9 @@ container writer, across hosts the same way, speaking the same coordinator proto
 (2026-10-11), and `aeiou datagen` writing TFRecord and tar itself behind the cargo feature
 `formats`, the Python writer's bytes at two to four times its speed, and HDF5 with its
 header from `aeiou-header`, a one-file tool beside `aeiou` that rank 0 alone runs, and Parquet by our own
-writer, pyarrow's bytes but for `created_by` (2026-10-12). The workload catalog
+writer, pyarrow's bytes but for `created_by` (2026-10-12), and the datagen manifest written from
+the start with its progress, and `datagen --resume ROOT`, which finishes a corpus from that
+manifest alone on any host count (2026-10-12). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
@@ -256,7 +258,7 @@ Not built, in rough order of interest:
   wall-clock-bounded phases (a contract change).
 - Computed holds (item 24): what a KV engine holds derived from its pool in the runner,
   not drawn at one reference engine.
-- `datagen --resume` (rewrite what is missing or short, by size alone), growing a corpus
+- ~~`datagen --resume` (rewrite what is missing or short, by size alone),~~ growing a corpus
   in place, and a run over the first *S* ids of a larger corpus (item 23): one long datagen
   on a fleet, then a series of runs growing toward the saturation point. First, decided
   2026-10-11 (`DESIGN_REVIEW.md` §3.70): the container formats written by `aeiou datagen`
@@ -265,7 +267,9 @@ Not built, in rough order of interest:
   `aeiou`), ~~Parquet not yet~~ Parquet the same day (our own writer, pyarrow's bytes but for
   `created_by`); the manifest written from the start, `writing` with the ids not yet
   written, rewritten every `--progress-secs`, and `complete` at the end, the same day.
-  Resume, whole directories, grow and shrink, and subset runs not yet; a sizing step for
+  `datagen --resume ROOT` the same day (the unfinished ids written again, whole, from the
+  manifest alone, on any host count); ~~Resume, whole directories,~~ grow and shrink and
+  subset runs not yet (whole directories not required of a corpus, §3.71); a sizing step for
   training corpora proposed the same day (`DESIGN_REVIEW.md` §3.71).
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),

@@ -76,6 +76,9 @@ pub struct DatagenOpts {
     /// How often each rank flushes and reports what it has finished, and rank 0 rewrites the
     /// manifests (`--progress-secs`).
     pub progress: Duration,
+    /// `--resume`: the manifest of the one dataset to finish (`DESIGN_REVIEW.md` §3.70); the
+    /// ids it lists as unfinished are written again, whole, and nothing else.
+    pub resume: Option<Manifest>,
 }
 
 /// The coordinator of a datagen on several hosts: this rank's client, and rank 0's server.
@@ -110,6 +113,69 @@ fn now_secs() -> u64 {
 /// This rank's slice of a `files` dataset's ids: the contiguous split of `run::gpu_range`.
 pub fn file_slice(files: i64, ranks: i64, rank: i64) -> (i64, i64) {
     crate::run::gpu_range(files, ranks, rank, 0)
+}
+
+/// The manifest of the dataset at `root`, a directory or `s3://BUCKET[/PREFIX]`, for `--resume`.
+pub fn resume_manifest(root: &str) -> Result<Manifest> {
+    if crate::object::is_uri(root) {
+        let store = crate::object::Store::open(root)?;
+        Manifest::read_object(&store, "")
+    } else {
+        Manifest::read(Path::new(root))
+    }
+}
+
+/// The abstract a resume runs (`DESIGN_REVIEW.md` §3.70): the manifest's resolved dataset, the
+/// only one, under the name and abstract it was written for, placed at `root` (a name declared
+/// `protocol: s3` when `root` is a bucket), with an actor that does nothing. Its datasets
+/// resolve to the manifest's own, so the corpus's id is unchanged.
+pub fn resume_abstract(m: &Manifest, root: &str) -> Result<(String, Vec<String>)> {
+    let name = m.provenance["dataset"].as_str().unwrap_or("dataset").to_string();
+    let mut dataset = m.dataset.clone();
+    if crate::object::is_uri(root) {
+        if let Some(inner) = dataset.as_object_mut().and_then(|o| o.values_mut().next()).and_then(Value::as_object_mut) {
+            inner.insert("protocol".into(), json!("s3"));
+        }
+    }
+    let doc = json!({
+        "ast": crate::ast::AST_VERSION,
+        "name": m.provenance["abstract"].as_str().unwrap_or("resume"),
+        "datasets": {name.clone(): dataset},
+        "actors": {"resume": {"body": []}},
+    });
+    Ok((serde_json::to_string(&doc)?, vec![format!("{name}={root}")]))
+}
+
+/// Rank `rank`'s part of the ids `work` (sorted, disjoint ranges): the contiguous split of
+/// their concatenation, so a fresh datagen's `[0, files)` splits as `file_slice` does and a
+/// resume's unfinished ranges split over any host count.
+pub fn work_slice(work: &[(i64, i64)], ranks: i64, rank: i64) -> Vec<(i64, i64)> {
+    let total: i64 = work.iter().map(|(a, b)| b - a).sum();
+    let (lo, hi) = crate::run::gpu_range(total, ranks, rank, 0);
+    let (mut out, mut at) = (Vec::new(), 0i64);
+    for &(a, b) in work {
+        let (from, to) = (lo.max(at), hi.min(at + b - a));
+        if from < to {
+            out.push((a + from - at, a + to - at));
+        }
+        at += b - a;
+    }
+    out
+}
+
+/// The runs handed to writers: each range cut at multiples of `run`, so a run never spans
+/// two directories of a `{id div N}` pattern when `run` divides `N`.
+fn cut_runs(ranges: &[(i64, i64)], run: i64) -> Vec<(i64, i64)> {
+    let mut out = Vec::new();
+    for &(a, b) in ranges {
+        let mut at = a;
+        while at < b {
+            let end = ((at / run + 1) * run).min(b);
+            out.push((at, end));
+            at = end;
+        }
+    }
+    out
 }
 
 /// The rank that writes the `index`-th `regions` dataset (in the abstract's order, among the
@@ -421,8 +487,8 @@ fn syncfs(dir: &Path) -> Result<()> {
 
 /// What this rank writes of one dataset.
 enum Share {
-    /// Files `[lo, hi)` of a `files` dataset.
-    Files { lo: i64, hi: i64 },
+    /// The files of these id ranges of a `files` dataset.
+    Files { ranges: Vec<(i64, i64)> },
     /// The whole `regions` file.
     Regions,
     /// Nothing: a `regions` dataset another rank owns.
@@ -440,8 +506,16 @@ struct Plan<'m, 'a> {
     share: Share,
     /// The rank that writes a `regions` dataset.
     owner: Option<i64>,
-    /// Ids per run handed to a writer (`run_size`).
-    run: i64,
+    /// A resumed object dataset: the keys already there (one `LIST`), each a whole object,
+    /// since an upload that did not complete leaves none.
+    present: std::collections::HashSet<String>,
+    /// The runs handed to writers, in id order (`run_size`, `cut_runs`).
+    runs: Vec<(i64, i64)>,
+    /// Every rank's ids, before any has said anything: `[0, files)`, or a resume's unfinished
+    /// ranges (a regions file is id 0).
+    work: Vec<(i64, i64)>,
+    /// Files and bytes written and flushed before this datagen, by the one it resumes.
+    before: (u64, u64),
     track: Track,
 }
 
@@ -460,13 +534,18 @@ struct Track {
 
 #[derive(Default)]
 struct Claims {
-    /// The next run to hand out.
-    next: i64,
+    /// The next run to hand out, an index into the plan's `runs`.
+    next: usize,
     /// Each writer's run `[start, end)` and the first id of it not yet written.
     slots: Vec<(i64, i64, std::sync::Arc<AtomicI64>)>,
 }
 
 impl Plan<'_, '_> {
+    /// An object already in the store, which a resume does not send again.
+    fn present(&self, opts: &DatagenOpts, path: &str) -> bool {
+        !self.present.is_empty() && opts.endpoints.object(path).is_some_and(|(_, rest)| self.present.contains(&rest))
+    }
+
     /// The id ranges of this rank's share not yet written, merged, in order (a regions file
     /// is id 0).
     fn unfinished(&self) -> Vec<(i64, i64)> {
@@ -478,7 +557,7 @@ impl Plan<'_, '_> {
                     v.push((0, 1));
                 }
             }
-            Share::Files { lo, hi } => {
+            Share::Files { .. } => {
                 let c = self.track.claims.lock().unwrap();
                 for (_, end, cursor) in &c.slots {
                     let at = cursor.load(Ordering::Acquire);
@@ -486,10 +565,7 @@ impl Plan<'_, '_> {
                         v.push((at, *end));
                     }
                 }
-                let rest = (c.next * self.run).max(lo);
-                if rest < hi {
-                    v.push((rest, hi));
-                }
+                v.extend_from_slice(&self.runs[c.next.min(self.runs.len())..]);
             }
         }
         merge_ranges(v)
@@ -511,15 +587,12 @@ fn merge_ranges(mut v: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
 }
 
 /// What rank `r` is to write of a dataset, before it has said anything.
-fn share_of(meta: &DsMeta<'_>, owner: Option<i64>, ranks: i64, r: i64) -> Vec<(i64, i64)> {
-    match meta {
-        DsMeta::Files { .. } => {
-            let (lo, hi) = file_slice(meta.files(), ranks, r);
-            merge_ranges(vec![(lo, hi)])
-        }
+fn share_of(p: &Plan<'_, '_>, ranks: i64, r: i64) -> Vec<(i64, i64)> {
+    match p.meta {
+        DsMeta::Files { .. } => work_slice(&p.work, ranks, r),
         DsMeta::Regions { .. } => {
-            if owner == Some(r) {
-                vec![(0, 1)]
+            if p.owner == Some(r) {
+                p.work.clone()
             } else {
                 Vec::new()
             }
@@ -558,13 +631,10 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
     let (files0, bytes0) = (track.files.load(Ordering::Relaxed), track.bytes.load(Ordering::Relaxed));
     match (&plan.share, meta) {
         (Share::Other { .. }, _) => {}
-        (Share::Files { lo, hi }, DsMeta::Files { spf, chunk, count, .. }) => {
-            let (lo, hi) = (*lo, *hi);
-            let len = hi - lo;
-            if len > 0 {
-                let run = plan.run;
-                let last = (hi - 1) / run;
-                let nthreads = writers.min((last - lo / run + 1).max(1) as usize);
+        (Share::Files { .. }, DsMeta::Files { spf, chunk, count, .. }) => {
+            let runs = &plan.runs;
+            if !runs.is_empty() {
+                let nthreads = writers.min(runs.len());
                 track.claims.lock().unwrap().slots = (0..nthreads).map(|_| (0, 0, std::sync::Arc::new(AtomicI64::new(0)))).collect();
                 std::thread::scope(|s| {
                     for w in 0..nthreads {
@@ -579,12 +649,8 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                 // claim the next run, and say so, under one lock
                                 let (a, b, cursor) = {
                                     let mut c = track.claims.lock().unwrap();
-                                    let j = c.next;
-                                    if j > last {
-                                        break;
-                                    }
+                                    let Some(&(a, b)) = runs.get(c.next) else { break };
                                     c.next += 1;
-                                    let (a, b) = ((j * run).max(lo), ((j + 1) * run).min(hi));
                                     let cursor = c.slots[w].2.clone();
                                     cursor.store(a, Ordering::Release);
                                     c.slots[w].0 = a;
@@ -599,7 +665,11 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         let size = meta.file_size(file)? as u64;
                                         let seed_of = |blk: u64| payload::file_block_seed(seed, file as u64, blk, dedupe);
                                         if let Some(c) = &plan.container {
-                                            let size = write_container(c, meta, file, &seed_of, &mut filler, &mut buf, &meta.file_path(file, None)?, opts, mode)?;
+                                            let path = meta.file_path(file, None)?.to_string();
+                                            if plan.present(opts, &path) {
+                                                return Ok(());
+                                            }
+                                            let size = write_container(c, meta, file, &seed_of, &mut filler, &mut buf, &path, opts, mode)?;
                                             track.files.fetch_add(1, Ordering::Relaxed);
                                             track.bytes.fetch_add(size, Ordering::Relaxed);
                                             return Ok(());
@@ -612,6 +682,9 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                             }
                                         };
                                         for (path, logical, len) in objects {
+                                            if plan.present(opts, &path) {
+                                                continue;
+                                            }
                                             if let Some((store, rest)) = opts.endpoints.object(&path) {
                                                 store.put_parts(&rest, len, crate::object::DEFAULT_PART, &mut |at, b| filler.fill_range(&seed_of, logical + at, b))?;
                                                 track.files.fetch_add(1, Ordering::Relaxed);
@@ -692,6 +765,11 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
     })
 }
 
+/// A payload as an error message names it.
+fn payload_line(p: &PayloadSpec) -> String {
+    format!("{} {} ({}, block {}, dedupe {}, compress {})", p.generator, p.version, p.wrapper, p.block, p.dedupe, p.compress)
+}
+
 /// One rank's part of one dataset, as sent to rank 0 (`Done`) and recorded in the manifest.
 fn part_json(rank: i64, host: &str, w: &Written) -> Value {
     json!({"rank": rank, "host": host, "files_written": w.files, "bytes_written": w.bytes, "started": w.started, "finished": w.finished})
@@ -714,6 +792,7 @@ impl Base {
             format: p.container.as_ref().map(|c| c.format.clone()),
             provenance: json!({
                 "abstract": loaded.ast.name,
+                "dataset": p.name,
                 "ast_sha256": loaded.sha256,
                 "params": self.params_json,
                 "param_files": cfg.sets.iter().map(|s| json!({"path": s.path, "sha256": s.sha256})).collect::<Vec<_>>(),
@@ -799,23 +878,26 @@ impl Ticker<'_, '_, '_> {
                         files += d["files"].as_u64().unwrap_or(0);
                         b += d["bytes"].as_u64().unwrap_or(0);
                     }
-                    None => unfinished.extend(share_of(p.meta, p.owner, ranks, r)),
+                    None => unfinished.extend(share_of(p, ranks, r)),
                 }
             }
             let unfinished = merge_ranges(unfinished);
+            let (files, b) = (files + p.before.0, b + p.before.1);
             total += match p.meta {
                 DsMeta::Files { .. } => p.meta.files(),
                 DsMeta::Regions { .. } => 1,
             };
             left += unfinished.iter().map(|(a, b)| b - a).sum::<i64>();
-            bytes += b;
+            bytes += b - p.before.1;
             let mut m = base.clone();
             m.progress = json!({"unfinished": ranges_json(&unfinished), "files_written": files, "bytes_written": b, "updated": now_secs()});
             write_manifest(p, &m)?;
         }
         let secs = self.t0.elapsed().as_secs_f64();
         let done = total - left;
-        let eta = if done > 0 && left > 0 { format!(", about {:.0} s left", secs * left as f64 / done as f64) } else { String::new() };
+        // the rate of this datagen alone: a resume starts with the work of the one before
+        let now = self.plans.iter().map(|p| p.work.iter().map(|(a, b)| b - a).sum::<i64>()).sum::<i64>() - left;
+        let eta = if now > 0 && left > 0 { format!(", about {:.0} s left", secs * left as f64 / now as f64) } else { String::new() };
         let mut l = log.lock().unwrap();
         writeln!(l, "progress {secs:.1} s: {done}/{total} files, {} written, {}/s{eta}", crate::dryrun::human_bytes(bytes), crate::dryrun::human_bytes((bytes as f64 / secs.max(1e-9)) as u64))?;
         l.flush()?;
@@ -835,10 +917,20 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     }
     let host = crate::run::hostname();
     let base = Base { params_json: payload::params_json(&loaded.doc, cfg, params)?, host: host.clone() };
+    let resume = opts.resume.as_ref();
+    if let Some(m) = resume {
+        if m.payload != spec {
+            bail!("the corpus was written with the payload {} and this aeiou writes {}: a resume would mix them", payload_line(&m.payload), payload_line(&spec));
+        }
+        if model.datasets.len() != 1 {
+            bail!("a resume finishes one dataset, not {}", model.datasets.len());
+        }
+    }
 
     // the plan: what each dataset is, where it goes, this rank's share; every rank checks
     // the roots are empty before the gate, so no rank sees another's files (rank 0's
-    // manifest, written before the gate, aside)
+    // manifest, written before the gate, aside); a resume checks instead that the format
+    // writer is the one that wrote the corpus
     let mut plans = Vec::new();
     let mut regions_index = 0usize;
     for meta in model.datasets.iter() {
@@ -853,15 +945,25 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         let rel = payload::dataset_root(&loaded.ast, name)?;
         let root = opts.endpoints.path(&opts.root, &rel);
         let object = opts.endpoints.object(&rel);
-        if let Some((store, rest)) = &object {
-            if matches!(meta, DsMeta::Regions { .. }) {
-                bail!("dataset `{name}`: a `regions` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
+        if let Some(m) = resume {
+            let mine = container.as_ref().map(|c| &c.format);
+            if mine != m.format.as_ref() {
+                let show = |f: Option<&Value>| f.map(|f| f.to_string()).unwrap_or_else(|| "none".into());
+                bail!("dataset `{name}`: the corpus's format is {} and this aeiou writes {}: a resume would mix them", show(m.format.as_ref()), show(mine));
             }
+        }
+        if object.is_some() && matches!(meta, DsMeta::Regions { .. }) {
+            bail!("dataset `{name}`: a `regions` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
+        }
+        let mut present = std::collections::HashSet::new();
+        if let (Some((store, rest)), true) = (&object, resume.is_some()) {
+            present = store.keys_below(rest)?.into_iter().collect();
+        } else if let Some((store, rest)) = &object {
             let busy = if rank == 0 { store.non_empty(rest)? } else { store.non_empty_except(rest, payload::MANIFEST_NAME)? };
             if busy {
                 bail!("dataset `{name}`: {} is not empty; datasets are read-only, remove it first", store.show(rest));
             }
-        } else if root.exists() {
+        } else if resume.is_none() && root.exists() {
             let n = std::fs::read_dir(&root)?
                 .filter(|e| rank == 0 || !e.as_ref().is_ok_and(|e| e.file_name().to_string_lossy().starts_with(payload::MANIFEST_NAME)))
                 .count();
@@ -872,26 +974,33 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if object.is_none() {
             std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         }
-        let (share, owner, run) = match meta {
+        let (work, before) = match resume {
+            Some(m) => (merge_ranges(m.unfinished()), (m.progress["files_written"].as_u64().unwrap_or(0), m.progress["bytes_written"].as_u64().unwrap_or(0))),
+            None => (vec![(0, if let DsMeta::Files { .. } = meta { meta.files() } else { 1 })], (0, 0)),
+        };
+        let (share, owner, runs) = match meta {
             DsMeta::Files { dirs, .. } => {
-                let (lo, hi) = file_slice(meta.files(), ranks, rank);
-                (Share::Files { lo, hi }, None, run_size(dirs, hi - lo, opts.writers))
+                let ranges = work_slice(&work, ranks, rank);
+                let run = run_size(dirs, ranges.iter().map(|(a, b)| b - a).sum(), opts.writers);
+                let runs = cut_runs(&ranges, run);
+                (Share::Files { ranges }, None, runs)
             }
             DsMeta::Regions { .. } => {
                 let owner = regions_owner(regions_index, ranks);
                 regions_index += 1;
-                (if owner == rank { Share::Regions } else { Share::Other { owner } }, Some(owner), 1)
+                // a resume whose regions file was finished has nothing to write
+                (if owner == rank && !work.is_empty() { Share::Regions } else { Share::Other { owner } }, Some(owner), Vec::new())
             }
         };
-        let track = Track::default();
-        if let Share::Files { lo, .. } = share {
-            track.claims.lock().unwrap().next = lo / run;
-        }
-        plans.push(Plan { meta, name, root, object, container, share, owner, run, track });
+        plans.push(Plan { meta, name, root, object, container, share, owner, present, runs, work, before, track: Track::default() });
     }
     for p in &plans {
         match &p.share {
-            Share::Files { lo, hi } => writeln!(log, "dataset {}: files [{lo}, {hi}) of {} on this rank", p.name, p.meta.files())?,
+            Share::Files { ranges } if resume.is_some() => writeln!(log, "dataset {}: {} of {} unfinished file(s) on this rank, in {} range(s) from {}", p.name, ranges.iter().map(|(a, b)| b - a).sum::<i64>(), p.work.iter().map(|(a, b)| b - a).sum::<i64>(), ranges.len(), ranges.first().map(|r| r.0).unwrap_or(0))?,
+            Share::Files { ranges } => {
+                let (lo, hi) = ranges.first().map(|r| (r.0, r.1)).unwrap_or((0, 0));
+                writeln!(log, "dataset {}: files [{lo}, {hi}) of {} on this rank", p.name, p.meta.files())?
+            }
             Share::Regions => writeln!(log, "dataset {}: the regions file, written by this rank", p.name)?,
             Share::Other { owner } => writeln!(log, "dataset {}: the regions file, written by rank {owner}", p.name)?,
         }
@@ -901,19 +1010,32 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     // the headers a container takes from its library: rank 0 makes them, Start carries them
     if rank == 0 {
         let share = make_headers(&mut plans, log)?;
+        if let Some(m) = resume {
+            // the library that made the corpus's headers must make the same ones now
+            for p in &plans {
+                let Some(c) = &p.container else { continue };
+                if !c.headers.is_null() && c.headers["sha256"] != m.provenance["headers"]["sha256"] {
+                    bail!("dataset `{}`: aeiou-header made headers other than the corpus's ({} against {}): a resume would mix them", p.name, c.headers["sha256"], m.provenance["headers"]["sha256"]);
+                }
+            }
+        }
         if let Some(server) = hosts.and_then(|h| h.server) {
             server.share(share);
         }
     }
 
     // the manifests from the start (DESIGN_REVIEW.md §3.70): `writing`, everything unfinished,
-    // so a corpus never holds a file without saying what it is meant to be
+    // so a corpus never holds a file without saying what it is meant to be; a resume keeps
+    // the one there, which already says so
     let started = now_secs();
     let mut manifests = Vec::new();
     for p in &plans {
+        if let Some(m) = resume {
+            manifests.push(m.clone());
+            continue;
+        }
         let mut m = base.manifest(loaded, cfg, &spec, p, ranks, started)?;
-        let all = share_of(p.meta, Some(0), 1, 0);
-        m.progress = json!({"unfinished": ranges_json(&all), "files_written": 0, "bytes_written": 0, "updated": started});
+        m.progress = json!({"unfinished": ranges_json(&p.work), "files_written": 0, "bytes_written": 0, "updated": started});
         if rank == 0 {
             write_manifest(p, &m)?;
         }
@@ -921,12 +1043,12 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     }
 
     // the gate: no rank writes before every rank has checked; when it does not open, nothing
-    // was written, and rank 0 takes back its manifests
+    // was written, and rank 0 takes back its manifests (never a resumed corpus's)
     if let Some(h) = hosts {
         let (_t0, names, shared) = match h.tcp.ready_shared() {
             Ok(x) => x,
             Err(e) => {
-                if rank == 0 {
+                if rank == 0 && resume.is_none() {
                     for p in &plans {
                         let _ = match &p.object {
                             Some((store, rest)) => store.delete_all(&[payload::join_key(rest, payload::MANIFEST_NAME)]).map_err(anyhow::Error::from),
@@ -1040,13 +1162,28 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         manifest.state = payload::STATE_COMPLETE.into();
         manifest.progress = Value::Null;
         let prov = &mut manifest.provenance;
-        prov["host"] = json!(parts.get(&0).and_then(|d| d["host"].as_str()).unwrap_or(&host));
-        prov["hosts"] = json!(host_parts);
-        prov["direct"] = json!(direct);
-        prov["started"] = json!(if started == u64::MAX { w.started } else { started });
-        prov["finished"] = json!(finished.max(w.finished));
-        prov["files_written"] = json!(total_files);
-        prov["bytes_written"] = json!(total_bytes);
+        let started = if started == u64::MAX { w.started } else { started };
+        if resume.is_some() {
+            // the datagen resumed keeps its record; each resume adds its own, and the totals
+            // count every file written and flushed once (what the last window recorded, then
+            // this datagen's)
+            let this = json!({"started": started, "finished": finished.max(w.finished), "ranks": ranks, "hosts": host_parts, "direct": direct, "files_written": total_files, "bytes_written": total_bytes});
+            match prov["resumes"].as_array_mut() {
+                Some(a) => a.push(this),
+                None => prov["resumes"] = json!([this]),
+            }
+            prov["finished"] = json!(finished.max(w.finished));
+            prov["files_written"] = json!(total_files + p.before.0);
+            prov["bytes_written"] = json!(total_bytes + p.before.1);
+        } else {
+            prov["host"] = json!(parts.get(&0).and_then(|d| d["host"].as_str()).unwrap_or(&host));
+            prov["hosts"] = json!(host_parts);
+            prov["direct"] = json!(direct);
+            prov["started"] = json!(started);
+            prov["finished"] = json!(finished.max(w.finished));
+            prov["files_written"] = json!(total_files);
+            prov["bytes_written"] = json!(total_bytes);
+        }
         if wrote_manifest {
             if let Err(e) = write_manifest(p, &manifest) {
                 manifest_error = Some(format!("{e:#}"));

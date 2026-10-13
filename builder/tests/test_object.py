@@ -240,6 +240,50 @@ def test_aeiou_datagen_streams_containers_into_the_bucket(name, minio, tmp_path)
         assert got == want, p
 
 
+@pytest.mark.parametrize("name", ["tfrecord", "plain"])
+def test_aeiou_datagen_resumes_into_the_bucket(name, minio, tmp_path):
+    """`aeiou datagen --resume s3://BUCKET/PREFIX` (DESIGN_REVIEW.md §3.70): an object is
+    whole or absent, so a resume sends only the unfinished ids whose keys are missing (one
+    `LIST`), and the bucket ends as a datagen that ran through left it."""
+    if not _has_object_engine():
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `object`")
+    if name == "tfrecord":
+        ast_file, flags = ast_path("tfrecord_stream"), ["--param", "samples=700", "--param", "per_shard=128", "--param", "sample_median=120000"]
+    else:
+        ast_file, flags = ast_path("file_per_sample"), ["--param", "files=40"]
+    obj = json.loads(pathlib.Path(ast_file).read_text())
+    (ds,) = obj["datasets"]
+    obj["datasets"][ds]["files"]["protocol"] = "s3"
+    obj.pop("posix", None)
+    obj.pop("cache", None)
+    obj_file = tmp_path / "object.ast.json"
+    obj_file.write_text(json.dumps(obj))
+    prefix = f"resume-{name}/data"
+    r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
+                        "--writers", "3", "--dedupe", "2", *flags], capture_output=True, text=True, env=minio.env)
+    if "--features formats" in r.stderr:
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+    assert r.returncode == 0, r.stdout + r.stderr
+    mkey = f"{prefix}/.aeiou-dataset.json"
+    whole = {k: minio.get(k) for k in minio.objects(prefix) if k != mkey}
+    m = json.loads(minio.get(mkey))
+    # what a crash leaves: the manifest `writing`, two unfinished ids' objects missing
+    m["state"] = "writing"
+    m["progress"] = {"unfinished": [[1, 4]], "files_written": 0, "bytes_written": 0, "updated": 0}
+    store = minio.store()
+    obstore.put(store, mkey, json.dumps(m).encode())
+    gone = sorted(whole)[1:3] if name == "tfrecord" else [k for k in whole if k.endswith(("img_000000001.jpg", "img_000000003.jpg"))]
+    assert len(gone) == 2
+    for k in gone:
+        obstore.delete(store, k)
+    r = subprocess.run([RUNNER, "datagen", "--resume", f"s3://bench/{prefix}", "--writers", "2"], capture_output=True, text=True, env=minio.env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert {k: minio.get(k) for k in minio.objects(prefix) if k != mkey} == whole
+    after = json.loads(minio.get(mkey))
+    assert after["state"] == "complete" and after["dataset"] == m["dataset"]
+    assert after["provenance"]["resumes"][0]["files_written"] == 2, "the two missing, not the one there"
+
+
 def test_a_multipart_upload_is_the_file(minio, tmp_path):
     """A file of several parts (the part is 8 MiB) arrives whole; an upload a writer fails
     before its close is aborted and leaves no object."""

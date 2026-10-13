@@ -308,7 +308,10 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
   `ast_sha256`, the full parameter values at datagen time, the datagen version, host, start
   and end time, and the count of files or regions actually written; since 2026-10-04 also
   `ranks`, `hosts` (each rank's host, files, bytes, start and end), and `direct` (written with
-  `O_DIRECT` everywhere).
+  `O_DIRECT` everywhere); since 2026-10-12 `dataset` (the dataset's name in the abstract, which
+  `aeiou datagen --resume` uses) and, after a resume, `resumes` (each resume's ranks, hosts,
+  counts, times, and `direct`), `files_written` and `bytes_written` then counting every
+  datagen's files once.
 - **Identity.** The SHA-256 of the canonical form of the normative content is the dataset id.
   `aeiou run` prints it with every result, next to the AST hash and the parameters in effect;
   a result is those three things.

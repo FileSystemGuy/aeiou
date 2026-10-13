@@ -5246,7 +5246,8 @@ check of the last few transfers of each file after it; decided instead, in the d
 - *Objects:* a completed upload is the whole object, so resume looks for missing keys
   (one paged `LIST`), and it aborts the multipart uploads left below the prefix.
 
-**4. Whole directories (the user's proposal, decided).** Every directory holds the same
+**4. Whole directories (the user's proposal, decided; revised 2026-10-12, §3.71 and below: not
+required of a corpus, only of a subset run's count).** Every directory holds the same
 number of files, for an even load: the count is rounded up to a multiple of `D·k` under
 `{id div D}` (`k` the samples per file), `M·k` under `{id mod M}`, and `k` for a flat
 pattern; the requested and the rounded counts are printed and recorded. Work is handed to
@@ -5489,6 +5490,53 @@ corpus. The bookkeeping costs nothing measurable (8 GiB of TFRecord to tmpfs at 
 writers: 14–17 GB/s against 11–15 for the previous build, this machine's tmpfs varying
 run to run). Next, before building: the command lines of resume, grow, and shrink, and
 the count rounding of whole directories.
+
+**Decided 2026-10-12 (the user): the command lines.** Resume, grow, and shrink are flags of
+`aeiou datagen` that take the dataset root in place of the abstract: `--resume ROOT`,
+`--grow N ROOT`, `--shrink N ROOT`, with `--ranks`, `--rank`, `--coordinator`, and refused
+when this binary's payload or container library differs from the manifest's. Whole
+directories are not required of a corpus (§3.71: the runner stays exact; rounding is the
+sizing step's), so item 4's rounding is withdrawn and a resume splits work by ids.
+
+**Built 2026-10-12: (d), part 2, resume.** `aeiou datagen --resume ROOT`, ROOT a dataset
+root or `s3://BUCKET[/PREFIX]`. Choices made while building:
+
+- *The abstract from the manifest.* The manifest's resolved dataset, wrapped in an abstract
+  with one actor that does nothing and placed at ROOT with an endpoint, goes through the same
+  loader and validator as any abstract, so the code that writes is the code that wrote and
+  the dataset id comes out the manifest's. The manifest did not record the dataset's name;
+  `provenance.dataset` now does (not hashed, so no id changes).
+- *Work by ids, not directories.* The unfinished ranges are split over the ranks as the
+  contiguous split of their concatenation, the same arithmetic as a first datagen's
+  `[0, files)`, and cut into the writers' runs at multiples of the run size. With whole
+  directories not required, nothing better is owed; two ranks may share the boundary
+  directory, as §3.62 allowed.
+- *Objects: skip what is there.* One `LIST` of the prefix; an unfinished id whose key is
+  present is whole (an upload that did not complete leaves no object) and is not sent.
+  Aborting the parts of uploads a crash left is not built: `object_store` 0.14 has no call
+  that lists multipart uploads, and a signed `ListMultipartUploads` of our own is more than
+  this step is worth; the parts are invisible to readers, and a bucket lifecycle rule
+  (`AbortIncompleteMultipartUpload`) can remove them. Open.
+- *The checks.* The payload block and the format block (class, reader, library version,
+  writer) must equal what this binary writes, and rank 0's HDF5 headers from `aeiou-header`
+  must have the provenance's SHA-256s, or nothing is written (`a resume would mix them`).
+- *The record.* The manifest is kept as it is (never removed when the gate does not open),
+  rewritten every window with the earlier counts added, and `complete` at the end with
+  `provenance.resumes` gaining this datagen's ranks, hosts, counts, times, and `direct`;
+  `files_written` and `bytes_written` count each file once (the last recorded window's
+  counts, then this datagen's: a file written after the last window and lost is not counted
+  twice). A `complete` manifest has nothing to write, said, exit 0, so a script may resume
+  until it succeeds.
+
+Tests: a datagen killed after three windows on one host and on two, an unfinished file
+stretched 300 KB past its size, resumed on the other host count: the same id, `complete`,
+every file counted once, `run` accepts the corpus, and the rewritten files are the payload's
+(`tests/coord.rs`); the usage refusals and a complete corpus. The builder's tests resume
+TFRecord, WebDataset, HDF5, and Parquet corpora with files missing and cut short, to the
+bytes of a datagen that ran through (HDF5's headers made again and compared), refuse a
+manifest naming another writer, and resume a bucket, sending only the two missing objects.
+By hand: a 20,000-file `file_per_sample` corpus killed at 900 files and resumed on one host
+and on two is byte for byte the uninterrupted one. Next: grow and shrink.
 
 ### 3.71 Sizing a training corpus: a sizing step that writes a parameter file, scale-free layout, and the step barrier (proposed 2026-10-12, discussed with the user; nothing built)
 

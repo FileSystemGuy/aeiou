@@ -10,6 +10,7 @@ aeiou - Author Execute I/O workload runner: validate, dry-run, generate datasets
 aeiou [--config FILE] check FILES...
 aeiou [--config FILE] dry-run [OPTIONS] --gpus GPUS ABSTRACT
 aeiou [--config FILE] datagen [OPTIONS] --root DIR ABSTRACT
+aeiou [--config FILE] datagen [OPTIONS] --resume ROOT
 aeiou [--config FILE] run [OPTIONS] --gpus GPUS --root DIR ABSTRACT
 aeiou --help | --version
 ```
@@ -94,6 +95,21 @@ before the start gate, writes after it, reports its progress every window, and s
 counts at the end; rank 0 writes the manifests, `complete` once every rank has reported, and records
 every rank's host and counts in the provenance. The coordinator refuses a host whose
 abstract, parameters, `--gpus`, `--dedupe`, `--compress`, or `--dataset` list differ.
+
+`datagen --resume ROOT` finishes a dataset a datagen left `writing` (killed, crashed, or
+failed), from the manifest at ROOT alone: the dataset, its place, the payload, and the
+format are the manifest's, so it takes no abstract. Every id the manifest lists as
+unfinished is written again, whole (a file opened with truncation, so a partial or stale one
+loses its tail); in an object store, where an upload that did not complete leaves no object,
+only the unfinished ids whose keys are missing (one `LIST`). The unfinished ids are split
+over the hosts of this datagen, whatever their count when the corpus was begun. It refuses a
+corpus whose payload or format writer is not this aeiou's, or whose HDF5 headers
+**aeiou-header**(1) would make differently, since the files would mix them. The manifest
+is rewritten every window as for a first datagen and `complete` at the end, with the same
+dataset id; each resume's hosts and counts are added to the provenance (`resumes`). A
+manifest already `complete` has nothing to write, and the command says so and exits 0. Not
+done: the parts of multipart uploads a crash left in a bucket are not aborted (the object
+engine has no call that lists them).
 
 ### run
 
@@ -274,6 +290,17 @@ turns it off, and the last one on the line wins.
 
   With `--ranks` above 1, required: the coordinator's address. Rank 0 listens on it
   (in-process); every rank connects to it. *Layered.*
+
+**Resume**
+
+- **--resume** *ROOT*
+
+  In place of *ABSTRACT*: finish the dataset whose root is ROOT (a directory, or
+  `s3://BUCKET[/PREFIX]`) from its manifest; see **datagen** above. No abstract, `--root`,
+  `--endpoint`, `--param`, `--params-file`, `--gpus`, `--dedupe`, `--compress`, or
+  `--dataset` with it (a usage error); `--writers`, `--object-threads`, `--progress-secs`, and
+  the several-hosts options as for any datagen. With several hosts, every host gives the same
+  ROOT and the coordinator refuses one that read another record of the corpus.
 
 ### aeiou run
 

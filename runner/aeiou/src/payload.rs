@@ -339,6 +339,11 @@ impl Manifest {
         m
     }
 
+    /// While `writing`: the id ranges not yet written and flushed, as recorded.
+    pub fn unfinished(&self) -> Vec<(i64, i64)> {
+        self.progress["unfinished"].as_array().into_iter().flatten().filter_map(|x| Some((x[0].as_i64()?, x[1].as_i64()?))).collect()
+    }
+
     /// The dataset id: SHA-256 of the canonical normative content.
     pub fn id(&self) -> String {
         canon::sha256_hex(&self.normative())

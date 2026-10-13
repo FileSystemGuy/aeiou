@@ -469,7 +469,36 @@ as root). The same runs on the loopback NFS mount are §7.
   taken before the flush it reports, an id outside `unfinished` is a whole file on stable
   storage; a datagen killed at any point leaves a manifest that is true
   (`tests/coord.rs`, on one host and two). `run` refuses any state but `complete`, naming
-  how many files are not written. Resume itself is not built yet.
+  how many files are not written. ~~Resume itself is not built yet.~~ Resume below.
+- **Resume (2026-10-12, `DESIGN_REVIEW.md` §3.70).** `aeiou datagen --resume ROOT` (a dataset
+  root, or `s3://BUCKET[/PREFIX]`) finishes a corpus left `writing`, from its manifest alone:
+  `datagen::resume_abstract` wraps the manifest's resolved dataset, under the name and
+  abstract the provenance records (`provenance.dataset`, added the same day), in an abstract
+  with one actor that does nothing, places it at ROOT with an endpoint, and loads it like any
+  other, so its resolved definition, and the dataset id, are the manifest's. The payload
+  (`--dedupe`, `--compress`) is the manifest's; an abstract, `--root`, `--endpoint`, a
+  parameter, `--gpus`, `--dedupe`, `--compress`, or `--dataset` beside it is a usage error. It
+  refuses, before the gate, a manifest whose payload or format block differs from what this
+  binary writes, and (rank 0) HDF5 headers from `aeiou-header` whose SHA-256s differ from the
+  provenance's. The work is `progress.unfinished`, split over this datagen's ranks as the
+  contiguous split of the ranges' concatenation (`work_slice`; a first datagen's work is
+  `[0, files)`, so its split is `file_slice`'s), cut into runs at multiples of the run size
+  (`cut_runs`), so any host count resumes any corpus. Every unfinished id is written again,
+  whole, opened `O_TRUNC`; an object dataset lists its prefix once and skips the keys there
+  (an upload that did not complete leaves no object). The emptiness check is skipped, the
+  manifest there is kept (and never removed when the gate does not open), the windows run as
+  for a first datagen with the earlier counts added, and the last write is `complete`, with
+  `provenance.resumes` gaining this datagen's ranks, hosts, counts, and times, and
+  `files_written`/`bytes_written` the totals (what the last recorded window counted, then
+  this datagen's). On several hosts the coordinator's identity is the dataset id and the
+  unfinished ranges with their time, so every rank finishes the same record. A `complete`
+  manifest has nothing to write (exit 0). Not built: aborting multipart uploads a crash left
+  in a bucket (object_store has no call that lists them). Tests: `tests/coord.rs` kills a
+  datagen on one host and on two, stretches an unfinished file past its size, resumes on
+  the other host count, and checks the id, the totals, `run`'s acceptance, and the
+  rewritten files' bytes; the builder's tests resume every container format (HDF5's headers
+  made again and compared) and a bucket (only the missing objects sent), and refuse another
+  writer's corpus.
 - **Several hosts (2026-10-04).** `aeiou datagen … --ranks R --rank r --coordinator
   HOST:PORT` on each of R hosts (`aeiou-launch` starts them, §6). Rank `r` writes the files
   of every `files` dataset whose ids fall in its slice of `[0, files)`, the same contiguous

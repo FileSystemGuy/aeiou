@@ -141,6 +141,13 @@ struct DatagenArgs {
     /// With --ranks above 1: the coordinator's address. Rank 0 listens on it (in-process); every rank connects to it.
     #[arg(long, value_name = "HOST:PORT", help_heading = "Several hosts")]
     coordinator: Option<String>,
+    /// Finish the dataset whose root this is (a directory, or s3://BUCKET[/PREFIX]) from its
+    /// manifest, in place of an abstract: every file the manifest lists as unfinished is written
+    /// again, whole (an object already in the bucket is whole and is kept). The dataset, the
+    /// payload, and the format come from the manifest, so no abstract, --root, --endpoint,
+    /// parameter, --gpus, --dedupe, --compress, or --dataset; any host count.
+    #[arg(long, value_name = "ROOT", help_heading = "Resume")]
+    resume: Option<String>,
 }
 
 #[derive(Args)]
@@ -523,15 +530,43 @@ fn real_main(cli: Cli) -> Result<()> {
 fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut l = Layers::new("datagen", config)?;
     let mut miss = Missing::new();
-    let abstract_path = miss.want(a.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None);
+    if a.resume.is_some() {
+        // what the manifest fixes is not taken from anywhere else
+        let given: Vec<&str> = [
+            (a.shape.abstract_path.is_some(), "an abstract"),
+            (!a.shape.params.is_empty(), "--param"),
+            (!a.shape.param_files.is_empty(), "--params-file"),
+            (a.gpus != 1, "--gpus"),
+            (a.dedupe != 1, "--dedupe"),
+            (a.compress != 1, "--compress"),
+            (!a.datasets.is_empty(), "--dataset"),
+            (a.root.is_some(), "--root"),
+            (!a.endpoints.is_empty(), "--endpoint"),
+        ]
+        .into_iter()
+        .filter_map(|(g, n)| g.then_some(n))
+        .collect();
+        if !given.is_empty() {
+            aeiou::usage!("--resume takes the dataset, its place, the payload, and the format from the manifest at its root: {} given too", given.join(", "));
+        }
+    }
+    let abstract_path = if a.resume.is_some() { None } else { miss.want(a.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None) };
     fix_shape(&mut l, &a.shape)?;
     l.fixed("gpus", &a.gpus, a.gpus != 1)?;
     l.fixed("dedupe", &a.dedupe, a.dedupe != 1)?;
     l.fixed("compress", &a.compress, a.compress != 1)?;
     l.fixed("dataset", &a.datasets, !a.datasets.is_empty())?;
+    l.fixed("resume", &a.resume, a.resume.is_some())?;
     let r = usage::root("datagen");
-    let root = miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2));
-    let endpoints = l.layered::<Vec<String>>("endpoint", (!a.endpoints.is_empty()).then_some(a.endpoints.clone()), None)?.unwrap_or_default();
+    let root = match &a.resume {
+        // the place is the manifest's root; an --root from the environment or the file is not used
+        Some(_) => None,
+        None => miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2)),
+    };
+    let endpoints = match &a.resume {
+        Some(_) => Vec::new(),
+        None => l.layered::<Vec<String>>("endpoint", (!a.endpoints.is_empty()).then_some(a.endpoints.clone()), None)?.unwrap_or_default(),
+    };
     let writers = l.layered::<usize>("writers", a.writers, None)?;
     let object_threads = l.layered::<usize>("object-threads", a.object_threads, None)?;
     let progress_secs = l.layered("progress-secs", a.progress_secs, Some(30.0))?.unwrap_or(30.0);
@@ -556,21 +591,50 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     if !(progress_secs > 0.0 && progress_secs.is_finite()) {
         aeiou::usage!("--progress-secs {progress_secs}: a positive number of seconds{}", l.from(&["progress-secs"]));
     }
-    let (abstract_path, root) = (abstract_path.expect("checked"), root.expect("checked"));
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
-    let loaded = aeiou::load(&abstract_path)?;
-    cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
+    // a resume: the abstract is the manifest's dataset alone, placed at the root given
+    let (loaded, root, endpoints, dedupe, compress, resume) = match &a.resume {
+        Some(at) => {
+            let m = datagen::resume_manifest(at)?;
+            if m.state == aeiou::payload::STATE_COMPLETE {
+                println!("resume {at}: the manifest says `complete`; nothing to write  id {}", m.id());
+                return Ok(());
+            }
+            if m.state != aeiou::payload::STATE_WRITING {
+                bail!("resume {at}: the manifest says `{}`, which this aeiou cannot finish", m.state);
+            }
+            let (text, endpoints) = datagen::resume_abstract(&m, at)?;
+            let loaded = aeiou::load_str(&text).with_context(|| format!("resume {at}: the manifest's dataset"))?;
+            let root = if aeiou::object::is_uri(at) { PathBuf::new() } else { PathBuf::from(at) };
+            (loaded, root, endpoints, m.payload.dedupe, m.payload.compress, Some(m))
+        }
+        None => {
+            let loaded = aeiou::load(&abstract_path.expect("checked"))?;
+            cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
+            (loaded, root.expect("checked"), endpoints, a.dedupe, a.compress, None)
+        }
+    };
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, endpoints, writers, dedupe: a.dedupe, compress: a.compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs) };
+    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs), resume };
     let mut out = std::io::stdout();
-    writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
-    l.print(&mut out)?;
-    writeln!(out, "gpus {}  params: {}", cfg.gpus, params_line(&cfg))?;
+    match &opts.resume {
+        Some(m) => {
+            let left: i64 = m.unfinished().iter().map(|(a, b)| b - a).sum();
+            writeln!(out, "resume {}: dataset {} of abstract {}  id {}  {left} file(s) unfinished", a.resume.as_deref().unwrap_or(""), m.provenance["dataset"].as_str().unwrap_or("?"), loaded.ast.name, m.id())?;
+            l.print(&mut out)?;
+            writeln!(out, "payload: dedupe {}  compress {}  (the manifest's)", dedupe, compress)?;
+        }
+        None => {
+            writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+            l.print(&mut out)?;
+            writeln!(out, "gpus {}  params: {}", cfg.gpus, params_line(&cfg))?;
+        }
+    }
     writeln!(out, "host {}  rank {} of {}  writers {}", aeiou::run::hostname(), rank, ranks, writers)?;
     if let Some(line) = object_line(object_threads) {
         writeln!(out, "{line}")?;
@@ -593,14 +657,18 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     };
     let tcp = match &coordinator {
         Some(addr) if ranks > 1 => {
-            let identity = serde_json::json!({
-                "ast_sha256": loaded.sha256,
-                "gpus": cfg.gpus,
-                "params": aeiou::payload::params_json(&loaded.doc, &cfg, &params)?,
-                "dedupe": a.dedupe,
-                "compress": a.compress,
-                "datasets": a.datasets,
-            });
+            let identity = match &opts.resume {
+                // every rank finishes the same corpus from the same record of it
+                Some(m) => serde_json::json!({"resume": m.id(), "unfinished": m.progress["unfinished"], "updated": m.progress["updated"]}),
+                None => serde_json::json!({
+                    "ast_sha256": loaded.sha256,
+                    "gpus": cfg.gpus,
+                    "params": aeiou::payload::params_json(&loaded.doc, &cfg, &params)?,
+                    "dedupe": a.dedupe,
+                    "compress": a.compress,
+                    "datasets": a.datasets,
+                }),
+            };
             let hash = aeiou::canon::sha256_hex(&identity);
             let t = Tcp::connect(addr, rank, ranks, &aeiou::run::hostname(), &identity, &l.json(), &[], Arc::new(AtomicBool::new(false)))?;
             writeln!(out, "coordinator {}: connected as rank {} of {}  identity {}…", t.addr, rank, ranks, &hash[..16])?;
