@@ -5,7 +5,7 @@
 //! thread or a process on this machine; the wire is the same.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -66,6 +66,15 @@ fn opts(root: &PathBuf, rank: i64, ranks: i64) -> RunOpts {
 
 fn connect(server: &Server, rank: i64, ranks: i64, config: &str, participants: &[(String, usize)]) -> anyhow::Result<Arc<Tcp>> {
     Ok(Arc::new(Tcp::connect(&server.addr.to_string(), rank, ranks, &format!("host{rank}"), &serde_json::json!({"cfg": config}), &serde_json::json!({}), participants, Arc::new(AtomicBool::new(false)))?))
+}
+
+/// The manifest at `dir` as a datagen leaves it when it has just noted progress: the live
+/// check's refusal then does not depend on how long killing the ranks took (on a slow host,
+/// longer than two 20 ms windows).
+fn just_updated(dir: &Path) {
+    let mut m = aeiou::payload::Manifest::read(dir).unwrap();
+    m.progress["updated"] = serde_json::json!(aeiou::datagen::now_f64());
+    m.write(dir).unwrap();
 }
 
 #[test]
@@ -542,6 +551,7 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
         std::io::Write::write_all(&mut f, &vec![7u8; 300_000]).unwrap();
         drop(f);
         // a manifest younger than two windows may still have a datagen writing it
+        just_updated(&root.join("train"));
         let outs = resume_ranks(&root.join("train"), 1);
         assert!(!outs[0].0 && outs[0].2.contains("so it may still be writing"), "{outs:?}");
         std::thread::sleep(std::time::Duration::from_millis(60));
@@ -904,6 +914,7 @@ fn a_killed_datagen_or_grow_settles_at_whole_directories() {
         let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
         assert_ne!(m.state, "complete");
         let claimed = m.progress["claimed"].as_i64().unwrap();
+        just_updated(&root.join("train"));
         let o = settle(&root.join("train"));
         assert!(!o.0 && o.2.contains("so it may still be writing"), "{o:?}");
         std::thread::sleep(std::time::Duration::from_millis(60));
