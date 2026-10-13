@@ -35,9 +35,9 @@ w.param("pq_code", 32, unit="bytes", doc="[config] bytes of one PQ-compressed ve
 w.param("stream", 8191, unit="bytes", doc="the first read of a C++ stream on a file (traced)")
 w.param("pq_read", 0x7ffff000, unit="bytes", doc="the stream reads the rest of the PQ file in one call; Linux returns at most this much per read")
 
-index = w.regions("index", file="diskann/index.bin", count=P.nodes, slot=P.sector,
+index = w.dataset("index", pattern="diskann/index.bin", layout="array", access="indexed", count=P.nodes, slot=P.sector,
                   size=const(P.sector), seed=0x5eed_da7d)
-pq = w.dataset("pq", pattern="pq/pq_compressed-{id}.bin", count=1,
+pq = w.dataset("pq", pattern="pq/pq_compressed-{id}.bin", layout="whole", access="indexed", count=1,
                size=const(P.nodes * P.per_sector * P.pq_code + 8),
                seed=0x5eed_da80)   # beside the index in the real layout; a dataset has its root to itself here (V13)
 

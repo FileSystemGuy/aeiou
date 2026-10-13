@@ -16,7 +16,7 @@
 //! - a `files` dataset: `u = id div D`, `b` = logical offset in the file ÷ 1 MiB (a chunked
 //!   file is the logical file cut at `chunk`), so every run of `D` consecutive files carries
 //!   the same bytes block for block, whatever the count;
-//! - a `regions` dataset (one file): `u = 0`, `b = (offset ÷ 1 MiB) div D`, so every run of
+//! - an `array` dataset (one file): `u = 0`, `b = (offset ÷ 1 MiB) div D`, so every run of
 //!   `D` consecutive blocks is one block repeated;
 //! - a namespace object written by `aeiou run`: `seed = labeled_key(namespace seed, "object",
 //!   [xxh3(path)])`, `u = 0`, `b` = offset ÷ 1 MiB, ratio from `--write-compress`, no dedupe.
@@ -32,7 +32,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::ast::{Ast, Dataset};
+use crate::ast::{Ast, Layout};
 use crate::canon;
 use crate::eval::{Config, Params};
 use crate::pattern::Pattern;
@@ -47,8 +47,9 @@ pub const PIECE: usize = 4096;
 pub const FILL: u8 = 0x5A;
 pub const MANIFEST_NAME: &str = ".aeiou-dataset.json";
 /// 2 since 2026-10-12: `state` and `progress` (`DESIGN_REVIEW.md` §3.70), so a reader that
-/// knows only 1 cannot take an unfinished corpus for a whole one.
-pub const MANIFEST_VERSION: u64 = 2;
+/// knows only 1 cannot take an unfinished corpus for a whole one. 3 since 2026-10-13: the
+/// dataset is contract 0.8's one shape (`layout`, `access`, `format.framing`; §3.72).
+pub const MANIFEST_VERSION: u64 = 3;
 /// A dataset's `state`: written at the start as `writing`, `complete` once every file is.
 pub const STATE_WRITING: &str = "writing";
 pub const STATE_COMPLETE: &str = "complete";
@@ -108,9 +109,9 @@ pub fn file_block_seed(seed: u64, id: u64, block: u64, dedupe: u64) -> u64 {
     block_seed(seed, id / dedupe.max(1), block)
 }
 
-/// The seed of block `block` of a `regions` dataset's one file under dedupe ratio `dedupe`:
+/// The seed of block `block` of an `array` dataset's one file under dedupe ratio `dedupe`:
 /// `D` consecutive blocks are one block repeated (since `aeiou-positional/2`).
-pub fn regions_block_seed(seed: u64, block: u64, dedupe: u64) -> u64 {
+pub fn array_block_seed(seed: u64, block: u64, dedupe: u64) -> u64 {
     block_seed(seed, 0, block / dedupe.max(1))
 }
 
@@ -398,14 +399,15 @@ pub fn join_key(rest: &str, name: &str) -> String {
 }
 
 /// The dataset's root directory relative to the run root (`schema/README.md` §6): the
-/// constant directory prefix of a `files` pattern; the directory of a `regions` file.
+/// constant directory prefix of its pattern; the directory of an `array` file.
 pub fn dataset_root(ast: &Ast, name: &str) -> Result<String> {
-    match ast.datasets.get(name).ok_or_else(|| anyhow!("no dataset `{name}`"))? {
-        Dataset::Files(f) => Ok(Pattern::parse(&f.pattern)?.root().to_string()),
-        Dataset::Regions(r) => Ok(match r.file.rfind('/') {
-            Some(i) => r.file[..i].to_string(),
+    let d = ast.datasets.get(name).ok_or_else(|| anyhow!("no dataset `{name}`"))?;
+    match d.layout {
+        Layout::Array => Ok(match d.pattern.rfind('/') {
+            Some(i) => d.pattern[..i].to_string(),
             None => String::new(),
         }),
+        _ => Ok(Pattern::parse(&d.pattern)?.root().to_string()),
     }
 }
 
@@ -546,13 +548,9 @@ pub fn resolved_dataset(doc: &Value, name: &str, cfg: &Config) -> Result<Value> 
         .ok_or_else(|| anyhow!("no dataset `{name}` in the abstract"))?;
     let values = param_values(doc, cfg)?;
     let mut v = substitute(entry, &values)?;
-    if let Some(obj) = v.as_object_mut() {
-        for inner in obj.values_mut() {
-            if let Some(o) = inner.as_object_mut() {
-                o.remove("doc");
-                o.remove("protocol");
-            }
-        }
+    if let Some(o) = v.as_object_mut() {
+        o.remove("doc");
+        o.remove("protocol");
     }
     let bytes = canon::canonical(&v);
     Ok(serde_json::from_slice(&bytes)?)

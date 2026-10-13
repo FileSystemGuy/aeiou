@@ -33,10 +33,10 @@ w.param("index_bytes", 528 * MiB + 128 * KiB + 276, unit="bytes",
 w.param("index_reads", [8192, 512 * MiB - 8192, 8192, 120 * KiB, 8192, 16 * MiB - 8192, 8192], unit="bytes",
         doc="[config] read lengths on the index file: stdio fills 8,192 bytes, and reads the bulk of each large array (centroids, codebooks, list table) directly")
 
-lists = w.regions("lists", file="ivf/merged_index.ivfdata", count=P.lists,
+lists = w.dataset("lists", pattern="ivf/merged_index.ivfdata", layout="array", access="indexed", count=P.lists,
                   slot=256 * KiB,                                        # ≥ the largest list
                   size=P.list_bytes, seed=0x5eed_da7e)
-index = w.dataset("index", pattern="index/populated-{id}.index", count=1, size=const(P.index_bytes),
+index = w.dataset("index", pattern="index/populated-{id}.index", layout="whole", access="indexed", count=1, size=const(P.index_bytes),
                   seed=0x5eed_da7f)    # beside the lists file in the real layout; a dataset has its root to itself here (V13)
 
 with w.actor("gpu") as gpu:                                              # one searching process

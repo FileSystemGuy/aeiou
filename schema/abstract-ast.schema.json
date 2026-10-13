@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.7",
+      "const": "0.8",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -728,207 +728,316 @@
     },
     "dataset": {
       "type": "object",
-      "minProperties": 1,
-      "maxProperties": 1,
+      "required": [
+        "pattern",
+        "layout",
+        "access",
+        "count",
+        "size",
+        "seed"
+      ],
       "additionalProperties": false,
       "properties": {
-        "files": {
+        "pattern": {
+          "$ref": "#/$defs/pattern",
+          "description": "Names of the dataset's files or objects: `{id}` (and `{k}`, the chunk, under `chunked`); an `array`'s one file, with no fields."
+        },
+        "layout": {
+          "type": "string",
+          "enum": [
+            "whole",
+            "chunked",
+            "compound",
+            "array"
+          ],
+          "description": "How a unit of storage (a file or an object) holds the items (contract 0.8): `whole`, one item; `chunked`, part of one (`chunk` bytes a unit, named by `{k}`); `compound`, several variably sized items (`samples_per_file`, framed by `format`); `array`, `count` fixed-size slots in one file (`slot` bytes each). V20."
+        },
+        "access": {
+          "type": "string",
+          "enum": [
+            "map",
+            "stream",
+            "indexed"
+          ],
+          "description": "How the application finds the items (contract 0.8): `map`, samples drawn from the positional shuffle and read by offset; `stream`, files (shards) drawn from it and read sequentially; `indexed`, looked up by id (`file`, `pick`), never consumed. An `array` is `indexed`; a consumed dataset's directories are `{id div D}` or none (V21); the format class says which it supports (V9)."
+        },
+        "count": {
+          "$ref": "#/$defs/expr",
+          "description": "Number of items: samples, or an array's slots."
+        },
+        "size": {
+          "$ref": "#/$defs/distref",
+          "description": "Bytes per item, drawn from the dataset seed; an array's capped at `slot`, the slot's tail unwritten."
+        },
+        "seed": {
+          "$ref": "#/$defs/seed"
+        },
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "samples_per_file": {
+          "$ref": "#/$defs/expr",
+          "description": "Samples in each file of a `compound` dataset (the last may hold fewer)."
+        },
+        "chunk": {
+          "$ref": "#/$defs/expr",
+          "description": "Realize each file as ceil(size / chunk) block objects named by the pattern's {k}."
+        },
+        "slot": {
+          "$ref": "#/$defs/expr",
+          "description": "Slot c of an `array` starts at c * slot."
+        },
+        "format": {
           "type": "object",
           "required": [
-            "pattern",
-            "count",
-            "size",
-            "seed"
+            "class"
           ],
           "additionalProperties": false,
           "properties": {
-            "pattern": {
-              "$ref": "#/$defs/pattern"
+            "class": {
+              "$ref": "#/$defs/ident"
             },
-            "count": {
-              "$ref": "#/$defs/expr",
-              "description": "Number of samples."
-            },
-            "size": {
-              "$ref": "#/$defs/distref",
-              "description": "Bytes per sample, drawn from the dataset seed."
-            },
-            "seed": {
-              "$ref": "#/$defs/seed"
-            },
-            "protocol": {
-              "$ref": "#/$defs/protocol"
-            },
-            "access": {
-              "type": "string",
-              "enum": [
-                "map",
-                "stream"
-              ],
-              "default": "map",
-              "description": "map: the shuffle runs over samples, read by offset; stream: over files (shards), read sequentially. The format class says which it supports (V9)."
-            },
-            "samples_per_file": {
-              "$ref": "#/$defs/expr",
-              "default": 1
-            },
-            "chunk": {
-              "$ref": "#/$defs/expr",
-              "description": "Realize each file as ceil(size / chunk) block objects named by the pattern's {k}."
-            },
-            "format": {
-              "type": "object",
-              "required": [
-                "class"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "class": {
-                  "$ref": "#/$defs/ident"
-                },
-                "reader": {
-                  "type": "string"
-                },
-                "version": {
-                  "type": "string"
-                },
-                "layout": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "description": "The container layout (v0.2): file = file_header \u2016 units \u2016 file_footer, aligned; unit = unit_header \u2016 column chunks \u2016 unit_footer, aligned; column chunk = header \u2016 rows, aligned; row = row_header \u2016 fixed \u2016 share of the sample \u2016 row_footer, aligned. Every field is an expression over parameters; absent means 0 (alignments 1). No layout is the packed layout: samples back to back.",
-                  "properties": {
-                    "unit": {
-                      "$ref": "#/$defs/expr",
-                      "description": "Samples per unit (row group, record batch, chunk); default samples_per_file."
-                    },
-                    "file_header": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "file_header_per_sample": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "file_header_per_unit": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "file_footer": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "file_footer_per_sample": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "file_footer_per_unit": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "file_align": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "unit_header": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "unit_header_per_sample": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "unit_footer": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "unit_footer_per_sample": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "unit_align": {
-                      "$ref": "#/$defs/expr"
-                    },
-                    "columns": {
-                      "type": "array",
-                      "minItems": 1,
-                      "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "properties": {
-                          "header": {
-                            "$ref": "#/$defs/expr",
-                            "description": "Bytes before the rows of this column chunk (a page header)."
-                          },
-                          "fixed": {
-                            "$ref": "#/$defs/expr",
-                            "description": "Bytes per row that do not come from the sample (an int64 label, an offset entry)."
-                          },
-                          "weight": {
-                            "type": "number",
-                            "minimum": 0,
-                            "maximum": 1,
-                            "default": 0,
-                            "description": "Share of each sample's bytes this column carries; weights sum to 1; the last positive one takes the remainder."
-                          },
-                          "row_header": {
-                            "$ref": "#/$defs/expr"
-                          },
-                          "row_footer": {
-                            "$ref": "#/$defs/expr"
-                          },
-                          "row_align": {
-                            "$ref": "#/$defs/expr",
-                            "description": "Each row is padded to a multiple of this (default 1)."
-                          },
-                          "align": {
-                            "$ref": "#/$defs/expr",
-                            "description": "The column chunk is padded to a multiple of this (default 1)."
-                          }
-                        }
-                      },
-                      "description": "The column chunks of a unit; default one column of weight 1."
-                    },
-                    "writer": {
-                      "type": "object",
-                      "description": "Class-specific writer settings, opaque to the runner; part of the resolved definition the manifest compares."
-                    }
-                  }
-                }
-              },
-              "description": "Which format class wrote the container, and its layout. The layout is what the runner computes offsets from; the class, reader, version, and writer settings are matched against the manifest."
-            },
-            "doc": {
+            "reader": {
               "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "framing": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "The container framing (v0.2; `layout` until 0.8): file = file_header \u2016 units \u2016 file_footer, aligned; unit = unit_header \u2016 column chunks \u2016 unit_footer, aligned; column chunk = header \u2016 rows, aligned; row = row_header \u2016 fixed \u2016 share of the sample \u2016 row_footer, aligned. Every field is an expression over parameters; absent means 0 (alignments 1). No framing is the packed framing: samples back to back.",
+              "properties": {
+                "unit": {
+                  "$ref": "#/$defs/expr",
+                  "description": "Samples per unit (row group, record batch, chunk); default samples_per_file."
+                },
+                "file_header": {
+                  "$ref": "#/$defs/expr"
+                },
+                "file_header_per_sample": {
+                  "$ref": "#/$defs/expr"
+                },
+                "file_header_per_unit": {
+                  "$ref": "#/$defs/expr"
+                },
+                "file_footer": {
+                  "$ref": "#/$defs/expr"
+                },
+                "file_footer_per_sample": {
+                  "$ref": "#/$defs/expr"
+                },
+                "file_footer_per_unit": {
+                  "$ref": "#/$defs/expr"
+                },
+                "file_align": {
+                  "$ref": "#/$defs/expr"
+                },
+                "unit_header": {
+                  "$ref": "#/$defs/expr"
+                },
+                "unit_header_per_sample": {
+                  "$ref": "#/$defs/expr"
+                },
+                "unit_footer": {
+                  "$ref": "#/$defs/expr"
+                },
+                "unit_footer_per_sample": {
+                  "$ref": "#/$defs/expr"
+                },
+                "unit_align": {
+                  "$ref": "#/$defs/expr"
+                },
+                "columns": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "header": {
+                        "$ref": "#/$defs/expr",
+                        "description": "Bytes before the rows of this column chunk (a page header)."
+                      },
+                      "fixed": {
+                        "$ref": "#/$defs/expr",
+                        "description": "Bytes per row that do not come from the sample (an int64 label, an offset entry)."
+                      },
+                      "weight": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "default": 0,
+                        "description": "Share of each sample's bytes this column carries; weights sum to 1; the last positive one takes the remainder."
+                      },
+                      "row_header": {
+                        "$ref": "#/$defs/expr"
+                      },
+                      "row_footer": {
+                        "$ref": "#/$defs/expr"
+                      },
+                      "row_align": {
+                        "$ref": "#/$defs/expr",
+                        "description": "Each row is padded to a multiple of this (default 1)."
+                      },
+                      "align": {
+                        "$ref": "#/$defs/expr",
+                        "description": "The column chunk is padded to a multiple of this (default 1)."
+                      }
+                    }
+                  },
+                  "description": "The column chunks of a unit; default one column of weight 1."
+                },
+                "writer": {
+                  "type": "object",
+                  "description": "Class-specific writer settings, opaque to the runner; part of the resolved definition the manifest compares."
+                }
+              }
+            }
+          },
+          "description": "Which format class wrote the container, and its layout. The layout is what the runner computes offsets from; the class, reader, version, and writer settings are matched against the manifest."
+        },
+        "doc": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "layout": {
+                "const": "whole"
+              }
+            }
+          },
+          "then": {
+            "required": [],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "samples_per_file"
+                  ]
+                },
+                {
+                  "required": [
+                    "chunk"
+                  ]
+                },
+                {
+                  "required": [
+                    "slot"
+                  ]
+                },
+                {
+                  "required": [
+                    "format"
+                  ]
+                }
+              ]
             }
           }
         },
-        "regions": {
-          "type": "object",
-          "required": [
-            "file",
-            "count",
-            "slot",
-            "size",
-            "seed"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "file": {
-              "type": "string",
-              "minLength": 1
+        {
+          "if": {
+            "properties": {
+              "layout": {
+                "const": "chunked"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "chunk"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "samples_per_file"
+                  ]
+                },
+                {
+                  "required": [
+                    "slot"
+                  ]
+                },
+                {
+                  "required": [
+                    "format"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "layout": {
+                "const": "compound"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "samples_per_file"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "chunk"
+                  ]
+                },
+                {
+                  "required": [
+                    "slot"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "layout": {
+                "const": "array"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "slot"
+            ],
+            "properties": {
+              "access": {
+                "const": "indexed"
+              }
             },
-            "count": {
-              "$ref": "#/$defs/expr"
-            },
-            "slot": {
-              "$ref": "#/$defs/expr",
-              "description": "Region c starts at c * slot."
-            },
-            "size": {
-              "$ref": "#/$defs/distref",
-              "description": "Bytes of region c, capped at slot; the slot's tail is unwritten."
-            },
-            "seed": {
-              "$ref": "#/$defs/seed"
-            },
-            "protocol": {
-              "$ref": "#/$defs/protocol"
-            },
-            "doc": {
-              "type": "string"
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "samples_per_file"
+                  ]
+                },
+                {
+                  "required": [
+                    "chunk"
+                  ]
+                },
+                {
+                  "required": [
+                    "format"
+                  ]
+                }
+              ]
             }
           }
         }
-      }
+      ]
     },
     "namespace": {
       "type": "object",

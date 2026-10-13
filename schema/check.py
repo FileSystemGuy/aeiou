@@ -8,6 +8,7 @@ This is the reference for the rules until the Rust validator exists; the Rust va
 reject everything this rejects. It needs only jsonschema.
 """
 import hashlib
+import re
 import json
 import pathlib
 import sys
@@ -27,11 +28,8 @@ RESERVED_PREFIX = ".aeiou"                                            # V13: the
 
 
 def dataset_root(d: dict) -> str:
-    """Constant directory prefix of a files pattern, or the directory of a regions file."""
-    kind, body = next(iter(d.items()))
-    if kind == "regions":
-        return body["file"].rpartition("/")[0]
-    prefix = body["pattern"].split("{", 1)[0]
+    """Constant directory prefix of a dataset's pattern (an array's: its file's directory)."""
+    prefix = d["pattern"].split("{", 1)[0]
     return prefix.rpartition("/")[0]
 
 
@@ -39,7 +37,7 @@ def protocols(ast: dict, traces: bool) -> tuple:
     """(posix, s3): the protocols an abstract has names on. `posix` when a dataset or namespace
     declares it (or none), when a `trace` node runs (its files are under --root), or when no
     name is `s3`."""
-    declared = [next(iter(d.values())).get("protocol", "posix") for d in ast.get("datasets", {}).values()]
+    declared = [d.get("protocol", "posix") for d in ast.get("datasets", {}).values()]
     declared += [n.get("protocol", "posix") for n in ast.get("namespaces", {}).values()]
     s3 = "s3" in declared
     return ("posix" in declared or traces or not s3), s3
@@ -66,6 +64,30 @@ class Check:
     def err(self, path, msg):
         self.errors.append(f"{self.name}: {'/'.join(map(str, path))}: {msg}")
 
+    def layout_fields(self, d: dict, path: list):
+        """V20 (the fields each layout takes) and V21 (access), contract 0.8."""
+        layout = d["layout"]
+        need, may = {"whole": ((), ()), "chunked": (("chunk",), ()), "compound": (("samples_per_file",), ("format",)),
+                     "array": (("slot",), ())}[layout]
+        for k in ("samples_per_file", "chunk", "slot", "format"):
+            if k in need and k not in d:
+                self.err(path, f"layout `{layout}` needs `{k}` (V20)")
+            elif k in d and k not in need and k not in may:
+                self.err(path + [k], f"layout `{layout}` takes no `{k}` (V20)")
+        fields = set(re.findall(r"\{([a-z_][a-z0-9_]*)", d["pattern"]))
+        if layout == "array" and fields:
+            self.err(path + ["pattern"], "an `array` is one file: its pattern has no fields (V20)")
+        elif layout == "chunked" and "k" not in fields:
+            self.err(path + ["pattern"], "a `chunked` dataset's pattern needs a `{k}` field (V20)")
+        elif layout in ("whole", "compound") and "k" in fields:
+            self.err(path + ["pattern"], "`{k}` names a chunk: only a `chunked` dataset has one (V20)")
+        elif layout != "array" and "id" not in fields:
+            self.err(path + ["pattern"], "the pattern needs an `{id}` field (V20)")
+        if layout == "array" and d["access"] != "indexed":
+            self.err(path + ["access"], "an `array` is `indexed`: its slots are looked up by position (V21)")
+        if d["access"] in ("map", "stream") and re.search(r"\{id mod ", d["pattern"].rpartition("/")[0]):
+            self.err(path + ["pattern"], "a consumed dataset's directories are `{id div D}` or none, never `mod`, so a subset of it is whole directories (V21)")
+
     # ---- entry ----
     def run(self):
         if "gpus" in self.params:
@@ -74,16 +96,17 @@ class Check:
             self.value(p["default"], ["params", pname])
         roots = {}
         for dname, d in self.datasets.items():
-            kind, body = next(iter(d.items()))
+            body = d
+            self.layout_fields(body, ["datasets", dname])
             self.exprlike(body["size"], ["datasets", dname, "size"], Scope(self), dist_ok=True)
             self.expr(body["count"], ["datasets", dname, "count"], Scope(self))
             for k in ("samples_per_file", "chunk", "slot"):
                 if k in body:
                     self.expr(body[k], ["datasets", dname, k], Scope(self))
-            layout = body.get("format", {}).get("layout")
-            if layout:
-                lp = ["datasets", dname, "format", "layout"]
-                for k, v in layout.items():
+            framing = body.get("format", {}).get("framing")
+            if framing:
+                lp = ["datasets", dname, "format", "framing"]
+                for k, v in framing.items():
                     if k == "columns":
                         weights = [c.get("weight", 0) for c in v]
                         if any(w < 0 for w in weights):
@@ -96,7 +119,7 @@ class Check:
                                     self.expr(cv, lp + ["columns", i, ck], Scope(self))
                     elif k != "writer":
                         self.expr(v, lp + [k], Scope(self))
-            self.reserved(body.get("pattern") or body.get("file"), ["datasets", dname])
+            self.reserved(body["pattern"], ["datasets", dname])
             root = dataset_root(d)
             if root in roots:
                 self.err(["datasets", dname], f"shares root `{root}/` with dataset `{roots[root]}` (V13)")
@@ -397,8 +420,8 @@ class Check:
             if a not in self.datasets:
                 self.err(p, f"unknown dataset `{a}`")
         elif k == "dirs":
-            if a not in self.datasets or "files" not in self.datasets[a]:
-                self.err(p, f"`dirs` needs a files dataset, got `{a}`")
+            if a not in self.datasets or self.datasets[a]["layout"] == "array":
+                self.err(p, f"`dirs` needs a dataset named by ids, not an `array`: got `{a}`")
         elif k == "cond":
             self.expr(a["if"], p + ["if"], scope)
             self.exprlike(a["then"], p + ["then"], scope, dist_ok=True, binding=binding)
@@ -485,8 +508,8 @@ class Check:
             if "chunk" in a:
                 self.expr(a["chunk"], p + ["chunk"], scope)
         elif k == "dir":
-            if a["dataset"] not in self.datasets or "files" not in self.datasets[a["dataset"]]:
-                self.err(p, f"`dir` needs a files dataset, got `{a['dataset']}`")
+            if a["dataset"] not in self.datasets or self.datasets[a["dataset"]]["layout"] == "array":
+                self.err(p, f"`dir` needs a dataset named by ids, not an `array`: got `{a['dataset']}`")
             self.expr(a["id"], p + ["id"], scope)
         elif k == "object":
             ns = self.namespaces.get(a["namespace"])
@@ -499,6 +522,8 @@ class Check:
         elif k == "consume":
             if a not in self.datasets:
                 self.err(p, f"unknown dataset `{a}`")
+            elif self.datasets[a]["access"] not in ("map", "stream"):
+                self.err(p, f"`consume` from `{a}`, which is `indexed`: its items are looked up by id (`file`, `pick`), never drawn from the shuffle (V21)")
             if not scope.indices:
                 self.err(p, "`consume` outside any loop: its position needs an index")
         elif k == "pick":

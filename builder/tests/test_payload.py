@@ -56,7 +56,7 @@ def test_the_rust_writer_writes_the_same_bytes(tmp_path):
     r = subprocess.run([str(RUNNER), "datagen", str(ast), "--root", str(root), "--param", "files=12", "--dedupe", "2",
                         "--compress", "3", "--writers", "2"], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
-    seed = json.loads(ast.read_text())["datasets"]["train"]["files"]["seed"]
+    seed = json.loads(ast.read_text())["datasets"]["train"]["seed"]
     m = json.loads((root / "train" / ".aeiou-dataset.json").read_text())
     assert m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/3"
     for i in range(12):

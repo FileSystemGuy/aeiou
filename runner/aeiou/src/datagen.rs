@@ -8,8 +8,8 @@
 //! **Several hosts** (`--ranks R --rank r --coordinator`, 2026-10-04, `DESIGN_REVIEW.md`
 //! §3.62). The ids of every `files` dataset are handed out in runs from one queue on rank 0,
 //! in id order (§3.70, 2026-10-12: so an interrupted corpus is whole directories, a band of
-//! partial ones, and nothing past it; and the hosts share the load), and each `regions`
-//! dataset is written whole by one rank (the i-th regions
+//! partial ones, and nothing past it; and the hosts share the load), and each `array`
+//! dataset is written whole by one rank (the i-th array
 //! dataset by rank `i mod R`: several hosts writing one NFS file serialize on the server, so
 //! the split buys nothing). Every rank checks that the roots are empty before the start gate,
 //! writes after it, `syncfs`es, and sends its counts; rank 0 writes the manifests once every
@@ -28,7 +28,7 @@
 //! **Object datasets** (`protocol: s3`, `object.rs`): each file is one object, sent as
 //! one `PUT` or, when larger than `object::DEFAULT_PART`, a multipart upload in parts of
 //! that size, each part made and sent before the next; the root's emptiness is a `LIST`, the
-//! manifest one `PUT` (atomic, so no temporary name), and there is no `syncfs`. A `regions`
+//! manifest one `PUT` (atomic, so no temporary name), and there is no `syncfs`. An `array`
 //! dataset, a sparse layout written at offsets, has no object form and is refused.
 //!
 //! **Writers.** Each writer (`--writers`, a thread each) claims a run, writes it in id order,
@@ -38,7 +38,7 @@
 //! exclusively for every create, and on NFS the `OPEN` round trip runs under it: threads
 //! creating in one directory serialize. A shrink claims its runs from the top down and
 //! removes each from its highest id down. Rank 0 records a claim mark in the manifest before
-//! handing out a run past it, so a settle knows how far strays can reach. A regions file is
+//! handing out a run past it, so a settle knows how far strays can reach. An array file is
 //! cut into 64 MiB pieces for the owner's writers (`pwrite` at disjoint offsets).
 //!
 //! **Stopping.** Ctrl-C (`SIGINT`) on any host stops every host: each stops claiming, leaves
@@ -66,7 +66,7 @@ use crate::payload::{self, Filler, Manifest, PayloadSpec, BLOCK};
 
 /// The alignment `O_DIRECT` wants of a buffer and a length (the largest common logical block).
 pub const ALIGN: usize = 4096;
-/// A regions file is written in pieces of this many bytes, one per writer at a time.
+/// An array file is written in pieces of this many bytes, one per writer at a time.
 const REGIONS_PIECE: u64 = 64 << 20;
 /// The ids of a run of a pattern without `{id div N}` directories.
 pub const FLAT_RUN: i64 = 1000;
@@ -180,7 +180,7 @@ pub struct DatasetResult {
     pub elapsed: Duration,
     /// This rank wrote the manifest (rank 0; the only rank on one host).
     pub wrote_manifest: bool,
-    /// A `regions` dataset another rank owns.
+    /// An `array` dataset another rank owns.
     pub owner: Option<i64>,
     /// A container's class and writer, `class, writer`.
     pub format: Option<String>,
@@ -232,8 +232,8 @@ pub fn resume_abstract(m: &Manifest, root: &str) -> Result<(String, Vec<String>)
     let name = m.provenance["dataset"].as_str().unwrap_or("dataset").to_string();
     let mut dataset = m.dataset.clone();
     if crate::object::is_uri(root) {
-        if let Some(inner) = dataset.as_object_mut().and_then(|o| o.values_mut().next()).and_then(Value::as_object_mut) {
-            inner.insert("protocol".into(), json!("s3"));
+        if let Some(def) = dataset.as_object_mut() {
+            def.insert("protocol".into(), json!("s3"));
         }
     }
     let doc = json!({
@@ -251,10 +251,10 @@ pub fn resume_abstract(m: &Manifest, root: &str) -> Result<(String, Vec<String>)
 /// begun recorded in `provenance.resizes`.
 pub fn resize_manifest(m: &Manifest, from: i64, count: i64) -> Result<Manifest> {
     let mut r = m.clone();
-    let Some(files) = r.dataset.get_mut("files").and_then(Value::as_object_mut) else {
-        bail!("only a `files` dataset grows or shrinks");
+    let Some(def) = r.dataset.as_object_mut().filter(|d| d["layout"] != "array") else {
+        bail!("an `array` does not grow or shrink");
     };
-    files.insert("count".into(), json!(count));
+    def.insert("count".into(), json!(count));
     let grow = count > from;
     r.state = if grow { payload::STATE_GROWING } else { payload::STATE_SHRINKING }.into();
     r.progress = json!({"from": from});
@@ -298,9 +298,9 @@ pub fn runs_of(work: &[(i64, i64)], dirs: &DirScheme, slots: usize, desc: bool) 
     pieces
 }
 
-/// The rank that writes the `index`-th `regions` dataset (in the abstract's order, among the
+/// The rank that writes the `index`-th `array` dataset (in the abstract's order, among the
 /// datasets selected).
-pub fn regions_owner(index: usize, ranks: i64) -> i64 {
+pub fn array_owner(index: usize, ranks: i64) -> i64 {
     (index as i64).rem_euclid(ranks.max(1))
 }
 
@@ -460,10 +460,7 @@ struct Container {
 
 /// The writer of a format-class dataset, from its resolved definition.
 fn container(name: &str, resolved: &Value) -> Result<Container> {
-    let fmt = &resolved["files"]["format"];
-    if !resolved["files"]["chunk"].is_null() {
-        bail!("dataset `{name}`: a container dataset with `chunk` has no writer");
-    }
+    let fmt = &resolved["format"];
     #[cfg(feature = "formats")]
     {
         let writer = crate::formats::Writer::from_format(name, fmt)?;
@@ -610,9 +607,9 @@ fn syncfs(dir: &Path) -> Result<()> {
 enum Share {
     /// Runs of a `files` dataset's ids, claimed from rank 0's queue.
     Files,
-    /// The whole `regions` file.
-    Regions,
-    /// Nothing: a `regions` dataset another rank owns.
+    /// The whole `array` file.
+    Array,
+    /// Nothing: an `array` dataset another rank owns.
     Other { owner: i64 },
 }
 
@@ -625,13 +622,13 @@ struct Plan<'m, 'a> {
     /// The writer of a format-class dataset.
     container: Option<Container>,
     share: Share,
-    /// The rank that writes a `regions` dataset.
+    /// The rank that writes an `array` dataset.
     owner: Option<i64>,
     /// A resumed object dataset: the keys already there (one `LIST`), each a whole object,
     /// since an upload that did not complete leaves none.
     present: std::collections::HashSet<String>,
     /// Every rank's ids, before any has said anything: `[0, files)`, a resume's unfinished
-    /// ranges, a grow's or shrink's ids from the first that changes (a regions file is id 0).
+    /// ranges, a grow's or shrink's ids from the first that changes (an array file is id 0).
     work: Vec<(i64, i64)>,
     /// Claimed and done from the top down (a shrink).
     desc: bool,
@@ -683,7 +680,7 @@ struct Track {
     files: AtomicU64,
     bytes: AtomicU64,
     claims: Mutex<Claims>,
-    /// The regions file is written.
+    /// The array file is written.
     whole: AtomicBool,
     /// Names removed (a shrink, a settle).
     removed: AtomicU64,
@@ -785,10 +782,10 @@ impl Plan<'_, '_> {
         Ok(got)
     }
 
-    /// This rank's note on the dataset: the ids not yet done of the runs it holds (a regions
+    /// This rank's note on the dataset: the ids not yet done of the runs it holds (an array
     /// file is id 0), how many runs it has received (`seen`: rank 0 counts the ones it sent
     /// after them as not done), and the files and bytes of the rest, read together: every
-    /// writer's lock is held while its cursor and the counts are read, and a regions file
+    /// writer's lock is held while its cursor and the counts are read, and an array file
     /// counts once whole.
     fn note(&self, tcp: Option<&Tcp>) -> Value {
         let mut v = Vec::new();
@@ -796,7 +793,7 @@ impl Plan<'_, '_> {
         let counts = || (self.track.files.load(Ordering::Relaxed), self.track.bytes.load(Ordering::Relaxed));
         let (files, bytes) = match self.share {
             Share::Other { .. } => (0, 0),
-            Share::Regions => {
+            Share::Array => {
                 if self.track.whole.load(Ordering::Acquire) {
                     counts()
                 } else {
@@ -839,7 +836,7 @@ fn merge_ranges(mut v: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
     out
 }
 
-/// What rank `r` is to write of a `regions` dataset, before it has said anything.
+/// What rank `r` is to write of an `array` dataset, before it has said anything.
 fn share_of(p: &Plan<'_, '_>, r: i64) -> Vec<(i64, i64)> {
     if p.owner == Some(r) {
         p.work.clone()
@@ -1064,7 +1061,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                 });
             }
         }
-        (Share::Regions, DsMeta::Regions { .. }) => {
+        (Share::Array, DsMeta::Array { .. }) => {
             let path = meta.file_path(0, None)?.to_string();
             let full = opts.endpoints.path(&opts.root, &path);
             let size = meta.file_size(0)? as u64;
@@ -1072,7 +1069,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
             let pieces = (size + REGIONS_PIECE - 1) / REGIONS_PIECE;
             let next = AtomicU64::new(0);
             let nthreads = writers.min(pieces.max(1) as usize);
-            let seed_of = |blk: u64| payload::regions_block_seed(seed, blk, dedupe);
+            let seed_of = |blk: u64| payload::array_block_seed(seed, blk, dedupe);
             let left = AtomicBool::new(false);
             std::thread::scope(|s| {
                 for _ in 0..nthreads {
@@ -1277,7 +1274,7 @@ impl Ticker<'_, '_, '_> {
             // a shrink's ids reach past its count
             total += match p.meta {
                 DsMeta::Files { .. } => p.meta.files().max(p.work.last().map_or(0, |r| r.1)),
-                DsMeta::Regions { .. } => 1,
+                DsMeta::Array { .. } => 1,
             };
             left += unfinished.iter().map(|(a, b)| b - a).sum::<i64>();
             bytes += b - p.before.1;
@@ -1313,7 +1310,7 @@ pub fn settle_manifest(m: &Manifest, meta: &DsMeta<'_>) -> Result<Manifest> {
         // a settle that did not finish: its count is decided
         return Ok(m.clone());
     }
-    let DsMeta::Files { spf, .. } = meta else { bail!("a `regions` dataset is one file: `--resume` finishes it") };
+    let DsMeta::Files { spf, .. } = meta else { bail!("an `array` dataset is one file: `--resume` finishes it") };
     let Some(claimed) = p["claimed"].as_i64() else { bail!("the manifest records no claim boundary (an earlier aeiou wrote it): `--resume` finishes it") };
     let mark = p["claimed_to"].as_i64().unwrap_or(claimed);
     let n = meta.count();
@@ -1345,7 +1342,7 @@ pub fn settle_manifest(m: &Manifest, meta: &DsMeta<'_>) -> Result<Manifest> {
         }
     }
     let mut r = m.clone();
-    let Some(def) = r.dataset.get_mut("files").and_then(Value::as_object_mut) else { bail!("only a `files` dataset settles") };
+    let Some(def) = r.dataset.as_object_mut().filter(|d| d["layout"] != "array") else { bail!("an `array` is one file: `--resume` finishes it") };
     def.insert("count".into(), json!(s));
     let mut progress = json!({"unfinished": ranges_json(&t), "files_written": files, "bytes_written": bytes, "settle": {"asked": n, "count": s}, "updated": p["updated"], "progress_secs": p["progress_secs"]});
     if let Some(f) = from {
@@ -1387,14 +1384,14 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     // manifest, written before the gate, aside); a resume checks instead that the format
     // writer is the one that wrote the corpus
     let mut plans = Vec::new();
-    let mut regions_index = 0usize;
+    let mut array_index = 0usize;
     for meta in model.datasets.iter() {
         let name = meta.name();
         if !opts.datasets.is_empty() && !opts.datasets.iter().any(|d| d == name) {
             continue;
         }
         let container = match loaded.ast.datasets.get(name) {
-            Some(crate::ast::Dataset::Files(f)) if f.format.is_some() => Some(container(name, &payload::resolved_dataset(&loaded.doc, name, cfg)?)?),
+            Some(d) if d.format.is_some() => Some(container(name, &payload::resolved_dataset(&loaded.doc, name, cfg)?)?),
             _ => None,
         };
         let rel = payload::dataset_root(&loaded.ast, name)?;
@@ -1407,8 +1404,8 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 bail!("dataset `{name}`: the corpus's format is {} and this aeiou writes {}: a resume would mix them", show(m.format.as_ref()), show(mine));
             }
         }
-        if object.is_some() && matches!(meta, DsMeta::Regions { .. }) {
-            bail!("dataset `{name}`: a `regions` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
+        if object.is_some() && matches!(meta, DsMeta::Array { .. }) {
+            bail!("dataset `{name}`: an `array` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
         }
         let mut present = std::collections::HashSet::new();
         if let (Some((store, rest)), true) = (&object, resume.is_some() && opts.resize.is_none()) {
@@ -1481,11 +1478,11 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 });
                 (Share::Files, None, queue)
             }
-            DsMeta::Regions { .. } => {
-                let owner = regions_owner(regions_index, ranks);
-                regions_index += 1;
-                // a resume whose regions file was finished has nothing to write
-                (if owner == rank && !work.is_empty() { Share::Regions } else { Share::Other { owner } }, Some(owner), None)
+            DsMeta::Array { .. } => {
+                let owner = array_owner(array_index, ranks);
+                array_index += 1;
+                // a resume whose array file was finished has nothing to write
+                (if owner == rank && !work.is_empty() { Share::Array } else { Share::Other { owner } }, Some(owner), None)
             }
         };
         let mark = match resume {
@@ -1522,8 +1519,8 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                     None => writeln!(log, "dataset {}: {what}, in runs claimed from rank 0", p.name)?,
                 }
             }
-            Share::Regions => writeln!(log, "dataset {}: the regions file, written by this rank", p.name)?,
-            Share::Other { owner } => writeln!(log, "dataset {}: the regions file, written by rank {owner}", p.name)?,
+            Share::Array => writeln!(log, "dataset {}: the array file, written by this rank", p.name)?,
+            Share::Other { owner } => writeln!(log, "dataset {}: the array file, written by rank {owner}", p.name)?,
         }
     }
     log.flush()?;

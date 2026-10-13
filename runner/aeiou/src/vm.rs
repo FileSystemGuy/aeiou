@@ -1003,7 +1003,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     fn container_of(&self, ds: usize, id: i64) -> i64 {
         match &self.model.datasets[ds] {
             DsMeta::Files { spf, .. } => id / spf,
-            DsMeta::Regions { .. } => 0,
+            DsMeta::Array { .. } => 0,
         }
     }
 
@@ -1018,11 +1018,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     let ds = self.model.dataset(ds)?;
                     let file = self.expr(id)?.as_int()?;
                     match &self.model.datasets[ds] {
-                        DsMeta::Regions { .. } => {
+                        DsMeta::Array { .. } => {
                             if file != 0 {
-                                return other("a regions dataset has one file, id 0");
+                                return other("an array dataset has one file, id 0");
                             }
-                            HVal::RegionFile { ds }
+                            HVal::ArrayFile { ds }
                         }
                         DsMeta::Files { .. } => match &f.chunk {
                             Some(k) => HVal::Chunk { ds, file, k: self.expr(k)?.as_int()? },
@@ -1035,14 +1035,14 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     let (ds, file) = match inner {
                         HVal::Sample { ds, id } => (ds, self.container_of(ds, id)),
                         HVal::File { ds, file } => (ds, file),
-                        HVal::Region { ds, .. } | HVal::RegionFile { ds } => (ds, 0),
+                        HVal::Slot { ds, .. } | HVal::ArrayFile { ds } => (ds, 0),
                         HVal::Chunk { ds, file, .. } | HVal::Unit { ds, file, .. } | HVal::Column { ds, file, .. } => (ds, file),
                         other_h => return other(format!("file {{of}}: {other_h:?} has no container")),
                     };
                     match &f.chunk {
                         Some(k) => HVal::Chunk { ds, file, k: self.expr(k)?.as_int()? },
                         None => match &self.model.datasets[ds] {
-                            DsMeta::Regions { .. } => HVal::RegionFile { ds },
+                            DsMeta::Array { .. } => HVal::ArrayFile { ds },
                             _ => HVal::File { ds, file },
                         },
                     }
@@ -1133,7 +1133,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 match meta {
                     DsMeta::Files { access: Access::Stream, .. } => HVal::File { ds, file: id },
                     DsMeta::Files { .. } => HVal::Sample { ds, id },
-                    DsMeta::Regions { .. } => HVal::Region { ds, c: id },
+                    DsMeta::Array { .. } => HVal::Slot { ds, c: id },
                 }
             }
         })
@@ -1190,8 +1190,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             HVal::Sample { ds: d, id } => ds[*d].sample_size(*id)?,
             HVal::File { ds: d, file } => ds[*d].file_size(*file)?,
             HVal::Chunk { ds: d, file, k } => ds[*d].chunk_size(*file, *k)?,
-            HVal::Region { ds: d, c } => ds[*d].sample_size(*c)?,
-            HVal::RegionFile { ds: d } => ds[*d].file_size(0)?,
+            HVal::Slot { ds: d, c } => ds[*d].sample_size(*c)?,
+            HVal::ArrayFile { ds: d } => ds[*d].file_size(0)?,
             HVal::Unit { ds: d, file, u } => {
                 let lens = self.unit_lens(*d, *file)?;
                 match lens.get(*u as usize) {
@@ -1212,8 +1212,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     fn offset_of(&mut self, h: &HVal) -> ER<i64> {
         Ok(match h {
             HVal::Sample { ds, id } => self.model.datasets[*ds].sample_offset(*id)?,
-            HVal::Region { ds, c } => self.model.datasets[*ds].sample_offset(*c)?,
-            HVal::Chunk { .. } | HVal::File { .. } | HVal::RegionFile { .. } => 0,
+            HVal::Slot { ds, c } => self.model.datasets[*ds].sample_offset(*c)?,
+            HVal::Chunk { .. } | HVal::File { .. } | HVal::ArrayFile { .. } => 0,
             HVal::Unit { ds, file, u } => self.unit_offset(*ds, *file, *u)?,
             HVal::Column { ds, file, u, c } => self.unit_offset(*ds, *file, *u)? + self.model.datasets[*ds].col_offset_in_unit(*file, *u, *c)?,
             _ => return other(format!("offset of {h:?}")),
@@ -1240,7 +1240,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 Target { path: ds[*d].file_path(*file, None)?, size: Some(ds[*d].file_size(*file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None }
             }
             HVal::Chunk { ds: d, file, k } => Target { path: ds[*d].file_path(*file, Some(*k))?, size: Some(ds[*d].chunk_size(*file, *k)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None },
-            HVal::Region { ds: d, .. } | HVal::RegionFile { ds: d } => Target { path: ds[*d].file_path(0, None)?, size: Some(ds[*d].file_size(0)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None },
+            HVal::Slot { ds: d, .. } | HVal::ArrayFile { ds: d } => Target { path: ds[*d].file_path(0, None)?, size: Some(ds[*d].file_size(0)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None },
             HVal::Dir { ds: d, d: dir } => Target { path: ds[*d].dir_path(*dir)?, size: None, as_written: false, seed: ds[*d].dataset_seed(), entries: ds[*d].dir_entries(*dir) },
             HVal::Object { ns, path, size } => Target { path: path.clone(), size: *size, as_written: size.is_none(), seed: self.model.namespaces[*ns].seed, entries: None },
         })

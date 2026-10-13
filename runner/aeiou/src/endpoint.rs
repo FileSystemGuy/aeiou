@@ -18,7 +18,7 @@ use anyhow::Result;
 
 use crate::object::Store;
 
-use crate::ast::{Ast, Dataset, Protocol};
+use crate::ast::{Ast, Protocol};
 use crate::payload;
 
 /// Where an abstract's relative paths live: a bare root (every path under it), or a run's
@@ -77,11 +77,7 @@ pub struct Endpoints {
 /// A dataset's or namespace's protocol and root, by name.
 fn lookup(ast: &Ast, name: &str) -> Result<Option<(Protocol, String)>> {
     if let Some(d) = ast.datasets.get(name) {
-        let p = match d {
-            Dataset::Files(f) => f.protocol,
-            Dataset::Regions(r) => r.protocol,
-        };
-        return Ok(Some((p.unwrap_or_default(), payload::dataset_root(ast, name)?)));
+        return Ok(Some((d.protocol.unwrap_or_default(), payload::dataset_root(ast, name)?)));
     }
     if let Some(n) = ast.namespaces.get(name) {
         return Ok(Some((n.protocol.unwrap_or_default(), payload::namespace_root(ast, name)?)));
@@ -233,9 +229,9 @@ mod tests {
     fn ast_with(object: bool) -> Ast {
         let obj = if object { r#", "obj": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 5, "protocol": "s3"}"# } else { "" };
         crate::load_str(&format!(
-            r#"{{"ast": "0.7", "name": "t",
-                "datasets": {{"sysp": {{"files": {{"pattern": "kv/sys/{{id:04}}/blk", "count": 2, "size": {{"const": 1}}, "seed": 1}}}},
-                             "flat": {{"files": {{"pattern": "flat/f_{{id}}", "count": 2, "size": {{"const": 1}}, "seed": 2}}}}}},
+            r#"{{"ast": "0.8", "name": "t",
+                "datasets": {{"sysp": {{"layout": "whole", "access": "map", "pattern": "kv/sys/{{id:04}}/blk", "count": 2, "size": {{"const": 1}}, "seed": 1}},
+                             "flat": {{"layout": "whole", "access": "map", "pattern": "flat/f_{{id}}", "count": 2, "size": {{"const": 1}}, "seed": 2}}}},
                 "namespaces": {{"kv": {{"pattern": "kv/{{c}}.pt", "fields": {{"c": "int"}}, "size": 1, "seed": 3}},
                                "kw": {{"pattern": "kv/{{c}}.w", "fields": {{"c": "int"}}, "size": 1, "seed": 4}}{obj}}},
                 "actors": {{"a": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "flat", "id": 0}}}}}}}}]}}}}}}"#
@@ -294,8 +290,8 @@ mod tests {
     #[test]
     fn a_posix_name_never_falls_under_an_object_root_and_a_key_keeps_its_rest() {
         let a = crate::load_str(
-            r#"{"ast": "0.7", "name": "t",
-                "datasets": {"inner": {"files": {"pattern": "o/in/f_{id}", "count": 2, "size": {"const": 1}, "seed": 1}}},
+            r#"{"ast": "0.8", "name": "t",
+                "datasets": {"inner": {"layout": "whole", "access": "map", "pattern": "o/in/f_{id}", "count": 2, "size": {"const": 1}, "seed": 1}},
                 "namespaces": {"outer": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 2, "protocol": "s3"}},
                 "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "inner", "id": 0}}}}]}}}"#,
         )

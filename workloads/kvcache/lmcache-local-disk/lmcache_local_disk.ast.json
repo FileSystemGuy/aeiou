@@ -1,5 +1,5 @@
 {
-  "ast": "0.7",
+  "ast": "0.8",
   "name": "lmcache_local_disk",
   "doc": "One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one.",
   "params": {
@@ -305,139 +305,139 @@
   },
   "datasets": {
     "sysp": {
-      "files": {
-        "pattern": "kv/sys/{id:04}/blk_{k:04}",
-        "count": {
-          "param": "sys_prompts"
-        },
-        "size": {
-          "lognormal": {
-            "median": {
-              "mul": [
-                {
-                  "param": "sys_tokens"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            },
-            "sigma": 0.3,
-            "min": {
-              "mul": [
-                {
-                  "param": "sys_tokens_min"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            },
-            "max": {
-              "mul": [
-                {
-                  "param": "sys_tokens_max"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            }
+      "pattern": "kv/sys/{id:04}/blk_{k:04}",
+      "layout": "chunked",
+      "access": "indexed",
+      "count": {
+        "param": "sys_prompts"
+      },
+      "size": {
+        "lognormal": {
+          "median": {
+            "mul": [
+              {
+                "param": "sys_tokens"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
+          },
+          "sigma": 0.3,
+          "min": {
+            "mul": [
+              {
+                "param": "sys_tokens_min"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
+          },
+          "max": {
+            "mul": [
+              {
+                "param": "sys_tokens_max"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
           }
-        },
-        "seed": 1592646272,
-        "chunk": {
-          "param": "chunk_bytes"
         }
+      },
+      "seed": 1592646272,
+      "chunk": {
+        "param": "chunk_bytes"
       }
     },
     "subp": {
-      "files": {
-        "pattern": "kv/sub/{id:04}/blk_{k:04}",
-        "count": {
-          "param": "sub_prompts"
-        },
-        "size": {
-          "lognormal": {
-            "median": {
-              "mul": [
-                {
-                  "param": "sub_tokens"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            },
-            "sigma": 0.3,
-            "min": {
-              "mul": [
-                {
-                  "param": "sub_tokens_min"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            },
-            "max": {
-              "mul": [
-                {
-                  "param": "sub_tokens_max"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            }
+      "pattern": "kv/sub/{id:04}/blk_{k:04}",
+      "layout": "chunked",
+      "access": "indexed",
+      "count": {
+        "param": "sub_prompts"
+      },
+      "size": {
+        "lognormal": {
+          "median": {
+            "mul": [
+              {
+                "param": "sub_tokens"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
+          },
+          "sigma": 0.3,
+          "min": {
+            "mul": [
+              {
+                "param": "sub_tokens_min"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
+          },
+          "max": {
+            "mul": [
+              {
+                "param": "sub_tokens_max"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
           }
-        },
-        "seed": 1592646276,
-        "chunk": {
-          "param": "chunk_bytes"
         }
+      },
+      "seed": 1592646276,
+      "chunk": {
+        "param": "chunk_bytes"
       }
     }
   },
@@ -2276,12 +2276,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk.py",
-      "sha256": "15a35c00043dd62db1fabc9be78c835520d1d8f421b40e065e5c1bc104231091",
+      "sha256": "979c87b44cedb361676506beaecf7f477642f1ba81cb9866d853e9bac8468917",
       "builder_version": "0.1.0",
-      "git": "7b115db69f80-dirty"
+      "git": "67e632d03bbb-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "9b730fb631b30942c834d253046118b3f4f1a622a268e4485a030b095bf25c58"
+    "ast_sha256": "8a764ce5faf9865b644d9333f6e41427f61f5c9902a15d0b8a783c703aad217f"
   }
 }

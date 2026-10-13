@@ -39,9 +39,9 @@ w.param("split", ["column", "row", "column", "row", "full"],
 w.param("rows", [1, 4096, 1, 8192, 1], unit="count")
 w.param("row_bytes", [512 * MiB, 32 * KiB, 64 * MiB, 128 * KiB, 16 * KiB], unit="bytes")
 
-model = w.dataset("model", pattern="model/model-{id:05}.safetensors", count=P.shards,
+model = w.dataset("model", pattern="model/model-{id:05}.safetensors", layout="whole", access="indexed", count=P.shards,
                   size=const(P.shard_bytes), seed=0x5eed_da7c)
-config = w.dataset("config", pattern="config/config-{id}.json", count=P.configs, size=const(P.config_bytes),
+config = w.dataset("config", pattern="config/config-{id}.json", layout="whole", access="indexed", count=P.configs, size=const(P.config_bytes),
                    seed=0x5eed_da7d)   # beside the shards in the real layout; a dataset has its root to itself here (V13)
 
 with w.actor("gpu") as gpu:

@@ -205,10 +205,10 @@ pub enum HVal {
     File { ds: usize, file: i64 },
     /// Chunk object `k` of file `file` of a `chunk`-realized dataset.
     Chunk { ds: usize, file: i64, k: i64 },
-    /// Region `c` of a regions dataset.
-    Region { ds: usize, c: i64 },
-    /// The single file of a regions dataset.
-    RegionFile { ds: usize },
+    /// Slot `c` of an array dataset.
+    Slot { ds: usize, c: i64 },
+    /// The single file of an array dataset.
+    ArrayFile { ds: usize },
     /// Unit `u` (row group, record batch, chunk) of file `file` of a files dataset.
     Unit { ds: usize, file: i64, u: i64 },
     /// Column chunk `c` of unit `u` of file `file`.
@@ -424,15 +424,15 @@ pub enum DirScheme {
     Unsupported,
 }
 
-/// A container's layout, resolved from `format.layout` (`schema/README.md` §2): how a file's
+/// A container's framing, resolved from `format.framing` (`schema/README.md` §2): how a file's
 /// bytes are framed around its samples. A file is `file_header ‖ units ‖ file_footer`,
 /// aligned to `file_align`; a unit is `unit_header ‖ column chunks ‖ unit_footer`, aligned;
 /// a column chunk is `header ‖ rows`, aligned; a row is `row_header ‖ fixed ‖ its share of
 /// the sample ‖ row_footer`, aligned. Headers and footers may grow per sample or per unit.
-/// All zeros with one column of weight 1 is the packed layout: samples back to back, which
+/// All zeros with one column of weight 1 is the packed framing: samples back to back, which
 /// is every dataset without a format class.
 #[derive(Debug, Clone)]
-pub struct Layout {
+pub struct Framing {
     /// Samples per unit.
     pub unit: i64,
     pub file_header: i64,
@@ -471,10 +471,10 @@ pub fn align_up(x: i64, a: i64) -> i64 {
     }
 }
 
-impl Layout {
+impl Framing {
     /// Samples back to back: no headers, one column carrying each sample whole.
-    pub fn packed(unit: i64) -> Layout {
-        Layout {
+    pub fn packed(unit: i64) -> Framing {
+        Framing {
             unit: unit.max(1),
             file_header: 0,
             file_header_per_sample: 0,
@@ -530,7 +530,7 @@ pub enum DsMeta<'a> {
         spf: i64,
         chunk: Option<i64>,
         access: Access,
-        layout: Layout,
+        framing: Framing,
         size: RDist<'a>,
         seed: u64,
         dirs: DirScheme,
@@ -540,7 +540,8 @@ pub enum DsMeta<'a> {
         consume_base: u64,
         rank_key: u64,
     },
-    Regions {
+    /// An `array` dataset: one file of `count` fixed slots (contract 0.8; `regions` before).
+    Array {
         name: &'a str,
         file: Arc<str>,
         count: i64,
@@ -554,23 +555,23 @@ pub enum DsMeta<'a> {
 impl<'a> DsMeta<'a> {
     pub fn name(&self) -> &'a str {
         match self {
-            DsMeta::Files { name, .. } | DsMeta::Regions { name, .. } => name,
+            DsMeta::Files { name, .. } | DsMeta::Array { name, .. } => name,
         }
     }
 
     pub fn count(&self) -> i64 {
         match self {
-            DsMeta::Files { count, .. } | DsMeta::Regions { count, .. } => *count,
+            DsMeta::Files { count, .. } | DsMeta::Array { count, .. } => *count,
         }
     }
 
     pub fn dataset_seed(&self) -> u64 {
         match self {
-            DsMeta::Files { seed, .. } | DsMeta::Regions { seed, .. } => *seed,
+            DsMeta::Files { seed, .. } | DsMeta::Array { seed, .. } => *seed,
         }
     }
 
-    /// Files of a files dataset (its shards), one for a regions dataset.
+    /// Files of a files dataset (its shards), one for an array dataset.
     /// The same dataset with `count` samples (files when there is one per file): what a corpus
     /// was before `datagen --grow` or `--shrink` (`DESIGN_REVIEW.md` §3.70), every name, size,
     /// and byte of an id the two share being the same.
@@ -581,7 +582,7 @@ impl<'a> DsMeta<'a> {
                 *c = count;
                 (*dirs, *ndirs) = Model::dir_scheme(pattern, count);
             }
-            DsMeta::Regions { count: c, .. } => *c = count,
+            DsMeta::Array { count: c, .. } => *c = count,
         }
         m
     }
@@ -589,14 +590,14 @@ impl<'a> DsMeta<'a> {
     pub fn files(&self) -> i64 {
         match self {
             DsMeta::Files { count, spf, .. } => (count + spf - 1) / spf,
-            DsMeta::Regions { .. } => 1,
+            DsMeta::Array { .. } => 1,
         }
     }
 
     pub fn access(&self) -> Access {
         match self {
             DsMeta::Files { access, .. } => *access,
-            DsMeta::Regions { .. } => Access::Map,
+            DsMeta::Array { .. } => Access::Indexed,
         }
     }
 
@@ -612,39 +613,39 @@ impl<'a> DsMeta<'a> {
     /// The rank order of ids for `zipf` and `hotset`, fixed by the dataset seed.
     pub fn rank_perm(&self) -> Perm {
         let key = match self {
-            DsMeta::Files { rank_key, .. } | DsMeta::Regions { rank_key, .. } => *rank_key,
+            DsMeta::Files { rank_key, .. } | DsMeta::Array { rank_key, .. } => *rank_key,
         };
         Perm::new(self.draw_domain().max(1) as u64, key)
     }
 
-    pub fn layout(&self) -> Result<&Layout> {
+    pub fn framing(&self) -> Result<&Framing> {
         match self {
-            DsMeta::Files { layout, .. } => Ok(layout),
-            DsMeta::Regions { .. } => bail!("`{}` is a regions dataset: no container layout", self.name()),
+            DsMeta::Files { framing, .. } => Ok(framing),
+            DsMeta::Array { .. } => bail!("`{}` is an array dataset: no container framing", self.name()),
         }
     }
 
     /// Units (row groups, record batches, chunks) in file `file`.
     pub fn units_in_file(&self, file: i64) -> Result<i64> {
         let n = self.samples_in_file(file)?;
-        let l = self.layout()?;
+        let l = self.framing()?;
         Ok((n + l.unit - 1) / l.unit)
     }
 
     /// The unit of sample `id`, within its file.
     pub fn unit_of_sample(&self, id: i64) -> Result<i64> {
         match self {
-            DsMeta::Files { spf, layout, .. } => {
+            DsMeta::Files { spf, framing: layout, .. } => {
                 let file = id / spf;
                 Ok((id - file * spf) / layout.unit)
             }
-            DsMeta::Regions { .. } => Ok(0),
+            DsMeta::Array { .. } => Ok(0),
         }
     }
 
     pub fn samples_in_unit(&self, file: i64, u: i64) -> Result<i64> {
         let n = self.samples_in_file(file)?;
-        let l = self.layout()?;
+        let l = self.framing()?;
         if u < 0 || u * l.unit >= n {
             bail!("unit {u} outside file {file} of `{}` ({} units)", self.name(), (n + l.unit - 1) / l.unit);
         }
@@ -653,7 +654,7 @@ impl<'a> DsMeta<'a> {
 
     /// Lengths of the column chunks of unit `u` of `file`, headers and alignment included.
     pub fn col_lens(&self, file: i64, u: i64) -> Result<Vec<i64>> {
-        let l = self.layout()?;
+        let l = self.framing()?;
         let spf = match self {
             DsMeta::Files { spf, .. } => *spf,
             _ => 1,
@@ -683,7 +684,7 @@ impl<'a> DsMeta<'a> {
 
     /// Offset of column chunk `c` from the start of its unit.
     pub fn col_offset_in_unit(&self, file: i64, u: i64, c: i64) -> Result<i64> {
-        let l = self.layout()?;
+        let l = self.framing()?;
         let lens = self.col_lens(file, u)?;
         if c < 0 || c as usize >= lens.len() {
             bail!("column {c} outside the {} columns of `{}`", lens.len(), self.name());
@@ -694,7 +695,7 @@ impl<'a> DsMeta<'a> {
 
     /// Bytes of unit `u` of `file`, framing and alignment included.
     pub fn unit_len(&self, file: i64, u: i64) -> Result<i64> {
-        let l = self.layout()?;
+        let l = self.framing()?;
         let n = self.samples_in_unit(file, u)?;
         let cols: i64 = self.col_lens(file, u)?.iter().sum();
         Ok(align_up(l.unit_header + l.unit_header_per_sample * n + cols + l.unit_footer + l.unit_footer_per_sample * n, l.unit_align))
@@ -708,7 +709,7 @@ impl<'a> DsMeta<'a> {
 
     /// Where the first unit starts: after the file header.
     pub fn data_start(&self, file: i64) -> Result<i64> {
-        let l = self.layout()?;
+        let l = self.framing()?;
         let n = self.samples_in_file(file)?;
         let units = self.units_in_file(file)?;
         Ok(l.file_header + l.file_header_per_sample * n + l.file_header_per_unit * units)
@@ -728,14 +729,14 @@ impl<'a> DsMeta<'a> {
 
     /// Bytes of a file: the framed units, the footer, and the file alignment.
     pub fn file_size_from_units(&self, file: i64, unit_lens: &[i64]) -> Result<i64> {
-        let l = self.layout()?;
+        let l = self.framing()?;
         let n = self.samples_in_file(file)?;
         let units = unit_lens.len() as i64;
         let data: i64 = unit_lens.iter().sum();
         Ok(align_up(self.data_start(file)? + data + l.file_footer + l.file_footer_per_sample * n + l.file_footer_per_unit * units, l.file_align))
     }
 
-    /// Bytes of sample `id` (files) or region `c` (regions, capped at the slot).
+    /// Bytes of sample `id` (files) or slot `c` (array, capped at the slot).
     pub fn sample_size(&self, id: i64) -> Result<i64> {
         match self {
             DsMeta::Files { size, seed, count, .. } => {
@@ -745,7 +746,7 @@ impl<'a> DsMeta<'a> {
                 let mut w = Words::new(dataset_key(*seed, id));
                 sample(size, &mut w, None)?.as_int()
             }
-            DsMeta::Regions { size, seed, count, slot, .. } => {
+            DsMeta::Array { size, seed, count, slot, .. } => {
                 if id < 0 || id >= *count {
                     bail!("region {id} outside dataset `{}` of {count}", self.name());
                 }
@@ -765,15 +766,15 @@ impl<'a> DsMeta<'a> {
                 }
                 Ok((*count - first).min(*spf))
             }
-            DsMeta::Regions { .. } => bail!("`{}` is a regions dataset", self.name()),
+            DsMeta::Array { .. } => bail!("`{}` is an array dataset", self.name()),
         }
     }
 
-    /// Bytes of a container file: the sum of its samples' sizes under the packed layout, else
-    /// the framed layout of `format.layout`.
+    /// Bytes of a container file: the sum of its samples' sizes under the packed framing, else
+    /// the framing of `format.framing`.
     pub fn file_size(&self, file: i64) -> Result<i64> {
         match self {
-            DsMeta::Files { spf, layout, .. } => {
+            DsMeta::Files { spf, framing: layout, .. } => {
                 let n = self.samples_in_file(file)?;
                 if !layout.is_packed() {
                     let lens = self.unit_lens(file)?;
@@ -788,9 +789,9 @@ impl<'a> DsMeta<'a> {
                 }
                 Ok(total)
             }
-            DsMeta::Regions { count, slot, .. } => {
+            DsMeta::Array { count, slot, .. } => {
                 if file != 0 {
-                    bail!("a regions dataset has one file, id 0");
+                    bail!("an array dataset has one file, id 0");
                 }
                 if *count == 0 {
                     return Ok(0);
@@ -801,12 +802,12 @@ impl<'a> DsMeta<'a> {
     }
 
     /// Offset of sample `id`'s bytes inside its container: the prefix sum over the file's
-    /// earlier samples under the packed layout; under a framed layout, the start of its row's
+    /// earlier samples under the packed framing; under a format's framing, the start of its row's
     /// payload in the one column (a sample split over several columns has no single offset:
     /// address its unit or a column).
     pub fn sample_offset(&self, id: i64) -> Result<i64> {
         match self {
-            DsMeta::Files { spf, layout, .. } => {
+            DsMeta::Files { spf, framing: layout, .. } => {
                 let file = id / spf;
                 if layout.is_packed() {
                     let mut off = 0i64;
@@ -826,7 +827,7 @@ impl<'a> DsMeta<'a> {
                 }
                 Ok(off + layout.columns[0].row_header)
             }
-            DsMeta::Regions { slot, .. } => Ok(id * slot),
+            DsMeta::Array { slot, .. } => Ok(id * slot),
         }
     }
 
@@ -863,9 +864,9 @@ impl<'a> DsMeta<'a> {
                 })?;
                 Ok(Arc::from(s))
             }
-            DsMeta::Regions { file: path, .. } => {
+            DsMeta::Array { file: path, .. } => {
                 if file != 0 {
-                    bail!("a regions dataset has one file, id 0");
+                    bail!("an array dataset has one file, id 0");
                 }
                 Ok(path.clone())
             }
@@ -891,7 +892,7 @@ impl<'a> DsMeta<'a> {
                 })?;
                 Ok(Arc::from(s))
             }
-            DsMeta::Regions { .. } => bail!("`dir` on regions dataset `{}`", self.name()),
+            DsMeta::Array { .. } => bail!("`dir` on array dataset `{}`", self.name()),
         }
     }
 
@@ -921,7 +922,7 @@ impl<'a> DsMeta<'a> {
                 }
                 Ok(Perm::new(n as u64, labeled_key(*consume_base, "epoch", &[epoch as u64])))
             }
-            DsMeta::Regions { .. } => bail!("`consume` on regions dataset `{}`: use `pick`", self.name()),
+            DsMeta::Array { .. } => bail!("`consume` on array dataset `{}`: use `pick`", self.name()),
         }
     }
 }
@@ -1005,8 +1006,9 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
     let mut ds_index = HashMap::new();
     for (name, d) in &ast.datasets {
         let ctx = || format!("dataset `{name}`");
-        let meta = match d {
-            Dataset::Files(f) => {
+        let meta = match d.layout {
+            Layout::Whole | Layout::Chunked | Layout::Compound => {
+                let f = d;
                 let pattern = Pattern::parse(&f.pattern).with_context(ctx)?;
                 let count = vm.eval_int(&f.count).with_context(ctx)?;
                 let spf = match &f.samples_per_file {
@@ -1027,23 +1029,23 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                     bail!("dataset `{name}`: a chunked dataset's pattern needs a {{k}} field");
                 }
                 let size = vm.resolve_distref(&f.size).with_context(ctx)?;
-                let access = f.access.unwrap_or(Access::Map);
-                let layout = match f.format.as_ref().and_then(|fm| fm.layout.as_ref()) {
-                    None => Layout::packed(spf),
+                let access = f.access;
+                let framing = match f.format.as_ref().and_then(|fm| fm.framing.as_ref()) {
+                    None => Framing::packed(spf),
                     Some(l) => {
                         let mut int = |e: &'a Option<Expr>, dflt: i64, what: &str| -> Result<i64> {
                             let v = match e {
-                                Some(e) => vm.eval_int(e).with_context(|| format!("dataset `{name}`: layout {what}"))?,
+                                Some(e) => vm.eval_int(e).with_context(|| format!("dataset `{name}`: framing {what}"))?,
                                 None => dflt,
                             };
                             if v < dflt.min(0) {
-                                bail!("dataset `{name}`: layout {what} is {v}");
+                                bail!("dataset `{name}`: framing {what} is {v}");
                             }
                             Ok(v)
                         };
                         let unit = int(&l.unit, spf, "unit")?;
                         if unit < 1 || unit > spf {
-                            bail!("dataset `{name}`: layout unit {unit} must be in [1, samples_per_file = {spf}]");
+                            bail!("dataset `{name}`: framing unit {unit} must be in [1, samples_per_file = {spf}]");
                         }
                         let mut columns = Vec::new();
                         match &l.columns {
@@ -1064,7 +1066,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                                 }
                             }
                         }
-                        Layout {
+                        Framing {
                             unit,
                             file_header: int(&l.file_header, 0, "file_header")?,
                             file_header_per_sample: int(&l.file_header_per_sample, 0, "file_header_per_sample")?,
@@ -1091,7 +1093,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                     spf,
                     chunk,
                     access,
-                    layout,
+                    framing,
                     size,
                     seed: f.seed,
                     dirs,
@@ -1100,16 +1102,20 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                     rank_key: labeled_key(f.seed, "rank", &[]),
                 }
             }
-            Dataset::Regions(r) => {
+            Layout::Array => {
+                let r = d;
                 let count = vm.eval_int(&r.count).with_context(ctx)?;
-                let slot = vm.eval_int(&r.slot).with_context(ctx)?;
+                let slot = match &r.slot {
+                    Some(e) => vm.eval_int(e).with_context(ctx)?,
+                    None => bail!("dataset `{name}`: an `array` needs `slot`"),
+                };
                 if count < 0 || slot <= 0 {
                     bail!("dataset `{name}`: count {count}, slot {slot}");
                 }
                 let size = vm.resolve_distref(&r.size).with_context(ctx)?;
-                DsMeta::Regions {
+                DsMeta::Array {
                     name,
-                    file: Arc::from(r.file.as_str()),
+                    file: Arc::from(r.pattern.as_str()),
                     count,
                     slot,
                     size,

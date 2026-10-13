@@ -12,21 +12,13 @@ pub fn annotate(ast: &Ast) {
         p.with(&["params", name, "default"], |p| pvalue(&param.default, p));
     }
     for (name, ds) in &ast.datasets {
-        p.with(&["datasets", name], |p| match ds {
-            Dataset::Files(f) => {
-                p.with(&["files", "count"], |p| expr(&f.count, p));
-                p.with(&["files", "size"], |p| distref(&f.size, p));
-                if let Some(e) = &f.samples_per_file {
-                    p.with(&["files", "samples_per_file"], |p| expr(e, p));
+        p.with(&["datasets", name], |p| {
+            p.with(&["count"], |p| expr(&ds.count, p));
+            p.with(&["size"], |p| distref(&ds.size, p));
+            for (k, e) in [("samples_per_file", &ds.samples_per_file), ("chunk", &ds.chunk), ("slot", &ds.slot)] {
+                if let Some(e) = e {
+                    p.with(&[k], |p| expr(e, p));
                 }
-                if let Some(e) = &f.chunk {
-                    p.with(&["files", "chunk"], |p| expr(e, p));
-                }
-            }
-            Dataset::Regions(r) => {
-                p.with(&["regions", "count"], |p| expr(&r.count, p));
-                p.with(&["regions", "slot"], |p| expr(&r.slot, p));
-                p.with(&["regions", "size"], |p| distref(&r.size, p));
             }
         });
     }

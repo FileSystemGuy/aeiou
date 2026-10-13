@@ -1,5 +1,5 @@
 {
-  "ast": "0.7",
+  "ast": "0.8",
   "name": "npy_per_sample",
   "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
   "params": {
@@ -75,25 +75,24 @@
   },
   "datasets": {
     "train": {
-      "files": {
-        "pattern": "train/{id div 10000:05}/sample_{id:09}.npz",
-        "count": {
-          "param": "files"
-        },
-        "size": {
-          "normal": {
-            "mean": {
-              "param": "sample_mean"
-            },
-            "sd": {
-              "param": "sample_sd"
-            },
-            "min": 1048576
-          }
-        },
-        "seed": 1592646267,
-        "access": "map"
-      }
+      "pattern": "train/{id div 10000:05}/sample_{id:09}.npz",
+      "layout": "whole",
+      "access": "map",
+      "count": {
+        "param": "files"
+      },
+      "size": {
+        "normal": {
+          "mean": {
+            "param": "sample_mean"
+          },
+          "sd": {
+            "param": "sample_sd"
+          },
+          "min": 1048576
+        }
+      },
+      "seed": 1592646267
     }
   },
   "actors": {
@@ -634,12 +633,12 @@
   "provenance": {
     "generator": {
       "script": "npy_per_sample.py",
-      "sha256": "0015ee58c3b1f892431462e4aa51abd7592b2ee29816f699f21e65de116605ee",
+      "sha256": "342e558a65ee752e9fc63281cafb5604e93ca1873a08bc80b5423594da588f28",
       "builder_version": "0.1.0",
-      "git": "7b115db69f80-dirty"
+      "git": "67e632d03bbb-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "44262d5af1a138923d50ea56049988d968ebda6088c0025bd60abfce0d291d74"
+    "ast_sha256": "ef512e44b7bd78d6446d4ac0c66552e491e5a4e4fbda68068ec2578555fc82a3"
   }
 }

@@ -1,5 +1,5 @@
 {
-  "ast": "0.7",
+  "ast": "0.8",
   "name": "lmcache_shared_fs",
   "doc": "One engine per actor in front of a store with no index (LMCache fs://): stat lookups, chunks written to a temporary name and renamed.",
   "params": {
@@ -311,153 +311,153 @@
   },
   "datasets": {
     "sysp": {
-      "files": {
-        "pattern": "kv/sys/{id:04}/blk_{k:04}",
-        "count": {
-          "param": "sys_prompts"
-        },
-        "size": {
-          "lognormal": {
-            "median": {
-              "mul": [
-                {
-                  "param": "sys_tokens"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            },
-            "sigma": 0.3,
-            "min": {
-              "mul": [
-                {
-                  "param": "sys_tokens_min"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            },
-            "max": {
-              "mul": [
-                {
-                  "param": "sys_tokens_max"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            }
+      "pattern": "kv/sys/{id:04}/blk_{k:04}",
+      "layout": "chunked",
+      "access": "indexed",
+      "count": {
+        "param": "sys_prompts"
+      },
+      "size": {
+        "lognormal": {
+          "median": {
+            "mul": [
+              {
+                "param": "sys_tokens"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
+          },
+          "sigma": 0.3,
+          "min": {
+            "mul": [
+              {
+                "param": "sys_tokens_min"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
+          },
+          "max": {
+            "mul": [
+              {
+                "param": "sys_tokens_max"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
           }
-        },
-        "seed": 1592646272,
-        "chunk": {
-          "add": [
-            {
-              "param": "meta_bytes"
-            },
-            {
-              "param": "chunk_bytes"
-            }
-          ]
         }
+      },
+      "seed": 1592646272,
+      "chunk": {
+        "add": [
+          {
+            "param": "meta_bytes"
+          },
+          {
+            "param": "chunk_bytes"
+          }
+        ]
       }
     },
     "subp": {
-      "files": {
-        "pattern": "kv/sub/{id:04}/blk_{k:04}",
-        "count": {
-          "param": "sub_prompts"
-        },
-        "size": {
-          "lognormal": {
-            "median": {
-              "mul": [
-                {
-                  "param": "sub_tokens"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            },
-            "sigma": 0.3,
-            "min": {
-              "mul": [
-                {
-                  "param": "sub_tokens_min"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            },
-            "max": {
-              "mul": [
-                {
-                  "param": "sub_tokens_max"
-                },
-                {
-                  "div": [
-                    {
-                      "param": "chunk_bytes"
-                    },
-                    {
-                      "param": "chunk_tokens"
-                    }
-                  ]
-                }
-              ]
-            }
+      "pattern": "kv/sub/{id:04}/blk_{k:04}",
+      "layout": "chunked",
+      "access": "indexed",
+      "count": {
+        "param": "sub_prompts"
+      },
+      "size": {
+        "lognormal": {
+          "median": {
+            "mul": [
+              {
+                "param": "sub_tokens"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
+          },
+          "sigma": 0.3,
+          "min": {
+            "mul": [
+              {
+                "param": "sub_tokens_min"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
+          },
+          "max": {
+            "mul": [
+              {
+                "param": "sub_tokens_max"
+              },
+              {
+                "div": [
+                  {
+                    "param": "chunk_bytes"
+                  },
+                  {
+                    "param": "chunk_tokens"
+                  }
+                ]
+              }
+            ]
           }
-        },
-        "seed": 1592646276,
-        "chunk": {
-          "add": [
-            {
-              "param": "meta_bytes"
-            },
-            {
-              "param": "chunk_bytes"
-            }
-          ]
         }
+      },
+      "seed": 1592646276,
+      "chunk": {
+        "add": [
+          {
+            "param": "meta_bytes"
+          },
+          {
+            "param": "chunk_bytes"
+          }
+        ]
       }
     }
   },
@@ -2391,12 +2391,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_shared_fs.py",
-      "sha256": "31969a121195149b23c056d92962fa562bdd712ce7c9482553824beb584010c6",
+      "sha256": "f89595129f279c27cadaaf7b062fe37ae90885d9d015beae4fad7f4b441c6711",
       "builder_version": "0.1.0",
-      "git": "7b115db69f80-dirty"
+      "git": "67e632d03bbb-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "131cbb484ac7addfa34356fd51d160638f4a12df43212048582a774dffa4b373"
+    "ast_sha256": "aa7991fc75d5092e52e0dfc38fc8475b9db9cbd582a5fc85b080c79c52dd65dc"
   }
 }

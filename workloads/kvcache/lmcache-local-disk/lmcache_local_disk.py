@@ -79,12 +79,12 @@ w.param("think", const(0), unit="ns",
         doc="[config: load] the client's delay before a request (its user's or its agent's think time); zero sends a slot's requests back to back")
 
 token_bytes = P.chunk_bytes // P.chunk_tokens
-sysp = w.dataset("sysp", pattern="kv/sys/{id:04}/blk_{k:04}", count=P.sys_prompts,
+sysp = w.dataset("sysp", pattern="kv/sys/{id:04}/blk_{k:04}", layout="chunked", access="indexed", count=P.sys_prompts,
                  size=lognormal(median=P.sys_tokens * token_bytes, sigma=0.3,
                                 min=P.sys_tokens_min * token_bytes, max=P.sys_tokens_max * token_bytes),
                  chunk=P.chunk_bytes,                                  # realized as ceil(size / chunk) block objects {k}; the last, partial one is never read
                  seed=0x5eed_da80)
-subp = w.dataset("subp", pattern="kv/sub/{id:04}/blk_{k:04}", count=P.sub_prompts,
+subp = w.dataset("subp", pattern="kv/sub/{id:04}/blk_{k:04}", layout="chunked", access="indexed", count=P.sub_prompts,
                  size=lognormal(median=P.sub_tokens * token_bytes, sigma=0.3,
                                 min=P.sub_tokens_min * token_bytes, max=P.sub_tokens_max * token_bytes),
                  chunk=P.chunk_bytes,                                  # realized as ceil(size / chunk) block objects {k}; the last, partial one is never read

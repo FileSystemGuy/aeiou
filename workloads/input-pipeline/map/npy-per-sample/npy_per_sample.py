@@ -28,9 +28,9 @@ w.param("sample_sd", 4 * MiB, unit="bytes", doc="[measure]")
 EOCD = 22      # end-of-central-directory record
 LOCATOR = 20   # zip64 end-of-central-directory locator, probed just before the EOCD
 
-train = w.dataset("train", pattern="train/{id div 10000:05}/sample_{id:09}.npz",
+train = w.dataset("train", pattern="train/{id div 10000:05}/sample_{id:09}.npz", layout="whole", access="map",
                   count=P.files, size=normal(P.sample_mean, P.sample_sd, min=1 * MiB),
-                  seed=0x5eed_da7b, access="map")
+                  seed=0x5eed_da7b)
 
 per_fill = P.xfer // P.np_chunk
 

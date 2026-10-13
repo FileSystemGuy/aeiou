@@ -1,5 +1,5 @@
 {
-  "ast": "0.7",
+  "ast": "0.8",
   "name": "diskann_search",
   "doc": "Beam search over a sector-packed graph index: dependent rounds of `beam` concurrent 4 KiB reads per query.",
   "posix": "libaio",
@@ -109,52 +109,52 @@
   },
   "datasets": {
     "index": {
-      "regions": {
-        "file": "diskann/index.bin",
-        "count": {
-          "param": "nodes"
-        },
-        "slot": {
+      "pattern": "diskann/index.bin",
+      "layout": "array",
+      "access": "indexed",
+      "count": {
+        "param": "nodes"
+      },
+      "size": {
+        "const": {
           "param": "sector"
-        },
-        "size": {
-          "const": {
-            "param": "sector"
-          }
-        },
-        "seed": 1592646269
+        }
+      },
+      "seed": 1592646269,
+      "slot": {
+        "param": "sector"
       }
     },
     "pq": {
-      "files": {
-        "pattern": "pq/pq_compressed-{id}.bin",
-        "count": 1,
-        "size": {
-          "const": {
-            "add": [
-              {
-                "mul": [
-                  {
-                    "mul": [
-                      {
-                        "param": "nodes"
-                      },
-                      {
-                        "param": "per_sector"
-                      }
-                    ]
-                  },
-                  {
-                    "param": "pq_code"
-                  }
-                ]
-              },
-              8
-            ]
-          }
-        },
-        "seed": 1592646272
-      }
+      "pattern": "pq/pq_compressed-{id}.bin",
+      "layout": "whole",
+      "access": "indexed",
+      "count": 1,
+      "size": {
+        "const": {
+          "add": [
+            {
+              "mul": [
+                {
+                  "mul": [
+                    {
+                      "param": "nodes"
+                    },
+                    {
+                      "param": "per_sector"
+                    }
+                  ]
+                },
+                {
+                  "param": "pq_code"
+                }
+              ]
+            },
+            8
+          ]
+        }
+      },
+      "seed": 1592646272
     }
   },
   "actors": {
@@ -537,12 +537,12 @@
   "provenance": {
     "generator": {
       "script": "diskann_search.py",
-      "sha256": "24c1231fab4e42c33b64a5ed647191963d9ad561171ef992b4417aaf40c324aa",
+      "sha256": "aa82e5d99b2eeff29a4eaa2dac89695a44f504dcd288659006918ed8eb3bc7f6",
       "builder_version": "0.1.0",
-      "git": "7b115db69f80-dirty"
+      "git": "67e632d03bbb-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "853deb52cc743f1d5ac7fee2c6b5ea86f4e525e826496a61f806326f2f6e456d"
+    "ast_sha256": "43d9af027d29ea4004bc529161e1374abc8d8bd695f73859a917c3b0728ec258"
   }
 }

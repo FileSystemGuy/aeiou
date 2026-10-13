@@ -21,8 +21,8 @@ w.param("step_time", 105 * ms, unit="ns", doc="[measure] GPU step time on the ta
 w.param("per_file", 512, unit="count", doc="[config] samples per container (96 MiB each)")
 w.param("samples", 1_000_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
 
-train = w.dataset("train", pattern="train/samples-{id:05}.h5", count=P.samples, samples_per_file=P.per_file,
-                  size=const(SHAPE[0] * SHAPE[1] * SHAPE[2]), seed=0x5eed_da91, access="map",
+train = w.dataset("train", pattern="train/samples-{id:05}.h5", layout="compound", access="map", count=P.samples, samples_per_file=P.per_file,
+                  size=const(SHAPE[0] * SHAPE[1] * SHAPE[2]), seed=0x5eed_da91,
                   format=hdf5(dataset="records", shape=SHAPE, dtype="u1"))
 
 with w.actor("gpu") as gpu:

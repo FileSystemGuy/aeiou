@@ -73,7 +73,7 @@ application through **aeiou-trace**(1).
 
 ### datagen
 
-Writes every `files` and `regions` dataset the abstract declares under `--root`: names from
+Writes every dataset the abstract declares under `--root`: names from
 the pattern, sizes from the dataset seed, content from the positional payload generator
 (1 MiB blocks of an SFC64 stream keyed by dataset seed, unit, and block, laid out in 4 KiB
 pieces for the compression ratio, with the dedupe and compression ratios given), in parallel by id, with `O_DIRECT` (datagen never
@@ -90,7 +90,7 @@ container format class is written by **aeiou-datagen**(1); a build with the carg
 the same bytes (a Parquet footer names this writer as `created_by`). An HDF5 file's header comes from **aeiou-header**(1), which must
 sit beside this binary; only rank 0 runs it.
 
-The ids of a `files` dataset are written in runs, handed out in id order from one queue
+The ids of a dataset (every layout but `array`) are written in runs, handed out in id order from one queue
 (rank 0's on several hosts): a run is a directory of a `{id div N}` pattern, or 1,000 ids of a
 flat one, cut smaller only when there are fewer runs than writers on all hosts. Each writer
 writes its run in id order and claims the next, so a datagen stopped anywhere leaves whole
@@ -100,8 +100,8 @@ a run past it, rank 0 records a claim mark in the manifest (`progress.claimed_to
 ahead), so `--settle` knows how far a datagen that died may have written.
 
 On several hosts (`--ranks`, `--rank`, `--coordinator`, as for `run`; **aeiou-launch**(1)
-starts them) every rank claims the runs of every `files` dataset from rank 0 over the
-coordinator, and each `regions` dataset is written whole by one rank (the *i*-th by rank *i*
+starts them) every rank claims the runs of every dataset from rank 0 over the
+coordinator, and each `array` dataset is written whole by one rank (the *i*-th by rank *i*
 mod *R*: several hosts writing one file serialize on the server). Every rank checks the roots are empty
 before the start gate, writes after it, reports its progress every window, and sends its
 counts at the end; rank 0 writes the manifests, `complete` once every rank has reported, and records
@@ -134,7 +134,7 @@ done: the parts of multipart uploads a crash left in a bucket are not aborted (t
 engine has no call that lists them).
 
 `datagen --grow N ROOT` and `datagen --shrink N ROOT` change the count of the complete
-`files` dataset at ROOT to N (its `count`: samples where a file holds several, files
+dataset at ROOT to N (its `count`: samples where a file holds several, files
 otherwise), larger for a grow and smaller, above 0, for a shrink; each refuses the other's
 direction, so a typo cannot delete a corpus. Everything else comes from the manifest, as for
 `--resume`, and is refused beside it, as is a corpus not `complete`. The files a datagen of
@@ -304,7 +304,7 @@ turns it off, and the last one on the line wins.
   `[datagen]` table of the config file. *Layered.*
 - **--writers** *N*
 
-  Writer threads: files, or 64 MiB pieces of a `regions` file, written at once; default all
+  Writer threads: files, or 64 MiB pieces of an `array` file, written at once; default all
   cores. *Layered.*
 - **--object-threads** *N*
 
@@ -313,7 +313,7 @@ turns it off, and the last one on the line wins.
   store. Default 2. *Layered.*
 - **--dedupe** *DEDUPE*
 
-  Dedupe ratio: every *DEDUPE* consecutive files (or 1 MiB blocks of a `regions` file) share
+  Dedupe ratio: every *DEDUPE* consecutive files (or 1 MiB blocks of an `array` file) share
   content, whatever the count, so a prefix of the ids has the ratio too. Default 1. Part of
   the payload the manifest records.
 - **--compress** *COMPRESS*
@@ -337,8 +337,8 @@ turns it off, and the last one on the line wins.
   This host's index among `--ranks` hosts. Default 0. *Layered.*
 - **--ranks** *N*
 
-  Hosts the datagen is spread over: each claims runs of every `files` dataset's ids from
-  rank 0, and each `regions` file is written by one of them. Default 1. *Layered.*
+  Hosts the datagen is spread over: each claims runs of every dataset's ids from
+  rank 0, and each `array` file is written by one of them. Default 1. *Layered.*
 - **--coordinator** *HOST:PORT*
 
   With `--ranks` above 1, required: the coordinator's address. Rank 0 listens on it
@@ -652,7 +652,7 @@ answer wakes it. Two actors writing one object at once (a sub-actor and the acto
 forked from) fail the run with `EBUSY`. **aeiou datagen**
 writes each file of an object dataset as one `PUT`, or as a multipart upload in 8 MiB
 parts when it is larger, and the manifest as one `PUT` at the prefix's root; the prefix
-must hold no key. A `regions` dataset has no object form. An object namespace's root is a
+must hold no key. An `array` dataset has no object form. An object namespace's root is a
 prefix: rank 0 finds it empty with a `LIST` (`--clean-namespaces` sends a `DELETE` of every
 key below it but those of a dataset placed there), and writes the namespace manifest as one
 `PUT` at it, where a run that reads the namespace as `input` finds it. A write at an offset

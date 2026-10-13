@@ -45,8 +45,7 @@ def object_variant(name, tmp_path, names=("shards",)):
     is left `posix`, without its POSIX API and cache mode (V19), as the Rust tests make it."""
     d = json.loads(ast_path(name).read_text())
     for n in names:
-        body = next(iter(d["datasets"][n].values()))
-        body["protocol"] = "s3"
+        d["datasets"][n]["protocol"] = "s3"
     if len(names) == len(d.get("datasets", {})) + len(d.get("namespaces", {})):
         d.pop("posix", None)
         d.pop("cache", None)
@@ -207,7 +206,7 @@ def test_aeiou_datagen_streams_containers_into_the_bucket(name, minio, tmp_path)
         ast_file = webdataset_ast(tmp_path)
     obj = json.loads(pathlib.Path(ast_file).read_text())
     (ds,) = obj["datasets"]
-    obj["datasets"][ds]["files"]["protocol"] = "s3"
+    obj["datasets"][ds]["protocol"] = "s3"
     obj.pop("posix", None)
     obj.pop("cache", None)
     obj_file = tmp_path / "object.ast.json"
@@ -253,7 +252,7 @@ def test_aeiou_datagen_resumes_into_the_bucket(name, minio, tmp_path):
         ast_file, flags = ast_path("file_per_sample"), ["--param", "files=40"]
     obj = json.loads(pathlib.Path(ast_file).read_text())
     (ds,) = obj["datasets"]
-    obj["datasets"][ds]["files"]["protocol"] = "s3"
+    obj["datasets"][ds]["protocol"] = "s3"
     obj.pop("posix", None)
     obj.pop("cache", None)
     obj_file = tmp_path / "object.ast.json"
@@ -297,7 +296,7 @@ def test_aeiou_datagen_grows_and_shrinks_in_the_bucket(name, minio, tmp_path):
         ast_file, flags, count, sizes = ast_path("file_per_sample"), [], "files", (40, 60, 25)
     obj = json.loads(pathlib.Path(ast_file).read_text())
     (ds,) = obj["datasets"]
-    obj["datasets"][ds]["files"]["protocol"] = "s3"
+    obj["datasets"][ds]["protocol"] = "s3"
     obj.pop("posix", None)
     obj.pop("cache", None)
     obj_file = tmp_path / "object.ast.json"
@@ -335,7 +334,7 @@ def test_aeiou_datagen_settles_an_interrupted_shrink_in_the_bucket(minio, tmp_pa
         pytest.skip(f"{RUNNER} is not built with the cargo feature `object`")
     obj = json.loads(pathlib.Path(ast_path("file_per_sample")).read_text())
     (ds,) = obj["datasets"]
-    obj["datasets"][ds]["files"]["protocol"] = "s3"
+    obj["datasets"][ds]["protocol"] = "s3"
     obj.pop("posix", None)
     obj.pop("cache", None)
     obj_file = tmp_path / "object.ast.json"
@@ -360,7 +359,7 @@ def test_aeiou_datagen_settles_an_interrupted_shrink_in_the_bucket(minio, tmp_pa
     for k in keys[41:] + keys[35:40]:
         obstore.delete(store, k)
     m["state"] = "shrinking"
-    m["dataset"]["files"]["count"] = 25
+    m["dataset"]["count"] = 25
     m["progress"] = {"unfinished": [[25, 41]], "files_written": 25, "bytes_written": sum(minio.objects(prefix)[k] for k in keys[:25]),
                      "from": 60, "claimed": 40, "claimed_to": 35, "updated": 0, "progress_secs": 30}
     obstore.put(store, mkey, json.dumps(m).encode())

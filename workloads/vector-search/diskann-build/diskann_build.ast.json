@@ -1,5 +1,5 @@
 {
-  "ast": "0.7",
+  "ast": "0.8",
   "name": "diskann_build",
   "doc": "Single builder: PQ training and compression, partition into shards, per-shard build, merge, disk layout, sample.",
   "params": {
@@ -106,30 +106,30 @@
   },
   "datasets": {
     "base": {
-      "regions": {
-        "file": "base/base.fbin",
-        "count": {
-          "param": "n"
-        },
-        "slot": {
+      "pattern": "base/base.fbin",
+      "layout": "array",
+      "access": "indexed",
+      "count": {
+        "param": "n"
+      },
+      "size": {
+        "const": {
           "mul": [
             {
               "param": "dim"
             },
             4
           ]
-        },
-        "size": {
-          "const": {
-            "mul": [
-              {
-                "param": "dim"
-              },
-              4
-            ]
-          }
-        },
-        "seed": 1592646271
+        }
+      },
+      "seed": 1592646271,
+      "slot": {
+        "mul": [
+          {
+            "param": "dim"
+          },
+          4
+        ]
       }
     }
   },
@@ -3341,12 +3341,12 @@
   "provenance": {
     "generator": {
       "script": "diskann_build.py",
-      "sha256": "6147c32ce6075887759f0ef11c161b7e14bc73a95ef58c0464c1aab6e1e06339",
+      "sha256": "f1d45858211421727fd8b14520ad30babd3486dac7b1fdc4413f1f5b11dcd2db",
       "builder_version": "0.1.0",
-      "git": "7b115db69f80-dirty"
+      "git": "67e632d03bbb-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "abcdaa71c5db316c4eb499aa769ceb1293dc7f78c912cf23eae6bc1491cd5fb6"
+    "ast_sha256": "0d1bafa586b4fdcb3964c64478bc4bbccfd7cacbbfc8458e691f232ad237e307"
   }
 }

@@ -34,23 +34,24 @@ fn hashes_match_check_py() {
     // `backend`, DESIGN_REVIEW §3.65, every fingerprint unchanged; all again the same day for contract 0.7,
     // `posix` in place of `api` and `s3` in place of the protocol `object`, every fingerprint unchanged; all again
     // 2026-10-10 when each abstract was renamed for its directory under workloads/, DESIGN_REVIEW §3.66, every
-    // fingerprint unchanged).
+    // fingerprint unchanged; all again 2026-10-13 for contract 0.8, one dataset shape with `layout`, `access`, and
+    // `format.framing`, DESIGN_REVIEW §3.72, every fingerprint unchanged).
     let want = [
-        ("dcp_load", "8ce5ccab7d8069ab9df6ed5fe9eff026626f3c942081466cc1fc1cd2c6455c44"),
-        ("dcp_save", "ec466990b90cca88b787b5a1c1d288d4841a0143e95ed925d731330175b46083"),
-        ("lmcache_local_disk", "9b730fb631b30942c834d253046118b3f4f1a622a268e4485a030b095bf25c58"),
-        ("safetensors_load", "2d9c481862395342d3721a8e9244c21349fc18a82d6efb8fca35f8aabf720efe"),
-        ("npy_per_sample", "44262d5af1a138923d50ea56049988d968ebda6088c0025bd60abfce0d291d74"),   // 2026-10-02: the `enumerate` phase, on by default
-        ("file_per_sample", "a2e66f4a8618bb9c1d2971ed4129dd0a9f6ff7c083de6ffdb5f66994445eae99"),   // 2026-10-02: `enumerate` on by default
-        ("diskann_build", "abcdaa71c5db316c4eb499aa769ceb1293dc7f78c912cf23eae6bc1491cd5fb6"),
-        ("diskann_search", "853deb52cc743f1d5ac7fee2c6b5ea86f4e525e826496a61f806326f2f6e456d"),
-        ("tfrecord_stream", "c54cc83889d3e8715a895ca7da2ff353fd17635316f9d299fd7dd6b73efa850e"),
-        ("parquet_stream", "3db79bb582085d0577c0d082c0c2d20a1e4ea66eda76b78a2d03af7b272944cc"),
-        ("hdf5_map", "871810a6f6469acf34099c896a2fae077b7dc05522b8e5c4ed8ac825c385e580"),
-        ("faiss_ivf_ondisk", "89a51a34cdcd9d3dc2376f85d272741bf559db110deb820b9282fd2e0fffae1e"),
+        ("dcp_load", "4f5642996fbac9b32eb22ec30a7b977b32a2c91b45343b9d5ad248956de05052"),
+        ("dcp_save", "86fdc623dec7053f62c47644abe8a15c5d8e5ead247a67883adf89b9bed43b7b"),
+        ("lmcache_local_disk", "8a764ce5faf9865b644d9333f6e41427f61f5c9902a15d0b8a783c703aad217f"),
+        ("safetensors_load", "752570de6e1a1d45ce15c06a181a1dda45ac6794b77d1a0c2a7437b6aede96f9"),
+        ("npy_per_sample", "ef512e44b7bd78d6446d4ac0c66552e491e5a4e4fbda68068ec2578555fc82a3"),   // 2026-10-02: the `enumerate` phase, on by default
+        ("file_per_sample", "06022201e7be3c26f78c73369ef34b1b0016d52311baf1cc40f88bf31ff01333"),   // 2026-10-02: `enumerate` on by default
+        ("diskann_build", "0d1bafa586b4fdcb3964c64478bc4bbccfd7cacbbfc8458e691f232ad237e307"),
+        ("diskann_search", "43d9af027d29ea4004bc529161e1374abc8d8bd695f73859a917c3b0728ec258"),
+        ("tfrecord_stream", "1ec650d3a75f2e2986bf094fe01336452adc14dea3f97470c2f5b572e762df37"),
+        ("parquet_stream", "7c48cc3d54807f5cd226c9b84612538f582ee0cbf740e24fee4a11fe3b5ba90b"),
+        ("hdf5_map", "5485ee114265231337fbf6f0d94636bd9f235f7de7324b2957b269392e7b9c6b"),
+        ("faiss_ivf_ondisk", "986e52d58749e20487c32429670fea67f8d75871b90e8bca9b0837d2b8fd251e"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("lmcache_shared_fs", "131cbb484ac7addfa34356fd51d160638f4a12df43212048582a774dffa4b373"),
-        ("lmcache_shared_fs_reader", "a1eb9ae7b8e898559ac58bd6202f453460a29d4d8f416dee655443a0130950a1"),
+        ("lmcache_shared_fs", "aa7991fc75d5092e52e0dfc38fc8475b9db9cbd582a5fc85b080c79c52dd65dc"),
+        ("lmcache_shared_fs_reader", "17a5a80dc6d22a7a266299d8a2da533f9dd53b79171a9690e64a1eb6dfb0beb2"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&crate::common::workload_ast(name)).unwrap();
@@ -215,9 +216,9 @@ fn collect(text: &str, cfg: &Config, template: &str, count: i64) -> Vec<(i64, Ve
 }
 
 const CONSUME: &str = r#"{
-  "ast": "0.7", "name": "consume_test",
+  "ast": "0.8", "name": "consume_test",
   "params": {"batches": {"default": 24}, "batch": {"default": 4}},
-  "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}}},
+  "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}},
   "actors": {"gpu": {"body": [
     {"loader": {"name": "q", "index": "b", "workers": 2, "prefetch": 1, "batches": {"param": "batches"}, "body": [
       {"loop": {"index": "j", "to": {"param": "batch"}, "body": [
@@ -254,7 +255,7 @@ fn consume_is_a_permutation_per_epoch_across_actors() {
 }
 
 const CHAIN: &str = r#"{
-  "ast": "0.7", "name": "chain_test",
+  "ast": "0.8", "name": "chain_test",
   "params": {"reuse": {"default": {"mixture": [{"weight": 0.4, "dist": null}, {"weight": 0.6, "dist": {"uniform": {"lo": 1, "hi": 5}}}]}}},
   "namespaces": {"kv": {"pattern": "kv/{conv:016x}/d{d}", "fields": {"conv": "int", "d": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
@@ -295,8 +296,8 @@ fn at_chains_reach_the_original_conversation() {
 }
 
 const UNTIL_EOF: &str = r#"{
-  "ast": "0.7", "name": "eof_test",
-  "datasets": {"d": {"files": {"pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}}},
+  "ast": "0.8", "name": "eof_test",
+  "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 1, "body": [
       {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 2}}}},
@@ -342,17 +343,31 @@ fn rejects(text: &str, needle: &str) {
 fn validator_rejects_what_check_py_rejects() {
     let base = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.7", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.8", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{{datasets}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )
     };
-    let ds = r#""d": {"files": {"pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}}"#;
+    let ds = r#""d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}"#;
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": {"param": "gpus"}, "body": []}}"#).replace(r#""n": {"default": 3}"#, r#""gpus": {"default": 3}"#), "reserved");
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 1, "body": [{"let": {"name": "f", "value": {"consume": "d"}}}, {"write": {"file": {"ref": "f"}, "len": 1}}]}}"#), "read-only (V12)");
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 1, "body": [{"open": {"file": {"file": {"dataset": "d", "id": 0}}, "flags": ["WRONLY"]}}]}}"#), "read-only (V12)");
-    rejects(&base(r#""d": {"files": {"pattern": ".aeiou-x/{id}", "count": 10, "size": {"const": 1}, "seed": 1}}"#, ""), ".aeiou");
+    rejects(&base(r#""d": {"layout": "whole", "access": "map", "pattern": ".aeiou-x/{id}", "count": 10, "size": {"const": 1}, "seed": 1}"#, ""), ".aeiou");
     rejects(&base(ds, r#"{"let": {"name": "f", "value": {"consume": "d"}}}"#), "outside any loop");
+    // contract 0.8: one dataset shape; the fields each layout takes (V20) and access (V21)
+    let one = |d: &str| base(&format!(r#""d": {{{d}, "count": 10, "size": {{"const": 1}}, "seed": 1}}"#), "");
+    rejects(&one(r#""pattern": "d/{id}", "layout": "whole", "access": "map", "samples_per_file": 2"#), "layout `whole` takes no `samples_per_file` (V20)");
+    rejects(&one(r#""pattern": "d/{id}", "layout": "compound", "access": "map""#), "layout `compound` needs `samples_per_file` (V20)");
+    rejects(&one(r#""pattern": "d/{id}", "layout": "chunked", "access": "indexed", "chunk": 4"#), "needs a `{k}` field (V20)");
+    rejects(&one(r#""pattern": "d/{id}_{k}", "layout": "whole", "access": "map""#), "only a `chunked` dataset has one (V20)");
+    rejects(&one(r#""pattern": "d/{id}", "layout": "array", "access": "indexed", "slot": 4"#), "its pattern has no fields (V20)");
+    rejects(&one(r#""pattern": "d/one.bin", "layout": "array", "access": "map", "slot": 4"#), "an `array` is `indexed`");
+    rejects(&one(r#""pattern": "d/{id mod 16}/f_{id}", "layout": "whole", "access": "map""#), "never `mod`");
+    aeiou::load_str(&one(r#""pattern": "d/{id mod 16}/f_{id}", "layout": "whole", "access": "indexed""#)).unwrap();
+    rejects(&one(r#""pattern": "d/{id}", "layout": "whole""#), "missing field `access`");
+    rejects(&one(r#""pattern": "d/{id}", "layout": "regions", "access": "indexed""#), "unknown variant `regions`");
+    let indexed = r#""d": {"layout": "whole", "access": "indexed", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}"#;
+    rejects(&base(indexed, r#"{"loop": {"index": "i", "to": 1, "body": [{"let": {"name": "f", "value": {"consume": "d"}}}]}}"#), "which is `indexed`");
     // contract 0.7: the declared APIs (one per protocol) and cache mode, each a name, and never
     // `direct` under `mmap`; `api` (0.6) and `backend` (0.3) are gone
     let declared = |kv: &str| base(ds, "").replacen(r#""name": "t","#, &format!(r#""name": "t", {kv},"#), 1);
@@ -418,7 +433,7 @@ fn validator_rejects_what_check_py_rejects() {
     // two datasets sharing a root (V13)
     rejects(
         &base(
-            r#""a": {"files": {"pattern": "x/{id}", "count": 1, "size": {"const": 1}, "seed": 1}}, "b": {"files": {"pattern": "x/y{id}", "count": 1, "size": {"const": 1}, "seed": 2}}"#,
+            r#""a": {"layout": "whole", "access": "map", "pattern": "x/{id}", "count": 1, "size": {"const": 1}, "seed": 1}, "b": {"layout": "whole", "access": "map", "pattern": "x/y{id}", "count": 1, "size": {"const": 1}, "seed": 2}"#,
             "",
         ),
         "shares root",
@@ -426,7 +441,7 @@ fn validator_rejects_what_check_py_rejects() {
     // or one root inside another (V13, 2026-10-01): datagen wants each root to itself
     rejects(
         &base(
-            r#""a": {"files": {"pattern": "x/{id}", "count": 1, "size": {"const": 1}, "seed": 1}}, "b": {"files": {"pattern": "x/y/{id}", "count": 1, "size": {"const": 1}, "seed": 2}}"#,
+            r#""a": {"layout": "whole", "access": "map", "pattern": "x/{id}", "count": 1, "size": {"const": 1}, "seed": 1}, "b": {"layout": "whole", "access": "map", "pattern": "x/y/{id}", "count": 1, "size": {"const": 1}, "seed": 2}"#,
             "",
         ),
         "are nested",
@@ -475,7 +490,7 @@ fn parameters_given_are_held_to_the_at_rule() {
 #[test]
 fn a_long_at_chain_is_one_link_per_iteration() {
     let text = r#"{
-  "ast": "0.7", "name": "long_chain",
+  "ast": "0.8", "name": "long_chain",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "k", "to": 200000, "body": [

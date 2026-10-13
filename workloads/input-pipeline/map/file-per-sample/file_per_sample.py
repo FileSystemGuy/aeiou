@@ -19,10 +19,10 @@ w.param("hdr_read", 1 * MiB, unit="bytes", doc="Python BufferedReader request = 
 w.param("enumerate", True, doc="the startup directory walk, as ImageFolder does it in every process (ABSTRACTS.md §9.8); on by default since 2026-10-02")
 w.param("files", 50_000_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
 
-train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg",
+train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg", layout="whole", access="map",
                   count=P.files,
                   size=lognormal(median=110 * KiB, sigma=0.45),   # [measure] corpus
-                  seed=0x5eed_da7a, access="map")
+                  seed=0x5eed_da7a)
 
 with w.actor("gpu") as gpu:
     with gpu.when(P.enumerate), gpu.phase("enumerate"):

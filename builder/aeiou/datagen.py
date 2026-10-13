@@ -15,8 +15,8 @@ Datasets without a format class are `aeiou datagen`'s (the Rust writer); this to
 them, and `aeiou datagen` refuses the ones with a class (built with the cargo feature
 `formats`, it writes TFRecord, WebDataset, and HDF5 too, these bytes), so a corpus is written by both, each
 dataset by exactly one of them. Names, sizes, offsets, and bytes follow the runner's
-definitions bit for bit (`rng.py`, `pattern.py`, `layout.py`); every file is checked against
-the geometry its layout predicts before the manifest is written.
+definitions bit for bit (`rng.py`, `pattern.py`, `framing.py`); every file is checked against
+the geometry its framing predicts before the manifest is written.
 
 A dataset declared `protocol: s3` is written to the object store its endpoint names
 (`--endpoint NAME=s3://BUCKET[/PREFIX]`, the store from the environment as the runner's
@@ -52,14 +52,14 @@ import time
 
 from . import __version__, coord, emit, options, params as params_mod, usage
 from .formats import FormatClass, Sink
-from .layout import FileGeometry, Layout
+from .framing import FileGeometry, Framing
 from .nodes import BuildError
 from .pattern import Pattern
 from .rng import block_seed, sample_size
 
 MANIFEST_NAME = ".aeiou-dataset.json"
 PART = 8 << 20   # the runner's `object::DEFAULT_PART`: what `aeiou datagen` sends a part at
-MANIFEST_VERSION = 2   # `state` since 2026-10-12 (DESIGN_REVIEW.md §3.70); this writer writes it once, `complete`
+MANIFEST_VERSION = 3   # `state` since 2026-10-12 (DESIGN_REVIEW.md §3.70), contract 0.8's dataset since 2026-10-13 (§3.72); this writer writes it once, `complete`
 BLOCK = 1 << 20
 GENERATOR, GENERATOR_VERSION, WRAPPER = "sfc64", "1", "aeiou-positional/3"
 PIECE, FILL = 4096, 0x5A
@@ -99,10 +99,8 @@ def canonical_json(v) -> str:
 
 def resolved_dataset(ast: dict, name: str, values: dict) -> dict:
     entry = substitute(ast["datasets"][name], values)
-    for inner in entry.values():
-        if isinstance(inner, dict):
-            inner.pop("doc", None)
-            inner.pop("protocol", None)   # where the dataset lives, not what it is
+    entry.pop("doc", None)
+    entry.pop("protocol", None)   # where the dataset lives, not what it is
     return json.loads(canonical_json(entry))
 
 
@@ -201,9 +199,8 @@ def _roots(ast: dict) -> dict:
     """Each dataset's and namespace's (protocol, root relative to --root)."""
     out = {}
     for name, d in ast.get("datasets", {}).items():
-        kind, body = next(iter(d.items()))
-        root = body["file"].rpartition("/")[0] if kind == "regions" else Pattern(body["pattern"]).root()
-        out[name] = (body.get("protocol", "posix"), root)
+        root = d["pattern"].rpartition("/")[0] if d["layout"] == "array" else Pattern(d["pattern"]).root()
+        out[name] = (d.get("protocol", "posix"), root)
     for name, n in ast.get("namespaces", {}).items():
         out[name] = (n.get("protocol", "posix"), Pattern(n["pattern"]).root())
     return out
@@ -334,7 +331,7 @@ class Job:
         """`at`: where a path relative to --root lives (`placement`)."""
         self.ast, self.name, self.values, self.at = ast, name, values, at
         self.resolved = resolved_dataset(ast, name, values)
-        body = self.resolved["files"]
+        body = self.resolved
         self.fmt = body["format"]
         self.klass = FormatClass.from_spec(self.fmt)
         self.count = ev(body["count"])
@@ -342,7 +339,7 @@ class Job:
         if self.count < 0 or self.spf < 1:
             raise BuildError(f"dataset {name}: count {self.count}, samples_per_file {self.spf}")
         self.files = (self.count + self.spf - 1) // self.spf
-        self.layout = Layout.from_spec(self.fmt.get("layout"), self.spf, ev)
+        self.framing = Framing.from_spec(self.fmt.get("framing"), self.spf, ev)
         self.size = body["size"]
         self.seed = int(body["seed"])
         self.pattern = Pattern(body["pattern"])
@@ -356,7 +353,7 @@ class Job:
 
     def write(self, file: int) -> tuple:
         sizes = self.sizes(file)
-        geo = FileGeometry(self.layout, sizes)
+        geo = FileGeometry(self.framing, sizes)
         rel = self.pattern.format(id=file)
         place = self.at(rel)
         # since `aeiou-positional/2`: `dedupe` consecutive files share a unit, whatever the count
@@ -667,7 +664,7 @@ def _plan(a, ast, values, at) -> list:
     wanted = set(a.dataset)
     jobs = []
     for name, d in ast.get("datasets", {}).items():
-        has_format = "files" in d and "format" in d["files"]
+        has_format = "format" in d
         if wanted and name not in wanted:
             continue
         if not has_format:

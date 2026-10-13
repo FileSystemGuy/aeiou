@@ -97,7 +97,7 @@ that extent's length and start, framing included), `count` and `dirs` of a datas
 neg`; `eq ne lt le gt ge and or not`; `cond {if, then, else}` whose arms may be expressions,
 distributions, or handles (this is how a distribution or a phase name is selected by index).
 
-**Handles:** `ref` (a binding); `file {dataset, id}` (a dataset file by id; a `regions` dataset's single file is `id: 0`) or
+**Handles:** `ref` (a binding); `file {dataset, id}` (a dataset file by id; an `array` dataset's single file is `id: 0`) or
 `file {of, chunk}` (the container file, or chunk object `k`, of a sample handle); `dir {dataset,
 id}`; `object {namespace, fields}`; `consume dataset` (next sample without replacement);
 `pick {dataset, dist}` (a sample with replacement, uniform or by a distribution over ids);
@@ -112,15 +112,25 @@ handle used where a file is expected means its container file. Under `stream` ac
 `zipf {s}`, `hotset {fraction, weight}`, `mixture [{weight, dist|null}]`. Wherever the schema
 says `distref`, a `param` or a `cond` that evaluates to a distribution is also accepted.
 
-**Datasets:** `files {pattern, count, size, seed, protocol, access, samples_per_file, chunk, format}` or
-`regions {file, count, slot, size, seed, protocol}` (`protocol`: V17). `count` is samples. Sizes are drawn from the dataset
+**Datasets** (one shape since 0.8; `files {…}` and `regions {…}` before, `DESIGN_REVIEW.md`
+§3.72): `{pattern, layout, access, count, size, seed, samples_per_file, chunk, slot, format,
+protocol, doc}` (`protocol`: V17). The hierarchy: a dataset's units of storage are files or
+objects (`protocol`); `layout` says how a unit holds the dataset's items: `whole` (one item),
+`chunked` (part of one: `chunk` bytes a unit, named by `{k}`), `compound` (several variably
+sized items: `samples_per_file` a file, framed by `format`), or `array` (`count` fixed-size
+slots of `slot` bytes in one file, its pattern without fields); the format's `framing` says how
+a compound file's bytes surround its items. `access` says how the application finds them:
+`map` (samples drawn from the positional shuffle, read by offset; PyTorch's map-style),
+`stream` (files drawn from it, read in order; iterable-style), or `indexed` (looked up by id
+with `file` or `pick`, never consumed). The fields each layout takes are V20; access, V21.
+`count` is items: samples, or an array's slots. Sizes are drawn from the dataset
 seed, never from `--seed`. Patterns use `{field[:format]}` with fields `id` (and `k` for chunk
 objects) and the forms `{id:09}`, `{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; a
 dataset's directories are the distinct prefixes up to the last `/`, enumerated in id order.
 
-**Container layout** (`format {class, reader, version, layout}`, 0.2). Without a format class
-the layout is *packed*: a file is its samples back to back, `offset(s)` the prefix sum. A
-format class declares `layout`, and every offset the runner computes follows from it, so the
+**Container framing** (`format {class, reader, version, framing}`, 0.2; `layout` until 0.8). Without a format class
+the framing is *packed*: a file is its samples back to back, `offset(s)` the prefix sum. A
+format class declares `framing`, and every offset the runner computes follows from it, so the
 runner stays format-ignorant: a file is `file_header ‖ units ‖ file_footer`, aligned to
 `file_align`; a unit (row group, record batch, chunk; `unit` samples each, default
 `samples_per_file`) is `unit_header ‖ column chunks ‖ unit_footer`, aligned to `unit_align`; a
@@ -129,7 +139,7 @@ of the sample ‖ row_footer`, aligned to `row_align`. Headers and footers may g
 `per_sample` and `per_unit`. A column's `weight` is the share of each sample's bytes it
 carries (`floor(size × weight)`, the last positive weight taking the remainder; weights sum
 to 1); `fixed` is bytes per row that are not sample bytes (an int64 label, an offset entry).
-Every field is an expression over parameters, so the layout is part of the resolved dataset
+Every field is an expression over parameters, so the framing is part of the resolved dataset
 definition the manifest compares; `writer` is opaque class-specific writer settings, likewise
 compared. `offset(s)` of a sample is the start of its payload in the one column; a sample
 split over several columns has no single offset (address its unit or a column). The
@@ -150,8 +160,8 @@ expression or `as_written` (§4, rule V4).
 | 9.3 `expect` | `expect: [errno…]` on any op |
 | 9.4 offsets and counts as expressions | `read.offset`, `loop.to`, `write.len` are expressions over `size`, `offset`, `elem`, indices; `member_off`-style helpers are expanded by the builder |
 | 9.5 `x @ i` and chains | `{at: {ref: x, index: e}}`, rule V3 |
-| 9.6 `regions` | the `regions` dataset kind |
-| 9.7 `namespace`, `chunk` | `namespaces`, `object` handles, `files.chunk`, `chunks(h)`, `file {of, chunk}` |
+| 9.6 `regions` | ~~the `regions` dataset kind~~ `layout: array` (0.8) |
+| 9.7 `namespace`, `chunk` | `namespaces`, `object` handles, `layout: chunked` with `chunk`, `chunks(h)`, `file {of, chunk}` |
 | 9.8 `phase`, `dirs`, `readdir` | `phase`, `{dirs: ds}`, `dir` handles, `readdir` |
 | 9.9 `when` selecting a distribution | expression `cond` with distribution arms |
 
@@ -213,8 +223,8 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   or `APPEND`. Writes go to namespaces. This is what makes the manifest (§7) true for the run.
 - **V13 Reserved names** (added 2026-09-30). No path component of a dataset or namespace
   pattern may begin with `.aeiou`; that prefix belongs to the manifest and any future
-  sidecar. Two `files` datasets may not share a root (the constant directory prefix of the
-  pattern), and a `regions` dataset's file may not sit at another dataset's root. Nor may one
+  sidecar. Two datasets may not share a root (the constant directory prefix of the
+  pattern; an `array`'s, the directory of its file). Nor may one
   dataset root lie inside another (added 2026-10-01: `aeiou datagen` wants each root empty and
   to itself; a dataset at the top level, root ``, therefore excludes any other dataset).
 - **V11 Scope.** A `let` is visible to later siblings and to child bodies, not to sibling
@@ -265,6 +275,15 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   or `libaio`, `blocking` with `sync`, `posix-aio`, or `mmap`. A run puts its actors on event
   loops when either API is event-driven, and a mix (a thread blocked on S3 while a loop runs
   its POSIX ops) waits for a traced application that shows it (`DESIGN_REVIEW.md` §3.65).
+- **V20 a layout's fields** (added 2026-10-13, contract 0.8). `whole` takes none of
+  `samples_per_file`, `chunk`, `slot`, `format`; `chunked` needs `chunk`; `compound` needs
+  `samples_per_file` and may have `format`; `array` needs `slot`. A pattern's fields: an
+  `array`'s none (it is one file; a sharded array is not built), a `chunked` dataset's `{id}`
+  and `{k}`, the others' `{id}` alone (`DESIGN_REVIEW.md` §3.72).
+- **V21 access** (added 2026-10-13, contract 0.8). An `array` is `indexed`. `consume` takes a
+  `map` or `stream` dataset; an `indexed` one is looked up by id (`file`, `pick`). A consumed
+  dataset's directory part is `{id div D}` or has no `id` field, never `{id mod M}`, so a
+  subset of it is whole directories (`DESIGN_REVIEW.md` §3.72).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -290,23 +309,23 @@ added on 2026-09-30.)
 `aeiou run` refuses to start unless every dataset the abstract declares matches its manifest.
 Reasoning in `DESIGN_REVIEW.md` §3.21.
 
-- **Root.** For a `files` dataset, the constant directory prefix of the pattern (`train/` for
-  `train/{id div 1300:05}/img_{id:09}.jpg`); for a `regions` dataset, the directory holding
-  its file. The manifest lives directly in that directory.
+- **Root.** The constant directory prefix of the pattern (`train/` for
+  `train/{id div 1300:05}/img_{id:09}.jpg`); for an `array`, the directory holding its file. The manifest lives directly in that directory.
 - **Name.** The leading `.` and the `.aeiou` prefix keep it out of the data: rule V13 means no
   pattern can generate a colliding or look-alike name, naive globs and ImageFolder-style walkers
   skip dotfiles, and the runner's structural check on `readdir` ignores `.aeiou*` entries (the
   real `getdents64` still returns them, as it would any dotfile). The verifier and datagen
   treat `.aeiou*` as metadata, never as data to generate or check.
 - **Normative content**, compared by `aeiou run` for exact equality with what it resolves from
-  its own abstract and the parameters in effect: `dataset` (the `files` or `regions` entry
+  its own abstract and the parameters in effect: `dataset` (the dataset's entry
   with every `param` reference substituted by the value used, in canonical form: sorted keys,
   provenance removed), `payload` (generator name and version, dedupe ratio, compression ratio,
   block size, the positional wrapper's version), `format` (format class, writer library and
-  version, layout fields) when the dataset has a format class, and `manifest_version`.
+  version, framing fields) when the dataset has a format class, and `manifest_version` (3 since
+  2026-10-13, contract 0.8's dataset shape).
 - **Provenance**, recorded and printed but never compared: the abstract's `name` and
   `ast_sha256`, the full parameter values at datagen time, the datagen version, host, start
-  and end time, and the count of files or regions actually written; since 2026-10-04 also
+  and end time, and the count of files actually written; since 2026-10-04 also
   `ranks`, `hosts` (each rank's host, files, bytes, start and end), and `direct` (written with
   `O_DIRECT` everywhere); since 2026-10-12 `dataset` (the dataset's name in the abstract, which
   `aeiou datagen --resume` uses) and, after a resume, `resumes` (each resume's ranks, hosts,
@@ -408,7 +427,7 @@ the committed sets; the reasoning is `DESIGN_REVIEW.md` §3.27.
 ## 7. Deferred (each is a version bump)
 
 - ~~The `trace` node's file format~~ (built 2026-10-02: `runner/REFERENCE.md` §13; not on this contract, since it is the exporter's output, pinned by the node's sha256).
-- ~~Runner-facing container layout fields beyond `samples_per_file`~~ (0.2, §2 *Container layout*).
+- ~~Runner-facing container layout fields beyond `samples_per_file`~~ (0.2, §2 *Container framing*).
 - ~~A records-per-batch knob on `loader` for `stream` access~~ (not needed: under `stream` the
   loader's unit of work is the shard, and a step loop takes one every `records_per_shard /
   batch` steps; 0.2).
@@ -449,3 +468,12 @@ the committed sets; the reasoning is `DESIGN_REVIEW.md` §3.27.
   `protocol: object` to `protocol: s3`); the committed ASTs declared `api` in three
   (`safetensors_load`, `faiss_ivf_ondisk`, `diskann_search`) and no protocol. Every committed AST
   was regenerated; no fingerprint changed.
+- **0.8** (2026-10-13): one dataset shape (§2): the kinds `files` and `regions` replaced by
+  `layout` (`whole`, `chunked`, `compound`, `array`), `access` required and gaining
+  `indexed`, `format.layout` renamed `format.framing`, `slot` and the file's path (as
+  `pattern`) carried over from `regions`, and rules V20 and V21 (§4). A 0.7 document maps
+  mechanically (a `files` entry's fields move up a level with `layout` from `chunk` and
+  `samples_per_file`, a `regions` entry becomes `layout: array, access: indexed`, an absent
+  `access` becomes `indexed`). Every committed AST was regenerated; every dataset id changed
+  (`manifest_version` 3); no fingerprint and no byte of data changed. Reasoning in
+  `DESIGN_REVIEW.md` §3.72.

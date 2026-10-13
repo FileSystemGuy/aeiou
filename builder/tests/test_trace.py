@@ -310,7 +310,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     assert r.returncode == 0, r.stderr
     sha = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("sha256 "))
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.7", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.8", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": exported.name, "sha256": sha}}]}}}))
     node_dry = tmp_path / "node.dry.json"
     r = run(RUNNER, "dry-run", node_ast, "--gpus", "1", "--metrics-json", node_dry)

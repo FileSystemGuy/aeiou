@@ -1,4 +1,4 @@
-//! The AST contract (`schema/abstract-ast.schema.json`, v0.5) as Rust types.
+//! The AST contract (`schema/abstract-ast.schema.json`, v0.8) as Rust types.
 //!
 //! Every node, expression, distribution, and handle is externally tagged: a JSON object with
 //! exactly one key naming its kind. `deny_unknown_fields` on every struct and serde's enum
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.7";
+pub const AST_VERSION: &str = "0.8";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -278,37 +278,68 @@ pub struct Pick {
 
 // ---------------------------------------------------------------- datasets, namespaces, actors
 
+/// How the application finds the dataset's items (contract 0.8, `DESIGN_REVIEW.md` §3.72):
+/// consumed from the positional shuffle, over samples (`map`, PyTorch's map-style) or files
+/// (`stream`, iterable-style), or looked up by id (`indexed`: the items are not anonymous).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Access {
     Map,
     Stream,
+    Indexed,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase", deny_unknown_fields)]
-pub enum Dataset {
-    Files(FilesDataset),
-    Regions(RegionsDataset),
+impl Access {
+    pub fn consumed(self) -> bool {
+        matches!(self, Access::Map | Access::Stream)
+    }
 }
 
+/// How a unit of storage, a file or an object, holds the dataset's items (contract 0.8,
+/// `DESIGN_REVIEW.md` §3.72): one item (`whole`), part of one (`chunked`, `chunk` bytes a
+/// unit), several variably sized ones (`compound`, `samples_per_file` a unit, framed by
+/// `format`), or fixed-size slots (`array`, `slot` bytes each).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout {
+    Whole,
+    Chunked,
+    Compound,
+    Array,
+}
+
+impl Layout {
+    pub fn name(self) -> &'static str {
+        match self {
+            Layout::Whole => "whole",
+            Layout::Chunked => "chunked",
+            Layout::Compound => "compound",
+            Layout::Array => "array",
+        }
+    }
+}
+
+/// A dataset: one shape for every layout (contract 0.8; `files` and `regions` before). The
+/// fields a layout takes are rule V20 (`validate.rs`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FilesDataset {
+pub struct Dataset {
     pub pattern: String,
+    pub layout: Layout,
+    pub access: Access,
     pub count: Expr,
     pub size: DistRef,
     pub seed: u64,
-    #[serde(default)]
-    pub access: Option<Access>,
     #[serde(default)]
     pub samples_per_file: Option<Expr>,
     #[serde(default)]
     pub chunk: Option<Expr>,
     #[serde(default)]
+    pub slot: Option<Expr>,
+    #[serde(default)]
     pub format: Option<Format>,
     /// Where the dataset or namespace lives: a file system (`posix`, absent) or an object
-    /// store (`object`) (`DESIGN_REVIEW.md` §3.65, contract 0.6). Not part of its identity.
+    /// store (`s3`) (`DESIGN_REVIEW.md` §3.65, contract 0.6). Not part of its identity.
     #[serde(default)]
     pub protocol: Option<Protocol>,
     #[serde(default)]
@@ -324,15 +355,16 @@ pub struct Format {
     #[serde(default)]
     pub version: Option<String>,
     #[serde(default)]
-    pub layout: Option<LayoutSpec>,
+    pub framing: Option<FramingSpec>,
 }
 
-/// The container layout a format class declares (`schema/README.md` §2, v0.2): how a file's
-/// bytes are framed around its samples. Every field is an expression over parameters; absent
-/// means 0 (alignments: 1). The resolved form and the formulas are `eval::Layout`.
+/// The container framing a format class declares (`schema/README.md` §2, v0.2; `layout` until
+/// v0.8): how a file's bytes are framed around its samples. Every field is an expression over
+/// parameters; absent means 0 (alignments: 1). The resolved form and the formulas are
+/// `eval::Framing`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LayoutSpec {
+pub struct FramingSpec {
     /// Samples per unit (default: `samples_per_file`, one unit per file).
     #[serde(default)]
     pub unit: Option<Expr>,
@@ -388,22 +420,6 @@ pub struct ColumnSpec {
     pub row_align: Option<Expr>,
     #[serde(default)]
     pub align: Option<Expr>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RegionsDataset {
-    pub file: String,
-    pub count: Expr,
-    pub slot: Expr,
-    pub size: DistRef,
-    pub seed: u64,
-    /// Where the dataset or namespace lives: a file system (`posix`, absent) or an object
-    /// store (`object`) (`DESIGN_REVIEW.md` §3.65, contract 0.6). Not part of its identity.
-    #[serde(default)]
-    pub protocol: Option<Protocol>,
-    #[serde(default)]
-    pub doc: Option<String>,
 }
 
 /// The protocol a dataset or namespace is reached through (contract 0.6; `object` became

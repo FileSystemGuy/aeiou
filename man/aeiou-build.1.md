@@ -127,8 +127,8 @@ from aeiou import *
 w = Workload("tiny", doc="one file per step")
 P = w.P
 w.param("steps", 100)
-data = w.dataset("data", pattern="data/{id:06}.bin", count=10_000,
-                 size=lognormal(median=110 * KiB, sigma=0.45), seed=0x5eed, access="map")
+data = w.dataset("data", pattern="data/{id:06}.bin", layout="whole", access="map",
+                 count=10_000, size=lognormal(median=110 * KiB, sigma=0.45), seed=0x5eed)
 with w.actor("gpu") as gpu:
     with gpu.loop("step", P.steps):
         f = gpu.let("f", data.consume())

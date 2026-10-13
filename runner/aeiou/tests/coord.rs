@@ -351,7 +351,7 @@ fn tree(root: &PathBuf) -> std::collections::BTreeMap<String, Vec<u8>> {
 #[test]
 fn datagen_on_two_ranks_writes_the_one_host_corpus() {
     // a files dataset (120 files, one directory: both ranks create in it) and a corpus with a
-    // regions file above one 64 MiB piece plus a one-file dataset (rank 1's slice is empty)
+    // array file above one 64 MiB piece plus a one-file dataset (rank 1's slice is empty)
     for (ast, gpus, params) in [("file_per_sample", 2, vec![("files", "120")]), ("faiss_ivf_ondisk", 1, vec![("lists", "280"), ("index_bytes", "1048576")])] {
         let one = tmpdir("dg-one");
         let two = tmpdir("dg-two");
@@ -400,7 +400,7 @@ fn datagen_on_two_ranks_writes_the_one_host_corpus() {
         }
         if ast == "faiss_ivf_ondisk" {
             let lists = r0.iter().position(|r| r.name == "lists").unwrap();
-            assert!(r0[lists].owner.is_none() && r1[lists].owner == Some(0), "the first regions dataset is rank 0's");
+            assert!(r0[lists].owner.is_none() && r1[lists].owner == Some(0), "the first array dataset is rank 0's");
             assert_eq!(r1[lists].files, 0);
             let index = r0.iter().position(|r| r.name == "index").unwrap();
             assert_eq!(r0[index].files + r1[index].files, 1, "one file, written by the rank that claimed it");
@@ -695,7 +695,7 @@ fn a_killed_grow_is_finished_by_resume() {
     child.kill().unwrap();
     child.wait().unwrap();
     let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
-    assert_eq!((m.state.as_str(), m.progress["from"].as_i64(), m.dataset["files"]["count"].as_i64()), ("growing", Some(from), Some(to)));
+    assert_eq!((m.state.as_str(), m.progress["from"].as_i64(), m.dataset["count"].as_i64()), ("growing", Some(from), Some(to)));
     let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "20000")]));
     let e = run::check_datasets(loaded, cfg, &root).unwrap_err().to_string();
     assert!(e.contains("the manifest says `growing`") && e.contains("--resume"), "{e}");
@@ -857,7 +857,7 @@ fn settle(at: &std::path::Path) -> (bool, String, String) {
 fn check_settled(root: &PathBuf, was: &aeiou::payload::Manifest, asked: i64) -> i64 {
     let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert_eq!(after.state, "complete");
-    let s = after.dataset["files"]["count"].as_i64().unwrap();
+    let s = after.dataset["count"].as_i64().unwrap();
     let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", &s.to_string())]));
     let meta = &model.datasets[0];
     assert!(listing(&root.join("train")) == expected(meta, s), "the settled corpus is not the {s}-file one");

@@ -212,7 +212,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-12)
+## Status (2026-10-13)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -232,7 +232,9 @@ manifest alone on any host count, and `datagen --grow N ROOT` and `--shrink N RO
 make a corpus the one a datagen of count N writes, and `datagen --settle ROOT`, which keeps
 what an interrupted one reached at whole directories, every datagen handing its ids out in
 id order from one queue on rank 0, and Ctrl-C stopping every host with the manifest true
-(2026-10-12). The workload catalog
+(2026-10-12), and contract 0.8, one dataset shape: a `layout` (`whole`, `chunked`,
+`compound`, `array`), an `access` (`map`, `stream`, `indexed`), and `format.framing`
+(2026-10-13, `DESIGN_REVIEW.md` §3.72). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape

@@ -5285,7 +5285,8 @@ subset's below, and the report says so. A flat pattern has no whole-directory su
 live-walk subset of a flat dataset is refused (no committed flat abstract walks). Subsets
 apply to sample spaces (`access: map` or `stream`) whose count is a bare parameter
 reference; a `regions` dataset or a dataset without an access mode (a DiskANN index is a
-graph over every node) is refused. Whether a scored step may run on a subset is the WG's
+graph over every node) is refused (in contract 0.8's terms, §3.72: an `array` or an `indexed`
+dataset). Whether a scored step may run on a subset is the WG's
 question (`PROJECT_BRIEF.md` §8), not aeiou's.
 
 **Order.** ~~(1) The payload (built). (2) `O_DIRECT` in the Python writer, measured. (3) The
@@ -5838,6 +5839,113 @@ are not required of a corpus); `aeiou run --subset` requires whole directories o
 subset's count. Other workloads (checkpoints, model loading, KV caches, vector indexes,
 dataprep) have no such layout; their sizes come from domain parameters, and they get the
 same projection in a later pass.
+
+### 3.72 One dataset shape: `layout`, `access`, and `format.framing` (decided with the user 2026-10-13; built the same day, contract 0.8)
+
+**How it came up.** Designing `aeiou run --subset` (§3.70 item 6), whose rule admits subsets of
+`map` and `stream` datasets and refuses a `regions` dataset and a dataset without an access
+mode. The user asked why, and whether "regions" and "no access mode" were community terms.
+Neither is: `regions` was coined here (`ABSTRACTS.md` §9.6), and "no access mode" is an absence.
+The community terms are on the consumed side only: `map` and `stream` are PyTorch's
+*map-style* and *iterable-style* datasets.
+
+**Two axes, tangled.** A `regions` dataset was described as a layout (one file of `count`
+fixed slots, read with `pick`), but the relationships the user had in mind (graph edges, list
+membership, reuse) were never in its definition; they are in the abstract's access pattern
+(positional distributions, `x @ i`). The datasets "without an access mode" (the safetensors
+shards and config files, LMCache's blocks, the DiskANN PQ file, the FAISS index file) were
+`files` in layout and looked up by id in access, like a `regions` dataset. So the line that
+matters is *consumed versus looked up*, and `regions` was one layout of the second.
+
+**Access (the user's terms).** `map` and `stream`: drawn from the positional shuffle, each
+item once an epoch, interchangeable. `indexed`: the application looks each item up by id
+(`file`, `pick`); "the items are not anonymous" (the user). `access` is now required, so no
+dataset is silent about it, and `consume` takes a `map` or `stream` dataset only (V21).
+
+**Layout (the user's hierarchy).** Storage is a file or an object (`protocol`, unchanged); a
+unit of storage then holds one item (`whole`), part of one (`chunked`), several variably sized
+items (`compound`), or fixed-size slots (`array`). The user chose `compound` because it is
+deliberately vague on alignment and `array` because arrays store fixed-size entries, so the
+contrast shows in one field. "Shard" was considered for the split case and rejected: in ML
+usage a shard is a file holding many samples (a TFRecord or WebDataset shard), our `compound`.
+`chunked` matches the existing `chunk` field.
+
+**No kind key.** An earlier proposal (this conversation) kept `files` and `array` as two kinds
+beside `layout`; the user's point that nobody would tell kind from layout without reading the
+documentation removed it. Every dataset has a `pattern`; an array in one file is a pattern
+without fields. "One file" is not what makes an array: it is a limit of today's contract (the
+three committed arrays are each one file), and real systems shard the same structure (a vector
+database's index per segment, a partitioned DiskANN, Lucene segments, RocksDB SSTs). A sharded
+array would be a pattern with `{id}` under `array`; not built, and refused until it is (V20).
+
+**Fixed against variable size.** Asked by the user whether it matters: it decides where an
+item's offset comes from (an array's from the id alone, `c × slot`, as a database computes a
+page; a compound file's from its format's framing and the sizes before it) and what storage
+sees (aligned reads at a fixed stride over a sparse file, the slot's tail unwritten, against
+unaligned reads of variable length). That is real workload shape, but a property of how
+offsets are found, not of what the dataset is, so it is the difference between two layout
+values and not a separate axis.
+
+**`format.framing`.** The container's headers, footers, alignment, and columns were
+`format.layout` (contract 0.2). With `layout` naming how a unit holds items, the old name
+would have meant two things in one definition; `framing` is also the better word for headers
+and alignment. The runner's `eval::Layout` and the builder's `aeiou/layout.py` follow
+(`eval::Framing`, `aeiou/framing.py`). §3.71's "layout counts" (samples per file, files per
+directory, directories) are the counts that shape a corpus's tree, not this field.
+
+**Consumed datasets' directories: `{id div D}` or none (V21).** The user: if a consumed
+dataset has directories at all, they are `div`. The shuffle makes every directory equally
+likely whatever the scheme, so `div` against `mod` is moot for a training read's load, and
+`div` is what makes a subset whole directories. Asked when `mod` would be better: only for
+access in id order (a single writer or a sequential scan, under `div` serialized on one
+directory and, on some scale-out systems, one metadata server; growth, which under `mod`
+fills every directory evenly), and a consumed dataset has none of it (our own datagen spreads
+creates by handing out whole directories per rank). Real applications that spread by name
+hash rather than use `mod`, and they write namespaces. `mod` stays in the pattern language
+for `indexed` datasets and namespaces, and a future workload that fits it will use it. A flat
+pattern (one directory, or a bucket prefix) is allowed: shard corpora are usually flat.
+
+**Decided on the way, for `run --subset` (built next).**
+- A subset means a smaller corpus: the run is the same workload as a fresh corpus of the
+  rounded count (same op stream and fingerprint), so subsets are whole `div` directories from
+  0, or whole files of a flat dataset; a flat subset whose abstract lists the directory is
+  refused (the listing returns the whole corpus). `--subset` with no dataset smaller than its
+  manifest is a usage error.
+- *Selection from a corpus* is another workload, recorded as a candidate: data scientists
+  train on a subset to study data quality or bias (the user), chosen by content and so
+  scattered over every directory; the walk lists the whole corpus (a `torch.utils.data.Subset`
+  wraps an ImageFolder that has walked everything) and the reads are a positional selection of
+  N out of C. It belongs in an abstract (a corpus count and a selected count), not a runner
+  flag; not built.
+- The inventory variant (§3.70 item 6) comes after `--subset`; whether a subset reads the
+  corpus's inventory whole or a list cut for it is decided then, with the selection workload.
+
+**Contract 0.8.** `datasets.<name>` is one object: `pattern`, `layout`, `access`, `count`,
+`size`, `seed`, and by layout `chunk` (`chunked`), `samples_per_file` and optionally `format`
+(`compound`), `slot` (`array`); `protocol` and `doc` as before. V20: the fields a layout takes
+and needs, its pattern's fields (`array` none, `chunked` `{id}` and `{k}`, the others `{id}`).
+V21: an `array` is `indexed`; `consume` needs `map` or `stream`; a consumed dataset's
+directory part has no `mod`. The mapping from 0.7:
+
+| 0.7 | 0.8 |
+|---|---|
+| `{"files": {…}}`, one sample per file | `layout: whole` |
+| `{"files": {…, "chunk": c}}` | `layout: chunked` |
+| `{"files": {…, "samples_per_file": n}}` | `layout: compound` |
+| `{"regions": {"file": f, …}}` | `layout: array`, `pattern: f`, `access: indexed` |
+| no `access` | `access: indexed` |
+| `format.layout` | `format.framing` |
+
+**What changed and what did not.** Every abstract's hash and every dataset id (the resolved
+definition is the new shape; `manifest_version` 3, so an older manifest is refused by its
+version, not by a diff). No fingerprint (`tests/golden.rs`, every committed abstract),
+no byte of data (the payload is keyed on seed, id, and offset), and no measured shape (the
+catalog's shapes changed in their hashes only). A dataset's draw sites are now the JSON
+pointers of the flat shape (`/datasets/d/size`), as the site rule requires; no committed
+dataset has a draw in its expressions. Built in the runner (`ast.rs`, `validate.rs`,
+`eval.rs`, `sites.rs`, `payload.rs`, `datagen.rs`), the schema and `schema/check.py`, the
+builder (`Workload.dataset(…, layout=, access=, slot=)`; `Workload.regions` removed), every
+committed abstract, and the documents; tests for V20 and V21 in `tests/golden.rs`.
 
 ## 4. Plan changes
 

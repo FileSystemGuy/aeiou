@@ -1555,6 +1555,10 @@ may be an expression provably `≥ 1`, such as `r mod d + 1` (`schema/README.md`
 
 ### 9.6 `regions`: a dataset of fixed-slot regions inside one file
 
+*2026-10-13: the paper language here is unchanged, but in the AST (contract 0.8) a `regions`
+dataset is `layout: array, access: indexed`, a `files` dataset `layout: whole`, `chunked`,
+or `compound` (`DESIGN_REVIEW.md` §3.72; `schema/README.md` §2).*
+
 DiskANN's index, FAISS's inverted lists, and a raw vector file are one file with many
 addressable pieces. Modeling each piece as a file would change the op pattern (an open per
 piece). Modeling them as computed offsets needs each region's offset to be computable in O(1),

@@ -39,7 +39,8 @@ shard_rows = P.overlap * P.n // P.shards               # modeled equal; traced 5
 shard_bytes = shard_rows * row + 8
 ids_bytes = shard_rows * 4 + 8
 
-base = w.regions("base", file="base/base.fbin", count=P.n, slot=row, size=const(row), seed=0x5eed_da7f)
+base = w.dataset("base", pattern="base/base.fbin", layout="array", access="indexed", count=P.n, slot=row,
+                 size=const(row), seed=0x5eed_da7f)
 tmp = w.namespace("tmp", pattern="diskann/tmp_subshard-{k}_{part}", fields={"k": int, "part": str}, size="as_written",
                   seed=0x5eed_da83)
 out = w.namespace("out", pattern="diskann/{name}", fields={"name": str}, size="as_written", seed=0x5eed_da83)

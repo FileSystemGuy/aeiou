@@ -68,7 +68,7 @@ def test_on_disk_form_round_trips():
 def _wl():
     w = Workload("t")
     P = w.params(n=10, xfer=1 * MiB)
-    ds = w.dataset("d", pattern="d/{id:06}", count=1000, size=const(1 * MiB), seed=1)
+    ds = w.dataset("d", pattern="d/{id:06}", layout="whole", access="map", count=1000, size=const(1 * MiB), seed=1)
     return w, P, ds
 
 
@@ -244,17 +244,17 @@ def test_datasets_are_read_only_and_names_are_reserved():
         with pytest.raises(BuildError, match="read-only"):
             a.rename(ds.file(1), ds.file(2))
     with pytest.raises(BuildError, match="reserved"):
-        w.dataset("m", pattern="m/.aeiou-{id}", count=1, size=const(1), seed=1)
+        w.dataset("m", pattern="m/.aeiou-{id}", layout="whole", access="map", count=1, size=const(1), seed=1)
     with pytest.raises(BuildError, match="reserved"):
         w.namespace("n", pattern="x/.aeiou-dataset.json/{k}", fields={"k": int}, size=0, seed=1)
     with pytest.raises(BuildError, match="shares root"):
-        w.dataset("d2", pattern="d/other_{id:06}", count=1, size=const(1), seed=1)
+        w.dataset("d2", pattern="d/other_{id:06}", layout="whole", access="map", count=1, size=const(1), seed=1)
     with pytest.raises(BuildError, match="inside dataset"):
         w.namespace("n2", pattern="d/out/{k}", fields={"k": int}, size=0, seed=1)
     with pytest.raises(BuildError, match="are nested"):                          # either way round
-        w.dataset("d3", pattern="d/sub/f_{id:06}", count=1, size=const(1), seed=1)
+        w.dataset("d3", pattern="d/sub/f_{id:06}", layout="whole", access="map", count=1, size=const(1), seed=1)
     with pytest.raises(BuildError, match="are nested"):
-        w.dataset("d4", pattern="top_{id:06}", count=1, size=const(1), seed=1)
+        w.dataset("d4", pattern="top_{id:06}", layout="whole", access="map", count=1, size=const(1), seed=1)
     w.namespace("ok", pattern="dd/{k}", fields={"k": int}, size=0, seed=1)      # `dd/` is not under `d/`
 
 
@@ -268,7 +268,7 @@ def test_check_py_enforces_v12_v13_on_a_hand_written_ast():
     ast["actors"]["gpu"]["body"][5]["open"]["flags"] = ["RDWR"]
     assert any("V12" in e for e in check.Check(ast, "x").run())
     ast = copy.deepcopy(base)
-    ast["datasets"]["lists"]["regions"]["file"] = "ivf/.aeiou-lists.bin"
+    ast["datasets"]["lists"]["pattern"] = "ivf/.aeiou-lists.bin"
     assert any("V13" in e for e in check.Check(ast, "x").run())
     ast = copy.deepcopy(base)
     ast["datasets"]["lists2"] = copy.deepcopy(ast["datasets"]["lists"])
@@ -309,7 +309,7 @@ def test_hermetic_denies(tmp_path, poison, needle):
     script = tmp_path / "poisoned.py"
     script.write_text("from aeiou import *\n" + poison + "\n"
                       "w = Workload('p')\nP = w.params(n=3)\n"
-                      "ds = w.dataset('d', pattern='d/{id}', count=10, size=const(1), seed=1)\n"
+                      "ds = w.dataset('d', pattern='d/{id}', layout='whole', access='map', count=10, size=const(1), seed=1)\n"
                       "with w.actor('a') as a:\n"
                       "    with a.loop('i', P.n):\n"
                       "        a.stat(ds.pick())\n")
@@ -327,7 +327,7 @@ def test_build_twice_detects_hash_order_dependence(tmp_path):
     script = tmp_path / "unstable.py"
     script.write_text("from aeiou import *\n"
                       "w = Workload('u')\nP = w.params(n=3)\n"
-                      "ds = w.dataset('d', pattern='d/{id}', count=10, size=const(1), seed=1)\n"
+                      "ds = w.dataset('d', pattern='d/{id}', layout='whole', access='map', count=10, size=const(1), seed=1)\n"
                       "names = {'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta'}\n"
                       "with w.actor('a') as a:\n"
                       "    with a.loop('i', P.n):\n"
@@ -365,7 +365,7 @@ def test_a_workload_may_declare_its_apis_and_cache():
     with pytest.raises(BuildError, match="page faults"):
         Workload("w", posix="mmap", cache="direct")
     w = Workload("w", posix="libaio", cache="direct")
-    d = w.dataset("d", pattern="d/f_{id:06}", count=1, size=const(1), seed=1)
+    d = w.dataset("d", pattern="d/f_{id:06}", layout="whole", access="map", count=1, size=const(1), seed=1)
     with w.actor("a", count=1) as a:
         a.stat(d.file(0))
     ast = w.build()
@@ -380,7 +380,7 @@ def test_v19_apis_follow_the_protocols():
     take APIs of one kind (event-driven or a thread per actor), defaults counted."""
     def build(protocols, **apis):
         w = Workload("v19", **apis)
-        ds = [w.dataset(f"d{i}", pattern=f"d{i}/f_{{id:06}}", count=1, size=const(1), seed=1, protocol=p)
+        ds = [w.dataset(f"d{i}", pattern=f"d{i}/f_{{id:06}}", layout="whole", access="map", count=1, size=const(1), seed=1, protocol=p)
               for i, p in enumerate(protocols)]
         with w.actor("a", count=1) as a:
             for d in ds:
@@ -410,15 +410,15 @@ def test_protocol_per_dataset_and_namespace():
     with pytest.raises(BuildError, match="protocol must be posix or s3"):
         Workload("p").namespace("n", pattern="o/{k:04}", fields={"k": int}, size=1, seed=1, protocol="object")
     w = Workload("p")
-    d = w.dataset("d", pattern="d/f_{id:06}", count=1, size=const(1), seed=1, protocol="s3")
+    d = w.dataset("d", pattern="d/f_{id:06}", layout="whole", access="map", count=1, size=const(1), seed=1, protocol="s3")
     w.namespace("a", pattern="o/{k:04}.a", fields={"k": int}, size=1, seed=2, protocol="s3")
     with pytest.raises(BuildError, match="V17"):
         w.namespace("b", pattern="o/{k:04}.b", fields={"k": int}, size=1, seed=3)
     with w.actor("x", count=1) as x:
         x.stat(d.file(0))
     ast = w.build()
-    assert ast["datasets"]["d"]["files"]["protocol"] == "s3" and ast["namespaces"]["a"]["protocol"] == "s3"
-    assert "protocol" not in resolved_dataset(ast, "d", {})["files"]
+    assert ast["datasets"]["d"]["protocol"] == "s3" and ast["namespaces"]["a"]["protocol"] == "s3"
+    assert "protocol" not in resolved_dataset(ast, "d", {})
 
 
 def test_v18_an_object_is_written_once_in_order():

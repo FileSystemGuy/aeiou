@@ -111,7 +111,7 @@ struct DatagenArgs {
     /// (whitespace-separated), else `endpoint` in the config file (an array).
     #[arg(long = "endpoint", value_name = "NAME=DIR|URI", help_heading = "Writer")]
     endpoints: Vec<String>,
-    /// Writer threads: files, or 64 MiB pieces of a regions file, written at once (default: all
+    /// Writer threads: files, or 64 MiB pieces of an array file, written at once (default: all
     /// cores).
     #[arg(long, value_name = "N", help_heading = "Writer")]
     writers: Option<usize>,
@@ -119,7 +119,7 @@ struct DatagenArgs {
     /// requests are made on the writers' threads). Default 2.
     #[arg(long, value_name = "N", help_heading = "Writer")]
     object_threads: Option<usize>,
-    /// Dedupe ratio: every `dedupe` consecutive files (or 1 MiB blocks of a regions file) share content.
+    /// Dedupe ratio: every `dedupe` consecutive files (or 1 MiB blocks of an array file) share content.
     #[arg(long, default_value_t = 1, help_heading = "Writer")]
     dedupe: u64,
     /// Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest 0x5A.
@@ -135,7 +135,7 @@ struct DatagenArgs {
     /// This host's index among --ranks hosts. Default 0.
     #[arg(long, value_name = "R", help_heading = "Several hosts")]
     rank: Option<i64>,
-    /// Hosts the datagen is spread over: each claims runs of every `files` dataset's ids from rank 0, and each `regions` file is written by one of them. Default 1.
+    /// Hosts the datagen is spread over: each claims runs of every dataset's ids from rank 0, and each `array` file is written by one of them. Default 1.
     #[arg(long, value_name = "N", help_heading = "Several hosts")]
     ranks: Option<i64>,
     /// With --ranks above 1: the coordinator's address. Rank 0 listens on it (in-process); every rank connects to it.
@@ -850,8 +850,8 @@ fn read_at_root(at: &str, flag: &str, n: Option<i64>, cfg: &Config) -> Result<se
             if m.state != STATE_COMPLETE {
                 bail!("{flag} {n} {at}: the manifest says `{}`; finish it first with `aeiou datagen --resume {at}`", m.state);
             }
-            if m.dataset.get("files").is_none() {
-                bail!("{flag} {n} {at}: only a `files` dataset grows or shrinks");
+            if m.dataset["layout"] == "array" {
+                bail!("{flag} {n} {at}: an `array` does not grow or shrink");
             }
             // the count it has, as the runner computes it from the manifest's dataset
             let (text, _) = datagen::resume_abstract(&m, at)?;

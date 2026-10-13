@@ -23,10 +23,7 @@ pub fn protocols(ast: &Ast, traces: bool) -> Protocols {
     let declared = ast
         .datasets
         .values()
-        .map(|d| match d {
-            crate::ast::Dataset::Files(f) => f.protocol,
-            crate::ast::Dataset::Regions(r) => r.protocol,
-        })
+        .map(|d| d.protocol)
         .chain(ast.namespaces.values().map(|n| n.protocol))
         .map(|p| p.unwrap_or_default());
     let (mut posix, mut s3) = (traces, false);
@@ -138,13 +135,8 @@ fn is_errno(s: &str) -> bool {
 }
 
 pub fn dataset_root(d: &Dataset) -> String {
-    match d {
-        Dataset::Regions(r) => r.file.rsplit_once('/').map(|(a, _)| a).unwrap_or("").to_string(),
-        Dataset::Files(f) => {
-            let prefix = f.pattern.split('{').next().unwrap_or("");
-            prefix.rsplit_once('/').map(|(a, _)| a).unwrap_or("").to_string()
-        }
-    }
+    let prefix = d.pattern.split('{').next().unwrap_or("");
+    prefix.rsplit_once('/').map(|(a, _)| a).unwrap_or("").to_string()
 }
 
 fn namespace_root(pattern: &str) -> String {
@@ -161,6 +153,44 @@ fn p(base: &P, more: &[&str]) -> P {
 }
 
 impl<'a> Checker<'a> {
+    /// V20 (the fields each layout takes) and V21 (access) on one dataset (contract 0.8,
+    /// `DESIGN_REVIEW.md` §3.72).
+    fn layout_fields(&mut self, d: &Dataset, path: &P) {
+        let has = [("samples_per_file", d.samples_per_file.is_some()), ("chunk", d.chunk.is_some()), ("slot", d.slot.is_some()), ("format", d.format.is_some())];
+        let (need, may): (&[&str], &[&str]) = match d.layout {
+            Layout::Whole => (&[], &[]),
+            Layout::Chunked => (&["chunk"], &[]),
+            Layout::Compound => (&["samples_per_file"], &["format"]),
+            Layout::Array => (&["slot"], &[]),
+        };
+        let l = d.layout.name();
+        for (k, present) in has {
+            if need.contains(&k) && !present {
+                self.err(path, format!("layout `{l}` needs `{k}` (V20)"));
+            } else if present && !need.contains(&k) && !may.contains(&k) {
+                self.err(&p(path, &[k]), format!("layout `{l}` takes no `{k}` (V20)"));
+            }
+        }
+        let fields = crate::pattern::Pattern::parse(&d.pattern).map(|pt| pt.field_names().iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_or_default();
+        match d.layout {
+            Layout::Array if !fields.is_empty() => self.err(&p(path, &["pattern"]), "an `array` is one file: its pattern has no fields (V20)"),
+            Layout::Chunked if !fields.iter().any(|f| f == "k") => self.err(&p(path, &["pattern"]), "a `chunked` dataset's pattern needs a `{k}` field (V20)"),
+            Layout::Whole | Layout::Compound if fields.iter().any(|f| f == "k") => self.err(&p(path, &["pattern"]), "`{k}` names a chunk: only a `chunked` dataset has one (V20)"),
+            Layout::Whole | Layout::Chunked | Layout::Compound if !fields.iter().any(|f| f == "id") => self.err(&p(path, &["pattern"]), "the pattern needs an `{id}` field (V20)"),
+            _ => {}
+        }
+        if d.layout == Layout::Array && d.access != Access::Indexed {
+            self.err(&p(path, &["access"]), "an `array` is `indexed`: its slots are looked up by position (V21)");
+        }
+        if d.access.consumed() {
+            if let Ok(pt) = crate::pattern::Pattern::parse(&d.pattern) {
+                if pt.dir_id_fields().iter().any(|f| matches!(f.op, Some((crate::pattern::FieldOp::Mod, _)))) {
+                    self.err(&p(path, &["pattern"]), "a consumed dataset's directories are `{id div D}` or none, never `mod`, so a subset of it is whole directories (V21)");
+                }
+            }
+        }
+    }
+
     fn err(&mut self, path: &P, msg: impl AsRef<str>) {
         self.errors.push(format!("{}: {}: {}", self.ast.name, path.join("/"), msg.as_ref()));
     }
@@ -214,77 +244,69 @@ impl<'a> Checker<'a> {
             }
             let scope = Scope::new(HashSet::new());
             let mut st = ActorState::default();
-            match d {
-                Dataset::Files(f) => {
-                    self.distref(&f.size, &p(&path, &["size"]), &scope, &mut st);
-                    self.expr(&f.count, &p(&path, &["count"]), &scope, &mut st, None);
-                    if let Some(e) = &f.samples_per_file {
-                        self.expr(e, &p(&path, &["samples_per_file"]), &scope, &mut st, None);
-                    }
-                    if let Some(e) = &f.chunk {
-                        self.expr(e, &p(&path, &["chunk"]), &scope, &mut st, None);
-                    }
-                    if let Some(fm) = &f.format {
-                        if !is_ident(&fm.class) {
-                            self.err(&p(&path, &["format", "class"]), "not an identifier");
-                        }
-                        if let Some(l) = &fm.layout {
-                            let lp = p(&path, &["format", "layout"]);
-                            for (k, e) in [
-                                ("unit", &l.unit),
-                                ("file_header", &l.file_header),
-                                ("file_header_per_sample", &l.file_header_per_sample),
-                                ("file_header_per_unit", &l.file_header_per_unit),
-                                ("file_footer", &l.file_footer),
-                                ("file_footer_per_sample", &l.file_footer_per_sample),
-                                ("file_footer_per_unit", &l.file_footer_per_unit),
-                                ("file_align", &l.file_align),
-                                ("unit_header", &l.unit_header),
-                                ("unit_header_per_sample", &l.unit_header_per_sample),
-                                ("unit_footer", &l.unit_footer),
-                                ("unit_footer_per_sample", &l.unit_footer_per_sample),
-                                ("unit_align", &l.unit_align),
-                            ] {
-                                if let Some(e) = e {
-                                    self.expr(e, &p(&lp, &[k]), &scope, &mut st, None);
-                                }
-                            }
-                            if let Some(cols) = &l.columns {
-                                if cols.is_empty() {
-                                    self.err(&p(&lp, &["columns"]), "at least one column");
-                                }
-                                let total: f64 = cols.iter().map(|c| c.weight).sum();
-                                if cols.iter().any(|c| c.weight < 0.0) {
-                                    self.err(&p(&lp, &["columns"]), "negative weight");
-                                } else if !cols.is_empty() && (total - 1.0).abs() > 1e-9 {
-                                    self.err(&p(&lp, &["columns"]), format!("weights sum to {total}, not 1: the sample's bytes must land somewhere once"));
-                                }
-                                for (i, c) in cols.iter().enumerate() {
-                                    let cp = p(&lp, &["columns", &i.to_string()]);
-                                    for (k, e) in [("header", &c.header), ("fixed", &c.fixed), ("row_header", &c.row_header), ("row_footer", &c.row_footer), ("row_align", &c.row_align), ("align", &c.align)] {
-                                        if let Some(e) = e {
-                                            self.expr(e, &p(&cp, &[k]), &scope, &mut st, None);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if f.pattern.is_empty() {
-                        self.err(&p(&path, &["pattern"]), "empty pattern");
-                    }
-                    self.reserved(&f.pattern, &path);
+            self.layout_fields(d, &path);
+            let f = d;
+            self.distref(&f.size, &p(&path, &["size"]), &scope, &mut st);
+            self.expr(&f.count, &p(&path, &["count"]), &scope, &mut st, None);
+            if let Some(e) = &f.samples_per_file {
+                self.expr(e, &p(&path, &["samples_per_file"]), &scope, &mut st, None);
+            }
+            if let Some(e) = &f.chunk {
+                self.expr(e, &p(&path, &["chunk"]), &scope, &mut st, None);
+            }
+            if let Some(e) = &f.slot {
+                self.expr(e, &p(&path, &["slot"]), &scope, &mut st, None);
+            }
+            if let Some(fm) = &f.format {
+                if !is_ident(&fm.class) {
+                    self.err(&p(&path, &["format", "class"]), "not an identifier");
                 }
-                Dataset::Regions(r) => {
-                    self.distref(&r.size, &p(&path, &["size"]), &scope, &mut st);
-                    self.expr(&r.count, &p(&path, &["count"]), &scope, &mut st, None);
-                    self.expr(&r.slot, &p(&path, &["slot"]), &scope, &mut st, None);
-                    if r.file.is_empty() {
-                        self.err(&p(&path, &["file"]), "empty file");
+                if let Some(l) = &fm.framing {
+                    let lp = p(&path, &["format", "framing"]);
+                    for (k, e) in [
+                        ("unit", &l.unit),
+                        ("file_header", &l.file_header),
+                        ("file_header_per_sample", &l.file_header_per_sample),
+                        ("file_header_per_unit", &l.file_header_per_unit),
+                        ("file_footer", &l.file_footer),
+                        ("file_footer_per_sample", &l.file_footer_per_sample),
+                        ("file_footer_per_unit", &l.file_footer_per_unit),
+                        ("file_align", &l.file_align),
+                        ("unit_header", &l.unit_header),
+                        ("unit_header_per_sample", &l.unit_header_per_sample),
+                        ("unit_footer", &l.unit_footer),
+                        ("unit_footer_per_sample", &l.unit_footer_per_sample),
+                        ("unit_align", &l.unit_align),
+                    ] {
+                        if let Some(e) = e {
+                            self.expr(e, &p(&lp, &[k]), &scope, &mut st, None);
+                        }
                     }
-                    self.reserved(&r.file, &path);
+                    if let Some(cols) = &l.columns {
+                        if cols.is_empty() {
+                            self.err(&p(&lp, &["columns"]), "at least one column");
+                        }
+                        let total: f64 = cols.iter().map(|c| c.weight).sum();
+                        if cols.iter().any(|c| c.weight < 0.0) {
+                            self.err(&p(&lp, &["columns"]), "negative weight");
+                        } else if !cols.is_empty() && (total - 1.0).abs() > 1e-9 {
+                            self.err(&p(&lp, &["columns"]), format!("weights sum to {total}, not 1: the sample's bytes must land somewhere once"));
+                        }
+                        for (i, c) in cols.iter().enumerate() {
+                            let cp = p(&lp, &["columns", &i.to_string()]);
+                            for (k, e) in [("header", &c.header), ("fixed", &c.fixed), ("row_header", &c.row_header), ("row_footer", &c.row_footer), ("row_align", &c.row_align), ("align", &c.align)] {
+                                if let Some(e) = e {
+                                    self.expr(e, &p(&cp, &[k]), &scope, &mut st, None);
+                                }
+                            }
+                        }
+                    }
                 }
             }
+            if f.pattern.is_empty() {
+                self.err(&p(&path, &["pattern"]), "empty pattern");
+            }
+            self.reserved(&f.pattern, &path);
             let root = dataset_root(d);
             if let Some(other) = roots.get(&root) {
                 self.err(&path, format!("shares root `{root}/` with dataset `{other}` (V13)"));
@@ -894,8 +916,8 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprNode::Dirs(name) => {
-                if !matches!(self.ast.datasets.get(name), Some(Dataset::Files(_))) {
-                    self.err(path, format!("`dirs` needs a files dataset, got `{name}`"));
+                if !matches!(self.ast.datasets.get(name), Some(d) if d.layout != Layout::Array) {
+                    self.err(path, format!("`dirs` needs a dataset named by ids, not an `array`: got `{name}`"));
                 }
             }
             ExprNode::Cond(c) => {
@@ -1026,8 +1048,8 @@ impl<'a> Checker<'a> {
                 }
             }
             Handle::Dir { dataset, id } => {
-                if !matches!(self.ast.datasets.get(dataset), Some(Dataset::Files(_))) {
-                    self.err(path, format!("`dir` needs a files dataset, got `{dataset}`"));
+                if !matches!(self.ast.datasets.get(dataset), Some(d) if d.layout != Layout::Array) {
+                    self.err(path, format!("`dir` needs a dataset named by ids, not an `array`: got `{dataset}`"));
                 }
                 self.expr(id, &p(path, &["id"]), scope, st, None);
             }
@@ -1045,8 +1067,10 @@ impl<'a> Checker<'a> {
                 }
             },
             Handle::Consume(ds) => {
-                if !self.ast.datasets.contains_key(ds) {
-                    self.err(path, format!("unknown dataset `{ds}`"));
+                match self.ast.datasets.get(ds) {
+                    None => self.err(path, format!("unknown dataset `{ds}`")),
+                    Some(d) if !d.access.consumed() => self.err(path, format!("`consume` from `{ds}`, which is `indexed`: its items are looked up by id (`file`, `pick`), never drawn from the shuffle (V21)")),
+                    Some(_) => {}
                 }
                 if scope.indices.is_empty() {
                     self.err(path, "`consume` outside any loop: its position needs an index");

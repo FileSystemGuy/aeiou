@@ -2,7 +2,7 @@
 formats a dataset can be stored in, each a library with two halves.
 
 The **format contract** is what a trace of the named reader library shows regardless of the
-application that drives it: the *layout* (`schema/README.md` §2, *Container layout*: how the
+application that drives it: the *framing* (`schema/README.md` §2, *Container framing*: how the
 file frames its samples, from which the runner computes every offset), the reader's fixed
 *protocol* as ordinary POSIX nodes emitted on a cursor, the *access modes* it supports (V9),
 and the *writer* that `aeiou-datagen` uses to produce real files with the runner's payload,
@@ -12,18 +12,18 @@ The **loader contract** stays in the abstract: access mode, how many shards a wo
 column projection, batch composition.
 
 Each class is pinned to a reader library and, where the constants come from the library, to
-its version: the constants a layout needs (a Parquet page header's bytes, an HDF5 file's data
+its version: the constants a framing needs (a Parquet page header's bytes, an HDF5 file's data
 offset, a Parquet footer's growth per row group) are probed at build time by writing a
-one-row file in memory with the installed library, so the AST records the version the layout
+one-row file in memory with the installed library, so the AST records the version the framing
 was derived for, and the writer checks every file it produces against the formula. The
 protocols were read off `strace` of the libraries on the loopback NFS mount of
 `runner/REFERENCE.md` §7 (2026-09-30, pyarrow 25.0.1, h5py 3.16 / HDF5 2.0, CPython 3.12's
 `tarfile`); TFRecord's is from TensorFlow's source and is tagged [verify].
 
     from aeiou.formats import tfrecord, parquet, hdf5, webdataset
-    shards = w.dataset("shards", pattern="train/shard-{id:05}.tfrecord", count=P.samples,
-                       samples_per_file=P.per_shard, size=lognormal(110 * KiB, 0.45),
-                       seed=0x5eed_0001, access="stream", format=tfrecord(xfer=P.xfer))
+    shards = w.dataset("shards", pattern="train/shard-{id:05}.tfrecord", layout="compound", access="stream",
+                       count=P.samples, samples_per_file=P.per_shard, size=lognormal(110 * KiB, 0.45),
+                       seed=0x5eed_0001, format=tfrecord(xfer=P.xfer))
     with gpu.loader("shards", workers=P.cycle, prefetch=1, batches=P.shards) as worker:
         s = worker.let("s", shards.consume())        # a shard: stream datasets consume files
         shards.format.stream(worker, s)              # open, sequential reads to EOF, close
@@ -53,7 +53,7 @@ def _lib(name: str):
 
 def _plain_int(x, what: str, lo: int = 0) -> int:
     if isinstance(x, bool) or not isinstance(x, int) or x < lo:
-        raise BuildError(f"{what} must be a plain integer >= {lo} (it fixes the layout at build time), got {x!r}")
+        raise BuildError(f"{what} must be a plain integer >= {lo} (it fixes the framing at build time), got {x!r}")
     return x
 
 
@@ -68,7 +68,7 @@ def varint_len(v: int) -> int:
 
 def expected_sample_bytes(size, params: dict | None) -> float:
     """The mean of a size distribution, with parameter references resolved to their defaults:
-    what a class needs to place a layout constant in the right band."""
+    what a class needs to place a framing constant in the right band."""
     params = params or {}
 
     def num(v):
@@ -140,7 +140,7 @@ class Sink:
 
 class FormatClass:
     """Base of the format classes. Subclasses set `name`, `reader`, `modes`, and implement
-    `layout`, the protocol methods, and the writer."""
+    `framing`, the protocol methods, and the writer."""
     name = ""
     reader = ""
     modes: frozenset = frozenset()
@@ -148,11 +148,11 @@ class FormatClass:
     def version(self) -> str | None:
         return None
 
-    def layout(self, mean_bytes: float) -> dict:
+    def framing(self, mean_bytes: float) -> dict:
         raise NotImplementedError
 
     def writer_settings(self) -> dict:
-        """What `aeiou-datagen` needs to rebuild this class from the AST (`layout.writer`)."""
+        """What `aeiou-datagen` needs to rebuild this class from the AST (`framing.writer`)."""
         raise NotImplementedError
 
     def spec(self, access: str, size=None, params: dict | None = None) -> dict:
@@ -162,13 +162,13 @@ class FormatClass:
                              f"(schema/README.md V9, GRAMMAR_OPTIONS.md §6.2)")
         self.check_size(size, params)
         mean = expected_sample_bytes(size, params) if size is not None else 0.0
-        layout = dict(self.layout(mean))
-        layout["writer"] = self.writer_settings()
+        framing = dict(self.framing(mean))
+        framing["writer"] = self.writer_settings()
         spec = {"class": self.name, "reader": self.reader}
         v = self.version()
         if v:
             spec["version"] = v
-        spec["layout"] = layout
+        spec["framing"] = framing
         return spec
 
     def check_size(self, size, params):
@@ -183,14 +183,14 @@ class FormatClass:
         `out`, a writable byte stream that need not seek (a `Sink`); `payload(logical_offset,
         n)` returns the sample bytes of the file's payload stream (`payload.pieces(offset, n)`
         the same bytes as views of its blocks, with no copy). Returns what `check_file`
-        needs of the writer beyond the byte count (the library's own record of the layout)."""
+        needs of the writer beyond the byte count (the library's own record of the framing)."""
         raise NotImplementedError
 
     def check_file(self, name: str, written: int, sizes: list, geo, info) -> None:
-        """Compare the file as written with the geometry the layout predicts; raise on drift.
+        """Compare the file as written with the geometry the framing predicts; raise on drift.
         `written` is the bytes the stream took, `info` what `write_file` returned."""
         if written != geo.file_size:
-            raise BuildError(f"{name}: {written} bytes written, the layout predicts {geo.file_size}: the format class's layout "
+            raise BuildError(f"{name}: {written} bytes written, the framing predicts {geo.file_size}: the format class's framing "
                              f"does not match its writer (library version?)")
 
     @classmethod
@@ -200,7 +200,7 @@ class FormatClass:
         klass = CLASSES.get(name)
         if klass is None:
             raise BuildError(f"unknown format class `{name}` (known: {sorted(CLASSES)})")
-        return klass.from_writer(spec.get("layout", {}).get("writer", {}))
+        return klass.from_writer(spec.get("framing", {}).get("writer", {}))
 
     @classmethod
     def from_writer(cls, writer: dict) -> "FormatClass":
@@ -230,7 +230,7 @@ class TfRecord(FormatClass):
     def __init__(self, xfer=256 * KiB):
         self.xfer = lift(xfer, "tfrecord xfer")
 
-    def layout(self, mean_bytes):
+    def framing(self, mean_bytes):
         return {"columns": [{"row_header": 12, "row_footer": 4, "weight": 1}]}
 
     def writer_settings(self):
@@ -277,7 +277,7 @@ class WebDataset(FormatClass):
             raise BuildError("webdataset: exactly one member is the sample (bytes None)")
         self.xfer = lift(xfer, "webdataset xfer")
 
-    def layout(self, mean_bytes):
+    def framing(self, mean_bytes):
         extra = sum(512 + (n + 511) // 512 * 512 for _, n in self.members if n is not None)
         return {"file_footer": 1024, "file_align": 10240,
                 "columns": [{"row_header": 512, "row_footer": extra, "row_align": 512, "weight": 1}]}
@@ -376,7 +376,7 @@ class Hdf5(FormatClass):
             raise BuildError(f"hdf5: samples are fixed-size rows; the dataset's size must be const({self.row_bytes}) for "
                              f"shape {self.shape} {self.dtype}, got {d!r}")
 
-    def layout(self, mean_bytes):
+    def framing(self, mean_bytes):
         return {"file_header": self.data_offset()}
 
     def writer_settings(self):
@@ -442,8 +442,8 @@ class Hdf5(FormatClass):
         row = self.row_bytes
         n = len(sizes)
         head = self.header(n)
-        if len(head) != geo.layout.file_header:
-            raise BuildError(f"the dataset's data starts at {len(head)}, the layout says {geo.layout.file_header}")
+        if len(head) != geo.framing.file_header:
+            raise BuildError(f"the dataset's data starts at {len(head)}, the framing says {geo.framing.file_header}")
         out.write(head)
         for piece in payload.pieces(0, n * row):
             out.write(piece)
@@ -526,7 +526,7 @@ class Parquet(FormatClass):
                 "data_page_size": 1 << 30, "write_page_index": False, "store_schema": False}
 
     def column_specs(self, mean_bytes: float) -> list:
-        """The layout's columns, with page headers for the band the expected chunk sizes fall in."""
+        """The framing's columns, with page headers for the band the expected chunk sizes fall in."""
         self.probe()
         specs = []
         for _, t in self.columns:
@@ -538,7 +538,7 @@ class Parquet(FormatClass):
                 specs.append({"header": parquet_page_header(self.rows * w, self.rows), "fixed": w, "weight": 0})
         return specs
 
-    def layout(self, mean_bytes):
+    def framing(self, mean_bytes):
         # the file's tail: the thrift footer, padded to footer_base + footer_per_unit × units,
         # then the 4-byte footer length and `PAR1`
         return {"unit": self.rows, "file_header": 4, "file_footer": self.footer_base() + 8,
@@ -657,12 +657,12 @@ class Parquet(FormatClass):
         """Streamed a row group at a time, in two passes: the first, of zero bytes in the
         samples' sizes into a counting sink, measures the natural footer (its bytes do not
         depend on the samples' bytes, since no statistics are written), so the second can pad
-        it to the size the layout declares."""
+        it to the size the framing declares."""
         zeros = bytes(max(sum(sizes[g:g + self.rows]) for g in range(0, len(sizes), self.rows)))
         sink = Sink()
         self._write(sink, first_id, sizes, lambda off, n: memoryview(zeros)[:n], 0)
         footer0 = int.from_bytes(sink.tail[:4], "little")
-        target = geo.layout.file_footer - 8 + geo.layout.file_footer_per_unit * geo.units
+        target = geo.framing.file_footer - 8 + geo.framing.file_footer_per_unit * geo.units
         pad = target - footer0
         for _ in range(4):
             pad = target - footer0 - (varint_len(pad) - 1)
@@ -674,14 +674,14 @@ class Parquet(FormatClass):
         """`m`: the footer's metadata as the writer wrote it."""
         super().check_file(name, written, sizes, geo, m)
         if m.num_row_groups != geo.units:
-            raise BuildError(f"{name}: {m.num_row_groups} row groups, the layout predicts {geo.units}")
+            raise BuildError(f"{name}: {m.num_row_groups} row groups, the framing predicts {geo.units}")
         for r in range(m.num_row_groups):
             rg = m.row_group(r)
             for c in range(rg.num_columns):
                 cc = rg.column(c)
                 want_off, want_len = geo.col_offset(r, c), geo.col_lens[r][c]
                 if (cc.data_page_offset, cc.total_compressed_size) != (want_off, want_len):
-                    raise BuildError(f"{name}: row group {r} column {c} at {cc.data_page_offset} for {cc.total_compressed_size} bytes; the layout "
+                    raise BuildError(f"{name}: row group {r} column {c} at {cc.data_page_offset} for {cc.total_compressed_size} bytes; the framing "
                                      f"predicts {want_off} for {want_len} (a page header outside the declared band? keep every "
                                      f"column chunk's bytes within one varint band of the expected size)")
 

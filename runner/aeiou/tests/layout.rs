@@ -42,11 +42,11 @@ fn collect(text: &str, cfg: &Config, count: i64) -> Vec<(i64, OpKind, String, i6
 /// A TFRecord-shaped shard dataset: 100 records of 1000 bytes in shards of 10, each record
 /// framed by a 12-byte header and a 4-byte footer, read sequentially under `stream`.
 const TFRECORD: &str = r#"{
-  "ast": "0.7", "name": "stream_test",
+  "ast": "0.8", "name": "stream_test",
   "params": {"batches": {"default": 10}, "xfer": {"default": 4096}},
-  "datasets": {"shards": {"files": {"pattern": "s/{id:04}.tfrecord", "count": 100, "samples_per_file": 10,
+  "datasets": {"shards": {"layout": "compound", "pattern": "s/{id:04}.tfrecord", "count": 100, "samples_per_file": 10,
      "size": {"const": 1000}, "seed": 7, "access": "stream",
-     "format": {"class": "tfrecord", "reader": "tf.data", "layout": {"columns": [{"row_header": 12, "row_footer": 4, "weight": 1}]}}}}},
+     "format": {"class": "tfrecord", "reader": "tf.data", "framing": {"columns": [{"row_header": 12, "row_footer": 4, "weight": 1}]}}}},
   "actors": {"gpu": {"body": [
     {"loader": {"name": "q", "index": "b", "workers": 2, "prefetch": 1, "batches": {"param": "batches"}, "body": [
       {"loop": {"index": "j", "to": 1, "body": [
@@ -99,14 +99,14 @@ fn stream_consume_shuffles_shards_and_frames_records() {
 /// column of 8 bytes per row and a 22-byte page header); 4 magic bytes before the groups and a
 /// footer of 200 + 120 per group after them.
 const PARQUET: &str = r#"{
-  "ast": "0.7", "name": "parquet_test",
+  "ast": "0.8", "name": "parquet_test",
   "params": {"groups": {"default": 3}},
-  "datasets": {"t": {"files": {"pattern": "p/{id:04}.parquet", "count": 192, "samples_per_file": 192,
+  "datasets": {"t": {"layout": "compound", "pattern": "p/{id:04}.parquet", "count": 192, "samples_per_file": 192,
      "size": {"const": 100000}, "seed": 7, "access": "stream",
-     "format": {"class": "parquet", "reader": "pyarrow", "version": "25.0.1", "layout": {
+     "format": {"class": "parquet", "reader": "pyarrow", "version": "25.0.1", "framing": {
        "unit": 64, "file_header": 4, "file_footer": 200, "file_footer_per_unit": 120,
        "columns": [{"header": 26, "fixed": 4, "weight": 1.0}, {"header": 22, "fixed": 8, "weight": 0}],
-       "writer": {"rows_per_group": 64}}}}}},
+       "writer": {"rows_per_group": 64}}}}},
   "actors": {"gpu": {"body": [
     {"let": {"name": "f", "value": {"file": {"dataset": "t", "id": 0}}}},
     {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
@@ -164,11 +164,11 @@ fn framed_layout_geometry_by_hand() {
 /// Alignment: tar members (512-byte header, data padded to 512), the archive padded to
 /// 10240 after two zero blocks.
 const TAR: &str = r#"{
-  "ast": "0.7", "name": "tar_test",
-  "datasets": {"t": {"files": {"pattern": "w/{id:04}.tar", "count": 25, "samples_per_file": 10,
+  "ast": "0.8", "name": "tar_test",
+  "datasets": {"t": {"layout": "compound", "pattern": "w/{id:04}.tar", "count": 25, "samples_per_file": 10,
      "size": {"const": 1000}, "seed": 7, "access": "stream",
-     "format": {"class": "webdataset", "layout": {"file_footer": 1024, "file_align": 10240,
-       "columns": [{"row_header": 512, "row_align": 512, "weight": 1}]}}}}},
+     "format": {"class": "webdataset", "framing": {"file_footer": 1024, "file_align": 10240,
+       "columns": [{"row_header": 512, "row_align": 512, "weight": 1}]}}}},
   "actors": {"gpu": {"body": [
     {"let": {"name": "f", "value": {"file": {"dataset": "t", "id": 2}}}},
     {"let": {"name": "s", "value": {"pick": {"dataset": "t"}}}},
@@ -202,8 +202,8 @@ fn alignment_and_short_last_shard() {
 
 /// `fadvise` runs against a real file and is part of the fingerprint.
 const FADVISE: &str = r#"{
-  "ast": "0.7", "name": "fadvise_test",
-  "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 4, "size": {"const": 20000}, "seed": 3}}},
+  "ast": "0.8", "name": "fadvise_test",
+  "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id:04}", "count": 4, "size": {"const": 20000}, "seed": 3}},
   "actors": {"gpu": {"body": [
     {"loop": {"index": "i", "to": 4, "body": [
       {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": {"index": "i"}}}}},

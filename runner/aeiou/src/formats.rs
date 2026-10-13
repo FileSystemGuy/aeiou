@@ -127,7 +127,7 @@ impl Writer {
     /// The writer of a resolved `format` entry (`schema/README.md` §2), or why there is none.
     pub fn from_format(dataset: &str, format: &Value) -> Result<Writer> {
         let class = format["class"].as_str().unwrap_or("");
-        let settings = &format["layout"]["writer"];
+        let settings = &format["framing"]["writer"];
         match class {
             "tfrecord" => Ok(Writer::TfRecord),
             "webdataset" => {
@@ -220,9 +220,9 @@ pub fn run_header_tool(tool: &std::path::Path, format: &Value, rows: &[i64]) -> 
     if !out.status.success() {
         bail!("{} failed ({}): {}", tool.display(), out.status, String::from_utf8_lossy(&out.stderr).trim());
     }
-    let each = format["layout"]["file_header"].as_u64().ok_or_else(|| anyhow!("the layout has no file_header"))? as usize;
+    let each = format["framing"]["file_header"].as_u64().ok_or_else(|| anyhow!("the framing has no file_header"))? as usize;
     if out.stdout.len() != each * rows.len() {
-        bail!("{} gave {} bytes for {} header(s) of {each} bytes, the layout's file_header", tool.display(), out.stdout.len(), rows.len());
+        bail!("{} gave {} bytes for {} header(s) of {each} bytes, the framing's file_header", tool.display(), out.stdout.len(), rows.len());
     }
     Ok(rows.iter().zip(out.stdout.chunks(each.max(1))).map(|(n, h)| (*n, h.to_vec())).collect())
 }
@@ -572,7 +572,7 @@ impl<'s, 'a> Stream<'s, 'a> {
     pub fn new(writer: &'s Writer, meta: &'s DsMeta<'a>, file: i64, seed_of: &'s dyn Fn(u64) -> u64, filler: &'s mut Filler) -> Result<Self> {
         let spf = match meta {
             DsMeta::Files { spf, .. } => *spf,
-            DsMeta::Regions { .. } => bail!("`{}` is a regions dataset: no container", meta.name()),
+            DsMeta::Array { .. } => bail!("`{}` is an array dataset: no container", meta.name()),
         };
         let n = meta.samples_in_file(file)?;
         Ok(Stream { writer, meta, seed_of, filler, first: file * spf, n, sample: 0, member: 0, small: Vec::with_capacity(TAR_RECORD as usize), small_at: 0, pay_left: 0, pay_at: 0, crc: 0, after: After::Nothing, pos: 0, ended: false, done: false, pq: PqAt::default() })
@@ -676,14 +676,14 @@ impl<'s, 'a> Stream<'s, 'a> {
     /// Parquet: `PAR1`; per row group, per column, the page header and the rows (a binary
     /// row its 4-byte length, then the sample); the footer.
     fn advance_parquet(&mut self, columns: &[(String, PqType)]) -> Result<()> {
-        let layout = self.meta.layout()?;
+        let layout = self.meta.framing()?;
         if self.pq.ended {
             self.done = true;
             return Ok(());
         }
         if !self.pq.started {
             self.pq.started = true;
-            let DsMeta::Files { spf, .. } = self.meta else { bail!("a regions dataset has no container") };
+            let DsMeta::Files { spf, .. } = self.meta else { bail!("an array dataset has no container") };
             let lens = self.meta.unit_lens(self.first / spf)?;
             let mut at = 4u64;
             for len in lens {

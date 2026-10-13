@@ -126,7 +126,7 @@ fn manifest_mismatch_and_missing_are_refused() {
     // a different count resolves to a different definition
     let (loaded2, cfg2, _) = leaked_model("file_per_sample", config(1, 1, &[("files", "51")]));
     let e = run::check_datasets(loaded2, cfg2, &root).unwrap_err();
-    assert!(e.to_string().contains("files.count: 51 vs 50"), "{e:#}");
+    assert!(e.to_string().contains("count: 51 vs 50"), "{e:#}");
     // datagen refuses a non-empty root
     let (loaded3, cfg3, model3) = leaked_model("file_per_sample", config(1, 1, &[("files", "50")]));
     let params = Params::new(&loaded3.ast, cfg3).unwrap();
@@ -278,7 +278,7 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
 }
 
 #[test]
-fn regions_dataset_nested_parallel_and_direct_reads() {
+fn array_dataset_nested_parallel_and_direct_reads() {
     let root = tmpdir("diskann");
     let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
     let (loaded, cfg, model) = leaked_model("diskann_search", config(1, 9, &params));

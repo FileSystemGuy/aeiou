@@ -26,7 +26,7 @@ cargo test --release
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
-| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C stops every host, exit 130. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
+| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C stops every host, exit 130. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
@@ -38,7 +38,7 @@ backend-specific counters beyond those come with each backend), `--drop-caches` 
 start gate with the residency check and the mount options line (decided 2026-10-01,
 `PROJECT_BRIEF.md` §6 item 16), ~~`RLIMIT` startup checks,~~ (**built 2026-10-01**, §11) ~~a JSON report,~~ (**built 2026-10-01**, §12) ~~`--metrics` (`PROJECT_BRIEF.md` §6 item 14),~~ (`--metrics` **built 2026-10-01**, §10; ~~the trace-side tool that computes the same numbers from a real trace is not~~ the trace side is `aeiou-trace`, built 2026-10-01, `builder/REFERENCE.md` §7) ~~and the `trace` node (`replay` until 2026-10-02; designed as `DESIGN_REVIEW.md` §3.58)~~ (the `trace` node **built 2026-10-02**, §13; not yet under the event-loop backends). ~~`stream`
 access, container layouts beyond `samples_per_file`~~ (contract 0.2, 2026-09-30: `eval.rs`
-computes every offset of a framed container from `format.layout`, `consume` under `stream`
+computes every offset of a framed container from `format.framing`, `consume` under `stream`
 shuffles shards, `fadvise` is the eighteenth op; `tests/layout.rs`). Datagen for format
 classes is the Python side (`aeiou-datagen`, `builder/REFERENCE.md`); ~~`aeiou datagen` refuses a
 dataset that has a format class~~ since 2026-10-12 `aeiou datagen` built with the cargo feature
@@ -415,9 +415,9 @@ as root). The same runs on the loopback NFS mount are §7.
   measured 1.00), and the generator was an external crate and wheel kept bit-identical. The
   prefix of a block is independent of how it is read out, so a verifier can regenerate any
   piece with numpy alone. Dedupe is the wrapper's, by seed reuse (`aeiou-positional/2`,
-  2026-10-04, unchanged in `/3`): a `files` dataset uses `u = id div D` and `b` the
+  2026-10-04, unchanged in `/3`): a dataset named by ids uses `u = id div D` and `b` the
   block of the logical offset (a chunked file is the logical file cut at `chunk`), so every
-  run of `D` consecutive files carries the same bytes, whatever the count; a `regions`
+  run of `D` consecutive files carries the same bytes, whatever the count; an `array`
   dataset (one file) uses `u = 0` and `b div D`; a namespace object written by `run` uses
   `s = labeled_key(namespace seed, "object", [xxh3(path)])`, `u = 0`. ~~`aeiou-positional/1`
   used `u = id mod ceil(files / D)` and `b mod ceil(blocks / D)`~~: the groups then depended
@@ -503,7 +503,7 @@ as root). The same runs on the loopback NFS mount are §7.
   made again and compared) and a bucket (only the missing objects sent), and refuse another
   writer's corpus.
 - **Grow and shrink (2026-10-12, `DESIGN_REVIEW.md` §3.70).** `aeiou datagen --grow N ROOT`
-  and `--shrink N ROOT` change the `count` of the complete `files` dataset at ROOT, N larger
+  and `--shrink N ROOT` change the `count` of the complete dataset at ROOT, N larger
   for a grow, smaller and above 0 for a shrink (each refuses the other's direction; a
   manifest not `complete` is told to `--resume` first). `datagen::resize_manifest` takes the
   manifest, puts N in its resolved dataset's `count`, sets `growing` or `shrinking`, records
@@ -534,7 +534,7 @@ as root). The same runs on the loopback NFS mount are §7.
   tests grow and shrink every container format across short last files (HDF5 headers
   included) and a bucket, each to the bytes of a fresh datagen.
 - **Claims, settle, and Ctrl-C (2026-10-12, `DESIGN_REVIEW.md` §3.70).** *Claims.* Every
-  datagen (first, resume, grow, shrink, settle) hands the ids of a `files` dataset out in
+  datagen (first, resume, grow, shrink, settle) hands the ids of a dataset (every layout but `array`) out in
   runs from one queue on rank 0 (`Queue`), in the work's order: `runs_of` cuts the work at
   the pattern's directories (`{id div N}`; every `FLAT_RUN` = 1,000 ids of a flat pattern),
   and each piece into equal parts when there are fewer pieces than writers on every host
@@ -561,7 +561,7 @@ as root). The same runs on the loopback NFS mount are §7.
   next item.) *Settle.* `aeiou datagen --settle ROOT`
   (`datagen::settle_manifest`): the count `S` is the boundary times `samples_per_file`,
   capped at the count asked and at least the count a grow or shrink began from (a shrink:
-  `max(N, min(from, claimed·spf))`); refused at 0, for a regions dataset, and when no boundary
+  `max(N, min(from, claimed·spf))`); refused at 0, for an array dataset, and when no boundary
   is recorded. What is left (`T`) is the unfinished ids on the claimed side of the boundary
   and the band between it and the mark; the manifest is rewritten first with `S`,
   `unfinished = T`, `progress.settle` `{asked, count}`, and the counts the corpus keeps (a
@@ -610,15 +610,15 @@ as root). The same runs on the loopback NFS mount are §7.
   was recorded both as unfinished and as counted, and a resume counted it twice
   (`files_written` one high; seen once under a loaded test run). Now each writer adds a
   file's counts and advances its cursor under its own lock, and the window holds every
-  writer's lock while it reads them; a regions file counts once whole.
+  writer's lock while it reads them; an array file counts once whole.
 - **Several hosts (2026-10-04).** `aeiou datagen … --ranks R --rank r --coordinator
   HOST:PORT` on each of R hosts (`aeiou-launch` starts them, §6). ~~Rank `r` writes the files
-  of every `files` dataset whose ids fall in its slice of `[0, files)`, the same contiguous
+  of every dataset whose ids fall in its slice of `[0, files)`, the same contiguous
   split as `run`'s GPU ranges (`run::gpu_range`), so a host's files sit in its own
   directories under a `{id div N}` pattern;~~ Every rank claims runs of every `files`
-  dataset's ids from rank 0 (since 2026-10-12, above); each `regions` dataset is written whole by one
-  rank, the `i`-th regions dataset by rank `i mod R`, because several NFS clients writing one
-  file serialize on the server's inode, so the split buys nothing, and a regions corpus is
+  dataset's ids from rank 0 (since 2026-10-12, above); each `array` dataset is written whole by one
+  rank, the `i`-th array dataset by rank `i mod R`, because several NFS clients writing one
+  file serialize on the server's inode, so the split buys nothing, and an array is
   bounded by one host's stream. Every rank checks the roots are empty before the start gate
   (so no rank sees another's files), writes after it, `syncfs`es, and sends its counts
   (`Done`); rank 0 writes the manifests ~~once every rank has reported~~ (since 2026-10-12
@@ -632,7 +632,7 @@ as root). The same runs on the loopback NFS mount are §7.
   cut only when there are fewer than writers on every host): Linux takes the parent directory's
   lock exclusively for every create, and on NFS the `OPEN` round trip runs under it, so
   threads creating in one directory serialize at one create per round trip, and a flat
-  pattern is bounded that way on the server whatever the host count. A regions file is cut
+  pattern is bounded that way on the server whatever the host count. An array file is cut
   into 64 MiB pieces for the owner's writers. Datagen is a tool, not a benchmark: there is no
   aggregate rate, only each rank's counts and the totals.
 - **Containers** are written by the Python side: `aeiou-datagen` (`builder/REFERENCE.md` §6)
@@ -1876,11 +1876,11 @@ runtime threads N` ~~`object engine: object_store 0.14.2  runtime threads N`~~ a
 endpoint, that the mount counters and the residency sample do not cover it; the JSON report
 records `object_threads`, `object_part_mib`, and each endpoint's `uri`.
 
-**`aeiou datagen`.** A `files` dataset declared `s3`: the prefix must hold no key (a
+**`aeiou datagen`.** A dataset declared `s3`: the prefix must hold no key (a
 `LIST`); each file (or chunk object) is one `PUT`, or a multipart upload in parts of
 `object::DEFAULT_PART` (8 MiB) when larger, each part made from the payload and sent before
 the next; the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix (atomic, so no
-temporary name), and there is no `syncfs`. A `regions` dataset is refused: a sparse layout
+temporary name), and there is no `syncfs`. An `array` dataset is refused: a sparse layout
 written at offsets has no object form. The writers' threads make the requests, as actors do.
 A container dataset in a store is `aeiou-datagen`'s, which streams each file from its format
 class's writer into an upload in the same 8 MiB parts, through `obstore` over the same

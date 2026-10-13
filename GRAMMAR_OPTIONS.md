@@ -663,7 +663,7 @@ sample per file. This section records how the model covers them. Reasoning in
 A dataset declares `count` **samples**, not files. `consume(ds)` returns a sample handle `s`
 with `file(s)`, `offset(s)`, `size(s)`, and `unit(s)` (the row group, chunk, or shard that
 contains it). One sample per file is the special case `samples_per_file = 1`, and the
-`regions` dataset of `ABSTRACTS.md` §9.6 is the special case of one container file. Epochs are
+`regions` dataset of `ABSTRACTS.md` §9.6 is the special case of one container file (2026-10-13: `layout: array`, always `indexed`, `DESIGN_REVIEW.md` §3.72). Epochs are
 `drop_last` over samples; the position formula `g + G·(b·B + j)` is unchanged.
 
 ### 6.2 Two access modes, declared per dataset

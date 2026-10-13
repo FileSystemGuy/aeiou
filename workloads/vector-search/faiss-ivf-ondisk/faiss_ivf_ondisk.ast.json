@@ -1,5 +1,5 @@
 {
-  "ast": "0.7",
+  "ast": "0.8",
   "name": "faiss_ivf_ondisk",
   "doc": "Per search call and OpenMP slice, prefetch threads touch every inverted list the slice's queries probe; lists chosen by popularity.",
   "posix": "mmap",
@@ -81,29 +81,29 @@
   },
   "datasets": {
     "lists": {
-      "regions": {
-        "file": "ivf/merged_index.ivfdata",
-        "count": {
-          "param": "lists"
-        },
-        "slot": 262144,
-        "size": {
-          "param": "list_bytes"
-        },
-        "seed": 1592646270
-      }
+      "pattern": "ivf/merged_index.ivfdata",
+      "layout": "array",
+      "access": "indexed",
+      "count": {
+        "param": "lists"
+      },
+      "size": {
+        "param": "list_bytes"
+      },
+      "seed": 1592646270,
+      "slot": 262144
     },
     "index": {
-      "files": {
-        "pattern": "index/populated-{id}.index",
-        "count": 1,
-        "size": {
-          "const": {
-            "param": "index_bytes"
-          }
-        },
-        "seed": 1592646271
-      }
+      "pattern": "index/populated-{id}.index",
+      "layout": "whole",
+      "access": "indexed",
+      "count": 1,
+      "size": {
+        "const": {
+          "param": "index_bytes"
+        }
+      },
+      "seed": 1592646271
     }
   },
   "actors": {
@@ -366,12 +366,12 @@
   "provenance": {
     "generator": {
       "script": "faiss_ivf_ondisk.py",
-      "sha256": "146a8d9229ae55d1d2b8815cd99a0a0a42cbb5d7dbd0e0ab0d71bd2c3578840c",
+      "sha256": "788a7e0903ed9fdad0b8152d401f7347be01ed0a3760e84328d5fdd577776f66",
       "builder_version": "0.1.0",
-      "git": "7b115db69f80-dirty"
+      "git": "67e632d03bbb-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "89a51a34cdcd9d3dc2376f85d272741bf559db110deb820b9282fd2e0fffae1e"
+    "ast_sha256": "986e52d58749e20487c32429670fea67f8d75871b90e8bca9b0837d2b8fd251e"
   }
 }

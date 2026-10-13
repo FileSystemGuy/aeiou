@@ -5,11 +5,11 @@ short last one), and writes the rows after it; the user never calls it.
 
     aeiou-header --format JSON --rows N [--rows N]…
 
-one header per `--rows`, back to back in the order given (each is the layout's `file_header`
+one header per `--rows`, back to back in the order given (each is the framing's `file_header`
 bytes long, so the reader splits them by length). `--format` is the dataset's resolved
 `format` entry (parameters substituted, as the manifest records it). HDF5 is the one class: the first `data_offset` bytes of a file of `N` rows from
 libhdf5 (`formats.Hdf5.header`), refused when the installed h5py and libhdf5 differ from
-the entry's `version`, the one its layout was probed with. Nothing but the header goes to
+the entry's `version`, the one its framing was probed with. Nothing but the header goes to
 stdout.
 """
 from __future__ import annotations
@@ -31,12 +31,12 @@ def header(fmt: dict, rows: int) -> bytes:
     klass = FormatClass.from_spec(fmt)
     have, want = klass.version(), fmt.get("version")
     if have != want:
-        raise BuildError(f"the abstract's layout was probed with {want}, this tool has {have}: the header could differ; "
+        raise BuildError(f"the abstract's framing was probed with {want}, this tool has {have}: the header could differ; "
                          "rebuild the abstract with this library, or use the aeiou-header of the release that built it")
     got = klass.header(rows)
-    expect = fmt.get("layout", {}).get("file_header")
+    expect = fmt.get("framing", {}).get("file_header")
     if expect is not None and len(got) != expect:
-        raise BuildError(f"the header is {len(got)} bytes, the layout says {expect}")
+        raise BuildError(f"the header is {len(got)} bytes, the framing says {expect}")
     return got
 
 

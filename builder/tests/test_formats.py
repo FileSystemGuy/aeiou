@@ -1,6 +1,6 @@
 """Format classes: the ports of the runner's definitions, the class specs and probes,
 `aeiou-datagen` writing real containers that the libraries read back and that match the
-layout's geometry, and, when the runner binary is built (`AEIOU_RUNNER` or
+framing's geometry, and, when the runner binary is built (`AEIOU_RUNNER` or
 runner/target/release/aeiou), `aeiou run` executing the new abstracts over the generated
 corpus to the dry-run fingerprint."""
 import io
@@ -30,7 +30,7 @@ pytest.importorskip("numpy")
 
 from aeiou import *  # noqa: E402,F401
 from aeiou import emit, formats  # noqa: E402
-from aeiou.layout import FileGeometry, Layout  # noqa: E402
+from aeiou.framing import FileGeometry, Framing  # noqa: E402
 from aeiou.nodes import BuildError  # noqa: E402
 from aeiou.pattern import Pattern  # noqa: E402
 from aeiou.rng import Words, labeled_key, sample_size  # noqa: E402
@@ -66,7 +66,7 @@ def test_layout_geometry_by_hand_matches_the_rust_test():
     # tests/layout.rs `framed_layout_geometry_by_hand`: three 64-row groups, two columns
     spec = {"unit": 64, "file_header": 4, "file_footer": 200, "file_footer_per_unit": 120,
             "columns": [{"header": 26, "fixed": 4, "weight": 1.0}, {"header": 22, "fixed": 8, "weight": 0}]}
-    lay = Layout.from_spec(spec, 192, int)
+    lay = Framing.from_spec(spec, 192, int)
     geo = FileGeometry(lay, [100000] * 192)
     col0, col1 = 26 + 64 * (4 + 100000), 22 + 64 * 8
     unit = col0 + col1
@@ -75,7 +75,7 @@ def test_layout_geometry_by_hand_matches_the_rust_test():
     assert geo.col_offset(1, 1) == 4 + unit + col0
     assert geo.file_size == 4 + 3 * unit + 200 + 3 * 120
     # tar: 512-byte headers, data padded to 512, 1024 footer, 10240 alignment
-    tar = Layout.from_spec({"file_footer": 1024, "file_align": 10240, "columns": [{"row_header": 512, "row_align": 512, "weight": 1}]}, 10, int)
+    tar = Framing.from_spec({"file_footer": 1024, "file_align": 10240, "columns": [{"row_header": 512, "row_align": 512, "weight": 1}]}, 10, int)
     assert FileGeometry(tar, [1000] * 10).file_size == 20480
     assert FileGeometry(tar, [1000] * 5).file_size == 10240
     assert FileGeometry(tar, [1000] * 10).sample_offset(1) == 1536 + 512
@@ -85,7 +85,7 @@ def test_specs_probes_and_v9():
     pq = formats.parquet(rows_per_group=64)
     spec = pq.spec("stream", const(100000), {})
     assert spec["class"] == "parquet" and spec["version"].startswith("pyarrow ")
-    lay = spec["layout"]
+    lay = spec["framing"]
     assert lay["unit"] == 64 and lay["file_header"] == 4
     assert lay["columns"] == [{"header": 26, "fixed": 4, "weight": 1.0}, {"header": 22, "fixed": 8, "weight": 0}]
     assert lay["writer"] == {"rows_per_group": 64, "columns": [["image", "binary"], ["label", "int64"]]}
@@ -98,18 +98,18 @@ def test_specs_probes_and_v9():
     assert formats.parquet_page_header(10000 * 1028, 10000) == 27
     h5 = formats.hdf5(dataset="records", shape=(64, 64, 3), dtype="u1")
     assert h5.row_bytes == 12288
-    assert h5.spec("map", const(12288), {})["layout"]["file_header"] == 2048
+    assert h5.spec("map", const(12288), {})["framing"]["file_header"] == 2048
     with pytest.raises(BuildError, match="fixed-size"):
         h5.spec("map", const(100), {})
     with pytest.raises(BuildError, match="V9"):
         formats.tfrecord().spec("map", const(10), {})
-    assert formats.webdataset().spec("stream", const(10), {})["layout"]["columns"][0]["row_footer"] == 1024
-    assert formats.tfrecord().spec("stream", lognormal(median=110 * KiB, sigma=0.45), {})["layout"]["columns"] == [{"row_header": 12, "row_footer": 4, "weight": 1}]
+    assert formats.webdataset().spec("stream", const(10), {})["framing"]["columns"][0]["row_footer"] == 1024
+    assert formats.tfrecord().spec("stream", lognormal(median=110 * KiB, sigma=0.45), {})["framing"]["columns"] == [{"row_header": 12, "row_footer": 4, "weight": 1}]
     with pytest.raises(BuildError, match="binary"):
         formats.parquet(columns=(("a", "int64"),))
     # the narrow integers are INT32 in a PLAIN page, 4 bytes a row
     narrow = formats.parquet(columns=(("image", "binary"), ("a", "int8"), ("b", "uint8"), ("c", "int16"))).spec("stream", const(1000), {})
-    assert [c["fixed"] for c in narrow["layout"]["columns"]] == [4, 4, 4, 4]
+    assert [c["fixed"] for c in narrow["framing"]["columns"]] == [4, 4, 4, 4]
     assert formats.FormatClass.from_spec(spec).rows == 64
     assert formats.expected_sample_bytes(lognormal(median=1000, sigma=0.001), {}) == pytest.approx(1000.0, abs=0.01)
     assert formats.expected_sample_bytes({"normal": {"mean": {"param": "m"}, "sd": 1}}, {"m": 42}) == 42.0
@@ -153,13 +153,13 @@ def test_datagen_tfrecord_round_trip(tmp_path):
     files = sorted((root / "train").glob("*.tfrecord"))
     assert len(files) == 6
     ast = emit.load(ast_path("tfrecord_stream"))
-    seed = ast["datasets"]["shards"]["files"]["seed"]
+    seed = ast["datasets"]["shards"]["seed"]
     sizes = _parse_tfrecord(files[2])
     assert sizes == [sample_size({"lognormal": {"median": 20000, "sigma": 0.45}}, seed, 2 * 128 + i) for i in range(128)]
     m = json.loads((root / "train" / ".aeiou-dataset.json").read_text())
-    assert m["manifest_version"] == 2 and m["state"] == "complete" and m["format"]["class"] == "tfrecord" and m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/3"
-    assert m["dataset"]["files"]["count"] == 768 and m["dataset"]["files"]["samples_per_file"] == 128
-    assert "doc" not in m["dataset"]["files"]
+    assert m["manifest_version"] == 3 and m["state"] == "complete" and m["format"]["class"] == "tfrecord" and m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/3"
+    assert m["dataset"]["count"] == 768 and m["dataset"]["samples_per_file"] == 128
+    assert "doc" not in m["dataset"]
     assert m["provenance"]["files_written"] == 6
     assert "id " in out
     # a second datagen into the same root is refused: datasets are read-only
@@ -175,12 +175,12 @@ def test_datagen_parquet_reads_back_with_pyarrow(tmp_path):
     t = pq.read_table(files[1])
     assert t.num_rows == 128 and t.column_names == ["image", "label"]
     ast = emit.load(ast_path("parquet_stream"))
-    seed = ast["datasets"]["shards"]["files"]["seed"]
+    seed = ast["datasets"]["shards"]["seed"]
     lens = [len(v.as_py()) for v in t.column("image")]
     assert lens == [sample_size({"lognormal": {"median": 20000, "sigma": 0.45}}, seed, 128 + i) for i in range(128)]
     md = pq.ParquetFile(files[1]).metadata
     assert md.num_row_groups == 2
-    lay = ast["datasets"]["shards"]["files"]["format"]["layout"]
+    lay = ast["datasets"]["shards"]["format"]["framing"]
     footer = int.from_bytes(files[1].read_bytes()[-8:-4], "little")
     assert footer == lay["file_footer"] - 8 + lay["file_footer_per_unit"] * 2, "the thrift footer is padded to the declared size"
     assert files[1].stat().st_size == 4 + sum(
@@ -204,7 +204,7 @@ def test_datagen_hdf5_reads_back_with_h5py(tmp_path):
 
 def _geometry(klass, access, size, sizes):
     from aeiou.datagen import ev
-    return FileGeometry(Layout.from_spec(klass.spec(access, size)["layout"], len(sizes), ev), sizes)
+    return FileGeometry(Framing.from_spec(klass.spec(access, size)["framing"], len(sizes), ev), sizes)
 
 
 def test_streamed_hdf5_and_parquet_are_the_files_the_libraries_write(tmp_path):
@@ -248,12 +248,12 @@ import resource, sys
 sys.path.insert(0, %r)
 from aeiou import formats
 from aeiou.datagen import Payload, ev
-from aeiou.layout import FileGeometry, Layout
+from aeiou.framing import FileGeometry, Framing
 from aeiou.dists import const, lognormal
 def peak():
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 def geo(k, access, size, sizes):
-    return FileGeometry(Layout.from_spec(k.spec(access, size)["layout"], len(sizes), ev), sizes)
+    return FileGeometry(Framing.from_spec(k.spec(access, size)["framing"], len(sizes), ev), sizes)
 h = formats.hdf5()
 p = formats.parquet()
 small = [h.row_bytes] * 2
@@ -295,7 +295,7 @@ def test_runner_executes_the_generated_corpus(name, tmp_path):
 def webdataset_ast(tmp_path, members=(("jpg", None), ("cls", 4), ("json", 700))):
     """`tfrecord_stream` with its shards a WebDataset tar (no committed abstract has one)."""
     a = json.loads(ast_path("tfrecord_stream").read_text())
-    f = a["datasets"]["shards"]["files"]
+    f = a["datasets"]["shards"]
     f["pattern"] = "train/shard-{id:05}.tar"
     f["format"] = formats.webdataset(members=members).spec("stream", f["size"], {k: p["default"] for k, p in a["params"].items()})
     a["name"] = "webdataset_stream"
@@ -307,7 +307,7 @@ def webdataset_ast(tmp_path, members=(("jpg", None), ("cls", 4), ("json", 700)))
 def parquet_types_ast(tmp_path):
     """`parquet_stream` with a column of every fixed-width type around the sample's."""
     a = json.loads(ast_path("parquet_stream").read_text())
-    f = a["datasets"]["shards"]["files"]
+    f = a["datasets"]["shards"]
     cols = (("a", "int8"), ("b", "uint8"), ("c", "int16"), ("image", "binary"), ("d", "float32"), ("e", "int32"), ("g", "float64"), ("h", "int64"))
     f["format"] = formats.parquet(rows_per_group=64, columns=cols).spec("stream", f["size"], {k: p["default"] for k, p in a["params"].items()})
     a["name"] = "parquet_types"
@@ -513,7 +513,7 @@ def test_aeiou_datagen_settles_an_interrupted_grow(name, tmp_path):
     r = subprocess.run([RUNNER, "datagen", "--settle", root, "--writers", "2"], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     got = json.loads(path.read_text())
-    s = got["dataset"]["files"]["count"]
+    s = got["dataset"]["count"]
     assert c0 < s < n
     want = fresh(tmp_path / f"fresh{s}", s)
     assert files(root) == files(want), f"settled at {s}"
@@ -591,7 +591,7 @@ def test_hdf5_headers_come_from_rank_0_alone(tmp_path):
 def test_aeiou_header_refuses_another_library_version():
     from aeiou import header
     fmt = formats.hdf5(dataset="records", shape=(4, 4, 3), dtype="u1").spec("map", const(48), {})
-    assert len(header.header(fmt, 5)) == fmt["layout"]["file_header"]
+    assert len(header.header(fmt, 5)) == fmt["framing"]["file_header"]
     with pytest.raises(BuildError, match="probed with h5py 0.0"):
         header.header({**fmt, "version": "h5py 0.0, hdf5 0.0"}, 5)
     with pytest.raises(BuildError, match="only hdf5"):
@@ -626,18 +626,18 @@ def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(
 @needs_runner
 def test_size_draws_match_the_runner(tmp_path):
     """The Python `sample_size` port against sizes the Rust datagen wrote."""
-    ast = {"ast": "0.7", "name": "sizes", "datasets": {"d": {"files": {"pattern": "d/{id:04}", "count": 40, "seed": 99,
+    ast = {"ast": "0.8", "name": "sizes", "datasets": {"d": {"pattern": "d/{id:04}", "layout": "whole", "access": "indexed", "count": 40, "seed": 99,
            "size": {"mixture": [{"weight": 1, "dist": {"normal": {"mean": 50000, "sd": 20000, "min": 100}}},
                                 {"weight": 1, "dist": {"lognormal": {"median": 30000, "sigma": 0.7, "min": 1, "max": 90000}}},
                                 {"weight": 1, "dist": {"uniform": {"lo": 10, "hi": 5000}}},
-                                {"weight": 1, "dist": {"empirical": {"values": [7, 8, 9], "weights": [1, 2, 3]}}}]}}}},
+                                {"weight": 1, "dist": {"empirical": {"values": [7, 8, 9], "weights": [1, 2, 3]}}}]}}},
            "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
     p = tmp_path / "s.ast.json"
     p.write_text(json.dumps(ast))
     r = subprocess.run([RUNNER, "datagen", p, "--root", tmp_path / "r"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     for i in range(40):
-        assert (tmp_path / "r" / "d" / f"{i:04}").stat().st_size == sample_size(ast["datasets"]["d"]["files"]["size"], 99, i), i
+        assert (tmp_path / "r" / "d" / f"{i:04}").stat().st_size == sample_size(ast["datasets"]["d"]["size"], 99, i), i
 
 
 def test_npz_framing_of_the_installed_numpy_is_the_abstracts_default():

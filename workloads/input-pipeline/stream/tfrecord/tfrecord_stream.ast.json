@@ -1,5 +1,5 @@
 {
-  "ast": "0.7",
+  "ast": "0.8",
   "name": "tfrecord_stream",
   "doc": "tf.data over TFRecord shards: cycle shards streamed concurrently, positioned reads of the buffer size to EOF.",
   "params": {
@@ -60,37 +60,36 @@
   },
   "datasets": {
     "shards": {
-      "files": {
-        "pattern": "train/shard-{id:05}.tfrecord",
-        "count": {
-          "param": "samples"
-        },
-        "size": {
-          "lognormal": {
-            "median": {
-              "param": "sample_median"
-            },
-            "sigma": 0.45
-          }
-        },
-        "seed": 1592646288,
-        "access": "stream",
-        "samples_per_file": {
-          "param": "per_shard"
-        },
-        "format": {
-          "class": "tfrecord",
-          "reader": "tf.data.TFRecordDataset",
-          "layout": {
-            "columns": [
-              {
-                "row_header": 12,
-                "row_footer": 4,
-                "weight": 1.0
-              }
-            ],
-            "writer": {}
-          }
+      "pattern": "train/shard-{id:05}.tfrecord",
+      "layout": "compound",
+      "access": "stream",
+      "count": {
+        "param": "samples"
+      },
+      "size": {
+        "lognormal": {
+          "median": {
+            "param": "sample_median"
+          },
+          "sigma": 0.45
+        }
+      },
+      "seed": 1592646288,
+      "samples_per_file": {
+        "param": "per_shard"
+      },
+      "format": {
+        "class": "tfrecord",
+        "reader": "tf.data.TFRecordDataset",
+        "framing": {
+          "columns": [
+            {
+              "row_header": 12,
+              "row_footer": 4,
+              "weight": 1.0
+            }
+          ],
+          "writer": {}
         }
       }
     }
@@ -263,12 +262,12 @@
   "provenance": {
     "generator": {
       "script": "tfrecord_stream.py",
-      "sha256": "56ea79a7a199b9e68ddad7d4db6959b4a1b1578280db46e7165025ad70474e94",
+      "sha256": "d154e1d35577db3a79759c527b74cd3d59c6e98b6eb35ea34e66a137589745fb",
       "builder_version": "0.1.0",
-      "git": "7b115db69f80-dirty"
+      "git": "67e632d03bbb-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "c54cc83889d3e8715a895ca7da2ff353fd17635316f9d299fd7dd6b73efa850e"
+    "ast_sha256": "1ec650d3a75f2e2986bf094fe01336452adc14dea3f97470c2f5b572e762df37"
   }
 }

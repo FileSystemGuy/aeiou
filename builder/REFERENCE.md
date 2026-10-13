@@ -12,7 +12,7 @@ builder/
   aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli,
              params (parameter files, `aeiou-params`), formats (the format classes), datagen
              (`aeiou-datagen`), trace (`aeiou-trace`, §7), catalog (`aeiou-catalog`, §8), and the ports
-             of the runner's definitions it needs: rng, pattern, layout
+             of the runner's definitions it needs: rng, pattern, framing
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds;
                      the parameter files fit their abstracts; the format classes write files the
                      libraries read back and the runner executes to the dry-run fingerprint; the
@@ -45,9 +45,8 @@ w.param("batch", 32, unit="count")
 w.param("step_time", 105 * ms, unit="ns", doc="[measure]")
 w.param("reuse", mixture((0.55, none), (0.45, lognormal(median=40, sigma=1.2, min=1))))
 
-train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg",
-                  count=50_000_000, size=lognormal(median=110 * KiB, sigma=0.45),
-                  seed=0x5eed_da7a, access="map")
+train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg", layout="whole", access="map",
+                  count=50_000_000, size=lognormal(median=110 * KiB, sigma=0.45), seed=0x5eed_da7a)
 ckpt = w.namespace("ckpt", pattern="ckpt/step_{step:06}/__{rank}_0.distcp",
                    fields={"step": int, "rank": int}, size="as_written", seed=0x5eed_da82)
 
@@ -72,14 +71,18 @@ if __name__ == "__main__":
 ```
 
 **Declarations** on the `Workload`: `param(name, default, unit=, doc=, cli=)` or
-`params(**defaults)`; `dataset(name, pattern=, count=, size=, seed=, access=, samples_per_file=,
-chunk=, format=)`; `regions(name, file=, count=, slot=, size=, seed=)`; `namespace(name,
+`params(**defaults)`; `dataset(name, pattern=, layout=, access=, count=, size=, seed=,
+samples_per_file=, chunk=, slot=, format=)` (contract 0.8, `DESIGN_REVIEW.md` §3.72: `layout`
+`whole`, `chunked` with `chunk`, `compound` with `samples_per_file` and optionally `format`,
+`array` with `slot` and a pattern without fields; `access` `map`, `stream`, or `indexed`; the
+builder refuses what V20 and V21 refuse, and `consume()` on an `indexed` dataset; `regions()`
+is gone, an array being `dataset(…, layout="array", access="indexed", slot=…)`); `namespace(name,
 pattern=, fields=, size=, seed=, input=)`; `actor(name, count=)`. `w.P.x` is the parameter reference;
 `P.xs[t]`, `P.xs.len`, `P.xs.sum` index and reduce a parameter array (a table is several
 parallel arrays).
 
 **Handles**: `ds.file(id)`, `ds.dir(id)`, `ds.consume()`, `ds.pick(dist=None)`, `ds.count`,
-`ds.dirs`; a `regions` dataset's single file is `ds.file()`; `h.size`, `h.offset`, `h.unit`,
+`ds.dirs`; an `array` dataset's single file is `ds.file()`; `h.size`, `h.offset`, `h.unit`,
 `h.chunks`, `h.chunk(k)`, `h.container`; `ns.object(**fields)`. Bind a handle with
 `cursor.let(name, h)` before using it in ops when the same sample must flow through several
 ops (a `let` is the way to use one positional draw twice).
@@ -202,7 +205,7 @@ same program.
 
 A dataset stored in a container format declares its class (`aeiou.formats`, `GRAMMAR_OPTIONS.md`
 §6.4, `DESIGN_REVIEW.md` §3.28), and the class supplies the three things the two-contract
-split assigns to the format: the **layout** (`schema/README.md` §2 *Container layout*; the
+split assigns to the format: the **framing** (`schema/README.md` §2 *Container framing*, `layout` until contract 0.8; the
 runner computes every offset from it and stays format-ignorant), the reader library's fixed
 **protocol** as ordinary ops emitted on a cursor, and the **writer** that `aeiou-datagen`
 uses. The loader's choices (access mode, how many shards a worker streams, projection, batch
@@ -211,9 +214,9 @@ composition) stay in the abstract.
 ```python
 from aeiou.formats import tfrecord, parquet, hdf5, webdataset
 
-shards = w.dataset("shards", pattern="train/shard-{id:05}.parquet", count=P.samples,
-                   samples_per_file=P.per_shard, size=lognormal(median=P.sample_median, sigma=0.45),
-                   seed=0x5eed_da90, access="stream",
+shards = w.dataset("shards", pattern="train/shard-{id:05}.parquet", layout="compound", access="stream",
+                   count=P.samples, samples_per_file=P.per_shard,
+                   size=lognormal(median=P.sample_median, sigma=0.45), seed=0x5eed_da90,
                    format=parquet(rows_per_group=64, columns=(("image", "binary"), ("label", "int64"))))
 with gpu.loader("shards", workers=P.cycle, prefetch=1, batches=ceil_div(P.steps * P.batch, P.per_shard)) as worker:
     s = worker.let("s", shards.consume())       # under `stream`, consume draws a shard
@@ -231,7 +234,7 @@ with gpu.loader("shards", workers=P.cycle, prefetch=1, batches=ceil_div(P.steps 
 
 `spec(access, size, params)` is what `w.dataset(format=…)` calls; it refuses an access mode
 the class does not support (V9) and records `class`, `reader`, `version` (the installed
-library's, when a constant was probed from it), and `layout` with `writer` settings. The
+library's, when a constant was probed from it), and `framing` with `writer` settings. The
 probes write a one-row file in memory with the library; the libraries are the `formats`
 extra and are pre-imported by the hermetic child. Arrow IPC, MDS, and Megatron are not
 written yet (`DESIGN_REVIEW.md` §3.28 says why).
@@ -240,7 +243,7 @@ written yet (`DESIGN_REVIEW.md` §3.28 says why).
 [--compress C] [--threads N] [--dataset NAME]… [--config FILE]** writes every dataset that has a format class:
 names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
 bytes under `aeiou-positional/3` (numpy's `SFC64` in 4 KiB pieces, `payload_block`;
-bit-identical to the Rust writer's, `tests/test_payload.py`), each file checked against the geometry its layout predicts (`layout.py`), then the
+bit-identical to the Rust writer's, `tests/test_payload.py`), each file checked against the geometry its framing predicts (`framing.py`), then the
 manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names the writer
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
 ones with a class (since 2026-10-12, built with the cargo feature `formats`, it writes TFRecord,
@@ -508,7 +511,7 @@ without the writer's `--seed`, `--gpus`, and parameters is refused before the ga
 
 **Where a dataset or namespace lives is declared in the script** (contract 0.6,
 2026-10-09; `s3` was `object` until contract 0.7): `w.dataset(..., protocol="s3")`,
-`w.regions(..., protocol=...)`, `w.namespace(..., protocol=...)` for one the application
+`w.namespace(..., protocol=...)` for one the application
 reaches through an S3 store;
 leave it out for a file system. Namespaces sharing a root declare one protocol (V17). A run
 places each with `--endpoint` (`runner/REFERENCE.md` §4), and `aeiou-datagen` takes the same
@@ -661,4 +664,4 @@ rather than the dictionary, being what the case runs rather than what it is.
   abstract (`GRAMMAR_OPTIONS.md` §6.5).
 - The `strace` → parameter fitting tool (`aeiou-fit`, `ABSTRACTS.md` §11), which will write
   parameter files (`aeiou-trace` of §7 reads the trace and measures; it fits nothing); the offline content verifier (`aeiou-verify`), which `rng.py` and
-  `layout.py` now make a short tool.
+  `framing.py` now make a short tool.

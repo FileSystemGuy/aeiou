@@ -39,9 +39,7 @@ fn object_variant(example: &str, names: &[&str], dir: &Path) -> PathBuf {
             ns["protocol"] = "s3".into();
             continue;
         }
-        let ds = d["datasets"][*n].as_object_mut().unwrap();
-        let (_, body) = ds.iter_mut().next().unwrap();
-        body["protocol"] = "s3".into();
+        d["datasets"][*n]["protocol"] = "s3".into();
     }
     let all = d.get("datasets").and_then(|v| v.as_object()).map_or(0, |m| m.len()) + d.get("namespaces").and_then(|v| v.as_object()).map_or(0, |m| m.len());
     if names.len() == all {
@@ -315,7 +313,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     let skip = dir.join("skip.ast.json");
     std::fs::write(
         &skip,
-        r#"{"ast": "0.7", "name": "skip",
+        r#"{"ast": "0.8", "name": "skip",
             "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": 1, "body": [
                 {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
@@ -370,12 +368,12 @@ fn object_names_need_object_endpoints() {
     refused(&o, "--s3: no dataset or namespace is `protocol: s3`");
     let o = aeiou(None, &["run", plain.to_str().unwrap(), "--gpus", "1", "--root", root, "--posix"]);
     refused(&o, "a value is required for '--posix <API>'");
-    // a regions file has no object form
+    // an array file has no object form
     let vdb = object_variant("diskann_search", &["index"], &dir);
     // its other names stay posix under its declared `libaio`, so the S3 client is async (V19)
     let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&vdb).unwrap()).unwrap();
     d["s3"] = "async".into();
     std::fs::write(&vdb, d.to_string()).unwrap();
-    refused(&aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb"]), "dataset `index`: a `regions` dataset is a sparse layout written at offsets and has no object form");
+    refused(&aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb"]), "dataset `index`: an `array` dataset is a sparse layout written at offsets and has no object form");
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -35,9 +35,9 @@ def shape(name, pattern, make_format, doc):
     w.param("xfer", 256 * KiB, unit="bytes", doc="[verify] the reader library's read buffer (TFRecord)")
     w.param("samples", 1_281_167, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
     w.param("sample_median", 110 * KiB, unit="bytes", doc="[measure] corpus")
-    shards = w.dataset("shards", pattern=pattern, count=P.samples, samples_per_file=P.per_shard,
+    shards = w.dataset("shards", pattern=pattern, layout="compound", access="stream", count=P.samples, samples_per_file=P.per_shard,
                        size=lognormal(median=P.sample_median, sigma=0.45), seed=0x5eed_da90,
-                       access="stream", format=make_format(P))
+                       format=make_format(P))
 
     with w.actor("gpu") as gpu:
         with gpu.loader("shards", workers=P.cycle, prefetch=P.prefetch,

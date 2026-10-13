@@ -20,7 +20,9 @@ OPEN_FLAGS = ("RDONLY", "WRONLY", "RDWR", "CREAT", "TRUNC", "EXCL", "APPEND", "C
               "DIRECTORY", "DIRECT", "SYNC", "DSYNC", "NOATIME", "NOFOLLOW")
 IOCTLS = ("TCGETS", "FIONREAD", "BLKGETSIZE64")
 ADVICE = ("NORMAL", "RANDOM", "SEQUENTIAL", "WILLNEED", "DONTNEED", "NOREUSE")
-LAYOUT_KEYS = ("unit", "file_header", "file_header_per_sample", "file_header_per_unit", "file_footer",
+LAYOUTS = ("whole", "chunked", "compound", "array")
+ACCESSES = ("map", "stream", "indexed")
+FRAMING_KEYS = ("unit", "file_header", "file_header_per_sample", "file_header_per_unit", "file_footer",
                "file_footer_per_sample", "file_footer_per_unit", "file_align", "unit_header",
                "unit_header_per_sample", "unit_footer", "unit_footer_per_sample", "unit_align", "columns", "writer")
 COLUMN_KEYS = ("header", "fixed", "weight", "row_header", "row_footer", "row_align", "align")
@@ -114,14 +116,14 @@ class Params:
 
 
 class Dataset:
-    def __init__(self, name: str, kind: str, spec: dict):
-        self.name, self.kind, self.spec = name, kind, spec
+    def __init__(self, name: str, layout: str, spec: dict):
+        self.name, self.layout, self.spec = name, layout, spec
         #: the format class instance the dataset was declared with (`aeiou.formats`), for its
         #: reader protocol: `ds.format.stream(cursor, shard)`; None without one
         self.format = None
 
     def ast(self):
-        return {self.kind: _strip_none(self.spec)}
+        return _strip_none(self.spec)
 
     @property
     def count(self) -> Expr:
@@ -129,27 +131,31 @@ class Dataset:
 
     @property
     def dirs(self) -> Expr:
-        if self.kind != "files":
-            raise BuildError("dirs() needs a files dataset")
+        if self.layout == "array":
+            raise BuildError(f"dirs() on array dataset {self.name}: an array is one file")
         return DatasetMeta("dirs", self.name)
 
     def file(self, id=None) -> Handle:
-        """Dataset file by id. A `regions` dataset has one file, addressed as id 0."""
-        if self.kind == "regions":
+        """Dataset file by id. An `array` dataset has one file, addressed as id 0."""
+        if self.layout == "array":
             if id is not None:
-                raise BuildError(f"regions dataset {self.name} has one file; call file() with no id")
+                raise BuildError(f"array dataset {self.name} has one file; call file() with no id")
             return FileHandle(self.name, 0)
         if id is None:
-            raise BuildError(f"file() on files dataset {self.name} needs an id")
+            raise BuildError(f"file() on dataset {self.name} needs an id")
         return FileHandle(self.name, id)
 
     def dir(self, id) -> Handle:
-        if self.kind != "files":
-            raise BuildError("dir() needs a files dataset")
+        if self.layout == "array":
+            raise BuildError(f"dir() on array dataset {self.name}: an array is one file")
         return DirHandle(self.name, id)
 
     def consume(self) -> Handle:
-        """Next sample without replacement (positional; must sit inside a loop)."""
+        """Next sample without replacement (positional; must sit inside a loop). Only a `map`
+        or `stream` dataset is consumed (V21)."""
+        if self.spec.get("access") not in ("map", "stream"):
+            raise BuildError(f"consume() on dataset {self.name}, which is `indexed`: look its items up by id "
+                             f"(file(), pick()), or declare it `map` or `stream` (V21)")
         return Consume(self.name)
 
     def pick(self, dist=None) -> Handle:
@@ -176,7 +182,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.7"
+    AST_VERSION = "0.8"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -239,44 +245,57 @@ class Workload:
         return self.P
 
     # ---- datasets ----
-    def dataset(self, name: str, *, pattern: str, count, size, seed: int, access: str | None = None,
-                samples_per_file=None, chunk=None, format: dict | None = None, protocol: str | None = None,
-                doc: str | None = None) -> Dataset:
-        """A `files` dataset: files named by `pattern`, sizes drawn from `seed`. `protocol`:
-        `object` for one the application reads from an object store; absent, a file system."""
+    def dataset(self, name: str, *, pattern: str, layout: str, access: str, count, size, seed: int,
+                samples_per_file=None, chunk=None, slot=None, format: dict | None = None,
+                protocol: str | None = None, doc: str | None = None) -> Dataset:
+        """A dataset (contract 0.8, DESIGN_REVIEW.md §3.72): files or objects named by `pattern`,
+        sizes drawn from `seed`. `layout`, how a file holds the items: `whole` (one item),
+        `chunked` (part of one: `chunk` bytes a file, a `{k}` field), `compound` (several
+        variably sized ones: `samples_per_file`, framed by `format`), `array` (`count` fixed
+        `slot`s in one file; a pattern without fields). `access`, how they are found: `map`
+        (samples drawn from the shuffle), `stream` (files drawn from the shuffle), `indexed`
+        (looked up by id). `protocol`: `s3` for one the application reads from an object store;
+        absent, a file system."""
         self._declare(name, "dataset")
         _protocol(protocol, f"dataset {name}")
+        if layout not in LAYOUTS:
+            raise BuildError(f"dataset {name}: layout must be one of {', '.join(LAYOUTS)}, got {layout!r}")
+        if access not in ACCESSES:
+            raise BuildError(f"dataset {name}: access must be one of {', '.join(ACCESSES)}, got {access!r}")
+        given = {"samples_per_file": samples_per_file, "chunk": chunk, "slot": slot, "format": format}
+        need, may = {"whole": ((), ()), "chunked": (("chunk",), ()), "compound": (("samples_per_file",), ("format",)),
+                     "array": (("slot",), ())}[layout]
+        for k, v in given.items():
+            if k in need and v is None:
+                raise BuildError(f"dataset {name}: layout `{layout}` needs `{k}` (V20)")
+            if v is not None and k not in need and k not in may:
+                raise BuildError(f"dataset {name}: layout `{layout}` takes no `{k}` (V20)")
         fields = set(FIELD.findall(pattern))
-        if not fields <= {"id", "k"} or "id" not in fields:
-            raise BuildError(f"dataset {name}: pattern fields must be `id` (and `k` for chunks), "
-                             f"got {sorted(fields)}")
-        if (chunk is not None) != ("k" in fields):
-            raise BuildError(f"dataset {name}: `chunk` and a `{{k}}` field go together")
-        if access is not None and access not in ("map", "stream"):
-            raise BuildError(f"dataset {name}: access must be map or stream")
+        if layout == "array":
+            if fields:
+                raise BuildError(f"dataset {name}: an array is one file: its pattern has no fields, got {sorted(fields)} (V20)")
+            if access != "indexed":
+                raise BuildError(f"dataset {name}: an array is `indexed`: its slots are looked up by position (V21)")
+        else:
+            want = {"id", "k"} if layout == "chunked" else {"id"}
+            if fields != want:
+                raise BuildError(f"dataset {name}: a `{layout}` dataset's pattern fields are {sorted(want)}, "
+                                 f"got {sorted(fields)} (V20)")
+        if access in ("map", "stream") and re.search(r"\{id mod ", pattern.rpartition("/")[0]):
+            raise BuildError(f"dataset {name}: a consumed dataset's directories are `{{id div D}}` or none, never `mod`, "
+                             f"so a subset of it is whole directories (V21)")
         fmt_obj = format if hasattr(format, "spec") else None
         if format is not None:
-            format = _format_spec(name, format, access or "map", size, {k: v["default"] for k, v in self._param_specs.items()})
+            format = _format_spec(name, format, access, size, {k: v["default"] for k, v in self._param_specs.items()})
         _reserved(pattern, f"dataset {name}")
-        self._claim_root(_root(pattern), name)
-        spec = {"pattern": pattern, "count": lift(count, "count"), "size": distref(size),
-                "seed": _seed(seed, name), "protocol": protocol, "access": access,
+        self._claim_root(pattern.rpartition("/")[0] if layout == "array" else _root(pattern), name)
+        spec = {"pattern": pattern, "layout": layout, "access": access, "count": lift(count, "count"),
+                "size": distref(size), "seed": _seed(seed, name), "protocol": protocol,
                 "samples_per_file": None if samples_per_file is None else lift(samples_per_file),
-                "chunk": None if chunk is None else lift(chunk, "chunk"), "format": format, "doc": doc}
-        self._datasets[name] = ds = Dataset(name, "files", spec)
+                "chunk": None if chunk is None else lift(chunk, "chunk"),
+                "slot": None if slot is None else lift(slot, "slot"), "format": format, "doc": doc}
+        self._datasets[name] = ds = Dataset(name, layout, spec)
         ds.format = fmt_obj
-        return ds
-
-    def regions(self, name: str, *, file: str, count, slot, size, seed: int, protocol: str | None = None,
-                doc: str | None = None) -> Dataset:
-        """A `regions` dataset: `count` fixed-slot regions inside one file."""
-        self._declare(name, "dataset")
-        _protocol(protocol, f"dataset {name}")
-        _reserved(file, f"dataset {name}")
-        self._claim_root(file.rpartition("/")[0], name)
-        spec = {"file": file, "count": lift(count, "count"), "slot": lift(slot, "slot"),
-                "size": distref(size), "seed": _seed(seed, name), "protocol": protocol, "doc": doc}
-        self._datasets[name] = ds = Dataset(name, "regions", spec)
         return ds
 
     # ---- namespaces ----
@@ -405,25 +424,25 @@ class Workload:
 
 
 def _format_spec(name: str, format, access: str, size=None, params: dict | None = None) -> dict:
-    """The `format` entry of a dataset: a dict `{class, reader?, version?, layout?}` (a format
+    """The `format` entry of a dataset: a dict `{class, reader?, version?, framing?}` (a format
     class object of `aeiou.formats` renders to one through `.spec(access, size, params)`)."""
     spec = format.spec(access, size, params) if hasattr(format, "spec") else format
     if not isinstance(spec, dict) or "class" not in spec:
         raise BuildError(f"dataset {name}: format needs a `class`")
     check_ident(spec["class"], "format class")
     for k in spec:
-        if k not in ("class", "reader", "version", "layout"):
+        if k not in ("class", "reader", "version", "framing"):
             raise BuildError(f"dataset {name}: unknown format key {k!r}")
-    layout = spec.get("layout")
-    if layout is not None:
-        if not isinstance(layout, dict):
-            raise BuildError(f"dataset {name}: format layout must be a dict")
-        for k, v in layout.items():
-            if k not in LAYOUT_KEYS:
-                raise BuildError(f"dataset {name}: unknown layout key {k!r} (one of {LAYOUT_KEYS})")
+    framing = spec.get("framing")
+    if framing is not None:
+        if not isinstance(framing, dict):
+            raise BuildError(f"dataset {name}: format framing must be a dict")
+        for k, v in framing.items():
+            if k not in FRAMING_KEYS:
+                raise BuildError(f"dataset {name}: unknown framing key {k!r} (one of {FRAMING_KEYS})")
             if k == "columns":
                 if not isinstance(v, list) or not v:
-                    raise BuildError(f"dataset {name}: layout columns must be a non-empty list")
+                    raise BuildError(f"dataset {name}: framing columns must be a non-empty list")
                 weights = []
                 for c in v:
                     for ck in c:
@@ -435,9 +454,9 @@ def _format_spec(name: str, format, access: str, size=None, params: dict | None 
                     weights.append(w)
                 if abs(sum(weights) - 1) > 1e-9:
                     raise BuildError(f"dataset {name}: column weights sum to {sum(weights)}, not 1")
-                layout["columns"] = [{ck: (float(cv) if ck == "weight" else lift(cv, f"column {ck}")) for ck, cv in c.items()} for c in v]
+                framing["columns"] = [{ck: (float(cv) if ck == "weight" else lift(cv, f"column {ck}")) for ck, cv in c.items()} for c in v]
             elif k != "writer":
-                layout[k] = lift(v, f"layout {k}")
+                framing[k] = lift(v, f"framing {k}")
     return spec
 
 

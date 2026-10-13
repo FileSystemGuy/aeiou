@@ -1,5 +1,5 @@
 {
-  "ast": "0.7",
+  "ast": "0.8",
   "name": "file_per_sample",
   "doc": "PyTorch DataLoader over an ImageFolder-style corpus; W workers, B files per batch, in-order delivery.",
   "params": {
@@ -46,20 +46,19 @@
   },
   "datasets": {
     "train": {
-      "files": {
-        "pattern": "train/{id div 1300:05}/img_{id:09}.jpg",
-        "count": {
-          "param": "files"
-        },
-        "size": {
-          "lognormal": {
-            "median": 112640,
-            "sigma": 0.45
-          }
-        },
-        "seed": 1592646266,
-        "access": "map"
-      }
+      "pattern": "train/{id div 1300:05}/img_{id:09}.jpg",
+      "layout": "whole",
+      "access": "map",
+      "count": {
+        "param": "files"
+      },
+      "size": {
+        "lognormal": {
+          "median": 112640,
+          "sigma": 0.45
+        }
+      },
+      "seed": 1592646266
     }
   },
   "actors": {
@@ -307,12 +306,12 @@
   "provenance": {
     "generator": {
       "script": "file_per_sample.py",
-      "sha256": "4c1bf1c62358410c17d35ae9959277b703014c73495c4f9a0814707f657556c9",
+      "sha256": "7f5931251774a1fa12b357b36ee05a0f9a61ec532de1cf4d9f98260f4209eeab",
       "builder_version": "0.1.0",
-      "git": "7b115db69f80-dirty"
+      "git": "67e632d03bbb-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "a2e66f4a8618bb9c1d2971ed4129dd0a9f6ff7c083de6ffdb5f66994445eae99"
+    "ast_sha256": "06022201e7be3c26f78c73369ef34b1b0016d52311baf1cc40f88bf31ff01333"
   }
 }

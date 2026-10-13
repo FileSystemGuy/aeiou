@@ -10,16 +10,17 @@ An **abstract** is a workload written as a program over POSIX-shaped I/O operati
 operation sequence a real application issues, as its author understands it, with the
 quantities the application draws at random expressed as distributions. It is authored as a
 Python script with **aeiou-build**(1), compiled to one JSON document (`<name>.ast.json`,
-contract version 0.5), and executed by **aeiou**(1). The document is the only thing the
+contract version 0.8), and executed by **aeiou**(1). The document is the only thing the
 runner executes and the only artifact an author publishes with a hash.
 
 The model has three parts:
 
-- **Datasets** are sample spaces that exist before the run: `files` named by a pattern with
-  sizes drawn from a dataset seed, or `regions` inside one file. They are read-only. A
-  dataset stored in a container format (Parquet, HDF5, TFRecord, tar) declares its format
-  class and a *layout*, a generic framing formula from which the runner computes every
-  offset without reading the container's own metadata.
+- **Datasets** exist before the run: files or objects named by a pattern, with sizes drawn
+  from a dataset seed, each holding one item, part of one, several, or fixed-size slots (the
+  *layout*), and found by the application through the positional shuffle or by id (the
+  *access*). They are read-only. A dataset stored in a container format (Parquet, HDF5,
+  TFRecord, tar) declares its format class and a *framing*, a generic formula from which the
+  runner computes every offset without reading the container's own metadata.
 - **Namespaces** are the objects a run creates, named by a pattern over declared fields, with
   sizes computed from the writes that create them, never observed. A namespace declared
   `input` holds the objects a previous run wrote (a checkpoint restore reads what the write
@@ -127,13 +128,17 @@ ids of `zipf` and `hotset` are fixed by the dataset seed, not the run seed.
 
 ## DATASETS, NAMESPACES, ACTORS
 
-**Datasets**: `files {pattern, count, size, seed, protocol, access, samples_per_file, chunk, format}`
-or `regions {file, count, slot, size, seed, protocol}`. `count` is samples. Patterns use
+**Datasets**: `{pattern, layout, access, count, size, seed, samples_per_file, chunk, slot,
+format, protocol}` (contract 0.8). `layout` is how a file or object holds the items: `whole`
+(one item), `chunked` (part of one: `chunk` bytes each, named by `{k}`), `compound`
+(`samples_per_file` variably sized items, framed by `format`), or `array` (`count` fixed
+slots of `slot` bytes in one file, a pattern without fields). `count` is items. Patterns use
 `{field[:format]}` with the field `id` (and `k` for chunk objects) and the forms `{id:09}`,
 `{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; a dataset's directories are the distinct
 prefixes up to the last `/`, enumerated in id order. `access` is `map` (the shuffle runs
-over samples) or `stream` (over files). A `format {class, reader, version, layout}` block
-declares the container layout: a file is `file_header || units || file_footer`, a unit is
+over samples), `stream` (over files), or `indexed` (items looked up by id, never consumed;
+always for an `array`); a consumed dataset's directories are `{id div D}` or none. A
+`format {class, reader, version, framing}` block declares the container framing: a file is `file_header || units || file_footer`, a unit is
 `unit_header || column chunks || unit_footer`, a column chunk is `header || rows`, a row is
 `row_header || fixed || its share of the sample || row_footer`, each with its alignment, and
 every field an expression over parameters.
