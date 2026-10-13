@@ -5588,8 +5588,114 @@ count in the wrong direction, 0, a parameter beside it, and two operations at on
 builder's tests grow and shrink TFRecord, WebDataset, HDF5 across short last files (headers
 included) and Parquet (whole files, brief item 31) to the bytes of a fresh datagen, and a
 bucket of TFRecord shards and of plain files. By hand: a chunked dataset (`lmcache_local_disk`)
-grown and shrunk to a fresh datagen's tree. Next: subset runs (`run --subset`), then the
-§3.71 sizing step.
+grown and shrunk to a fresh datagen's tree. ~~Next: subset runs (`run --subset`), then the
+§3.71 sizing step.~~ (2026-10-12: settle, global claims, and Ctrl-C first, below.)
+
+**Decided 2026-10-12 (the user, on the points proposed): settle, global claims, and Ctrl-C.**
+The user's question: a grow started by mistake, or one that must stop, has only `--resume`
+to finish it, so a corpus can be stuck between two counts for hours. Decided:
+
+1. *`aeiou datagen --settle ROOT`* (the name preferred to `--stop`): finish what was
+   claimed, claim nothing new. An interrupted `writing`, `growing`, or `shrinking` corpus is
+   brought to a self-consistent count it reached, the manifest `complete` with that count's
+   id; the asked-for and the settled counts are recorded in the provenance (a `resizes`
+   entry, or a `settles` entry for a first datagen). Same command-line rules as `--resume`.
+2. *Monotonic in whole directories, by a global claim order* (the user's point: with each
+   host writing a contiguous slice and each writer a run of it, an interrupted corpus has
+   holes all through the id sequence, and the longest finished prefix would keep about one
+   host's share of the work). Every datagen (first, resume, grow, shrink) hands out work
+   from one queue on rank 0, in id order: a run is a whole directory under `{id div D}`, a
+   fixed block of ids for a flat pattern, smaller runs when there are fewer directories than
+   hosts × writers (two hosts may then share a directory, as §3.62 allowed). Writers ask
+   rank 0 for the next run, one ahead to hide the round trip (about 150 claims a second at
+   today's speeds; rank 0's own writers claim in process). So an interrupted corpus is whole
+   directories `[0, k)`, a band of partial ones no wider than hosts × writers runs, and
+   nothing beyond. This replaces the contiguous host slices (`work_slice`) and balances the
+   load across hosts as well. The Python writer stays static.
+3. *A shrink removes strictly in reverse:* runs claimed from the top down, each removed from
+   its highest id down (the built removal went upward). Settling a shrink completes only
+   the removals in flight, deleting no more than the band, and never continues the shrink
+   (the user: a typo of 50 for 50M must not cost hours of work); `--grow` writes it back. A
+   shrink that had reached the new short last file's rewrite has it completed.
+4. *Settling a grow or a first datagen* completes the runs in flight; the count is the end
+   of the highest claimed run (whole files; a directory boundary under `div`), or N. The old
+   short last file is in the first run claimed, so it ends whole. A settled count of 0 is
+   refused (remove the corpus instead).
+5. *A claim mark written ahead:* rank 0 records `claimed_to` in the manifest before handing
+   out runs beyond it (a few bands at a time), so after a crash a settle removes the strays
+   in `[settled count, claimed_to)`; a clean stop makes the mark exact. Progress tells runs
+   in flight from runs never claimed.
+6. *Ctrl-C:* rank 0 catches `SIGINT` (a small `sigaction` handler setting an atomic flag; no
+   new crate) and sends every rank Stop; each rank stops claiming, abandons the file it is
+   writing, takes a last note, flushes, and sends note and Done; rank 0 waits for every rank,
+   writes the manifest once more (state unchanged, and true), prints that all ranks stopped,
+   and exits 130. `SIGINT` on another rank goes the same way through rank 0 (as a failure
+   does today). A second Ctrl-C exits at once (the manifest of the last window is still
+   true). A rank whose connection drops counts as stopped, its last note standing.
+7. *A live corpus is refused:* `--settle` and `--resume` refuse a manifest updated less
+   than two progress windows ago, since a datagen may still be writing it; the manifest
+   records `progress_secs` beside `progress.updated`, and the refusal names the wait.
+
+**Built 2026-10-12: (d), part 4, claims, settle, and Ctrl-C** (`runner/REFERENCE.md` §5, §6).
+As decided, with these choices made while building:
+
+- *What rank 0 knows of a rank's claims.* Grants carry the run (`Grant { dataset, ticket,
+  run }`), so only rank 0 cuts the work and other hosts' `--writers` need not agree. A
+  rank's note lists its writers' unfinished remainders, the grants it holds that no writer
+  has taken, and `seen`, the runs it has received; rank 0 counts the runs it granted that
+  rank after its `seen` as not done. Grants to one rank go out in the order made and are
+  counted by one reader thread, so the count names them; rank 0's own writers take a run and
+  set their slot under one lock. No list of every run a rank took is ever sent.
+- *The band is wider by the claim ahead.* Each writer on a host other than rank 0 holds one
+  run ahead, so a stopped corpus's band is up to a run per writer on every host plus one per
+  writer on the other hosts (seen in the test: 7,452 ids below a boundary of 7,800 on two
+  hosts of two writers).
+- *One step per id.* Removal and writing are one pass: each id's names under `reach` (the
+  largest of the count, `progress.from`, a settle's asked count) that the count lacks are
+  removed, then the file written when the count has it. A grow and a shrink are one work
+  range, `[w0, max(files(N), files(old)))`, a shrink's from the top down, which replaced the
+  separate removal pass (`remove_old`) and the host slices (`work_slice`).
+- *Settle through the resume path.* `settle_manifest` turns the manifest into one at the
+  settled count with what is left (`progress.settle`), written before the gate as a grow's
+  is, and the resume path finishes it; an interrupted settle is finished as it is. Strays
+  between the boundary and the mark are removed past the count and written again below it,
+  so a shrink is never continued: a shrink caught at a boundary of 13,000 with the mark at
+  7,800 kept 13,000 files, removing what was in hand and rewriting the 5,200 a stray had
+  taken down.
+- *`stopped`.* A manifest written by a datagen that is exiting (Ctrl-C, or a failure)
+  says so, and the live check lets it through at once; the progress total of a shrink counts
+  to the larger end of its work.
+- *Found on the way:* a grow's other ranks read the manifest as rank 0 was rewriting it and
+  could refuse it as `growing`; ~~rank 0 now waits for every `Hello` before writing a grow's,
+  shrink's, or settle's manifest~~ (superseded 2026-10-13: no rank but 0 reads it, below).
+
+Tests: `tests/coord.rs` settles a datagen killed on two hosts and a grow killed on one at a
+directory boundary, to the names, sizes, sampled bytes, and totals of that count, after the
+live check refuses; settles a killed shrink without removing past the run in hand; Ctrl-C on
+rank 1 of two and on one host, every host exiting 130, the manifest true and `stopped`,
+settled with no wait; the killed datagen's band and mark. The builder's tests settle an
+interrupted grow of every container format to a fresh datagen's bytes (HDF5's headers
+included) and an interrupted shrink of a bucket (objects in flight deleted, a stray's sent
+again). Next: subset runs (`run --subset`), then the §3.71 sizing step.
+
+**Decided and built 2026-10-13 (the user): rank 0 alone reads the manifest at ROOT.** Asked
+whether only rank 0 touches the manifest: it alone wrote it, but every rank read it for
+`--resume`, `--grow`, `--shrink`, and `--settle`, ran the live check and the settle or resize
+on its own, and the coordinator compared the results; the race above came from that. The user
+noted a cluster runs one rank 0, so the manifest is its alone: rank 0 listens with every
+`Welcome` held, reads and decides, and sends the manifest to run (and the one it replaces)
+with `Welcome`; the other ranks run what they are given. One place decides the settled count,
+the wait for every `Hello` is gone, and a refusal or a `complete` corpus reaches every host
+from rank 0 (`Server::last_word`, rank 0 not connecting) instead of each host reaching it
+alone. The identity becomes the operation, its count, and ROOT as each host names it, so
+every host must name the corpus the same way; before, a host given a different path would
+have been refused only because the manifest it read differed. Decided by the user the same day:
+every host mounts the system under test at the same local pathname, so ROOT is spelled the
+same on every host. Found on the way: a client
+whose send broke because rank 0 had gone reported `Broken pipe`, not rank 0's reason; a send
+now waits briefly for the reader to take the `Stop` that precedes the close. Not changed:
+`aeiou run` still reads each dataset's manifest on every rank, a read-only check of a
+`complete` corpus (`runner/REFERENCE.md` §5, §6).
 
 ### 3.71 Sizing a training corpus: a sizing step that writes a parameter file, scale-free layout, and the step barrier (proposed 2026-10-12, discussed with the user; nothing built)
 

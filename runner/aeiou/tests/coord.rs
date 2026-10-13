@@ -184,7 +184,7 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
-    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None }, None, &mut log).unwrap();
+    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false }, None, &mut log).unwrap();
     let dry = dryrun::run(model, 2, None).unwrap();
 
     let server = Server::start("127.0.0.1:0", 2).unwrap();
@@ -328,7 +328,7 @@ fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
 // ---------------------------------------------------------------- datagen on several hosts
 
 fn dopts(root: &PathBuf, rank: i64, ranks: i64) -> DatagenOpts {
-    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20), resume: None, resize: None }
+    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20), resume: None, resize: None, settle: None, sigint: false }
 }
 
 /// Every data file under `root` (the `.aeiou*` metadata left out), by relative path.
@@ -403,7 +403,7 @@ fn datagen_on_two_ranks_writes_the_one_host_corpus() {
             assert!(r0[lists].owner.is_none() && r1[lists].owner == Some(0), "the first regions dataset is rank 0's");
             assert_eq!(r1[lists].files, 0);
             let index = r0.iter().position(|r| r.name == "index").unwrap();
-            assert_eq!((r0[index].files, r1[index].files), (1, 0), "one file: rank 0's slice is [0, 1), rank 1's is empty");
+            assert_eq!(r0[index].files + r1[index].files, 1, "one file, written by the rank that claimed it");
             assert!(std::fs::metadata(two.join("ivf/merged_index.ivfdata")).unwrap().len() > 64 << 20, "several pieces");
         }
         assert_eq!(tree(&one), tree(&two), "{ast}: byte for byte the same corpus");
@@ -447,8 +447,9 @@ fn datagen_on_two_processes_end_to_end() {
     // rank 0 prints the progress of both, the other rank none
     assert!(outs[0].1.contains("progress ") && outs[0].1.contains("/100 files"), "{}", outs[0].1);
     assert!(!outs[1].1.contains("progress "), "{}", outs[1].1);
-    assert!(outs[0].1.contains("files [0, 50) of 100 on this rank"), "{}", outs[0].1);
-    assert!(outs[1].1.contains("files [50, 100) of 100 on this rank"), "{}", outs[1].1);
+    // one directory of 100 ids, cut in four for the four writers; rank 0 hands the runs out
+    assert!(outs[0].1.contains("dataset train: 100 id(s) of 100, in 4 run(s) handed out by this rank in order"), "{}", outs[0].1);
+    assert!(outs[1].1.contains("dataset train: 100 id(s) of 100, in runs claimed from rank 0"), "{}", outs[1].1);
     assert!(outs[0].1.contains("all 2 hosts 100 file(s)") && outs[0].1.contains("manifest written"), "{}", outs[0].1);
     assert!(outs[1].1.contains("(manifest by rank 0)"), "{}", outs[1].1);
     let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
@@ -512,8 +513,17 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
         let unfinished: Vec<(i64, i64)> = m.progress["unfinished"].as_array().unwrap().iter().map(|r| (r[0].as_i64().unwrap(), r[1].as_i64().unwrap())).collect();
         let left: i64 = unfinished.iter().map(|(a, b)| b - a).sum();
         assert!(left > 0 && left < files, "{ranks} rank(s): {unfinished:?}");
-        if ranks == 2 {
-            assert!(unfinished.iter().all(|(a, _)| *a != 0 && *a != files / 2), "both ranks have reported progress: {unfinished:?}");
+        // the claim order (DESIGN_REVIEW.md §3.70): below the boundary only the band of runs in
+        // flight is unfinished (a directory of 1,300 for each of the writers on every host, and
+        // one claimed ahead by each writer on another host than rank 0), and nothing was
+        // written at or past the mark
+        let (claimed, mark) = (m.progress["claimed"].as_i64().unwrap(), m.progress["claimed_to"].as_i64().unwrap());
+        assert!(0 < claimed && claimed <= mark && mark <= files, "{}", m.progress);
+        let band: i64 = unfinished.iter().map(|&(a, b)| (b.min(claimed) - a).max(0)).sum();
+        assert!(band <= (ranks * 2 + (ranks - 1) * 2) * 1300, "{ranks} rank(s): {band} unfinished below {claimed}: {unfinished:?}");
+        assert!(unfinished.last().unwrap().1 == files && unfinished.last().unwrap().0 <= claimed, "{unfinished:?}");
+        for id in mark..files {
+            assert!(!root.join(meta.file_path(id, None).unwrap().to_string()).exists(), "id {id} written past the mark {mark}");
         }
         for id in 0..files {
             if unfinished.iter().any(|(a, b)| (*a..*b).contains(&id)) {
@@ -531,6 +541,10 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&first).unwrap();
         std::io::Write::write_all(&mut f, &vec![7u8; 300_000]).unwrap();
         drop(f);
+        // a manifest younger than two windows may still have a datagen writing it
+        let outs = resume_ranks(&root.join("train"), 1);
+        assert!(!outs[0].0 && outs[0].2.contains("so it may still be writing"), "{outs:?}");
+        std::thread::sleep(std::time::Duration::from_millis(60));
         let outs = resume_ranks(&root.join("train"), 3 - ranks);
         assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s) killed: {outs:?}");
         assert!(outs[0].1.contains(&format!("{left} file(s) unfinished")), "{}", outs[0].1);
@@ -688,6 +702,7 @@ fn a_killed_grow_is_finished_by_resume() {
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--grow", "30000"]).arg(root.join("train")).output().unwrap();
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("finish it first with `aeiou datagen --resume"), "{o:?}");
 
+    std::thread::sleep(std::time::Duration::from_millis(60));
     let outs = resume_ranks(&root.join("train"), 2);
     assert!(outs.iter().all(|(ok, _, _)| *ok), "{outs:?}");
     assert!(outs[0].1.contains(&format!("(growing from count {from})")), "{}", outs[0].1);
@@ -727,4 +742,256 @@ fn grow_and_shrink_refuse_what_they_cannot_do() {
     refuse(&["--grow", "40", a, "--resume", a], "--resume, --grow: one at a time");
     assert_eq!(tree(&root).len(), 30, "nothing changed");
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// At a dataset root on several hosts, rank 0 alone reads the manifest, and what it decides
+/// reaches every host with `Welcome`: its refusal, or a complete corpus's nothing to do. Every
+/// host names the same root.
+#[test]
+fn only_rank_0_reads_the_manifest_at_the_root() {
+    let root = tmpdir("dg-rank0-manifest");
+    datagen_one(&root, 30);
+    let at = root.join("train");
+    for (rank, (ok, _, e)) in resize_ranks("--grow", 30, &at, 2, &[]).iter().enumerate() {
+        assert!(!ok && e.contains("the dataset's count is 30; a grow takes a larger one"), "rank {rank}: {e}");
+    }
+    for (rank, (ok, out, e)) in resume_ranks(&at, 2).iter().enumerate() {
+        assert!(*ok && out.contains("the manifest says `complete`; nothing to write"), "rank {rank}: {out}{e}");
+    }
+    let port = free_port();
+    let children: Vec<_> = [at.clone(), root.join("elsewhere")]
+        .iter()
+        .enumerate()
+        .map(|(rank, at)| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+            c.arg("datagen").arg("--grow").arg("40").arg(at).args(["--ranks", "2", "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
+            c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap()
+        })
+        .collect();
+    for (rank, c) in children.into_iter().enumerate() {
+        let o = c.wait_with_output().unwrap();
+        let e = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && e.contains("not the same run") && e.contains("root"), "rank {rank}: {e}");
+    }
+    assert_eq!(tree(&root).len(), 30, "nothing changed");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+// ---------------------------------------------------------------- settle and Ctrl-C
+
+/// Data files under `root` with their lengths (the `.aeiou*` metadata left out).
+fn listing(root: &std::path::Path) -> std::collections::BTreeMap<String, u64> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut std::collections::BTreeMap<String, u64>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, root, out);
+            } else if !p.file_name().unwrap().to_string_lossy().starts_with(".aeiou") {
+                out.insert(p.strip_prefix(root).unwrap().to_string_lossy().into_owned(), std::fs::metadata(&p).unwrap().len());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
+/// What a datagen of `count` writes under the dataset root: every name with its size.
+fn expected(meta: &aeiou::eval::DsMeta<'_>, count: i64) -> std::collections::BTreeMap<String, u64> {
+    let m = meta.with_count(count);
+    (0..m.files()).map(|id| (m.file_path(id, None).unwrap().to_string().trim_start_matches("train/").to_string(), m.file_size(id).unwrap() as u64)).collect()
+}
+
+/// File `id` under `root` holds the payload's bytes.
+fn is_payload(root: &std::path::Path, meta: &aeiou::eval::DsMeta<'_>, id: i64) -> bool {
+    let got = std::fs::read(root.join(meta.file_path(id, None).unwrap().to_string())).unwrap_or_default();
+    let mut want = vec![0u8; meta.file_size(id).unwrap() as usize];
+    let seed = meta.dataset_seed();
+    aeiou::payload::Filler::new(1).fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk, 1), 0, &mut want);
+    got == want
+}
+
+/// `aeiou datagen ARGS` on `ranks` processes, started (rank 0 first), output piped.
+fn spawn_ranks(args: &[String], ranks: i64) -> Vec<std::process::Child> {
+    let port = free_port();
+    let mut children = Vec::new();
+    for rank in 0..ranks {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.arg("datagen").args(args);
+        if ranks > 1 {
+            c.args(["--ranks", &ranks.to_string(), "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
+        }
+        children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap());
+        if rank == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    children
+}
+
+/// Read rank 0's lines until `n` progress windows that `moved` accepts; the reader is
+/// returned for the rest.
+fn windows(child: &mut std::process::Child, n: usize, moved: impl Fn(&str) -> bool) -> std::io::Lines<std::io::BufReader<std::process::ChildStdout>> {
+    use std::io::BufRead;
+    let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut seen = 0;
+    while let Some(Ok(l)) = lines.next() {
+        if l.starts_with("progress ") && moved(&l) {
+            seen += 1;
+            if seen == n {
+                return lines;
+            }
+        }
+    }
+    panic!("the datagen ended before {n} windows");
+}
+
+fn settle(at: &std::path::Path) -> (bool, String, String) {
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--settle"]).arg(at).args(["--writers", "2"]).output().unwrap();
+    (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+}
+
+/// The settled corpus is what a datagen of its count writes: the names and sizes, the id a
+/// run accepts, the totals; the ids the settle finished or wrote again, and a sample of the
+/// rest, are the payload's. Returns the count.
+fn check_settled(root: &PathBuf, was: &aeiou::payload::Manifest, asked: i64) -> i64 {
+    let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+    assert_eq!(after.state, "complete");
+    let s = after.dataset["files"]["count"].as_i64().unwrap();
+    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", &s.to_string())]));
+    let meta = &model.datasets[0];
+    assert!(listing(&root.join("train")) == expected(meta, s), "the settled corpus is not the {s}-file one");
+    run::check_datasets(loaded, cfg, root).unwrap();
+    assert_eq!(after.provenance["files_written"].as_i64(), Some(s), "{}", after.provenance);
+    assert_eq!(after.provenance["bytes_written"].as_u64(), Some(expected(meta, s).values().sum::<u64>()));
+    let st = after.provenance["settles"].as_array().unwrap().last().unwrap();
+    assert_eq!((st["asked"].as_i64(), st["count"].as_i64(), st["state"].as_str()), (Some(asked), Some(s), Some(was.state.as_str())));
+    let mut ids: Vec<i64> = (0..s).step_by(991).collect();
+    for (a, b) in was.unfinished() {
+        ids.extend((a..b.min(s)).take(30));
+    }
+    for id in ids {
+        assert!(is_payload(root, meta, id), "id {id}: not the payload");
+    }
+    s
+}
+
+/// `--settle` (DESIGN_REVIEW.md §3.70) keeps what a killed datagen or grow reached: the count
+/// is the boundary of the runs handed out, a directory boundary, and the corpus is a fresh
+/// datagen's of that count.
+#[test]
+fn a_killed_datagen_or_grow_settles_at_whole_directories() {
+    let files = 20000i64;
+    for (op, ranks) in [("datagen", 2i64), ("grow", 1)] {
+        let root = tmpdir("dg-settle");
+        let from = 2000i64;
+        let args: Vec<String> = match op {
+            "datagen" => vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("files={files}")],
+            _ => {
+                datagen_one(&root, from);
+                vec!["--grow".into(), files.to_string(), root.join("train").to_string_lossy().into_owned()]
+            }
+        };
+        let mut args = args;
+        args.extend(["--writers", "2", "--progress-secs", "0.02"].map(String::from));
+        let mut children = spawn_ranks(&args, ranks);
+        let start = if op == "datagen" { " 0/".to_string() } else { format!(" {from}/") };
+        let _rest = windows(&mut children[0], 2, |l| !l.contains(&start));
+        for c in children.iter_mut() {
+            c.kill().unwrap();
+            c.wait().unwrap();
+        }
+        let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+        assert_ne!(m.state, "complete");
+        let claimed = m.progress["claimed"].as_i64().unwrap();
+        let o = settle(&root.join("train"));
+        assert!(!o.0 && o.2.contains("so it may still be writing"), "{o:?}");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let o = settle(&root.join("train"));
+        assert!(o.0, "{op}: {o:?}");
+        assert!(o.1.contains(&format!("of the {files} asked")), "{}", o.1);
+        let s = check_settled(&root, &m, files);
+        let low = if op == "grow" { from } else { 0 };
+        assert_eq!(s, low.max(claimed.min(files)), "{op}: settled at the boundary {claimed}");
+        assert!(s % 1300 == 0 || s == files || s == from, "{op}: {s} is not a directory boundary");
+        if op == "grow" {
+            let r = &m.provenance["resizes"][0];
+            let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+            assert_eq!((r["to"].as_i64(), after.provenance["resizes"][0]["settled"].as_i64()), (Some(files), Some(s)));
+        }
+        // a complete corpus has nothing to settle
+        let o = settle(&root.join("train"));
+        assert!(o.0 && o.1.contains("nothing to settle"), "{o:?}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+/// Settling a killed shrink finishes only the removals it had in hand: it never continues
+/// the shrink, and what it keeps is a fresh datagen's corpus of the count it reached.
+#[test]
+fn a_killed_shrink_settles_without_removing_more() {
+    let (files, to) = (20000i64, 100i64);
+    let root = tmpdir("dg-settle-shrink");
+    datagen_one(&root, files);
+    let args: Vec<String> = vec!["--shrink".into(), to.to_string(), root.join("train").to_string_lossy().into_owned(), "--writers".into(), "1".into(), "--progress-secs".into(), "0.01".into()];
+    let mut children = spawn_ranks(&args, 1);
+    let _rest = windows(&mut children[0], 2, |l| !l.contains(" 0/"));
+    children[0].kill().unwrap();
+    children[0].wait().unwrap();
+    let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+    assert_eq!(m.state, "shrinking", "the shrink ended before it was killed");
+    let there = listing(&root.join("train")).len() as i64;
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let o = settle(&root.join("train"));
+    assert!(o.0, "{o:?}");
+    let s = check_settled(&root, &m, to);
+    let claimed = m.progress["claimed"].as_i64().unwrap();
+    assert_eq!(s, to.max(claimed.min(files)));
+    assert!(there - s <= 1300, "the settle removed {} files past the run in hand", there - s);
+    let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+    assert_eq!((after.provenance["resizes"][0]["op"].as_str(), after.provenance["resizes"][0]["settled"].as_i64()), (Some("shrink"), Some(s)));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Ctrl-C on any host stops every host (DESIGN_REVIEW.md §3.70): each exits 130, the
+/// manifest records what is finished and that no datagen is writing, so `--settle` needs no
+/// wait.
+#[test]
+fn ctrl_c_stops_every_host_and_leaves_a_true_manifest() {
+    let files = 20000i64;
+    let (_, _, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "20000")]));
+    let meta = &model.datasets[0];
+    for (ranks, at) in [(2i64, 1usize), (1, 0)] {
+        let root = tmpdir("dg-ctrl-c");
+        let mut args = vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("files={files}")];
+        args.extend(["--writers", "2", "--progress-secs", "0.05"].map(String::from));
+        let mut children = spawn_ranks(&args, ranks);
+        let rest = windows(&mut children[0], 1, |l| !l.contains(" 0/"));
+        unsafe { libc::kill(children[at].id() as i32, libc::SIGINT) };
+        let tail: Vec<String> = rest.map_while(Result::ok).collect();
+        for c in children.iter_mut() {
+            let st = c.wait().unwrap();
+            let mut err = String::new();
+            std::io::Read::read_to_string(c.stderr.as_mut().unwrap(), &mut err).unwrap();
+            assert_eq!(st.code(), Some(130), "{ranks} rank(s): {err}");
+        }
+        let said = if ranks > 1 { "all 2 ranks stopped" } else { "stopped; the manifest records what is finished" };
+        assert!(tail.iter().any(|l| l.starts_with(said)), "{tail:?}");
+        let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+        assert!(m.state == "writing" && !m.progress["stopped"].is_null(), "{}", m.progress);
+        let unfinished = m.unfinished();
+        let mark = m.progress["claimed_to"].as_i64().unwrap();
+        for id in 0..mark {
+            if !unfinished.iter().any(|(a, b)| (*a..*b).contains(&id)) {
+                let path = root.join(meta.file_path(id, None).unwrap().to_string());
+                assert_eq!(std::fs::metadata(&path).map(|m| m.len()).ok(), Some(meta.file_size(id).unwrap() as u64), "{}: recorded as finished", path.display());
+            }
+        }
+        // stopped: no wait for the windows
+        let o = settle(&root.join("train"));
+        assert!(o.0, "{o:?}");
+        let s = check_settled(&root, &m, files);
+        assert_eq!(s, m.progress["claimed"].as_i64().unwrap());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

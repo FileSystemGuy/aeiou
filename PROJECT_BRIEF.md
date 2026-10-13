@@ -550,7 +550,13 @@ numbers; the order is this note's.
     new count's manifest first, the files a fresh datagen of N would write and the corpus
     lacks written (the old short last file among them), the names past N removed with the
     directories they leave empty, so the corpus is a fresh datagen's byte for byte with its
-    id; an interrupted one finished by `--resume`. Subset runs remain.
+    id; an interrupted one finished by `--resume`. *Decided and built 2026-10-12 (§3.70):*
+    `--settle ROOT` keeps what an interrupted datagen, grow, or shrink reached (the runs
+    handed out finished, a shrink never continued, strays past the claim mark removed), at
+    whole directories, because every datagen now hands its ids out in runs from one queue on
+    rank 0, in id order (from the top down in a shrink); Ctrl-C stops every host with the
+    manifest true (exit 130); `--resume` and `--settle` refuse a manifest less than two
+    progress windows old unless its datagen recorded that it stopped. Subset runs remain.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

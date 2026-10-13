@@ -13,6 +13,7 @@ aeiou [--config FILE] datagen [OPTIONS] --root DIR ABSTRACT
 aeiou [--config FILE] datagen [OPTIONS] --resume ROOT
 aeiou [--config FILE] datagen [OPTIONS] --grow N ROOT
 aeiou [--config FILE] datagen [OPTIONS] --shrink N ROOT
+aeiou [--config FILE] datagen [OPTIONS] --settle ROOT
 aeiou [--config FILE] run [OPTIONS] --gpus GPUS --root DIR ABSTRACT
 aeiou --help | --version
 ```
@@ -89,14 +90,30 @@ container format class is written by **aeiou-datagen**(1); a build with the carg
 the same bytes (a Parquet footer names this writer as `created_by`). An HDF5 file's header comes from **aeiou-header**(1), which must
 sit beside this binary; only rank 0 runs it.
 
+The ids of a `files` dataset are written in runs, handed out in id order from one queue
+(rank 0's on several hosts): a run is a directory of a `{id div N}` pattern, or 1,000 ids of a
+flat one, cut smaller only when there are fewer runs than writers on all hosts. Each writer
+writes its run in id order and claims the next, so a datagen stopped anywhere leaves whole
+directories, a band of partial ones no wider than a run per writer on every host (and one
+claimed ahead per writer on a host other than rank 0), and nothing past it. Before handing out
+a run past it, rank 0 records a claim mark in the manifest (`progress.claimed_to`, a few bands
+ahead), so `--settle` knows how far a datagen that died may have written.
+
 On several hosts (`--ranks`, `--rank`, `--coordinator`, as for `run`; **aeiou-launch**(1)
-starts them) rank *r* writes its contiguous slice of every `files` dataset's ids, and each
-`regions` dataset is written whole by one rank (the *i*-th by rank *i* mod *R*: several
-hosts writing one file serialize on the server). Every rank checks the roots are empty
+starts them) every rank claims the runs of every `files` dataset from rank 0 over the
+coordinator, and each `regions` dataset is written whole by one rank (the *i*-th by rank *i*
+mod *R*: several hosts writing one file serialize on the server). Every rank checks the roots are empty
 before the start gate, writes after it, reports its progress every window, and sends its
 counts at the end; rank 0 writes the manifests, `complete` once every rank has reported, and records
 every rank's host and counts in the provenance. The coordinator refuses a host whose
 abstract, parameters, `--gpus`, `--dedupe`, `--compress`, or `--dataset` list differ.
+
+Ctrl-C (`SIGINT`) on any host stops every host: each stops claiming, leaves the file it is
+writing, notes what it finished, flushes, and reports to rank 0, which rewrites the manifests
+once more, marked `stopped` (no datagen is writing the corpus), prints that every rank
+stopped, and every host exits 130. The state is unchanged, so `--resume ROOT` finishes the
+corpus and `--settle ROOT` keeps what it reached. A second Ctrl-C exits at once; the manifest
+of the last window is still true. A host that fails stops the others the same way.
 
 `datagen --resume ROOT` finishes a dataset a datagen left `writing`, `growing`, or
 `shrinking` (killed, crashed, or failed), from the manifest at ROOT alone: the dataset, its place, the payload, and the
@@ -109,7 +126,10 @@ corpus whose payload or format writer is not this aeiou's, or whose HDF5 headers
 **aeiou-header**(1) would make differently, since the files would mix them. The manifest
 is rewritten every window as for a first datagen and `complete` at the end, with the same
 dataset id; each resume's hosts and counts are added to the provenance (`resumes`). A
-manifest already `complete` has nothing to write, and the command says so and exits 0. Not
+manifest already `complete` has nothing to write, and the command says so and exits 0. A
+manifest updated less than two progress windows ago (`progress.updated`,
+`progress.progress_secs`) may still have a datagen writing it and is refused, unless it says
+`stopped`. Not
 done: the parts of multipart uploads a crash left in a bucket are not aborted (the object
 engine has no call that lists them).
 
@@ -127,7 +147,22 @@ rewritten first, `growing` or `shrinking` with the new count and the old one
 (`progress.from`), so `run` refuses the corpus until the change is done and `--resume ROOT`
 finishes an interrupted one (removing again is no error); it ends `complete`, with the change
 recorded in the provenance (`resizes`: the old count and id, hosts, counts, times). The work
-splits over the hosts as a resume's does.
+splits over the hosts as a resume's does. A shrink hands out its runs from the top down and
+removes each from its highest id down.
+
+`datagen --settle ROOT` keeps what an interrupted datagen, grow, or shrink reached, claiming
+nothing new. The count is the boundary of the runs handed out (`progress.claimed`; whole
+files, a directory boundary), never past the count asked for nor short of the count a grow or
+shrink began from. The runs handed out and not finished are finished (a shrink's removals
+among them, never more: a shrink is never continued, and `--grow` undoes one); ids between
+the boundary and the mark, where a datagen that died after its last window may have written
+or removed, are removed past the count and written again below it. The manifest is rewritten
+first with the settled count and what is left to do (`progress.settle`: the counts asked and
+settled), so an interrupted settle is finished by `--settle ROOT` or `--resume ROOT`, and ends
+`complete`, with that count's dataset id, the settle in the provenance (`settles`), and a
+grow or shrink it ended marked `settled`. A count of 0 is refused (remove the corpus). As
+`--resume` otherwise, the live check included; a manifest from an aeiou that recorded no
+claim boundary is refused (`--resume` finishes it).
 
 ### run
 
@@ -302,8 +337,8 @@ turns it off, and the last one on the line wins.
   This host's index among `--ranks` hosts. Default 0. *Layered.*
 - **--ranks** *N*
 
-  Hosts the datagen is spread over: each writes its slice of every `files` dataset's ids, and
-  each `regions` file is written by one of them. Default 1. *Layered.*
+  Hosts the datagen is spread over: each claims runs of every `files` dataset's ids from
+  rank 0, and each `regions` file is written by one of them. Default 1. *Layered.*
 - **--coordinator** *HOST:PORT*
 
   With `--ranks` above 1, required: the coordinator's address. Rank 0 listens on it
@@ -317,20 +352,29 @@ turns it off, and the last one on the line wins.
   `s3://BUCKET[/PREFIX]`) from its manifest; see **datagen** above. No abstract, `--root`,
   `--endpoint`, `--param`, `--params-file`, `--gpus`, `--dedupe`, `--compress`, or
   `--dataset` with it (a usage error); `--writers`, `--object-threads`, `--progress-secs`, and
-  the several-hosts options as for any datagen. With several hosts, every host gives the same
-  ROOT and the coordinator refuses one that read another record of the corpus.
+  the several-hosts options as for any datagen. With several hosts, rank 0 alone reads the
+  manifest and sends every host what to write; every host gives the same ROOT, written the
+  same way (the coordinator refuses one that does not), and a refusal on rank 0 is reported
+  on every host.
 
 - **--grow** *N* *ROOT*
 
   In place of *ABSTRACT*: grow the complete dataset at ROOT to a count of N, larger than its
   own; see **datagen** above. As `--resume` for what may stand beside it; one of `--resume`,
-  `--grow`, `--shrink` at a time. With several hosts, the coordinator refuses a host growing
-  another corpus or to another count.
+  `--grow`, `--shrink`, `--settle` at a time. With several hosts, the coordinator refuses a host growing
+  another ROOT or to another count.
 
 - **--shrink** *N* *ROOT*
 
   In place of *ABSTRACT*: shrink the complete dataset at ROOT to a count of N, smaller than
   its own and above 0; as `--grow` otherwise.
+
+- **--settle** *ROOT*
+
+  In place of *ABSTRACT*: keep what an interrupted datagen, grow, or shrink of the dataset at
+  ROOT reached, at the count of the runs it had handed out; see **datagen** above. As
+  `--resume` for what may stand beside it; one of `--resume`, `--grow`, `--shrink`,
+  `--settle` at a time.
 
 ### aeiou run
 
@@ -696,6 +740,10 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
 
   A usage error. Every missing argument is listed at once, from every layer, in the frame
   every tool of the suite shares.
+- **130**
+
+  `datagen` stopped by Ctrl-C (on this host or another); the manifest records what is
+  finished.
 
 ## EXAMPLES
 

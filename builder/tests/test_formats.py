@@ -465,6 +465,66 @@ def test_aeiou_datagen_grows_and_shrinks_a_container_corpus(name, tmp_path):
     assert [x["op"] for x in got["provenance"]["resizes"]] == ["grow", "shrink"]
 
 
+@needs_runner
+@pytest.mark.parametrize("name", sorted(RUST_CASES))
+def test_aeiou_datagen_settles_an_interrupted_grow(name, tmp_path):
+    """`aeiou datagen --settle ROOT` (DESIGN_REVIEW.md §3.70) keeps what an interrupted grow
+    reached: the count is the claim boundary's, the file in flight is written again, the stray
+    past the boundary removed, and the corpus is, byte for byte, a fresh datagen's of the
+    settled count (its HDF5 header that count's, checked against the corpus's)."""
+    make, corpus, _ = RUST_CASES[name]
+    ast_file = make(tmp_path)
+
+    def fresh(where, samples):
+        params = [p if not p.startswith("samples=") else f"samples={samples}" for p in corpus]
+        r = subprocess.run([RUNNER, "datagen", ast_file, "--root", where, "--writers", "3", *_params(params), "--dedupe", "2"], capture_output=True, text=True)
+        if "--features formats" in r.stderr:
+            pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+        assert r.returncode == 0, r.stdout + r.stderr
+        return where / "train"
+
+    def files(root):
+        return {p.name: p.read_bytes() for p in root.iterdir() if p.name != ".aeiou-dataset.json"}
+
+    c0 = int(next(p for p in corpus if p.startswith("samples=")).split("=")[1])
+    root = fresh(tmp_path / "rs", c0)
+    f0 = len(files(root))
+    n = RESIZES[name][0]
+    r = subprocess.run([RUNNER, "datagen", "--grow", str(n), root, "--writers", "2"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    # what a grow killed after handing out the run that ends at file c leaves: file c - 1 in
+    # flight (cut short), file c written past the last window (a stray), nothing beyond
+    names = sorted(files(root))
+    c = f0 + 1
+    assert c < len(names), names
+    path = root / ".aeiou-dataset.json"
+    m = json.loads(path.read_text())
+    done = [root / x for x in names[:c - 1]]
+    m["state"] = "growing"
+    for k in ("finished", "ranks", "hosts", "direct", "files_written", "bytes_written"):
+        m["provenance"]["resizes"][-1].pop(k, None)
+    m["progress"] = {"unfinished": [[c - 1, len(names)]], "files_written": len(done), "bytes_written": sum(p.stat().st_size for p in done),
+                     "from": c0, "claimed": c, "claimed_to": c + 1, "updated": 0, "progress_secs": 30}
+    path.write_text(json.dumps(m))
+    with open(root / names[c - 1], "r+b") as f:
+        f.truncate((root / names[c - 1]).stat().st_size // 2)
+    for x in names[c + 1:]:
+        (root / x).unlink()
+    r = subprocess.run([RUNNER, "datagen", "--settle", root, "--writers", "2"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    got = json.loads(path.read_text())
+    s = got["dataset"]["files"]["count"]
+    assert c0 < s < n
+    want = fresh(tmp_path / f"fresh{s}", s)
+    assert files(root) == files(want), f"settled at {s}"
+    exp = json.loads((want / ".aeiou-dataset.json").read_text())
+    assert got["state"] == "complete" and "progress" not in got
+    assert {k: got[k] for k in ("dataset", "payload", "format")} == {k: exp[k] for k in ("dataset", "payload", "format")}
+    assert got["provenance"].get("headers") == exp["provenance"].get("headers")
+    assert (got["provenance"]["files_written"], got["provenance"]["bytes_written"]) == (exp["provenance"]["files_written"], exp["provenance"]["bytes_written"])
+    assert got["provenance"]["resizes"][-1]["settled"] == s and got["provenance"]["settles"][-1]["asked"] == n
+
+
 def _parquet_parts(b):
     """A Parquet file as its row groups and its footer with `created_by` and the `aeiou.pad`
     value taken out (the two things the Rust and Python writers' files differ in)."""

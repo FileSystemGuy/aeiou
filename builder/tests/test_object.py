@@ -326,6 +326,54 @@ def test_aeiou_datagen_grows_and_shrinks_in_the_bucket(name, minio, tmp_path):
         assert got["provenance"]["files_written"] == exp["provenance"]["files_written"]
 
 
+def test_aeiou_datagen_settles_an_interrupted_shrink_in_the_bucket(minio, tmp_path):
+    """`aeiou datagen --settle s3://BUCKET/PREFIX` (DESIGN_REVIEW.md §3.70) after a shrink killed
+    from the top down: the count is the claim boundary's, the object in flight is deleted, the
+    ones a stray removed below the boundary are sent again, and the bucket ends as a datagen of
+    the settled count leaves it, never shrunk further."""
+    if not _has_object_engine():
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `object`")
+    obj = json.loads(pathlib.Path(ast_path("file_per_sample")).read_text())
+    (ds,) = obj["datasets"]
+    obj["datasets"][ds]["files"]["protocol"] = "s3"
+    obj.pop("posix", None)
+    obj.pop("cache", None)
+    obj_file = tmp_path / "object.ast.json"
+    obj_file.write_text(json.dumps(obj))
+
+    def fresh(prefix, n):
+        r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
+                            "--writers", "3", "--param", f"files={n}"], capture_output=True, text=True, env=minio.env)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    def contents(prefix):
+        return {k[len(prefix):]: minio.get(k) for k in minio.objects(prefix) if not k.endswith(".aeiou-dataset.json")}
+
+    prefix = "settle-shrink/data"
+    fresh(prefix, 60)
+    keys = sorted(k for k in minio.objects(prefix) if not k.endswith(".aeiou-dataset.json"))
+    mkey = f"{prefix}/.aeiou-dataset.json"
+    m = json.loads(minio.get(mkey))
+    # a shrink to 25 killed with the runs down to id 40 handed out: [41, 60) removed, 40 in
+    # flight, [35, 40) removed by a stray past the last window (the mark is 35)
+    store = minio.store()
+    for k in keys[41:] + keys[35:40]:
+        obstore.delete(store, k)
+    m["state"] = "shrinking"
+    m["dataset"]["files"]["count"] = 25
+    m["progress"] = {"unfinished": [[25, 41]], "files_written": 25, "bytes_written": sum(minio.objects(prefix)[k] for k in keys[:25]),
+                     "from": 60, "claimed": 40, "claimed_to": 35, "updated": 0, "progress_secs": 30}
+    obstore.put(store, mkey, json.dumps(m).encode())
+    r = subprocess.run([RUNNER, "datagen", "--settle", f"s3://bench/{prefix}", "--writers", "2"], capture_output=True, text=True, env=minio.env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    fresh("settle-shrink-fresh40/data", 40)
+    assert contents(prefix) == contents("settle-shrink-fresh40/data")
+    got, exp = (json.loads(minio.get(f"{p}/.aeiou-dataset.json")) for p in (prefix, "settle-shrink-fresh40/data"))
+    assert got["state"] == "complete" and got["dataset"] == exp["dataset"]
+    assert (got["provenance"]["files_written"], got["provenance"]["bytes_written"]) == (exp["provenance"]["files_written"], exp["provenance"]["bytes_written"])
+    assert got["provenance"]["settles"][-1]["count"] == 40
+
+
 def test_a_multipart_upload_is_the_file(minio, tmp_path):
     """A file of several parts (the part is 8 MiB) arrives whole; an upload a writer fails
     before its close is aborted and leaves no object."""

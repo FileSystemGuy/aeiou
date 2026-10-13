@@ -26,7 +26,7 @@ cargo test --release
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
-| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank writes its slice of the ids and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
+| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every `files` and `regions` dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C stops every host, exit 130. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
@@ -480,18 +480,21 @@ as root). The same runs on the loopback NFS mount are §7.
   parameter, `--gpus`, `--dedupe`, `--compress`, or `--dataset` beside it is a usage error. It
   refuses, before the gate, a manifest whose payload or format block differs from what this
   binary writes, and (rank 0) HDF5 headers from `aeiou-header` whose SHA-256s differ from the
-  provenance's. The work is `progress.unfinished`, split over this datagen's ranks as the
+  provenance's. The work is `progress.unfinished`, ~~split over this datagen's ranks as the
   contiguous split of the ranges' concatenation (`work_slice`; a first datagen's work is
   `[0, files)`, so its split is `file_slice`'s), cut into runs at multiples of the run size
-  (`cut_runs`), so any host count resumes any corpus. Every unfinished id is written again,
+  (`cut_runs`)~~ cut into runs and claimed from rank 0's queue (since 2026-10-12, below), so
+  any host count resumes any corpus. Every unfinished id is written again,
   whole, opened `O_TRUNC`; an object dataset lists its prefix once and skips the keys there
   (an upload that did not complete leaves no object). The emptiness check is skipped, the
   manifest there is kept (and never removed when the gate does not open), the windows run as
   for a first datagen with the earlier counts added, and the last write is `complete`, with
   `provenance.resumes` gaining this datagen's ranks, hosts, counts, and times, and
   `files_written`/`bytes_written` the totals (what the last recorded window counted, then
-  this datagen's). On several hosts the coordinator's identity is the dataset id and the
-  unfinished ranges with their time, so every rank finishes the same record. A `complete`
+  this datagen's). On several hosts ~~the coordinator's identity is the dataset id and the
+  unfinished ranges with their time, so every rank finishes the same record~~ rank 0 alone
+  reads the manifest (2026-10-13, below: the identity is the operation, its count, and ROOT,
+  and every rank runs the manifest rank 0 sends). A `complete`
   manifest has nothing to write (exit 0). Not built: aborting multipart uploads a crash left
   in a bucket (object_store has no call that lists them). Tests: `tests/coord.rs` kills a
   datagen on one host and on two, stretches an unfinished file past its size, resumes on
@@ -510,23 +513,98 @@ as root). The same runs on the loopback NFS mount are §7.
   (`DsMeta::with_count`): everything of an id but which samples a short last file holds is a
   function of the id. The work is `[w0, files(N))` with `w0 = min(old, N) / samples_per_file`,
   the first file whose bytes change (the old last file when it was short, which a grow fills
-  and a shrink cuts), split and cut as a resume's; before it, every rank removes its
+  and a shrink cuts), split and cut as a resume's; ~~before it, every rank removes its
   `work_slice` of `[w0, files(old))`'s old names that the new count does not have
   (`remove_old`: the files past N, a chunked file's extra chunks; `rmdir` of every directory
   left empty, up to the dataset root; `delete_all` in batches of 1,000 keys for objects),
-  `ENOENT` no error. Rank 0 writes the new manifest before the gate, with `progress` holding
+  `ENOENT` no error.~~ (since 2026-10-12, below: the work is `[w0, max(files(N), files(old)))`,
+  a shrink's from the top down, and each id's old names the new count lacks are removed as
+  the id is reached.) Rank 0 writes the new manifest before the gate, with `progress` holding
   the work, `from`, and the counts the corpus keeps (its totals less the old ids from `w0`),
   and puts the original back if the gate does not open. HDF5 headers are made for N; those
   both counts have must agree with the provenance's, and the new count's replace them. At the
   end `complete`, the `resizes` entry completed with ranks, hosts, counts, times, and
   `direct`. A resume of a `growing` or `shrinking` manifest removes again (what is gone is no
   error), writes the unfinished ids, and does not trust an object for the old short last file.
-  On several hosts the coordinator's identity is the old id and the new. Tests:
+  On several hosts ~~the coordinator's identity is the old id and the new~~ rank 0 alone
+  reads the manifest (2026-10-13, below). Tests:
   `tests/coord.rs` grows 3,000 files to 5,000 and shrinks them to 2,100 on one host and two
   against fresh datagens of those counts (files, emptied directories, id, totals, `run`),
   kills a grow and finishes it with `--resume` on two hosts, and the refusals; the builder's
   tests grow and shrink every container format across short last files (HDF5 headers
   included) and a bucket, each to the bytes of a fresh datagen.
+- **Claims, settle, and Ctrl-C (2026-10-12, `DESIGN_REVIEW.md` §3.70).** *Claims.* Every
+  datagen (first, resume, grow, shrink, settle) hands the ids of a `files` dataset out in
+  runs from one queue on rank 0 (`Queue`), in the work's order: `runs_of` cuts the work at
+  the pattern's directories (`{id div N}`; every `FLAT_RUN` = 1,000 ids of a flat pattern),
+  and each piece into equal parts when there are fewer pieces than writers on every host
+  (rank 0's `--writers` times `--ranks`); a shrink's runs are listed from the top down. Rank
+  0's writers take runs from the queue directly; another rank's writers send `Claim` and
+  rank 0's granter thread answers each with `Grant` (§6), each writer keeping one claim
+  ahead. A writer does its run in order (from the top down in a shrink), per id removing the
+  names under `reach` (the largest of the count, `progress.from`, and a settle's asked
+  count) that the count lacks, with `rmdir` of directories left empty and objects batched
+  per run (`DELETE_BATCH` keys a request; the run counts as done when its batch is sent),
+  then writing the file when the count has it. A rank's note is its writers' unfinished
+  remainders, the runs granted it that no writer has taken, and `seen`, the runs it has
+  received (counted by the coordinator's one reader thread, or under the claims lock on rank
+  0); rank 0 merges the notes with the runs not handed out and those granted a rank after
+  its `seen`. `progress.claimed` is the boundary of the runs handed out (kept monotone across
+  resumes; absent when a resumed manifest never recorded one), and `progress.claimed_to` the
+  mark: rank 0 writes the manifest with a new mark, `MARK_BANDS` (4) bands of runs ahead,
+  before handing out a run past the old one, so a datagen that dies leaves nothing past the
+  mark. A stopped corpus is whole directories below the boundary, a band of partial runs no
+  wider than a run per writer on every host plus one claimed ahead per writer on the other
+  hosts, and nothing past the mark. ~~Rank 0 waits for every host's `Hello` before writing a
+  grow's, shrink's, or settle's manifest, so no rank reads the new one in place of the one it
+  replaces (a race the grow had).~~ (Superseded 2026-10-13: no rank but 0 reads a manifest,
+  next item.) *Settle.* `aeiou datagen --settle ROOT`
+  (`datagen::settle_manifest`): the count `S` is the boundary times `samples_per_file`,
+  capped at the count asked and at least the count a grow or shrink began from (a shrink:
+  `max(N, min(from, claimed·spf))`); refused at 0, for a regions dataset, and when no boundary
+  is recorded. What is left (`T`) is the unfinished ids on the claimed side of the boundary
+  and the band between it and the mark; the manifest is rewritten first with `S`,
+  `unfinished = T`, `progress.settle` `{asked, count}`, and the counts the corpus keeps (a
+  shrink settled above its count adds the old files it keeps; a grow settled at its old count,
+  the old short last file), and finished by the resume path: ids of `T` below `files(S)` are
+  written again, the names past `S` removed. A manifest that holds `progress.settle` is
+  finished as it is by `--settle` or `--resume`. The end: `provenance.settles` gains the state
+  settled, the counts asked and kept, ranks, hosts, counts, times, and a `resizes` entry not
+  finished is marked `settled`. *Live check.* `--resume` and `--settle` refuse a manifest
+  updated (`progress.updated`, seconds to the millisecond) less than two windows
+  (`progress.progress_secs`, 30 when absent) ago, unless it holds `progress.stopped`.
+  *Ctrl-C.* With `DatagenOpts::sigint` (the command line's) a `sigaction` handler counts
+  `SIGINT`s; a watch thread sends `Halt` to the coordinator, which sends it to every rank (on
+  one host it stops the writers itself), and stops this host's writers when a `Halt` or a
+  failure comes in. Writers claim nothing more and leave the file in hand (checked between
+  blocks; an object upload in progress is finished); each rank flushes, sends its last note
+  and `Done`; rank 0 gathers every rank (one whose connection drops counts as stopped),
+  writes the manifests once more with `progress.stopped`, prints that every rank stopped, and
+  every rank exits 130 (`datagen::Stopped`). The second `SIGINT` calls `_exit(130)`. The
+  manifest written on a failure's way out holds `stopped` too. Tests: `tests/coord.rs` kills
+  a datagen on two hosts and a grow on one and settles each at a directory boundary, to the
+  names, sizes, bytes, and totals of that count (`run` accepts it), the live check refusing
+  first; kills a shrink and settles it without removing past the run in hand; Ctrl-C on rank
+  1 of two and on a lone rank 0, each host exiting 130 and the manifest true, settled with no
+  wait; the killed datagen's manifest keeps the band below the boundary and nothing past the
+  mark. The builder's tests settle an interrupted grow of every container format to a fresh
+  datagen's bytes (HDF5 headers included) and an interrupted shrink of a bucket.
+- **Rank 0 alone reads the manifest at ROOT (2026-10-13, `DESIGN_REVIEW.md` §3.70).** For
+  `--resume`, `--grow`, `--shrink`, and `--settle` on several hosts, rank 0 starts the
+  coordinator with every `Welcome` held (`Server::start_held`), reads the manifest, and
+  decides everything that depends on it: the state, the live check, the old count and the
+  direction, the settled count, the new manifest. `Welcome` then carries the manifest to run
+  and the one it replaces to every rank (`Server::welcome`), which runs it as given and never
+  reads one at ROOT. When rank 0 goes no further (a refusal, a `complete` corpus) it does not
+  connect: `Server::last_word` gives every host the refusal or the line with `Welcome`, waits
+  until each has it, and a host leaving after it is no failure; every rank then prints the
+  same line or fails with rank 0's reason. The identity a rank sends is the operation, its
+  count, and ROOT as given, so every host must name the corpus the same way (one mount path,
+  or one bucket URI). Rank 0 is the only host that reads or writes a dataset manifest in a
+  datagen; the other ranks' emptiness checks skip it. A client whose send fails because rank
+  0 went away reports the reason rank 0 sent, not the broken pipe (`ClientState::tell`).
+  Tests: `tests/coord.rs` `only_rank_0_reads_the_manifest_at_the_root` (rank 0's refusal and a
+  complete corpus reach both hosts; a host naming another ROOT is refused).
 - **Counting a file once (fixed 2026-10-12).** A writer counted a file before advancing its
   cursor, and a window read the cursor before the counts, so a file finished in between
   was recorded both as unfinished and as counted, and a resume counted it twice
@@ -534,10 +612,11 @@ as root). The same runs on the loopback NFS mount are §7.
   file's counts and advances its cursor under its own lock, and the window holds every
   writer's lock while it reads them; a regions file counts once whole.
 - **Several hosts (2026-10-04).** `aeiou datagen … --ranks R --rank r --coordinator
-  HOST:PORT` on each of R hosts (`aeiou-launch` starts them, §6). Rank `r` writes the files
+  HOST:PORT` on each of R hosts (`aeiou-launch` starts them, §6). ~~Rank `r` writes the files
   of every `files` dataset whose ids fall in its slice of `[0, files)`, the same contiguous
   split as `run`'s GPU ranges (`run::gpu_range`), so a host's files sit in its own
-  directories under a `{id div N}` pattern; each `regions` dataset is written whole by one
+  directories under a `{id div N}` pattern;~~ Every rank claims runs of every `files`
+  dataset's ids from rank 0 (since 2026-10-12, above); each `regions` dataset is written whole by one
   rank, the `i`-th regions dataset by rank `i mod R`, because several NFS clients writing one
   file serialize on the server's inode, so the split buys nothing, and a regions corpus is
   bounded by one host's stream. Every rank checks the roots are empty before the start gate
@@ -549,7 +628,8 @@ as root). The same runs on the loopback NFS mount are §7.
   the abstract's hash, `--gpus`, the parameters, `--dedupe`, `--compress`, and the
   `--dataset` list, so one host with a different ratio cannot poison the corpus. Within a
   rank, ids go to its writers (`--writers`, a thread each) in runs aligned to the pattern's
-  directories (a run is a directory under `{id div N}`, shrunk so every writer has several): Linux takes the parent directory's
+  directories (a run is a directory under `{id div N}`, ~~shrunk so every writer has several~~
+  cut only when there are fewer than writers on every host): Linux takes the parent directory's
   lock exclusively for every create, and on NFS the `OPEN` round trip runs under it, so
   threads creating in one directory serialize at one create per round trip, and a flat
   pattern is bounded that way on the server whatever the host count. A regions file is cut
@@ -655,7 +735,15 @@ building it is `DESIGN_REVIEW.md` §3.25.
   (`n[1-4]`, `n[01-10]` zero-padded, `n[1,3,5-7]`, `n[1-4]-ib`), expanded in the script; the
   shell's own `n{1..4}` works too (2026-10-04, for the 50- and 200-host fleets of
   `DESIGN_REVIEW.md` §3.62). `aeiou datagen` across hosts is the same loop (§5); the
-  `Done` message and `Server::gathered` are its reduction, a JSON document per rank.
+  `Done` message and `Server::gathered` are its reduction, a JSON document per rank. Since
+  2026-10-12 a datagen also sends `Claim { dataset, ticket }` (a writer asks for the next run),
+  answered by rank 0 with `Grant { dataset, ticket, run }` (a run, or none: the queue is empty
+  or the datagen is stopping; grants to one rank go out in the order made, so the client's
+  count of runs received matches rank 0's list), and `Halt` (Ctrl-C: a client sends it, the
+  server sends it to every client; once halted a host that goes away is no failure and
+  `gathered` counts it as stopped). `Server::wait_connected` waits for every `Hello`. Since
+  2026-10-13 `Welcome` may carry a document from rank 0 (`Server::start_held`, then
+  `welcome` or `last_word`): at a dataset root, the manifest that only rank 0 reads (§5).
 
 Observed on WSL2 (2026-09-30, `runner/aeiou/tests/coord.rs` and `aeiou-launch` with a local
 shim for ssh): two processes on `localhost` run `file_per_sample` to the dry-run

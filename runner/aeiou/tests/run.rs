@@ -39,7 +39,7 @@ fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Co
 
 fn gen(loaded: &aeiou::Loaded, cfg: &Config, model: &Model<'_>, root: &PathBuf) {
     let params = Params::new(&loaded.ast, cfg).unwrap();
-    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None };
+    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false };
     let mut log = Vec::new();
     datagen(loaded, cfg, &params, model, &opts, None, &mut log).unwrap();
 }
@@ -130,7 +130,7 @@ fn manifest_mismatch_and_missing_are_refused() {
     // datagen refuses a non-empty root
     let (loaded3, cfg3, model3) = leaked_model("file_per_sample", config(1, 1, &[("files", "50")]));
     let params = Params::new(&loaded3.ast, cfg3).unwrap();
-    let o = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None };
+    let o = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false };
     let mut log = Vec::new();
     assert!(datagen(loaded3, cfg3, &params, model3, &o, None, &mut log).is_err());
     std::fs::remove_dir_all(&root).unwrap();
@@ -201,7 +201,7 @@ fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
     let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(1, 5, &params));
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &[format!("sysp={}", sys.display()), format!("kv={}", kv.display())]).unwrap();
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
-    let dopts = DatagenOpts { root: root.clone(), endpoints: endpoints.clone(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None };
+    let dopts = DatagenOpts { root: root.clone(), endpoints: endpoints.clone(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false };
     datagen(loaded, cfg, &dparams, model, &dopts, None, &mut Vec::new()).unwrap();
     assert!(sys.join("0000/blk_0000").exists() && sys.join(".aeiou-dataset.json").exists());
     assert!(kv.join("sub/.aeiou-dataset.json").exists());
@@ -705,7 +705,7 @@ fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
     let (l4, c4, m4) = leaked_model("file_per_sample", config(1, 1, &[("files", "4")]));
     for (l, c, m, root) in [(l6, c6, m6, &six), (l4, c4, m4, &four)] {
         let params = Params::new(&l.ast, c).unwrap();
-        let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None };
+        let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false };
         datagen(l, c, &params, m, &opts, None, &mut Vec::new()).unwrap();
     }
     let file = |root: &PathBuf, id: i64| std::fs::read(root.join(m6.datasets[0].file_path(id, None).unwrap().as_ref())).unwrap();

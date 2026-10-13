@@ -181,7 +181,13 @@ enum Msg {
     /// (`options::Layers::json`), recorded per rank and compared after the gate;
     /// `participants` are this host's barrier scopes with its instance counts.
     Hello { rank: i64, ranks: i64, host: String, identity: Value, layers: Value, participants: Vec<(String, usize)> },
-    Welcome,
+    /// Server → client, the identity accepted: `doc`, what rank 0 gives every rank before it
+    /// starts (`Server::start_held`; a datagen's manifest, which no other rank reads), absent
+    /// when there is none.
+    Welcome {
+        #[serde(default, skip_serializing_if = "Value::is_null")]
+        doc: Value,
+    },
     /// Client → server once its startup checks are done.
     Ready,
     /// Server → all once every host is ready: the common start time and the host list by rank;
@@ -203,6 +209,16 @@ enum Msg {
     /// Client → server every `--progress-secs` of a datagen: what this host has finished and
     /// flushed (`DESIGN_REVIEW.md` §3.70); the server keeps each host's latest.
     Progress(Value),
+    /// Client → server: a datagen writer asks for the next run of `dataset`'s ids
+    /// (`DESIGN_REVIEW.md` §3.70: one queue on rank 0, handed out in id order); `ticket`
+    /// names the request in the `Grant` that answers it.
+    Claim { dataset: String, ticket: u64 },
+    /// Server → the client that asked: the run `[a, b)`, or none (nothing left, or stopping).
+    Grant { dataset: String, ticket: u64, run: Option<(i64, i64)> },
+    /// Either way: stop a datagen (Ctrl-C on some host). A client sends it to the server,
+    /// which sends it to every client; each stops claiming, notes what it finished, and
+    /// sends its `Done`.
+    Halt,
     /// Server → all after the reduction: the verdict rank 0 reached on the merged report.
     Result { ok: bool, fingerprint: u64, error: Option<String> },
     Stop { reason: String },
@@ -281,9 +297,18 @@ struct TBar {
     left: bool,
 }
 
+/// The runs rank 0 granted this host, by ticket, until a writer takes them.
+#[derive(Default)]
+struct Grants {
+    next_ticket: u64,
+    /// Runs received, per dataset, in the order the server sent them.
+    seen: HashMap<String, u64>,
+    untaken: HashMap<u64, (String, Option<(i64, i64)>)>,
+}
+
 #[derive(Default)]
 struct Events {
-    welcome: bool,
+    welcome: Option<Value>,
     started: Option<(f64, Vec<String>, Value)>,
     result: Option<(bool, u64, Option<String>)>,
 }
@@ -297,6 +322,9 @@ struct ClientState {
     aborted: Arc<AtomicBool>,
     reason: Mutex<Option<String>>,
     efds: Eventfds,
+    grants: Mutex<Grants>,
+    /// The server said `Halt`.
+    halted: AtomicBool,
 }
 
 impl ClientState {
@@ -313,6 +341,18 @@ impl ClientState {
 
     fn failure(&self) -> Option<String> {
         self.reason.lock().unwrap().clone()
+    }
+
+    /// `send`, but a send the server's going away broke reports why it went, once the reader
+    /// has read it (the `Stop` before the close).
+    fn tell(&self, m: &Msg) -> Result<()> {
+        send(&self.writer, m).map_err(|e| {
+            let until = Instant::now() + Duration::from_secs(2);
+            while !self.aborted.load(Ordering::Relaxed) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            self.failure().map_or(e, |r| anyhow!("{r}"))
+        })
     }
 
     /// Wait until `done` holds or the run was aborted.
@@ -336,6 +376,8 @@ pub struct Tcp {
     pub rank: i64,
     pub ranks: i64,
     pub addr: SocketAddr,
+    /// What rank 0 gave every rank with `Welcome` (null when nothing).
+    pub welcome: Value,
     _reader: JoinHandle<()>,
 }
 
@@ -372,6 +414,8 @@ impl Tcp {
             aborted,
             reason: Mutex::new(None),
             efds: Eventfds::default(),
+            grants: Mutex::new(Grants::default()),
+            halted: AtomicBool::new(false),
         });
         send(&writer, &Msg::Hello { rank, ranks, host: host.to_string(), identity: identity.clone(), layers: layers.clone(), participants: participants.to_vec() })?;
         let reader = {
@@ -387,8 +431,8 @@ impl Tcp {
                 })
                 .expect("spawn coordinator client thread")
         };
-        st.wait_event(|e| e.welcome.then_some(())).with_context(|| format!("coordinator {sock} refused rank {rank}"))?;
-        Ok(Tcp { st, rank, ranks, addr: sock, _reader: reader })
+        let welcome = st.wait_event(|e| e.welcome.clone()).with_context(|| format!("coordinator {sock} refused rank {rank}"))?;
+        Ok(Tcp { st, rank, ranks, addr: sock, welcome, _reader: reader })
     }
 
     /// Startup checks are done here; blocks until every host says so. Returns the common
@@ -399,28 +443,66 @@ impl Tcp {
 
     /// `ready`, and what rank 0 shared with every rank (`Server::share`; null when nothing).
     pub fn ready_shared(&self) -> Result<(f64, Vec<String>, Value)> {
-        send(&self.st.writer, &Msg::Ready)?;
+        self.st.tell(&Msg::Ready)?;
         self.st.wait_event(|e| e.started.clone())
     }
 
     /// Send this host's report for the reduction.
     pub fn report(&self, r: &Report) -> Result<()> {
-        send(&self.st.writer, &Msg::Report(Box::new(r.clone())))
+        self.st.tell(&Msg::Report(Box::new(r.clone())))
     }
 
     /// Send rank 0 what this host has finished so far (a datagen's progress).
     pub fn progress(&self, doc: &Value) -> Result<()> {
-        send(&self.st.writer, &Msg::Progress(doc.clone()))
+        self.st.tell(&Msg::Progress(doc.clone()))
     }
 
     /// Send this host's `Done` document (a datagen's counts) for rank 0 to gather.
     pub fn done(&self, doc: &Value) -> Result<()> {
-        send(&self.st.writer, &Msg::Done(doc.clone()))
+        self.st.tell(&Msg::Done(doc.clone()))
     }
 
     /// Wait for rank 0's verdict on the merged report: `(ok, fingerprint, error)`.
     pub fn result(&self) -> Result<(bool, u64, Option<String>)> {
         self.st.wait_event(|e| e.result.clone())
+    }
+
+    /// Ask rank 0 for the next run of `dataset`; the ticket names the answer.
+    pub fn claim(&self, dataset: &str) -> Result<u64> {
+        let ticket = {
+            let mut g = self.st.grants.lock().unwrap();
+            g.next_ticket += 1;
+            g.next_ticket
+        };
+        self.st.tell(&Msg::Claim { dataset: dataset.to_string(), ticket })?;
+        Ok(ticket)
+    }
+
+    /// Wait until the answer to `ticket` is in (it stays there for `take_grant`).
+    pub fn wait_grant(&self, ticket: u64) -> Result<()> {
+        self.st.wait_event(|_| self.st.grants.lock().unwrap().untaken.contains_key(&ticket).then_some(()))
+    }
+
+    /// The answer to `ticket`, taken (none when it is not in yet).
+    pub fn take_grant(&self, ticket: u64) -> Option<Option<(i64, i64)>> {
+        self.st.grants.lock().unwrap().untaken.remove(&ticket).map(|(_, run)| run)
+    }
+
+    /// The runs of `dataset` received so far, and those of them no writer has taken, read
+    /// together.
+    pub fn grant_book(&self, dataset: &str) -> (u64, Vec<(i64, i64)>) {
+        let g = self.st.grants.lock().unwrap();
+        (g.seen.get(dataset).copied().unwrap_or(0), g.untaken.values().filter(|(d, _)| d == dataset).filter_map(|(_, r)| *r).collect())
+    }
+
+    /// Stop the datagen on every host (Ctrl-C here).
+    pub fn halt(&self) -> Result<()> {
+        self.st.tell(&Msg::Halt)
+    }
+
+    /// The server said `Halt`.
+    pub fn halted(&self) -> bool {
+        self.st.halted.load(Ordering::Relaxed)
     }
 }
 
@@ -432,8 +514,8 @@ fn client_loop(st: &ClientState, stream: &mut TcpStream, live: &mut Liveness) ->
         };
         live.seen();
         match m {
-            Msg::Welcome => {
-                st.events.lock().unwrap().welcome = true;
+            Msg::Welcome { doc } => {
+                st.events.lock().unwrap().welcome = Some(doc);
                 st.ecv.notify_all();
             }
             Msg::Start { t0, hosts, share } => {
@@ -446,6 +528,20 @@ fn client_loop(st: &ClientState, stream: &mut TcpStream, live: &mut Liveness) ->
                 }
                 st.cv.notify_all();
                 st.efds.kick();
+            }
+            Msg::Grant { dataset, ticket, run } => {
+                // under the events lock, which `wait_grant` waits on
+                let _ev = st.events.lock().unwrap();
+                let mut g = st.grants.lock().unwrap();
+                if run.is_some() {
+                    *g.seen.entry(dataset.clone()).or_insert(0) += 1;
+                }
+                g.untaken.insert(ticket, (dataset, run));
+                st.ecv.notify_all();
+            }
+            Msg::Halt => {
+                st.halted.store(true, Ordering::Relaxed);
+                st.ecv.notify_all();
             }
             Msg::Result { ok, fingerprint, error } => {
                 st.events.lock().unwrap().result = Some((ok, fingerprint, error));
@@ -560,6 +656,9 @@ struct SState {
     started: Option<f64>,
     /// What `Start` carries to every rank (`Server::share`).
     share: Value,
+    /// What `Welcome` carries; none while rank 0 has not given it (`Server::start_held`),
+    /// and a host whose identity matches waits for it.
+    welcome: Option<Value>,
     bars: BTreeMap<String, SBar>,
     reports: BTreeMap<i64, Report>,
     /// Each host's `Done` document, by rank.
@@ -568,8 +667,13 @@ struct SState {
     progress: BTreeMap<i64, Value>,
     failed: Option<String>,
     finished: bool,
-    /// Connections that have gone away.
+    /// Connections that have gone away, and the ranks of those that had said `Hello`.
     closed: usize,
+    closed_ranks: HashSet<i64>,
+    /// A datagen's claims not yet answered: rank, dataset, ticket.
+    claims: std::collections::VecDeque<(i64, String, u64)>,
+    /// Some host sent `Halt`: a datagen is stopping, and a host going away is no failure.
+    halted: bool,
 }
 
 struct ServerState {
@@ -619,6 +723,15 @@ pub struct Server {
 
 impl Server {
     pub fn start(addr: &str, ranks: i64) -> Result<Server> {
+        let s = Server::start_held(addr, ranks)?;
+        s.welcome(Value::Null);
+        Ok(s)
+    }
+
+    /// `start`, with every host's `Welcome` held until `welcome` gives what it carries (or
+    /// `stop` refuses them all): rank 0 listens before it reads what only it reads, so a
+    /// failure there reaches every host.
+    pub fn start_held(addr: &str, ranks: i64) -> Result<Server> {
         let listener = TcpListener::bind(addr).with_context(|| format!("coordinator: binding {addr}"))?;
         let bound = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -631,6 +744,26 @@ impl Server {
                 .expect("spawn coordinator accept thread");
         }
         Ok(Server { st, addr: bound })
+    }
+
+    /// Give every rank `v` with `Welcome`, releasing those waiting for it.
+    pub fn welcome(&self, v: Value) {
+        self.st.m.lock().unwrap().welcome = Some(v);
+        self.st.cv.notify_all();
+    }
+
+    /// Rank 0's last word when it goes no further (a refusal, nothing to do): every other
+    /// host gets `v` with `Welcome`, and this waits (up to `CONNECT_WINDOW`) until each has.
+    /// Rank 0 does not connect, and a host leaving after it is no failure.
+    pub fn last_word(&self, v: Value) {
+        let mut s = self.st.m.lock().unwrap();
+        s.finished = true;
+        s.welcome = Some(v);
+        self.st.cv.notify_all();
+        let deadline = Instant::now() + CONNECT_WINDOW;
+        while (s.conns.len() as i64) < self.st.ranks - 1 && Instant::now() < deadline {
+            s = self.st.cv.wait_timeout(s, Duration::from_millis(20)).unwrap().0;
+        }
     }
 
     /// Give every rank `v` with `Start`: rank 0 calls it before its own `ready`, so the gate
@@ -676,14 +809,16 @@ impl Server {
         }
     }
 
-    /// Wait for every host's `Done` document, by rank; a host's failure ends the wait.
+    /// Wait for every host's `Done` document, by rank; a host's failure ends the wait. Once
+    /// halted, a host that went away without one counts as stopped.
     pub fn gathered(&self) -> Result<BTreeMap<i64, Value>> {
         let mut s = self.st.m.lock().unwrap();
         loop {
             if let Some(r) = &s.failed {
                 bail!("{r}");
             }
-            if s.done.len() as i64 == self.st.ranks {
+            let gone = if s.halted { s.closed_ranks.iter().filter(|r| !s.done.contains_key(r)).count() } else { 0 };
+            if (s.done.len() + gone) as i64 == self.st.ranks {
                 return Ok(std::mem::take(&mut s.done));
             }
             s = self.st.cv.wait_timeout(s, Duration::from_millis(50)).unwrap().0;
@@ -693,6 +828,42 @@ impl Server {
     /// Each host's latest `Progress` document, by rank (the hosts heard from so far).
     pub fn progress(&self) -> BTreeMap<i64, Value> {
         self.st.m.lock().unwrap().progress.clone()
+    }
+
+    /// Wait until every host has said `Hello` and been welcomed.
+    pub fn wait_connected(&self) -> Result<()> {
+        let mut s = self.st.m.lock().unwrap();
+        loop {
+            if let Some(r) = &s.failed {
+                bail!("{r}");
+            }
+            if s.conns.len() as i64 == self.st.ranks {
+                return Ok(());
+            }
+            s = self.st.cv.wait_timeout(s, Duration::from_millis(20)).unwrap().0;
+        }
+    }
+
+    /// The next claim to answer (rank, dataset, ticket), waiting up to `wait` for one.
+    pub fn next_claim(&self, wait: Duration) -> Option<(i64, String, u64)> {
+        let mut s = self.st.m.lock().unwrap();
+        if s.claims.is_empty() {
+            s = self.st.cv.wait_timeout(s, wait).unwrap().0;
+        }
+        s.claims.pop_front()
+    }
+
+    /// Answer rank `rank`'s claim `ticket`. Grants to one rank are sent in the order made.
+    pub fn grant(&self, rank: i64, dataset: &str, ticket: u64, run: Option<(i64, i64)>) {
+        let s = self.st.m.lock().unwrap();
+        if let Some(w) = s.conns.get(&rank) {
+            let _ = send(w, &Msg::Grant { dataset: dataset.to_string(), ticket, run });
+        }
+    }
+
+    /// Some host sent `Halt`.
+    pub fn halted(&self) -> bool {
+        self.st.m.lock().unwrap().halted
     }
 
     fn departure_releases_locked(&self, s: &SState) -> Vec<(String, u64)> {
@@ -769,14 +940,19 @@ fn serve(st: Arc<ServerState>, stream: TcpStream, peer: SocketAddr) {
     };
     let mut live = Liveness { last: Instant::now(), writer: writer.clone(), peer: peer.to_string() };
     let mut who = peer.to_string();
-    let r = serve_loop(&st, &mut stream, &writer, &mut live, &mut who);
+    let mut rank = None;
+    let r = serve_loop(&st, &mut stream, &writer, &mut live, &mut who, &mut rank);
     let mut s = st.m.lock().unwrap();
     if let Err(e) = r {
-        if !s.finished {
+        // a stopping datagen's host may go away; its last note stands
+        if !s.finished && !s.halted {
             st.fail(&mut s, format!("{who}: {e:#}"));
         }
     }
     s.closed += 1;
+    if let Some(r) = rank {
+        s.closed_ranks.insert(r);
+    }
     st.cv.notify_all();
 }
 
@@ -807,7 +983,7 @@ fn identity_differences(mine: &Value, theirs: &Value, r0: i64) -> Vec<String> {
     out
 }
 
-fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpStream>>, live: &mut Liveness, who: &mut String) -> Result<()> {
+fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpStream>>, live: &mut Liveness, who: &mut String, rank_out: &mut Option<i64>) -> Result<()> {
     let rank = {
         let mut idle = || live.idle();
         let m = recv(stream, &mut idle)?;
@@ -835,6 +1011,21 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
         if s.identity.is_none() {
             s.identity = Some((rank, hash, identity));
         }
+        // rank 0 may still be reading what Welcome carries; keep the host alive meanwhile
+        let mut beat = Instant::now();
+        while s.welcome.is_none() && s.failed.is_none() {
+            s = st.cv.wait_timeout(s, Duration::from_millis(100)).unwrap().0;
+            if beat.elapsed() >= HEARTBEAT {
+                send(writer, &Msg::Heartbeat)?;
+                live.seen();
+                beat = Instant::now();
+            }
+        }
+        if let Some(e) = s.failed.clone() {
+            // not registered, so not in the broadcast that carried the failure
+            let _ = send(writer, &Msg::Stop { reason: e.clone() });
+            bail!("{e}");
+        }
         s.layers.insert(rank, layers);
         s.conns.insert(rank, writer.clone());
         s.hosts.insert(rank, host);
@@ -843,7 +1034,9 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
                 s.bars.entry(scope).or_insert_with(|| SBar { expected: 0, arrived: HashSet::new(), generation: 0, departure_releases: 0 }).expected += 1;
             }
         }
-        send(writer, &Msg::Welcome)?;
+        send(writer, &Msg::Welcome { doc: s.welcome.clone().unwrap_or_default() })?;
+        st.cv.notify_all();
+        *rank_out = Some(rank);
         rank
     };
     loop {
@@ -887,6 +1080,17 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
             }
             Msg::Progress(d) => {
                 s.progress.insert(rank, d);
+            }
+            Msg::Claim { dataset, ticket } => {
+                s.claims.push_back((rank, dataset, ticket));
+                st.cv.notify_all();
+            }
+            Msg::Halt => {
+                if !s.halted {
+                    s.halted = true;
+                    st.broadcast(&s, &Msg::Halt);
+                }
+                st.cv.notify_all();
             }
             Msg::Stop { reason } => {
                 st.fail(&mut s, format!("{who}: {reason}"));

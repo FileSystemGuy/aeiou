@@ -135,7 +135,7 @@ struct DatagenArgs {
     /// This host's index among --ranks hosts. Default 0.
     #[arg(long, value_name = "R", help_heading = "Several hosts")]
     rank: Option<i64>,
-    /// Hosts the datagen is spread over: each writes its slice of every `files` dataset's ids, and each `regions` file is written by one of them. Default 1.
+    /// Hosts the datagen is spread over: each claims runs of every `files` dataset's ids from rank 0, and each `regions` file is written by one of them. Default 1.
     #[arg(long, value_name = "N", help_heading = "Several hosts")]
     ranks: Option<i64>,
     /// With --ranks above 1: the coordinator's address. Rank 0 listens on it (in-process); every rank connects to it.
@@ -159,6 +159,14 @@ struct DatagenArgs {
     /// written again when it is short. As --grow otherwise.
     #[arg(long, num_args = 2, value_names = ["N", "ROOT"], help_heading = "Resume")]
     shrink: Option<Vec<String>>,
+    /// Keep what an interrupted datagen, grow, or shrink of the dataset at ROOT reached,
+    /// claiming nothing new: the runs it had handed out are finished (a shrink's removals
+    /// among them, never more), what it may have written past them is removed, and the
+    /// manifest is `complete` at that count, whole files (a directory boundary), with that
+    /// count's id. As --resume otherwise; refused, as --resume is, while the manifest is less
+    /// than two progress windows old, unless its datagen recorded that it stopped.
+    #[arg(long, value_name = "ROOT", help_heading = "Resume")]
+    settle: Option<String>,
 }
 
 #[derive(Args)]
@@ -523,6 +531,10 @@ fn main() {
         if e.downcast_ref::<UsageError>().is_some() {
             usage_exit(&format!("{e:#}"));
         }
+        if e.downcast_ref::<datagen::Stopped>().is_some() {
+            // Ctrl-C: what was finished is recorded, said already
+            std::process::exit(130);
+        }
         eprintln!("{prog}: {e:#}");
         std::process::exit(1);
     }
@@ -545,6 +557,9 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut ops: Vec<(&str, Option<i64>, String)> = Vec::new();
     if let Some(r) = &a.resume {
         ops.push(("--resume", None, r.clone()));
+    }
+    if let Some(r) = &a.settle {
+        ops.push(("--settle", None, r.clone()));
     }
     for (flag, v) in [("--grow", &a.grow), ("--shrink", &a.shrink)] {
         if let Some(v) = v {
@@ -589,6 +604,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("resume", &a.resume, a.resume.is_some())?;
     l.fixed("grow", &a.grow, a.grow.is_some())?;
     l.fixed("shrink", &a.shrink, a.shrink.is_some())?;
+    l.fixed("settle", &a.settle, a.settle.is_some())?;
     let r = usage::root("datagen");
     let root = match &op {
         // the place is the manifest's root; an --root from the environment or the file is not used
@@ -624,51 +640,67 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
         aeiou::usage!("--progress-secs {progress_secs}: a positive number of seconds{}", l.from(&["progress-secs"]));
     }
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
-    // a resume: the abstract is the manifest's dataset alone, placed at the root given
+    // at a dataset root, rank 0 alone reads the manifest (DESIGN_REVIEW.md §3.70): with several
+    // hosts it listens first, decides, and gives every rank the manifest with `Welcome`, so a
+    // refusal reaches them all and no host reads a manifest another is replacing
+    let early = at_root.is_some() && ranks > 1;
+    let mut server = match &coordinator {
+        Some(addr) if early && rank == 0 => {
+            let s = Server::start_held(addr, ranks)?;
+            println!("coordinator listening on {}", s.addr);
+            Some(s)
+        }
+        _ => None,
+    };
+    let at_root_doc = match (&op, rank) {
+        (Some((flag, n, at)), 0) => Some(read_at_root(at, flag, *n, &cfg)),
+        _ => None,
+    };
+    let further = !matches!(&at_root_doc, Some(Err(_))) && !matches!(&at_root_doc, Some(Ok(d)) if !d["complete"].is_null());
+    if let (Some(s), Some(r)) = (&server, &at_root_doc) {
+        match r {
+            Ok(doc) if further => s.welcome(doc.clone()),
+            // rank 0 goes no further: every host hears why before it exits
+            Ok(doc) => s.last_word(doc.clone()),
+            Err(e) => s.last_word(serde_json::json!({"refused": format!("{e:#}")})),
+        }
+    }
+    let mut tcp = match (&coordinator, &op) {
+        (Some(addr), Some((flag, n, at))) if early && further => {
+            // the same change of the same root on every host; the manifest is rank 0's
+            let identity = serde_json::json!({"op": &flag[2..], "count": n, "root": at});
+            let t = Tcp::connect(addr, rank, ranks, &aeiou::run::hostname(), &identity, &l.json(), &[], Arc::new(AtomicBool::new(false)))?;
+            println!("coordinator {}: connected as rank {} of {}  identity {}…", t.addr, rank, ranks, &aeiou::canon::sha256_hex(&identity)[..16]);
+            Some(t)
+        }
+        _ => None,
+    };
+    let at_root_doc = match at_root_doc {
+        Some(Ok(d)) => Some(d),
+        Some(Err(e)) => return Err(e),
+        None => tcp.as_ref().filter(|_| op.is_some()).map(|t| t.welcome.clone()),
+    };
     let mut resize = None;
-    let (loaded, root, endpoints, dedupe, compress, resume) = match &at_root {
-        Some(at) => {
-            let mut m = datagen::resume_manifest(at)?;
-            use aeiou::payload::{STATE_COMPLETE, STATE_GROWING, STATE_SHRINKING, STATE_WRITING};
-            match op.as_ref().and_then(|o| o.1) {
-                None => {
-                    if m.state == STATE_COMPLETE {
-                        println!("resume {at}: the manifest says `complete`; nothing to write  id {}", m.id());
-                        return Ok(());
-                    }
-                    if ![STATE_WRITING, STATE_GROWING, STATE_SHRINKING].contains(&m.state.as_str()) {
-                        bail!("resume {at}: the manifest says `{}`, which this aeiou cannot finish", m.state);
-                    }
-                }
-                Some(n) => {
-                    let (flag, grow) = (op.as_ref().unwrap().0, a.grow.is_some());
-                    if m.state != STATE_COMPLETE {
-                        bail!("{flag} {n} {at}: the manifest says `{}`; finish it first with `aeiou datagen --resume {at}`", m.state);
-                    }
-                    if m.dataset.get("files").is_none() {
-                        bail!("{flag} {n} {at}: only a `files` dataset grows or shrinks");
-                    }
-                    // the count it has, as the runner computes it from the manifest's dataset
-                    let (text, _) = datagen::resume_abstract(&m, at)?;
-                    let old = aeiou::load_str(&text).with_context(|| format!("{flag} {at}: the manifest's dataset"))?;
-                    let oparams = Params::new(&old.ast, &cfg)?;
-                    let from = build_model(&old.ast, &cfg, &oparams)?.datasets.first().map(|d| d.count()).unwrap_or(0);
-                    if grow && n <= from {
-                        aeiou::usage!("--grow {n} {at}: the dataset's count is {from}; a grow takes a larger one (--shrink makes it smaller)");
-                    }
-                    if !grow && n >= from {
-                        aeiou::usage!("--shrink {n} {at}: the dataset's count is {from}; a shrink takes a smaller one (--grow makes it larger)");
-                    }
-                    resize = Some(datagen::Resize { original: m.clone() });
-                    m = datagen::resize_manifest(&m, from, n)?;
-                }
+    let mut settle = None;
+    let (loaded, root, endpoints, dedupe, compress, resume) = match (&at_root, at_root_doc) {
+        (Some(at), Some(doc)) => {
+            if let Some(e) = doc["refused"].as_str() {
+                bail!("rank 0: {e}");
             }
+            if let Some(line) = doc["complete"].as_str() {
+                println!("{line}");
+                return Ok(());
+            }
+            let manifest = |k: &str| -> Result<Option<aeiou::payload::Manifest>> { Ok(if doc[k].is_null() { None } else { Some(serde_json::from_value(doc[k].clone())?) }) };
+            let m = manifest("manifest")?.ok_or_else(|| anyhow::anyhow!("{at}: rank 0 gave no manifest"))?;
+            resize = manifest("resize")?.map(|original| datagen::Resize { original });
+            settle = manifest("settle")?.map(|original| datagen::Resize { original });
             let (text, endpoints) = datagen::resume_abstract(&m, at)?;
             let loaded = aeiou::load_str(&text).with_context(|| format!("resume {at}: the manifest's dataset"))?;
             let root = if aeiou::object::is_uri(at) { PathBuf::new() } else { PathBuf::from(at) };
             (loaded, root, endpoints, m.payload.dedupe, m.payload.compress, Some(m))
         }
-        None => {
+        _ => {
             let loaded = aeiou::load(&abstract_path.expect("checked"))?;
             cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
             (loaded, root.expect("checked"), endpoints, a.dedupe, a.compress, None)
@@ -680,9 +712,16 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs), resume, resize };
+    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs), resume, resize, settle, sigint: true };
     let mut out = std::io::stdout();
     match &opts.resume {
+        Some(m) if !m.progress["settle"].is_null() => {
+            let (st, left) = (&m.progress["settle"], m.unfinished().iter().map(|(a, b)| b - a).sum::<i64>());
+            let was = opts.settle.as_ref().map(|o| o.original.id()).unwrap_or_else(|| m.id());
+            writeln!(out, "settle {}: dataset {} of abstract {}  {} at count {} of the {} asked  id {} -> {}  {left} id(s) to finish or remove", at_root.as_deref().unwrap_or(""), m.provenance["dataset"].as_str().unwrap_or("?"), loaded.ast.name, m.state, st["count"], st["asked"], was, m.id())?;
+            l.print(&mut out)?;
+            writeln!(out, "payload: dedupe {}  compress {}  (the manifest's)", dedupe, compress)?;
+        }
         Some(m) if opts.resize.is_some() => {
             let (o, flag) = (&opts.resize.as_ref().unwrap().original, op.as_ref().unwrap().0);
             writeln!(out, "{} {}: dataset {} of abstract {}  count {} -> {}  id {} -> {}", &flag[2..], at_root.as_deref().unwrap_or(""), m.provenance["dataset"].as_str().unwrap_or("?"), loaded.ast.name, m.progress["from"], op.as_ref().unwrap().1.unwrap_or(0), o.id(), m.id())?;
@@ -713,39 +752,38 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
 
     // several hosts: rank 0 listens, every rank connects and has its configuration checked
     // before anything is written; a host that fails tells the others through it
-    let server = match &coordinator {
-        Some(addr) if ranks > 1 && rank == 0 => {
-            let s = Server::start(addr, ranks)?;
-            writeln!(out, "coordinator listening on {}", s.addr)?;
-            out.flush()?;
-            Some(s)
-        }
-        _ => None,
-    };
-    let tcp = match &coordinator {
-        Some(addr) if ranks > 1 => {
-            let identity = match &opts.resume {
-                // every rank grows or shrinks the same corpus to the same count
-                Some(m) if opts.resize.is_some() => serde_json::json!({"resize": opts.resize.as_ref().unwrap().original.id(), "to": m.id()}),
-                // every rank finishes the same corpus from the same record of it
-                Some(m) => serde_json::json!({"resume": m.id(), "unfinished": m.progress["unfinished"], "updated": m.progress["updated"]}),
-                None => serde_json::json!({
+    // (at a dataset root both were done before, around rank 0's reading of the manifest)
+    if server.is_none() {
+        server = match &coordinator {
+            Some(addr) if ranks > 1 && rank == 0 => {
+                let s = Server::start(addr, ranks)?;
+                writeln!(out, "coordinator listening on {}", s.addr)?;
+                out.flush()?;
+                Some(s)
+            }
+            _ => None,
+        };
+    }
+    if tcp.is_none() {
+        tcp = match &coordinator {
+            Some(addr) if ranks > 1 => {
+                let identity = serde_json::json!({
                     "ast_sha256": loaded.sha256,
                     "gpus": cfg.gpus,
                     "params": aeiou::payload::params_json(&loaded.doc, &cfg, &params)?,
                     "dedupe": a.dedupe,
                     "compress": a.compress,
                     "datasets": a.datasets,
-                }),
-            };
-            let hash = aeiou::canon::sha256_hex(&identity);
-            let t = Tcp::connect(addr, rank, ranks, &aeiou::run::hostname(), &identity, &l.json(), &[], Arc::new(AtomicBool::new(false)))?;
-            writeln!(out, "coordinator {}: connected as rank {} of {}  identity {}…", t.addr, rank, ranks, &hash[..16])?;
-            out.flush()?;
-            Some(t)
-        }
-        _ => None,
-    };
+                });
+                let hash = aeiou::canon::sha256_hex(&identity);
+                let t = Tcp::connect(addr, rank, ranks, &aeiou::run::hostname(), &identity, &l.json(), &[], Arc::new(AtomicBool::new(false)))?;
+                writeln!(out, "coordinator {}: connected as rank {} of {}  identity {}…", t.addr, rank, ranks, &hash[..16])?;
+                out.flush()?;
+                Some(t)
+            }
+            _ => None,
+        };
+    }
     let hosts = tcp.as_ref().map(|t| Hosts { tcp: t, server: server.as_ref() });
     let results = match datagen::datagen(&loaded, &cfg, &params, &model, &opts, hosts.as_ref(), &mut out) {
         Ok(r) => r,
@@ -775,6 +813,62 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+
+/// What rank 0 reads at the dataset root of `--resume`, `--settle`, `--grow N`, or `--shrink N`
+/// (`flag`, `n`), checks, and decides: `{"manifest", "resize", "settle"}` (the manifest to
+/// run and the one it replaces), or `{"complete"}` (the line to print: nothing to do).
+fn read_at_root(at: &str, flag: &str, n: Option<i64>, cfg: &Config) -> Result<serde_json::Value> {
+    let mut m = datagen::resume_manifest(at)?;
+    let (mut resize, mut settle): (Option<aeiou::payload::Manifest>, Option<aeiou::payload::Manifest>) = (None, None);
+    use aeiou::payload::{STATE_COMPLETE, STATE_GROWING, STATE_SHRINKING, STATE_WRITING};
+    match n {
+        None => {
+            let what = &flag[2..];
+            if m.state == STATE_COMPLETE {
+                return Ok(serde_json::json!({"complete": format!("{what} {at}: the manifest says `complete`; nothing to {}  id {}", if what == "settle" { "settle" } else { "write" }, m.id())}));
+            }
+            if ![STATE_WRITING, STATE_GROWING, STATE_SHRINKING].contains(&m.state.as_str()) {
+                bail!("{what} {at}: the manifest says `{}`, which this aeiou cannot finish", m.state);
+            }
+            datagen::check_not_live(&m, &format!("{flag} {at}"))?;
+            if what == "settle" {
+                // the count it settles at comes from the claims the manifest records
+                let (text, _) = datagen::resume_abstract(&m, at)?;
+                let asked = aeiou::load_str(&text).with_context(|| format!("{flag} {at}: the manifest's dataset"))?;
+                let aparams = Params::new(&asked.ast, cfg)?;
+                let amodel = build_model(&asked.ast, cfg, &aparams)?;
+                let meta = amodel.datasets.first().ok_or_else(|| anyhow::anyhow!("{flag} {at}: the manifest names no dataset"))?;
+                let settled = datagen::settle_manifest(&m, meta).with_context(|| format!("{flag} {at}"))?;
+                settle = Some(m.clone());
+                m = settled;
+            }
+        }
+        Some(n) => {
+            let grow = flag == "--grow";
+            if m.state != STATE_COMPLETE {
+                bail!("{flag} {n} {at}: the manifest says `{}`; finish it first with `aeiou datagen --resume {at}`", m.state);
+            }
+            if m.dataset.get("files").is_none() {
+                bail!("{flag} {n} {at}: only a `files` dataset grows or shrinks");
+            }
+            // the count it has, as the runner computes it from the manifest's dataset
+            let (text, _) = datagen::resume_abstract(&m, at)?;
+            let old = aeiou::load_str(&text).with_context(|| format!("{flag} {at}: the manifest's dataset"))?;
+            let oparams = Params::new(&old.ast, cfg)?;
+            let from = build_model(&old.ast, cfg, &oparams)?.datasets.first().map(|d| d.count()).unwrap_or(0);
+            if grow && n <= from {
+                aeiou::usage!("--grow {n} {at}: the dataset's count is {from}; a grow takes a larger one (--shrink makes it smaller)");
+            }
+            if !grow && n >= from {
+                aeiou::usage!("--shrink {n} {at}: the dataset's count is {from}; a shrink takes a smaller one (--grow makes it larger)");
+            }
+            resize = Some(m.clone());
+            m = datagen::resize_manifest(&m, from, n)?;
+        }
+    }
+    Ok(serde_json::json!({"manifest": m, "resize": resize, "settle": settle}))
 }
 
 fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {

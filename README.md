@@ -229,7 +229,10 @@ header from `aeiou-header`, a one-file tool beside `aeiou` that rank 0 alone run
 writer, pyarrow's bytes but for `created_by` (2026-10-12), and the datagen manifest written from
 the start with its progress, and `datagen --resume ROOT`, which finishes a corpus from that
 manifest alone on any host count, and `datagen --grow N ROOT` and `--shrink N ROOT`, which
-make a corpus the one a datagen of count N writes (2026-10-12). The workload catalog
+make a corpus the one a datagen of count N writes, and `datagen --settle ROOT`, which keeps
+what an interrupted one reached at whole directories, every datagen handing its ids out in
+id order from one queue on rank 0, and Ctrl-C stopping every host with the manifest true
+(2026-10-12). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
@@ -270,7 +273,7 @@ Not built, in rough order of interest:
   written, rewritten every `--progress-secs`, and `complete` at the end, the same day.
   `datagen --resume ROOT` the same day (the unfinished ids written again, whole, from the
   manifest alone, on any host count); ~~Resume, whole directories,~~ grow
-  and shrink the same day; subset runs not yet (whole directories not required of a corpus, §3.71); a sizing step for
+  and shrink the same day, settle, claims in id order, and Ctrl-C the same day; subset runs not yet (whole directories not required of a corpus, §3.71); a sizing step for
   training corpora proposed the same day (`DESIGN_REVIEW.md` §3.71).
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),

@@ -6,9 +6,10 @@
 //! (`DESIGN_REVIEW.md` §3.70), each time atomically.
 //!
 //! **Several hosts** (`--ranks R --rank r --coordinator`, 2026-10-04, `DESIGN_REVIEW.md`
-//! §3.62). Rank `r` writes the files of every `files` dataset whose ids fall in its slice of
-//! `[0, files)` (the contiguous split of `run::gpu_range`, so a host's files sit in its own
-//! directories), and each `regions` dataset is written whole by one rank (the i-th regions
+//! §3.62). The ids of every `files` dataset are handed out in runs from one queue on rank 0,
+//! in id order (§3.70, 2026-10-12: so an interrupted corpus is whole directories, a band of
+//! partial ones, and nothing past it; and the hosts share the load), and each `regions`
+//! dataset is written whole by one rank (the i-th regions
 //! dataset by rank `i mod R`: several hosts writing one NFS file serialize on the server, so
 //! the split buys nothing). Every rank checks that the roots are empty before the start gate,
 //! writes after it, `syncfs`es, and sends its counts; rank 0 writes the manifests once every
@@ -30,11 +31,19 @@
 //! manifest one `PUT` (atomic, so no temporary name), and there is no `syncfs`. A `regions`
 //! dataset, a sparse layout written at offsets, has no object form and is refused.
 //!
-//! **Writers.** A rank's ids are handed to its writers (`--writers`, a thread each) in runs
-//! aligned to the pattern's directories (`{id div N}`: a run is a directory, shrunk so that
-//! every writer has several), because Linux takes the parent directory's lock exclusively for
-//! every create, and on NFS the `OPEN` round trip runs under it: threads creating in one
-//! directory serialize. A regions file is cut into 64 MiB pieces for the owner's writers (`pwrite` at disjoint offsets).
+//! **Writers.** Each writer (`--writers`, a thread each) claims a run, writes it in id order,
+//! and claims the next (over the coordinator, one claim ahead). A run is a directory of the
+//! pattern (`{id div N}`), or `FLAT_RUN` ids of a flat one, cut smaller only when there are
+//! fewer runs than writers on all hosts, because Linux takes the parent directory's lock
+//! exclusively for every create, and on NFS the `OPEN` round trip runs under it: threads
+//! creating in one directory serialize. A shrink claims its runs from the top down and
+//! removes each from its highest id down. Rank 0 records a claim mark in the manifest before
+//! handing out a run past it, so a settle knows how far strays can reach. A regions file is
+//! cut into 64 MiB pieces for the owner's writers (`pwrite` at disjoint offsets).
+//!
+//! **Stopping.** Ctrl-C (`SIGINT`) on any host stops every host: each stops claiming, leaves
+//! the file it is writing, notes what it finished, flushes, and reports; rank 0 writes the
+//! manifests once more (`stopped`), and every host exits 130. A second Ctrl-C exits at once.
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::collections::BTreeMap;
@@ -44,14 +53,14 @@ use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
-use crate::coord::{Server, Tcp};
+use crate::coord::{Coordinator, Server, Tcp};
 use crate::eval::{Config, DirScheme, DsMeta, Model, Params};
 use crate::payload::{self, Filler, Manifest, PayloadSpec, BLOCK};
 
@@ -59,6 +68,11 @@ use crate::payload::{self, Filler, Manifest, PayloadSpec, BLOCK};
 pub const ALIGN: usize = 4096;
 /// A regions file is written in pieces of this many bytes, one per writer at a time.
 const REGIONS_PIECE: u64 = 64 << 20;
+/// The ids of a run of a pattern without `{id div N}` directories.
+pub const FLAT_RUN: i64 = 1000;
+/// Rank 0 moves the claim mark this many bands (a run for every writer on every host) past a
+/// run it hands out beyond it, so the mark costs one manifest write every few bands.
+const MARK_BANDS: usize = 4;
 
 #[derive(Debug, Clone)]
 pub struct DatagenOpts {
@@ -82,12 +96,69 @@ pub struct DatagenOpts {
     /// `--grow` / `--shrink`, begun by this datagen: `resume` then holds `resize_manifest`'s
     /// manifest, which names the new count.
     pub resize: Option<Resize>,
+    /// `--settle`, begun by this datagen: `resume` then holds `settle_manifest`'s manifest,
+    /// which names the settled count.
+    pub settle: Option<Resize>,
+    /// Ctrl-C stops every host (`catch_sigint`; the command line's, not a library caller's).
+    pub sigint: bool,
+}
+
+impl DatagenOpts {
+    /// The manifest a grow, shrink, or settle begun by this datagen replaces: rank 0 writes
+    /// the new one before the gate and puts this one back when the gate does not open.
+    fn begun(&self) -> Option<&Manifest> {
+        self.resize.as_ref().or(self.settle.as_ref()).map(|r| &r.original)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Resize {
-    /// The complete corpus's manifest, put back when the start gate does not open.
+    /// The manifest replaced (a grow's or shrink's complete corpus, a settle's unfinished
+    /// one), put back when the start gate does not open.
     pub original: Manifest,
+}
+
+/// A datagen stopped by Ctrl-C (`aeiou` exits 130); what it finished is recorded.
+#[derive(Debug)]
+pub struct Stopped(pub String);
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Stopped {}
+
+/// A write left because the datagen is stopping; not a failure.
+#[derive(Debug)]
+struct Halted;
+
+impl std::fmt::Display for Halted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("stopped")
+    }
+}
+
+impl std::error::Error for Halted {}
+
+static SIGINTS: AtomicU32 = AtomicU32::new(0);
+
+extern "C" fn on_sigint(_: libc::c_int) {
+    // the second exits at once: the manifest of the last window is still true
+    if SIGINTS.fetch_add(1, Ordering::SeqCst) > 0 {
+        unsafe { libc::_exit(130) };
+    }
+}
+
+/// Catch `SIGINT` from here on: the first asks every host to stop, the second exits.
+fn catch_sigint() {
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = on_sigint as extern "C" fn(libc::c_int) as usize;
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
+    }
 }
 
 /// The coordinator of a datagen on several hosts: this rank's client, and rank 0's server.
@@ -119,9 +190,28 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// This rank's slice of a `files` dataset's ids: the contiguous split of `run::gpu_range`.
-pub fn file_slice(files: i64, ranks: i64, rank: i64) -> (i64, i64) {
-    crate::run::gpu_range(files, ranks, rank, 0)
+/// Now, in seconds to the millisecond (`progress.updated`, which the live check compares
+/// with windows of a fraction of a second in tests).
+pub fn now_f64() -> f64 {
+    let t = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    (t * 1000.0).round() / 1000.0
+}
+
+/// Refuse to finish a corpus a datagen may still be writing: one whose manifest was updated
+/// less than two progress windows ago and does not say its datagen stopped
+/// (`DESIGN_REVIEW.md` §3.70; a manifest from before the window was recorded counts 30 s).
+pub fn check_not_live(m: &Manifest, what: &str) -> Result<()> {
+    let p = &m.progress;
+    if !p["stopped"].is_null() {
+        return Ok(());
+    }
+    let secs = p["progress_secs"].as_f64().unwrap_or(30.0);
+    let age = now_f64() - p["updated"].as_f64().unwrap_or(0.0);
+    if age < 2.0 * secs {
+        let show = |x: f64| if x >= 10.0 { format!("{x:.0}") } else { format!("{:.3}", x).trim_end_matches('0').trim_end_matches('.').to_string() };
+        bail!("{what}: the manifest was updated {} s ago and its datagen notes progress every {} s, so it may still be writing; stop it, or wait until {} s have passed since the update", show(age.max(0.0)), show(secs), show(2.0 * secs));
+    }
+    Ok(())
 }
 
 /// The manifest of the dataset at `root`, a directory or `s3://BUCKET[/PREFIX]`, for `--resume`.
@@ -176,53 +266,42 @@ pub fn resize_manifest(m: &Manifest, from: i64, count: i64) -> Result<Manifest> 
     Ok(r)
 }
 
-/// Rank `rank`'s part of the ids `work` (sorted, disjoint ranges): the contiguous split of
-/// their concatenation, so a fresh datagen's `[0, files)` splits as `file_slice` does and a
-/// resume's unfinished ranges split over any host count.
-pub fn work_slice(work: &[(i64, i64)], ranks: i64, rank: i64) -> Vec<(i64, i64)> {
-    let total: i64 = work.iter().map(|(a, b)| b - a).sum();
-    let (lo, hi) = crate::run::gpu_range(total, ranks, rank, 0);
-    let (mut out, mut at) = (Vec::new(), 0i64);
+/// The runs rank 0 hands out, in the order it hands them out: the ranges of `work` cut at
+/// the pattern's directories (`{id div N}`; every `FLAT_RUN` ids otherwise), each piece cut
+/// again into equal parts when there are fewer pieces than `slots` (writers on every host);
+/// from the top down when `desc` (a shrink).
+pub fn runs_of(work: &[(i64, i64)], dirs: &DirScheme, slots: usize, desc: bool) -> Vec<(i64, i64)> {
+    let per = match dirs {
+        DirScheme::Div(n) => (*n).max(1),
+        _ => FLAT_RUN,
+    };
+    let mut pieces = Vec::new();
     for &(a, b) in work {
-        let (from, to) = (lo.max(at), hi.min(at + b - a));
-        if from < to {
-            out.push((a + from - at, a + to - at));
-        }
-        at += b - a;
-    }
-    out
-}
-
-/// The runs handed to writers: each range cut at multiples of `run`, so a run never spans
-/// two directories of a `{id div N}` pattern when `run` divides `N`.
-fn cut_runs(ranges: &[(i64, i64)], run: i64) -> Vec<(i64, i64)> {
-    let mut out = Vec::new();
-    for &(a, b) in ranges {
         let mut at = a;
         while at < b {
-            let end = ((at / run + 1) * run).min(b);
-            out.push((at, end));
+            let end = ((at / per + 1) * per).min(b);
+            pieces.push((at, end));
             at = end;
         }
     }
-    out
+    if pieces.len() < slots {
+        let total: i64 = pieces.iter().map(|(a, b)| b - a).sum();
+        let size = ((total + slots as i64 - 1) / slots.max(1) as i64).max(1);
+        pieces = pieces.into_iter().flat_map(|(a, b)| {
+            let k = (b - a + size - 1) / size;
+            (0..k).map(move |i| (a + (b - a) * i / k, a + (b - a) * (i + 1) / k))
+        }).collect();
+    }
+    if desc {
+        pieces.reverse();
+    }
+    pieces
 }
 
 /// The rank that writes the `index`-th `regions` dataset (in the abstract's order, among the
 /// datasets selected).
 pub fn regions_owner(index: usize, ranks: i64) -> i64 {
     (index as i64).rem_euclid(ranks.max(1))
-}
-
-/// Ids are handed to writers in runs: a directory each for `{id div N}`, shrunk so that a
-/// slice of `len` ids gives every writer several runs; one id otherwise.
-pub fn run_size(dirs: &DirScheme, len: i64, writers: usize) -> i64 {
-    let per_dir = match dirs {
-        DirScheme::Div(n) => (*n).max(1),
-        _ => 1,
-    };
-    let target = (len / (4 * writers.max(1) as i64)).max(1);
-    per_dir.min(target).max(1)
 }
 
 // ---------------------------------------------------------------- the writer
@@ -270,14 +349,20 @@ pub struct Mode {
     /// An unaligned tail under `O_DIRECT` is refused here: pad it and truncate.
     pad_tails: AtomicBool,
     notes: Mutex<Vec<String>>,
+    /// The datagen is stopping (Ctrl-C, or another host failed): claim nothing more, and
+    /// leave the file in hand.
+    halt: AtomicBool,
 }
 
 impl Mode {
     pub fn new() -> Self {
-        Mode { direct: AtomicBool::new(true), pad_tails: AtomicBool::new(false), notes: Mutex::new(Vec::new()) }
+        Mode { direct: AtomicBool::new(true), pad_tails: AtomicBool::new(false), notes: Mutex::new(Vec::new()), halt: AtomicBool::new(false) }
     }
     pub fn direct(&self) -> bool {
         self.direct.load(Ordering::Relaxed)
+    }
+    fn halted(&self) -> bool {
+        self.halt.load(Ordering::Relaxed)
     }
     fn note(&self, s: String) {
         let mut n = self.notes.lock().unwrap();
@@ -325,6 +410,9 @@ fn create(full: &Path, mode: &Mode) -> Result<(File, bool)> {
 fn write_range(f: &File, direct: bool, mode: &Mode, seed_of: &dyn Fn(u64) -> u64, logical: u64, at: u64, len: u64, filler: &mut Filler, buf: &mut Aligned, what: &Path) -> Result<()> {
     let mut done = 0u64;
     while done < len {
+        if mode.halted() {
+            return Err(Halted.into());
+        }
         let n = (len - done).min(BLOCK) as usize;
         filler.fill_range(seed_of, logical + done, &mut buf[..n]);
         write_at(f, direct, mode, buf, n, at + done, what)?;
@@ -480,6 +568,9 @@ fn write_container(c: &Container, meta: &DsMeta<'_>, file: i64, seed_of: &dyn Fn
         let full = opts.endpoints.path(&opts.root, path);
         let (f, direct) = create(&full, mode)?;
         loop {
+            if mode.halted() {
+                return Err(Halted.into());
+            }
             let n = stream.read(&mut buf[..BLOCK as usize])?;
             if n == 0 {
                 break;
@@ -517,8 +608,8 @@ fn syncfs(dir: &Path) -> Result<()> {
 
 /// What this rank writes of one dataset.
 enum Share {
-    /// The files of these id ranges of a `files` dataset.
-    Files { ranges: Vec<(i64, i64)> },
+    /// Runs of a `files` dataset's ids, claimed from rank 0's queue.
+    Files,
     /// The whole `regions` file.
     Regions,
     /// Nothing: a `regions` dataset another rank owns.
@@ -530,7 +621,7 @@ struct Plan<'m, 'a> {
     name: &'a str,
     root: PathBuf,
     /// The store and root key of an object dataset.
-    object: Option<(std::sync::Arc<crate::object::Store>, String)>,
+    object: Option<(Arc<crate::object::Store>, String)>,
     /// The writer of a format-class dataset.
     container: Option<Container>,
     share: Share,
@@ -539,31 +630,54 @@ struct Plan<'m, 'a> {
     /// A resumed object dataset: the keys already there (one `LIST`), each a whole object,
     /// since an upload that did not complete leaves none.
     present: std::collections::HashSet<String>,
-    /// The runs handed to writers, in id order (`run_size`, `cut_runs`).
-    runs: Vec<(i64, i64)>,
-    /// Every rank's ids, before any has said anything: `[0, files)`, or a resume's unfinished
-    /// ranges (a regions file is id 0).
+    /// Every rank's ids, before any has said anything: `[0, files)`, a resume's unfinished
+    /// ranges, a grow's or shrink's ids from the first that changes (a regions file is id 0).
     work: Vec<(i64, i64)>,
+    /// Claimed and done from the top down (a shrink).
+    desc: bool,
+    /// Rank 0 (and the one host): the queue of runs every rank claims from.
+    queue: Option<Mutex<Queue>>,
+    /// Rank 0: the manifest last written, and the claim mark, under one lock.
+    book: Mutex<Book>,
     /// Files and bytes written and flushed before this datagen, by the one it resumes (a grow
     /// or shrink: what the corpus keeps).
     before: (u64, u64),
-    /// A grow or shrink: the count the corpus had, and the old names to remove.
+    /// A grow or shrink: the count the corpus had.
     from: Option<i64>,
-    remove: Option<Remove<'a>>,
+    /// What every manifest's progress carries: `from`, `settle`.
+    carry: serde_json::Map<String, Value>,
+    /// The count whose names may be on storage past this one's (a shrink's old count, a
+    /// settle's asked one): an id's names under it that this count lacks are removed.
+    remove: Option<DsMeta<'a>>,
     track: Track,
 }
 
-/// What a grow or shrink removes: the names of ids `[ids.0, ids.1)` under the old count that
-/// the new count does not have (the ids past it; the extra chunks of a chunked file it cuts).
-struct Remove<'a> {
-    old: DsMeta<'a>,
-    ids: (i64, i64),
+/// Rank 0's queue of one dataset's runs (`DESIGN_REVIEW.md` §3.70): handed out in order, to
+/// its own writers directly and to the other ranks' over the coordinator.
+struct Queue {
+    runs: Vec<(i64, i64)>,
+    next: usize,
+    /// The runs granted to each rank, in the order granted (to another rank, sent).
+    grants: Vec<Vec<(i64, i64)>>,
+    /// The claim boundary before the first run: the start of the work, or a resume's
+    /// manifest's; none when that manifest never recorded one, and then none is recorded.
+    claimed0: Option<i64>,
+    /// How many runs past a grant the mark moves when the grant reaches beyond it.
+    step: usize,
+}
+
+#[derive(Default)]
+struct Book {
+    /// The manifest as rank 0 last wrote it, which a mark is written into.
+    last: Option<Manifest>,
+    /// `claimed_to`: no run reaching past it has been handed out, by this datagen or an
+    /// earlier one of this corpus.
+    mark: Option<i64>,
 }
 
 /// What this rank has written of one dataset, kept by its writers and read every
-/// `--progress-secs` (`DESIGN_REVIEW.md` §3.70). Writers claim runs in id order and write a
-/// run in id order, so what is not finished is, per writer, the rest of its run, and every
-/// run not yet claimed.
+/// `--progress-secs` (`DESIGN_REVIEW.md` §3.70). A writer does its run in id order (from the
+/// top down in a shrink), so what is not done is, per writer, the rest of its run.
 #[derive(Default)]
 struct Track {
     files: AtomicU64,
@@ -571,19 +685,22 @@ struct Track {
     claims: Mutex<Claims>,
     /// The regions file is written.
     whole: AtomicBool,
-    /// Names a grow or shrink removed.
+    /// Names removed (a shrink, a settle).
     removed: AtomicU64,
 }
 
 #[derive(Default)]
 struct Claims {
-    /// The next run to hand out, an index into the plan's `runs`.
-    next: usize,
-    /// Each writer's run `[start, end)` and the first id of it not yet written, which the
-    /// writer advances under its lock together with the counts, so a window reads a file as
-    /// finished and counted, or as neither.
-    slots: Vec<(i64, i64, std::sync::Arc<Mutex<i64>>)>,
+    /// Each writer's run `[a, b)` and where it is (the first id not yet done; from the top
+    /// down, the end of those not yet done), which the writer moves under its lock together
+    /// with the counts, so a window reads a file as done and counted, or as neither.
+    slots: Vec<(i64, i64, Arc<Mutex<i64>>)>,
+    /// Runs this rank took from the queue itself (rank 0, the one host).
+    taken: u64,
 }
+
+/// Objects removed in one request.
+const DELETE_BATCH: usize = 1000;
 
 impl Plan<'_, '_> {
     /// An object already in the store, which a resume does not send again.
@@ -591,11 +708,91 @@ impl Plan<'_, '_> {
         !self.present.is_empty() && opts.endpoints.object(path).is_some_and(|(_, rest)| self.present.contains(&rest))
     }
 
-    /// The id ranges of this rank's share not yet written, merged, in order (a regions file
-    /// is id 0), and the files and bytes of the rest, read together: every writer's lock is
-    /// held while its cursor and the counts are read, and a regions file counts once whole.
-    fn unfinished(&self) -> (Vec<(i64, i64)>, u64, u64) {
+    /// `x` lies past `than` in the order of the work.
+    fn past(&self, x: i64, than: i64) -> bool {
+        if self.desc { x < than } else { x > than }
+    }
+
+    /// The far end of a run in the order of the work.
+    fn far(&self, (a, b): (i64, i64)) -> i64 {
+        if self.desc { a } else { b }
+    }
+
+    /// The claim boundary: every id of the work on the near side of it has been handed out.
+    fn claimed(&self, q: &Queue) -> Option<i64> {
+        let c0 = q.claimed0?;
+        Some(match q.next.checked_sub(1) {
+            None => c0,
+            Some(i) if self.past(self.far(q.runs[i]), c0) => self.far(q.runs[i]),
+            Some(_) => c0,
+        })
+    }
+
+    /// Rank 0: hand rank `rank` the next run (none when the queue is empty or the datagen is
+    /// stopping), first moving the claim mark `step` runs past it, and writing it into the
+    /// manifest, when the run reaches beyond the mark.
+    fn take(&self, rank: i64, halted: bool) -> Result<Option<(i64, i64)>> {
+        let mut q = self.queue.as_ref().expect("rank 0's queue").lock().unwrap();
+        if halted || q.next >= q.runs.len() {
+            return Ok(None);
+        }
+        let run = q.runs[q.next];
+        let mut b = self.book.lock().unwrap();
+        if b.mark.map_or(true, |m| self.past(self.far(run), m)) {
+            let to = self.far(q.runs[(q.next + q.step).min(q.runs.len() - 1)]);
+            b.mark = Some(to);
+            if let Some(m) = b.last.as_mut() {
+                m.progress["claimed_to"] = json!(to);
+                m.progress["updated"] = json!(now_f64());
+                write_manifest(self, m)?;
+            }
+        }
+        drop(b);
+        q.next += 1;
+        q.grants[rank as usize].push(run);
+        Ok(Some(run))
+    }
+
+    /// Writer `w`'s next run, set in its slot: from the queue (rank 0, the one host), or from
+    /// rank 0 over the coordinator with one claim ahead, so the round trip overlaps a run.
+    fn claim(&self, w: usize, ahead: &mut Option<u64>, tcp: Option<&Tcp>, mode: &Mode) -> Result<Option<(i64, i64, Arc<Mutex<i64>>)>> {
+        let set = |c: &mut Claims, (a, b): (i64, i64)| {
+            let cursor = c.slots[w].2.clone();
+            *cursor.lock().unwrap() = if self.desc { b } else { a };
+            c.slots[w].0 = a;
+            c.slots[w].1 = b;
+            (a, b, cursor)
+        };
+        if self.queue.is_some() {
+            let mut c = self.track.claims.lock().unwrap();
+            let Some(run) = self.take(0, mode.halted())? else { return Ok(None) };
+            c.taken += 1;
+            return Ok(Some(set(&mut c, run)));
+        }
+        let Some(t) = tcp else { bail!("dataset `{}`: no queue and no coordinator", self.name) };
+        let ticket = match ahead.take() {
+            Some(k) => k,
+            None => t.claim(self.name)?,
+        };
+        t.wait_grant(ticket)?;
+        let got = {
+            let mut c = self.track.claims.lock().unwrap();
+            t.take_grant(ticket).flatten().map(|run| set(&mut c, run))
+        };
+        if got.is_some() && !mode.halted() {
+            *ahead = Some(t.claim(self.name)?);
+        }
+        Ok(got)
+    }
+
+    /// This rank's note on the dataset: the ids not yet done of the runs it holds (a regions
+    /// file is id 0), how many runs it has received (`seen`: rank 0 counts the ones it sent
+    /// after them as not done), and the files and bytes of the rest, read together: every
+    /// writer's lock is held while its cursor and the counts are read, and a regions file
+    /// counts once whole.
+    fn note(&self, tcp: Option<&Tcp>) -> Value {
         let mut v = Vec::new();
+        let mut seen = 0u64;
         let counts = || (self.track.files.load(Ordering::Relaxed), self.track.bytes.load(Ordering::Relaxed));
         let (files, bytes) = match self.share {
             Share::Other { .. } => (0, 0),
@@ -607,19 +804,24 @@ impl Plan<'_, '_> {
                     (0, 0)
                 }
             }
-            Share::Files { .. } => {
+            Share::Files => {
                 let c = self.track.claims.lock().unwrap();
-                let held: Vec<_> = c.slots.iter().map(|(_, end, cursor)| (*end, cursor.lock().unwrap())).collect();
-                for (end, at) in &held {
-                    if **at < *end {
-                        v.push((**at, *end));
-                    }
+                let held: Vec<_> = c.slots.iter().map(|(a, b, cursor)| (*a, *b, cursor.lock().unwrap())).collect();
+                for (a, b, at) in &held {
+                    v.push(if self.desc { (*a, **at) } else { (**at, *b) });
                 }
-                v.extend_from_slice(&self.runs[c.next.min(self.runs.len())..]);
+                seen = match (tcp, &self.queue) {
+                    (Some(t), None) => {
+                        let (n, untaken) = t.grant_book(self.name);
+                        v.extend(untaken);
+                        n
+                    }
+                    _ => c.taken,
+                };
                 counts()
             }
         };
-        (merge_ranges(v), files, bytes)
+        json!({"unfinished": ranges_json(&merge_ranges(v)), "seen": seen, "files": files, "bytes": bytes})
     }
 }
 
@@ -637,17 +839,12 @@ fn merge_ranges(mut v: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
     out
 }
 
-/// What rank `r` is to write of a dataset, before it has said anything.
-fn share_of(p: &Plan<'_, '_>, ranks: i64, r: i64) -> Vec<(i64, i64)> {
-    match p.meta {
-        DsMeta::Files { .. } => work_slice(&p.work, ranks, r),
-        DsMeta::Regions { .. } => {
-            if p.owner == Some(r) {
-                p.work.clone()
-            } else {
-                Vec::new()
-            }
-        }
+/// What rank `r` is to write of a `regions` dataset, before it has said anything.
+fn share_of(p: &Plan<'_, '_>, r: i64) -> Vec<(i64, i64)> {
+    if p.owner == Some(r) {
+        p.work.clone()
+    } else {
+        Vec::new()
     }
 }
 
@@ -661,6 +858,9 @@ fn ranges_of(v: &Value) -> Vec<(i64, i64)> {
 
 /// The names of file `id`: its chunks', or its own.
 fn names(meta: &DsMeta<'_>, id: i64) -> Result<Vec<String>> {
+    if id >= meta.files() {
+        return Ok(Vec::new());
+    }
     match meta {
         DsMeta::Files { chunk: Some(_), .. } => (0..meta.chunks(id)?).map(|k| Ok(meta.file_path(id, Some(k))?.to_string())).collect(),
         _ => Ok(vec![meta.file_path(id, None)?.to_string()]),
@@ -686,81 +886,6 @@ fn prune(dir: &Path, root: &Path) {
     }
 }
 
-/// A grow or shrink: remove this rank's part of the old names the new count does not have,
-/// and every directory that leaves empty, so the corpus is what a datagen of the new count
-/// writes (`DESIGN_REVIEW.md` §3.70). A name already gone is no error, so a resume removes
-/// again; objects go in batches of `DELETE_BATCH`.
-fn remove_old(plan: &Plan<'_, '_>, rm: &Remove<'_>, opts: &DatagenOpts) -> Result<()> {
-    const DELETE_BATCH: usize = 1000;
-    let DsMeta::Files { dirs, .. } = plan.meta else { return Ok(()) };
-    let new_files = plan.meta.files();
-    let mine = work_slice(&[rm.ids], opts.ranks.max(1), opts.rank);
-    let runs = cut_runs(&mine, run_size(dirs, mine.iter().map(|(a, b)| b - a).sum(), opts.writers));
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
-    let removed = &plan.track.removed;
-    std::thread::scope(|s| {
-        for _ in 0..opts.writers.max(1).min(runs.len()) {
-            s.spawn(|| {
-                let r = (|| -> Result<()> {
-                    let mut batch: Option<(std::sync::Arc<crate::object::Store>, Vec<String>)> = None;
-                    let send = |b: &mut Option<(std::sync::Arc<crate::object::Store>, Vec<String>)>| -> Result<()> {
-                        if let Some((store, keys)) = b.as_mut().filter(|(_, k)| !k.is_empty()) {
-                            store.delete_all(keys)?;
-                            removed.fetch_add(keys.len() as u64, Ordering::Relaxed);
-                            keys.clear();
-                        }
-                        Ok(())
-                    };
-                    while let Some(&(a, b)) = runs.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        let mut last_dir: Option<PathBuf> = None;
-                        for id in a..b {
-                            let keep = if id < new_files { names(plan.meta, id)? } else { Vec::new() };
-                            for path in names(&rm.old, id)?.into_iter().filter(|n| !keep.contains(n)) {
-                                if let Some((store, rest)) = opts.endpoints.object(&path) {
-                                    batch.get_or_insert_with(|| (store, Vec::new())).1.push(rest);
-                                    if batch.as_ref().is_some_and(|(_, k)| k.len() >= DELETE_BATCH) {
-                                        send(&mut batch)?;
-                                    }
-                                    continue;
-                                }
-                                let full = opts.endpoints.path(&opts.root, &path);
-                                match std::fs::remove_file(&full) {
-                                    Ok(()) => {
-                                        removed.fetch_add(1, Ordering::Relaxed);
-                                    }
-                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                                    Err(e) => return Err(e).with_context(|| format!("removing {}", full.display())),
-                                }
-                                let dir = full.parent().map(Path::to_path_buf);
-                                if dir != last_dir {
-                                    if let Some(d) = last_dir.take() {
-                                        prune(&d, &plan.root);
-                                    }
-                                    last_dir = dir;
-                                }
-                            }
-                        }
-                        if let Some(d) = last_dir {
-                            prune(&d, &plan.root);
-                        }
-                    }
-                    send(&mut batch)
-                })();
-                if let Err(e) = r {
-                    errors.lock().unwrap().push(e);
-                    // the others stop at their next run
-                    next.store(usize::MAX / 2, Ordering::Relaxed);
-                }
-            });
-        }
-    });
-    match errors.into_inner().unwrap().into_iter().next() {
-        Some(e) => Err(e.context(format!("dataset `{}`", plan.name))),
-        None => Ok(()),
-    }
-}
-
 struct Written {
     files: u64,
     bytes: u64,
@@ -769,8 +894,14 @@ struct Written {
     elapsed: Duration,
 }
 
-/// Write this rank's share of one dataset.
-fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode: &Mode) -> Result<Written> {
+/// Write this rank's share of one dataset: a `files` dataset's runs as they are claimed, each
+/// id in order removing the names the count does not have (`DESIGN_REVIEW.md` §3.70: a
+/// shrink's, a settle's; a directory that leaves empty goes too, so the tree is a fresh
+/// datagen's) and writing the file when the count has it. A name already gone is no error,
+/// so a resume removes again; objects go in batches of `DELETE_BATCH`, sent at the end of a
+/// run, which counts as done only then. `tcp`: another rank's coordinator, which it claims
+/// through.
+fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode: &Mode, tcp: Option<&Tcp>) -> Result<Written> {
     let name = plan.name;
     let meta = plan.meta;
     let track = &plan.track;
@@ -781,42 +912,77 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
     let dedupe = spec.dedupe;
     let failed = AtomicBool::new(false);
     let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
+    let fail = |e: anyhow::Error| {
+        errors.lock().unwrap().push(e);
+        failed.store(true, Ordering::Relaxed);
+    };
     let (files0, bytes0) = (track.files.load(Ordering::Relaxed), track.bytes.load(Ordering::Relaxed));
     match (&plan.share, meta) {
         (Share::Other { .. }, _) => {}
-        (Share::Files { .. }, DsMeta::Files { spf, chunk, count, .. }) => {
-            if let Some(rm) = &plan.remove {
-                remove_old(plan, rm, opts)?;
-            }
-            let runs = &plan.runs;
-            if !runs.is_empty() {
-                let nthreads = writers.min(runs.len());
-                track.claims.lock().unwrap().slots = (0..nthreads).map(|_| (0, 0, std::sync::Arc::new(Mutex::new(0)))).collect();
+        (Share::Files, DsMeta::Files { spf, chunk, count, .. }) => {
+            let total: i64 = plan.work.iter().map(|(a, b)| b - a).sum();
+            let nthreads = writers.min(total.max(0) as usize);
+            if nthreads > 0 {
+                track.claims.lock().unwrap().slots = (0..nthreads).map(|_| (0, 0, Arc::new(Mutex::new(0)))).collect();
+                // removals into a bucket are batched: the run counts once its batch is sent
+                let hold = plan.remove.is_some() && plan.object.is_some();
                 std::thread::scope(|s| {
                     for w in 0..nthreads {
-                        let (failed, errors) = (&failed, &errors);
+                        let fail = &fail;
+                        let failed = &failed;
                         s.spawn(move || {
                             let mut filler = Filler::new(spec.compress);
                             let mut buf = Aligned::new();
+                            let mut ahead = None;
                             loop {
-                                if failed.load(Ordering::Relaxed) {
+                                if failed.load(Ordering::Relaxed) || mode.halted() {
                                     break;
                                 }
-                                // claim the next run, and say so, under one lock
-                                let (a, b, cursor) = {
-                                    let mut c = track.claims.lock().unwrap();
-                                    let Some(&(a, b)) = runs.get(c.next) else { break };
-                                    c.next += 1;
-                                    let cursor = c.slots[w].2.clone();
-                                    *cursor.lock().unwrap() = a;
-                                    c.slots[w].0 = a;
-                                    c.slots[w].1 = b;
-                                    (a, b, cursor)
+                                let (a, b, cursor) = match plan.claim(w, &mut ahead, tcp, mode) {
+                                    Ok(Some(x)) => x,
+                                    Ok(None) => break,
+                                    Err(e) => {
+                                        fail(e);
+                                        break;
+                                    }
                                 };
-                                for file in a..b {
+                                let mut batch: Vec<String> = Vec::new();
+                                let mut held = (0u64, 0u64);
+                                let mut last_dir: Option<PathBuf> = None;
+                                let mut whole = true;
+                                let ids: Box<dyn Iterator<Item = i64>> = if plan.desc { Box::new((a..b).rev()) } else { Box::new(a..b) };
+                                for file in ids {
+                                    if mode.halted() {
+                                        whole = false;
+                                        break;
+                                    }
                                     // this file's objects and bytes, counted when it is whole
                                     let mut got = (0u64, 0u64);
                                     let r: Result<()> = (|| {
+                                        if let Some(rm) = &plan.remove {
+                                            let keep = names(meta, file)?;
+                                            for path in names(rm, file)?.into_iter().filter(|n| !keep.contains(n)) {
+                                                if let Some((_, rest)) = opts.endpoints.object(&path) {
+                                                    batch.push(rest);
+                                                    continue;
+                                                }
+                                                let full = opts.endpoints.path(&opts.root, &path);
+                                                match std::fs::remove_file(&full) {
+                                                    Ok(()) => {
+                                                        track.removed.fetch_add(1, Ordering::Relaxed);
+                                                    }
+                                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                                    Err(e) => return Err(e).with_context(|| format!("removing {}", full.display())),
+                                                }
+                                                let dir = full.parent().map(Path::to_path_buf);
+                                                if dir != last_dir {
+                                                    if let Some(d) = last_dir.take() {
+                                                        prune(&d, &plan.root);
+                                                    }
+                                                    last_dir = dir;
+                                                }
+                                            }
+                                        }
                                         if file * spf >= *count {
                                             return Ok(());
                                         }
@@ -854,14 +1020,43 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         Ok(())
                                     })();
                                     if let Err(e) = r {
-                                        errors.lock().unwrap().push(e);
-                                        failed.store(true, Ordering::Relaxed);
+                                        // a file left because the datagen is stopping is not done, and no failure
+                                        if !e.is::<Halted>() {
+                                            fail(e);
+                                        }
+                                        whole = false;
                                         break;
+                                    }
+                                    if hold {
+                                        held = (held.0 + got.0, held.1 + got.1);
+                                        continue;
                                     }
                                     let mut at = cursor.lock().unwrap();
                                     track.files.fetch_add(got.0, Ordering::Relaxed);
                                     track.bytes.fetch_add(got.1, Ordering::Relaxed);
-                                    *at = file + 1;
+                                    *at = if plan.desc { file } else { file + 1 };
+                                }
+                                if let Some(d) = last_dir {
+                                    prune(&d, &plan.root);
+                                }
+                                if hold && whole {
+                                    let sent = (|| -> Result<()> {
+                                        if let Some((store, _)) = &plan.object {
+                                            for keys in batch.chunks(DELETE_BATCH) {
+                                                store.delete_all(keys)?;
+                                                track.removed.fetch_add(keys.len() as u64, Ordering::Relaxed);
+                                            }
+                                        }
+                                        Ok(())
+                                    })();
+                                    if let Err(e) = sent {
+                                        fail(e);
+                                        break;
+                                    }
+                                    let mut at = cursor.lock().unwrap();
+                                    track.files.fetch_add(held.0, Ordering::Relaxed);
+                                    track.bytes.fetch_add(held.1, Ordering::Relaxed);
+                                    *at = if plan.desc { a } else { b };
                                 }
                             }
                         });
@@ -878,6 +1073,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
             let next = AtomicU64::new(0);
             let nthreads = writers.min(pieces.max(1) as usize);
             let seed_of = |blk: u64| payload::regions_block_seed(seed, blk, dedupe);
+            let left = AtomicBool::new(false);
             std::thread::scope(|s| {
                 for _ in 0..nthreads {
                     s.spawn(|| {
@@ -894,8 +1090,11 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                             let at = p * REGIONS_PIECE;
                             let len = (size - at).min(REGIONS_PIECE);
                             if let Err(e) = write_range(&f, direct, mode, &seed_of, at, at, len, &mut filler, &mut buf, &full) {
-                                errors.lock().unwrap().push(e);
-                                failed.store(true, Ordering::Relaxed);
+                                if e.is::<Halted>() {
+                                    left.store(true, Ordering::Relaxed);
+                                } else {
+                                    fail(e);
+                                }
                                 break;
                             }
                             track.bytes.fetch_add(len, Ordering::Relaxed);
@@ -903,7 +1102,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                     });
                 }
             });
-            if !failed.load(Ordering::Relaxed) {
+            if !failed.load(Ordering::Relaxed) && !left.load(Ordering::Relaxed) {
                 track.files.fetch_add(1, Ordering::Relaxed);
                 track.whole.store(true, Ordering::Release);
             }
@@ -975,12 +1174,10 @@ fn write_manifest(p: &Plan<'_, '_>, m: &Manifest) -> Result<()> {
     .with_context(|| format!("dataset `{}`: writing its manifest", p.name))
 }
 
-/// This rank's progress document: per dataset, what is not yet written and the counts.
-fn progress_doc(plans: &[Plan<'_, '_>]) -> Value {
-    json!({"datasets": plans.iter().map(|p| {
-        let (unfinished, files, bytes) = p.unfinished();
-        (p.name.to_string(), json!({"unfinished": ranges_json(&unfinished), "files": files, "bytes": bytes}))
-    }).collect::<serde_json::Map<_, _>>()})
+/// This rank's progress document: per dataset, its note (`Plan::note`). `tcp`: another
+/// rank's coordinator, which holds the runs granted it that no writer has taken.
+fn progress_doc(plans: &[Plan<'_, '_>], tcp: Option<&Tcp>) -> Value {
+    json!({"datasets": plans.iter().map(|p| (p.name.to_string(), p.note(tcp))).collect::<serde_json::Map<_, _>>()})
 }
 
 /// Flush what this rank has written: what `O_DIRECT` left to the page cache, and the metadata.
@@ -997,9 +1194,31 @@ fn flush(opts: &DatagenOpts) -> Result<()> {
     Ok(())
 }
 
+/// A manifest's progress record (`schema/README.md` §6): what is not yet written and flushed,
+/// the counts, when, the window, what a change carries (`from`, `settle`), the claim boundary
+/// and mark, and, from a datagen that is exiting, `stopped`.
+fn progress_json(p: &Plan<'_, '_>, unfinished: &[(i64, i64)], counts: (u64, u64), claimed: Option<i64>, mark: Option<i64>, opts: &DatagenOpts, stopped: bool) -> Value {
+    let mut v = json!({"unfinished": ranges_json(unfinished), "files_written": counts.0, "bytes_written": counts.1, "updated": now_f64(), "progress_secs": opts.progress.as_secs_f64()});
+    for (k, x) in &p.carry {
+        v[k] = x.clone();
+    }
+    if let Some(c) = claimed {
+        v["claimed"] = json!(c);
+    }
+    if let Some(m) = mark {
+        v["claimed_to"] = json!(m);
+    }
+    if stopped {
+        v["stopped"] = json!(now_f64());
+    }
+    v
+}
+
 /// The progress window: note what is finished, flush, and tell rank 0 (`DESIGN_REVIEW.md`
-/// §3.70); rank 0 merges every rank's latest note, rewrites each manifest once, and prints
-/// one line. A rank not heard from yet counts as having written nothing.
+/// §3.70); rank 0 merges every rank's latest note with its queue (the runs not handed out,
+/// and those handed to a rank after the last it had seen when it took its note), rewrites
+/// each manifest once, and prints one line. A rank not heard from yet counts as having
+/// written nothing.
 struct Ticker<'p, 'm, 'a> {
     plans: &'p [Plan<'m, 'a>],
     manifests: &'p [Manifest],
@@ -1009,8 +1228,12 @@ struct Ticker<'p, 'm, 'a> {
 }
 
 impl Ticker<'_, '_, '_> {
-    fn tick(&self, log: &Mutex<&mut (dyn Write + Send)>) -> Result<()> {
-        let mine = progress_doc(self.plans);
+    /// `last`: this datagen is exiting (stopped, or failed), so the manifests say no datagen
+    /// is writing the corpus (`progress.stopped`).
+    fn tick(&self, log: &Mutex<&mut (dyn Write + Send)>, last: bool) -> Result<()> {
+        let rank = self.opts.rank;
+        let remote = self.hosts.filter(|_| rank != 0).map(|h| h.tcp);
+        let mine = progress_doc(self.plans, remote);
         flush(self.opts)?;
         let mut docs = BTreeMap::new();
         if let Some(h) = self.hosts {
@@ -1020,37 +1243,49 @@ impl Ticker<'_, '_, '_> {
                 None => return Ok(()),
             }
         }
-        docs.insert(self.opts.rank, mine);
+        docs.insert(rank, mine);
         let ranks = self.opts.ranks.max(1);
         let (mut total, mut left, mut bytes) = (0i64, 0i64, 0u64);
         for (p, base) in self.plans.iter().zip(self.manifests) {
             let mut unfinished = Vec::new();
             let (mut files, mut b) = (0u64, 0u64);
+            let doc = |r: i64| docs.get(&r).map(|d| &d["datasets"][p.name]);
             for r in 0..ranks {
-                match docs.get(&r) {
+                match doc(r) {
                     Some(d) => {
-                        let d = &d["datasets"][p.name];
                         unfinished.extend(ranges_of(&d["unfinished"]));
                         files += d["files"].as_u64().unwrap_or(0);
                         b += d["bytes"].as_u64().unwrap_or(0);
                     }
-                    None => unfinished.extend(share_of(p, ranks, r)),
+                    None if p.queue.is_none() => unfinished.extend(share_of(p, r)),
+                    None => {}
                 }
+            }
+            let mut claimed = None;
+            if let Some(q) = &p.queue {
+                let q = q.lock().unwrap();
+                unfinished.extend_from_slice(&q.runs[q.next..]);
+                for r in 0..ranks {
+                    let seen = doc(r).and_then(|d| d["seen"].as_u64()).unwrap_or(0) as usize;
+                    let g = &q.grants[r as usize];
+                    unfinished.extend_from_slice(&g[seen.min(g.len())..]);
+                }
+                claimed = p.claimed(&q);
             }
             let unfinished = merge_ranges(unfinished);
             let (files, b) = (files + p.before.0, b + p.before.1);
+            // a shrink's ids reach past its count
             total += match p.meta {
-                DsMeta::Files { .. } => p.meta.files(),
+                DsMeta::Files { .. } => p.meta.files().max(p.work.last().map_or(0, |r| r.1)),
                 DsMeta::Regions { .. } => 1,
             };
             left += unfinished.iter().map(|(a, b)| b - a).sum::<i64>();
             bytes += b - p.before.1;
+            let mut book = p.book.lock().unwrap();
             let mut m = base.clone();
-            m.progress = json!({"unfinished": ranges_json(&unfinished), "files_written": files, "bytes_written": b, "updated": now_secs()});
-            if let Some(from) = p.from {
-                m.progress["from"] = json!(from);
-            }
+            m.progress = progress_json(p, &unfinished, (files, b), claimed, book.mark, self.opts, last);
             write_manifest(p, &m)?;
+            book.last = Some(m);
         }
         let secs = self.t0.elapsed().as_secs_f64();
         let done = total - left;
@@ -1062,6 +1297,62 @@ impl Ticker<'_, '_, '_> {
         l.flush()?;
         Ok(())
     }
+}
+
+/// The manifest `--settle` starts from (`DESIGN_REVIEW.md` §3.70): an unfinished corpus
+/// brought to the count it reached, claiming nothing new. `meta` is its dataset at the count
+/// the manifest names (the one asked for). The count is the end of the runs handed out (from
+/// the top down in a shrink: its start), whole files, never past the asked count nor short of
+/// the one a grow or shrink began from; what is left to do is what was handed out and is not
+/// done, and the band between the boundary and the mark, where a datagen that died after its
+/// last window may have written or removed (strays past the count are removed, ids below it
+/// written again). The result is `settling` (`progress.settle`), finished as a resume is.
+pub fn settle_manifest(m: &Manifest, meta: &DsMeta<'_>) -> Result<Manifest> {
+    let p = &m.progress;
+    if !p["settle"].is_null() {
+        // a settle that did not finish: its count is decided
+        return Ok(m.clone());
+    }
+    let DsMeta::Files { spf, .. } = meta else { bail!("a `regions` dataset is one file: `--resume` finishes it") };
+    let Some(claimed) = p["claimed"].as_i64() else { bail!("the manifest records no claim boundary (an earlier aeiou wrote it): `--resume` finishes it") };
+    let mark = p["claimed_to"].as_i64().unwrap_or(claimed);
+    let n = meta.count();
+    let from = p["from"].as_i64();
+    let desc = m.state == payload::STATE_SHRINKING;
+    let s = if desc { n.max(from.unwrap_or(n).min(claimed * spf)) } else { from.unwrap_or(0).max(n.min(claimed * spf)) };
+    if s == 0 {
+        bail!("nothing was handed out, so a settled corpus would be empty: remove it instead");
+    }
+    let near = |(a, b): (i64, i64)| if desc { (a.max(claimed), b) } else { (a, b.min(claimed)) };
+    let mut t: Vec<(i64, i64)> = m.unfinished().into_iter().map(near).collect();
+    t.push(if desc { (mark, claimed) } else { (claimed, mark) });
+    let t = merge_ranges(t);
+    let inside = |id: i64| t.iter().any(|(a, b)| (*a..*b).contains(&id));
+    let target = meta.with_count(s);
+    let (mut files, mut bytes) = (p["files_written"].as_u64().unwrap_or(0), p["bytes_written"].as_u64().unwrap_or(0));
+    // ids the corpus keeps that no window counted: a shrink settled above its count keeps old
+    // files from the new short last one up; a grow settled at its old count keeps the old
+    // short last file
+    let kept = match from {
+        Some(_) if desc && s > n => (n / spf, target.files()),
+        Some(f) if !desc && s == f => (f / spf, target.files()),
+        _ => (0, 0),
+    };
+    for id in kept.0..kept.1 {
+        if !inside(id) {
+            files += objects_of(&target, id)?;
+            bytes += target.file_size(id)? as u64;
+        }
+    }
+    let mut r = m.clone();
+    let Some(def) = r.dataset.get_mut("files").and_then(Value::as_object_mut) else { bail!("only a `files` dataset settles") };
+    def.insert("count".into(), json!(s));
+    let mut progress = json!({"unfinished": ranges_json(&t), "files_written": files, "bytes_written": bytes, "settle": {"asked": n, "count": s}, "updated": p["updated"], "progress_secs": p["progress_secs"]});
+    if let Some(f) = from {
+        progress["from"] = json!(f);
+    }
+    r.progress = progress;
+    Ok(r)
 }
 
 pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Model<'_>, opts: &DatagenOpts, hosts: Option<&Hosts<'_>>, log: &mut (impl Write + Send)) -> Result<Vec<DatasetResult>> {
@@ -1079,6 +1370,9 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     let resume = opts.resume.as_ref();
     // a grow or shrink, begun now or resumed: the count the corpus had
     let from = resume.and_then(|m| m.progress["from"].as_i64());
+    // a settle, begun now or resumed: the count asked for and the count settled at
+    let settle = resume.map(|m| m.progress["settle"].clone()).filter(|v| !v.is_null());
+    let desc = resume.is_some_and(|m| m.state == payload::STATE_SHRINKING);
     if let Some(m) = resume {
         if m.payload != spec {
             bail!("the corpus was written with the payload {} and this aeiou writes {}: a resume would mix them", payload_line(&m.payload), payload_line(&spec));
@@ -1135,65 +1429,98 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if object.is_none() {
             std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         }
-        let mut remove = None;
+        let count = meta.count();
+        // the count whose names may be on storage past this one's
+        let reach = [from, settle.as_ref().and_then(|s| s["asked"].as_i64())].into_iter().flatten().fold(count, i64::max);
         let (work, before) = match resume {
             Some(m) if opts.resize.is_none() => (merge_ranges(m.unfinished()), (m.progress["files_written"].as_u64().unwrap_or(0), m.progress["bytes_written"].as_u64().unwrap_or(0))),
             // a grow or shrink begun now: the ids from the first whose bytes change (the old last
-            // file when it was short) to the new count are written, and the corpus keeps the rest
+            // file when it was short; a shrink's new one) to the larger count's last, and the
+            // corpus keeps the rest
             Some(m) => {
                 let (Some(c0), DsMeta::Files { spf, .. }) = (from, meta) else { bail!("dataset `{name}`: only a `files` dataset grows or shrinks") };
                 let old = meta.with_count(c0);
-                let w0 = c0.min(meta.count()) / spf;
+                let w0 = c0.min(count) / spf;
                 let (mut files, mut bytes) = (0u64, 0u64);
                 for id in w0..old.files() {
                     files += objects_of(&old, id)?;
                     bytes += old.file_size(id)? as u64;
                 }
                 let kept = (m.provenance["files_written"].as_u64().unwrap_or(0).saturating_sub(files), m.provenance["bytes_written"].as_u64().unwrap_or(0).saturating_sub(bytes));
-                (if w0 < meta.files() { vec![(w0, meta.files())] } else { Vec::new() }, kept)
+                let end = old.files().max(meta.files());
+                (if w0 < end { vec![(w0, end)] } else { Vec::new() }, kept)
             }
             None => (vec![(0, if let DsMeta::Files { .. } = meta { meta.files() } else { 1 })], (0, 0)),
         };
-        if let (Some(c0), DsMeta::Files { spf, .. }) = (from, meta) {
-            let old = meta.with_count(c0);
-            let w0 = c0.min(meta.count()) / spf;
-            if c0 % spf != 0 && w0 < meta.files() {
-                // the old short last file is there whole but is not the new one's: write it again
-                for n in names(meta, w0)? {
-                    if let Some((_, rest)) = opts.endpoints.object(&n) {
-                        present.remove(&rest);
+        if let DsMeta::Files { spf, .. } = meta {
+            if from.is_some() || reach > count {
+                // a short last file in the bucket under one count is not the other's: write it again
+                for c in [from.unwrap_or(count), count] {
+                    if c % spf != 0 {
+                        for n in names(meta, c / spf)? {
+                            if let Some((_, rest)) = opts.endpoints.object(&n) {
+                                present.remove(&rest);
+                            }
+                        }
                     }
                 }
             }
-            remove = Some(Remove { ids: (w0, old.files()), old });
         }
-        let (share, owner, runs) = match meta {
+        let remove = (reach > count).then(|| meta.with_count(reach));
+        let (share, owner, queue) = match meta {
             DsMeta::Files { dirs, .. } => {
-                let ranges = work_slice(&work, ranks, rank);
-                let run = run_size(dirs, ranges.iter().map(|(a, b)| b - a).sum(), opts.writers);
-                let runs = cut_runs(&ranges, run);
-                (Share::Files { ranges }, None, runs)
+                // rank 0 holds the queue; the boundary starts at the work's start, or where a
+                // resumed manifest left it
+                let queue = (rank == 0).then(|| {
+                    let slots = ranks as usize * opts.writers.max(1);
+                    let claimed0 = match resume {
+                        Some(m) if opts.resize.is_none() => m.progress["claimed"].as_i64(),
+                        _ => Some(if desc { work.last().map(|r| r.1).unwrap_or(0) } else { work.first().map(|r| r.0).unwrap_or(0) }),
+                    };
+                    Mutex::new(Queue { runs: runs_of(&work, dirs, slots, desc), next: 0, grants: vec![Vec::new(); ranks as usize], claimed0, step: MARK_BANDS * slots })
+                });
+                (Share::Files, None, queue)
             }
             DsMeta::Regions { .. } => {
                 let owner = regions_owner(regions_index, ranks);
                 regions_index += 1;
                 // a resume whose regions file was finished has nothing to write
-                (if owner == rank && !work.is_empty() { Share::Regions } else { Share::Other { owner } }, Some(owner), Vec::new())
+                (if owner == rank && !work.is_empty() { Share::Regions } else { Share::Other { owner } }, Some(owner), None)
             }
         };
-        plans.push(Plan { meta, name, root, object, container, share, owner, present, runs, work, before, from, remove, track: Track::default() });
+        let mark = match resume {
+            Some(m) if opts.resize.is_none() => m.progress["claimed_to"].as_i64(),
+            _ => None,
+        };
+        let mut carry = serde_json::Map::new();
+        if let Some(f) = from {
+            carry.insert("from".into(), json!(f));
+        }
+        if let Some(s) = &settle {
+            carry.insert("settle".into(), s.clone());
+        }
+        plans.push(Plan { meta, name, root, object, container, share, owner, present, work, desc, queue, book: Mutex::new(Book { last: None, mark }), before, from, carry, remove, track: Track::default() });
     }
     for p in &plans {
-        if let (Some(c0), Some(rm)) = (p.from, &p.remove) {
-            let w = p.work.iter().map(|(a, b)| b - a).sum::<i64>();
-            let gone = if rm.ids.0 < rm.ids.1 { format!("; old names of ids [{}, {}) removed where the new count has none", rm.ids.0, rm.ids.1) } else { String::new() };
-            writeln!(log, "dataset {}: count {c0} -> {}: {w} file(s) to write{gone}", p.name, p.meta.count())?;
+        let w = p.work.iter().map(|(a, b)| b - a).sum::<i64>();
+        if let (Some(c0), true, DsMeta::Files { spf, .. }) = (p.from, opts.resize.is_some(), p.meta) {
+            let n = p.meta.count();
+            if p.desc {
+                let again = if n % spf != 0 { format!(", and file {} written again", n / spf) } else { String::new() };
+                writeln!(log, "dataset {}: count {c0} -> {n}: {w} id(s) from the top down, the names past the new count removed{again}", p.name)?;
+            } else {
+                writeln!(log, "dataset {}: count {c0} -> {n}: {w} file(s) to write", p.name)?;
+            }
         }
         match &p.share {
-            Share::Files { ranges } if resume.is_some() => writeln!(log, "dataset {}: {} of {} unfinished file(s) on this rank, in {} range(s) from {}", p.name, ranges.iter().map(|(a, b)| b - a).sum::<i64>(), p.work.iter().map(|(a, b)| b - a).sum::<i64>(), ranges.len(), ranges.first().map(|r| r.0).unwrap_or(0))?,
-            Share::Files { ranges } => {
-                let (lo, hi) = ranges.first().map(|r| (r.0, r.1)).unwrap_or((0, 0));
-                writeln!(log, "dataset {}: files [{lo}, {hi}) of {} on this rank", p.name, p.meta.files())?
+            Share::Files => {
+                let what = if resume.is_some() && opts.resize.is_none() { format!("{w} unfinished id(s) of {}", p.meta.files()) } else { format!("{w} id(s) of {}", p.meta.files()) };
+                let order = if p.desc { ", from the top down" } else { "" };
+                match p.queue.as_ref().map(|q| q.lock().unwrap().runs.len()) {
+                    Some(n) if ranks > 1 => writeln!(log, "dataset {}: {what}, in {n} run(s) handed out by this rank in order{order}", p.name)?,
+                    Some(n) => writeln!(log, "dataset {}: {what}, in {n} run(s){order}", p.name)?,
+                    None => writeln!(log, "dataset {}: {what}, in runs claimed from rank 0", p.name)?,
+                }
             }
             Share::Regions => writeln!(log, "dataset {}: the regions file, written by this rank", p.name)?,
             Share::Other { owner } => writeln!(log, "dataset {}: the regions file, written by rank {owner}", p.name)?,
@@ -1208,9 +1535,9 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             // the library that made the corpus's headers must make the same ones now
             for p in &plans {
                 let Some(c) = &p.container else { continue };
-                // a grow or shrink changes the short last file's header alone: those both have must agree
+                // a grow, shrink, or settle changes the short last file's header alone: those both have must agree
                 let (now, was) = (&c.headers["sha256"], &m.provenance["headers"]["sha256"]);
-                let differ = match opts.resize {
+                let differ = match opts.begun() {
                     None => now != was,
                     Some(_) => now.as_object().into_iter().flatten().any(|(k, v)| was.get(k).is_some_and(|w| w != v)),
                 };
@@ -1226,30 +1553,37 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
 
     // the manifests from the start (DESIGN_REVIEW.md §3.70): `writing`, everything unfinished,
     // so a corpus never holds a file without saying what it is meant to be; a resume keeps
-    // the one there, which already says so
+    // the one there, which already says so (no rank but 0 reads it: it came with `Welcome`)
     let started = now_secs();
     let mut manifests = Vec::new();
     for p in &plans {
-        if let Some(m) = resume {
-            let mut m = m.clone();
-            if opts.resize.is_some() {
-                // the new count's manifest, before anything is removed or written
-                m.progress = json!({"unfinished": ranges_json(&p.work), "files_written": p.before.0, "bytes_written": p.before.1, "from": p.from, "updated": started});
-                if let Some(c) = p.container.as_ref().filter(|c| !c.headers.is_null()) {
-                    m.provenance["headers"] = c.headers.clone();
+        let claimed = p.queue.as_ref().and_then(|q| p.claimed(&q.lock().unwrap()));
+        let mark = p.book.lock().unwrap().mark;
+        let m = match resume {
+            Some(m) => {
+                let mut m = m.clone();
+                if opts.begun().is_some() {
+                    // the new count's manifest, before anything is removed or written
+                    m.progress = progress_json(p, &p.work, p.before, claimed, mark, opts, false);
+                    if let Some(c) = p.container.as_ref().filter(|c| !c.headers.is_null()) {
+                        m.provenance["headers"] = c.headers.clone();
+                    }
+                    if rank == 0 {
+                        write_manifest(p, &m)?;
+                    }
                 }
+                m
+            }
+            None => {
+                let mut m = base.manifest(loaded, cfg, &spec, p, ranks, started)?;
+                m.progress = progress_json(p, &p.work, (0, 0), claimed, mark, opts, false);
                 if rank == 0 {
                     write_manifest(p, &m)?;
                 }
+                m
             }
-            manifests.push(m);
-            continue;
-        }
-        let mut m = base.manifest(loaded, cfg, &spec, p, ranks, started)?;
-        m.progress = json!({"unfinished": ranges_json(&p.work), "files_written": 0, "bytes_written": 0, "updated": started});
-        if rank == 0 {
-            write_manifest(p, &m)?;
-        }
+        };
+        p.book.lock().unwrap().last = Some(m.clone());
         manifests.push(m);
     }
 
@@ -1259,10 +1593,10 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         let (_t0, names, shared) = match h.tcp.ready_shared() {
             Ok(x) => x,
             Err(e) => {
-                if let (0, Some(rz)) = (rank, &opts.resize) {
-                    // nothing was removed or written: the corpus is the complete one it was
+                if let (0, Some(original)) = (rank, opts.begun()) {
+                    // nothing was removed or written: the corpus is the one it was
                     for p in &plans {
-                        let _ = write_manifest(p, &rz.original);
+                        let _ = write_manifest(p, original);
                     }
                 } else if rank == 0 && resume.is_none() {
                     for p in &plans {
@@ -1282,35 +1616,81 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
     }
 
-    // the writes, with a progress window beside them; then the metadata to stable storage, a
-    // last note, and (several hosts) this rank's part to rank 0, whose window runs until
-    // every part is in
+    // the writes, with a progress window beside them, a watch for Ctrl-C and for another host
+    // stopping, and on rank 0 the answers to the other ranks' claims; then the metadata to
+    // stable storage, a last note, and (several hosts) this rank's part to rank 0, whose
+    // window runs until every part is in
     let mode = Mode::new();
+    if opts.sigint {
+        catch_sigint();
+    }
+    let remote = hosts.filter(|_| rank != 0).map(|h| h.tcp);
     let ticker = Ticker { plans: &plans, manifests: &manifests, opts, hosts, t0: Instant::now() };
     let log_m: Mutex<&mut (dyn Write + Send)> = Mutex::new(log);
     let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    let over = AtomicBool::new(false);
     let mut parts: BTreeMap<i64, Value> = BTreeMap::new();
     let mut written = Vec::new();
     let phase: Result<()> = std::thread::scope(|s| {
-        let (ticker, log_m) = (&ticker, &log_m);
+        let (ticker, log_m, mode, over, plans) = (&ticker, &log_m, &mode, &over, &plans);
         s.spawn(move || loop {
             match stopped.recv_timeout(opts.progress) {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if let Err(e) = ticker.tick(&log_m) {
+                    if let Err(e) = ticker.tick(log_m, false) {
                         let _ = writeln!(log_m.lock().unwrap(), "  progress: {e:#}");
                     }
                 }
                 _ => break,
             }
         });
+        // Ctrl-C here reaches every host through rank 0; a halt or a failure anywhere stops
+        // this host's writers
+        s.spawn(move || {
+            let mut sent = false;
+            while !over.load(Ordering::Relaxed) {
+                if opts.sigint && !sent && SIGINTS.load(Ordering::Relaxed) > 0 {
+                    sent = true;
+                    match hosts {
+                        Some(h) => {
+                            if h.tcp.halt().is_err() {
+                                mode.halt.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        None => mode.halt.store(true, Ordering::Relaxed),
+                    }
+                }
+                if hosts.is_some_and(|h| h.tcp.halted() || h.tcp.abort_reason().is_some()) {
+                    mode.halt.store(true, Ordering::Relaxed);
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        if let Some(server) = hosts.and_then(|h| h.server) {
+            s.spawn(move || {
+                while !over.load(Ordering::Relaxed) {
+                    let Some((r, ds, ticket)) = server.next_claim(Duration::from_millis(50)) else { continue };
+                    let run = match plans.iter().find(|p| p.name == ds && p.queue.is_some()) {
+                        Some(p) => p.take(r, mode.halted()),
+                        None => Ok(None),
+                    };
+                    match run {
+                        Ok(run) => server.grant(r, &ds, ticket, run),
+                        Err(e) => {
+                            server.stop(&format!("{e:#}"));
+                            server.grant(r, &ds, ticket, None);
+                        }
+                    }
+                }
+            });
+        }
         let r = (|| {
-            for p in &plans {
-                let w = write_share(p, opts, &spec, &mode);
+            for p in plans {
+                let w = write_share(p, opts, &spec, mode, remote);
                 for n in mode.take_notes() {
                     writeln!(log_m.lock().unwrap(), "  {n}")?;
                 }
                 if p.remove.is_some() {
-                    writeln!(log_m.lock().unwrap(), "dataset {}: {} old name(s) removed on this rank", p.name, p.track.removed.load(Ordering::Relaxed))?;
+                    writeln!(log_m.lock().unwrap(), "dataset {}: {} name(s) removed on this rank", p.name, p.track.removed.load(Ordering::Relaxed))?;
                 }
                 written.push(w?);
             }
@@ -1318,6 +1698,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             let mine = json!({
                 "host": host,
                 "direct": mode.direct(),
+                "halted": mode.halted(),
                 "datasets": plans.iter().zip(&written).map(|(p, w)| (p.name.to_string(), part_json(rank, &host, w))).collect::<serde_json::Map<_, _>>(),
             });
             match hosts {
@@ -1326,7 +1707,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 }
                 Some(h) => {
                     // the last note, so rank 0's manifests do not wait a window for this rank
-                    h.tcp.progress(&progress_doc(&plans))?;
+                    h.tcp.progress(&progress_doc(plans, remote))?;
                     h.tcp.done(&mine)?;
                     if let Some(server) = h.server {
                         parts = server.gathered().context("gathering every rank's part")?;
@@ -1335,16 +1716,36 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             }
             Ok(())
         })();
+        over.store(true, Ordering::Relaxed);
         let _ = stop.send(());
         r
     });
-    let log = log_m.into_inner().unwrap();
+    let mut sink = std::io::sink();
+    let quiet: Mutex<&mut (dyn Write + Send)> = Mutex::new(&mut sink);
     if let Err(e) = phase {
         // what is finished, recorded before the error is reported
         if rank == 0 || hosts.is_some() {
-            let _ = ticker.tick(&Mutex::new(&mut std::io::sink() as &mut (dyn Write + Send)));
+            let _ = ticker.tick(&quiet, true);
         }
         return Err(e);
+    }
+    let log = log_m.into_inner().unwrap();
+    if mode.halted() {
+        // stopped: every rank has noted what it finished; rank 0 records it once more
+        let mut msg = "stopped".to_string();
+        if rank == 0 {
+            ticker.tick(&quiet, true)?;
+            msg = if ranks > 1 { format!("all {ranks} ranks stopped") } else { "stopped".into() };
+            msg += "; the manifest records what is finished: `aeiou datagen --resume ROOT` finishes the corpus, `--settle ROOT` keeps what it reached";
+            if let Some(server) = hosts.and_then(|h| h.server) {
+                server.finish(false, 0, Some("stopped".into()));
+            }
+        } else if let Some(h) = hosts {
+            let _ = h.tcp.result();
+        }
+        writeln!(log, "{msg}")?;
+        log.flush()?;
+        return Err(Stopped(msg).into());
     }
     let wrote_manifest = rank == 0;
     if let (Some(h), false) = (hosts, wrote_manifest) {
@@ -1382,9 +1783,24 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         manifest.progress = Value::Null;
         let prov = &mut manifest.provenance;
         let started = if started == u64::MAX { w.started } else { started };
-        if opts.resize.is_some() {
+        let finished = finished.max(w.finished);
+        if let Some(st) = &settle {
+            // the corpus kept at the count it reached: the settle's record, and the change it
+            // ended marked settled
+            let this = json!({"state": base_m.state, "asked": st["asked"], "count": st["count"], "started": started, "finished": finished, "ranks": ranks, "hosts": host_parts, "direct": direct, "files_written": total_files, "bytes_written": total_bytes});
+            match prov["settles"].as_array_mut() {
+                Some(a) => a.push(this),
+                None => prov["settles"] = json!([this]),
+            }
+            if let Some(last) = prov["resizes"].as_array_mut().and_then(|a| a.last_mut()).filter(|l| l["finished"].is_null()) {
+                last["settled"] = st["count"].clone();
+                last["finished"] = json!(finished);
+            }
+            prov["finished"] = json!(finished);
+            prov["files_written"] = json!(total_files + p.before.0);
+            prov["bytes_written"] = json!(total_bytes + p.before.1);
+        } else if opts.resize.is_some() {
             // the change begun completes its record; the totals are what the corpus holds
-            let finished = finished.max(w.finished);
             if let Some(last) = prov["resizes"].as_array_mut().and_then(|a| a.last_mut()) {
                 for (k, v) in [("finished", json!(finished)), ("ranks", json!(ranks)), ("hosts", json!(host_parts)), ("direct", json!(direct)), ("files_written", json!(total_files)), ("bytes_written", json!(total_bytes))] {
                     last[k] = v;
@@ -1397,12 +1813,12 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             // the datagen resumed keeps its record; each resume adds its own, and the totals
             // count every file written and flushed once (what the last window recorded, then
             // this datagen's)
-            let this = json!({"started": started, "finished": finished.max(w.finished), "ranks": ranks, "hosts": host_parts, "direct": direct, "files_written": total_files, "bytes_written": total_bytes});
+            let this = json!({"started": started, "finished": finished, "ranks": ranks, "hosts": host_parts, "direct": direct, "files_written": total_files, "bytes_written": total_bytes});
             match prov["resumes"].as_array_mut() {
                 Some(a) => a.push(this),
                 None => prov["resumes"] = json!([this]),
             }
-            prov["finished"] = json!(finished.max(w.finished));
+            prov["finished"] = json!(finished);
             prov["files_written"] = json!(total_files + p.before.0);
             prov["bytes_written"] = json!(total_bytes + p.before.1);
         } else {
@@ -1410,7 +1826,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             prov["hosts"] = json!(host_parts);
             prov["direct"] = json!(direct);
             prov["started"] = json!(started);
-            prov["finished"] = json!(finished.max(w.finished));
+            prov["finished"] = json!(finished);
             prov["files_written"] = json!(total_files);
             prov["bytes_written"] = json!(total_bytes);
         }

@@ -313,7 +313,10 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
   counts, times, and `direct`), `files_written` and `bytes_written` then counting every
   datagen's files once; after `aeiou datagen --grow` or `--shrink`, `resizes` (each change's
   `op`, the count and dataset id it started `from`, the count it went `to`, ranks, hosts,
-  counts, and times), `files_written` and `bytes_written` then the corpus's own.
+  counts, and times), `files_written` and `bytes_written` then the corpus's own; after
+  `aeiou datagen --settle`, `settles` (each settle's `state` settled, the count `asked` and
+  the `count` kept, ranks, hosts, counts, times), and the `resizes` entry it ended marked
+  `settled` with the count kept.
 - **Identity.** The SHA-256 of the canonical form of the normative content is the dataset id.
   `aeiou run` prints it with every result, next to the AST hash and the parameters in effect;
   a result is those three things.
@@ -325,7 +328,14 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
   progress window, and `complete` with no `progress` once every file is; neither is part of
   the normative content. A grow or shrink (`aeiou datagen --grow N ROOT`, `--shrink N ROOT`)
   writes the new count's manifest first, `growing` or `shrinking`, its `progress` also holding
-  `from`, the count the corpus had, so a resume knows what to remove. A run refuses any state but `complete`. On several hosts rank 0
+  `from`, the count the corpus had, so a resume knows what to remove. Since 2026-10-12
+  (`DESIGN_REVIEW.md` §3.70) `progress` also holds `progress_secs` (the window) beside
+  `updated` (now seconds to the millisecond), so `--resume` and `--settle` refuse a manifest a
+  datagen may still be writing; `stopped` (the time a datagen that stopped, by Ctrl-C or a
+  failure, last wrote it, which lifts that refusal); `claimed`, the boundary of the runs handed
+  out in id order (from the top down in a shrink), and `claimed_to`, the mark no run handed
+  out reaches past; and, from `aeiou datagen --settle ROOT`, `settle` (`asked`, `count`), the
+  count the corpus is settling at in place of the one asked. A run refuses any state but `complete`. On several hosts rank 0
   writes it, merging every rank's progress note, and says `complete` once every rank has
   reported its part, so `complete` means the whole corpus. The Python writer writes it once,
   last, `complete`.

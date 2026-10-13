@@ -42,7 +42,7 @@ pub const ALL_OPTIONS: &[&str] = &[
     "iowq-max-workers", "sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "aio-depth", "mmap-mode", "mmap-consume", "object-threads", "object-part-mib", "rank", "ranks",
     "coordinator", "rank-rotate", "expect-fingerprint", "expect-dataset-id", "max-gap", "require-cold", "drop-caches", "clean-namespaces",
     "ignore-limits", "report-json", "report-takes", "dedupe", "compress", "dataset", "gpu", "steps", "limit", "metrics", "metrics-block",
-    "metrics-sample", "metrics-json", "writers", "progress-secs", "resume", "grow", "shrink", "config",
+    "metrics-sample", "metrics-json", "writers", "progress-secs", "resume", "grow", "shrink", "settle", "config",
 ];
 
 /// Where a value came from.
