@@ -5490,6 +5490,144 @@ writers: 14–17 GB/s against 11–15 for the previous build, this machine's tmp
 run to run). Next, before building: the command lines of resume, grow, and shrink, and
 the count rounding of whole directories.
 
+### 3.71 Sizing a training corpus: a sizing step that writes a parameter file, scale-free layout, and the step barrier (proposed 2026-10-12, discussed with the user; nothing built)
+
+**Where it came from.** Building §3.70's whole directories, the user chose (2026-10-12) to
+refuse any count that is not whole directories (option (a)) over rounding the count inside
+the runner (option (b)). A survey of the committed workloads then showed (a) refusing the
+defaults of `file_per_sample` (50,000,000 against directories of 1,300), `hdf5_map`,
+`tfrecord_stream` and `parquet_stream` (1,281,167 against 1,024 a shard), and the
+calibrated cases `imagefolder-jpeg` (3,200 files) and `npy-8mib`/`npy-140mib` (256 and 16
+against 10,000), which cannot comply without changing what was traced. The user then
+reopened (b), argued for rounding up the independent variable generously and showing every
+dependent value before a datagen (the total capacity above all, so a user can see that a
+corpus will not fit), and for layout counts that scale the way a data scientist would set
+them. The discussion that followed, corrections included, is below. MLCommons' own
+benchmark has the same three steps (`datasize`, `datagen`, `run`; its Rules.md), the user
+noted.
+
+**The arguments, as settled.**
+
+- *Rounding is harmless at scale*, so it can be generous: 50,000,000 → 50,000,600 is 0.001%.
+  The expected total of the sizes is exact enough to decide whether a corpus fits: the sum
+  of `n` lognormal draws strays from its expectation by about `σ/√n` relative (≈ 0.01% at
+  50 M); a small corpus can be summed exactly.
+- *An epoch is a full pass* (the user's correction of their own first statement, "a few epochs
+  read a small fraction"): with the Feistel permutation and `drop_last` every sample is read
+  once an epoch, and the 5× rule exists because epochs reuse. Within a pass, shuffled access
+  has no reuse, so every read is a first touch whatever the corpus size; corpus size then
+  matters through the metadata working set (dentries, inodes, directory blocks, on clients
+  and servers), the fullness of the system under test, and the data's age. So a subset run
+  (§3.70 item 6) stands for a corpus of the subset's size on a system holding the whole: its
+  metadata footprint is the subset's. **The age bias** (the subset is the oldest data
+  written, and a system that tiers by age serves it from its coldest tier) must be stated
+  wherever subset results are (the user: not thought of before).
+- *Whole directories are not about skew.* With uniform shuffling every file is equally
+  likely, so a short last directory is colder only in proportion to its size: noise among
+  thousands of directories (it matters only for tiny corpora: 3,200 files in directories of
+  1,300 leave the last one 46% as busy). Whole directories serve subsets, a clean ownership
+  of directories by datagen's hosts, and growth; the user agreed this weakens the skew
+  argument.
+- *The calibrated cases stay exact.* A case exists to check its abstract against the trace
+  that fitted it, so its counts are the traced ones; it says nothing about how a scaled run
+  is laid out. Rounding inside the runner (option (b) as a definition) would quietly change
+  the cases (3,200 → 3,900) and break that check. Hence the sizing step below: it gives
+  (b)'s ease without touching any definition, fingerprint, or case.
+- *The layout counts are the data scientist's choice, not the application's semantics*, so
+  they may scale with the corpus. The user's terms: samples per file, files per directory,
+  directories. Checked against primary sources the same day: TensorFlow's TFRecord guide
+  ("at least 10 times as many files as there will be hosts reading data … at least 10 MB+
+  and ideally 100 MB+" a file), Hugging Face's WebDataset page ("Each shard is often
+  ~1GB"), Parquet's configuration page ("large row groups (512MB - 1GB)"), Transformers'
+  `max_shard_size` (5 GB by default). For directory width there is no authoritative guidance:
+  ext4's htree and XFS's hashed directories look a name up in `O(log n)`, so width costs
+  elsewhere (a listing is linear; creates serialize on the parent; some scale-out systems
+  place a whole directory on one metadata server; the directory blocks a client keeps
+  resident). Since §3.70 item 6 replaced the walk of a large corpus with an inventory (the
+  user's reminder), the listing cost applies only to small corpora, which favours wide
+  directories at scale. Depth: a third level adds few directories (the leaves are files ÷
+  width whatever the depth) but one more lookup per open; the user prefers one level made
+  wider, which is also what the runner supports today.
+- *ImageNet's 1,300 is a class size* (ImageFolder: a directory is a label; 1,281,167 images
+  in 1,000 classes, 732 to 1,300 each), a fact of how the corpus was assembled, not a
+  constraint. Practitioners grow a classification corpus by classes and do not inflate the
+  class size, but taxonomies stop near 20,000 classes (ImageNet-21k about 21,000 for 14 M
+  images; JFT-300M about 18,000 for 300 M, from memory of Sun et al. 2017, not stored as
+  directories). So a class-structured corpus grows by classes up to a cap and then by class
+  size; past about 26 M samples real practice is sharded, and a larger ImageFolder corpus is
+  the metadata-heavy variant, to be labelled so, not "ImageNet at scale".
+- *Comparability.* The layout counts change the operation stream (how many opens, read and
+  `readdir` sizes), so a CLOSED result needs every submitter at one corpus size to get one
+  layout: the WG fixes the *rule* (the targets below), never the totals, and the corpus grows
+  with the system under test. Users outside the WG may set the counts directly.
+- *Growth.* A path is a function of the files per directory and the samples per file, so
+  changing either renames every file: a new corpus. With scale-free targets (bytes per file,
+  files per directory) only the directory count grows, so a corpus grown fifty-fold keeps a
+  layout in the norms (the user's caveat about small corpora grown large). The exception is
+  a corpus whose file count is below the readers' floor at the larger scale; §3.70's
+  original answer holds there: size the corpus for the largest step and run the smaller ones
+  as subsets.
+- *The barrier.* The user recalled an earlier exchange: gradient exchange in modern training
+  overlaps the backward pass (DDP reduces buckets as they are ready; FSDP and ZeRO
+  prefetch), so a stop-the-world wait added after `step_time` overstates the cost.
+  Overlap hides the exchange's *time*, not its *dependency*: synchronous SGD cannot start
+  step `k+1` until every GPU's step-`k` gradients are reduced, so a GPU that starts late
+  because its loader ran dry delays every GPU, and the step is the slowest GPU's data wait
+  plus compute. Coupling every step is the straggler effect a storage benchmark exists to
+  expose; its cost must be only "wait for the slowest", the exchange's own time being inside
+  the measured `step_time`. The loaders still read ahead across it (`workers × prefetch`
+  batches). The default `sync_every = 500` most likely followed MLPerf's 500 steps.
+- *MLPerf's numbers* (checked in MLCommons' Rules.md and Submission_guidelines.md the same
+  day): the dataset at least 5× the memory of all its nodes; at least 500 steps an epoch
+  (`500 × batch_size × num_accelerators` samples); `datagen` at least what `datasize`
+  computed; a run phase of six runs, one warm-up and five measured. Neither document states
+  a number of epochs a run; "5" may be the five measured runs. WG process, `PROJECT_BRIEF.md`
+  §8.
+
+**Proposed** (the user agreed to all six points 2026-10-12; to be built after resume, which
+does not depend on it):
+
+1. *A sizing step* that writes nothing to storage: input one size (samples, bytes, or the 5×
+   inputs: hosts, their memory, GPUs), the format, epochs, GPUs, and any layout count the
+   user fixes; output a parameter file (`schema/README.md` §8) with the samples rounded up to
+   whole directories (and whole files), the layout counts, and `steps` from epochs (`epochs ×
+   ⌊samples / (G × batch)⌋`), and a printed projection: samples, files, directories, files
+   per directory, samples per file, mean file size, expected total bytes, steps. `datagen`,
+   `dry-run`, and `run` take the file as they take any parameter file, so the runner stays
+   exact and the calibrated cases untouched. An `aeiou` subcommand in Rust (exact per-sample
+   sums for small corpora; it sits beside `datagen`); its name is open (named for the
+   mechanism; `datasize` is MLCommons' word for the same step).
+2. *The layout rule.* Sharded formats: samples per file from the format's byte target
+   (TFRecord 100 MB and up, WebDataset about 1 GB, Parquet a 512 MB to 1 GB row group),
+   subject to files ≥ 10 × readers (GPUs × loader workers under `stream` access).
+   Anonymous directories: one level, a width fixed by the WG (one constant, its value open:
+   4,096 or 10,000), wider before deeper. Class-structured (ImageFolder): files per
+   directory the class size (1,300) until the class count reaches a cap of about 20,000,
+   then larger classes. Applied once, for the target size: the layout is fixed for the
+   corpus's life, and grow and shrink refuse to change it.
+3. *Epochs.* The sizing step derives `steps`; the epoch count is a WG reference parameter
+   (§8), not this tool's default, until the rules state one.
+4. *The barrier.* `sync_every` defaults to every step for synchronous data-parallel
+   training, adding no time of its own; the coordinator's barrier latency is measured (2, 8,
+   32 hosts) to confirm it is small against `step_time`, and if it is not, the fix is a
+   cheaper release, not a rarer barrier.
+5. *The capacity check.* `datagen` refuses when the expected bytes plus a margin exceed the
+   free space `statvfs` reports for a directory root; an object root cannot be checked and
+   is warned about.
+6. *Terms.* Defined once in `schema/README.md` and used everywhere: **sample**, **file**,
+   **directory**; `samples`, `samples_per_file`, `files_per_directory`, and the derived
+   `files`, `directories`; standard parameter names across the training abstracts, passed as
+   parameters (they are workload identity), the sizing step's flags the same names. A
+   contract extension lets `div` in a pattern take a parameter (`{id div
+   files_per_directory}`; today the width is a literal, so the directory *count* already
+   scales but the width cannot).
+
+**Not changed by this.** §3.70's resume, grow, and shrink take any count (whole directories
+are not required of a corpus); `aeiou run --subset` requires whole directories of the
+subset's count. Other workloads (checkpoints, model loading, KV caches, vector indexes,
+dataprep) have no such layout; their sizes come from domain parameters, and they get the
+same projection in a later pass.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
