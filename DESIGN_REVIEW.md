@@ -5582,7 +5582,10 @@ noted.
   (`500 × batch_size × num_accelerators` samples); `datagen` at least what `datasize`
   computed; a run phase of six runs, one warm-up and five measured. Neither document states
   a number of epochs a run; "5" may be the five measured runs. WG process, `PROJECT_BRIEF.md`
-  §8.
+  §8. *Confirmed by the user the same day:* one warm-up run of at least 500 steps, then five
+  independent runs of 500 steps each; the 5 is runs, not epochs. Since the dataset holds at
+  least 500 steps an epoch, a run reads at most one pass, so a run has no reuse within it;
+  reuse is across runs (each starts over), which is what the 5× rule defeats.
 
 **Proposed** (the user agreed to all six points 2026-10-12; to be built after resume, which
 does not depend on it):
@@ -5605,8 +5608,9 @@ does not depend on it):
    directory the class size (1,300) until the class count reaches a cap of about 20,000,
    then larger classes. Applied once, for the target size: the layout is fixed for the
    corpus's life, and grow and shrink refuse to change it.
-3. *Epochs.* The sizing step derives `steps`; the epoch count is a WG reference parameter
-   (§8), not this tool's default, until the rules state one.
+3. *Epochs.* The sizing step derives `steps` from a step count or from epochs; the run
+   structure is the WG's (§8): MLPerf's is one warm-up run of at least 500 steps and five
+   independent measured runs of 500 steps, each at most one pass.
 4. *The barrier.* `sync_every` defaults to every step for synchronous data-parallel
    training, adding no time of its own; the coordinator's barrier latency is measured (2, 8,
    32 hosts) to confirm it is small against `step_time`, and if it is not, the fix is a
