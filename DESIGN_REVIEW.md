@@ -5279,15 +5279,29 @@ corpus fits the run: the definition equal but for the count, the run's count no 
 `aeiou run --subset` required for a smaller count, so a typo is refused rather than run. A
 subset is a contiguous set of whole directories from 0, the count rounded up the same way
 and both counts printed; the directories beyond are ignored. A live walk on a subset walks
-those directories, and only the root listing differs from a corpus of exactly that size: it
+those directories~~, and only the root listing differs from a corpus of exactly that size: it
 returns every directory's name, so the runner expects the corpus's count there and the
-subset's below, and the report says so. A flat pattern has no whole-directory subset, so a
+subset's below, and the report says so~~ (struck 2026-10-13: no handle names a dataset's
+root, `dir` names one of its directories, so a walk lists whole directories only and a subset
+is the fresh corpus's workload, §3.72). A flat pattern has no whole-directory subset, so a
 live-walk subset of a flat dataset is refused (no committed flat abstract walks). Subsets
 apply to sample spaces (`access: map` or `stream`) whose count is a bare parameter
 reference; a `regions` dataset or a dataset without an access mode (a DiskANN index is a
 graph over every node) is refused (in contract 0.8's terms, §3.72: an `array` or an `indexed`
 dataset). Whether a scored step may run on a subset is the WG's
 question (`PROJECT_BRIEF.md` §8), not aeiou's.
+*Built 2026-10-13* (`runner/REFERENCE.md` §5, *Subset runs*), as decided in §3.72: the count
+asked is rounded up before the model is built (`D·k` ids under `{id div D}`, `k` for a flat
+pattern), so the op stream and the fingerprint are a fresh corpus's of the rounded count and
+the dataset id is the corpus's; the options block shows the count asked, run, and the
+corpus's, the report's dataset entry a `subset` block, and the run prints the age bias. A
+flat subset is refused whenever the abstract has a `dir` handle on the dataset, whatever its
+parameters (so `file_per_sample` made flat is refused even with `enumerate=false`: the check
+reads the abstract, and no committed consumed dataset is flat with a walk). Rounding that
+reaches the whole corpus is no subset (usage error with nothing else smaller); one that
+passes it is refused, naming the largest whole subset. Tested on one host and two ranks
+(`tests/coord.rs`, `a_subset_runs_whole_directories_of_the_corpus`), the fingerprint held to
+the dry run's at the rounded count, and every refusal. The inventory variant is next.
 
 **Order.** ~~(1) The payload (built). (2) `O_DIRECT` in the Python writer, measured. (3) The
 manifest from the start, the progress messages, and resume, on both writers. (4) Whole
@@ -5905,7 +5919,7 @@ hash rather than use `mod`, and they write namespaces. `mod` stays in the patter
 for `indexed` datasets and namespaces, and a future workload that fits it will use it. A flat
 pattern (one directory, or a bucket prefix) is allowed: shard corpora are usually flat.
 
-**Decided on the way, for `run --subset` (built next).**
+**Decided on the way, for `run --subset` (~~built next~~ built 2026-10-13, §3.70 item 6).**
 - A subset means a smaller corpus: the run is the same workload as a fresh corpus of the
   rounded count (same op stream and fingerprint), so subsets are whole `div` directories from
   0, or whole files of a flat dataset; a flat subset whose abstract lists the directory is

@@ -129,7 +129,7 @@ sides may come from different layers.
 
 ## OPTIONS BY KIND
 
-**aeiou run.** Fixed: the abstract, `--gpus`, `--seed`, `--param`, `--params-file`,
+**aeiou run.** Fixed: the abstract, `--gpus`, `--seed`, `--param`, `--params-file`, `--subset`,
 `--posix`, `--cache`, `--s3`, `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`,
 `--ignore-limits`. Layered: `--root`, `--endpoint`, `--threads`, `--buffer-mib`, `--write-compress`,
 `--time-scale`, the io_uring knobs (`--iowq-max-workers`, `--sqpoll`, `--sqpoll-shared`,

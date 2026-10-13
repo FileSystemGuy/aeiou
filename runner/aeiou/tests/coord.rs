@@ -1006,3 +1006,77 @@ fn ctrl_c_stops_every_host_and_leaves_a_true_manifest() {
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
+
+/// `run --subset` (DESIGN_REVIEW.md §3.70 item 6): a count below the corpus's runs the corpus's
+/// first ids, rounded up to whole directories, on one host and on two, with the fingerprint of
+/// a fresh corpus of the rounded count and the corpus's dataset id; and the refusals.
+#[test]
+fn a_subset_runs_whole_directories_of_the_corpus() {
+    // 1300 files a directory: 3200 is two whole directories and 600 files
+    let root = tmpdir("subset");
+    datagen_one(&root, 3200);
+    let corpus = aeiou::payload::Manifest::read(&root.join("train")).unwrap().id();
+    let params = ["files=2000", "steps=4"];
+    let fp = dry_fingerprint_cli("file_per_sample.ast.json", "2", &["files=2600", "steps=4"]);
+    for ranks in [1i64, 2] {
+        let json = root.join(format!("report-{ranks}.json"));
+        let outs = run_ranks("file_per_sample.ast.json", &root, "2", &params, ranks, &["--subset", "--expect-fingerprint", &fp, "--report-json", json.to_str().unwrap()]);
+        assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s): {outs:?}");
+        let text = &outs[0].1;
+        assert!(text.contains("subset = train: files = 2000 asked, rounded up to 2600 (whole directories of 1300 files), of the corpus's 3200  [cli]"), "{text}");
+        assert!(text.contains("subset: a subset is the corpus's lowest ids"), "{text}");
+        assert!(text.contains("params: steps=4 files=2600"), "{text}");
+        let d: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+        let ds = &d["datasets"][0];
+        assert_eq!(ds["id"].as_str(), Some(corpus.as_str()), "the corpus's id");
+        let s = &ds["subset"];
+        assert_eq!((s["param"].as_str(), s["corpus"].as_i64(), s["requested"].as_i64(), s["run"].as_i64(), s["unit"].as_i64()), (Some("files"), Some(3200), Some(2000), Some(2600), Some(1300)));
+        assert_eq!(d["verdict"]["fingerprint"].as_str().map(|f| f.trim_start_matches("0x").to_string()), Some(fp.trim_start_matches("0x").to_string()));
+    }
+    let refused = |params: &[&str], extra: &[&str]| {
+        let outs = run_ranks("file_per_sample.ast.json", &root, "2", params, 1, extra);
+        assert!(!outs[0].0, "{outs:?}");
+        outs[0].2.clone()
+    };
+    let e = refused(&["files=3000", "steps=4"], &["--subset"]);
+    assert!(e.contains("3000 rounds up to 3900 (whole directories of 1300 files), past the corpus's 3200; the largest subset of whole units is 2600"), "{e}");
+    let e = refused(&["files=4000", "steps=4"], &["--subset"]);
+    assert!(e.contains("a subset is smaller; `aeiou datagen --grow 4000"), "{e}");
+    let e = refused(&["files=3200", "steps=4"], &["--subset"]);
+    assert!(e.contains("--subset: no dataset is run smaller than its corpus"), "{e}");
+    let e = refused(&["files=2600", "steps=4"], &[]);
+    assert!(e.contains("count: 2600 vs 3200") && e.contains("`--subset` runs the corpus's first ids"), "{e}");
+
+    // a flat corpus whose directory the abstract lists: the listing would be the whole corpus
+    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(crate::common::workload_ast("file_per_sample.ast.json")).unwrap()).unwrap();
+    doc["datasets"]["train"]["pattern"] = serde_json::json!("train/img_{id:09}.jpg");
+    let flat = tmpdir("subset-flat");
+    let ast = flat.join("file_per_sample.ast.json");
+    std::fs::write(&ast, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let cli = |args: &[&str]| Command::new(env!("CARGO_BIN_EXE_aeiou")).args(args).output().unwrap();
+    let (a, r) = (ast.to_str().unwrap(), flat.to_str().unwrap());
+    assert!(cli(&["datagen", a, "--root", r, "--param", "files=300"]).status.success());
+    let o = cli(&["run", a, "--root", r, "--gpus", "2", "--time-scale", "0", "--param", "files=100", "--param", "steps=4", "--subset"]);
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && e.contains("its files share one directory, and the abstract lists it"), "{e}");
+    // without the listing, whole files: one sample a file, so nothing is rounded
+    let o = cli(&["run", a, "--root", r, "--gpus", "2", "--time-scale", "0", "--param", "files=100", "--param", "steps=4", "--param", "enumerate=false", "--subset"]);
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && e.contains("the abstract lists it"), "the refusal reads the abstract, not the parameters: {e}");
+
+    // an `indexed` dataset is looked up by id: never a smaller corpus
+    let small = ["shard_bytes=4194304", "hdr_len=[4096, 4096]", "off=[4104, 1052680, 4104, 1052680, 2101256]", "bytes=[1048576, 1048576, 1048576, 1048576, 16384]", "rows=[1, 64, 1, 64, 1]", "row_bytes=[1048576, 16384, 1048576, 16384, 16384]"];
+    let st = crate::common::workload_ast("safetensors_load.ast.json");
+    let mut args: Vec<String> = vec!["datagen".into(), st.display().to_string(), "--root".into(), r.into(), "--gpus".into(), "2".into()];
+    args.extend(small.iter().flat_map(|p| ["--param".to_string(), p.to_string()]));
+    let v: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    assert!(cli(&v).status.success());
+    args[0] = "run".into();
+    args.extend(["--time-scale", "0", "--param", "configs=2", "--subset"].map(String::from));
+    let v: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let o = cli(&v);
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && e.contains("`indexed` (looked up by id, never consumed)"), "{e}");
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&flat).unwrap();
+}

@@ -1447,42 +1447,179 @@ pub struct DatasetCheck {
     pub id: String,
     pub payload: payload::PayloadSpec,
     pub files: Option<u64>,
+    /// Run as a smaller corpus than the one at its root (`--subset`).
+    pub subset: Option<Subset>,
+}
+
+/// A dataset run as a smaller corpus than the one at its root (`run --subset`,
+/// `DESIGN_REVIEW.md` §3.70 item 6): its first `run` ids, whole directories (whole files when
+/// it has none), which are a fresh corpus of `run` byte for byte, so the run is the workload
+/// of that corpus and its fingerprint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Subset {
+    pub name: String,
+    /// The parameter the dataset's `count` is.
+    pub param: String,
+    /// The count at the root (the manifest's).
+    pub corpus: i64,
+    /// The count the parameters in effect ask for.
+    pub requested: i64,
+    /// The count run: `requested` rounded up to a whole `unit`, or the corpus.
+    pub run: i64,
+    /// Ids in a whole directory (whole file, for a flat pattern).
+    pub unit: i64,
+    /// What `unit` is, in words.
+    pub whole: String,
+}
+
+/// Said with every subset, printed and in the report.
+pub const SUBSET_AGE: &str = "a subset is the corpus's lowest ids, the first written and the oldest: a tiering system may serve them from its coldest tier, which a fresh corpus of that count would not be";
+
+impl Subset {
+    pub fn describe(&self) -> String {
+        let rounded = if self.run == self.requested { String::new() } else { format!(", rounded up to {} ({})", self.run, self.whole) };
+        format!("{} = {} asked{rounded}, of the corpus's {}", self.param, self.requested, self.corpus)
+    }
+
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::json!({"param": self.param, "corpus": self.corpus, "requested": self.requested, "run": self.run, "unit": self.unit, "note": SUBSET_AGE})
+    }
+}
+
+/// The manifest at dataset `name`'s root, refused unless complete.
+fn dataset_manifest(loaded: &crate::Loaded, name: &str, root: &(impl Place + ?Sized)) -> Result<(String, PathBuf, Manifest)> {
+    let rel = payload::dataset_root(&loaded.ast, name)?;
+    let dir = root.at(&rel);
+    let m = match root.object(&rel) {
+        Some((store, rest)) => Manifest::read_object(&store, &rest),
+        None => Manifest::read(&dir),
+    }
+    .with_context(|| format!("dataset `{name}` at {}: run `aeiou datagen` first", dir.display()))?;
+    if m.state != payload::STATE_COMPLETE {
+        let left = m.progress["unfinished"].as_array().map(|r| r.iter().map(|x| x[1].as_i64().unwrap_or(0) - x[0].as_i64().unwrap_or(0)).sum::<i64>());
+        bail!(
+            "dataset `{name}` at {}: the manifest says `{}`{}: a datagen did not finish it; finish it with `aeiou datagen --resume {}`",
+            dir.display(),
+            m.state,
+            left.map(|n| format!(", {n} file(s) not written")).unwrap_or_default(),
+            dir.display()
+        );
+    }
+    Ok((rel, dir, m))
+}
+
+/// The definition with another count, to compare a subset's with its corpus's.
+fn with_count(def: &serde_json::Value, count: i64) -> serde_json::Value {
+    let mut d = def.clone();
+    if let Some(o) = d.as_object_mut() {
+        o.insert("count".into(), serde_json::json!(count));
+    }
+    d
+}
+
+/// A `dir` handle of dataset `name` anywhere in the abstract: a listing of its directory.
+fn lists_directory(v: &serde_json::Value, name: &str) -> bool {
+    match v {
+        serde_json::Value::Object(o) => {
+            o.get("dir").and_then(|d| d.get("dataset")).and_then(|d| d.as_str()) == Some(name) || o.values().any(|x| lists_directory(x, name))
+        }
+        serde_json::Value::Array(a) => a.iter().any(|x| lists_directory(x, name)),
+        _ => false,
+    }
+}
+
+/// `run --subset` (`DESIGN_REVIEW.md` §3.70 item 6): every dataset whose count in effect is
+/// below its corpus's, run as the corpus's first ids, the count rounded up to whole
+/// directories of a `{id div D}` pattern (whole files for a flat one). Refused: a count above
+/// the corpus's (`datagen --grow` makes it), one that rounds past it, an `indexed` dataset, a
+/// count that is not a parameter, a definition that differs in more than the count, and a
+/// flat dataset whose directory the abstract lists (the listing would show the whole corpus).
+/// Datasets at their corpus's count are left out; the caller refuses `--subset` when none is
+/// left.
+pub fn subsets(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized)) -> Result<Vec<Subset>> {
+    let mut out: Vec<Subset> = Vec::new();
+    for name in loaded.ast.datasets.keys() {
+        let (_, dir, m) = dataset_manifest(loaded, name, root)?;
+        let want = payload::resolved_dataset(&loaded.doc, name, cfg)?;
+        let (Some(requested), Some(corpus)) = (want["count"].as_i64(), m.dataset["count"].as_i64()) else { continue };
+        if requested == corpus {
+            continue;
+        }
+        let at = format!("--subset: dataset `{name}` at {}", dir.display());
+        if requested > corpus {
+            bail!("{at}: {requested} asked, the corpus has {corpus}: a subset is smaller; `aeiou datagen --grow {requested} {}` makes the larger corpus", dir.display());
+        }
+        if want["access"] == "indexed" {
+            bail!("{at}: `indexed` (looked up by id, never consumed): only a consumed dataset (`map`, `stream`) is run as a smaller corpus");
+        }
+        let raw = &loaded.doc["datasets"][name.as_str()]["count"];
+        let Some(param) = raw.get("param").and_then(|p| p.as_str()).filter(|_| raw.as_object().map(|o| o.len()) == Some(1)) else {
+            bail!("{at}: its count is not a parameter, so a run cannot ask for fewer");
+        };
+        if with_count(&want, corpus) != m.dataset {
+            let mut lines = Vec::new();
+            payload::diff(&with_count(&want, corpus), &m.dataset, "", &mut lines);
+            bail!("{at}: the definition differs from the corpus's in more than its count (abstract vs manifest):\n  {}", lines.join("\n  "));
+        }
+        let spf = if want["layout"] == "compound" { want["samples_per_file"].as_i64().unwrap_or(1).max(1) } else { 1 };
+        let files = |n: i64| format!("{n} file{}{}", if n == 1 { "" } else { "s" }, if spf == 1 { String::new() } else { format!(" of {spf} samples") });
+        let pattern = crate::pattern::Pattern::parse(want["pattern"].as_str().unwrap_or_default())?;
+        let (unit, whole) = match crate::eval::Model::dir_scheme(&pattern, corpus).0 {
+            crate::eval::DirScheme::Div(d) => (d * spf, format!("whole directories of {}", files(d))),
+            crate::eval::DirScheme::Plain => (spf, format!("whole directories of {}", files(1))),
+            crate::eval::DirScheme::NoDir | crate::eval::DirScheme::Constant => {
+                if lists_directory(&loaded.doc, name) {
+                    bail!("{at}: its files share one directory, and the abstract lists it: the listing would show the whole corpus, which a fresh corpus of the subset's count would not");
+                }
+                (spf, format!("whole files of {spf} samples"))
+            }
+            _ => bail!("{at}: its directories are not `{{id div D}}`, so a subset of it is not whole directories (V21)"),
+        };
+        let run = (requested + unit - 1) / unit * unit;
+        if run > corpus {
+            let most = corpus / unit * unit;
+            bail!(
+                "{at}: {requested} rounds up to {run} ({whole}), past the corpus's {corpus}; {}",
+                if most > 0 { format!("the largest subset of whole units is {most}") } else { "the corpus has no smaller subset of whole units".into() }
+            );
+        }
+        if let Some(o) = out.iter().find(|s| s.param == param) {
+            bail!("{at}: its count is `{param}`, as dataset `{}`'s is; a subset rounds each dataset's count alone", o.name);
+        }
+        out.push(Subset { name: name.clone(), param: param.to_string(), corpus, requested, run, unit, whole });
+    }
+    Ok(out)
 }
 
 /// Compare every dataset against its manifest; returns the dataset ids.
 pub fn check_datasets(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized)) -> Result<Vec<DatasetCheck>> {
+    check_datasets_subset(loaded, cfg, root, &[])
+}
+
+/// `check_datasets`, a dataset among `subsets` compared at its corpus's count.
+pub fn check_datasets_subset(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized), subsets: &[Subset]) -> Result<Vec<DatasetCheck>> {
     let mut out = Vec::new();
     for name in loaded.ast.datasets.keys() {
-        let rel = payload::dataset_root(&loaded.ast, name)?;
-        let dir = root.at(&rel);
-        let m = match root.object(&rel) {
-            Some((store, rest)) => Manifest::read_object(&store, &rest),
-            None => Manifest::read(&dir),
+        let (rel, dir, m) = dataset_manifest(loaded, name, root)?;
+        let subset = subsets.iter().find(|s| s.name == *name).cloned();
+        let mut want = payload::resolved_dataset(&loaded.doc, name, cfg)?;
+        if let Some(s) = &subset {
+            want = with_count(&want, s.corpus);
         }
-        .with_context(|| format!("dataset `{name}` at {}: run `aeiou datagen` first", dir.display()))?;
-        if m.state != payload::STATE_COMPLETE {
-            let left = m.progress["unfinished"].as_array().map(|r| r.iter().map(|x| x[1].as_i64().unwrap_or(0) - x[0].as_i64().unwrap_or(0)).sum::<i64>());
-            bail!(
-                "dataset `{name}` at {}: the manifest says `{}`{}: a datagen did not finish it; finish it with `aeiou datagen --resume {}`",
-                dir.display(),
-                m.state,
-                left.map(|n| format!(", {n} file(s) not written")).unwrap_or_default(),
-                dir.display()
-            );
-        }
-        let want = payload::resolved_dataset(&loaded.doc, name, cfg)?;
         if m.dataset != want {
             let mut lines = Vec::new();
             payload::diff(&want, &m.dataset, "", &mut lines);
+            let smaller = with_count(&want, m.dataset["count"].as_i64().unwrap_or(-1)) == m.dataset && want["count"].as_i64() < m.dataset["count"].as_i64();
             bail!(
-                "dataset `{name}` at {}: the manifest does not match the resolved definition (abstract vs manifest):\n  {}",
+                "dataset `{name}` at {}: the manifest does not match the resolved definition (abstract vs manifest):\n  {}{}",
                 dir.display(),
-                lines.join("\n  ")
+                lines.join("\n  "),
+                if smaller { "\n  (only the count differs, and it is smaller: `--subset` runs the corpus's first ids)" } else { "" }
             );
         }
         m.payload.check().with_context(|| format!("dataset `{name}` at {}", dir.display()))?;
         let files = m.provenance.get("files_written").and_then(|v| v.as_u64());
-        out.push(DatasetCheck { name: name.clone(), root: rel, id: m.id(), payload: m.payload.clone(), files });
+        out.push(DatasetCheck { name: name.clone(), root: rel, id: m.id(), payload: m.payload.clone(), files, subset });
     }
     Ok(out)
 }

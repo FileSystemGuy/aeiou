@@ -275,7 +275,7 @@ Not built, in rough order of interest:
   written, rewritten every `--progress-secs`, and `complete` at the end, the same day.
   `datagen --resume ROOT` the same day (the unfinished ids written again, whole, from the
   manifest alone, on any host count); ~~Resume, whole directories,~~ grow
-  and shrink the same day, settle, claims in id order, and Ctrl-C the same day; subset runs not yet (whole directories not required of a corpus, §3.71); a sizing step for
+  and shrink the same day, settle, claims in id order, and Ctrl-C the same day; subset runs (`aeiou run --subset`, whole directories of the corpus, 2026-10-13; whole directories not required of a corpus, §3.71), the inventory variant not yet; a sizing step for
   training corpora proposed the same day (`DESIGN_REVIEW.md` §3.71).
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),

@@ -396,6 +396,21 @@ turns it off, and the last one on the line wins.
 - **--seed** *SEED*
 
   As for `dry-run`.
+- **--subset**
+
+  Run a dataset whose count (from `--param`, as always) is below its corpus's as the
+  corpus's first ids. The count is rounded up to whole directories of a `{id div D}`
+  pattern, `D` times the samples per file (to whole files when the pattern has no
+  directories), which are byte for byte a fresh corpus of that count, so the run is that
+  corpus's workload and fingerprint; the dataset id is the corpus's. The options block shows
+  the count asked and the count run, and the report's dataset entry has a `subset` block.
+  The subset is the corpus's lowest ids, the first written: a tiering system may serve them
+  from its coldest tier, and the run says so. Only for a consumed dataset (`map`, `stream`)
+  whose `count` is a parameter and whose definition differs from the corpus's in nothing
+  else. Refused: a count above the corpus's (`aeiou datagen --grow` makes it), one that
+  rounds up past it (the message names the largest whole subset), an `indexed` dataset, a
+  flat dataset whose directory the abstract lists (the listing would be the whole corpus),
+  and `--subset` when no dataset is smaller. The command line's alone.
 
 **Backend**
 
@@ -773,6 +788,14 @@ run to the dry run's fingerprint:
 aeiou datagen workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
 aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
     --param files=4000 --param steps=50 --expect-fingerprint 3f1c... --report-json run.json
+```
+
+The first 2,600 files of that corpus (two whole directories of 1,300), the fingerprint the
+dry run gives for `files=2600`:
+
+```
+aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+    --param files=2000 --param steps=50 --subset
 ```
 
 The same run on io_uring with a capped io-wq, the metrics of the stream to a file:

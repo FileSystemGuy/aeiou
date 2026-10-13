@@ -557,7 +557,12 @@ numbers; the order is this note's.
     whole directories, because every datagen now hands its ids out in runs from one queue on
     rank 0, in id order (from the top down in a shrink); Ctrl-C stops every host with the
     manifest true (exit 130); `--resume` and `--settle` refuse a manifest less than two
-    progress windows old unless its datagen recorded that it stopped. Subset runs remain.
+    progress windows old unless its datagen recorded that it stopped. ~~Subset runs remain.~~
+    Subset runs **built 2026-10-13** (§3.70 item 6, §3.72): `aeiou run --subset` runs a
+    consumed dataset's count below its corpus's as the corpus's first ids, rounded up to
+    whole `div` directories (whole files when flat), the workload and fingerprint of a fresh
+    corpus of that count, the corpus's dataset id, and the age bias said. The inventory
+    variant remains.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

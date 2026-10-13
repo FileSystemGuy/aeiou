@@ -27,7 +27,7 @@ cargo test --release
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
 | `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C stops every host, exit 130. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
-| `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
+| `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
 Not yet: the other asynchronous backends (~~`libaio`, `posix-aio`, `mmap`,~~ **built
@@ -605,6 +605,32 @@ as root). The same runs on the loopback NFS mount are §7.
   0 went away reports the reason rank 0 sent, not the broken pipe (`ClientState::tell`).
   Tests: `tests/coord.rs` `only_rank_0_reads_the_manifest_at_the_root` (rank 0's refusal and a
   complete corpus reach both hosts; a host naming another ROOT is refused).
+- **Subset runs (2026-10-13, `DESIGN_REVIEW.md` §3.70 item 6, §3.72).** `aeiou run
+  --subset` runs a dataset whose count in effect (from `--param`, as always) is below its
+  corpus's as the corpus's first ids. Before the model is built, `run::subsets` reads each
+  dataset's manifest and, for every dataset asked smaller, rounds the count up to a whole
+  unit: `D·k` ids under `{id div D}` (`k` the samples per file, 1 but for `compound`), `k`
+  under `{id}` as the directory, and `k` for a flat pattern (no directory field). The
+  rounded count replaces the parameter (`params:` prints it), so the model, the op stream,
+  and the fingerprint are those of a fresh corpus of that count, whose bytes the corpus's
+  first ids are (the payload's groups are `div`, §5 *Payload*; an HDF5 file's header
+  depends on its own row count alone). `check_datasets` then compares the definition at
+  the corpus's count, and the dataset id printed and reported is the corpus's. The options
+  block's `subset` line shows each count asked, run, and the corpus's; the dataset line
+  is followed by the age bias (`run::SUBSET_AGE`: the lowest ids are the oldest data, which
+  a tiering system may hold in its coldest tier). Refused, each naming the dataset: a count
+  above the corpus's (pointing at `datagen --grow`); one that rounds past it (naming the
+  largest whole subset, `⌊C / unit⌋·unit`); an `indexed` dataset (every `array`); a count
+  that is not a bare `{"param": x}`; a definition that differs in more than the count; two
+  datasets sharing the count parameter; a flat dataset (no directory field, or a constant
+  directory) whose directory the abstract lists through a `dir` handle, since the listing
+  would return the whole corpus (read from the abstract, whatever its parameters, so a walk
+  switched off by a parameter is refused too). A `dir` handle names one of a dataset's
+  directories and none names its root, so under `div` every listing a subset makes is of a
+  whole directory and nothing differs from the fresh corpus. `--subset` when no dataset is
+  run smaller than its corpus (a count that rounds up to the whole corpus included) is a
+  usage error (exit 2); a smaller count without `--subset` is refused as a manifest
+  mismatch that says `--subset` would run it. The flag is the command line's alone (§14).
 - **Counting a file once (fixed 2026-10-12).** A writer counted a file before advancing its
   cursor, and a window read the cursor before the counts, so a file finished in between
   was recorded both as unfinished and as counted, and a resume counted it twice
@@ -1395,8 +1421,10 @@ the same day (decided 2026-10-01).**
   "layers": {config: {path, sha256} | null, env: [names that contributed],
              options: {flag: {value, source: "cli" | "env AEIOU_X" | "config PATH" | "default"}}, warnings},   §14 (2026-10-04)
   "hosts": [{rank, host, layers}],           rank 0 of several: every host's block, from its Hello
-  "datasets": [{name, root, id, payload, files}], "input_namespaces": [{names, root, writer_…, gap_s, objects, same_host}],
+  "datasets": [{name, root, id, payload, files, subset}], "input_namespaces": [{names, root, writer_…, gap_s, objects, same_host}],
   "limits": {"checked": {…§11…}, "ignored": [problems started over]},
+  (datasets[].subset: null, or under --subset {param, corpus, requested, run, unit, note}: the
+   count asked, the count run, the corpus's, the ids in a whole unit, the age-bias sentence; §5)
   "started", "finished",                      Unix seconds, the gate and the end of the run
   "scope": "run" | "host", "result": {…}, "this_host": {…},
   "verdict": {"ok", "error", "fingerprint", "fingerprint_scope", "expected_fingerprint"} }
@@ -1617,7 +1645,7 @@ lower one's value (`options.rs`; the reasoning is `DESIGN_REVIEW.md` §3.60):
 **Two kinds of option.** A *fixed* option is the command line's alone, and the environment
 and the file are refused when they name it: nothing the fingerprint, a dataset id, or a safety
 check depends on may come from a layer the command line does not show. For `run` these are
-the abstract, `--gpus`, `--seed`, `--param`, `--params-file`, `--posix`, `--cache`, `--s3`,
+the abstract, `--gpus`, `--seed`, `--param`, `--params-file`, `--subset`, `--posix`, `--cache`, `--s3`,
 `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`, `--ignore-limits`; for
 `datagen` the abstract, `--gpus`, `--param`, `--params-file`, `--dedupe`, `--compress`,
 `--dataset` (the payload is part of what the run compares); for `dry-run` the identity and

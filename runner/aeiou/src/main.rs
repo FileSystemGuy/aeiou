@@ -283,6 +283,12 @@ struct RunCmd {
     /// Run the GPU range of rank (rank + k) mod ranks, so each host reads what another wrote. Default 0.
     #[arg(long, value_name = "K", help_heading = "Several hosts")]
     rank_rotate: Option<i64>,
+    /// Run a dataset whose count is below its corpus's as the corpus's first ids: the count is
+    /// rounded up to whole directories (whole files when the dataset has none), which are a fresh
+    /// corpus of that count, so the run is that corpus's workload and fingerprint. Only for a
+    /// consumed dataset whose count is a parameter; the count comes from --param as always.
+    #[arg(long, help_heading = "Workload")]
+    subset: bool,
     /// Fail unless the run's fingerprint is this (hex, from `aeiou dry-run`).
     #[arg(long, value_name = "HEX", help_heading = "Checks")]
     expect_fingerprint: Option<String>,
@@ -358,6 +364,7 @@ struct RunOptions {
     ranks: i64,
     coordinator: Option<String>,
     rank_rotate: i64,
+    subset: bool,
     expect_fingerprint: Option<String>,
     expect_dataset_ids: Vec<String>,
     max_gap: Option<f64>,
@@ -388,6 +395,7 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     l.fixed("posix", &a.posix.clone().unwrap_or_else(|| "the abstract's".into()), a.posix.is_some())?;
     l.fixed("cache", &a.cache.clone().unwrap_or_else(|| "the abstract's".into()), a.cache.is_some())?;
     l.fixed("s3", &a.s3.clone().unwrap_or_else(|| "the abstract's".into()), a.s3.is_some())?;
+    l.fixed("subset", &a.subset, a.subset)?;
     l.fixed("expect-fingerprint", &a.expect_fingerprint, a.expect_fingerprint.is_some())?;
     l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
     l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces || a.no_clean_namespaces)?;
@@ -427,6 +435,7 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         posix: a.posix,
         cache: a.cache,
         s3: a.s3,
+        subset: a.subset,
         expect_fingerprint: a.expect_fingerprint,
         expect_dataset_ids: a.expect_dataset_ids,
         clean_namespaces: a.clean_namespaces,
@@ -872,7 +881,7 @@ fn read_at_root(at: &str, flag: &str, n: Option<i64>, cfg: &Config) -> Result<se
 }
 
 fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
-    let (a, layers) = resolve_run(a, config)?;
+    let (a, mut layers) = resolve_run(a, config)?;
     let mut doc = aeiou::report::Doc { full_takes: a.report_takes, ..Default::default() };
     if let Some(path) = &a.report_json {
         // never leave an earlier run's report where this run's is expected
@@ -881,7 +890,7 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
             _ => {}
         }
     }
-    let r = run_checked(&a, &layers, &mut doc);
+    let r = run_checked(&a, &mut layers, &mut doc);
     if let Some(path) = &a.report_json {
         let error = r.as_ref().err().map(|e| format!("{e:#}"));
         match (doc.write(path, error.as_deref()), &r) {
@@ -953,8 +962,8 @@ fn run_s3(a: &RunOptions, declared: S3Api) -> Result<S3Api> {
     }
 }
 
-fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
-    let cfg = parse_config(&a.run.shape, a.gpus, a.run.seed)?;
+fn run_checked(a: &RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
+    let mut cfg = parse_config(&a.run.shape, a.gpus, a.run.seed)?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &a.endpoints)?;
@@ -1027,6 +1036,30 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
         Some(c) => MmapConsume::parse(c).ok_or_else(|| usage::err(format!("--mmap-consume {c}: not one of touch, copy{}", layers.from(&["mmap-consume"]))))?,
     };
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
+    // --subset: the corpora's manifests first, since each count run is rounded up from the
+    // count asked to whole directories of the corpus at the root, before the model is built
+    let subsets = if a.subset {
+        let mut s = run::subsets(loaded, &cfg, &(a.root.as_path(), &endpoints))?;
+        if !s.iter().any(|s| s.run < s.corpus) {
+            aeiou::usage!(
+                "--subset: no dataset is run smaller than its corpus{}",
+                if s.is_empty() { String::new() } else { format!(" ({} round(s) up to the whole corpus)", s.iter().map(|s| s.describe()).collect::<Vec<_>>().join("; ")) }
+            );
+        }
+        for s in &s {
+            cfg.overrides.retain(|(k, _)| *k != s.param);
+            cfg.overrides.push((s.param.clone(), s.run.to_string()));
+        }
+        if let Some(e) = layers.entries.iter_mut().find(|e| e.name == "subset") {
+            e.shown = s.iter().map(|s| format!("{}: {}", s.name, s.describe())).collect::<Vec<_>>().join("; ");
+        }
+        // one rounded up to its whole corpus is that corpus: no subset
+        s.retain(|s| s.run < s.corpus);
+        s
+    } else {
+        Vec::new()
+    };
+    let layers: &Layers = layers;
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
     let model = Box::leak(Box::new(build_model(&loaded.ast, cfg, params)?));
@@ -1087,7 +1120,7 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
         doc.set("object_part_mib", serde_json::json!(n));
     }
 
-    let checks = run::check_datasets(loaded, cfg, &(a.root.as_path(), &endpoints))?;
+    let checks = run::check_datasets_subset(loaded, cfg, &(a.root.as_path(), &endpoints), &subsets)?;
     for c in &checks {
         if !a.expect_dataset_ids.is_empty() && !a.expect_dataset_ids.iter().any(|x| *x == c.id) {
             bail!("dataset `{}` id {} is not among --expect-dataset-id", c.name, c.id);
@@ -1104,6 +1137,10 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
             c.payload.compress,
             c.files.map(|n| format!("  ({n} files)")).unwrap_or_default()
         )?;
+        if let Some(s) = &c.subset {
+            writeln!(out, "  subset: {}", s.describe())?;
+            writeln!(out, "  subset: {}", run::SUBSET_AGE)?;
+        }
     }
     // the `trace` nodes (`DESIGN_REVIEW.md` §3.58): V16 with the resolved counts, and what
     // each file is, before any host is kept waiting; the paths under --root are checked
@@ -1180,7 +1217,7 @@ fn run_checked(a: &RunOptions, layers: &Layers, doc: &mut aeiou::report::Doc) ->
         }),
     );
     doc.set("gpu_ids", serde_json::json!([lo, hi]));
-    let datasets: Vec<serde_json::Value> = checks.iter().map(|c| serde_json::json!({"name": c.name, "root": c.root, "id": c.id, "payload": c.payload, "files": c.files})).collect();
+    let datasets: Vec<serde_json::Value> = checks.iter().map(|c| serde_json::json!({"name": c.name, "root": c.root, "id": c.id, "payload": c.payload, "files": c.files, "subset": c.subset.as_ref().map(|s| s.json())})).collect();
     doc.set("datasets", serde_json::json!(datasets));
     doc.set("limits", serde_json::json!({"checked": limits, "ignored": limits.problems()}));
 
