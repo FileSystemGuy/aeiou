@@ -12,7 +12,7 @@ cargo test --release --features formats
 ./target/release/aeiou check $(find ../workloads -name '*.ast.json')
 ./target/release/aeiou dry-run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
 ./target/release/aeiou run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
-    --param files=4000 --param steps=50
+    --param samples=4000 --param steps=50
 ```
 
 ## What it is

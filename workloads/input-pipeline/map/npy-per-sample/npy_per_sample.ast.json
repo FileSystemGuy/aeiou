@@ -1,5 +1,5 @@
 {
-  "ast": "0.9",
+  "ast": "0.10",
   "name": "npy_per_sample",
   "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
   "params": {
@@ -71,10 +71,15 @@
       "unit": "bytes",
       "doc": "[measure] the inventory reader's request; Python's BufferedReader asks st_blksize"
     },
-    "files": {
+    "samples": {
       "default": 50000,
       "unit": "count",
       "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+    },
+    "files_per_directory": {
+      "default": 10000,
+      "unit": "count",
+      "doc": "[config] files a directory holds, {id div files_per_directory} (contract 0.10); 10,000 as kit/mkcorpus.py writes them"
     },
     "sample_mean": {
       "default": 146800640,
@@ -89,11 +94,11 @@
   },
   "datasets": {
     "train": {
-      "pattern": "train/{id div 10000:05}/sample_{id:09}.npz",
+      "pattern": "train/{id div files_per_directory:05}/sample_{id:09}.npz",
       "layout": "whole",
       "access": "map",
       "count": {
-        "param": "files"
+        "param": "samples"
       },
       "size": {
         "normal": {
@@ -733,11 +738,12 @@
   "provenance": {
     "generator": {
       "script": "npy_per_sample.py",
-      "sha256": "974423b60a279931202a6741e791c532c70c867c90db9174d81b312b90eee1de",
+      "sha256": "7c38748a5f6a228248f24e54fc3b09b4efcd2ac7c825f50913278a023e0f5613",
       "builder_version": "0.1.0",
-      "git": "de228d0db4a5-dirty"
+      "git": "4e84ba6615ad-dirty"
     },
     "python": "3.12.13",
-    "ast_sha256": "5a73267654776844435d160c9961f0c5387a97024c46fb13f74f3cad8a35ecbd"
+    "built_twice_identical": true,
+    "ast_sha256": "d5627edefb81daba63626b18228cc79578627acea75057c70728024b36e9df0b"
   }
 }

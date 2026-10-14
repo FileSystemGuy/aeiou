@@ -18,10 +18,10 @@ w.param("prefetch", 2, unit="count")
 w.param("steps", 500, unit="count")
 w.param("sync_every", 500, unit="count", doc="1 for DDP; 500 keeps the brief's reference workload")
 w.param("step_time", 105 * ms, unit="ns", doc="[measure] GPU step time on the target accelerator")
-w.param("per_file", 512, unit="count", doc="[config] samples per container (96 MiB each)")
+w.param("samples_per_file", 512, unit="count", doc="[config] samples per container (96 MiB each)")
 w.param("samples", 1_000_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
 
-train = w.dataset("train", pattern="train/samples-{id:05}.h5", layout="compound", access="map", count=P.samples, samples_per_file=P.per_file,
+train = w.dataset("train", pattern="train/samples-{id:05}.h5", layout="compound", access="map", count=P.samples, samples_per_file=P.samples_per_file,
                   size=const(SHAPE[0] * SHAPE[1] * SHAPE[2]), seed=0x5eed_da91,
                   format=hdf5(dataset="records", shape=SHAPE, dtype="u1"))
 

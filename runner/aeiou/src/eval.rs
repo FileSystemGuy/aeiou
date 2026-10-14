@@ -1014,6 +1014,16 @@ impl<'a> Model<'a> {
     }
 }
 
+/// A dataset's or namespace's pattern with each parameter divisor bound to the parameter's
+/// value in effect (contract 0.10, V23): an integer scalar.
+pub fn bind_pattern(src: &str, params: &Params) -> Result<Pattern> {
+    Pattern::parse(src)?.bind(|name| match params.values.get(name) {
+        Some(PValue::Scalar(Literal::Int(n))) => Ok(*n),
+        Some(_) => bail!("parameter `{name}` is not an integer"),
+        None => bail!("unknown parameter `{name}`"),
+    })
+}
+
 /// Build the model. Dataset and namespace metadata expressions are evaluated with a VM over
 /// a model that has no datasets yet, so they may use parameters but not other datasets.
 pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Result<Model<'a>> {
@@ -1045,7 +1055,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
         let meta = match d.layout {
             Layout::Whole | Layout::Chunked | Layout::Compound => {
                 let f = d;
-                let pattern = Pattern::parse(&f.pattern).with_context(ctx)?;
+                let pattern = bind_pattern(&f.pattern, params).with_context(ctx)?;
                 let count = vm.eval_int(&f.count).with_context(ctx)?;
                 let spf = match &f.samples_per_file {
                     Some(e) => vm.eval_int(e).with_context(ctx)?,
@@ -1179,7 +1189,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
     let mut namespaces = Vec::new();
     let mut ns_index = HashMap::new();
     for (name, n) in &ast.namespaces {
-        let pattern = Pattern::parse(&n.pattern).with_context(|| format!("namespace `{name}`"))?;
+        let pattern = bind_pattern(&n.pattern, params).with_context(|| format!("namespace `{name}`"))?;
         for f in pattern.field_names() {
             if !n.fields.contains_key(f) {
                 bail!("namespace `{name}`: pattern field `{{{f}}}` is not a declared field");

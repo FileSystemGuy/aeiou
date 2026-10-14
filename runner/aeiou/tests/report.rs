@@ -46,7 +46,7 @@ fn read(path: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const SMALL: [&str; 6] = ["files=600", "batch=4", "workers=2", "prefetch=2", "steps=12", "walk=true"];
+const SMALL: [&str; 6] = ["samples=600", "batch=4", "workers=2", "prefetch=2", "steps=12", "walk=true"];
 
 #[test]
 fn one_host_report_matches_the_text_and_failures_are_written() {
@@ -67,7 +67,7 @@ fn one_host_report_matches_the_text_and_failures_are_written() {
     assert_eq!(d["abstract"]["name"], "file_per_sample");
     assert!(text.contains(&format!("sha256 {}", d["abstract"]["sha256"].as_str().unwrap())));
     assert_eq!((d["seed"].as_u64(), d["gpus"].as_u64(), d["rank"].as_u64(), d["ranks"].as_u64()), (Some(7), Some(2), Some(0), Some(1)));
-    assert_eq!(d["params"]["files"], 600);
+    assert_eq!(d["params"]["samples"], 600);
     assert_eq!((d["posix"].as_str(), d["cache"].as_str()), (Some("sync"), Some("per-open")));
     assert_eq!(d["datasets"][0]["files"], 600);
     // the host's facts, and the datasets' bytes beside its memory: the bytes on storage

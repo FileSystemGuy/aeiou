@@ -69,7 +69,7 @@ fn row<'a>(rows: &'a [(String, String, String)], name: &str) -> &'a (String, Str
     rows.iter().find(|r| r.0 == name).unwrap_or_else(|| panic!("no row {name} in {rows:?}"))
 }
 
-const SMALL: [&str; 6] = ["files=600", "batch=4", "workers=2", "prefetch=2", "steps=12", "walk=true"];
+const SMALL: [&str; 6] = ["samples=600", "batch=4", "workers=2", "prefetch=2", "steps=12", "walk=true"];
 
 #[test]
 fn every_subcommand_prints_the_block_with_sources() {

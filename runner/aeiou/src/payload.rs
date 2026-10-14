@@ -507,6 +507,7 @@ pub fn resolved_namespace(doc: &Value, name: &str, cfg: &Config) -> Result<Value
         .ok_or_else(|| anyhow!("no namespace `{name}` in the abstract"))?;
     let values = param_values(doc, cfg)?;
     let mut v = substitute(entry, &values)?;
+    bind_pattern(&mut v, &values)?;
     if let Some(o) = v.as_object_mut() {
         o.remove("doc");
         o.remove("input");
@@ -554,12 +555,26 @@ pub fn resolved_dataset(doc: &Value, name: &str, cfg: &Config) -> Result<Value> 
         .ok_or_else(|| anyhow!("no dataset `{name}` in the abstract"))?;
     let values = param_values(doc, cfg)?;
     let mut v = substitute(entry, &values)?;
+    bind_pattern(&mut v, &values)?;
     if let Some(o) = v.as_object_mut() {
         o.remove("doc");
         o.remove("protocol");
     }
     let bytes = canon::canonical(&v);
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// The entry's `pattern` with each parameter divisor replaced by its value (contract 0.10),
+/// so the definition, and the dataset id, say which width the names were made at; a pattern
+/// without parameters is unchanged.
+fn bind_pattern(v: &mut Value, values: &BTreeMap<String, Value>) -> Result<()> {
+    if let Some(Value::String(src)) = v.get_mut("pattern") {
+        let bound = Pattern::parse(src)?.bind(|name| {
+            values.get(name).and_then(|x| x.as_i64()).ok_or_else(|| anyhow!("parameter `{name}` has no integer value"))
+        })?;
+        *src = bound.source;
+    }
+    Ok(())
 }
 
 fn substitute(v: &Value, values: &BTreeMap<String, Value>) -> Result<Value> {

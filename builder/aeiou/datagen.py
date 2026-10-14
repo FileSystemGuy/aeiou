@@ -99,6 +99,7 @@ def canonical_json(v) -> str:
 
 def resolved_dataset(ast: dict, name: str, values: dict) -> dict:
     entry = substitute(ast["datasets"][name], values)
+    entry["pattern"] = Pattern(entry["pattern"]).bind(values).source    # contract 0.10: the width it was made at
     entry.pop("doc", None)
     entry.pop("protocol", None)   # where the dataset lives, not what it is
     return json.loads(canonical_json(entry))

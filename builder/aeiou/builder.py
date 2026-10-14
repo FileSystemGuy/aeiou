@@ -12,6 +12,7 @@ import re
 import sys
 from typing import Any
 
+from .pattern import Pattern
 from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle, Dist, Draw, InventoryHandle,
                     Expr, FileHandle, FileOf, Handle, Index, Node, ObjectHandle, Op, Param, Pick, Ref,
                     ast_of, check_ident, distref, lift, lower_bound_of, walk)
@@ -30,7 +31,7 @@ WHENCE = ("SET", "CUR", "END")
 ERRNO = re.compile(r"^E[A-Z0-9]{1,15}$")
 RESERVED_PREFIX = ".aeiou"      # V13: the dataset manifest `.aeiou-dataset.json` and future sidecars
 WRITE_FLAGS = {"WRONLY", "RDWR", "CREAT", "TRUNC", "APPEND"}
-FIELD = re.compile(r"\{([a-z_][a-z0-9_]*)(?:\s+(?:div|mod)\s+\d+)?(?::[^}]*)?\}")
+FIELD = re.compile(r"\{([a-z_][a-z0-9_]*)(?:\s+(?:div|mod)\s+(?:\d+|[a-z_][a-z0-9_]*))?(?::[^}]*)?\}")
 
 gpu_id = Actor("id")        # this actor's global id
 actor_count = Actor("count")
@@ -219,7 +220,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.9"
+    AST_VERSION = "0.10"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -281,6 +282,21 @@ class Workload:
             self.param(k, v)
         return self.P
 
+    def _divisors(self, pattern: str, what: str) -> None:
+        """V23 (contract 0.10, DESIGN_REVIEW.md §3.75): a divisor named in a pattern
+        (`{id div files_per_directory}`) is a parameter declared before it, its default an integer."""
+        try:
+            names = Pattern(pattern).params()
+        except ValueError as e:
+            raise BuildError(f"{what}: {e}") from None
+        for n in names:
+            spec = self._param_specs.get(n)
+            if spec is None:
+                raise BuildError(f"{what}: divisor `{n}` is not a declared parameter (V23)")
+            d = spec["default"]
+            if not isinstance(d, int) or isinstance(d, bool):
+                raise BuildError(f"{what}: divisor `{n}` is a parameter whose default is not an integer (V23)")
+
     # ---- datasets ----
     def dataset(self, name: str, *, pattern: str, layout: str, access: str, count, size, seed: int,
                 samples_per_file=None, chunk=None, slot=None, format: dict | None = None,
@@ -327,6 +343,7 @@ class Workload:
         if format is not None:
             format = _format_spec(name, format, access, size, {k: v["default"] for k, v in self._param_specs.items()})
         _reserved(pattern, f"dataset {name}")
+        self._divisors(pattern, f"dataset {name}")
         if inventory is not None:
             inventory = _inventory(name, pattern, access, inventory)
         self._claim_root(pattern.rpartition("/")[0] if layout == "array" else _root(pattern), name)
@@ -365,6 +382,7 @@ class Workload:
         if pat != set(fields):
             raise BuildError(f"namespace {name}: pattern fields {sorted(pat)} != declared {sorted(fields)}")
         _reserved(pattern, f"namespace {name}")
+        self._divisors(pattern, f"namespace {name}")
         nroot = _root(pattern)
         for root, dname in self._roots.items():
             if root and (nroot == root or nroot.startswith(root + "/")):

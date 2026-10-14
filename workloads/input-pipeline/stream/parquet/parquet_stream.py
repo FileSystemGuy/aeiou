@@ -8,7 +8,7 @@ interleaved stream and an in-memory shuffle buffer produces no I/O. In the model
 work a loader worker does is therefore a **shard**, not a batch: `consume` over a `stream`
 dataset draws shard ids from the epoch's permutation, the worker runs the format class's
 reader protocol over the whole shard, and the training loop takes a shard every
-`per_shard / batch` steps. This one: Parquet through `pyarrow.parquet.ParquetFile` (full
+`samples_per_file / batch` steps. This one: Parquet through `pyarrow.parquet.ParquetFile` (full
 projection; the format class's `read_all(columns=[…])` is the projected variant).
 `../tfrecord/tfrecord_stream.py` is the same shape over TFRecord; the two repeat
 the shape on purpose, one mechanism per directory (`DESIGN_REVIEW.md` §3.66).
@@ -25,7 +25,7 @@ def shape(name, pattern, make_format, doc):
     w = Workload(name, doc=doc)
     P = w.P
     w.param("batch", 256, unit="count", doc="[config] samples per step")
-    w.param("per_shard", 1024, unit="count", doc="[config] samples per shard; a multiple of batch")
+    w.param("samples_per_file", 1024, unit="count", doc="[config] samples per shard; a multiple of batch")
     w.param("cycle", 4, unit="count", doc="[config] interleave cycle_length: shards one GPU's pipeline streams concurrently")
     w.param("prefetch", 1, unit="count", doc="[config] shards finished ahead of the training loop, per cycle slot")
     w.param("steps", 500, unit="count")
@@ -35,19 +35,19 @@ def shape(name, pattern, make_format, doc):
     w.param("xfer", 256 * KiB, unit="bytes", doc="[verify] the reader library's read buffer (TFRecord)")
     w.param("samples", 1_281_167, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
     w.param("sample_median", 110 * KiB, unit="bytes", doc="[measure] corpus")
-    shards = w.dataset("shards", pattern=pattern, layout="compound", access="stream", count=P.samples, samples_per_file=P.per_shard,
+    shards = w.dataset("shards", pattern=pattern, layout="compound", access="stream", count=P.samples, samples_per_file=P.samples_per_file,
                        size=lognormal(median=P.sample_median, sigma=0.45), seed=0x5eed_da90,
                        format=make_format(P))
 
     with w.actor("gpu") as gpu:
         with gpu.loader("shards", workers=P.cycle, prefetch=P.prefetch,
-                        batches=ceil_div(P.steps * P.batch, P.per_shard)) as worker:
+                        batches=ceil_div(P.steps * P.batch, P.samples_per_file)) as worker:
             s = worker.let("s", shards.consume())                    # a shard, by position in the epoch's permutation
             yield w, worker, shards, s
             worker.compute(P.decode)
 
         with gpu.phase("train"), gpu.loop("step", P.steps) as step:
-            with gpu.every(P.per_shard // P.batch):
+            with gpu.every(P.samples_per_file // P.batch):
                 gpu.take("shards")
             gpu.compute(P.step_time)
             with gpu.every(P.sync_every):

@@ -809,17 +809,17 @@ Generate a small corpus, then run against it under the abstract's own backend, h
 run to the dry run's fingerprint:
 
 ```
-aeiou datagen workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+aeiou datagen workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param samples=4000
 aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
-    --param files=4000 --param steps=50 --expect-fingerprint 3f1c... --report-json run.json
+    --param samples=4000 --param steps=50 --expect-fingerprint 3f1c... --report-json run.json
 ```
 
 The first 2,600 files of that corpus (two whole directories of 1,300), the fingerprint the
-dry run gives for `files=2600`:
+dry run gives for `samples=2600`:
 
 ```
 aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
-    --param files=2000 --param steps=50 --subset
+    --param samples=2000 --param steps=50 --subset
 ```
 
 The same run on io_uring with a capped io-wq, the metrics of the stream to a file:

@@ -21,10 +21,11 @@ w.param("walk", True, doc="the startup directory walk, as ImageFolder does it in
 w.param("inventory", False, doc="the startup read of the corpus's inventory, every process, in place of the walk at scale (DESIGN_REVIEW.md §3.73)")
 w.param("inv_entry", 24, unit="bytes", doc="[measure] inventory bytes per file: the name below the root (`00000/img_000000000.jpg`) and a newline")
 w.param("inv_read", 1 * MiB, unit="bytes", doc="[measure] the inventory reader's request; Python's BufferedReader asks st_blksize")
-w.param("files", 50_000_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
+w.param("samples", 50_000_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
+w.param("files_per_directory", 1_300, unit="count", doc="[config] files a directory holds, {id div files_per_directory} (contract 0.10); 1,300 is ImageNet-1k's most images in a class, as kit/mkcorpus.py writes them")
 
-train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg", layout="whole", access="map",
-                  count=P.files,
+train = w.dataset("train", pattern="train/{id div files_per_directory:05}/img_{id:09}.jpg", layout="whole", access="map",
+                  count=P.samples,
                   size=lognormal(median=110 * KiB, sigma=0.45),   # [measure] corpus
                   seed=0x5eed_da7a,
                   inventory={"name": "inventory.txt", "entry": P.inv_entry})

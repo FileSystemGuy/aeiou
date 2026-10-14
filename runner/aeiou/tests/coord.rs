@@ -189,7 +189,7 @@ fn a_failing_host_stops_the_others() {
 #[test]
 fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let root = tmpdir("two");
-    let params = [("files", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("walk", "true")];
+    let params = [("samples", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("walk", "true")];
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
@@ -361,7 +361,7 @@ fn tree(root: &PathBuf) -> std::collections::BTreeMap<String, Vec<u8>> {
 fn datagen_on_two_ranks_writes_the_one_host_corpus() {
     // a files dataset (120 files, one directory: both ranks create in it) and a corpus with a
     // array file above one 64 MiB piece plus a one-file dataset (rank 1's slice is empty)
-    for (ast, gpus, params) in [("file_per_sample", 2, vec![("files", "120")]), ("faiss_ivf_ondisk", 1, vec![("lists", "280"), ("index_bytes", "1048576")])] {
+    for (ast, gpus, params) in [("file_per_sample", 2, vec![("samples", "120")]), ("faiss_ivf_ondisk", 1, vec![("lists", "280"), ("index_bytes", "1048576")])] {
         let one = tmpdir("dg-one");
         let two = tmpdir("dg-two");
         let (loaded, cfg, model) = leaked_model(ast, config(gpus, 7, &params));
@@ -448,7 +448,7 @@ fn datagen_ranks(root: &PathBuf, params: &[&str], ranks: i64, extra: impl Fn(i64
 #[test]
 fn datagen_on_two_processes_end_to_end() {
     let root = tmpdir("dg-e2e");
-    let outs = datagen_ranks(&root, &["files=100"], 2, |_| vec!["--progress-secs".into(), "0.01".into()]);
+    let outs = datagen_ranks(&root, &["samples=100"], 2, |_| vec!["--progress-secs".into(), "0.01".into()]);
     for (ok, stdout, stderr) in &outs {
         assert!(*ok, "stdout:\n{stdout}\nstderr:\n{stderr}");
         assert!(stdout.contains("start gate: 2 host(s) ready"), "{stdout}");
@@ -467,7 +467,7 @@ fn datagen_on_two_processes_end_to_end() {
     assert_eq!((m.state.as_str(), &m.progress), ("complete", &serde_json::Value::Null));
     // a differing payload on one rank is refused on every rank before anything is written
     let root2 = tmpdir("dg-mixed");
-    let outs = datagen_ranks(&root2, &["files=100"], 2, |rank| if rank == 1 { vec!["--dedupe".into(), "2".into()] } else { vec![] });
+    let outs = datagen_ranks(&root2, &["samples=100"], 2, |rank| if rank == 1 { vec!["--dedupe".into(), "2".into()] } else { vec![] });
     assert!(outs.iter().all(|(ok, _, _)| !ok), "{outs:?}");
     assert!(outs.iter().any(|(_, _, e)| e.contains("dedupe 2 differs from rank 0's 1") || e.contains("dedupe 1 differs from rank 1's 2")), "{outs:?}");
     assert!(aeiou::payload::Manifest::read(&root2.join("train")).is_err(), "no manifest");
@@ -483,7 +483,7 @@ fn datagen_on_two_processes_end_to_end() {
 fn a_killed_datagen_leaves_a_manifest_that_is_true() {
     use std::io::BufRead;
     let files = 20000i64;
-    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "20000")]));
+    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "20000")]));
     let meta = &model.datasets[0];
     for ranks in [1i64, 2] {
         let root = tmpdir("dg-killed");
@@ -492,7 +492,7 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
         for rank in 0..ranks {
             let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
             c.arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root);
-            c.args(["--writers", "2", "--progress-secs", "0.02", "--param", &format!("files={files}")]);
+            c.args(["--writers", "2", "--progress-secs", "0.02", "--param", &format!("samples={files}")]);
             if ranks > 1 {
                 c.args(["--ranks", &ranks.to_string(), "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
             }
@@ -602,11 +602,11 @@ fn resume_ranks(at: &std::path::Path, ranks: i64) -> Vec<(bool, String, String)>
 #[test]
 fn a_resume_takes_nothing_the_manifest_fixes() {
     let root = tmpdir("dg-resume-usage");
-    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(root.join("train")).args(["--param", "files=10", "--dedupe", "2"]).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(root.join("train")).args(["--param", "samples=10", "--dedupe", "2"]).output().unwrap();
     assert_eq!(o.status.code(), Some(2));
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(e.contains("--param, --dedupe given too"), "{e}");
-    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root).args(["--param", "files=30"]).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root).args(["--param", "samples=30"]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(root.join("train")).output().unwrap();
     assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).contains("the manifest says `complete`; nothing to write"), "{o:?}");
@@ -632,7 +632,7 @@ fn resize_ranks(op: &str, n: i64, at: &std::path::Path, ranks: i64, extra: &[&st
 }
 
 fn datagen_one(root: &PathBuf, files: i64) {
-    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(root).args(["--writers", "3", "--param", &format!("files={files}")]).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(root).args(["--writers", "3", "--param", &format!("samples={files}")]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
 }
 
@@ -660,7 +660,7 @@ fn grow_and_shrink_make_the_corpus_of_the_new_count() {
         assert_eq!((&m.provenance["files_written"], &m.provenance["bytes_written"]), (&f.provenance["files_written"], &f.provenance["bytes_written"]));
         let r = &m.provenance["resizes"][0];
         assert_eq!((r["op"].as_str(), r["from"].as_i64(), r["to"].as_i64(), r["from_id"].as_str(), r["files_written"].as_i64(), r["ranks"].as_i64()), (Some("grow"), Some(3000), Some(5000), Some(was.as_str()), Some(2000), Some(ranks)));
-        let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "5000")]));
+        let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "5000")]));
         run::check_datasets(loaded, cfg, &root).unwrap();
 
         let outs = resize_ranks("--shrink", 2100, &root.join("train"), 3 - ranks, &[]);
@@ -671,7 +671,7 @@ fn grow_and_shrink_make_the_corpus_of_the_new_count() {
         assert_eq!((m.state.as_str(), m.id()), ("complete", f.id()));
         assert_eq!((&m.provenance["files_written"], &m.provenance["bytes_written"]), (&f.provenance["files_written"], &f.provenance["bytes_written"]));
         assert_eq!(m.provenance["resizes"][1]["op"], "shrink");
-        let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "2100")]));
+        let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "2100")]));
         run::check_datasets(loaded, cfg, &root).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -706,7 +706,7 @@ fn a_killed_grow_is_finished_by_resume() {
     child.wait().unwrap();
     let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert_eq!((m.state.as_str(), m.progress["from"].as_i64(), m.dataset["count"].as_i64()), ("growing", Some(from), Some(to)));
-    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "20000")]));
+    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "20000")]));
     let e = run::check_datasets(loaded, cfg, &root).unwrap_err().to_string();
     assert!(e.contains("the manifest says `growing`") && e.contains("--resume"), "{e}");
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--grow", "30000"]).arg(root.join("train")).output().unwrap();
@@ -749,7 +749,7 @@ fn grow_and_shrink_refuse_what_they_cannot_do() {
     refuse(&["--grow", "30", a], "the dataset's count is 30; a grow takes a larger one");
     refuse(&["--shrink", "31", a], "the dataset's count is 30; a shrink takes a smaller one");
     refuse(&["--shrink", "0", a], "a whole number above 0");
-    refuse(&["--grow", "40", a, "--param", "files=40"], "--grow takes the dataset, its place, the payload, and the format from the manifest at its root: --param given too");
+    refuse(&["--grow", "40", a, "--param", "samples=40"], "--grow takes the dataset, its place, the payload, and the format from the manifest at its root: --param given too");
     refuse(&["--grow", "40", a, "--resume", a], "--resume, --grow: one at a time");
     assert_eq!(tree(&root).len(), 31, "nothing changed (30 files and the inventory)");
     std::fs::remove_dir_all(&root).unwrap();
@@ -884,7 +884,7 @@ fn check_settled(root: &PathBuf, was: &aeiou::payload::Manifest, asked: i64) -> 
     let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert_eq!(after.state, "complete");
     let s = after.dataset["count"].as_i64().unwrap();
-    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", &s.to_string())]));
+    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", &s.to_string())]));
     let meta = &model.datasets[0];
     assert!(listing(&root.join("train")) == expected(meta, s), "the settled corpus is not the {s}-file one");
     run::check_datasets(loaded, cfg, root).unwrap();
@@ -914,7 +914,7 @@ fn a_killed_datagen_or_grow_settles_at_whole_directories() {
         let root = tmpdir("dg-settle");
         let from = 2000i64;
         let args: Vec<String> = match op {
-            "datagen" => vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("files={files}")],
+            "datagen" => vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("samples={files}")],
             _ => {
                 datagen_one(&root, from);
                 vec!["--grow".into(), files.to_string(), root.join("train").to_string_lossy().into_owned()]
@@ -988,11 +988,11 @@ fn a_killed_shrink_settles_without_removing_more() {
 #[test]
 fn ctrl_c_stops_every_host_and_leaves_a_true_manifest() {
     let files = 20000i64;
-    let (_, _, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("files", "20000")]));
+    let (_, _, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "20000")]));
     let meta = &model.datasets[0];
     for (ranks, at) in [(2i64, 1usize), (1, 0)] {
         let root = tmpdir("dg-ctrl-c");
-        let mut args = vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("files={files}")];
+        let mut args = vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("samples={files}")];
         args.extend(["--writers", "2", "--progress-secs", "0.05"].map(String::from));
         let mut children = spawn_ranks(&args, ranks);
         let rest = windows(&mut children[0], 1, |l| !l.contains(" 0/"));
@@ -1034,35 +1034,35 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
     let root = tmpdir("subset");
     datagen_one(&root, 3200);
     let corpus = aeiou::payload::Manifest::read(&root.join("train")).unwrap().id();
-    let params = ["files=2000", "steps=4"];
-    let fp = dry_fingerprint_cli("file_per_sample.ast.json", "2", &["files=2600", "steps=4"]);
+    let params = ["samples=2000", "steps=4"];
+    let fp = dry_fingerprint_cli("file_per_sample.ast.json", "2", &["samples=2600", "steps=4"]);
     for ranks in [1i64, 2] {
         let json = root.join(format!("report-{ranks}.json"));
         let outs = run_ranks("file_per_sample.ast.json", &root, "2", &params, ranks, &["--subset", "--expect-fingerprint", &fp, "--report-json", json.to_str().unwrap()]);
         assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s): {outs:?}");
         let text = &outs[0].1;
-        assert!(text.contains("subset = train: files = 2000 asked, rounded up to 2600 (whole directories of 1300 files), of the corpus's 3200  [cli]"), "{text}");
+        assert!(text.contains("subset = train: samples = 2000 asked, rounded up to 2600 (whole directories of 1300 files), of the corpus's 3200  [cli]"), "{text}");
         assert!(text.contains("subset: a subset is the corpus's lowest ids"), "{text}");
-        assert!(text.contains("params: steps=4 files=2600"), "{text}");
+        assert!(text.contains("params: steps=4 samples=2600"), "{text}");
         let d: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
         let ds = &d["datasets"][0];
         assert_eq!(ds["id"].as_str(), Some(corpus.as_str()), "the corpus's id");
         let s = &ds["subset"];
-        assert_eq!((s["param"].as_str(), s["corpus"].as_i64(), s["requested"].as_i64(), s["run"].as_i64(), s["unit"].as_i64()), (Some("files"), Some(3200), Some(2000), Some(2600), Some(1300)));
+        assert_eq!((s["param"].as_str(), s["corpus"].as_i64(), s["requested"].as_i64(), s["run"].as_i64(), s["unit"].as_i64()), (Some("samples"), Some(3200), Some(2000), Some(2600), Some(1300)));
         assert_eq!(d["verdict"]["fingerprint"].as_str().map(|f| f.trim_start_matches("0x").to_string()), Some(fp.trim_start_matches("0x").to_string()));
     }
     // the inventory in place of the walk (DESIGN_REVIEW §3.73): the whole corpus's read to its
     // end; a subset's read as a corpus of the rounded count's would be, issued no further than
     // its end (a read past it would return the corpus's bytes where 0 is expected, and fail)
     let inv = ["walk=false", "inventory=true", "steps=4"];
-    let whole = [&inv[..], &["files=3200"]].concat();
+    let whole = [&inv[..], &["samples=3200"]].concat();
     let fp = dry_fingerprint_cli("file_per_sample.ast.json", "2", &whole);
     let outs = run_ranks("file_per_sample.ast.json", &root, "2", &whole, 1, &["--expect-fingerprint", &fp]);
     assert!(outs.iter().all(|(ok, _, _)| *ok), "the whole corpus's inventory: {outs:?}");
-    let fp = dry_fingerprint_cli("file_per_sample.ast.json", "2", &[&inv[..], &["files=2600"]].concat());
+    let fp = dry_fingerprint_cli("file_per_sample.ast.json", "2", &[&inv[..], &["samples=2600"]].concat());
     for (ranks, posix) in [(1i64, "sync"), (2, "sync"), (1, "io_uring"), (1, "libaio")] {
         let json = root.join(format!("report-inv-{ranks}-{posix}.json"));
-        let outs = run_ranks("file_per_sample.ast.json", &root, "2", &[&inv[..], &["files=2000"]].concat(), ranks, &["--subset", "--posix", posix, "--expect-fingerprint", &fp, "--report-json", json.to_str().unwrap()]);
+        let outs = run_ranks("file_per_sample.ast.json", &root, "2", &[&inv[..], &["samples=2000"]].concat(), ranks, &["--subset", "--posix", posix, "--expect-fingerprint", &fp, "--report-json", json.to_str().unwrap()]);
         assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s), {posix}: {outs:?}");
         let d: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
         let ph = &d["result"]["phases"]["inventory"];
@@ -1075,14 +1075,17 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
         assert!(!outs[0].0, "{outs:?}");
         outs[0].2.clone()
     };
-    let e = refused(&["files=3000", "steps=4"], &["--subset"]);
+    let e = refused(&["samples=3000", "steps=4"], &["--subset"]);
     assert!(e.contains("3000 rounds up to 3900 (whole directories of 1300 files), past the corpus's 3200; the largest subset of whole units is 2600"), "{e}");
-    let e = refused(&["files=4000", "steps=4"], &["--subset"]);
+    let e = refused(&["samples=4000", "steps=4"], &["--subset"]);
     assert!(e.contains("a subset is smaller; `aeiou datagen --grow 4000"), "{e}");
-    let e = refused(&["files=3200", "steps=4"], &["--subset"]);
+    let e = refused(&["samples=3200", "steps=4"], &["--subset"]);
     assert!(e.contains("--subset: no dataset is run smaller than its corpus"), "{e}");
-    let e = refused(&["files=2600", "steps=4"], &[]);
+    let e = refused(&["samples=2600", "steps=4"], &[]);
     assert!(e.contains("count: 2600 vs 3200") && e.contains("`--subset` runs the corpus's first ids"), "{e}");
+    // another directory width is another dataset (contract 0.10): the bound pattern differs
+    let e = refused(&["samples=2000", "files_per_directory=1000", "steps=4"], &["--subset"]);
+    assert!(e.contains("differs from the corpus's in more than its count") && e.contains("{id div 1000:05}"), "{e}");
 
     // a flat corpus whose directory the abstract lists: the listing would be the whole corpus
     let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(crate::common::workload_ast("file_per_sample.ast.json")).unwrap()).unwrap();
@@ -1092,12 +1095,12 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
     std::fs::write(&ast, serde_json::to_vec(&doc).unwrap()).unwrap();
     let cli = |args: &[&str]| Command::new(env!("CARGO_BIN_EXE_aeiou")).args(args).output().unwrap();
     let (a, r) = (ast.to_str().unwrap(), flat.to_str().unwrap());
-    assert!(cli(&["datagen", a, "--root", r, "--param", "files=300"]).status.success());
-    let o = cli(&["run", a, "--root", r, "--gpus", "2", "--time-scale", "0", "--param", "files=100", "--param", "steps=4", "--subset"]);
+    assert!(cli(&["datagen", a, "--root", r, "--param", "samples=300"]).status.success());
+    let o = cli(&["run", a, "--root", r, "--gpus", "2", "--time-scale", "0", "--param", "samples=100", "--param", "steps=4", "--subset"]);
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && e.contains("its files share one directory, and the abstract lists it"), "{e}");
     // without the listing, whole files: one sample a file, so nothing is rounded
-    let o = cli(&["run", a, "--root", r, "--gpus", "2", "--time-scale", "0", "--param", "files=100", "--param", "steps=4", "--param", "walk=false", "--subset"]);
+    let o = cli(&["run", a, "--root", r, "--gpus", "2", "--time-scale", "0", "--param", "samples=100", "--param", "steps=4", "--param", "walk=false", "--subset"]);
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && e.contains("the abstract lists it"), "the refusal reads the abstract, not the parameters: {e}");
 

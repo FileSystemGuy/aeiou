@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.9",
+      "const": "0.10",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -728,7 +728,7 @@
     "pattern": {
       "type": "string",
       "minLength": 1,
-      "description": "A path pattern with {field[:format]} fields. Datasets use `id` (and `k` for chunks); namespaces declare their fields."
+      "description": "A path pattern with {field[:format]} fields, `{field div N}` or `{field mod N}` with N a positive number or (contract 0.10) the name of an integer parameter (V23). Datasets use `id` (and `k` for chunks); namespaces declare their fields."
     },
     "dataset": {
       "type": "object",

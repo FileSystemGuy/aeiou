@@ -132,7 +132,7 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
     let ast = object_variant("npy_per_sample", &["train"], &dir);
     let ast = ast.to_str().unwrap();
     // 20 MiB samples: three parts each (8 + 8 + 4 MiB), read in 1 MiB requests across the seams
-    let params = ["--param", "files=12", "--param", "sample_mean=20971520", "--param", "sample_sd=0", "--param", "steps=2", "--param", "batch=2", "--param", "workers=1", "--param", "step_time=0"];
+    let params = ["--param", "samples=12", "--param", "sample_mean=20971520", "--param", "sample_sd=0", "--param", "steps=2", "--param", "batch=2", "--param", "workers=1", "--param", "step_time=0"];
     let root = dir.join("root");
     let gen = |root: &Path, endpoint: &str| {
         let mut a = vec!["datagen", ast, "--root", root.to_str().unwrap(), "--endpoint", endpoint];
@@ -189,7 +189,7 @@ fn listings_and_stats_of_prefixes_read_like_directories() {
     // four directories of 1300 files, walked by `stat` and `readdir` at startup (the counts are
     // checked against the definition, so the manifest object is not counted), and a header read
     // of 1 MiB past every file's end: a short read, then a read of nothing
-    let params = ["--param", "files=5200", "--param", "steps=6", "--param", "workers=2", "--param", "step_time=0"];
+    let params = ["--param", "samples=5200", "--param", "steps=6", "--param", "workers=2", "--param", "step_time=0"];
     let root = dir.join("root");
     let mut a = vec!["datagen", ast, "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/small/t", "--object-threads", "3"];
     a.extend(params);
@@ -313,7 +313,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     let skip = dir.join("skip.ast.json");
     std::fs::write(
         &skip,
-        r#"{"ast": "0.9", "name": "skip",
+        r#"{"ast": "0.10", "name": "skip",
             "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": 1, "body": [
                 {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
@@ -336,7 +336,7 @@ fn object_names_need_object_endpoints() {
     let root = dir.join("root");
     let root = root.to_str().unwrap();
     let run = |extra: &[&str]| {
-        let mut a = vec!["run", ast, "--gpus", "1", "--root", root, "--param", "files=1300"];
+        let mut a = vec!["run", ast, "--gpus", "1", "--root", root, "--param", "samples=1300"];
         a.extend(extra);
         aeiou(None, &a)
     };

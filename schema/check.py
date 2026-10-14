@@ -201,6 +201,14 @@ class Check:
         for comp in pattern.split("/"):
             if comp.startswith(RESERVED_PREFIX):
                 self.err(path, f"path component `{comp}` begins with `{RESERVED_PREFIX}`, reserved for the manifest (V13)")
+        # V23 (contract 0.10, DESIGN_REVIEW.md §3.75): a divisor named in a pattern is a declared
+        # parameter whose default is an integer
+        for name in re.findall(r"\{\s*[a-z_][a-z0-9_]*\s+(?:div|mod)\s+([a-z_][a-z0-9_]*)", pattern):
+            p = self.ast.get("params", {}).get(name)
+            if p is None:
+                self.err(path + ["pattern"], f"divisor `{name}` is not a declared parameter (V23)")
+            elif not (isinstance(p.get("default"), int) and not isinstance(p.get("default"), bool)):
+                self.err(path + ["pattern"], f"divisor `{name}` is a parameter whose default is not an integer (V23)")
 
     def value(self, v, path):
         if isinstance(v, list):

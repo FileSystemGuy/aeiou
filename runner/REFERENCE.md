@@ -13,9 +13,9 @@ cargo test --release
 ./target/release/aeiou dry-run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
 ./target/release/aeiou dry-run ../workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json --gpus 1 \
     --param concurrency=2 --param requests=20 --gpu 0 --steps 1..2 --limit 50
-./target/release/aeiou datagen ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+./target/release/aeiou datagen ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param samples=4000
 ./target/release/aeiou run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
-    --param files=4000 --param steps=50 --posix sync
+    --param samples=4000 --param steps=50 --posix sync
 ./target/release/aeiou dry-run ../workloads/model-loading/safetensors-load/safetensors_load.ast.json --gpus 8 \
     --params-file ../workloads/model-loading/safetensors-load/params/synthetic.params.json      # a parameter file (§4)
 ```
@@ -50,7 +50,7 @@ aeiou/src/
   canon.rs     canonical form and SHA-256, byte-identical to check.py::canonical
   validate.rs  rules V1–V13 and the schema's structural constraints, ported from check.py
   sites.rs     draw sites: the JSON pointer of every draw / pick / choose, hashed
-  pattern.rs   path patterns: {id div 1300:05}, {conv:016x}, {name}
+  pattern.rs   path patterns: {id div 1300:05}, {id div files_per_directory:05}, {conv:016x}, {name}
   rng.rs       positional keys, SplitMix64 words, the 4-round Feistel permutation
   eval.rs      the resolved model: parameters, datasets (sizes, layouts, names), namespaces, distributions
   vm.rs        expression evaluation and the walk as a resumable state machine: `next` yields the
@@ -148,6 +148,12 @@ each is a recorded decision and the golden tests pin them.
   until the known size is exhausted, then one more (returning 0). An `as_written` object's
   size is the sum of the write lengths this actor issued to it through the same path at this
   position (rule V4 guarantees a reader that uses `until_eof` on one is the writer).
+- **A divisor named by a parameter** (contract 0.10, `DESIGN_REVIEW.md` §3.75). In `{id div
+  files_per_directory:05}` the name is bound to the parameter's value when the model is built
+  (`eval::bind_pattern`), so names, `dirs`, datagen's runs, and `--subset`'s rounding see the
+  number; the resolved definition (§5) carries the pattern with the number in place of the name
+  (`payload::bind_pattern`), so another width is another dataset id and the default width's id
+  is the literal pattern's. A value of zero or less, or not an integer, is refused, naming it.
 - **`readdir`** is one op in the stream; how many `getdents64` calls it takes is a backend
   matter, like the RPC count of a read.
 - **Fingerprint.** Sum modulo 2⁶⁴ over ops of `xxh3_64(kind ‖ actor ‖ n ‖ i₁…iₙ ‖ offset ‖
@@ -1226,7 +1232,7 @@ and that none of this is a number for a real target:
    that series is given in both regimes.
 
 **Observed on large files (2026-10-01, same mount).** `npy_per_sample` with 4 GPUs
-(20 actors), `files=28`, `steps=2`: 28 files of about 140 MiB, 8,220 reads of 1 MiB,
+(20 actors), `samples=28`, `steps=2`: 28 files of about 140 MiB, 8,220 reads of 1 MiB,
 7.83 GiB read, every file read twice (3.85 GiB from the server on a cold pass). This is
 the shape `mmap` loaders are used for. Cold rows each on a freshly generated directory:
 
@@ -1732,7 +1738,7 @@ warning, then an empty line (there is no `--show-config`: the block is always th
 ```
 options (cli > env > config > default)
   abstract = ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json   [cli]
-  param = files=4000 steps=50                                [cli]
+  param = samples=4000 steps=50                              [cli]
   params-file = none                                         [default]
   gpus = 8                                                   [cli]
   seed = 1                                                   [cli]

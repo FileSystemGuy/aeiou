@@ -118,9 +118,9 @@ def test_specs_probes_and_v9():
 # ---- datagen round trips ----
 
 CASES = {
-    "tfrecord_stream": ["samples=768", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
-    "parquet_stream": ["samples=768", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
-    "hdf5_map": ["samples=64", "per_file=16", "batch=4", "workers=2", "steps=4"],
+    "tfrecord_stream": ["samples=768", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
+    "parquet_stream": ["samples=768", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
+    "hdf5_map": ["samples=64", "samples_per_file=16", "batch=4", "workers=2", "steps=4"],
 }
 
 
@@ -318,12 +318,12 @@ def parquet_types_ast(tmp_path):
 
 # each writer's case: the abstract, its corpus parameters (a short last file), and the run's
 RUST_CASES = {
-    "tfrecord": (lambda tmp: ast_path("tfrecord_stream"), ["samples=700", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
-    "webdataset": (webdataset_ast, ["samples=700", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
-    "hdf5": (lambda tmp: ast_path("hdf5_map"), ["samples=70", "per_file=16"], ["batch=4", "workers=2", "steps=4"]),
+    "tfrecord": (lambda tmp: ast_path("tfrecord_stream"), ["samples=700", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    "webdataset": (webdataset_ast, ["samples=700", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    "hdf5": (lambda tmp: ast_path("hdf5_map"), ["samples=70", "samples_per_file=16"], ["batch=4", "workers=2", "steps=4"]),
     # whole row groups and no short last file (brief item 31)
-    "parquet": (lambda tmp: ast_path("parquet_stream"), ["samples=768", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
-    "parquet_types": (parquet_types_ast, ["samples=768", "per_shard=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    "parquet": (lambda tmp: ast_path("parquet_stream"), ["samples=768", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    "parquet_types": (parquet_types_ast, ["samples=768", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
 }
 
 
@@ -626,7 +626,7 @@ def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(
 @needs_runner
 def test_size_draws_match_the_runner(tmp_path):
     """The Python `sample_size` port against sizes the Rust datagen wrote."""
-    ast = {"ast": "0.9", "name": "sizes", "datasets": {"d": {"pattern": "d/{id:04}", "layout": "whole", "access": "indexed", "count": 40, "seed": 99,
+    ast = {"ast": "0.10", "name": "sizes", "datasets": {"d": {"pattern": "d/{id:04}", "layout": "whole", "access": "indexed", "count": 40, "seed": 99,
            "size": {"mixture": [{"weight": 1, "dist": {"normal": {"mean": 50000, "sd": 20000, "min": 100}}},
                                 {"weight": 1, "dist": {"lognormal": {"median": 30000, "sigma": 0.7, "min": 1, "max": 90000}}},
                                 {"weight": 1, "dist": {"uniform": {"lo": 10, "hi": 5000}}},

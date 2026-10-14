@@ -1,5 +1,5 @@
 {
-  "ast": "0.9",
+  "ast": "0.10",
   "name": "hdf5_map",
   "doc": "DataLoader over HDF5 containers of fixed-size rows: open, metadata reads, one positioned row read, close per sample.",
   "params": {
@@ -29,7 +29,7 @@
       "unit": "ns",
       "doc": "[measure] GPU step time on the target accelerator"
     },
-    "per_file": {
+    "samples_per_file": {
       "default": 512,
       "unit": "count",
       "doc": "[config] samples per container (96 MiB each)"
@@ -53,7 +53,7 @@
       },
       "seed": 1592646289,
       "samples_per_file": {
-        "param": "per_file"
+        "param": "samples_per_file"
       },
       "format": {
         "class": "hdf5",
@@ -301,11 +301,12 @@
   "provenance": {
     "generator": {
       "script": "hdf5_map.py",
-      "sha256": "e94378c57c7fde3661646e43cd3f436841853cbc2e9cab4c869f7850e39c9a1e",
+      "sha256": "2623cbef42b18d2a75e1cfd348cff2039e4f0eef269e9701fe558706e9b462b7",
       "builder_version": "0.1.0",
-      "git": "de228d0db4a5"
+      "git": "4e84ba6615ad-dirty"
     },
     "python": "3.12.13",
-    "ast_sha256": "aa9e67bff3e3ed8da26211df76b458d280eca4fcbea4d5d80ed1d08afd7c781d"
+    "built_twice_identical": true,
+    "ast_sha256": "2c1558de12b207ff6663bbe3b1ab2506f3212dce552bea26d5884ae98b9a4723"
   }
 }

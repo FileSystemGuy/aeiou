@@ -135,7 +135,7 @@ def test_aeiou_datagen_through_the_layers(tmp_path):
     cfg.write_text("[datagen]\nwriters = 2\n")
     root = tmp_path / "root"
     ast = ast_path("tfrecord_stream")
-    params = ["samples=64", "per_shard=16", "batch=8", "steps=2", "cycle=1", "sample_median=2000"]
+    params = ["samples=64", "samples_per_file=16", "batch=8", "steps=2", "cycle=1", "sample_median=2000"]
     r = _datagen([ast, *sum([["--param", p] for p in params], [])], {"AEIOU_ROOT": str(root), "AEIOU_CONFIG": str(cfg), "AEIOU_BOGUS": "1"})
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.splitlines()[1] == "options (cli > env > config > default)"

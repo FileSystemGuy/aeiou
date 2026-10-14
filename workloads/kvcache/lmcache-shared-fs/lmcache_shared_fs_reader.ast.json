@@ -1,5 +1,5 @@
 {
-  "ast": "0.9",
+  "ast": "0.10",
   "name": "lmcache_shared_fs_reader",
   "doc": "A cold engine in front of the store a lmcache_shared_fs run filled: every lookup hits, every chunk it does not hold is read, nothing is written.",
   "params": {
@@ -2097,9 +2097,10 @@
       "script": "lmcache_shared_fs.py",
       "sha256": "f89595129f279c27cadaaf7b062fe37ae90885d9d015beae4fad7f4b441c6711",
       "builder_version": "0.1.0",
-      "git": "de228d0db4a5"
+      "git": "4e84ba6615ad"
     },
     "python": "3.12.13",
-    "ast_sha256": "49c814917853b8d14c5943aa99231ffcd29717b77827bf41923f956abd41d91b"
+    "built_twice_identical": true,
+    "ast_sha256": "a5c730a5d1944ccaf9dc1e7722283d73a131801b3bb777331cb8961a6adb9728"
   }
 }

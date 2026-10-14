@@ -5849,7 +5849,7 @@ with point 1's projection moved into `aeiou dry-run` and the host facts into the
    parameters (they are workload identity), ~~the sizing step's flags the same names~~ (2026-10-13: and `mlpstorage`'s, §3.74). A
    contract extension lets `div` in a pattern take a parameter (`{id div
    files_per_directory}`; today the width is a literal, so the directory *count* already
-   scales but the width cannot).
+   scales but the width cannot). *(Built 2026-10-13, contract 0.10, §3.75.)*
 
 **Not changed by this.** §3.70's resume, grow, and shrink take any count (whole directories
 are not required of a corpus); `aeiou run --subset` requires whole directories of the
@@ -6135,7 +6135,71 @@ writes is held to its projection (files and bytes, chunked, array, and whole dat
 `a_corpus_larger_than_the_free_space_is_refused_before_anything_is_written`; the report's
 `facts` and `memory` against the bytes on disk, and the dry run's line (`tests/report.rs`); every
 host's facts on rank 0 of two (`tests/options.rs`). Not yet: the Python `aeiou-datagen` has no
-space check; item 5's `div` by a parameter is next.
+space check; ~~item 5's `div` by a parameter is next.~~ item 5's `div` by a parameter built the
+same day (contract 0.10, §3.75).
+
+### 3.75 `div` by a parameter and the standard layout names (decided with the user 2026-10-13; built the same day, contract 0.10)
+
+**The problem.** §3.71 point 6 and §3.74 item 5: a pattern's divisor was a literal
+(`{id div 1300:05}`), so a corpus's directory *count* scaled with `count` but its *width*, the
+files a directory holds, was fixed in the abstract. Who sizes a corpus (a researcher, or
+`mlpstorage` applying the WG's layout targets, §3.74) must be able to set it as a parameter, under
+a name every training abstract shares.
+
+**Options weighed.** (a) A parameter's name in the pattern string, `{id div
+files_per_directory:05}`. (b) A structured pattern, `{text: "…{id div $D}…", args: {D: <expr>}}`,
+taking any expression. (b) is more general, but no one needs an expression here (the width is
+computed by whoever sizes the corpus, and given as a number) and every pattern would read worse.
+**Decided: (a).**
+
+**Decided.**
+
+1. *Syntax.* The word after `div` or `mod` is a positive number or the name of a parameter; the
+   two cannot be confused (an identifier starts with a letter or `_`), so the name takes no sigil.
+   Datasets and namespaces alike. `mod` by a parameter is allowed where `mod` is (an `indexed`
+   dataset, a namespace); a consumed dataset's directories stay `div` (V21).
+2. *Rule V23.* The name is a declared parameter whose default is an integer (`validate.rs`,
+   `schema/check.py`, the builder). `gpus` is not a declared parameter, so it cannot be a divisor:
+   a corpus's names do not depend on how many GPUs read it. A value of zero or less, or not an
+   integer, is refused when the model is built, naming the parameter.
+3. *Bound before use.* `Pattern::bind` replaces each name with its value when the model is built
+   (`eval::bind_pattern`); a bound pattern's source is the original text with the name replaced,
+   and formatting an unbound one is an error. The directory scheme, `dirs`, `dir`, datagen's runs,
+   and `--subset`'s rounding all see the number.
+4. *The resolved definition says the number.* `resolved_dataset` and `resolved_namespace`
+   substitute `{"param": x}` nodes, which would not see a name inside a string, so a corpus made at
+   width 1,300 would have matched a run at 4,096. They now bind the pattern too
+   (`payload::bind_pattern`, and the Python `resolved_dataset`), so another width is another
+   dataset (a run is refused, `--subset` included, naming the pattern), and at the default the
+   resolved pattern is exactly the literal one: **no dataset id changed**, and no fingerprint.
+5. *Padding stays literal.* `:05` is a minimum width; a narrower directory over a large corpus
+   gives more than 99,999 directories, whose names print wider and no longer sort by name in id
+   order. Harmless to the runner (directories are enumerated by id, never sorted); noted rather
+   than given an automatic width.
+6. *The terms* (§3.71 point 6), defined once in `schema/README.md` §2: **sample** (an item a job
+   draws), **file** (a file or object of the dataset), **directory**; the parameters `samples`,
+   `samples_per_file`, `files_per_directory`, and the derived (never parameters) `files` and
+   `directories`. Renamed: `per_shard` (`tfrecord_stream`, `parquet_stream`) and `per_file`
+   (`hdf5_map`) to `samples_per_file`; `files` (`file_per_sample`, `npy_per_sample`, whose
+   items are whole files) to `samples`; those two gained `files_per_directory` (1,300, ImageNet-1k's
+   most images in a class; 10,000), as their kits' corpora are laid out. The three cases'
+   `params.json` follow. No alias for the old names (no users yet).
+
+*Built 2026-10-13.* Runner: `pattern.rs` (`Field::param`, `Field::spec`, `Pattern::params`,
+`Pattern::bind`), `eval::bind_pattern`, `payload::bind_pattern`, V23 in `validate.rs`;
+`AST_VERSION` 0.10. Builder: `aeiou/pattern.py` (`params`, `bind`), `Workload._divisors`, the
+`FIELD` pattern accepting a name, `datagen.resolved_dataset`. Every committed AST regenerated:
+every AST hash changed, no fingerprint, no dataset id; the catalog's shapes changed in their
+hashes only. Tests: `tests/golden.rs` (V23; the binding, the directory count, the id at the
+default and at another width, a zero width refused), `tests/coord.rs` (`--subset` at another
+width refused), `test_builder.py` (V23 in the builder and `check.py`; the Python binding).
+
+**Found on the way, fixed.** (i) The Python `aeiou-datagen`'s `Hello` had no `facts`, which
+§3.74 made a required field of the frame, so a Python rank was refused by a Rust rank 0
+("missing field `facts`"); `coord.host_facts` now sends what `run::host_facts` does. (ii)
+`test_coord.py::test_the_frames_are_the_runners` wrote `file_per_sample` at its default 50,000,000
+files, which §3.74's space check refuses on rank 0 before the identities are compared; it now
+writes 100. Neither showed in CI, whose Python job builds no runner, so the test was skipped.
 
 ## 4. Plan changes
 

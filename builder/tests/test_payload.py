@@ -53,7 +53,7 @@ def test_the_rust_writer_writes_the_same_bytes(tmp_path):
     Python payload of its unit, so the two writers can share a corpus's definition."""
     ast = next((ROOT / "workloads").rglob("file_per_sample.ast.json"))
     root = tmp_path / "r"
-    r = subprocess.run([str(RUNNER), "datagen", str(ast), "--root", str(root), "--param", "files=12", "--dedupe", "2",
+    r = subprocess.run([str(RUNNER), "datagen", str(ast), "--root", str(root), "--param", "samples=12", "--dedupe", "2",
                         "--compress", "3", "--writers", "2"], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     seed = json.loads(ast.read_text())["datasets"]["train"]["seed"]

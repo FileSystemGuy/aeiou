@@ -30,9 +30,9 @@ RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" 
 USER, SECRET = "aeiou", "aeiou-secret"
 
 CASES = {
-    "tfrecord_stream": ["samples=768", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
-    "parquet_stream": ["samples=768", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
-    "hdf5_map": ["samples=64", "per_file=16", "batch=4", "workers=2", "steps=4"],
+    "tfrecord_stream": ["samples=768", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
+    "parquet_stream": ["samples=768", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
+    "hdf5_map": ["samples=64", "samples_per_file=16", "batch=4", "workers=2", "steps=4"],
 }
 
 
@@ -212,11 +212,11 @@ def test_aeiou_datagen_streams_containers_into_the_bucket(name, minio, tmp_path)
     obj_file = tmp_path / "object.ast.json"
     obj_file.write_text(json.dumps(obj))
     if name == "hdf5":
-        flags = ["--param", "samples=560", "--param", "per_file=96"]   # 18 MiB files, the last short
+        flags = ["--param", "samples=560", "--param", "samples_per_file=96"]   # 18 MiB files, the last short
     elif name == "parquet":
-        flags = ["--param", "samples=768", "--param", "per_shard=128", "--param", "sample_median=120000"]   # whole row groups (brief item 31)
+        flags = ["--param", "samples=768", "--param", "samples_per_file=128", "--param", "sample_median=120000"]   # whole row groups (brief item 31)
     else:
-        flags = ["--param", "samples=700", "--param", "per_shard=128", "--param", "sample_median=120000"]
+        flags = ["--param", "samples=700", "--param", "samples_per_file=128", "--param", "sample_median=120000"]
     flags += ["--dedupe", "2", "--compress", "3"]
     prefix = f"rust-{name}/data"
     r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
@@ -247,9 +247,9 @@ def test_aeiou_datagen_resumes_into_the_bucket(name, minio, tmp_path):
     if not _has_object_engine():
         pytest.skip(f"{RUNNER} is not built with the cargo feature `object`")
     if name == "tfrecord":
-        ast_file, flags = ast_path("tfrecord_stream"), ["--param", "samples=700", "--param", "per_shard=128", "--param", "sample_median=120000"]
+        ast_file, flags = ast_path("tfrecord_stream"), ["--param", "samples=700", "--param", "samples_per_file=128", "--param", "sample_median=120000"]
     else:
-        ast_file, flags = ast_path("file_per_sample"), ["--param", "files=40"]
+        ast_file, flags = ast_path("file_per_sample"), ["--param", "samples=40"]
     obj = json.loads(pathlib.Path(ast_file).read_text())
     (ds,) = obj["datasets"]
     obj["datasets"][ds]["protocol"] = "s3"
@@ -291,7 +291,7 @@ def test_aeiou_datagen_grows_and_shrinks_in_the_bucket(name, minio, tmp_path):
     if not _has_object_engine():
         pytest.skip(f"{RUNNER} is not built with the cargo feature `object`")
     if name == "tfrecord":
-        ast_file, flags, count, sizes = ast_path("tfrecord_stream"), ["--param", "per_shard=128", "--param", "sample_median=20000"], "samples", (700, 900, 300)
+        ast_file, flags, count, sizes = ast_path("tfrecord_stream"), ["--param", "samples_per_file=128", "--param", "sample_median=20000"], "samples", (700, 900, 300)
     else:
         ast_file, flags, count, sizes = ast_path("file_per_sample"), [], "files", (40, 60, 25)
     obj = json.loads(pathlib.Path(ast_file).read_text())
@@ -342,7 +342,7 @@ def test_aeiou_datagen_settles_an_interrupted_shrink_in_the_bucket(minio, tmp_pa
 
     def fresh(prefix, n):
         r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
-                            "--writers", "3", "--param", f"files={n}"], capture_output=True, text=True, env=minio.env)
+                            "--writers", "3", "--param", f"samples={n}"], capture_output=True, text=True, env=minio.env)
         assert r.returncode == 0, r.stdout + r.stderr
 
     def contents(prefix):
@@ -377,7 +377,7 @@ def test_a_multipart_upload_is_the_file(minio, tmp_path):
     """A file of several parts (the part is 8 MiB) arrives whole; an upload a writer fails
     before its close is aborted and leaves no object."""
     name = "hdf5_map"
-    flags = sum([["--param", p] for p in ["samples=96", "per_file=96", "batch=4", "workers=2", "steps=4"]], [])
+    flags = sum([["--param", p] for p in ["samples=96", "samples_per_file=96", "batch=4", "workers=2", "steps=4"]], [])
     ast = object_variant(name, tmp_path, dataset_names(name))
     r = _datagen([ast, "--root", tmp_path / "unused", *sum([["--endpoint", f"{n}=s3://bench/big"] for n in dataset_names(name)], []), *flags], minio.env)
     assert r.returncode == 0, r.stdout + r.stderr

@@ -305,7 +305,7 @@ def test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root():
             g.write(inv, 1)
         g.close(inv)
     ast = w.build()
-    assert ast["ast"] == "0.9"
+    assert ast["ast"] == "0.10"
     assert ast["datasets"]["train"]["inventory"] == {"name": "inventory.txt", "entry": {"param": "entry"}}
     assert ast["actors"]["gpu"]["body"][0]["let"]["value"] == {"inventory": "train"}
     _, check = _load()
@@ -320,6 +320,45 @@ def test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root():
         bad = copy.deepcopy(ast)
         mutate(bad)
         assert any(needle in e for e in check.Check(bad, "x").run()), needle
+
+
+def test_a_divisor_is_a_declared_integer_parameter():
+    """Contract 0.10 (DESIGN_REVIEW.md §3.75): V23 in the builder and in check.py alike, and the
+    Python port binds a divisor as the runner does, so the resolved definition names the width."""
+    import copy
+    from aeiou.validate import _load
+    from aeiou.pattern import Pattern
+    from aeiou.datagen import resolved_dataset
+    w = Workload("t")
+    P = w.params(files_per_directory=1300, ratio=0.5)
+    with pytest.raises(BuildError, match="divisor `width` is not a declared parameter"):
+        w.dataset("a", pattern="a/{id div width}/f_{id}", layout="whole", access="map", count=10, size=const(1), seed=1)
+    with pytest.raises(BuildError, match="whose default is not an integer"):
+        w.dataset("b", pattern="b/{id div ratio}/f_{id}", layout="whole", access="map", count=10, size=const(1), seed=1)
+    train = w.dataset("train", pattern="train/{id div files_per_directory:05}/img_{id:09}.jpg", layout="whole",
+                      access="map", count=5000, size=const(1), seed=1)
+    with w.actor("gpu") as g:
+        with g.loop("d", train.dirs) as d:
+            g.stat(g.let("dh", train.dir(d)))
+    ast = w.build()
+    assert ast["datasets"]["train"]["pattern"] == "train/{id div files_per_directory:05}/img_{id:09}.jpg"
+    _, check = _load()
+    assert not check.Check(copy.deepcopy(ast), "x").run()
+    for mutate, needle in [
+        (lambda a: a["params"].pop("files_per_directory"), "divisor `files_per_directory` is not a declared parameter (V23)"),
+        (lambda a: a["params"]["files_per_directory"].__setitem__("default", 2.5), "whose default is not an integer (V23)"),
+    ]:
+        bad = copy.deepcopy(ast)
+        mutate(bad)
+        assert any(needle in e for e in check.Check(bad, "x").run()), needle
+    p = Pattern(ast["datasets"]["train"]["pattern"])
+    assert p.params() == ["files_per_directory"]
+    with pytest.raises(ValueError, match="not bound"):
+        p.format(id=1)
+    assert p.bind({"files_per_directory": 4096}).format(id=4096) == "train/00001/img_000004096.jpg"
+    with pytest.raises(ValueError, match="positive divisor"):
+        p.bind({"files_per_directory": 0})
+    assert resolved_dataset(ast, "train", {"files_per_directory": 1300})["pattern"] == "train/{id div 1300:05}/img_{id:09}.jpg"
 
 
 # ---- the harness ----

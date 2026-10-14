@@ -28,9 +28,9 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("lmcache_local_disk", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("lmcache_shared_fs_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
-    ("tfrecord_stream", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
-    ("parquet_stream", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
-    ("hdf5_map", 2, &[("samples", "64"), ("per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")]),
+    ("tfrecord_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
+    ("parquet_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")]),
+    ("hdf5_map", 2, &[("samples", "64"), ("samples_per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")]),
 ];
 
 #[test]

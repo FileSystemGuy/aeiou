@@ -22,7 +22,7 @@ protocols were read off `strace` of the libraries on the loopback NFS mount of
 
     from aeiou.formats import tfrecord, parquet, hdf5, webdataset
     shards = w.dataset("shards", pattern="train/shard-{id:05}.tfrecord", layout="compound", access="stream",
-                       count=P.samples, samples_per_file=P.per_shard, size=lognormal(110 * KiB, 0.45),
+                       count=P.samples, samples_per_file=P.samples_per_file, size=lognormal(110 * KiB, 0.45),
                        seed=0x5eed_0001, format=tfrecord(xfer=P.xfer))
     with gpu.loader("shards", workers=P.cycle, prefetch=1, batches=P.shards) as worker:
         s = worker.let("s", shards.consume())        # a shard: stream datasets consume files

@@ -246,7 +246,7 @@ needs_run = pytest.mark.skipif(not RUNNER.exists() or not _strace_works(), reaso
 @pytest.mark.parametrize(
     "name, seed, params",
     [
-        ("file_per_sample", 7, ["files=600", "batch=4", "workers=2", "prefetch=2", "steps=12"]),
+        ("file_per_sample", 7, ["samples=600", "batch=4", "workers=2", "prefetch=2", "steps=12"]),
         ("lmcache_local_disk", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
                               'reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}',
                               'keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}']),
@@ -310,7 +310,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     assert r.returncode == 0, r.stderr
     sha = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("sha256 "))
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.9", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.10", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": exported.name, "sha256": sha}}]}}}))
     node_dry = tmp_path / "node.dry.json"
     r = run(RUNNER, "dry-run", node_ast, "--gpus", "1", "--metrics-json", node_dry)

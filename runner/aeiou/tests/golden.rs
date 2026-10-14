@@ -37,23 +37,25 @@ fn hashes_match_check_py() {
     // fingerprint unchanged; all again 2026-10-13 for contract 0.8, one dataset shape with `layout`, `access`, and
     // `format.framing`, DESIGN_REVIEW §3.72, every fingerprint unchanged; all again the same day for contract 0.9,
     // a dataset's `inventory`, DESIGN_REVIEW §3.73, with file_per_sample and npy_per_sample's `enumerate` renamed `walk`
-    // and an `inventory` read added, off by default, every fingerprint unchanged).
+    // and an `inventory` read added, off by default, every fingerprint unchanged; all again the same day for
+    // contract 0.10, `div` by a parameter, DESIGN_REVIEW §3.75, with the standard names `samples`,
+    // `samples_per_file`, and `files_per_directory`, every fingerprint unchanged).
     let want = [
-        ("dcp_load", "043ffa6ca45271d828ed5cf561eca0ce5b2f79b31cdcc5a863c15851144c594c"),
-        ("dcp_save", "af8dc17d922d28cbc6ebaf45695930065f294f462649dc7f3911fc86857426af"),
-        ("lmcache_local_disk", "c72dd9ff9205d6d492c281e4d6cfd6bcd11bcc6fa7725a197a4c2a3a00e05357"),
-        ("safetensors_load", "8065ddc8a86bbaf4117bef19bf22d4195e5f4acbacf03035fe90ae147e8f3f5a"),
-        ("npy_per_sample", "5a73267654776844435d160c9961f0c5387a97024c46fb13f74f3cad8a35ecbd"),   // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13)
-        ("file_per_sample", "2d4fe1a1d26aa4647f42b6e1b50194bc28e1d64715716977e91b90cfa292cd88"),   // 2026-10-02: `enumerate` on by default
-        ("diskann_build", "664b65bef5b04b6a4ad4c6844f7a9989b9ba0cf44ff89a88dc10dcd171d018d1"),
-        ("diskann_search", "91f8a434ad14194d2f358beb965599cf2bb9267b38ed6eea4dcddf7117384160"),
-        ("tfrecord_stream", "a128ec4900db4aba098f102917726a33d867dc7b7985826f1d1cf66d0dd2c252"),
-        ("parquet_stream", "5fa2028070dc2b8ec0b24303c1d0ef21d7c0c220163ba4f3c7bf70535b943f11"),
-        ("hdf5_map", "aa9e67bff3e3ed8da26211df76b458d280eca4fcbea4d5d80ed1d08afd7c781d"),
-        ("faiss_ivf_ondisk", "f953b1e090fd2d1ea428ef97643a7dec674eff7a89f8897de43c05256a71b6d6"),
+        ("dcp_load", "219c0f16212c1278fe027b72c3b0748c887ee8bc3b66c0851eb3edd4c54b9f26"),
+        ("dcp_save", "2462d2ce607cf9a6ff4cf435467fb75e6c73b0bc614f185a2448cd924093fccd"),
+        ("lmcache_local_disk", "1ec099cf87d61d4726171f3f231ebb8962a7483f0afd15f4138fc25b75914bcd"),
+        ("safetensors_load", "2b116662c63cac0392d5f8498f1e489ef381b2079262bf930f7409ec030a35c7"),
+        ("npy_per_sample", "d5627edefb81daba63626b18228cc79578627acea75057c70728024b36e9df0b"),   // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13)
+        ("file_per_sample", "a4d7729c86b751a18d5dd6d395e9dd63a0774a5af2c7f8cf6a0f0ee9c8ed7071"),   // 2026-10-02: `enumerate` on by default
+        ("diskann_build", "a6503c207fd28f297cd209cc35be0bc41849cb78c0e1e1e1c5ccf5ee92ea03d0"),
+        ("diskann_search", "b61e510d7622bac8963f5ea8f7892d1baf00b24003e3da87dad5f874a65e2629"),
+        ("tfrecord_stream", "a7bb936d2301a8c45d4545632813c3767ba63e421e913cbc53e19ed029fd44de"),
+        ("parquet_stream", "51edca67c8644b6f199472cd10f2c97fe4ca0355436efb38182a9fcf82c30e04"),
+        ("hdf5_map", "2c1558de12b207ff6663bbe3b1ab2506f3212dce552bea26d5884ae98b9a4723"),
+        ("faiss_ivf_ondisk", "2df0aa609dbd6b28e0a5112bc54de5cd54719c68e0fcd9b57574f7deff96824f"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("lmcache_shared_fs", "b2214bf08303e4bd89d3302a87519b8b63f69e47686691759bde270a6a4f318b"),
-        ("lmcache_shared_fs_reader", "49c814917853b8d14c5943aa99231ffcd29717b77827bf41923f956abd41d91b"),
+        ("lmcache_shared_fs", "aa2846afa5058390c20218ebd3d01d9b6b52b4e79c1457abdd00ee4b6c3e23c7"),
+        ("lmcache_shared_fs_reader", "a5c730a5d1944ccaf9dc1e7722283d73a131801b3bb777331cb8961a6adb9728"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&crate::common::workload_ast(name)).unwrap();
@@ -112,9 +114,9 @@ fn golden_fingerprints() {
         ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc7d83399ee6948bc, 3417),
         ("lmcache_shared_fs_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x382dba518a89c85f, 2986),
         // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations
-        ("tfrecord_stream", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
-        ("parquet_stream", 2, &[("samples", "768"), ("per_shard", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),
-        ("hdf5_map", 2, &[("samples", "64"), ("per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")], 0x3dd38374803bff38, 384),
+        ("tfrecord_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
+        ("parquet_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),
+        ("hdf5_map", 2, &[("samples", "64"), ("samples_per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")], 0x3dd38374803bff38, 384),
     ];
     for (name, gpus, params, fp, ops) in cases {
         let text = std::fs::read_to_string(crate::common::workload_ast(name)).unwrap();
@@ -138,9 +140,9 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
     let mut cfg = config(2, 1, &[("steps", "10")]);
     cfg.sets = vec![set.clone()];
     let by_file = dry(&text, &cfg, 1);
-    let by_cli = dry(&text, &config(2, 1, &[("files", "4000"), ("steps", "10")]), 1);
+    let by_cli = dry(&text, &config(2, 1, &[("samples", "4000"), ("steps", "10")]), 1);
     assert_eq!(by_file.total.fingerprint, by_cli.total.fingerprint);
-    assert_ne!(by_file.total.fingerprint, dry(&text, &config(2, 1, &[("steps", "10")]), 1).total.fingerprint, "files=4000 changes the permutation");
+    assert_ne!(by_file.total.fingerprint, dry(&text, &config(2, 1, &[("steps", "10")]), 1).total.fingerprint, "samples=4000 changes the permutation");
     // the rules (schema/README.md §8)
     let loaded = aeiou::load_str(&text).unwrap();
     let outcome = |json: &str| -> String {
@@ -218,7 +220,7 @@ fn collect(text: &str, cfg: &Config, template: &str, count: i64) -> Vec<(i64, Ve
 }
 
 const CONSUME: &str = r#"{
-  "ast": "0.9", "name": "consume_test",
+  "ast": "0.10", "name": "consume_test",
   "params": {"batches": {"default": 24}, "batch": {"default": 4}},
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}},
   "actors": {"gpu": {"body": [
@@ -257,7 +259,7 @@ fn consume_is_a_permutation_per_epoch_across_actors() {
 }
 
 const CHAIN: &str = r#"{
-  "ast": "0.9", "name": "chain_test",
+  "ast": "0.10", "name": "chain_test",
   "params": {"reuse": {"default": {"mixture": [{"weight": 0.4, "dist": null}, {"weight": 0.6, "dist": {"uniform": {"lo": 1, "hi": 5}}}]}}},
   "namespaces": {"kv": {"pattern": "kv/{conv:016x}/d{d}", "fields": {"conv": "int", "d": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
@@ -298,7 +300,7 @@ fn at_chains_reach_the_original_conversation() {
 }
 
 const UNTIL_EOF: &str = r#"{
-  "ast": "0.9", "name": "eof_test",
+  "ast": "0.10", "name": "eof_test",
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 1, "body": [
@@ -345,7 +347,7 @@ fn rejects(text: &str, needle: &str) {
 fn validator_rejects_what_check_py_rejects() {
     let base = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.9", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.10", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{{datasets}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )
@@ -378,6 +380,12 @@ fn validator_rejects_what_check_py_rejects() {
     aeiou::load_str(&inv("d/f_{id:04}.jpg", "stream", "files.txt")).unwrap();
     aeiou::load_str(&inv("d/{id div 4:05}/f_{id}", "map", "inventory.txt")).unwrap();
     rejects(&base(ds, r#"{"open": {"file": {"inventory": "d"}, "flags": ["RDONLY"]}}"#), "`inventory` of `d`, which declares none (V22)");
+    // contract 0.10: a divisor named in a pattern is a declared integer parameter (V23, DESIGN_REVIEW §3.75)
+    aeiou::load_str(&one(r#""pattern": "d/{id div n:03}/f_{id}", "layout": "whole", "access": "map""#)).unwrap();
+    rejects(&one(r#""pattern": "d/{id div width}/f_{id}", "layout": "whole", "access": "map""#), "divisor `width` is not a declared parameter (V23)");
+    rejects(&one(r#""pattern": "d/{id div n}/f_{id}", "layout": "whole", "access": "map""#).replace(r#""n": {"default": 3}"#, r#""n": {"default": 2.5}"#), "whose default is not an integer (V23)");
+    rejects(&one(r#""pattern": "d/{id div n}/f_{id}", "layout": "whole", "access": "map""#).replace(r#""n": {"default": 3}"#, r#""n": {"default": {"const": 3}}"#), "whose default is not an integer (V23)");
+    rejects(&one(r#""pattern": "d/{id mod n}/f_{id}", "layout": "whole", "access": "map""#), "never `mod`");
     let with_inv = r#""d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1, "inventory": {"name": "list.txt", "entry": 8}}"#;
     rejects(&base(with_inv, r#"{"open": {"file": {"inventory": "d"}, "flags": ["WRONLY"]}}"#), "read-only (V12)");
     let indexed = r#""d": {"layout": "whole", "access": "indexed", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}"#;
@@ -504,7 +512,7 @@ fn parameters_given_are_held_to_the_at_rule() {
 #[test]
 fn a_long_at_chain_is_one_link_per_iteration() {
     let text = r#"{
-  "ast": "0.9", "name": "long_chain",
+  "ast": "0.10", "name": "long_chain",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "k", "to": 200000, "body": [
@@ -521,8 +529,46 @@ fn a_long_at_chain_is_one_link_per_iteration() {
     assert_eq!(ops[199_999].3, "o/199999");     // 66,666 full periods of 0 + 1 + 2, then 0 + 1
 }
 
+/// A divisor named in a pattern (contract 0.10, DESIGN_REVIEW §3.75) is bound to the parameter's
+/// value: the names, the directory count, and the resolved definition use the number, so at the
+/// default the dataset id is the literal pattern's, and another width is another dataset.
+#[test]
+fn a_divisor_parameter_binds_the_names_the_directories_and_the_dataset_id() {
+    let path = crate::common::workload_ast("file_per_sample.ast.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(doc["datasets"]["train"]["pattern"], "train/{id div files_per_directory:05}/img_{id:09}.jpg");
+    let resolved = |doc: &serde_json::Value, params: &[(&str, &str)]| aeiou::payload::resolved_dataset(doc, "train", &config(1, 0, params)).unwrap();
+    let at_default = resolved(&doc, &[("samples", "5000")]);
+    assert_eq!(at_default["pattern"], "train/{id div 1300:05}/img_{id:09}.jpg");
+    let mut literal = doc.clone();
+    literal["datasets"]["train"]["pattern"] = "train/{id div 1300:05}/img_{id:09}.jpg".into();
+    assert_eq!(at_default, resolved(&literal, &[("samples", "5000")]), "the default width resolves to the literal pattern's definition");
+    let wide = resolved(&doc, &[("samples", "5000"), ("files_per_directory", "4096")]);
+    assert_eq!(wide["pattern"], "train/{id div 4096:05}/img_{id:09}.jpg");
+    assert_ne!(wide, at_default);
+
+    let loaded = aeiou::load_str(&text).unwrap();
+    for (width, dirs, name) in [("1300", 4, "train/00003/img_000004000.jpg"), ("4096", 2, "train/00000/img_000004000.jpg")] {
+        let cfg = config(1, 0, &[("samples", "5000"), ("files_per_directory", width)]);
+        let params = Params::new(&loaded.ast, &cfg).unwrap();
+        let model = build_model(&loaded.ast, &cfg, &params).unwrap();
+        match &model.datasets[model.dataset("train").unwrap()] {
+            aeiou::eval::DsMeta::Files { pattern, ndirs, .. } => {
+                assert_eq!(*ndirs, dirs, "width {width}");
+                assert_eq!(pattern.format(|f| (f == "id").then_some(aeiou::pattern::FieldValue::Int(4000))).unwrap(), name);
+            }
+            _ => unreachable!(),
+        }
+    }
+    let cfg = config(1, 0, &[("files_per_directory", "0")]);
+    let params = Params::new(&loaded.ast, &cfg).unwrap();
+    let e = format!("{:#}", build_model(&loaded.ast, &cfg, &params).err().unwrap());
+    assert!(e.contains("`div files_per_directory` is 0: it needs a positive divisor"), "{e}");
+}
+
 const INVENTORY: &str = r#"{
-  "ast": "0.9", "name": "inventory_test",
+  "ast": "0.10", "name": "inventory_test",
   "params": {"files": {"default": 100000}},
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id div 1000:03}/f_{id:06}", "count": {"param": "files"},
                      "size": {"const": 4096}, "seed": 7, "inventory": {"name": "inventory.txt", "entry": 24}}},

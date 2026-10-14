@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import pathlib
 import socket
 import struct
 import threading
@@ -51,6 +53,39 @@ def identity_differences(mine: dict, theirs: dict, r0: int) -> list:
         else:
             out.append(f"{k} {show(a)} differs from rank {r0}'s {show(b)}")
     return out or [f"identity differs from rank {r0}'s"]
+
+
+def host_facts() -> dict:
+    """What a host brings, as `run::host_facts` says it in the runner's `Hello`: host, kernel,
+    CPUs, `MemTotal`, and the tightest cgroup v2 `memory.max` on the way to the root."""
+    def mem_total():
+        try:
+            for line in open("/proc/meminfo"):
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    def cgroup_max():
+        try:
+            rel = next(l[3:].strip() for l in open("/proc/self/cgroup") if l.startswith("0::"))
+        except (OSError, StopIteration):
+            return None
+        best, d, top = None, pathlib.Path("/sys/fs/cgroup") / rel.lstrip("/"), pathlib.Path("/sys/fs/cgroup")
+        while True:
+            try:
+                n = int((d / "memory.max").read_text().strip())
+                best = n if best is None else min(best, n)
+            except (OSError, ValueError):
+                pass
+            if d == top or d.parent == d:
+                return best
+            d = d.parent
+
+    online = os.sysconf("SC_NPROCESSORS_ONLN") if hasattr(os, "sysconf") else -1
+    return {"host": socket.gethostname(), "kernel": os.uname().release, "cpus": len(os.sched_getaffinity(0)),
+            "cpus_online": online if online > 0 else None, "memory": mem_total(), "cgroup_memory_max": cgroup_max()}
 
 
 class Closed(Exception):
@@ -143,7 +178,8 @@ class Client:
                 time.sleep(0.5)
         self.addr = "%s:%d" % sock.getpeername()[:2]
         self.conn = Conn(sock, f"coordinator {self.addr}")
-        self.conn.send({"Hello": {"rank": rank, "ranks": ranks, "host": host, "identity": identity, "layers": layers, "participants": []}})
+        self.conn.send({"Hello": {"rank": rank, "ranks": ranks, "host": host, "identity": identity, "layers": layers, "participants": [],
+                                 "facts": host_facts()}})
         threading.Thread(target=self._loop, name="coord-client", daemon=True).start()
         try:
             self._wait(lambda: self.welcome or None)

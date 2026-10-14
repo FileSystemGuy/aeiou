@@ -24,7 +24,7 @@ from aeiou.nodes import BuildError  # noqa: E402
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 needs_runner = pytest.mark.skipif(not RUNNER.exists(), reason="runner binary not built")
 # six shards of 128 samples, the last short (700 samples)
-PARAMS = ["samples=700", "per_shard=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"]
+PARAMS = ["samples=700", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"]
 
 
 def ast_path(name):
@@ -169,10 +169,10 @@ def test_the_frames_are_the_runners(tmp_path):
     addr = f"127.0.0.1:{free_port()}"
     ast = ast_path("file_per_sample")
     rust = subprocess.Popen([str(RUNNER), "datagen", str(ast), "--root", str(tmp_path / "r"), "--ranks", "2", "--rank", "0",
-                             "--coordinator", addr, "--dedupe", "2"],
+                             "--coordinator", addr, "--dedupe", "2", "--param", "samples=100"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_env())
     py = subprocess.run([sys.executable, "-m", "aeiou.datagen", str(ast), "--root", str(tmp_path / "p"), "--ranks", "2", "--rank", "1",
-                         "--coordinator", addr], capture_output=True, text=True, cwd=str(BUILDER), env=_env(), timeout=300)
+                         "--coordinator", addr, "--param", "samples=100"], capture_output=True, text=True, cwd=str(BUILDER), env=_env(), timeout=300)
     ro, re_ = rust.communicate(timeout=300)
     assert rust.returncode != 0 and py.returncode == 1, ro + re_ + py.stdout + py.stderr
     assert "dedupe 1 differs from rank 0's 2" in py.stderr, py.stderr

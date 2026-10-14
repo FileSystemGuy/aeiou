@@ -72,7 +72,7 @@ fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
 #[test]
 fn the_estimate_matches_the_counted_peak() {
     let root = tmpdir("limits");
-    let params = [("files", "300"), ("batch", "4"), ("workers", "3"), ("prefetch", "2"), ("steps", "10")];
+    let params = [("samples", "300"), ("batch", "4"), ("workers", "3"), ("prefetch", "2"), ("steps", "10")];
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(3, 11, &params));
     gen(loaded, cfg, model, &root);
     run::check_datasets(loaded, cfg, &root).unwrap();

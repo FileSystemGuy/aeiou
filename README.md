@@ -197,9 +197,9 @@ cd builder && uv sync --extra test --extra formats && uv run pytest && cd ..
 # check, dry-run, generate, run
 runner/target/release/aeiou check $(find workloads -name '*.ast.json')
 runner/target/release/aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
-runner/target/release/aeiou datagen workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param files=4000
+runner/target/release/aeiou datagen workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param samples=4000
 runner/target/release/aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
-    --param files=4000 --param steps=50 --report-json run.json
+    --param samples=4000 --param steps=50 --report-json run.json
 ```
 
 The workloads shipped as abstracts: small-file training, large-sample training (`.npz`),
@@ -235,7 +235,8 @@ id order from one queue on rank 0, and Ctrl-C stopping every host with the manif
 (2026-10-12), and contract 0.8, one dataset shape: a `layout` (`whole`, `chunked`,
 `compound`, `array`), an `access` (`map`, `stream`, `indexed`), and `format.framing`
 (2026-10-13, `DESIGN_REVIEW.md` §3.72), and contract 0.9, a consumed dataset's `inventory`
-(the same day, §3.73). The workload catalog
+(the same day, §3.73), and contract 0.10, a pattern's divisor named by a parameter
+(`{id div files_per_directory}`) and the layout parameters' standard names (the same day, §3.75). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
@@ -280,7 +281,8 @@ Not built, in rough order of interest:
   training corpora proposed the same day (`DESIGN_REVIEW.md` §3.71).~~ the sizing step for
   training corpora left to the WG's `mlpstorage` (2026-10-13, `DESIGN_REVIEW.md` §3.74);
   the host facts in the report, the dataset projection in `dry-run`, and the capacity check
-  in `datagen` built the same day; `div` by a parameter next.
+  in `datagen` built the same day; `div` by a parameter (contract 0.10, `DESIGN_REVIEW.md`
+  §3.75) the same day.
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),
   and concurrent mixes of cases (item 30, critical but not yet; `DESIGN_REVIEW.md` §3.67).

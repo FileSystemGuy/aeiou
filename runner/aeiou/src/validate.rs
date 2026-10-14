@@ -467,6 +467,23 @@ impl<'a> Checker<'a> {
                 self.err(path, format!("path component `{comp}` begins with `{RESERVED_PREFIX}`, reserved for the manifest (V13)"));
             }
         }
+        self.divisors(pattern, &p(path, &["pattern"]));
+    }
+
+    /// V23 (contract 0.10, `DESIGN_REVIEW.md` §3.75): a divisor named in a pattern
+    /// (`{id div files_per_directory}`) is a declared parameter whose default is an integer.
+    fn divisors(&mut self, pattern: &str, path: &P) {
+        let pt = match crate::pattern::Pattern::parse(pattern) {
+            Ok(pt) => pt,
+            Err(e) => return self.err(path, e.to_string()),
+        };
+        for name in pt.params() {
+            match self.ast.params.get(name).map(|p| &p.default) {
+                Some(PValue::Scalar(Literal::Int(_))) => {}
+                Some(_) => self.err(path, format!("divisor `{name}` is a parameter whose default is not an integer (V23)")),
+                None => self.err(path, format!("divisor `{name}` is not a declared parameter (V23)")),
+            }
+        }
     }
 
     fn pvalue(&mut self, v: &'a PValue, path: &P) {

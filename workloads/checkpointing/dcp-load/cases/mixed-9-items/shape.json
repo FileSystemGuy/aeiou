@@ -4,7 +4,7 @@
   "runs": [
     {
       "ast": "dcp_load",
-      "ast_sha256": "25c0aa4576cf4de697f130d730879dce0e5bb1550a841dba3ee392660047ce13",
+      "ast_sha256": "748a6780ef6f1c7895f1e3ead56b8a351a491277d20e54b8d884631367dd5639",
       "params": "params.json",
       "params_sha256": "6f3c1113cb149899f2b17524d55036a1adde624661245be5eb6170306af23020",
       "gpus": 2,

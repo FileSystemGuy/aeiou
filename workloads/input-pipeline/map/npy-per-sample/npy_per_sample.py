@@ -25,14 +25,15 @@ w.param("walk", True, doc="the startup listing: the training script's glob over 
 w.param("inventory", False, doc="the startup read of the corpus's inventory, every process, in place of the glob at scale (DESIGN_REVIEW.md §3.73)")
 w.param("inv_entry", 27, unit="bytes", doc="[measure] inventory bytes per file: the name below the root (`00000/sample_000000000.npz`) and a newline")
 w.param("inv_read", 1 * MiB, unit="bytes", doc="[measure] the inventory reader's request; Python's BufferedReader asks st_blksize")
-w.param("files", 50_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
+w.param("samples", 50_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
+w.param("files_per_directory", 10_000, unit="count", doc="[config] files a directory holds, {id div files_per_directory} (contract 0.10); 10,000 as kit/mkcorpus.py writes them")
 w.param("sample_mean", 140 * MiB, unit="bytes", doc="[measure]")
 w.param("sample_sd", 4 * MiB, unit="bytes", doc="[measure]")
 EOCD = 22      # end-of-central-directory record
 LOCATOR = 20   # zip64 end-of-central-directory locator, probed just before the EOCD
 
-train = w.dataset("train", pattern="train/{id div 10000:05}/sample_{id:09}.npz", layout="whole", access="map",
-                  count=P.files, size=normal(P.sample_mean, P.sample_sd, min=1 * MiB),
+train = w.dataset("train", pattern="train/{id div files_per_directory:05}/sample_{id:09}.npz", layout="whole", access="map",
+                  count=P.samples, size=normal(P.sample_mean, P.sample_sd, min=1 * MiB),
                   seed=0x5eed_da7b,
                   inventory={"name": "inventory.txt", "entry": P.inv_entry})
 

@@ -10,7 +10,7 @@ An **abstract** is a workload written as a program over POSIX-shaped I/O operati
 operation sequence a real application issues, as its author understands it, with the
 quantities the application draws at random expressed as distributions. It is authored as a
 Python script with **aeiou-build**(1), compiled to one JSON document (`<name>.ast.json`,
-contract version 0.9), and executed by **aeiou**(1). The document is the only thing the
+contract version 0.10), and executed by **aeiou**(1). The document is the only thing the
 runner executes and the only artifact an author publishes with a hash.
 
 The model has three parts:
@@ -129,12 +129,14 @@ ids of `zipf` and `hotset` are fixed by the dataset seed, not the run seed.
 ## DATASETS, NAMESPACES, ACTORS
 
 **Datasets**: `{pattern, layout, access, count, size, seed, samples_per_file, chunk, slot,
-format, inventory, protocol}` (contract 0.9). `layout` is how a file or object holds the items: `whole`
+format, inventory, protocol}` (contract 0.10). `layout` is how a file or object holds the items: `whole`
 (one item), `chunked` (part of one: `chunk` bytes each, named by `{k}`), `compound`
 (`samples_per_file` variably sized items, framed by `format`), or `array` (`count` fixed
 slots of `slot` bytes in one file, a pattern without fields). `count` is items. Patterns use
 `{field[:format]}` with the field `id` (and `k` for chunk objects) and the forms `{id:09}`,
-`{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; a dataset's directories are the distinct
+`{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; the divisor may name an integer parameter,
+`{id div files_per_directory:05}` (contract 0.10), so a corpus's directory width is a parameter
+like its count; a dataset's directories are the distinct
 prefixes up to the last `/`, enumerated in id order. `access` is `map` (the shuffle runs
 over samples), `stream` (over files), or `indexed` (items looked up by id, never consumed;
 always for an `array`); a consumed dataset's directories are `{id div D}` or none. A
@@ -199,6 +201,7 @@ these, and the builder enforces most of them at construction:
   `mod`.
 - **V22** An `inventory` is a consumed dataset's, its name a constant file name in the root
   that the pattern cannot produce there; the `inventory` handle names a dataset that has one.
+- **V23** A divisor named in a pattern is a declared parameter whose default is an integer.
 
 ## PARAMETER FILES
 

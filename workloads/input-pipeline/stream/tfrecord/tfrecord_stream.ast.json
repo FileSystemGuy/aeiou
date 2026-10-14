@@ -1,5 +1,5 @@
 {
-  "ast": "0.9",
+  "ast": "0.10",
   "name": "tfrecord_stream",
   "doc": "tf.data over TFRecord shards: cycle shards streamed concurrently, positioned reads of the buffer size to EOF.",
   "params": {
@@ -8,7 +8,7 @@
       "unit": "count",
       "doc": "[config] samples per step"
     },
-    "per_shard": {
+    "samples_per_file": {
       "default": 1024,
       "unit": "count",
       "doc": "[config] samples per shard; a multiple of batch"
@@ -76,7 +76,7 @@
       },
       "seed": 1592646288,
       "samples_per_file": {
-        "param": "per_shard"
+        "param": "samples_per_file"
       },
       "format": {
         "class": "tfrecord",
@@ -120,7 +120,7 @@
                   ]
                 },
                 {
-                  "param": "per_shard"
+                  "param": "samples_per_file"
                 }
               ]
             },
@@ -196,7 +196,7 @@
                                 {
                                   "div": [
                                     {
-                                      "param": "per_shard"
+                                      "param": "samples_per_file"
                                     },
                                     {
                                       "param": "batch"
@@ -262,11 +262,12 @@
   "provenance": {
     "generator": {
       "script": "tfrecord_stream.py",
-      "sha256": "d154e1d35577db3a79759c527b74cd3d59c6e98b6eb35ea34e66a137589745fb",
+      "sha256": "1f343a1508947fe542d5eaa3bdf3f967ff9d10912ccd8428d6639251d8f4e9dc",
       "builder_version": "0.1.0",
-      "git": "de228d0db4a5"
+      "git": "4e84ba6615ad-dirty"
     },
     "python": "3.12.13",
-    "ast_sha256": "a128ec4900db4aba098f102917726a33d867dc7b7985826f1d1cf66d0dd2c252"
+    "built_twice_identical": true,
+    "ast_sha256": "a7bb936d2301a8c45d4545632813c3767ba63e421e913cbc53e19ed029fd44de"
   }
 }

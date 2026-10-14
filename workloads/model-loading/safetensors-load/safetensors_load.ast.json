@@ -1,5 +1,5 @@
 {
-  "ast": "0.9",
+  "ast": "0.10",
   "name": "safetensors_load",
   "doc": "Every process reads every safetensors shard, touching its tensor-parallel slice of each tensor (fan-in G).",
   "posix": "mmap",
@@ -633,9 +633,10 @@
       "script": "safetensors_load.py",
       "sha256": "12c67ce1da37b50389b25e87468cf61780409d51f85de1963000fad32f789ae4",
       "builder_version": "0.1.0",
-      "git": "de228d0db4a5"
+      "git": "4e84ba6615ad"
     },
     "python": "3.12.13",
-    "ast_sha256": "8065ddc8a86bbaf4117bef19bf22d4195e5f4acbacf03035fe90ae147e8f3f5a"
+    "built_twice_identical": true,
+    "ast_sha256": "2b116662c63cac0392d5f8498f1e489ef381b2079262bf930f7409ec030a35c7"
   }
 }

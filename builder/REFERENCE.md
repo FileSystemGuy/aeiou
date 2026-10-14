@@ -78,7 +78,10 @@ samples_per_file=, chunk=, slot=, format=, inventory=)` (contract 0.8, `DESIGN_R
 builder refuses what V20 and V21 refuse, and `consume()` on an `indexed` dataset; `regions()`
 is gone, an array being `dataset(…, layout="array", access="indexed", slot=…)`; contract 0.9,
 §3.73: `inventory={"name": "inventory.txt", "entry": P.inv_entry}` declares a consumed dataset's
-file list, refused as V22 refuses); `namespace(name,
+file list, refused as V22 refuses; contract 0.10, §3.75: a pattern's divisor may name a
+parameter declared before it with an integer default, `{id div files_per_directory:05}`, refused
+as V23 refuses; the training abstracts' layout parameters are `samples`, `samples_per_file`, and
+`files_per_directory`, `schema/README.md` §2); `namespace(name,
 pattern=, fields=, size=, seed=, input=)`; `actor(name, count=)`. `w.P.x` is the parameter reference;
 `P.xs[t]`, `P.xs.len`, `P.xs.sum` index and reduce a parameter array (a table is several
 parallel arrays).
@@ -217,10 +220,10 @@ composition) stay in the abstract.
 from aeiou.formats import tfrecord, parquet, hdf5, webdataset
 
 shards = w.dataset("shards", pattern="train/shard-{id:05}.parquet", layout="compound", access="stream",
-                   count=P.samples, samples_per_file=P.per_shard,
+                   count=P.samples, samples_per_file=P.samples_per_file,
                    size=lognormal(median=P.sample_median, sigma=0.45), seed=0x5eed_da90,
                    format=parquet(rows_per_group=64, columns=(("image", "binary"), ("label", "int64"))))
-with gpu.loader("shards", workers=P.cycle, prefetch=1, batches=ceil_div(P.steps * P.batch, P.per_shard)) as worker:
+with gpu.loader("shards", workers=P.cycle, prefetch=1, batches=ceil_div(P.steps * P.batch, P.samples_per_file)) as worker:
     s = worker.let("s", shards.consume())       # under `stream`, consume draws a shard
     shards.format.open_reads(worker, s)         # two fstats, the 64 KiB footer read (and the rest if larger)
     shards.format.read_all(worker, s)           # WILLNEED + one pread per coalesced run of row groups

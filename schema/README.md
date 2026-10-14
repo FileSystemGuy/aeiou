@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.9`, 2026-10-13 (~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.10`, 2026-10-13 (~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -125,8 +125,18 @@ a compound file's bytes surround its items. `access` says how the application fi
 with `file` or `pick`, never consumed). The fields each layout takes are V20; access, V21.
 `count` is items: samples, or an array's slots. Sizes are drawn from the dataset
 seed, never from `--seed`. Patterns use `{field[:format]}` with fields `id` (and `k` for chunk
-objects) and the forms `{id:09}`, `{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; a
+objects) and the forms `{id:09}`, `{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; the
+divisor of `div` or `mod` is a positive number or (contract 0.10) the name of an integer
+parameter, `{id div files_per_directory:05}` (V23), bound to its value before any name is made,
+so the resolved definition, and the dataset id, carry the number (`DESIGN_REVIEW.md` §3.75); a
 dataset's directories are the distinct prefixes up to the last `/`, enumerated in id order.
+
+**Terms** (contract 0.10, `DESIGN_REVIEW.md` §3.71 point 6, §3.75). A **sample** is an item a
+job draws; a **file** is a file or object of the dataset; a **directory** is a distinct prefix of
+its names. Training abstracts name their layout parameters `samples` (the dataset's `count`),
+`samples_per_file` (a `compound` dataset's), and `files_per_directory` (the divisor of `{id div
+files_per_directory}`), so whoever sizes a corpus sets the same names in every abstract;
+`files` and `directories` follow from them and are never parameters.
 
 **Inventory** (contract 0.9, `DESIGN_REVIEW.md` §3.73): `inventory {name, entry}` on a consumed
 dataset is a file list of it, the file `name` directly in the dataset's root, `count × entry`
@@ -297,6 +307,11 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   beginning with `.aeiou` (V13), and not a name the pattern can produce in the dataset's root
   (each field read as the characters an integer formats to). The `inventory` handle names a
   dataset that declares one, and V12 holds for it: it is read-only (`DESIGN_REVIEW.md` §3.73).
+
+- **V23 divisor** (added 2026-10-13, contract 0.10). A name after `div` or `mod` in a dataset's
+  or namespace's pattern is a declared parameter whose default is an integer (`gpus` is not
+  declared, so it is never one); a value of zero or less is refused when the model is built
+  (`DESIGN_REVIEW.md` §3.75).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -496,3 +511,10 @@ the committed sets; the reasoning is `DESIGN_REVIEW.md` §3.27.
   read, off by default, and their `enumerate` became `walk`); no fingerprint changed. A corpus
   of a dataset with an inventory has a new dataset id (the definition holds it); one without
   keeps its id. Reasoning in `DESIGN_REVIEW.md` §3.73.
+- **0.10** (2026-10-13): a pattern's divisor may name an integer parameter (`{id div
+  files_per_directory}`), bound before use and in the resolved definition, and rule V23 (§2,
+  §4); the layout terms and their standard parameter names (§2). A 0.9 document is a 0.10
+  document with the version changed. Every committed AST was regenerated, `per_shard` and
+  `per_file` renamed `samples_per_file`, `files` renamed `samples`, and `file_per_sample` and
+  `npy_per_sample` given `files_per_directory`; no fingerprint and no dataset id changed.
+  Reasoning in `DESIGN_REVIEW.md` §3.75.
