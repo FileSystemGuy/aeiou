@@ -276,8 +276,11 @@ Not built, in rough order of interest:
   written, rewritten every `--progress-secs`, and `complete` at the end, the same day.
   `datagen --resume ROOT` the same day (the unfinished ids written again, whole, from the
   manifest alone, on any host count); ~~Resume, whole directories,~~ grow
-  and shrink the same day, settle, claims in id order, and Ctrl-C the same day; subset runs (`aeiou run --subset`, whole directories of the corpus, 2026-10-13; whole directories not required of a corpus, §3.71), ~~the inventory variant not yet;~~ the inventory the same day (contract 0.9, `DESIGN_REVIEW.md` §3.73: a consumed dataset's file list, read in place of a walk, its shape `[measure]` until a traced job reads one); a sizing step for
-  training corpora proposed the same day (`DESIGN_REVIEW.md` §3.71).
+  and shrink the same day, settle, claims in id order, and Ctrl-C the same day; subset runs (`aeiou run --subset`, whole directories of the corpus, 2026-10-13; whole directories not required of a corpus, §3.71), ~~the inventory variant not yet;~~ the inventory the same day (contract 0.9, `DESIGN_REVIEW.md` §3.73: a consumed dataset's file list, read in place of a walk, its shape `[measure]` until a traced job reads one); ~~a sizing step for
+  training corpora proposed the same day (`DESIGN_REVIEW.md` §3.71).~~ the sizing step for
+  training corpora left to the WG's `mlpstorage` (2026-10-13, `DESIGN_REVIEW.md` §3.74);
+  the host facts in the report, the dataset projection in `dry-run`, and the capacity check
+  in `datagen` built the same day; `div` by a parameter next.
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),
   and concurrent mixes of cases (item 30, critical but not yet; `DESIGN_REVIEW.md` §3.67).

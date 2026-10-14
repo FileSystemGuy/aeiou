@@ -224,6 +224,13 @@ fn two_ranks_record_every_host_and_print_the_differences_and_a_mismatch_names_th
     assert_eq!(hosts[0]["layers"]["options"]["buffer-mib"]["value"], 4);
     assert_eq!(d0["layers"]["options"]["buffer-mib"]["value"], 4);
     assert!(d1.get("hosts").is_none());
+    // every host's facts came with its Hello, and the memory block sums them
+    for h in hosts {
+        assert!(h["facts"]["memory"].as_u64().unwrap() > 0, "{h}");
+    }
+    assert_eq!(d0["memory"]["hosts"], 2);
+    assert_eq!(d0["memory"]["memory"].as_u64(), Some(hosts.iter().map(|h| h["facts"]["memory"].as_u64().unwrap()).sum::<u64>()));
+    assert!(d1.get("memory").is_none() && d1["facts"]["memory"].as_u64().is_some());
     assert_eq!(d1["layers"]["options"]["buffer-mib"]["value"], 2);
     // a differing seed is refused with the field named, on both ranks
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();

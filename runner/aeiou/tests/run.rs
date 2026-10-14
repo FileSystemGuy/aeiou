@@ -39,9 +39,16 @@ fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Co
 
 fn gen(loaded: &aeiou::Loaded, cfg: &Config, model: &Model<'_>, root: &PathBuf) {
     let params = Params::new(&loaded.ast, cfg).unwrap();
-    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false };
+    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
     let mut log = Vec::new();
-    datagen(loaded, cfg, &params, model, &opts, None, &mut log).unwrap();
+    let written = datagen(loaded, cfg, &params, model, &opts, None, &mut log).unwrap();
+    // the projection is what datagen writes: its files (chunks and an array's one file) and
+    // bytes (the inventory's apart, which datagen does not count)
+    for w in &written {
+        let meta = model.datasets.iter().find(|m| m.name() == w.name).unwrap();
+        let p = aeiou::project::project(meta, 3).unwrap();
+        assert_eq!((p.files, p.bytes - p.inventory_bytes), (w.total_files, w.total_bytes), "dataset `{}`", w.name);
+    }
 }
 
 fn opts(root: &PathBuf, backend: BackendKind) -> RunOpts {
@@ -130,7 +137,7 @@ fn manifest_mismatch_and_missing_are_refused() {
     // datagen refuses a non-empty root
     let (loaded3, cfg3, model3) = leaked_model("file_per_sample", config(1, 1, &[("files", "50")]));
     let params = Params::new(&loaded3.ast, cfg3).unwrap();
-    let o = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false };
+    let o = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
     let mut log = Vec::new();
     assert!(datagen(loaded3, cfg3, &params, model3, &o, None, &mut log).is_err());
     std::fs::remove_dir_all(&root).unwrap();
@@ -201,7 +208,7 @@ fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
     let (loaded, cfg, model) = leaked_model("lmcache_local_disk", config(1, 5, &params));
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &[format!("sysp={}", sys.display()), format!("kv={}", kv.display())]).unwrap();
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
-    let dopts = DatagenOpts { root: root.clone(), endpoints: endpoints.clone(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false };
+    let dopts = DatagenOpts { root: root.clone(), endpoints: endpoints.clone(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
     datagen(loaded, cfg, &dparams, model, &dopts, None, &mut Vec::new()).unwrap();
     assert!(sys.join("0000/blk_0000").exists() && sys.join(".aeiou-dataset.json").exists());
     assert!(kv.join("sub/.aeiou-dataset.json").exists());
@@ -705,7 +712,7 @@ fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
     let (l4, c4, m4) = leaked_model("file_per_sample", config(1, 1, &[("files", "4")]));
     for (l, c, m, root) in [(l6, c6, m6, &six), (l4, c4, m4, &four)] {
         let params = Params::new(&l.ast, c).unwrap();
-        let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false };
+        let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
         datagen(l, c, &params, m, &opts, None, &mut Vec::new()).unwrap();
     }
     let file = |root: &PathBuf, id: i64| std::fs::read(root.join(m6.datasets[0].file_path(id, None).unwrap().as_ref())).unwrap();
@@ -725,4 +732,32 @@ fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
     assert_eq!(m.payload.dedupe, 2);
     std::fs::remove_dir_all(&six).unwrap();
     std::fs::remove_dir_all(&four).unwrap();
+}
+
+/// A corpus larger than the free space at its root is refused before anything is written
+/// (`DESIGN_REVIEW.md` §3.74 item 4): a million files of a TiB fit on no test host.
+#[test]
+fn a_corpus_larger_than_the_free_space_is_refused_before_anything_is_written() {
+    let root = tmpdir("space");
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(
+        aeiou::load_str(
+            r#"{"ast": "0.9", "name": "t",
+                "datasets": {"big": {"layout": "whole", "access": "map", "pattern": "big/{id div 1000:04}/f_{id}", "count": 1000000, "size": {"const": 1099511627776}, "seed": 1}},
+                "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "big", "id": 0}}}}]}}}"#,
+        )
+        .unwrap(),
+    ));
+    let cfg: &'static Config = Box::leak(Box::new(config(1, 1, &[])));
+    let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
+    let p = aeiou::project::project(&model.datasets[0], 2).unwrap();
+    assert_eq!((p.samples, p.files, p.directories, p.bytes), (1_000_000, 1_000_000, 1000, 1_000_000 << 40));
+    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
+    let Err(e) = datagen(loaded, cfg, params, model, &opts, None, &mut Vec::new()) else { panic!("written") };
+    let e = format!("{e:#}");
+    assert!(e.contains("space: dataset(s) `big`: 976.56 PiB to write,") && e.contains("the corpus does not fit (--ignore-space writes anyway"), "{e}");
+    assert!(!root.join("big").exists());
+    // the check is the lines datagen prints, and --ignore-space keeps the line
+    let lines = aeiou::datagen::check_space(loaded, model, &opts, true).unwrap();
+    assert!(lines.len() == 1 && lines[0].starts_with("space: IGNORED: dataset(s) `big`"), "{lines:?}");
 }

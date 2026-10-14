@@ -24,6 +24,7 @@ pub mod metrics;
 pub mod object;
 pub mod options;
 pub mod pattern;
+pub mod project;
 pub mod payload;
 pub mod report;
 pub mod rng;

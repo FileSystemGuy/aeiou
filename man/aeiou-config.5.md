@@ -139,7 +139,7 @@ sides may come from different layers.
 
 **aeiou datagen** and **aeiou-datagen.** Fixed: the abstract, `--gpus`, `--param`,
 `--params-file`, `--dedupe`, `--compress`, `--dataset` (the payload is part of what the
-run compares). Layered: `--root`, `--endpoint`, `--writers`, and for **aeiou datagen**
+run compares), and for **aeiou datagen** `--ignore-space` (a safety check). Layered: `--root`, `--endpoint`, `--writers`, and for **aeiou datagen**
 `--object-threads`.
 
 **aeiou dry-run.** Fixed: the identity (the abstract, `--gpus`, `--seed`, `--param`,

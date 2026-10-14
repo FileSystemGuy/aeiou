@@ -5713,7 +5713,7 @@ now waits briefly for the reader to take the `Stop` that precedes the close. Not
 `aeiou run` still reads each dataset's manifest on every rank, a read-only check of a
 `complete` corpus (`runner/REFERENCE.md` §5, §6).
 
-### 3.71 Sizing a training corpus: a sizing step that writes a parameter file, scale-free layout, and the step barrier (proposed 2026-10-12, discussed with the user; nothing built)
+### 3.71 Sizing a training corpus: a sizing step that writes a parameter file, scale-free layout, and the step barrier (proposed 2026-10-12, discussed with the user; revised 2026-10-13, §3.74: the sizing step, the layout rule, and the epochs are the WG's, in `mlpstorage`)
 
 **Where it came from.** Building §3.70's whole directories, the user chose (2026-10-12) to
 refuse any count that is not whole directories (option (a)) over rounding the count inside
@@ -5811,9 +5811,11 @@ noted.
   reuse is across runs (each starts over), which is what the 5× rule defeats.
 
 **Proposed** (the user agreed to all six points 2026-10-12; to be built after resume, which
-does not depend on it):
+does not depend on it). *Revised 2026-10-13 (§3.74):* points 1 to 3 are the WG's methodology
+and belong to `mlpstorage`, the WG's driver, not to aeiou; struck below. Points 4 to 6 stay,
+with point 1's projection moved into `aeiou dry-run` and the host facts into the report.
 
-1. *A sizing step* that writes nothing to storage: input one size (samples, bytes, or the 5×
+1. ~~*A sizing step* that writes nothing to storage: input one size (samples, bytes, or the 5×
    inputs: hosts, their memory, GPUs), the format, epochs, GPUs, and any layout count the
    user fixes; output a parameter file (`schema/README.md` §8) with the samples rounded up to
    whole directories (and whole files), the layout counts, and `steps` from epochs (`epochs ×
@@ -5822,18 +5824,18 @@ does not depend on it):
    `dry-run`, and `run` take the file as they take any parameter file, so the runner stays
    exact and the calibrated cases untouched. An `aeiou` subcommand in Rust (exact per-sample
    sums for small corpora; it sits beside `datagen`); its name is open (named for the
-   mechanism; `datasize` is MLCommons' word for the same step).
-2. *The layout rule.* Sharded formats: samples per file from the format's byte target
+   mechanism; `datasize` is MLCommons' word for the same step).~~ *(Superseded 2026-10-13 by §3.74: the WG's, in `mlpstorage`; the projection is `aeiou dry-run`'s, without the rounding or the 5× inputs.)*
+2. ~~*The layout rule.* Sharded formats: samples per file from the format's byte target
    (TFRecord 100 MB and up, WebDataset about 1 GB, Parquet a 512 MB to 1 GB row group),
    subject to files ≥ 10 × readers (GPUs × loader workers under `stream` access).
    Anonymous directories: one level, a width fixed by the WG (one constant, its value open:
    4,096 or 10,000), wider before deeper. Class-structured (ImageFolder): files per
    directory the class size (1,300) until the class count reaches a cap of about 20,000,
    then larger classes. Applied once, for the target size: the layout is fixed for the
-   corpus's life, and grow and shrink refuse to change it.
-3. *Epochs.* The sizing step derives `steps` from a step count or from epochs; the run
+   corpus's life, and grow and shrink refuse to change it.~~ *(Superseded 2026-10-13 by §3.74: the targets are the WG's, applied by `mlpstorage`; aeiou keeps the parameter names and `div` by a parameter, point 6.)*
+3. ~~*Epochs.* The sizing step derives `steps` from a step count or from epochs; the run
    structure is the WG's (§8): MLPerf's is one warm-up run of at least 500 steps and five
-   independent measured runs of 500 steps, each at most one pass.
+   independent measured runs of 500 steps, each at most one pass.~~ *(Superseded 2026-10-13 by §3.74: the WG's run structure, applied by `mlpstorage`; `steps` is an ordinary parameter here.)*
 4. *The barrier.* `sync_every` defaults to every step for synchronous data-parallel
    training, adding no time of its own; the coordinator's barrier latency is measured (2, 8,
    32 hosts) to confirm it is small against `step_time`, and if it is not, the fix is a
@@ -5844,7 +5846,7 @@ does not depend on it):
 6. *Terms.* Defined once in `schema/README.md` and used everywhere: **sample**, **file**,
    **directory**; `samples`, `samples_per_file`, `files_per_directory`, and the derived
    `files`, `directories`; standard parameter names across the training abstracts, passed as
-   parameters (they are workload identity), the sizing step's flags the same names. A
+   parameters (they are workload identity), ~~the sizing step's flags the same names~~ (2026-10-13: and `mlpstorage`'s, §3.74). A
    contract extension lets `div` in a pattern take a parameter (`{id div
    files_per_directory}`; today the width is a literal, so the directory *count* already
    scales but the width cannot).
@@ -6053,6 +6055,87 @@ one and two ranks under `sync`, `io_uring`, and `libaio`, its fingerprint the dr
 rounded count, its ops and bytes; without the cap the run fails as predicted, "expected 62400
 bytes, got 76800"; grow, shrink, and settle leave the fresh corpus's inventory); builder
 `test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root`.
+
+### 3.74 The sizing step is the WG's: aeiou is the workload generator, `mlpstorage` the methodology (decided with the user 2026-10-13)
+
+**The question (the user's).** Before building §3.71's sizing subcommand, the user asked whether
+this tool needs it at all. `fio` has nothing like it: it takes `size=` and `nrfiles=` and never
+asks why. The 5× rule may belong to MLPerf and not intrude here. `datagen` also parallels
+MLPerf, but making the corpus a run needs is within the tool's scope. Would a calculator that
+asks every host for its memory and applies the 5× rule on rank 0 be an advantage?
+
+**The assessment (mine, agreed by the user).**
+
+- *Choosing a test's size is methodology.* The 5× rule exists to defeat client caching in a
+  CLOSED submission (§3.67); it is WG process, beside divisions and published hashes
+  (`PROJECT_BRIEF.md` §8). A researcher may want a corpus that fits in cache (§3.67 item 1:
+  small datasets are real). An engine that sizes the test enforces one methodology on every
+  user.
+- *Checking is stronger than calculating.* A sizing step trusts what it is told: the hosts,
+  their memory, which of them will run. Datagen's hosts need not be the run's. What the WG
+  needs is evidence that *this run's* hosts read a dataset at least 5× their memory: facts
+  collected at run time, in the report, judged afterwards. That is reporting, which is
+  generic, plus a rule, which is not.
+- *datagen is different.* A run cannot happen without its corpus, and the corpus's names,
+  sizes, bytes, and manifest are fixed by the runner's definitions. Writing it is the tool's
+  job; choosing its count is the user's input, as in `fio`.
+- *What is lost:* one place that turns "32 hosts" into a parameter file, unless the WG
+  writes it. It does: below.
+
+**`mlpstorage` (the user's context).** MLCommons' `mlpstorage` command wraps the workload
+generators the benchmark uses today across all the hosts and applies every WG-specific probe
+and rule. It is to be changed to drive aeiou as the workload generator of all four workloads
+MLPerf Storage supports today, replacing the three generators it uses now (DLIO for training and
+checkpointing, a Milvus-based harness for vector search, and a KV-cache simulator). So the
+sizing step has a home that is already the WG's: `mlpstorage` probes the hosts, applies the 5×
+rule, the layout targets, and the run structure, and writes the parameter file (the form
+`aeiou-params` writes, `schema/README.md` §8) that `aeiou datagen` and `aeiou run` take. It runs
+each phase as its own `aeiou` process (`PROJECT_BRIEF.md` §8, *Driver integration*).
+
+**Decided.**
+
+1. *Not built here:* §3.71 points 1 to 3 (the sizing subcommand, the layout rule's targets, the
+   epochs and run structure), struck there. Their open questions (the subcommand's name, a
+   directory width of 4,096 or 10,000, the class cap) are the WG's to answer in `mlpstorage`.
+2. *The host facts in the report* (`PROJECT_BRIEF.md` §6 item 29): every rank's memory, CPUs,
+   kernel, and the GPU ids it emulated, sent to rank 0 with its Hello and listed in the merged
+   report, with the datasets' bytes beside the hosts' total memory. Reported, never judged:
+   the 5× check is `mlpstorage`'s, read from `run --report-json`.
+3. *A projection in `aeiou dry-run`:* each dataset's samples, files, directories, mean file
+   size, and total bytes, summed exactly from the size expressions (the same evaluation
+   `datagen` does, without the payload), so a user sees whether a corpus fits before writing
+   it. No rounding and no rule: the numbers follow from the parameters given.
+4. *The capacity check in `datagen`* (§3.71 point 5): refused before anything is written when
+   the projected bytes exceed what `statvfs` reports free at a directory root; an object root
+   cannot be checked and is warned about.
+5. *Kept from §3.71:* point 4 (the barrier: it is the abstract's fidelity to synchronous
+   training, not the WG's choice) and point 6 (the terms, and `div` by a parameter, so any user
+   can scale a corpus's directory width; `mlpstorage` sets the same parameter names).
+
+**Decided while building (2026-10-13).** The projection's bytes are exact and unrounded: a
+block-rounded "allocated" figure was tried and dropped, because an NFS client's `statvfs`
+reports its transfer size (often 1 MiB) as `f_frsize`, which would overstate a corpus of
+128 KiB files eightfold and says nothing of the server's allocation. So the check refuses on
+the exact bytes against `f_bavail × f_frsize` and warns above 90% of it, metadata uncounted.
+It runs on rank 0 alone, since the roots are the shared storage under test, and its refusal
+reaches every rank as an empty-root refusal does. `--[no-]ignore-space` overrides it, for a
+system under test that stores less than it is sent (the payload's `--dedupe` and
+`--compress`). It is fixed (command line only) as a safety check, like `--ignore-limits`. The
+memory block is computed after the run, so no host's gate waits on a projection (0.34 s for
+`file_per_sample`'s 50,000,000 files on 20 threads, 1.2 s for DiskANN's 10⁹ slots).
+
+*Built 2026-10-13* (items 2 to 4). `project.rs` (`Projection`, `project`, `project_all`: files
+with chunks counted, an array's written slots, the inventory's bytes included and shown
+apart, summed over threads). `dry-run` prints a `dataset` line per dataset. `run`:
+`run::host_facts` (host, kernel, CPUs, `MemTotal`, the tightest cgroup v2 `memory.max`) goes in
+each `Hello` (`Msg::Hello.facts`, `Server::facts`), and the report gains `facts`,
+`hosts[].facts`, and `memory` (`run::memory_block`, printed by `run::memory_line`). `datagen`:
+`datagen::check_space` and `DatagenOpts::ignore_space`. Tests: every corpus `tests/run.rs`
+writes is held to its projection (files and bytes, chunked, array, and whole datasets);
+`a_corpus_larger_than_the_free_space_is_refused_before_anything_is_written`; the report's
+`facts` and `memory` against the bytes on disk, and the dry run's line (`tests/report.rs`); every
+host's facts on rank 0 of two (`tests/options.rs`). Not yet: the Python `aeiou-datagen` has no
+space check; item 5's `div` by a parameter is next.
 
 ## 4. Plan changes
 

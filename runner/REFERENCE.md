@@ -25,8 +25,8 @@ cargo test --release
 | Command | What it does |
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
-| `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
-| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C stops every host, exit 130. Refuses a non-empty root (datasets are read-only, V12). Prints each dataset's id. |
+| `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. Then each dataset's projection: samples, files, directories, mean file, and total bytes, what `datagen` writes (`project.rs`, 2026-10-13). `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). |
+| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--[no-]ignore-space] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C stops every host, exit 130. Refuses a non-empty root (datasets are read-only, V12), and, on rank 0 before anything is written, bytes to write beyond the free space `statvfs` reports at a directory root (`--ignore-space` writes anyway; §5, *Space*). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
@@ -668,7 +668,15 @@ as root). The same runs on the loopback NFS mount are §7.
   dataset's ids from rank 0 (since 2026-10-12, above); each `array` dataset is written whole by one
   rank, the `i`-th array dataset by rank `i mod R`, because several NFS clients writing one
   file serialize on the server's inode, so the split buys nothing, and an array is
-  bounded by one host's stream. Every rank checks the roots are empty before the start gate
+  bounded by one host's stream. *Space (2026-10-13, `DESIGN_REVIEW.md` §3.74 item 4):*
+  first, rank 0 sums the bytes still to write (`datagen::check_space`: each dataset's
+  projection, `project.rs`, exact and unrounded, less the `bytes_written` a resumed manifest's
+  progress or a resized one's provenance records) per file system of the directory roots
+  (by `st_dev` of the root or its nearest existing ancestor) and refuses when a sum exceeds
+  `f_bavail × f_frsize`; it prints a `space:` line per file system, warns above 90%
+  (`SPACE_WARN`), and for an object root, which has no free space to ask, says it is not
+  checked. Metadata and what a system saves by deduplicating or compressing are not counted,
+  hence `--ignore-space`. Every rank checks the roots are empty before the start gate
   (so no rank sees another's files), writes after it, `syncfs`es, and sends its counts
   (`Done`); rank 0 writes the manifests ~~once every rank has reported~~ (since 2026-10-12
   from the start, and `complete` once every rank has reported, above) (`Server::gathered`),
@@ -1438,16 +1446,20 @@ the same day (decided 2026-10-01).**
 { "aeiou_report": 1, "runner": "0.1.0",
   "abstract": {"name", "sha256"}, "seed", "gpus", "params": {…resolved…}, "posix", "cache", "s3", "posix_declared", "cache_declared", "s3_declared",
   "host", "rank", "ranks", "gpu_ids": [lo, hi],
+  "facts": {host, kernel, cpus, cpus_online, memory, cgroup_memory_max},   this host's (2026-10-13)
   "options": {root, endpoints: [{names, root, dir}], threads, buffer_bytes, write_compress, time_scale, io_uring, aio_depth,
               mmap_mode, mmap_consume, clean_namespaces, rank_rotate, max_gap, require_cold,
               drop_caches, ignore_limits},
   "layers": {config: {path, sha256} | null, env: [names that contributed],
              options: {flag: {value, source: "cli" | "env AEIOU_X" | "config PATH" | "default"}}, warnings},   §14 (2026-10-04)
-  "hosts": [{rank, host, layers}],           rank 0 of several: every host's block, from its Hello
+  "hosts": [{rank, host, layers, facts}],    rank 0 of several: every host's block, from its Hello
   "datasets": [{name, root, id, payload, files, subset}], "input_namespaces": [{names, root, writer_…, gap_s, objects, same_host}],
   "limits": {"checked": {…§11…}, "ignored": [problems started over]},
   (datasets[].subset: null, or under --subset {param, corpus, requested, run, unit, note}: the
    count asked, the count run, the corpus's, the ids in a whole unit, the age-bias sentence; §5)
+  "memory": {hosts, memory, datasets_bytes, datasets_per_memory,
+             datasets: [{name, samples, files, directories, bytes, inventory_bytes, mean_file}]},
+                                              one host, and rank 0 of several (2026-10-13)
   "started", "finished",                      Unix seconds, the gate and the end of the run
   "scope": "run" | "host", "result": {…}, "this_host": {…},
   "verdict": {"ok", "error", "fingerprint", "fingerprint_scope", "expected_fingerprint"} }
@@ -1474,6 +1486,16 @@ take_summary {per_instance, instances, takes, stall_ns, compute_ns, stall_mean_n
 instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_records [[stall_ns, compute_ns], …]}]
 ```
 
+- **The hosts' facts and the memory block (2026-10-13, `DESIGN_REVIEW.md` §3.74).** `facts` is
+  what a host brings (`run::host_facts`): `memory` is `MemTotal`, `cpus` the CPUs this
+  process may run on and `cpus_online` the host's, `cgroup_memory_max` the tightest
+  `memory.max` of the cgroup v2 hierarchy the process is in (the kernel charges page cache to
+  it; null when unlimited). Every rank sends its facts in its `Hello`. `memory` sums the
+  hosts' `memory` (null when one is unknown) beside the datasets' projected bytes at the
+  run's counts (`project.rs`, the projection `dry-run` prints; under `--subset` the subset's),
+  computed after the run so no host waits on it. They are facts, never judged: whether a ratio
+  is enough (MLPerf Storage's 5× rule) is the driving methodology's check, made from this
+  document (`PROJECT_BRIEF.md` §8).
 - **Which report, on which host.** One host: `result` is the run, `scope` is `run`. Several
   hosts: rank 0 writes the merged report as `result` (`scope: run`) and its own as
   `this_host`; every other rank writes its own (`scope: host`). Each rank writes its own

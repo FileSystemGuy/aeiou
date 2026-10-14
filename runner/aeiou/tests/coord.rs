@@ -193,7 +193,7 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
-    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false }, None, &mut log).unwrap();
+    datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false }, None, &mut log).unwrap();
     let dry = dryrun::run(model, 2, None).unwrap();
 
     let server = Server::start("127.0.0.1:0", 2).unwrap();
@@ -337,7 +337,7 @@ fn run_ranks_mixed(root: &PathBuf) -> Vec<(bool, String, String)> {
 // ---------------------------------------------------------------- datagen on several hosts
 
 fn dopts(root: &PathBuf, rank: i64, ranks: i64) -> DatagenOpts {
-    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20), resume: None, resize: None, settle: None, sigint: false }
+    DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 3, dedupe: 1, compress: 1, datasets: vec![], rank, ranks, progress: std::time::Duration::from_millis(20), resume: None, resize: None, settle: None, sigint: false, ignore_space: false }
 }
 
 /// Every data file under `root` (the `.aeiou*` metadata left out), by relative path.

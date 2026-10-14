@@ -350,6 +350,21 @@ pub fn write_report(out: &mut impl Write, r: &Report, ranks: Option<i64>, gpus: 
     Ok(())
 }
 
+/// One dataset's projection (`project.rs`): what `aeiou datagen` writes for it.
+pub fn write_projection(out: &mut impl Write, p: &crate::project::Projection) -> std::io::Result<()> {
+    let inv = if p.inventory_bytes > 0 { format!(" (inventory {})", human_bytes(p.inventory_bytes)) } else { String::new() };
+    writeln!(
+        out,
+        "dataset {}: samples {}  files {}  directories {}  mean file {}  total {}{inv}",
+        p.name,
+        p.samples,
+        p.files,
+        p.directories,
+        human_bytes(p.mean_file()),
+        human_bytes(p.bytes)
+    )
+}
+
 fn write_stats(out: &mut impl Write, d: &DryRun, indent: &str) -> std::io::Result<()> {
     let s = &d.total;
     writeln!(out, "{indent}ops {}  read {}  written {}", s.ops, human_bytes(s.bytes_read), human_bytes(s.bytes_written))?;

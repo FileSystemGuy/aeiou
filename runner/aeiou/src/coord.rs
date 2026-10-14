@@ -179,8 +179,9 @@ enum Msg {
     /// seed, G, parameters, dataset ids, backend, rotation), compared by its canonical hash
     /// and, when it differs, field by field; `layers` is the host's options block
     /// (`options::Layers::json`), recorded per rank and compared after the gate;
-    /// `participants` are this host's barrier scopes with its instance counts.
-    Hello { rank: i64, ranks: i64, host: String, identity: Value, layers: Value, participants: Vec<(String, usize)> },
+    /// `participants` are this host's barrier scopes with its instance counts; `facts` what
+    /// the host brings (`run::host_facts`), recorded in rank 0's report.
+    Hello { rank: i64, ranks: i64, host: String, identity: Value, layers: Value, participants: Vec<(String, usize)>, facts: Value },
     /// Server → client, the identity accepted: `doc`, what rank 0 gives every rank before it
     /// starts (`Server::start_held`; a datagen's manifest, which no other rank reads), absent
     /// when there is none.
@@ -417,7 +418,7 @@ impl Tcp {
             grants: Mutex::new(Grants::default()),
             halted: AtomicBool::new(false),
         });
-        send(&writer, &Msg::Hello { rank, ranks, host: host.to_string(), identity: identity.clone(), layers: layers.clone(), participants: participants.to_vec() })?;
+        send(&writer, &Msg::Hello { rank, ranks, host: host.to_string(), identity: identity.clone(), layers: layers.clone(), participants: participants.to_vec(), facts: crate::run::host_facts() })?;
         let reader = {
             let st = st.clone();
             let mut stream = stream;
@@ -652,6 +653,8 @@ struct SState {
     hosts: BTreeMap<i64, String>,
     /// Each host's options block, from its `Hello`.
     layers: BTreeMap<i64, Value>,
+    /// Each host's facts (`run::host_facts`), from its `Hello`.
+    facts: BTreeMap<i64, Value>,
     ready: HashSet<i64>,
     started: Option<f64>,
     /// What `Start` carries to every rank (`Server::share`).
@@ -777,6 +780,11 @@ impl Server {
     pub fn hosts(&self) -> Vec<(i64, String, Value)> {
         let s = self.st.m.lock().unwrap();
         s.hosts.iter().map(|(r, h)| (*r, h.clone(), s.layers.get(r).cloned().unwrap_or(Value::Null))).collect()
+    }
+
+    /// Every host's facts (`run::host_facts`, from its `Hello`), by rank.
+    pub fn facts(&self) -> BTreeMap<i64, Value> {
+        self.st.m.lock().unwrap().facts.clone()
     }
 
     /// Host-level departure releases (a host whose participants all left completed a
@@ -988,7 +996,7 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
         let mut idle = || live.idle();
         let m = recv(stream, &mut idle)?;
         live.seen();
-        let Msg::Hello { rank, ranks, host, identity, layers, participants } = m else { bail!("expected Hello, got {m:?}") };
+        let Msg::Hello { rank, ranks, host, identity, layers, participants, facts } = m else { bail!("expected Hello, got {m:?}") };
         *who = format!("rank {rank} ({host})");
         let hash = crate::canon::sha256_hex(&identity);
         let mut s = st.m.lock().unwrap();
@@ -1027,6 +1035,7 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
             bail!("{e}");
         }
         s.layers.insert(rank, layers);
+        s.facts.insert(rank, facts);
         s.conns.insert(rank, writer.clone());
         s.hosts.insert(rank, host);
         for (scope, n) in participants {

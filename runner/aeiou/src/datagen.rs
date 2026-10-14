@@ -101,6 +101,8 @@ pub struct DatagenOpts {
     pub settle: Option<Resize>,
     /// Ctrl-C stops every host (`catch_sigint`; the command line's, not a library caller's).
     pub sigint: bool,
+    /// `--ignore-space`: write a corpus larger than the free space (`check_space`).
+    pub ignore_space: bool,
 }
 
 impl DatagenOpts {
@@ -1385,6 +1387,86 @@ pub fn settle_manifest(m: &Manifest, meta: &DsMeta<'_>) -> Result<Manifest> {
     Ok(r)
 }
 
+/// Above this share of a file system's free space, `check_space` warns.
+pub const SPACE_WARN: f64 = 0.9;
+
+/// The capacity check before a datagen writes anything (`DESIGN_REVIEW.md` §3.74 item 4):
+/// the bytes still to write for each dataset (its projection, `project.rs`, less what a
+/// resumed or resized manifest says is already there), summed per file system of the
+/// directory roots, against what `statvfs` reports free to an unprivileged writer there.
+/// Refused above it unless `ignore`; a line of warning above `SPACE_WARN` of it, and for an
+/// object root, which has no free space to ask. File-system metadata, and what a system under
+/// test saves by deduplicating or compressing the payload, are not counted. Returns the
+/// lines to print.
+pub fn check_space(loaded: &crate::Loaded, model: &Model<'_>, opts: &DatagenOpts, ignore: bool) -> Result<Vec<String>> {
+    use crate::dryrun::human_bytes;
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let mut lines = Vec::new();
+    // by file system: the roots on it, the bytes to write, its free bytes
+    let mut fs: Vec<(u64, Vec<String>, u64, u64)> = Vec::new();
+    for meta in model.datasets.iter() {
+        let name = meta.name();
+        if !opts.datasets.is_empty() && !opts.datasets.iter().any(|d| d == name) {
+            continue;
+        }
+        let rel = payload::dataset_root(&loaded.ast, name)?;
+        let p = crate::project::project(meta, threads)?;
+        let have = match &opts.resume {
+            None => 0,
+            Some(m) if opts.resize.is_none() => m.progress["bytes_written"].as_u64().unwrap_or(0),
+            Some(m) => m.provenance["bytes_written"].as_u64().unwrap_or(0),
+        };
+        let need = p.bytes.saturating_sub(have);
+        if need == 0 {
+            continue;
+        }
+        if let Some((store, rest)) = opts.endpoints.object(&rel) {
+            lines.push(format!("space: dataset `{name}`: {} to write to {}; an object store reports no free space, not checked", human_bytes(need), store.show(&rest)));
+            continue;
+        }
+        let root = opts.endpoints.path(&opts.root, &rel);
+        let (dev, free) = free_space(&root)?;
+        match fs.iter_mut().find(|f| f.0 == dev) {
+            Some(f) => {
+                f.1.push(name.to_string());
+                f.2 += need;
+            }
+            None => fs.push((dev, vec![name.to_string()], need, free)),
+        }
+    }
+    for (_, names, need, free) in &fs {
+        let what = format!("dataset(s) {}: {} to write, {} free", names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", "), human_bytes(*need), human_bytes(*free));
+        if need > free {
+            if !ignore {
+                bail!("space: {what}: the corpus does not fit (--ignore-space writes anyway, for a system that stores less than it is sent)");
+            }
+            lines.push(format!("space: IGNORED: {what}"));
+        } else if *need as f64 > SPACE_WARN * *free as f64 {
+            lines.push(format!("space: {what}: above {:.0}% of the free space", SPACE_WARN * 100.0));
+        } else {
+            lines.push(format!("space: {what}"));
+        }
+    }
+    Ok(lines)
+}
+
+/// The device and the bytes `statvfs` reports available to an unprivileged writer at `path`,
+/// or at its nearest existing ancestor (a dataset root datagen has yet to create).
+fn free_space(path: &Path) -> Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let mut p = path;
+    while !p.exists() {
+        p = p.parent().ok_or_else(|| anyhow::anyhow!("{}: no existing directory above it", path.display()))?;
+    }
+    let dev = std::fs::metadata(p)?.dev();
+    let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes())?;
+    let mut v: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut v) } != 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| format!("statvfs {}", p.display()));
+    }
+    Ok((dev, v.f_bavail as u64 * v.f_frsize as u64))
+}
+
 pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Model<'_>, opts: &DatagenOpts, hosts: Option<&Hosts<'_>>, log: &mut (impl Write + Send)) -> Result<Vec<DatasetResult>> {
     let spec = PayloadSpec::new(opts.dedupe, opts.compress);
     let ranks = opts.ranks.max(1);
@@ -1416,6 +1498,13 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     // the roots are empty before the gate, so no rank sees another's files (rank 0's
     // manifest, written before the gate, aside); a resume checks instead that the format
     // writer is the one that wrote the corpus
+    // the space, on rank 0 (the roots are the shared storage under test): a refusal there
+    // reaches every rank as the empty-root checks below do
+    if rank == 0 {
+        for line in check_space(loaded, model, opts, opts.ignore_space)? {
+            writeln!(log, "{line}")?;
+        }
+    }
     let mut plans = Vec::new();
     let mut array_index = 0usize;
     for meta in model.datasets.iter() {

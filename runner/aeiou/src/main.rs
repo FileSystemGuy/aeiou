@@ -167,6 +167,12 @@ struct DatagenArgs {
     /// than two progress windows old, unless its datagen recorded that it stopped.
     #[arg(long, value_name = "ROOT", help_heading = "Resume")]
     settle: Option<String>,
+    /// Write even when the bytes to write exceed the free space statvfs reports at a directory
+    /// root (for a system that stores less than it is sent, by deduplicating or compressing).
+    #[arg(long = "[no-]ignore-space", alias = "ignore-space", overrides_with = "no_ignore_space", help_heading = "Checks")]
+    ignore_space: bool,
+    #[arg(long = "no-ignore-space", hide = true, overrides_with = "ignore_space")]
+    no_ignore_space: bool,
 }
 
 #[derive(Args)]
@@ -614,6 +620,8 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("grow", &a.grow, a.grow.is_some())?;
     l.fixed("shrink", &a.shrink, a.shrink.is_some())?;
     l.fixed("settle", &a.settle, a.settle.is_some())?;
+    l.fixed("ignore-space", &a.ignore_space, a.ignore_space || a.no_ignore_space)?;
+    let ignore_space = a.ignore_space;
     let r = usage::root("datagen");
     let root = match &op {
         // the place is the manifest's root; an --root from the environment or the file is not used
@@ -721,7 +729,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs), resume, resize, settle, sigint: true };
+    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs), resume, resize, settle, sigint: true, ignore_space };
     let mut out = std::io::stdout();
     match &opts.resume {
         Some(m) if !m.progress["settle"].is_null() => {
@@ -1222,6 +1230,8 @@ fn run_checked(a: &RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc
         }),
     );
     doc.set("gpu_ids", serde_json::json!([lo, hi]));
+    let facts = run::host_facts();
+    doc.set("facts", facts.clone());
     let datasets: Vec<serde_json::Value> = checks.iter().map(|c| serde_json::json!({"name": c.name, "root": c.root, "id": c.id, "payload": c.payload, "files": c.files, "subset": c.subset.as_ref().map(|s| s.json())})).collect();
     doc.set("datasets", serde_json::json!(datasets));
     doc.set("limits", serde_json::json!({"checked": limits, "ignored": limits.problems()}));
@@ -1359,7 +1369,8 @@ fn run_connected(
             // every host's options block came with its Hello: the report records them all,
             // and the options that differ between hosts are printed (rank always does)
             let all = s.hosts();
-            doc.set("hosts", serde_json::json!(all.iter().map(|(r, h, l)| serde_json::json!({"rank": r, "host": h, "layers": l})).collect::<Vec<_>>()));
+            let facts = s.facts();
+            doc.set("hosts", serde_json::json!(all.iter().map(|(r, h, l)| serde_json::json!({"rank": r, "host": h, "layers": l, "facts": facts.get(r)})).collect::<Vec<_>>()));
             let refs: Vec<(i64, &serde_json::Value)> = all.iter().map(|(r, _, l)| (*r, l)).collect();
             let rows = options::differences(&refs);
             writeln!(out, "options differing between hosts ({}; rank always does):", if rows.len() > 1 { "layered values are each host's own" } else { "none but rank" })?;
@@ -1396,8 +1407,23 @@ fn run_connected(
         }
         Ok(())
     };
+    // the datasets' bytes beside the hosts' memory, after the run so no host waits on it;
+    // reported, never judged (DESIGN_REVIEW §3.74 item 2)
+    let memory = |out: &mut dyn Write, doc: &mut aeiou::report::Doc, facts: Vec<serde_json::Value>| -> Result<()> {
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let projections = aeiou::project::project_all(model, threads)?;
+        let block = run::memory_block(&facts, &projections);
+        if let Some(line) = run::memory_line(&block) {
+            writeln!(out, "{line}")?;
+        }
+        doc.set("memory", block);
+        Ok(())
+    };
     match (tcp, server) {
-        (None, _) => verdict(out, &report),
+        (None, _) => {
+            memory(out, doc, vec![run::host_facts()])?;
+            verdict(out, &report)
+        }
         (Some(t), None) => {
             t.report(&report)?;
             writeln!(out, "report sent to the coordinator; waiting for rank 0's verdict")?;
@@ -1429,6 +1455,7 @@ fn run_connected(
                 writeln!(out, "rank {} {}  gpu ids [{}, {})", r.rank, r.host, r.gpus[0], r.gpus[1])?;
             }
             run::write_report(out, &merged)?;
+            memory(out, doc, s.facts().into_values().collect())?;
             match verdict(out, &merged) {
                 Ok(()) => {
                     s.finish(true, merged.stats.fingerprint, None);
@@ -1549,6 +1576,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     }
     let metrics = (a.metrics || a.metrics_json.is_some()).then_some(aeiou::metrics::Opts { block: a.metrics_block, sample: a.metrics_sample });
     let mut report = dryrun::run_with(&model, threads, filter, metrics)?;
+    let projections = aeiou::project::project_all(&model, threads)?;
     let elapsed = started.elapsed();
     if let Some(path) = &a.metrics_json {
         let templates: std::collections::BTreeMap<&str, _> = report.templates.iter().filter_map(|t| aeiou::metrics::to_json(&t.run).map(|m| (t.name.as_str(), m))).collect();
@@ -1587,6 +1615,9 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         t.run.take_lines();
     }
     dryrun::write_report(&mut out, &report, ranks, cfg.gpus)?;
+    for p in &projections {
+        dryrun::write_projection(&mut out, p)?;
+    }
     writeln!(out, "dry-run took {:.2?} on {} thread(s)", elapsed, threads)?;
     Ok(())
 }

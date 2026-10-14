@@ -32,6 +32,16 @@ fn out(c: &mut Command) -> (bool, String, String) {
     (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
 }
 
+/// Every file below `dir`.
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() { out.extend(walk(&p)) } else { out.push(p) }
+    }
+    out
+}
+
 fn read(path: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
@@ -60,6 +70,20 @@ fn one_host_report_matches_the_text_and_failures_are_written() {
     assert_eq!(d["params"]["files"], 600);
     assert_eq!((d["posix"].as_str(), d["cache"].as_str()), (Some("sync"), Some("per-open")));
     assert_eq!(d["datasets"][0]["files"], 600);
+    // the host's facts, and the datasets' bytes beside its memory: the bytes on storage
+    // (the manifest aside), the inventory's included
+    let f = &d["facts"];
+    assert!(f["memory"].as_u64().unwrap() > 0 && f["cpus"].as_u64().unwrap() > 0 && f["kernel"].is_string(), "{f}");
+    let m = &d["memory"];
+    let on_disk: u64 = walk(&root.join("train")).iter().filter(|p| !p.file_name().unwrap().to_string_lossy().starts_with(".aeiou")).map(|p| p.metadata().unwrap().len()).sum();
+    assert_eq!((m["hosts"].as_u64(), m["memory"].as_u64(), m["datasets_bytes"].as_u64()), (Some(1), f["memory"].as_u64(), Some(on_disk)), "{m}");
+    assert_eq!((m["datasets"][0]["samples"].as_u64(), m["datasets"][0]["files"].as_u64()), (Some(600), Some(600)), "{m}");
+    assert!(text.contains("datasets ") && text.contains(" against 1 host(s)' memory "), "{text}");
+    // the dry run prints the same projection
+    let (ok, dry, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]));
+    assert!(ok, "{err}");
+    let files_bytes = on_disk - m["datasets"][0]["inventory_bytes"].as_u64().unwrap();
+    assert!(dry.contains(&format!("dataset train: samples 600  files 600  directories 1  mean file {}  total ", aeiou::dryrun::human_bytes(files_bytes / 600))), "{dry}");
     assert!(text.contains(&format!("id {}", d["datasets"][0]["id"].as_str().unwrap())));
     assert_eq!(d["scope"], "run");
     assert_eq!(d["verdict"]["ok"], true);

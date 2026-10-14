@@ -65,7 +65,10 @@ operations by kind, in the format of the reference checker `schema/check.py`. Pr
 Walks every actor instance without I/O, in parallel over instances, and prints: the
 operation counts by kind and by phase, bytes read and written, emulated compute time,
 barriers, the declared API and cache mode when the abstract declares one, and the workload fingerprint.
-With `--ranks` it adds the bytes per host, against this host's memory. With `--gpu` it
+With `--ranks` it adds the bytes per host, against this host's memory. Last, one line per
+dataset projects what **datagen** writes for it at these parameters: samples, files (chunks
+and objects counted), directories, mean file size, and total bytes, the inventory's
+included, summed exactly from the size expressions and the framing. With `--gpu` it
 prints one instance's operation stream, one line per operation, in the round-robin order
 of that instance's concurrent sub-actors. With `--metrics` it computes the locality
 metrics of the stream (see METRICS below) for comparison with a trace of the real
@@ -182,7 +185,11 @@ actor, position, and operation. The runner never looks at the bytes.
 At the end it prints latency histograms per operation kind, per-phase totals, per-step
 stall and busy fractions, host counters (task and io-wq worker peaks, CPU, RSS, the mount's
 NFS RPC deltas), the fingerprint, and the verdict, and leaves `.aeiou-namespace.json` at
-every namespace root it wrote. `--report-json` writes the same as one JSON document.
+every namespace root it wrote. On one host, and on rank 0 of several, a line sets the
+datasets' projected bytes against the hosts' memory: every host sends its memory, CPUs,
+kernel, and cgroup memory limit to rank 0 with its first message. These are facts, never a
+verdict: whether a ratio is enough is a methodology's rule, not the runner's.
+`--report-json` writes the same as one JSON document.
 
 ## OPTIONS
 
@@ -331,6 +338,18 @@ turns it off, and the last one on the line wins.
   Seconds between progress notes: each rank flushes what it has written and reports it,
   and rank 0 rewrites each manifest with the ids not yet written and prints one line
   (files, bytes, rate, time left). Default 30. *Layered.*
+
+**Checks**
+
+- **--[no-]ignore-space**
+
+  Before anything is written, rank 0 sums the bytes still to write per file system of the
+  directory roots (the projection **dry-run** prints, less what a resumed or resized
+  manifest says is there) and refuses when they exceed what `statvfs` reports available
+  there; a line `space:` gives each sum and the free space, and warns above 90% of it or
+  for an object root, which reports none. This flag writes anyway (for a system under test
+  that stores less than it is sent, by deduplicating or compressing), the line then
+  `space: IGNORED:`. File-system metadata is not counted.
 
 **Several hosts**
 

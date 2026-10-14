@@ -325,6 +325,78 @@ pub fn hostname() -> String {
     std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_else(|_| "?".into())
 }
 
+/// What a host brings to a run, recorded in the report and never judged
+/// (`DESIGN_REVIEW.md` §3.74 item 2): its name, kernel release, the CPUs this process may
+/// run on and those online, its memory (`MemTotal`), and the tightest `memory.max` of the
+/// cgroup v2 hierarchy this process is in (the kernel charges page cache to it; null when
+/// unlimited or not on cgroup v2).
+pub fn host_facts() -> serde_json::Value {
+    let kernel = {
+        let mut u: libc::utsname = unsafe { std::mem::zeroed() };
+        if unsafe { libc::uname(&mut u) } == 0 {
+            unsafe { std::ffi::CStr::from_ptr(u.release.as_ptr()) }.to_string_lossy().into_owned()
+        } else {
+            "?".into()
+        }
+    };
+    let online = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    serde_json::json!({
+        "host": hostname(),
+        "kernel": kernel,
+        "cpus": std::thread::available_parallelism().map(|n| n.get()).ok(),
+        "cpus_online": (online > 0).then_some(online),
+        "memory": crate::dryrun::host_dram(),
+        "cgroup_memory_max": cgroup_memory_max(),
+    })
+}
+
+/// The report's `memory` block: the hosts' memory (`MemTotal` summed; null when a host's is
+/// unknown) beside the datasets' projected bytes at the run's counts (`project.rs`), and
+/// their ratio. Facts, never a verdict: whether the ratio is enough is a methodology's rule.
+pub fn memory_block(facts: &[serde_json::Value], projections: &[crate::project::Projection]) -> serde_json::Value {
+    let mem: Option<u64> = facts.iter().map(|f| f["memory"].as_u64()).sum();
+    let bytes: u64 = projections.iter().map(|p| p.bytes).sum();
+    serde_json::json!({
+        "hosts": facts.len(),
+        "memory": mem,
+        "datasets_bytes": bytes,
+        "datasets_per_memory": mem.filter(|m| *m > 0).map(|m| bytes as f64 / m as f64),
+        "datasets": projections.iter().map(|p| p.json()).collect::<Vec<_>>(),
+    })
+}
+
+/// The printed form of `memory_block`, when there are datasets.
+pub fn memory_line(b: &serde_json::Value) -> Option<String> {
+    let bytes = b["datasets_bytes"].as_u64()?;
+    if b["datasets"].as_array().is_none_or(|d| d.is_empty()) {
+        return None;
+    }
+    let hb = crate::dryrun::human_bytes;
+    Some(match (b["memory"].as_u64(), b["datasets_per_memory"].as_f64()) {
+        (Some(m), Some(r)) => format!("datasets {} against {} host(s)' memory {} ({r:.2}×)", hb(bytes), b["hosts"], hb(m)),
+        _ => format!("datasets {} against {} host(s)' memory (unknown)", hb(bytes), b["hosts"]),
+    })
+}
+
+/// The smallest `memory.max` from this process's cgroup v2 up to the root, if any is set.
+fn cgroup_memory_max() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let rel = text.lines().find_map(|l| l.strip_prefix("0::"))?;
+    let mut dir = std::path::PathBuf::from("/sys/fs/cgroup").join(rel.trim_start_matches('/'));
+    let mut best: Option<u64> = None;
+    loop {
+        if let Ok(v) = std::fs::read_to_string(dir.join("memory.max")) {
+            if let Ok(n) = v.trim().parse::<u64>() {
+                best = Some(best.map_or(n, |b| b.min(n)));
+            }
+        }
+        if dir == std::path::Path::new("/sys/fs/cgroup") || !dir.pop() {
+            break;
+        }
+    }
+    best
+}
+
 pub fn unix_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
