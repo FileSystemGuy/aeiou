@@ -6200,6 +6200,14 @@ width refused), `test_builder.py` (V23 in the builder and `check.py`; the Python
 `test_coord.py::test_the_frames_are_the_runners` wrote `file_per_sample` at its default 50,000,000
 files, which §3.74's space check refuses on rank 0 before the identities are compared; it now
 writes 100. Neither showed in CI, whose Python job builds no runner, so the test was skipped.
+(iii) So CI fails what it skips (asked by the user the same day): `AEIOU_REQUIRE` in
+`builder/tests/conftest.py` names the capabilities a job built (`runner`, `formats`, `object`,
+`strace`, `header`, `minio`), and a test skipped for lacking one of them fails, naming it. The
+integration job now runs the whole Python suite against its binary with
+`runner,formats,strace,header` (`test_coord.py`, `test_payload.py`, and `test_usage.py` had run
+in no job), the object job `test_object.py` with `object` and `minio` added; the `abstracts` job
+keeps its runner-less run, where those skips are right. `test_require.py` holds the hook to that
+and requires every skip in the suite to name a capability, so a new one cannot escape it.
 
 ## 4. Plan changes
 

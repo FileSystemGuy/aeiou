@@ -293,7 +293,7 @@ def test_aeiou_datagen_grows_and_shrinks_in_the_bucket(name, minio, tmp_path):
     if name == "tfrecord":
         ast_file, flags, count, sizes = ast_path("tfrecord_stream"), ["--param", "samples_per_file=128", "--param", "sample_median=20000"], "samples", (700, 900, 300)
     else:
-        ast_file, flags, count, sizes = ast_path("file_per_sample"), [], "files", (40, 60, 25)
+        ast_file, flags, count, sizes = ast_path("file_per_sample"), [], "samples", (40, 60, 25)
     obj = json.loads(pathlib.Path(ast_file).read_text())
     (ds,) = obj["datasets"]
     obj["datasets"][ds]["protocol"] = "s3"
