@@ -313,7 +313,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     let skip = dir.join("skip.ast.json");
     std::fs::write(
         &skip,
-        r#"{"ast": "0.8", "name": "skip",
+        r#"{"ast": "0.9", "name": "skip",
             "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": 1, "body": [
                 {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},

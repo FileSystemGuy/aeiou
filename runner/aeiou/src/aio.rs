@@ -275,11 +275,12 @@ impl Engine for AioIo {
         let (opcode, buf, nbytes, offset) = match op.kind {
             OpKind::Read => {
                 let al = ALIGN as i64;
-                let (lo, len, rounded) = if direct && (op.offset % al != 0 || op.len % al != 0) {
-                    let (lo, hi) = round_out(op.offset, op.len);
+                let n = op.issue_len();
+                let (lo, len, rounded) = if direct && (op.offset % al != 0 || n % al != 0) {
+                    let (lo, hi) = round_out(op.offset, n);
                     (lo, hi - lo, true)
                 } else {
-                    (op.offset, op.len, false)
+                    (op.offset, n, false)
                 };
                 let chunk = self.pool.get(len as usize);
                 let ptr = chunk.ptr;
@@ -325,7 +326,7 @@ impl Engine for AioIo {
             return Err(std::io::Error::from_raw_os_error(-res));
         }
         match (op.kind, round) {
-            (OpKind::Read, Some(lo)) => Ok((res as i64 - (op.offset - lo)).clamp(0, op.len)),
+            (OpKind::Read, Some(lo)) => Ok((res as i64 - (op.offset - lo)).clamp(0, op.issue_len())),
             (OpKind::Read | OpKind::Write, _) => Ok(res as i64),
             _ => Ok(0),
         }

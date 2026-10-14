@@ -108,6 +108,18 @@ pub struct Op<'c> {
     /// The payload key of the target: the namespace seed for an object, the dataset seed for a
     /// dataset file, 0 otherwise. Not hashed; a backend that writes uses it to generate content.
     pub seed: u64,
+    /// A read of an inventory under `--subset` (`DESIGN_REVIEW.md` §3.73 item 5): issued with
+    /// length `bytes`, never past the size at the run's count, while `len` (hashed) stays what
+    /// the application asks. Not hashed.
+    pub capped: bool,
+}
+
+impl Op<'_> {
+    /// The length a backend issues: `len`, or for a capped read the bytes it is expected to
+    /// return (0 for the read that finds the subset's end).
+    pub fn issue_len(&self) -> i64 {
+        if self.capped { self.bytes } else { self.len }
+    }
 }
 
 /// Where an op comes from: the actor instance, its position, and the statistics label.
@@ -233,6 +245,7 @@ struct FileState {
     pos: i64,
     size: Option<i64>,
     as_written: bool,
+    capped: bool,
 }
 
 /// A handle resolved to something an op can name.
@@ -244,6 +257,8 @@ struct Target {
     seed: u64,
     /// For a dataset directory: the entries a `readdir` is expected to return, when computable.
     entries: Option<i64>,
+    /// An inventory read under `--subset`: reads are issued no further than `size`.
+    capped: bool,
 }
 
 /// What a sub-actor starts from: the parent's position (frames, with the fork's frame last),
@@ -328,6 +343,7 @@ struct Pending<'a> {
     expect: &'a [String],
     positioned: bool,
     seed: u64,
+    capped: bool,
 }
 
 /// How many ops a `read`/`write` statement still has to issue.
@@ -349,6 +365,7 @@ struct IoSeq<'a> {
     positioned: bool,
     expect: &'a [String],
     as_written: bool,
+    capped: bool,
     left: Left,
 }
 
@@ -549,7 +566,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 _ => "",
             },
         };
-        (Op { kind: p.kind, path, path2: p.path2.as_deref(), offset: p.offset, len: p.len, bytes: p.bytes, aux: p.aux, expect: p.expect, positioned: p.positioned, seed: p.seed }, self.ctx())
+        (Op { kind: p.kind, path, path2: p.path2.as_deref(), offset: p.offset, len: p.len, bytes: p.bytes, aux: p.aux, expect: p.expect, positioned: p.positioned, seed: p.seed, capped: p.capped }, self.ctx())
     }
 
     fn ctx(&self) -> OpCtx<'_> {
@@ -1053,6 +1070,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let ds = self.model.dataset(dataset)?;
                 HVal::Dir { ds, d: self.expr(id)?.as_int()? }
             }
+            Handle::Inventory(dataset) => HVal::Inventory { ds: self.model.dataset(dataset)? },
             Handle::Object { namespace, fields } => {
                 let ns = self.model.namespace(namespace)?;
                 let meta = &self.model.namespaces[ns];
@@ -1201,6 +1219,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             }
             HVal::Column { ds: d, file, u, c } => ds[*d].col_len(*file, *u, *c)?,
             HVal::Dir { .. } => return other("size of a directory"),
+            HVal::Inventory { ds: d } => match ds[*d].inventory() {
+                Some((_, size, _)) => size,
+                None => return other(format!("dataset `{}` has no inventory", ds[*d].name())),
+            },
             HVal::Object { size: Some(s), .. } => *s,
             HVal::Object { path, .. } => match self.written.get(path) {
                 Some(n) => *n,
@@ -1213,7 +1235,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         Ok(match h {
             HVal::Sample { ds, id } => self.model.datasets[*ds].sample_offset(*id)?,
             HVal::Slot { ds, c } => self.model.datasets[*ds].sample_offset(*c)?,
-            HVal::Chunk { .. } | HVal::File { .. } | HVal::ArrayFile { .. } => 0,
+            HVal::Chunk { .. } | HVal::File { .. } | HVal::ArrayFile { .. } | HVal::Inventory { .. } => 0,
             HVal::Unit { ds, file, u } => self.unit_offset(*ds, *file, *u)?,
             HVal::Column { ds, file, u, c } => self.unit_offset(*ds, *file, *u)? + self.model.datasets[*ds].col_offset_in_unit(*file, *u, *c)?,
             _ => return other(format!("offset of {h:?}")),
@@ -1234,15 +1256,19 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         Ok(match &hv {
             HVal::Sample { ds: d, id } => {
                 let file = self.container_of(*d, *id);
-                Target { path: ds[*d].file_path(file, None)?, size: Some(ds[*d].file_size(file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None }
+                Target { path: ds[*d].file_path(file, None)?, size: Some(ds[*d].file_size(file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false }
             }
             HVal::File { ds: d, file } | HVal::Unit { ds: d, file, .. } | HVal::Column { ds: d, file, .. } => {
-                Target { path: ds[*d].file_path(*file, None)?, size: Some(ds[*d].file_size(*file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None }
+                Target { path: ds[*d].file_path(*file, None)?, size: Some(ds[*d].file_size(*file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false }
             }
-            HVal::Chunk { ds: d, file, k } => Target { path: ds[*d].file_path(*file, Some(*k))?, size: Some(ds[*d].chunk_size(*file, *k)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None },
-            HVal::Slot { ds: d, .. } | HVal::ArrayFile { ds: d } => Target { path: ds[*d].file_path(0, None)?, size: Some(ds[*d].file_size(0)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None },
-            HVal::Dir { ds: d, d: dir } => Target { path: ds[*d].dir_path(*dir)?, size: None, as_written: false, seed: ds[*d].dataset_seed(), entries: ds[*d].dir_entries(*dir) },
-            HVal::Object { ns, path, size } => Target { path: path.clone(), size: *size, as_written: size.is_none(), seed: self.model.namespaces[*ns].seed, entries: None },
+            HVal::Chunk { ds: d, file, k } => Target { path: ds[*d].file_path(*file, Some(*k))?, size: Some(ds[*d].chunk_size(*file, *k)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false },
+            HVal::Slot { ds: d, .. } | HVal::ArrayFile { ds: d } => Target { path: ds[*d].file_path(0, None)?, size: Some(ds[*d].file_size(0)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false },
+            HVal::Dir { ds: d, d: dir } => Target { path: ds[*d].dir_path(*dir)?, size: None, as_written: false, seed: ds[*d].dataset_seed(), entries: ds[*d].dir_entries(*dir), capped: false },
+            HVal::Inventory { ds: d } => {
+                let Some((path, size, capped)) = ds[*d].inventory() else { return other(format!("dataset `{}` has no inventory", ds[*d].name())) };
+                Target { path, size: Some(size), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped }
+            }
+            HVal::Object { ns, path, size } => Target { path: path.clone(), size: *size, as_written: size.is_none(), seed: self.model.namespaces[*ns].seed, entries: None, capped: false },
         })
     }
 
@@ -1434,12 +1460,12 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             }
             return Ok(None);
         };
-        let (seed, expect, positioned, as_written) = (io.seed, io.expect, io.positioned, io.as_written);
+        let (seed, expect, positioned, as_written, capped) = (io.seed, io.expect, io.positioned, io.as_written, io.capped);
         if kind == OpKind::Write && as_written {
             let path = io.path.clone();
             *self.written.entry(path).or_insert(0) += len;
         }
-        self.set_pending(Pending { kind, path: None, path2: None, offset: off, len, bytes, aux: 0, expect, positioned, seed });
+        self.set_pending(Pending { kind, path: None, path2: None, offset: off, len, bytes, aux: 0, expect, positioned, seed, capped });
         Ok(Some(Next::Op))
     }
 
@@ -1460,7 +1486,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
 
     #[allow(clippy::too_many_arguments)]
     fn emit(&mut self, kind: OpKind, t: Target, path2: Option<Arc<str>>, offset: i64, len: i64, bytes: i64, aux: u64, expect: &'a Expect, positioned: bool) -> ER<Option<Next<'a>>> {
-        self.set_pending(Pending { kind, path: Some(t.path), path2, offset, len, bytes, aux, expect: expect.as_deref().unwrap_or(&[]), positioned, seed: t.seed });
+        let capped = t.capped && kind == OpKind::Read;
+        self.set_pending(Pending { kind, path: Some(t.path), path2, offset, len, bytes, aux, expect: expect.as_deref().unwrap_or(&[]), positioned, seed: t.seed, capped });
         Ok(Some(Next::Op))
     }
 
@@ -1482,7 +1509,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 let size = if t.as_written { self.written.get(&t.path).copied() } else { t.size };
                 let pos = if append { size.unwrap_or(0) } else { 0 };
-                self.open.insert(t.path.clone(), FileState { pos, size, as_written: t.as_written });
+                self.open.insert(t.path.clone(), FileState { pos, size, as_written: t.as_written, capped: t.capped });
                 let aux = flag_bits(flags) | ((mode.unwrap_or(0) as u64) << 32);
                 self.emit(OpKind::Open, t, None, 0, 0, 0, aux, expect, false)
             }
@@ -1511,6 +1538,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     if positioned.is_none() {
                         self.open.get_mut(&t.path).unwrap().pos = off + bytes;
                     }
+                    let t = Target { capped: st.capped, ..t };
                     return self.emit(OpKind::Read, t, None, off, len, bytes, 0, expect, positioned.is_some());
                 }
                 let left = match repeat {
@@ -1526,7 +1554,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         Left::UntilEof { size, tail_done: false }
                     }
                 };
-                self.stack.push(Cont::Io(IoSeq { kind: OpKind::Read, path: t.path, seed: t.seed, off, len, size, positioned: positioned.is_some(), expect: expect.as_deref().unwrap_or(&[]), as_written: st.as_written, left }));
+                self.stack.push(Cont::Io(IoSeq { kind: OpKind::Read, path: t.path, seed: t.seed, off, len, size, positioned: positioned.is_some(), expect: expect.as_deref().unwrap_or(&[]), as_written: st.as_written, capped: st.capped, left }));
                 Ok(None)
             }
             Node::Write { file, len, offset, repeat, expect } => {
@@ -1554,7 +1582,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     }
                     return self.emit(OpKind::Write, t, None, off, len, len, 0, expect, positioned.is_some());
                 }
-                self.stack.push(Cont::Io(IoSeq { kind: OpKind::Write, path: t.path, seed: t.seed, off, len, size: None, positioned: positioned.is_some(), expect: expect.as_deref().unwrap_or(&[]), as_written: st.as_written, left: Left::Count(n) }));
+                self.stack.push(Cont::Io(IoSeq { kind: OpKind::Write, path: t.path, seed: t.seed, off, len, size: None, positioned: positioned.is_some(), expect: expect.as_deref().unwrap_or(&[]), as_written: st.as_written, capped: false, left: Left::Count(n) }));
                 Ok(None)
             }
             Node::Lseek { file, offset, whence } => {
@@ -1661,7 +1689,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
 
 impl Pending<'_> {
     fn empty() -> Self {
-        Pending { kind: OpKind::Open, path: None, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: &[], positioned: false, seed: 0 }
+        Pending { kind: OpKind::Open, path: None, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: &[], positioned: false, seed: 0, capped: false }
     }
 }
 

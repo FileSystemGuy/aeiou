@@ -951,19 +951,20 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
         OpKind::Read => {
             let fd = a.fd(op.path)?;
             let al = ALIGN as i64;
-            if sh.opts.backend.direct() && (op.offset % al != 0 || op.len % al != 0) {
+            let len = op.issue_len();
+            if sh.opts.backend.direct() && (op.offset % al != 0 || len % al != 0) {
                 // round out; O_DIRECT needs the offset, length, and buffer aligned
-                let (lo, hi) = round_out(op.offset, op.len);
+                let (lo, hi) = round_out(op.offset, len);
                 let buf = rbuf.slice((hi - lo) as usize);
                 let n = be.read(&fd, buf, Some(lo))? as i64;
-                let got = (n - (op.offset - lo)).clamp(0, op.len);
+                let got = (n - (op.offset - lo)).clamp(0, len);
                 if !op.positioned && !be.positional() {
                     // keep the file position where a plain read would have left it
                     be.lseek(&fd, op.offset + got, crate::ast::Whence::SET)?;
                 }
                 return Ok(got);
             }
-            let buf = rbuf.slice(op.len as usize);
+            let buf = rbuf.slice(len as usize);
             let off = if op.positioned || be.positional() { Some(op.offset) } else { None };
             be.read(&fd, buf, off).map(|n| n as i64)
         }

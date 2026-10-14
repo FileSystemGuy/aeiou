@@ -419,7 +419,9 @@ as root). The same runs on the loopback NFS mount are §7.
   block of the logical offset (a chunked file is the logical file cut at `chunk`), so every
   run of `D` consecutive files carries the same bytes, whatever the count; an `array`
   dataset (one file) uses `u = 0` and `b div D`; a namespace object written by `run` uses
-  `s = labeled_key(namespace seed, "object", [xxh3(path)])`, `u = 0`. ~~`aeiou-positional/1`
+  `s = labeled_key(namespace seed, "object", [xxh3(path)])`, `u = 0`; a dataset's inventory
+  (contract 0.9) is seeded `labeled_key(s, "inventory", [b div D])`, a label of its own, so its
+  bytes at an offset depend on neither the count nor any id. ~~`aeiou-positional/1`
   used `u = id mod ceil(files / D)` and `b mod ceil(blocks / D)`~~: the groups then depended
   on the count, so a prefix of the ids had a lower ratio than `D` and a dataset could not be
   grown in place; the `div` form makes resume, growth, and a run over a prefix the same
@@ -631,6 +633,27 @@ as root). The same runs on the loopback NFS mount are §7.
   run smaller than its corpus (a count that rounds up to the whole corpus included) is a
   usage error (exit 2); a smaller count without `--subset` is refused as a manifest
   mismatch that says `--subset` would run it. The flag is the command line's alone (§14).
+  *An inventory under a subset (2026-10-13, `DESIGN_REVIEW.md` §3.73 item 5):* the model's
+  inventory size is `run × entry`, a fresh corpus's, while the file at the root is the
+  corpus's, whose first `run × entry` bytes are that list (fixed-width entries in id order).
+  Every read of it is the fresh corpus's op (offset, length asked, and expected count, so the
+  fingerprint), and `Op::issue_len` is what a backend issues: the expected count, not the
+  length asked (`Op::capped`, set by `Model::cap_inventory` for each dataset run smaller). The
+  tail is a short read, and the read that finds the end on a file that size is issued with
+  length 0, so no byte past the subset's list is asked for and the op count is unchanged
+  (a 0-length object read sends no request where a fresh corpus's `GET` would get 416). The
+  cap is in every backend's read (`run.rs`, `uring.rs`, `aio.rs`, `object.rs`); an `O_DIRECT`
+  read's unaligned tail is rounded out as any is, so it may cover up to one alignment unit past
+  the end, and a buffered client's readahead may fetch past it, which is the client's.
+- **Inventory (contract 0.9, 2026-10-13, `DESIGN_REVIEW.md` §3.73).** A dataset that declares
+  `inventory {name, entry}` gets the file `name` in its root, `count × entry` bytes of payload
+  (above), written by rank 0 once every rank has reported and before the manifest says
+  `complete`, by every datagen that ends complete (first, resume, grow, shrink, settle), at the
+  count the corpus ends at. A file written directly keeps its whole 1 MiB blocks (a strict
+  prefix, as every datagen file) and the rest is written, so a grow extends it and a shrink
+  truncates it; through the page cache it is written whole; an object is one upload. Its bytes
+  are not in `files_written` or `bytes_written`. The definition holds it, so the dataset id
+  does. The Python `aeiou-datagen` refuses a dataset with one.
 - **Counting a file once (fixed 2026-10-12).** A writer counted a file before advancing its
   cursor, and a window read the cursor before the counts, so a file finished in between
   was recorded both as unfinished and as counted, and a resume counted it twice

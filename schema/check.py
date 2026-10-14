@@ -88,6 +88,26 @@ class Check:
         if d["access"] in ("map", "stream") and re.search(r"\{id mod ", d["pattern"].rpartition("/")[0]):
             self.err(path + ["pattern"], "a consumed dataset's directories are `{id div D}` or none, never `mod`, so a subset of it is whole directories (V21)")
 
+    def inventory(self, d: dict, path: list):
+        """V22 (contract 0.9, DESIGN_REVIEW.md §3.73): a dataset's inventory is a file directly in
+        its root, of a consumed dataset, named so the pattern cannot produce it."""
+        inv = d.get("inventory")
+        if inv is None:
+            return
+        ip = path + ["inventory"]
+        if d["access"] not in ("map", "stream"):
+            self.err(ip, "only a consumed dataset (`map` or `stream`) has an inventory: it stands in for the walk of a corpus the job draws from (V22)")
+        n = inv["name"]
+        root = dataset_root(d)
+        sibling = (d["pattern"][len(root) + 1:] if root else d["pattern"]).split("/")[0]
+        glob = "[0-9a-f -]+".join(re.escape(s) for s in re.split(r"\{[^}]*\}", sibling))
+        if n in ("", ".", "..") or any(c in n for c in "/{}"):
+            self.err(ip + ["name"], f"`{n}` is not a file name: the inventory lies directly in the dataset's root, its name a constant (V22)")
+        elif n.startswith(RESERVED_PREFIX):
+            self.err(ip + ["name"], f"`{n}` begins with `{RESERVED_PREFIX}`, reserved for the manifest (V13)")
+        elif re.fullmatch(glob, n):
+            self.err(ip + ["name"], f"`{n}` is a name the pattern `{d['pattern']}` can produce in the dataset's root (V22)")
+
     # ---- entry ----
     def run(self):
         if "gpus" in self.params:
@@ -98,11 +118,14 @@ class Check:
         for dname, d in self.datasets.items():
             body = d
             self.layout_fields(body, ["datasets", dname])
+            self.inventory(body, ["datasets", dname])
             self.exprlike(body["size"], ["datasets", dname, "size"], Scope(self), dist_ok=True)
             self.expr(body["count"], ["datasets", dname, "count"], Scope(self))
             for k in ("samples_per_file", "chunk", "slot"):
                 if k in body:
                     self.expr(body[k], ["datasets", dname, k], Scope(self))
+            if "inventory" in body:
+                self.expr(body["inventory"]["entry"], ["datasets", dname, "inventory", "entry"], Scope(self))
             framing = body.get("format", {}).get("framing")
             if framing:
                 lp = ["datasets", dname, "format", "framing"]
@@ -330,7 +353,7 @@ class Check:
             return a["dataset"] if "dataset" in a else self.dataset_of(a["of"], scope)
         if k in ("dir",):
             return a["dataset"]
-        if k == "consume":
+        if k in ("consume", "inventory"):
             return a
         if k == "pick":
             return a["dataset"]
@@ -507,6 +530,11 @@ class Check:
                 self.handle(a["of"], p + ["of"], scope)
             if "chunk" in a:
                 self.expr(a["chunk"], p + ["chunk"], scope)
+        elif k == "inventory":
+            if a not in self.datasets:
+                self.err(p, f"unknown dataset `{a}`")
+            elif "inventory" not in self.datasets[a]:
+                self.err(p, f"`inventory` of `{a}`, which declares none (V22)")
         elif k == "dir":
             if a["dataset"] not in self.datasets or self.datasets[a["dataset"]]["layout"] == "array":
                 self.err(p, f"`dir` needs a dataset named by ids, not an `array`: got `{a['dataset']}`")

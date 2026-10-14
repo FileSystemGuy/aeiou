@@ -436,41 +436,41 @@ impl TraceFile {
             LineOp::Open { fd, path: p, flags, mode, ret } => {
                 oid = Some(*fd);
                 let aux = flag_bits(flags) | ((mode.unwrap_or(0) as u64) << 32);
-                Op { kind: OpKind::Open, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux, expect: ret.expect(), positioned: false, seed: 0 }
+                Op { kind: OpKind::Open, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux, expect: ret.expect(), positioned: false, seed: 0, capped: false }
             }
-            LineOp::Close { fd, ret } => Op { kind: OpKind::Close, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
+            LineOp::Close { fd, ret } => Op { kind: OpKind::Close, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Read { fd, offset, len, ret } => {
                 let off = offset.unwrap_or_else(|| cur(*fd));
                 let bytes = ret.count().max(0);
                 if offset.is_none() {
                     pos_after = Some(off + bytes);
                 }
-                Op { kind: OpKind::Read, path: path(fd), path2: None, offset: off, len: *len, bytes, aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0 }
+                Op { kind: OpKind::Read, path: path(fd), path2: None, offset: off, len: *len, bytes, aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
             }
             LineOp::Write { fd, offset, len, ret } => {
                 let off = offset.unwrap_or_else(|| cur(*fd));
                 if offset.is_none() {
                     pos_after = Some(off + *len);
                 }
-                Op { kind: OpKind::Write, path: path(fd), path2: None, offset: off, len: *len, bytes: *len, aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0 }
+                Op { kind: OpKind::Write, path: path(fd), path2: None, offset: off, len: *len, bytes: *len, aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
             }
             LineOp::Lseek { fd, offset, whence, ret } => {
                 pos_after = Some(ret.count().max(0));
-                Op { kind: OpKind::Lseek, path: path(fd), path2: None, offset: *offset, len: 0, bytes: 0, aux: *whence as u64, expect: ret.expect(), positioned: false, seed: 0 }
+                Op { kind: OpKind::Lseek, path: path(fd), path2: None, offset: *offset, len: 0, bytes: 0, aux: *whence as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false }
             }
-            LineOp::Fstat { fd, ret } => Op { kind: OpKind::Fstat, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Fsync { fd, ret } => Op { kind: OpKind::Fsync, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Fdatasync { fd, ret } => Op { kind: OpKind::Fdatasync, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Readdir { fd, ret } => Op { kind: OpKind::Readdir, path: path(fd), path2: None, offset: 0, len: 0, bytes: -1, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Ioctl { fd, request, ret } => Op { kind: OpKind::Ioctl, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: *request as u64, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Fadvise { fd, offset, len, advice, ret } => Op { kind: OpKind::Fadvise, path: path(fd), path2: None, offset: *offset, len: *len, bytes: 0, aux: *advice as u64, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Ftruncate { fd, len, ret } => Op { kind: OpKind::Ftruncate, path: path(fd), path2: None, offset: 0, len: *len, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Fallocate { fd, offset, len, ret } => Op { kind: OpKind::Fallocate, path: path(fd), path2: None, offset: *offset, len: *len, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Stat { path: p, ret } => Op { kind: OpKind::Stat, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Unlink { path: p, ret } => Op { kind: OpKind::Unlink, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Mkdir { path: p, mode, ret } => Op { kind: OpKind::Mkdir, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: mode.unwrap_or(0o777) as u64, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Rmdir { path: p, ret } => Op { kind: OpKind::Rmdir, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
-            LineOp::Rename { path: p, to, ret } => Op { kind: OpKind::Rename, path: p, path2: Some(to), offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0 },
+            LineOp::Fstat { fd, ret } => Op { kind: OpKind::Fstat, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Fsync { fd, ret } => Op { kind: OpKind::Fsync, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Fdatasync { fd, ret } => Op { kind: OpKind::Fdatasync, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Readdir { fd, ret } => Op { kind: OpKind::Readdir, path: path(fd), path2: None, offset: 0, len: 0, bytes: -1, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Ioctl { fd, request, ret } => Op { kind: OpKind::Ioctl, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: *request as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Fadvise { fd, offset, len, advice, ret } => Op { kind: OpKind::Fadvise, path: path(fd), path2: None, offset: *offset, len: *len, bytes: 0, aux: *advice as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Ftruncate { fd, len, ret } => Op { kind: OpKind::Ftruncate, path: path(fd), path2: None, offset: 0, len: *len, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Fallocate { fd, offset, len, ret } => Op { kind: OpKind::Fallocate, path: path(fd), path2: None, offset: *offset, len: *len, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Stat { path: p, ret } => Op { kind: OpKind::Stat, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Unlink { path: p, ret } => Op { kind: OpKind::Unlink, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Mkdir { path: p, mode, ret } => Op { kind: OpKind::Mkdir, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: mode.unwrap_or(0o777) as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Rmdir { path: p, ret } => Op { kind: OpKind::Rmdir, path: p, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
+            LineOp::Rename { path: p, to, ret } => Op { kind: OpKind::Rename, path: p, path2: Some(to), offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Submit { .. } => unreachable!("build() on a group; build its members"),
         };
         Built { op: built, oid, pos_after }

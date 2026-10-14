@@ -1,5 +1,5 @@
 {
-  "ast": "0.8",
+  "ast": "0.9",
   "name": "npy_per_sample",
   "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
   "params": {
@@ -53,9 +53,23 @@
       "unit": "bytes",
       "doc": "archive bytes that are not x's data: x's local header and npy header (183), the y member (191), central directory (102), EOCD (22); np.savez(x=, y=[0]) (traced 2026-10-01)"
     },
-    "enumerate": {
+    "walk": {
       "default": true,
-      "doc": "the startup listing: the training script's glob over the corpus, one scandir per directory (traced 2026-10-02); on by default"
+      "doc": "the startup listing: the training script's glob over the corpus, one scandir per directory (traced 2026-10-02); on by default (`enumerate` until 2026-10-13)"
+    },
+    "inventory": {
+      "default": false,
+      "doc": "the startup read of the corpus's inventory, every process, in place of the glob at scale (DESIGN_REVIEW.md §3.73)"
+    },
+    "inv_entry": {
+      "default": 27,
+      "unit": "bytes",
+      "doc": "[measure] inventory bytes per file: the name below the root (`00000/sample_000000000.npz`) and a newline"
+    },
+    "inv_read": {
+      "default": 1048576,
+      "unit": "bytes",
+      "doc": "[measure] the inventory reader's request; Python's BufferedReader asks st_blksize"
     },
     "files": {
       "default": 50000,
@@ -92,7 +106,13 @@
           "min": 1048576
         }
       },
-      "seed": 1592646267
+      "seed": 1592646267,
+      "inventory": {
+        "name": "inventory.txt",
+        "entry": {
+          "param": "inv_entry"
+        }
+      }
     }
   },
   "actors": {
@@ -101,12 +121,12 @@
         {
           "cond": {
             "if": {
-              "param": "enumerate"
+              "param": "walk"
             },
             "then": [
               {
                 "phase": {
-                  "name": "enumerate",
+                  "name": "walk",
                   "body": [
                     {
                       "loop": {
@@ -163,6 +183,86 @@
                             }
                           }
                         ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "cond": {
+            "if": {
+              "param": "inventory"
+            },
+            "then": [
+              {
+                "phase": {
+                  "name": "inventory",
+                  "body": [
+                    {
+                      "let": {
+                        "name": "inv",
+                        "value": {
+                          "inventory": "train"
+                        }
+                      }
+                    },
+                    {
+                      "open": {
+                        "file": {
+                          "ref": "inv"
+                        },
+                        "flags": [
+                          "RDONLY",
+                          "CLOEXEC"
+                        ]
+                      }
+                    },
+                    {
+                      "fstat": {
+                        "file": {
+                          "ref": "inv"
+                        }
+                      }
+                    },
+                    {
+                      "ioctl": {
+                        "file": {
+                          "ref": "inv"
+                        },
+                        "request": "TCGETS",
+                        "expect": [
+                          "ENOTTY"
+                        ]
+                      }
+                    },
+                    {
+                      "lseek": {
+                        "file": {
+                          "ref": "inv"
+                        },
+                        "offset": 0,
+                        "whence": "CUR"
+                      }
+                    },
+                    {
+                      "read": {
+                        "file": {
+                          "ref": "inv"
+                        },
+                        "len": {
+                          "param": "inv_read"
+                        },
+                        "repeat": "until_eof"
+                      }
+                    },
+                    {
+                      "close": {
+                        "file": {
+                          "ref": "inv"
+                        }
                       }
                     }
                   ]
@@ -633,12 +733,11 @@
   "provenance": {
     "generator": {
       "script": "npy_per_sample.py",
-      "sha256": "342e558a65ee752e9fc63281cafb5604e93ca1873a08bc80b5423594da588f28",
+      "sha256": "974423b60a279931202a6741e791c532c70c867c90db9174d81b312b90eee1de",
       "builder_version": "0.1.0",
-      "git": "67e632d03bbb-dirty"
+      "git": "de228d0db4a5-dirty"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "ef512e44b7bd78d6446d4ac0c66552e491e5a4e4fbda68068ec2578555fc82a3"
+    "ast_sha256": "5a73267654776844435d160c9961f0c5387a97024c46fb13f74f3cad8a35ecbd"
   }
 }

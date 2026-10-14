@@ -20,6 +20,9 @@ pub fn annotate(ast: &Ast) {
                     p.with(&[k], |p| expr(e, p));
                 }
             }
+            if let Some(i) = &ds.inventory {
+                p.with(&["inventory", "entry"], |p| expr(&i.entry, p));
+            }
         });
     }
     for (name, ns) in &ast.namespaces {
@@ -184,7 +187,7 @@ fn args(a: &[Expr], key: &str, p: &mut Path) {
 
 fn handle(h: &Handle, p: &mut Path) {
     match h {
-        Handle::Ref(_) | Handle::Consume(_) => {}
+        Handle::Ref(_) | Handle::Consume(_) | Handle::Inventory(_) => {}
         Handle::File(f) => {
             if let Some(e) = &f.id {
                 p.with(&["file", "id"], |p| expr(e, p));

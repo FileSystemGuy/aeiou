@@ -561,8 +561,12 @@ numbers; the order is this note's.
     Subset runs **built 2026-10-13** (§3.70 item 6, §3.72): `aeiou run --subset` runs a
     consumed dataset's count below its corpus's as the corpus's first ids, rounded up to
     whole `div` directories (whole files when flat), the workload and fingerprint of a fresh
-    corpus of that count, the corpus's dataset id, and the age bias said. The inventory
-    variant remains.
+    corpus of that count, the corpus's dataset id, and the age bias said. ~~The inventory
+    variant remains.~~ The inventory **built 2026-10-13** (contract 0.9, §3.73): a consumed
+    dataset's `inventory {name, entry}`, a file list in its root written by datagen and read
+    through the `inventory` handle in place of a walk; under `--subset` its reads are issued
+    no further than a corpus of the run's count would end. Its shape (format, columns, who
+    reads it, read size) is `[measure]` until a job that reads one is traced.
 
 24. **Computed holds (deferred 2026-10-08, `DESIGN_REVIEW.md` §3.64).** The KV abstracts draw
     what the engine holds (`keep`, `sys_held`, `sub_held`), fitted at one engine pool; a pool

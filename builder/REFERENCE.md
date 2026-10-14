@@ -72,16 +72,18 @@ if __name__ == "__main__":
 
 **Declarations** on the `Workload`: `param(name, default, unit=, doc=, cli=)` or
 `params(**defaults)`; `dataset(name, pattern=, layout=, access=, count=, size=, seed=,
-samples_per_file=, chunk=, slot=, format=)` (contract 0.8, `DESIGN_REVIEW.md` §3.72: `layout`
+samples_per_file=, chunk=, slot=, format=, inventory=)` (contract 0.8, `DESIGN_REVIEW.md` §3.72: `layout`
 `whole`, `chunked` with `chunk`, `compound` with `samples_per_file` and optionally `format`,
 `array` with `slot` and a pattern without fields; `access` `map`, `stream`, or `indexed`; the
 builder refuses what V20 and V21 refuse, and `consume()` on an `indexed` dataset; `regions()`
-is gone, an array being `dataset(…, layout="array", access="indexed", slot=…)`); `namespace(name,
+is gone, an array being `dataset(…, layout="array", access="indexed", slot=…)`; contract 0.9,
+§3.73: `inventory={"name": "inventory.txt", "entry": P.inv_entry}` declares a consumed dataset's
+file list, refused as V22 refuses); `namespace(name,
 pattern=, fields=, size=, seed=, input=)`; `actor(name, count=)`. `w.P.x` is the parameter reference;
 `P.xs[t]`, `P.xs.len`, `P.xs.sum` index and reduce a parameter array (a table is several
 parallel arrays).
 
-**Handles**: `ds.file(id)`, `ds.dir(id)`, `ds.consume()`, `ds.pick(dist=None)`, `ds.count`,
+**Handles**: `ds.file(id)`, `ds.dir(id)`, `ds.inventory()` (the dataset's inventory, contract 0.9), `ds.consume()`, `ds.pick(dist=None)`, `ds.count`,
 `ds.dirs`; an `array` dataset's single file is `ds.file()`; `h.size`, `h.offset`, `h.unit`,
 `h.chunks`, `h.chunk(k)`, `h.container`; `ns.object(**fields)`. Bind a handle with
 `cursor.let(name, h)` before using it in ops when the same sample must flow through several

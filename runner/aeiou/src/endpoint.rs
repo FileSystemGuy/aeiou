@@ -229,7 +229,7 @@ mod tests {
     fn ast_with(object: bool) -> Ast {
         let obj = if object { r#", "obj": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 5, "protocol": "s3"}"# } else { "" };
         crate::load_str(&format!(
-            r#"{{"ast": "0.8", "name": "t",
+            r#"{{"ast": "0.9", "name": "t",
                 "datasets": {{"sysp": {{"layout": "whole", "access": "map", "pattern": "kv/sys/{{id:04}}/blk", "count": 2, "size": {{"const": 1}}, "seed": 1}},
                              "flat": {{"layout": "whole", "access": "map", "pattern": "flat/f_{{id}}", "count": 2, "size": {{"const": 1}}, "seed": 2}}}},
                 "namespaces": {{"kv": {{"pattern": "kv/{{c}}.pt", "fields": {{"c": "int"}}, "size": 1, "seed": 3}},
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn a_posix_name_never_falls_under_an_object_root_and_a_key_keeps_its_rest() {
         let a = crate::load_str(
-            r#"{"ast": "0.8", "name": "t",
+            r#"{"ast": "0.9", "name": "t",
                 "datasets": {"inner": {"layout": "whole", "access": "map", "pattern": "o/in/f_{id}", "count": 2, "size": {"const": 1}, "seed": 1}},
                 "namespaces": {"outer": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 2, "protocol": "s3"}},
                 "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "inner", "id": 0}}}}]}}}"#,

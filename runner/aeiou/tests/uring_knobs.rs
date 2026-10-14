@@ -88,7 +88,7 @@ fn io_uring_knobs_keep_the_fingerprint() {
     // report, and the counters see the SQPOLL threads. A kernel that refuses a setup flag
     // (SQPOLL needs 5.13 unprivileged, DEFER_TASKRUN 6.1) skips that row.
     let root = tmpdir("uring-knobs");
-    let params = [("files", "300"), ("batch", "4"), ("workers", "3"), ("prefetch", "2"), ("steps", "10"), ("enumerate", "true")];
+    let params = [("files", "300"), ("batch", "4"), ("workers", "3"), ("prefetch", "2"), ("steps", "10"), ("walk", "true")];
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(3, 11, &params));
     gen(loaded, cfg, model, &root);
     run::check_datasets(loaded, cfg, &root).unwrap();

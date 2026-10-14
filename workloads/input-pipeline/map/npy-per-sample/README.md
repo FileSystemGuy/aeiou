@@ -29,6 +29,8 @@ aeiou-trace compare $C/captures/2026-10-01/trace.metrics.json abstract.metrics.j
 
 `builder/tests/test_trace.py` repeats the last two steps against the committed metrics.
 
-The script's `glob` (one `scandir` per directory) is the abstract's optional `enumerate`
-phase since 2026-10-02. Wire counts are taken from a run without `strace`: `-yy` adds about
+The script's `glob` (one `scandir` per directory) is the abstract's optional `walk`
+phase since 2026-10-02 (`enumerate` until 2026-10-13). At scale a job lists its corpus from an
+inventory instead: the optional `inventory` phase reads `train/inventory.txt`, whose shape is
+`[measure]` until a job that reads one is traced (`DESIGN_REVIEW.md` §3.73). Wire counts are taken from a run without `strace`: `-yy` adds about
 one GETATTR per READ (`DESIGN_REVIEW.md` §3.53).

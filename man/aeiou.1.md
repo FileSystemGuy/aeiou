@@ -83,7 +83,9 @@ root that refuses `O_DIRECT` falls back to the page cache, said once). The manif
 `writing` and every id unfinished; every `--progress-secs` each rank flushes what it has
 written and reports it, and the manifest is rewritten (atomically, by rank 0) with the ids
 not yet written, and a progress line printed; once every file is written it says
-`complete`, and its id is printed. `run` refuses a dataset that is not `complete`. A
+`complete`, and its id is printed. A dataset that declares an `inventory` gets it in its
+root just before (rank 0, at the count the corpus ends at, whichever operation ended it).
+`run` refuses a dataset that is not `complete`. A
 non-empty root is refused: datasets are read-only. A dataset that declares a
 container format class is written by **aeiou-datagen**(1); a build with the cargo feature
 `formats` (the release's) writes TFRecord, tar (WebDataset), HDF5, and Parquet here too,
@@ -410,7 +412,10 @@ turns it off, and the last one on the line wins.
   else. Refused: a count above the corpus's (`aeiou datagen --grow` makes it), one that
   rounds up past it (the message names the largest whole subset), an `indexed` dataset, a
   flat dataset whose directory the abstract lists (the listing would be the whole corpus),
-  and `--subset` when no dataset is smaller. The command line's alone.
+  and `--subset` when no dataset is smaller. A dataset's inventory is read as a corpus of the
+  count run would have it: the corpus's, whose first entries are that list, with every read
+  issued no further than its end there (the tail short, the read that finds the end with
+  length 0), so the ops and the fingerprint are the fresh corpus's. The command line's alone.
 
 **Backend**
 

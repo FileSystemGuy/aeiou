@@ -524,11 +524,12 @@ impl Engine for LoopIo {
                 }
                 let f = try_fd!(t);
                 let al = ALIGN as i64;
-                let (lo, len, rounded) = if direct && (op.offset % al != 0 || op.len % al != 0) {
-                    let (lo, hi) = round_out(op.offset, op.len);
+                let n = op.issue_len();
+                let (lo, len, rounded) = if direct && (op.offset % al != 0 || n % al != 0) {
+                    let (lo, hi) = round_out(op.offset, n);
                     (lo, hi - lo, true)
                 } else {
-                    (op.offset, op.len, false)
+                    (op.offset, n, false)
                 };
                 t.round = rounded.then_some(lo);
                 let chunk = self.pool.get(len as usize);
@@ -653,7 +654,7 @@ impl Engine for LoopIo {
             OpKind::Read => {
                 let n = res as i64;
                 match round {
-                    Some(lo) => Ok((n - (op.offset - lo)).clamp(0, op.len)),
+                    Some(lo) => Ok((n - (op.offset - lo)).clamp(0, op.issue_len())),
                     None => Ok(n),
                 }
             }
@@ -722,7 +723,7 @@ impl Objects {
     fn issue(&mut self, sh: &Shared, t: &mut TaskIo, op: &Op, store: &Arc<crate::object::Store>, rest: String) -> Issued {
         use crate::object::{Sink, Step};
         t.started = Instant::now();
-        let sink = (op.kind == OpKind::Read).then(|| Sink::Owned(self.buffer(op.len as usize), op.len as usize));
+        let sink = (op.kind == OpKind::Read).then(|| Sink::Owned(self.buffer(op.issue_len() as usize), op.issue_len() as usize));
         match crate::object::start(store, rest, sh, &mut t.a, op, sink) {
             Step::Done(r) => Issued::Done(r, t.started.elapsed().as_nanos() as u64),
             Step::Send(f) => {

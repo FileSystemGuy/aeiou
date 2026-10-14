@@ -12,7 +12,7 @@ import re
 import sys
 from typing import Any
 
-from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle, Dist, Draw,
+from .nodes import (Actor, At, BuildError, Consume, Cond, DatasetMeta, DirHandle, Dist, Draw, InventoryHandle,
                     Expr, FileHandle, FileOf, Handle, Index, Node, ObjectHandle, Op, Param, Pick, Ref,
                     ast_of, check_ident, distref, lift, lower_bound_of, walk)
 
@@ -88,6 +88,35 @@ def _root(pattern: str) -> str:
     return pattern.split("{", 1)[0].rpartition("/")[0]
 
 
+def _field_glob(component: str) -> re.Pattern:
+    """The names a pattern component can produce: each field one or more of the characters an
+    integer field formats to."""
+    parts = re.split(r"\{[^}]*\}", component)
+    return re.compile("[0-9a-f -]+".join(re.escape(p) for p in parts))
+
+
+def _inventory(name: str, pattern: str, access: str, inv) -> dict:
+    """V22: an inventory of a consumed dataset, a constant file name directly in its root that
+    the pattern cannot produce there."""
+    if not isinstance(inv, dict) or set(inv) != {"name", "entry"}:
+        raise BuildError(f"dataset {name}: inventory is {{'name': file, 'entry': bytes}}")
+    n = inv["name"]
+    if access not in ("map", "stream"):
+        raise BuildError(f"dataset {name}: only a consumed dataset (`map` or `stream`) has an inventory (V22)")
+    if not isinstance(n, str) or n in ("", ".", "..") or any(c in n for c in "/{}"):
+        raise BuildError(f"dataset {name}: inventory name {n!r} is not a file name: it lies directly in "
+                         f"the dataset's root, a constant (V22)")
+    if n.startswith(RESERVED_PREFIX):
+        raise BuildError(f"dataset {name}: inventory name {n!r} begins with {RESERVED_PREFIX!r}, reserved "
+                         f"for the dataset manifest (V13)")
+    root = _root(pattern)
+    sibling = (pattern[len(root) + 1:] if root else pattern).split("/")[0]
+    if _field_glob(sibling).fullmatch(n):
+        raise BuildError(f"dataset {name}: inventory name {n!r} is a name the pattern {pattern!r} can "
+                         f"produce in the dataset's root (V22)")
+    return {"name": n, "entry": lift(inv["entry"], "inventory entry")}
+
+
 def _strip_none(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
@@ -150,6 +179,14 @@ class Dataset:
             raise BuildError(f"dir() on array dataset {self.name}: an array is one file")
         return DirHandle(self.name, id)
 
+    def inventory(self) -> Handle:
+        """The dataset's inventory (contract 0.9): the file list declared with `inventory=`,
+        read in place of a walk (DESIGN_REVIEW.md §3.73)."""
+        if not self.spec.get("inventory"):
+            raise BuildError(f"inventory() on dataset {self.name}, which declares none: pass "
+                             f"inventory={{'name': …, 'entry': …}} to Workload.dataset (V22)")
+        return InventoryHandle(self.name)
+
     def consume(self) -> Handle:
         """Next sample without replacement (positional; must sit inside a loop). Only a `map`
         or `stream` dataset is consumed (V21)."""
@@ -182,7 +219,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.8"
+    AST_VERSION = "0.9"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -247,7 +284,7 @@ class Workload:
     # ---- datasets ----
     def dataset(self, name: str, *, pattern: str, layout: str, access: str, count, size, seed: int,
                 samples_per_file=None, chunk=None, slot=None, format: dict | None = None,
-                protocol: str | None = None, doc: str | None = None) -> Dataset:
+                protocol: str | None = None, inventory: dict | None = None, doc: str | None = None) -> Dataset:
         """A dataset (contract 0.8, DESIGN_REVIEW.md §3.72): files or objects named by `pattern`,
         sizes drawn from `seed`. `layout`, how a file holds the items: `whole` (one item),
         `chunked` (part of one: `chunk` bytes a file, a `{k}` field), `compound` (several
@@ -255,7 +292,9 @@ class Workload:
         `slot`s in one file; a pattern without fields). `access`, how they are found: `map`
         (samples drawn from the shuffle), `stream` (files drawn from the shuffle), `indexed`
         (looked up by id). `protocol`: `s3` for one the application reads from an object store;
-        absent, a file system."""
+        absent, a file system. `inventory`, `{"name": file, "entry": bytes}`: a file list of the
+        dataset in its root, `entry` bytes per item of `count`, read in place of a walk (a
+        consumed dataset's; contract 0.9, DESIGN_REVIEW.md §3.73, V22)."""
         self._declare(name, "dataset")
         _protocol(protocol, f"dataset {name}")
         if layout not in LAYOUTS:
@@ -288,12 +327,15 @@ class Workload:
         if format is not None:
             format = _format_spec(name, format, access, size, {k: v["default"] for k, v in self._param_specs.items()})
         _reserved(pattern, f"dataset {name}")
+        if inventory is not None:
+            inventory = _inventory(name, pattern, access, inventory)
         self._claim_root(pattern.rpartition("/")[0] if layout == "array" else _root(pattern), name)
         spec = {"pattern": pattern, "layout": layout, "access": access, "count": lift(count, "count"),
                 "size": distref(size), "seed": _seed(seed, name), "protocol": protocol,
                 "samples_per_file": None if samples_per_file is None else lift(samples_per_file),
                 "chunk": None if chunk is None else lift(chunk, "chunk"),
-                "slot": None if slot is None else lift(slot, "slot"), "format": format, "doc": doc}
+                "slot": None if slot is None else lift(slot, "slot"), "format": format,
+                "inventory": inventory, "doc": doc}
         self._datasets[name] = ds = Dataset(name, layout, spec)
         ds.format = fmt_obj
         return ds
@@ -827,7 +869,7 @@ class Cursor:
         """Dataset name if the handle is (a binding to) a dataset file, dir, sample, region, or chunk."""
         if isinstance(h, Ref):
             return self._dataset_of(self._lookup(h.name))
-        if isinstance(h, (FileHandle, DirHandle, Consume, Pick)):
+        if isinstance(h, (FileHandle, DirHandle, Consume, Pick, InventoryHandle)):
             return h.dataset
         if isinstance(h, FileOf):
             return self._dataset_of(h.of)

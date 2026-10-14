@@ -234,7 +234,8 @@ what an interrupted one reached at whole directories, every datagen handing its 
 id order from one queue on rank 0, and Ctrl-C stopping every host with the manifest true
 (2026-10-12), and contract 0.8, one dataset shape: a `layout` (`whole`, `chunked`,
 `compound`, `array`), an `access` (`map`, `stream`, `indexed`), and `format.framing`
-(2026-10-13, `DESIGN_REVIEW.md` §3.72). The workload catalog
+(2026-10-13, `DESIGN_REVIEW.md` §3.72), and contract 0.9, a consumed dataset's `inventory`
+(the same day, §3.73). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
@@ -275,7 +276,7 @@ Not built, in rough order of interest:
   written, rewritten every `--progress-secs`, and `complete` at the end, the same day.
   `datagen --resume ROOT` the same day (the unfinished ids written again, whole, from the
   manifest alone, on any host count); ~~Resume, whole directories,~~ grow
-  and shrink the same day, settle, claims in id order, and Ctrl-C the same day; subset runs (`aeiou run --subset`, whole directories of the corpus, 2026-10-13; whole directories not required of a corpus, §3.71), the inventory variant not yet; a sizing step for
+  and shrink the same day, settle, claims in id order, and Ctrl-C the same day; subset runs (`aeiou run --subset`, whole directories of the corpus, 2026-10-13; whole directories not required of a corpus, §3.71), ~~the inventory variant not yet;~~ the inventory the same day (contract 0.9, `DESIGN_REVIEW.md` §3.73: a consumed dataset's file list, read in place of a walk, its shape `[measure]` until a traced job reads one); a sizing step for
   training corpora proposed the same day (`DESIGN_REVIEW.md` §3.71).
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),

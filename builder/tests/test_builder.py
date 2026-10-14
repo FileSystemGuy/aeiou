@@ -276,6 +276,52 @@ def test_check_py_enforces_v12_v13_on_a_hand_written_ast():
     assert not check.Check(copy.deepcopy(base), "x").run()
 
 
+def test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root():
+    """Contract 0.9 (DESIGN_REVIEW.md §3.73): V22 in the builder and in check.py alike."""
+    import copy
+    from aeiou.validate import _load
+    w = Workload("t")
+    P = w.params(entry=24)
+
+    def ds(name, pattern, access="map", inv="inventory.txt"):
+        return w.dataset(name, pattern=pattern, layout="whole", access=access, count=10, size=const(1), seed=1,
+                         inventory={"name": inv, "entry": P.entry})
+    with pytest.raises(BuildError, match="only a consumed dataset"):
+        ds("a", "a/{id}", access="indexed")
+    with pytest.raises(BuildError, match="not a file name"):
+        ds("b", "b/{id}", inv="x/list.txt")
+    with pytest.raises(BuildError, match="reserved"):
+        ds("c", "c/{id}", inv=".aeiou-list")
+    with pytest.raises(BuildError, match="can produce"):
+        ds("e", "e/f_{id:04}.jpg", inv="f_0012.jpg")
+    with pytest.raises(BuildError, match="declares none"):
+        w.dataset("plain", pattern="p/{id}", layout="whole", access="map", count=1, size=const(1), seed=1).inventory()
+    train = ds("train", "train/{id div 1300:05}/img_{id:09}.jpg")
+    with w.actor("gpu") as g:
+        inv = g.let("inv", train.inventory())
+        g.open(inv, "RDONLY")
+        g.read(inv, 1 * MiB, repeat="until_eof")
+        with pytest.raises(BuildError, match="read-only"):
+            g.write(inv, 1)
+        g.close(inv)
+    ast = w.build()
+    assert ast["ast"] == "0.9"
+    assert ast["datasets"]["train"]["inventory"] == {"name": "inventory.txt", "entry": {"param": "entry"}}
+    assert ast["actors"]["gpu"]["body"][0]["let"]["value"] == {"inventory": "train"}
+    _, check = _load()
+    assert not check.Check(copy.deepcopy(ast), "x").run()
+    for mutate, needle in [
+        (lambda a: a["datasets"]["train"].__setitem__("access", "indexed"), "only a consumed dataset"),
+        (lambda a: a["datasets"]["train"]["inventory"].__setitem__("name", "01234"), "can produce in the dataset's root (V22)"),
+        (lambda a: a["datasets"]["train"]["inventory"].__setitem__("name", ".aeiou-x"), "V13"),
+        (lambda a: a["datasets"]["train"]["inventory"].__setitem__("name", "a/b"), "not a file name"),
+        (lambda a: a["datasets"]["train"].pop("inventory"), "which declares none (V22)"),
+    ]:
+        bad = copy.deepcopy(ast)
+        mutate(bad)
+        assert any(needle in e for e in check.Check(bad, "x").run()), needle
+
+
 # ---- the harness ----
 
 def _run_cli(args, cwd=BUILDER):

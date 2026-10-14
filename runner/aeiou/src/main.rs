@@ -1064,6 +1064,11 @@ fn run_checked(a: &RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
     let model = Box::leak(Box::new(build_model(&loaded.ast, cfg, params)?));
     model.traces = loaded.traces.clone();
+    // a subset reads its corpus's inventory no further than a corpus of its count's would end
+    // (DESIGN_REVIEW §3.73 item 5)
+    for s in &subsets {
+        model.cap_inventory(&s.name);
+    }
     // the run's identity first, so the report of a run that fails a check still says which run
     doc.set("abstract", serde_json::json!({"name": loaded.ast.name, "sha256": loaded.sha256}));
     doc.set("seed", serde_json::json!(cfg.seed));

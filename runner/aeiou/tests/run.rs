@@ -82,7 +82,7 @@ fn dry_fingerprint(model: &Model<'_>) -> (u64, u64, u64) {
 #[test]
 fn small_files_training_round_trip() {
     let root = tmpdir("tsf");
-    let params = [("files", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("enumerate", "true")];
+    let params = [("files", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("walk", "true")];
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(2, 7, &params));
     gen(loaded, cfg, model, &root);
     let checks = run::check_datasets(loaded, cfg, &root).unwrap();

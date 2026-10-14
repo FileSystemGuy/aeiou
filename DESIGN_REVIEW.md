@@ -5301,7 +5301,8 @@ reads the abstract, and no committed consumed dataset is flat with a walk). Roun
 reaches the whole corpus is no subset (usage error with nothing else smaller); one that
 passes it is refused, naming the largest whole subset. Tested on one host and two ranks
 (`tests/coord.rs`, `a_subset_runs_whole_directories_of_the_corpus`), the fingerprint held to
-the dry run's at the rounded count, and every refusal. The inventory variant is next.
+the dry run's at the rounded count, and every refusal. ~~The inventory variant is next.~~
+The inventory decided and built the same day (§3.73).
 
 **Order.** ~~(1) The payload (built). (2) `O_DIRECT` in the Python writer, measured. (3) The
 manifest from the start, the progress messages, and resume, on both writers. (4) Whole
@@ -5933,6 +5934,8 @@ pattern (one directory, or a bucket prefix) is allowed: shard corpora are usuall
   flag; not built.
 - The inventory variant (§3.70 item 6) comes after `--subset`; whether a subset reads the
   corpus's inventory whole or a list cut for it is decided then, with the selection workload.
+  (Decided 2026-10-13, §3.73: the list a corpus of the run's count would have; the whole list
+  is the selection workload's read.)
 
 **Contract 0.8.** `datasets.<name>` is one object: `pattern`, `layout`, `access`, `count`,
 `size`, `seed`, and by layout `chunk` (`chunked`), `samples_per_file` and optionally `format`
@@ -5960,6 +5963,96 @@ dataset has a draw in its expressions. Built in the runner (`ast.rs`, `validate.
 `eval.rs`, `sites.rs`, `payload.rs`, `datagen.rs`), the schema and `schema/check.py`, the
 builder (`Workload.dataset(…, layout=, access=, slot=)`; `Workload.regions` removed), every
 committed abstract, and the documents; tests for V20 and V21 in `tests/golden.rs`.
+
+### 3.73 The inventory: a file list of the corpus, read in place of the walk (decided with the user 2026-10-13; contract 0.9)
+
+§3.70 item 6 decided that a large corpus is listed from an inventory captured once, not walked,
+and left two things open: what the inventory is in the abstract, and what a `--subset` run
+reads of it (§3.72). Discussed with the user 2026-10-13.
+
+**No trace has one yet.** Every committed walk was traced from ImageFolder or a glob; no
+traced job reads a file list. So the inventory's format (text, Parquet, gzip'd CSV), its
+columns, its header, who reads it (every process, or rank 0 then a broadcast), and its read
+size are guesses until a real inventory-reading loader is traced. The user chose to build the
+mechanism now with the guesses labelled `[measure]` ("we know that an inventory is
+essentially a required feature for large datasets, so let's get closer than we are now and
+refine it as we get more information"). The walk cannot be scaled into an inventory: it says
+nothing of the inventory's shape. Once one is traced, a header plus `count × entry` (names are
+fixed-width) scales it to any count, and down for a subset.
+
+**Decided:**
+1. *The inventory is a key of the dataset it lists, not a dataset.* V13 gives every dataset a
+   root of its own, so a separate inventory dataset would need another root and another
+   manifest that the subset logic would have to tie to the corpus's. Instead
+   `datasets.<name>.inventory` is `{name, entry}`: `name` a constant file name (no fields, not
+   beginning with `.aeiou`, not one the pattern can produce) directly in the dataset's root,
+   `entry` the bytes per listed item. Its size is `count × entry` (`count` the dataset's,
+   files or samples by layout: an inventory lists what the job draws). It is part of the
+   resolved definition, so of the dataset id and the manifest. A dataset carries no access
+   parameters; how the inventory is opened (buffered or `O_DIRECT`) is the abstract's, as for
+   any file: a Python reader (`f.read()`, pandas, pyarrow) is buffered.
+2. *Datagen writes it as payload*, with the corpus's ratios, keyed on the dataset seed and a
+   ~~file id of its own (`u64::MAX`)~~ label of its own (`labeled_key(seed, "inventory", [b
+   div D])`; a reserved id could meet a corpus's under dedupe), so its bytes at an offset do
+   not depend on the count and a grow only extends it. It is written after the last id and before `complete`, by
+   every datagen that ends complete (first, resume, grow, shrink, settle), at the final
+   count: an inventory is captured after the corpus is written.
+3. *Only a consumed dataset (`map` or `stream`) has one* (V22): it stands in for the walk of
+   a corpus the job draws from. A whole or a chunked or a compound dataset can; an `array`
+   cannot (it is `indexed`).
+4. *The abstract reads it through a handle*, `{"inventory": "<dataset>"}` (builder:
+   `train.inventory()`), opened read-only like any dataset file, its known size the formula's.
+5. *Under `--subset` the run reads the list a corpus of the rounded count would have*
+   (option A; option B, the whole corpus's list, is the selection workload's read, §3.72).
+   Entries are fixed-width and in id order, so that list is the first `run × entry` bytes of
+   the corpus's inventory, and no other file is written. The fingerprint hashes each read's
+   requested length, as always, so it is a fresh corpus's. The length *issued* is capped at
+   the subset's size (the user: "limit the read operations we issue to the size of inventory
+   file we're simulating"): the tail read is short, as it would be on a file that size, and
+   the read that finds EOF on one (a reader looping until `read` returns 0, which it must,
+   since a file of a whole number of buffers has no short read) is issued with length 0, so
+   the op count is the fresh corpus's and no byte past the subset's list is asked for. The
+   cap applies to the inventory under `--subset` only. What the runner cannot stop: a
+   buffered client's readahead may fetch past the subset's end (solution behaviour), and an
+   `O_DIRECT` reader's unaligned tail is rounded out by up to one alignment unit.
+6. *The committed mechanisms that walk* (`file_per_sample`, `npy_per_sample`) get a parameter
+   `inventory` (false by default) and their `enumerate` parameter is renamed `walk` (no
+   alias, no users yet); both off, the job lists nothing. Parameters are scalars, so the two
+   are booleans rather than one three-valued `listing`. The inventory read: every GPU's
+   process opens, `fstat`s, reads `inv_read` bytes (`[measure]`, 1 MiB) until EOF, and closes;
+   `entry` defaults to the name's width plus a newline (`[measure]`).
+
+**The known refinement for objects.** S3 Inventory is AWS's, not a standard, but Google Cloud
+(Storage Insights inventory reports) and Azure (blob inventory) built the same thing: the
+provider writes, daily or weekly, into a destination bucket, a `manifest.json` (source
+bucket, format, column schema, and the list of data files with sizes and MD5s) plus data files
+in gzip'd CSV, ORC, or Parquet (AWS; Google and Azure CSV or Parquet). So an object dataset's
+real inventory is a manifest and several files, possibly in another bucket, read by the
+application's own code (fetch the manifest, then each file, usually through pyarrow). Until a
+job that reads one is traced, an `s3` dataset's inventory is the same single object at its
+prefix.
+
+*Built 2026-10-13.* Runner: `ast::Inventory` and `Handle::Inventory`, `eval::InvMeta` on a
+`files` dataset (its size `count × entry` follows `with_count`), `HVal::Inventory`; the cap is
+`Op::capped` and `Op::issue_len` (the length a backend issues; `len` stays the length asked and
+the hashed one), set through the target, the open file, and the read sequence, and
+`Model::cap_inventory` per dataset `--subset` runs smaller; every backend's read issues
+`issue_len` (`run.rs` for `sync`, `posix-aio`, `mmap`; `uring.rs`; `aio.rs`; `object.rs`). V22 in
+`validate.rs` and `schema/check.py` (a field of the sibling component read as the characters an
+integer formats to, so `inventory.txt` beside `{id div 1300:05}` directories is allowed). Datagen:
+`write_inventory`, rank 0, before `complete`, at the count in the manifest written (so a settle's
+count), keeping a direct file's whole blocks; `payload::inventory_block_seed`. The Python
+`aeiou-datagen` refuses a dataset with an inventory. Builder: `Workload.dataset(…, inventory=)`,
+`Dataset.inventory()`, `InventoryHandle`. `file_per_sample` and `npy_per_sample`: `enumerate`
+renamed `walk` (and its phase), an `inventory` phase off by default (`inv_entry` 24 and 27,
+`inv_read` 1 MiB, `[measure]`), named `inventory.txt`. Every committed AST regenerated (contract
+0.9): no fingerprint changed; those two corpora's dataset ids changed (the definition holds the
+inventory). Tests: `tests/golden.rs` (V22, and the capped reads: the same ops and fingerprint,
+issued to the subset's end); `tests/coord.rs` (a corpus's inventory read whole; a subset's on
+one and two ranks under `sync`, `io_uring`, and `libaio`, its fingerprint the dry run's at the
+rounded count, its ops and bytes; without the cap the run fails as predicted, "expected 62400
+bytes, got 76800"; grow, shrink, and settle leave the fresh corpus's inventory); builder
+`test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root`.
 
 ## 4. Plan changes
 

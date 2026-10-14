@@ -447,6 +447,17 @@ class DirHandle(Handle):
         return {"dir": {"dataset": self.dataset, "id": ast_of(self.id)}}
 
 
+class InventoryHandle(Handle):
+    """The inventory of a dataset (contract 0.9): the file list its `inventory` names."""
+    __slots__ = ("dataset",)
+
+    def __init__(self, dataset: str):
+        self.dataset = dataset
+
+    def ast(self):
+        return {"inventory": self.dataset}
+
+
 class ObjectHandle(Handle):
     __slots__ = ("namespace", "fields")
 

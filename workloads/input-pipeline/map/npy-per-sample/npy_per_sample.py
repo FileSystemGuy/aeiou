@@ -21,7 +21,10 @@ w.param("xfer", 1 * MiB, unit="bytes", doc="buffer fill under the member read: t
 w.param("np_chunk", 256 * KiB, unit="bytes", doc="NumPy's read chunk from a zip member (numpy.lib.format BUFFER_SIZE); one tell per chunk")
 w.param("cd_len", 102, unit="bytes", doc="central directory bytes: two entries, \"x.npy\" and \"y.npy\" (traced 2026-10-01)")
 w.param("framing", 498, unit="bytes", doc="archive bytes that are not x's data: x's local header and npy header (183), the y member (191), central directory (102), EOCD (22); np.savez(x=, y=[0]) (traced 2026-10-01)")
-w.param("enumerate", True, doc="the startup listing: the training script's glob over the corpus, one scandir per directory (traced 2026-10-02); on by default")
+w.param("walk", True, doc="the startup listing: the training script's glob over the corpus, one scandir per directory (traced 2026-10-02); on by default (`enumerate` until 2026-10-13)")
+w.param("inventory", False, doc="the startup read of the corpus's inventory, every process, in place of the glob at scale (DESIGN_REVIEW.md §3.73)")
+w.param("inv_entry", 27, unit="bytes", doc="[measure] inventory bytes per file: the name below the root (`00000/sample_000000000.npz`) and a newline")
+w.param("inv_read", 1 * MiB, unit="bytes", doc="[measure] the inventory reader's request; Python's BufferedReader asks st_blksize")
 w.param("files", 50_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
 w.param("sample_mean", 140 * MiB, unit="bytes", doc="[measure]")
 w.param("sample_sd", 4 * MiB, unit="bytes", doc="[measure]")
@@ -30,7 +33,8 @@ LOCATOR = 20   # zip64 end-of-central-directory locator, probed just before the 
 
 train = w.dataset("train", pattern="train/{id div 10000:05}/sample_{id:09}.npz", layout="whole", access="map",
                   count=P.files, size=normal(P.sample_mean, P.sample_sd, min=1 * MiB),
-                  seed=0x5eed_da7b)
+                  seed=0x5eed_da7b,
+                  inventory={"name": "inventory.txt", "entry": P.inv_entry})
 
 per_fill = P.xfer // P.np_chunk
 
@@ -41,13 +45,22 @@ def chunks(f):
 
 
 with w.actor("gpu") as gpu:
-    with gpu.when(P.enumerate), gpu.phase("enumerate"):               # glob("…/*/*.npz"): no stat, unlike ImageFolder's walk
+    with gpu.when(P.walk), gpu.phase("walk"):               # glob("…/*/*.npz"): no stat, unlike ImageFolder's walk
         with gpu.loop("d", train.dirs) as d:
             dh = gpu.let("dh", train.dir(d))
             gpu.open(dh, "RDONLY|CLOEXEC|DIRECTORY")                     # the real call adds O_NONBLOCK, which a directory ignores
             gpu.fstat(dh)                                                # os.scandir
             gpu.readdir(dh)
             gpu.close(dh)
+
+    with gpu.when(P.inventory), gpu.phase("inventory"):                # [measure] a Python open and read to EOF
+        inv = gpu.let("inv", train.inventory())
+        gpu.open(inv, "RDONLY|CLOEXEC")
+        gpu.fstat(inv)
+        gpu.ioctl(inv, "TCGETS", expect=["ENOTTY"])
+        gpu.lseek(inv, 0, "CUR")
+        gpu.read(inv, P.inv_read, repeat="until_eof")
+        gpu.close(inv)
 
     with gpu.loader("batches", workers=P.workers, prefetch=P.prefetch, batches=P.steps) as worker:
         with worker.loop("j", P.batch):

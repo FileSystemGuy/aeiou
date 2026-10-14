@@ -170,7 +170,7 @@ fn busy(op: &crate::vm::Op) -> io::Error {
 /// what it sends (a thread-per-actor API); `Ok(n)` is what the op returned, as from
 /// `run::issue_blocking`.
 pub(crate) fn issue(store: &Arc<Store>, rest: String, sh: &crate::run::Shared, a: &mut crate::run::ActorState, rbuf: &mut crate::run::Ring, op: &crate::vm::Op) -> io::Result<i64> {
-    let sink = (op.kind == crate::vm::OpKind::Read).then(|| Sink::Lent(rbuf.slice(op.len as usize)));
+    let sink = (op.kind == crate::vm::OpKind::Read).then(|| Sink::Lent(rbuf.slice(op.issue_len() as usize)));
     match start(store, rest, sh, a, op, sink) {
         Step::Done(r) => r,
         Step::Send(f) => settle(a, op, block(f)).0,

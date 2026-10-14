@@ -115,6 +115,12 @@ pub fn array_block_seed(seed: u64, block: u64, dedupe: u64) -> u64 {
     block_seed(seed, 0, block / dedupe.max(1))
 }
 
+/// The seed of block `block` of a dataset's inventory (contract 0.9, `DESIGN_REVIEW.md` §3.73):
+/// a label of its own, so no id's content is its, and `D` consecutive blocks repeat one.
+pub fn inventory_block_seed(seed: u64, block: u64, dedupe: u64) -> u64 {
+    labeled_key(seed, "inventory", &[block / dedupe.max(1)])
+}
+
 /// The seed of a namespace object's content.
 pub fn object_seed(namespace_seed: u64, path: &str) -> u64 {
     labeled_key(namespace_seed, "object", &[xxhash_rust::xxh3::xxh3_64(path.as_bytes())])

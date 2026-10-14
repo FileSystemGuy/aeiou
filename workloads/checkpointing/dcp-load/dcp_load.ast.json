@@ -1,5 +1,5 @@
 {
-  "ast": "0.8",
+  "ast": "0.9",
   "name": "dcp_load",
   "doc": "DCP load: every rank reads .metadata, then the items of its shard file (fan-in `replicas`).",
   "params": {
@@ -1470,10 +1470,9 @@
       "script": "dcp_load.py",
       "sha256": "849a89bd67eaa730ce801dd8a81a45ed8bdce2a82d989afd1849c9abfc03208b",
       "builder_version": "0.1.0",
-      "git": "67e632d03bbb"
+      "git": "de228d0db4a5"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "4f5642996fbac9b32eb22ec30a7b977b32a2c91b45343b9d5ad248956de05052"
+    "ast_sha256": "043ffa6ca45271d828ed5cf561eca0ce5b2f79b31cdcc5a863c15851144c594c"
   }
 }

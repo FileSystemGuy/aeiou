@@ -35,23 +35,25 @@ fn hashes_match_check_py() {
     // `posix` in place of `api` and `s3` in place of the protocol `object`, every fingerprint unchanged; all again
     // 2026-10-10 when each abstract was renamed for its directory under workloads/, DESIGN_REVIEW §3.66, every
     // fingerprint unchanged; all again 2026-10-13 for contract 0.8, one dataset shape with `layout`, `access`, and
-    // `format.framing`, DESIGN_REVIEW §3.72, every fingerprint unchanged).
+    // `format.framing`, DESIGN_REVIEW §3.72, every fingerprint unchanged; all again the same day for contract 0.9,
+    // a dataset's `inventory`, DESIGN_REVIEW §3.73, with file_per_sample and npy_per_sample's `enumerate` renamed `walk`
+    // and an `inventory` read added, off by default, every fingerprint unchanged).
     let want = [
-        ("dcp_load", "4f5642996fbac9b32eb22ec30a7b977b32a2c91b45343b9d5ad248956de05052"),
-        ("dcp_save", "86fdc623dec7053f62c47644abe8a15c5d8e5ead247a67883adf89b9bed43b7b"),
-        ("lmcache_local_disk", "8a764ce5faf9865b644d9333f6e41427f61f5c9902a15d0b8a783c703aad217f"),
-        ("safetensors_load", "752570de6e1a1d45ce15c06a181a1dda45ac6794b77d1a0c2a7437b6aede96f9"),
-        ("npy_per_sample", "ef512e44b7bd78d6446d4ac0c66552e491e5a4e4fbda68068ec2578555fc82a3"),   // 2026-10-02: the `enumerate` phase, on by default
-        ("file_per_sample", "06022201e7be3c26f78c73369ef34b1b0016d52311baf1cc40f88bf31ff01333"),   // 2026-10-02: `enumerate` on by default
-        ("diskann_build", "0d1bafa586b4fdcb3964c64478bc4bbccfd7cacbbfc8458e691f232ad237e307"),
-        ("diskann_search", "43d9af027d29ea4004bc529161e1374abc8d8bd695f73859a917c3b0728ec258"),
-        ("tfrecord_stream", "1ec650d3a75f2e2986bf094fe01336452adc14dea3f97470c2f5b572e762df37"),
-        ("parquet_stream", "7c48cc3d54807f5cd226c9b84612538f582ee0cbf740e24fee4a11fe3b5ba90b"),
-        ("hdf5_map", "5485ee114265231337fbf6f0d94636bd9f235f7de7324b2957b269392e7b9c6b"),
-        ("faiss_ivf_ondisk", "986e52d58749e20487c32429670fea67f8d75871b90e8bca9b0837d2b8fd251e"),
+        ("dcp_load", "043ffa6ca45271d828ed5cf561eca0ce5b2f79b31cdcc5a863c15851144c594c"),
+        ("dcp_save", "af8dc17d922d28cbc6ebaf45695930065f294f462649dc7f3911fc86857426af"),
+        ("lmcache_local_disk", "c72dd9ff9205d6d492c281e4d6cfd6bcd11bcc6fa7725a197a4c2a3a00e05357"),
+        ("safetensors_load", "8065ddc8a86bbaf4117bef19bf22d4195e5f4acbacf03035fe90ae147e8f3f5a"),
+        ("npy_per_sample", "5a73267654776844435d160c9961f0c5387a97024c46fb13f74f3cad8a35ecbd"),   // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13)
+        ("file_per_sample", "2d4fe1a1d26aa4647f42b6e1b50194bc28e1d64715716977e91b90cfa292cd88"),   // 2026-10-02: `enumerate` on by default
+        ("diskann_build", "664b65bef5b04b6a4ad4c6844f7a9989b9ba0cf44ff89a88dc10dcd171d018d1"),
+        ("diskann_search", "91f8a434ad14194d2f358beb965599cf2bb9267b38ed6eea4dcddf7117384160"),
+        ("tfrecord_stream", "a128ec4900db4aba098f102917726a33d867dc7b7985826f1d1cf66d0dd2c252"),
+        ("parquet_stream", "5fa2028070dc2b8ec0b24303c1d0ef21d7c0c220163ba4f3c7bf70535b943f11"),
+        ("hdf5_map", "aa9e67bff3e3ed8da26211df76b458d280eca4fcbea4d5d80ed1d08afd7c781d"),
+        ("faiss_ivf_ondisk", "f953b1e090fd2d1ea428ef97643a7dec674eff7a89f8897de43c05256a71b6d6"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("lmcache_shared_fs", "aa7991fc75d5092e52e0dfc38fc8475b9db9cbd582a5fc85b080c79c52dd65dc"),
-        ("lmcache_shared_fs_reader", "17a5a80dc6d22a7a266299d8a2da533f9dd53b79171a9690e64a1eb6dfb0beb2"),
+        ("lmcache_shared_fs", "b2214bf08303e4bd89d3302a87519b8b63f69e47686691759bde270a6a4f318b"),
+        ("lmcache_shared_fs_reader", "49c814917853b8d14c5943aa99231ffcd29717b77827bf41923f956abd41d91b"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&crate::common::workload_ast(name)).unwrap();
@@ -86,9 +88,9 @@ fn golden_fingerprints() {
         // actor in file_per_sample (38,462 directories), four per directory in npy_per_sample; with
         // `enumerate=false` both are what they were
         ("file_per_sample", 2, &[("steps", "10")], 0xfb3215e5607b32ae, 389740),
-        ("file_per_sample", 2, &[("steps", "10"), ("enumerate", "false")], 0x71628bdb4289c4c8, 5120),
+        ("file_per_sample", 2, &[("steps", "10"), ("walk", "false")], 0x71628bdb4289c4c8, 5120),
         ("npy_per_sample", 2, &[("steps", "5")], 0xf755bd4187b75b78, 50491),
-        ("npy_per_sample", 2, &[("steps", "5"), ("enumerate", "false")], 0xa2c284c6137f9639, 50451),
+        ("npy_per_sample", 2, &[("steps", "5"), ("walk", "false")], 0xa2c284c6137f9639, 50451),
         ("dcp_save", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
         ("dcp_load", 2, &[], 0x22990a88db4e6d4f, 368),
         ("safetensors_load", 2, &[], 0x2668387c7aa4126b, 24682),
@@ -154,7 +156,7 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
     assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"steps":[1]}}"#).contains("the default is a scalar, the value is an array"));
     assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"step_time":{"const":5}}}"#).contains("the value is a distribution"));
     assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"gpus":2}}"#).contains("--gpus"));
-    assert_eq!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"enumerate":true,"hdr_read":4096}}"#), "accepted");
+    assert_eq!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"walk":true,"hdr_read":4096}}"#), "accepted");
     assert!(ParamSet::parse(r#"{"params_version":2,"abstract":"a","params":{}}"#, "x").is_err());
     assert!(ParamSet::parse(r#"{"params_version":1,"abstract":"a","params":{},"extra":1}"#, "x").is_err());
     assert!(ParamSet::parse(r#"{"params_version":1,"abstract":"a"}"#, "x").is_err());
@@ -216,7 +218,7 @@ fn collect(text: &str, cfg: &Config, template: &str, count: i64) -> Vec<(i64, Ve
 }
 
 const CONSUME: &str = r#"{
-  "ast": "0.8", "name": "consume_test",
+  "ast": "0.9", "name": "consume_test",
   "params": {"batches": {"default": 24}, "batch": {"default": 4}},
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}},
   "actors": {"gpu": {"body": [
@@ -255,7 +257,7 @@ fn consume_is_a_permutation_per_epoch_across_actors() {
 }
 
 const CHAIN: &str = r#"{
-  "ast": "0.8", "name": "chain_test",
+  "ast": "0.9", "name": "chain_test",
   "params": {"reuse": {"default": {"mixture": [{"weight": 0.4, "dist": null}, {"weight": 0.6, "dist": {"uniform": {"lo": 1, "hi": 5}}}]}}},
   "namespaces": {"kv": {"pattern": "kv/{conv:016x}/d{d}", "fields": {"conv": "int", "d": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
@@ -296,7 +298,7 @@ fn at_chains_reach_the_original_conversation() {
 }
 
 const UNTIL_EOF: &str = r#"{
-  "ast": "0.8", "name": "eof_test",
+  "ast": "0.9", "name": "eof_test",
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 1, "body": [
@@ -343,7 +345,7 @@ fn rejects(text: &str, needle: &str) {
 fn validator_rejects_what_check_py_rejects() {
     let base = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.8", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.9", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{{datasets}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )
@@ -366,6 +368,18 @@ fn validator_rejects_what_check_py_rejects() {
     aeiou::load_str(&one(r#""pattern": "d/{id mod 16}/f_{id}", "layout": "whole", "access": "indexed""#)).unwrap();
     rejects(&one(r#""pattern": "d/{id}", "layout": "whole""#), "missing field `access`");
     rejects(&one(r#""pattern": "d/{id}", "layout": "regions", "access": "indexed""#), "unknown variant `regions`");
+    // contract 0.9: a dataset's inventory (V22, DESIGN_REVIEW §3.73)
+    let inv = |pattern: &str, access: &str, name: &str| one(&format!(r#""pattern": "{pattern}", "layout": "whole", "access": "{access}", "inventory": {{"name": "{name}", "entry": 8}}"#));
+    rejects(&inv("d/{id}", "indexed", "list.txt"), "only a consumed dataset (`map` or `stream`) has an inventory");
+    rejects(&inv("d/{id}", "map", "a/list.txt"), "is not a file name");
+    rejects(&inv("d/{id}", "map", ".aeiou-list"), "begins with `.aeiou`");
+    rejects(&inv("d/{id}", "map", "12"), "a name the pattern `d/{id}` can produce");
+    rejects(&inv("d/f_{id:04}.jpg", "stream", "f_0012.jpg"), "can produce in the dataset's root (V22)");
+    aeiou::load_str(&inv("d/f_{id:04}.jpg", "stream", "files.txt")).unwrap();
+    aeiou::load_str(&inv("d/{id div 4:05}/f_{id}", "map", "inventory.txt")).unwrap();
+    rejects(&base(ds, r#"{"open": {"file": {"inventory": "d"}, "flags": ["RDONLY"]}}"#), "`inventory` of `d`, which declares none (V22)");
+    let with_inv = r#""d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1, "inventory": {"name": "list.txt", "entry": 8}}"#;
+    rejects(&base(with_inv, r#"{"open": {"file": {"inventory": "d"}, "flags": ["WRONLY"]}}"#), "read-only (V12)");
     let indexed = r#""d": {"layout": "whole", "access": "indexed", "pattern": "d/{id}", "count": 10, "size": {"const": 1}, "seed": 1}"#;
     rejects(&base(indexed, r#"{"loop": {"index": "i", "to": 1, "body": [{"let": {"name": "f", "value": {"consume": "d"}}}]}}"#), "which is `indexed`");
     // contract 0.7: the declared APIs (one per protocol) and cache mode, each a name, and never
@@ -490,7 +504,7 @@ fn parameters_given_are_held_to_the_at_rule() {
 #[test]
 fn a_long_at_chain_is_one_link_per_iteration() {
     let text = r#"{
-  "ast": "0.8", "name": "long_chain",
+  "ast": "0.9", "name": "long_chain",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "k", "to": 200000, "body": [
@@ -505,4 +519,54 @@ fn a_long_at_chain_is_one_link_per_iteration() {
     assert_eq!(ops[0].3, "o/0");
     assert_eq!(ops[4].3, "o/4");                // 0 + 1 + 2 + 0 + 1
     assert_eq!(ops[199_999].3, "o/199999");     // 66,666 full periods of 0 + 1 + 2, then 0 + 1
+}
+
+const INVENTORY: &str = r#"{
+  "ast": "0.9", "name": "inventory_test",
+  "params": {"files": {"default": 100000}},
+  "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id div 1000:03}/f_{id:06}", "count": {"param": "files"},
+                     "size": {"const": 4096}, "seed": 7, "inventory": {"name": "inventory.txt", "entry": 24}}},
+  "actors": {"gpu": {"count": 1, "body": [
+    {"let": {"name": "inv", "value": {"inventory": "d"}}},
+    {"open": {"file": {"ref": "inv"}, "flags": ["RDONLY"]}},
+    {"read": {"file": {"ref": "inv"}, "len": 1048576, "repeat": "until_eof"}},
+    {"close": {"file": {"ref": "inv"}}}
+  ]}}
+}"#;
+
+#[derive(Default)]
+struct Issued {
+    reads: Vec<(i64, i64, i64, i64)>,
+}
+
+impl<'m, 'a> Sink<'m, 'a> for Issued {
+    fn op(&mut self, op: &Op, _: &OpCtx) -> anyhow::Result<()> {
+        if op.kind == OpKind::Read {
+            assert_eq!(op.path, "d/inventory.txt");
+            self.reads.push((op.offset, op.len, op.bytes, op.issue_len()));
+        }
+        Ok(())
+    }
+}
+
+/// The inventory's size is `count × entry` at the run's count; under `--subset` (capped) the
+/// reads are the same ops, so the same fingerprint, issued no further than that size: the tail
+/// short, the read that finds the end with length 0 (DESIGN_REVIEW §3.73 item 5).
+#[test]
+fn an_inventory_is_count_times_entry_and_a_subset_caps_its_reads() {
+    let loaded = aeiou::load_str(INVENTORY).unwrap();
+    let cfg = config(1, 0, &[("files", "50000")]);
+    let params = Params::new(&loaded.ast, &cfg).unwrap();
+    let plain = build_model(&loaded.ast, &cfg, &params).unwrap();
+    let mut capped = build_model(&loaded.ast, &cfg, &params).unwrap();
+    capped.cap_inventory("d");
+    let size = 50000 * 24;
+    let want: Vec<(i64, i64, i64)> = vec![(0, 1048576, 1048576), (1048576, 1048576, size - 1048576), (size, 1048576, 0)];
+    let a = run_actor(&plain, "gpu", 0, 1, Issued::default()).unwrap().reads;
+    let b = run_actor(&capped, "gpu", 0, 1, Issued::default()).unwrap().reads;
+    assert_eq!(a.iter().map(|r| (r.0, r.1, r.2)).collect::<Vec<_>>(), want);
+    assert_eq!(b.iter().map(|r| (r.0, r.1, r.2)).collect::<Vec<_>>(), want, "the same ops capped");
+    assert!(a.iter().all(|r| r.3 == r.1), "uncapped: issued as asked");
+    assert_eq!(b.iter().map(|r| r.3).collect::<Vec<_>>(), vec![1048576, size - 1048576, 0], "capped: the tail short, the end read 0");
+    assert_eq!(dryrun::run(&plain, 1, None).unwrap().total.fingerprint, dryrun::run(&capped, 1, None).unwrap().total.fingerprint);
 }

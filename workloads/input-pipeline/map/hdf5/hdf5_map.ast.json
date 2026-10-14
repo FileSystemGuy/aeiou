@@ -1,5 +1,5 @@
 {
-  "ast": "0.8",
+  "ast": "0.9",
   "name": "hdf5_map",
   "doc": "DataLoader over HDF5 containers of fixed-size rows: open, metadata reads, one positioned row read, close per sample.",
   "params": {
@@ -303,10 +303,9 @@
       "script": "hdf5_map.py",
       "sha256": "e94378c57c7fde3661646e43cd3f436841853cbc2e9cab4c869f7850e39c9a1e",
       "builder_version": "0.1.0",
-      "git": "67e632d03bbb-dirty"
+      "git": "de228d0db4a5"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "5485ee114265231337fbf6f0d94636bd9f235f7de7324b2957b269392e7b9c6b"
+    "ast_sha256": "aa9e67bff3e3ed8da26211df76b458d280eca4fcbea4d5d80ed1d08afd7c781d"
   }
 }

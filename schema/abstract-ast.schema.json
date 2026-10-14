@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.8",
+      "const": "0.9",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -666,6 +666,10 @@
           },
           "description": "A workload-created object, named by filling the namespace pattern's fields."
         },
+        "inventory": {
+          "$ref": "#/$defs/ident",
+          "description": "The inventory of the named dataset (contract 0.9): the one file its `inventory` declares in its root, of size `count \u00d7 entry`."
+        },
         "consume": {
           "$ref": "#/$defs/ident",
           "description": "Next sample of a dataset without replacement: perm(position), position = actor + count * (b * B + j) over the enclosing loader and loop."
@@ -896,6 +900,25 @@
             }
           },
           "description": "Which format class wrote the container, and its layout. The layout is what the runner computes offsets from; the class, reader, version, and writer settings are matched against the manifest."
+        },
+        "inventory": {
+          "type": "object",
+          "required": [
+            "name",
+            "entry"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The file's name, directly in the dataset's root: a constant, not beginning with `.aeiou`, not a name the pattern can produce there (V22)."
+            },
+            "entry": {
+              "$ref": "#/$defs/expr",
+              "description": "Bytes per item of `count`: the inventory's size is `count \u00d7 entry`."
+            }
+          },
+          "description": "A file list of the dataset (contract 0.9), written by datagen as payload and read through the `inventory` handle in place of a walk. Only a consumed dataset (`map` or `stream`) has one (V22). Under `run --subset` its reads are issued no further than its size at the run's count."
         },
         "doc": {
           "type": "string"

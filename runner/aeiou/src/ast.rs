@@ -1,4 +1,4 @@
-//! The AST contract (`schema/abstract-ast.schema.json`, v0.8) as Rust types.
+//! The AST contract (`schema/abstract-ast.schema.json`, v0.9) as Rust types.
 //!
 //! Every node, expression, distribution, and handle is externally tagged: a JSON object with
 //! exactly one key naming its kind. `deny_unknown_fields` on every struct and serde's enum
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.8";
+pub const AST_VERSION: &str = "0.9";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -230,6 +230,9 @@ pub enum Handle {
     Dir { dataset: String, id: Expr },
     Object { namespace: String, fields: BTreeMap<String, Expr> },
     Consume(String),
+    /// The inventory of a dataset (contract 0.9): the one file `datasets.<name>.inventory`
+    /// names in the dataset's root.
+    Inventory(String),
     Pick(Pick),
     /// A container unit (row group, record batch, chunk) of a file: `index` of the file
     /// `of` holds or is; without `index`, the unit holding the sample `of`.
@@ -338,12 +341,24 @@ pub struct Dataset {
     pub slot: Option<Expr>,
     #[serde(default)]
     pub format: Option<Format>,
+    /// A file list of the dataset, read in place of a walk (contract 0.9, `DESIGN_REVIEW.md`
+    /// §3.73; rule V22).
+    #[serde(default)]
+    pub inventory: Option<Inventory>,
     /// Where the dataset or namespace lives: a file system (`posix`, absent) or an object
     /// store (`s3`) (`DESIGN_REVIEW.md` §3.65, contract 0.6). Not part of its identity.
     #[serde(default)]
     pub protocol: Option<Protocol>,
     #[serde(default)]
     pub doc: Option<String>,
+}
+
+/// `name`, a file directly in the dataset's root, holding `entry` bytes per item of `count`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Inventory {
+    pub name: String,
+    pub entry: Expr,
 }
 
 #[derive(Debug, Deserialize)]

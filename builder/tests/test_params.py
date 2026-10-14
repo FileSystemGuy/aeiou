@@ -73,7 +73,7 @@ def test_value_rules():
     assert params.check(ast, {**base, "params": {"gpus": 4}})[0].endswith("--gpus, not by a parameter file")
     assert "the default is a scalar, the value is an array" in params.check(ast, {**base, "params": {"steps": [1]}})[0]
     assert "the default is a scalar, the value is a distribution" in params.check(ast, {**base, "params": {"steps": {"const": 1}}})[0]
-    assert params.check(ast, {**base, "params": {"steps": 7, "enumerate": True, "hdr_read": 4096}}) == []
+    assert params.check(ast, {**base, "params": {"steps": 7, "walk": True, "hdr_read": 4096}}) == []
     ast, _ = _ast("safetensors_load")
     assert params.check(ast, {**base, "abstract": "safetensors_load", "params": {"off": [1, 2, 3]}}) == []      # arrays may change length
     assert "elements are a scalar" in params.check(ast, {**base, "abstract": "safetensors_load", "params": {"off": [1, [2]]}})[0]

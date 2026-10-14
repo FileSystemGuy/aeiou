@@ -4,7 +4,7 @@
   "runs": [
     {
       "ast": "diskann_build",
-      "ast_sha256": "ca44dbfda2912d4c013660b1a250b7bc6e46f2f3bd1cb63690531267a419137d",
+      "ast_sha256": "8621af2d262b8ea788f9230eafadf26dc7f538a8016b8695855c4470d197f2ff",
       "params": "params.json",
       "params_sha256": "bbdf672025fbf3170ebf8e5e89f2ee564cc04b27f8f7999ab7cbb01d67442cb5",
       "gpus": 1,

@@ -215,6 +215,8 @@ pub enum HVal {
     Column { ds: usize, file: i64, u: i64, c: i64 },
     /// Directory `d` of a files dataset's pattern.
     Dir { ds: usize, d: i64 },
+    /// The inventory of dataset `ds` (contract 0.9).
+    Inventory { ds: usize },
     /// A namespace object with its formatted path and computed size (`None` = as_written).
     Object { ns: usize, path: Arc<str>, size: Option<i64> },
 }
@@ -521,6 +523,16 @@ impl Framing {
     }
 }
 
+/// A dataset's inventory (contract 0.9, `DESIGN_REVIEW.md` §3.73): `path`, `entry` bytes per
+/// item of the count. `cap`: the run is a subset of the corpus whose inventory is on disk, so
+/// reads of it are issued no further than the size at the run's count (§3.73 item 5).
+#[derive(Clone, Debug)]
+pub struct InvMeta {
+    pub path: Arc<str>,
+    pub entry: i64,
+    pub cap: bool,
+}
+
 #[derive(Clone)]
 pub enum DsMeta<'a> {
     Files {
@@ -539,6 +551,7 @@ pub enum DsMeta<'a> {
         /// `labeled_key(seed, "consume", name)`, the base of the per-epoch permutation keys.
         consume_base: u64,
         rank_key: u64,
+        inventory: Option<InvMeta>,
     },
     /// An `array` dataset: one file of `count` fixed slots (contract 0.8; `regions` before).
     Array {
@@ -585,6 +598,22 @@ impl<'a> DsMeta<'a> {
             DsMeta::Array { count: c, .. } => *c = count,
         }
         m
+    }
+
+    /// Reads of the inventory are issued no further than its size at this count: the run is a
+    /// subset of a corpus whose inventory lists more (`DESIGN_REVIEW.md` §3.73 item 5).
+    pub fn cap_inventory(&mut self) {
+        if let DsMeta::Files { inventory: Some(i), .. } = self {
+            i.cap = true;
+        }
+    }
+
+    /// The inventory's path, its size at this count, and whether reads of it are capped.
+    pub fn inventory(&self) -> Option<(Arc<str>, i64, bool)> {
+        match self {
+            DsMeta::Files { inventory: Some(i), count, .. } => Some((i.path.clone(), count * i.entry, i.cap)),
+            _ => None,
+        }
     }
 
     pub fn files(&self) -> i64 {
@@ -956,6 +985,13 @@ impl<'a> Model<'a> {
         self.ds_index.get(name).copied().ok_or_else(|| anyhow!("unknown dataset `{name}`"))
     }
 
+    /// Cap reads of dataset `name`'s inventory at its size at this count (`--subset`).
+    pub fn cap_inventory(&mut self, name: &str) {
+        if let Some(&i) = self.ds_index.get(name) {
+            self.datasets[i].cap_inventory();
+        }
+    }
+
     pub fn namespace(&self, name: &str) -> Result<usize> {
         self.ns_index.get(name).copied().ok_or_else(|| anyhow!("unknown namespace `{name}`"))
     }
@@ -1085,6 +1121,17 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                     }
                 };
                 let (dirs, ndirs) = Model::dir_scheme(&pattern, count);
+                let inventory = match &f.inventory {
+                    Some(i) => {
+                        let entry = vm.eval_int(&i.entry).with_context(|| format!("dataset `{name}`: inventory entry"))?;
+                        if entry < 1 {
+                            bail!("dataset `{name}`: inventory entry {entry} must be positive");
+                        }
+                        let path = crate::payload::join_key(pattern.root(), &i.name);
+                        Some(InvMeta { path: Arc::from(path), entry, cap: false })
+                    }
+                    None => None,
+                };
                 let name_hash = crate::rng::labeled_key(0, name, &[]);
                 DsMeta::Files {
                     name,
@@ -1100,6 +1147,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                     ndirs,
                     consume_base: labeled_key(cfg.seed, "consume", &[name_hash]),
                     rank_key: labeled_key(f.seed, "rank", &[]),
+                    inventory,
                 }
             }
             Layout::Array => {

@@ -10,7 +10,7 @@ An **abstract** is a workload written as a program over POSIX-shaped I/O operati
 operation sequence a real application issues, as its author understands it, with the
 quantities the application draws at random expressed as distributions. It is authored as a
 Python script with **aeiou-build**(1), compiled to one JSON document (`<name>.ast.json`,
-contract version 0.8), and executed by **aeiou**(1). The document is the only thing the
+contract version 0.9), and executed by **aeiou**(1). The document is the only thing the
 runner executes and the only artifact an author publishes with a hash.
 
 The model has three parts:
@@ -114,7 +114,7 @@ dataset; `add sub mul div mod ceil_div min max neg`; `eq ne lt le gt ge and or n
 `cond {if, then, else}` whose arms may be expressions, distributions, or handles.
 
 **Handles** name what an operation acts on: `ref` (a binding); `file {dataset, id}`; `dir
-{dataset, id}`; `object {namespace, fields}`; `consume dataset` (the next sample without
+{dataset, id}`; `inventory dataset` (its inventory); `object {namespace, fields}`; `consume dataset` (the next sample without
 replacement); `pick {dataset, dist}` (a sample with replacement, uniform or by a
 distribution over ids); `unit {of, index}` and `column {of, index}` of a container; `file
 {of, chunk}` (the container file, or chunk object `k`, of a sample handle). Under `stream`
@@ -129,7 +129,7 @@ ids of `zipf` and `hotset` are fixed by the dataset seed, not the run seed.
 ## DATASETS, NAMESPACES, ACTORS
 
 **Datasets**: `{pattern, layout, access, count, size, seed, samples_per_file, chunk, slot,
-format, protocol}` (contract 0.8). `layout` is how a file or object holds the items: `whole`
+format, inventory, protocol}` (contract 0.9). `layout` is how a file or object holds the items: `whole`
 (one item), `chunked` (part of one: `chunk` bytes each, named by `{k}`), `compound`
 (`samples_per_file` variably sized items, framed by `format`), or `array` (`count` fixed
 slots of `slot` bytes in one file, a pattern without fields). `count` is items. Patterns use
@@ -141,7 +141,11 @@ always for an `array`); a consumed dataset's directories are `{id div D}` or non
 `format {class, reader, version, framing}` block declares the container framing: a file is `file_header || units || file_footer`, a unit is
 `unit_header || column chunks || unit_footer`, a column chunk is `header || rows`, a row is
 `row_header || fixed || its share of the sample || row_footer`, each with its alignment, and
-every field an expression over parameters.
+every field an expression over parameters. A consumed dataset may declare `inventory {name,
+entry}`: a file list of it, the file `name` directly in its root, `count × entry` bytes,
+written by `aeiou datagen` and read through the `inventory` handle in place of a walk of a
+large corpus; under `aeiou run --subset` its reads are issued no further than its size at the
+run's count.
 
 **Namespaces**: `{pattern, fields, size, seed, input, same_run, protocol}`. `size` is an expression or
 `as_written`, the sum of the writes that created the object. `input` marks objects a previous
@@ -190,6 +194,11 @@ these, and the builder enforces most of them at construction:
 - **V19** `posix` and `cache` are declared only with a `posix` name (a `trace` counts, its
   files being under `--root`), `s3` only with an `s3` name; with both, the APIs are of one
   kind, defaults counted: `async` with `io_uring` or `libaio`, `blocking` with the others.
+- **V20** The fields a layout takes and needs, and its pattern's fields. **V21** An `array`
+  is `indexed`; `consume` needs `map` or `stream`; a consumed dataset's directories are never
+  `mod`.
+- **V22** An `inventory` is a consumed dataset's, its name a constant file name in the root
+  that the pattern cannot produce there; the `inventory` handle names a dataset that has one.
 
 ## PARAMETER FILES
 

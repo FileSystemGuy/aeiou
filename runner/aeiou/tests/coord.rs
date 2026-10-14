@@ -189,7 +189,7 @@ fn a_failing_host_stops_the_others() {
 #[test]
 fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let root = tmpdir("two");
-    let params = [("files", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("enumerate", "true")];
+    let params = [("files", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("walk", "true")];
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
@@ -722,7 +722,8 @@ fn a_killed_grow_is_finished_by_resume() {
     run::check_datasets(loaded, cfg, &root).unwrap();
     let meta = &model.datasets[0];
     let files = tree(&root);
-    assert_eq!(files.len() as i64, to);
+    assert_eq!(files.len() as i64, to + 1, "the files and the inventory");
+    assert!(inventory_is_payload(&root, meta, to), "the grown corpus's inventory");
     for id in (0..to).step_by(997) {
         let mut want = vec![0u8; meta.file_size(id).unwrap() as usize];
         let seed = meta.dataset_seed();
@@ -750,7 +751,7 @@ fn grow_and_shrink_refuse_what_they_cannot_do() {
     refuse(&["--shrink", "0", a], "a whole number above 0");
     refuse(&["--grow", "40", a, "--param", "files=40"], "--grow takes the dataset, its place, the payload, and the format from the manifest at its root: --param given too");
     refuse(&["--grow", "40", a, "--resume", a], "--resume, --grow: one at a time");
-    assert_eq!(tree(&root).len(), 30, "nothing changed");
+    assert_eq!(tree(&root).len(), 31, "nothing changed (30 files and the inventory)");
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -783,7 +784,7 @@ fn only_rank_0_reads_the_manifest_at_the_root() {
         let e = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && e.contains("not the same run") && e.contains("root"), "rank {rank}: {e}");
     }
-    assert_eq!(tree(&root).len(), 30, "nothing changed");
+    assert_eq!(tree(&root).len(), 31, "nothing changed (30 files and the inventory)");
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -806,10 +807,25 @@ fn listing(root: &std::path::Path) -> std::collections::BTreeMap<String, u64> {
     out
 }
 
-/// What a datagen of `count` writes under the dataset root: every name with its size.
+/// What a datagen of `count` writes under the dataset root: every name with its size, and the
+/// inventory at that count (DESIGN_REVIEW §3.73).
 fn expected(meta: &aeiou::eval::DsMeta<'_>, count: i64) -> std::collections::BTreeMap<String, u64> {
     let m = meta.with_count(count);
-    (0..m.files()).map(|id| (m.file_path(id, None).unwrap().to_string().trim_start_matches("train/").to_string(), m.file_size(id).unwrap() as u64)).collect()
+    let mut out: std::collections::BTreeMap<String, u64> = (0..m.files()).map(|id| (m.file_path(id, None).unwrap().to_string().trim_start_matches("train/").to_string(), m.file_size(id).unwrap() as u64)).collect();
+    if let Some((path, size, _)) = m.inventory() {
+        out.insert(path.trim_start_matches("train/").to_string(), size as u64);
+    }
+    out
+}
+
+/// The inventory under `root` holds the payload's bytes at `count` (its own label, §3.73).
+fn inventory_is_payload(root: &std::path::Path, meta: &aeiou::eval::DsMeta<'_>, count: i64) -> bool {
+    let (path, size, _) = meta.with_count(count).inventory().unwrap();
+    let got = std::fs::read(root.join(path.to_string())).unwrap_or_default();
+    let mut want = vec![0u8; size as usize];
+    let seed = meta.dataset_seed();
+    aeiou::payload::Filler::new(1).fill_range(|blk| aeiou::payload::inventory_block_seed(seed, blk, 1), 0, &mut want);
+    got == want
 }
 
 /// File `id` under `root` holds the payload's bytes.
@@ -873,7 +889,9 @@ fn check_settled(root: &PathBuf, was: &aeiou::payload::Manifest, asked: i64) -> 
     assert!(listing(&root.join("train")) == expected(meta, s), "the settled corpus is not the {s}-file one");
     run::check_datasets(loaded, cfg, root).unwrap();
     assert_eq!(after.provenance["files_written"].as_i64(), Some(s), "{}", after.provenance);
-    assert_eq!(after.provenance["bytes_written"].as_u64(), Some(expected(meta, s).values().sum::<u64>()));
+    let inventory = meta.with_count(s).inventory().map_or(0, |(_, n, _)| n as u64);
+    assert_eq!(after.provenance["bytes_written"].as_u64(), Some(expected(meta, s).values().sum::<u64>() - inventory), "the files' bytes, the inventory not counted");
+    assert!(inventory_is_payload(root, meta, s), "the settled corpus's inventory");
     let st = after.provenance["settles"].as_array().unwrap().last().unwrap();
     assert_eq!((st["asked"].as_i64(), st["count"].as_i64(), st["state"].as_str()), (Some(asked), Some(s), Some(was.state.as_str())));
     let mut ids: Vec<i64> = (0..s).step_by(991).collect();
@@ -1033,6 +1051,25 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
         assert_eq!((s["param"].as_str(), s["corpus"].as_i64(), s["requested"].as_i64(), s["run"].as_i64(), s["unit"].as_i64()), (Some("files"), Some(3200), Some(2000), Some(2600), Some(1300)));
         assert_eq!(d["verdict"]["fingerprint"].as_str().map(|f| f.trim_start_matches("0x").to_string()), Some(fp.trim_start_matches("0x").to_string()));
     }
+    // the inventory in place of the walk (DESIGN_REVIEW §3.73): the whole corpus's read to its
+    // end; a subset's read as a corpus of the rounded count's would be, issued no further than
+    // its end (a read past it would return the corpus's bytes where 0 is expected, and fail)
+    let inv = ["walk=false", "inventory=true", "steps=4"];
+    let whole = [&inv[..], &["files=3200"]].concat();
+    let fp = dry_fingerprint_cli("file_per_sample.ast.json", "2", &whole);
+    let outs = run_ranks("file_per_sample.ast.json", &root, "2", &whole, 1, &["--expect-fingerprint", &fp]);
+    assert!(outs.iter().all(|(ok, _, _)| *ok), "the whole corpus's inventory: {outs:?}");
+    let fp = dry_fingerprint_cli("file_per_sample.ast.json", "2", &[&inv[..], &["files=2600"]].concat());
+    for (ranks, posix) in [(1i64, "sync"), (2, "sync"), (1, "io_uring"), (1, "libaio")] {
+        let json = root.join(format!("report-inv-{ranks}-{posix}.json"));
+        let outs = run_ranks("file_per_sample.ast.json", &root, "2", &[&inv[..], &["files=2000"]].concat(), ranks, &["--subset", "--posix", posix, "--expect-fingerprint", &fp, "--report-json", json.to_str().unwrap()]);
+        assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s), {posix}: {outs:?}");
+        let d: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+        let ph = &d["result"]["phases"]["inventory"];
+        // 2 GPUs: open, fstat, ioctl, lseek, close, and 2600 × 24 bytes in 1 MiB reads, the end read
+        assert_eq!((ph["ops"].as_i64(), ph["bytes_read"].as_i64()), (Some(2 * (5 + 2)), Some(2 * 2600 * 24)), "{ranks} rank(s), {posix}: {ph}");
+    }
+
     let refused = |params: &[&str], extra: &[&str]| {
         let outs = run_ranks("file_per_sample.ast.json", &root, "2", params, 1, extra);
         assert!(!outs[0].0, "{outs:?}");
@@ -1060,7 +1097,7 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && e.contains("its files share one directory, and the abstract lists it"), "{e}");
     // without the listing, whole files: one sample a file, so nothing is rounded
-    let o = cli(&["run", a, "--root", r, "--gpus", "2", "--time-scale", "0", "--param", "files=100", "--param", "steps=4", "--param", "enumerate=false", "--subset"]);
+    let o = cli(&["run", a, "--root", r, "--gpus", "2", "--time-scale", "0", "--param", "files=100", "--param", "steps=4", "--param", "walk=false", "--subset"]);
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && e.contains("the abstract lists it"), "the refusal reads the abstract, not the parameters: {e}");
 

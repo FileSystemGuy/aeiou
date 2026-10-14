@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.5`, 2026-10-02 (~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.9`, 2026-10-13 (~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -99,7 +99,7 @@ distributions, or handles (this is how a distribution or a phase name is selecte
 
 **Handles:** `ref` (a binding); `file {dataset, id}` (a dataset file by id; an `array` dataset's single file is `id: 0`) or
 `file {of, chunk}` (the container file, or chunk object `k`, of a sample handle); `dir {dataset,
-id}`; `object {namespace, fields}`; `consume dataset` (next sample without replacement);
+id}`; `inventory dataset` (the dataset's inventory, contract 0.9); `object {namespace, fields}`; `consume dataset` (next sample without replacement);
 `pick {dataset, dist}` (a sample with replacement, uniform or by a distribution over ids);
 `unit {of, index}` (unit `index` of the file `of` holds or is; without `index`, the unit
 holding the sample `of`); `column {of, index}` (column chunk `index` of a unit). A sample
@@ -114,7 +114,7 @@ says `distref`, a `param` or a `cond` that evaluates to a distribution is also a
 
 **Datasets** (one shape since 0.8; `files {…}` and `regions {…}` before, `DESIGN_REVIEW.md`
 §3.72): `{pattern, layout, access, count, size, seed, samples_per_file, chunk, slot, format,
-protocol, doc}` (`protocol`: V17). The hierarchy: a dataset's units of storage are files or
+inventory, protocol, doc}` (`protocol`: V17). The hierarchy: a dataset's units of storage are files or
 objects (`protocol`); `layout` says how a unit holds the dataset's items: `whole` (one item),
 `chunked` (part of one: `chunk` bytes a unit, named by `{k}`), `compound` (several variably
 sized items: `samples_per_file` a file, framed by `format`), or `array` (`count` fixed-size
@@ -127,6 +127,14 @@ with `file` or `pick`, never consumed). The fields each layout takes are V20; ac
 seed, never from `--seed`. Patterns use `{field[:format]}` with fields `id` (and `k` for chunk
 objects) and the forms `{id:09}`, `{id div 1300:05}`, `{id mod 16}`, `{conv:016x}`; a
 dataset's directories are the distinct prefixes up to the last `/`, enumerated in id order.
+
+**Inventory** (contract 0.9, `DESIGN_REVIEW.md` §3.73): `inventory {name, entry}` on a consumed
+dataset is a file list of it, the file `name` directly in the dataset's root, `count × entry`
+bytes (`entry` an expression: bytes per item listed). `aeiou datagen` writes it as payload
+(its own key, so no id's bytes are its) once the corpus is written; the `inventory` handle
+names it, and a job reads it in place of a walk of a large corpus (§3.70 item 6). It is part of
+the resolved definition, so of the dataset id. Under `aeiou run --subset` its reads are issued
+no further than its size at the run's count (`runner/REFERENCE.md` §5, *Subset runs*). Rule V22.
 
 **Container framing** (`format {class, reader, version, framing}`, 0.2; `layout` until 0.8). Without a format class
 the framing is *packed*: a file is its samples back to back, `offset(s)` the prefix sum. A
@@ -284,6 +292,11 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   `map` or `stream` dataset; an `indexed` one is looked up by id (`file`, `pick`). A consumed
   dataset's directory part is `{id div D}` or has no `id` field, never `{id mod M}`, so a
   subset of it is whole directories (`DESIGN_REVIEW.md` §3.72).
+- **V22 inventory** (added 2026-10-13, contract 0.9). Only a `map` or `stream` dataset has an
+  `inventory`. Its `name` is a file name (no `/`, no field braces, not `.` or `..`), not
+  beginning with `.aeiou` (V13), and not a name the pattern can produce in the dataset's root
+  (each field read as the characters an integer formats to). The `inventory` handle names a
+  dataset that declares one, and V12 holds for it: it is read-only (`DESIGN_REVIEW.md` §3.73).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -477,3 +490,9 @@ the committed sets; the reasoning is `DESIGN_REVIEW.md` §3.27.
   `access` becomes `indexed`). Every committed AST was regenerated; every dataset id changed
   (`manifest_version` 3); no fingerprint and no byte of data changed. Reasoning in
   `DESIGN_REVIEW.md` §3.72.
+- **0.9** (2026-10-13): a dataset's optional `inventory {name, entry}`, the handle `inventory`,
+  and rule V22 (§2, §4). A 0.8 document is a 0.9 document with the version changed. Every
+  committed AST was regenerated (`file_per_sample` and `npy_per_sample` gained an inventory
+  read, off by default, and their `enumerate` became `walk`); no fingerprint changed. A corpus
+  of a dataset with an inventory has a new dataset id (the definition holds it); one without
+  keeps its id. Reasoning in `DESIGN_REVIEW.md` §3.73.

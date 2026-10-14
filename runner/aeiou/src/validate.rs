@@ -139,6 +139,38 @@ pub fn dataset_root(d: &Dataset) -> String {
     prefix.rsplit_once('/').map(|(a, _)| a).unwrap_or("").to_string()
 }
 
+/// The pattern's component directly below the dataset's root: the names it can put there.
+fn inventory_sibling(d: &Dataset) -> String {
+    let root = dataset_root(d);
+    let rest = if root.is_empty() { d.pattern.as_str() } else { d.pattern.get(root.len() + 1..).unwrap_or("") };
+    rest.split('/').next().unwrap_or("").to_string()
+}
+
+/// Whether `name` matches a pattern component, each `{field}` standing for one or more of the
+/// characters an integer field can format to (digits, hex digits, a sign, padding).
+fn glob_component(component: &str, name: &str) -> bool {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut rest = component;
+    while let Some(open) = rest.find('{') {
+        parts.push(&rest[..open]);
+        rest = match rest[open..].find('}') {
+            Some(close) => &rest[open + close + 1..],
+            None => "",
+        };
+    }
+    parts.push(rest);
+    fn m(parts: &[&str], s: &str) -> bool {
+        let (first, more) = (parts[0], &parts[1..]);
+        let Some(s) = s.strip_prefix(first) else { return false };
+        if more.is_empty() {
+            return s.is_empty();
+        }
+        let run = s.bytes().take_while(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c) || *c == b'-' || *c == b' ').count();
+        (1..=run).any(|i| m(more, &s[i..]))
+    }
+    m(&parts, name)
+}
+
 fn namespace_root(pattern: &str) -> String {
     let prefix = pattern.split('{').next().unwrap_or("");
     prefix.rsplit_once('/').map(|(a, _)| a).unwrap_or("").to_string()
@@ -188,6 +220,24 @@ impl<'a> Checker<'a> {
                     self.err(&p(path, &["pattern"]), "a consumed dataset's directories are `{id div D}` or none, never `mod`, so a subset of it is whole directories (V21)");
                 }
             }
+        }
+    }
+
+    /// V22 (contract 0.9, `DESIGN_REVIEW.md` §3.73): a dataset's inventory is a file directly
+    /// in its root, of a consumed dataset, named so the pattern cannot produce it.
+    fn inventory(&mut self, d: &Dataset, path: &P) {
+        let Some(inv) = &d.inventory else { return };
+        let ip = p(path, &["inventory"]);
+        if !d.access.consumed() {
+            self.err(&ip, "only a consumed dataset (`map` or `stream`) has an inventory: it stands in for the walk of a corpus the job draws from (V22)");
+        }
+        let n = inv.name.as_str();
+        if n.is_empty() || n == "." || n == ".." || n.contains('/') || n.contains('{') || n.contains('}') {
+            self.err(&p(&ip, &["name"]), format!("`{n}` is not a file name: the inventory lies directly in the dataset's root, its name a constant (V22)"));
+        } else if n.starts_with(RESERVED_PREFIX) {
+            self.err(&p(&ip, &["name"]), format!("`{n}` begins with `{RESERVED_PREFIX}`, reserved for the manifest (V13)"));
+        } else if glob_component(&inventory_sibling(d), n) {
+            self.err(&p(&ip, &["name"]), format!("`{n}` is a name the pattern `{}` can produce in the dataset's root (V22)", d.pattern));
         }
     }
 
@@ -245,6 +295,7 @@ impl<'a> Checker<'a> {
             let scope = Scope::new(HashSet::new());
             let mut st = ActorState::default();
             self.layout_fields(d, &path);
+            self.inventory(d, &path);
             let f = d;
             self.distref(&f.size, &p(&path, &["size"]), &scope, &mut st);
             self.expr(&f.count, &p(&path, &["count"]), &scope, &mut st, None);
@@ -256,6 +307,9 @@ impl<'a> Checker<'a> {
             }
             if let Some(e) = &f.slot {
                 self.expr(e, &p(&path, &["slot"]), &scope, &mut st, None);
+            }
+            if let Some(i) = &f.inventory {
+                self.expr(&i.entry, &p(&path, &["inventory", "entry"]), &scope, &mut st, None);
             }
             if let Some(fm) = &f.format {
                 if !is_ident(&fm.class) {
@@ -750,7 +804,7 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             Handle::Dir { dataset, .. } => Some(dataset.as_str()),
-            Handle::Consume(ds) => Some(ds.as_str()),
+            Handle::Consume(ds) | Handle::Inventory(ds) => Some(ds.as_str()),
             Handle::Pick(pk) => Some(pk.dataset.as_str()),
             Handle::Unit(u) => self.dataset_of(&u.of, scope),
             Handle::Column(c) => self.dataset_of(&c.of, scope),
@@ -1065,6 +1119,11 @@ impl<'a> Checker<'a> {
                         self.expr(e, &p(path, &["fields", f]), scope, st, None);
                     }
                 }
+            },
+            Handle::Inventory(ds) => match self.ast.datasets.get(ds) {
+                None => self.err(path, format!("unknown dataset `{ds}`")),
+                Some(d) if d.inventory.is_none() => self.err(path, format!("`inventory` of `{ds}`, which declares none (V22)")),
+                Some(_) => {}
             },
             Handle::Consume(ds) => {
                 match self.ast.datasets.get(ds) {

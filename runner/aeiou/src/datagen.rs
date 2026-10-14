@@ -388,11 +388,16 @@ fn is_einval(e: &std::io::Error) -> bool {
 /// Create (truncating) `full` for writing, with `O_DIRECT` unless this root has refused it;
 /// says whether this file's descriptor is direct.
 fn create(full: &Path, mode: &Mode) -> Result<(File, bool)> {
+    open_for_write(full, mode, true)
+}
+
+/// `create`, or with `truncate` false, open `full` keeping what it holds.
+fn open_for_write(full: &Path, mode: &Mode, truncate: bool) -> Result<(File, bool)> {
     if let Some(parent) = full.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     if mode.direct() {
-        match OpenOptions::new().write(true).create(true).truncate(true).custom_flags(libc::O_DIRECT).open(full) {
+        match OpenOptions::new().write(true).create(true).truncate(truncate).custom_flags(libc::O_DIRECT).open(full) {
             Ok(f) => return Ok((f, true)),
             Err(e) if is_einval(&e) => {
                 mode.direct.store(false, Ordering::Relaxed);
@@ -401,7 +406,35 @@ fn create(full: &Path, mode: &Mode) -> Result<(File, bool)> {
             Err(e) => return Err(e).with_context(|| format!("creating {}", full.display())),
         }
     }
-    Ok((OpenOptions::new().write(true).create(true).truncate(true).open(full).with_context(|| format!("creating {}", full.display()))?, false))
+    Ok((OpenOptions::new().write(true).create(true).truncate(truncate).open(full).with_context(|| format!("creating {}", full.display()))?, false))
+}
+
+/// Write dataset `p`'s inventory, if it has one, at the count `count` the corpus ends at
+/// (contract 0.9, `DESIGN_REVIEW.md` §3.73): rank 0, once every rank has reported, before the
+/// manifest says `complete`, so an inventory is of a written corpus. Its content is positional
+/// (`inventory_block_seed`), so a file's whole blocks are kept when it was written directly
+/// (a strict prefix, as every datagen file) and only the rest is written; a grow extends it,
+/// a shrink truncates it. An object is one upload, whole.
+fn write_inventory(p: &Plan<'_, '_>, count: i64, opts: &DatagenOpts, spec: &PayloadSpec, mode: &Mode) -> Result<()> {
+    let Some((path, size, _)) = p.meta.with_count(count).inventory() else { return Ok(()) };
+    let (size, seed, dedupe) = (size as u64, p.meta.dataset_seed(), spec.dedupe);
+    let seed_of = |blk: u64| payload::inventory_block_seed(seed, blk, dedupe);
+    let mut filler = Filler::new(spec.compress);
+    if let Some((store, rest)) = opts.endpoints.object(&path) {
+        store.put_parts(&rest, size, crate::object::DEFAULT_PART, &mut |at, b| filler.fill_range(&seed_of, at, b))
+            .with_context(|| format!("dataset `{}`: writing its inventory {}", p.name, store.show(&rest)))?;
+        return Ok(());
+    }
+    let full = opts.endpoints.path(&opts.root, &path);
+    let (f, direct) = open_for_write(&full, mode, false)?;
+    let had = f.metadata().with_context(|| format!("{}", full.display()))?.len();
+    let keep = if direct { had.min(size) / BLOCK * BLOCK } else { 0 };
+    f.set_len(keep).with_context(|| format!("truncating {}", full.display()))?;
+    let mut buf = Aligned::new();
+    write_range(&f, direct, mode, &seed_of, keep, keep, size - keep, &mut filler, &mut buf, &full)
+        .with_context(|| format!("dataset `{}`: writing its inventory", p.name))?;
+    f.sync_all().with_context(|| format!("flushing {}", full.display()))?;
+    Ok(())
 }
 
 /// Write `len` bytes of content at file offset `at`, the content being logical offset
@@ -1828,6 +1861,11 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             prov["bytes_written"] = json!(total_bytes);
         }
         if wrote_manifest {
+            let count = manifest.dataset["count"].as_i64().unwrap_or_else(|| p.meta.count());
+            if let Err(e) = write_inventory(p, count, opts, &spec, &mode) {
+                manifest_error = Some(format!("{e:#}"));
+                break;
+            }
             if let Err(e) = write_manifest(p, &manifest) {
                 manifest_error = Some(format!("{e:#}"));
                 break;

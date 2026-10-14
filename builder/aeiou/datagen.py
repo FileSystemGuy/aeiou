@@ -332,6 +332,9 @@ class Job:
         self.ast, self.name, self.values, self.at = ast, name, values, at
         self.resolved = resolved_dataset(ast, name, values)
         body = self.resolved
+        if "inventory" in body:
+            raise BuildError(f"dataset {name}: an inventory (contract 0.9) is written by the Rust `aeiou datagen` "
+                             f"alone; this writer is the byte reference of the container formats")
         self.fmt = body["format"]
         self.klass = FormatClass.from_spec(self.fmt)
         self.count = ev(body["count"])
