@@ -212,7 +212,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-13)
+## Status (2026-10-14)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -236,7 +236,7 @@ id order from one queue on rank 0, and Ctrl-C stopping every host with the manif
 `compound`, `array`), an `access` (`map`, `stream`, `indexed`), and `format.framing`
 (2026-10-13, `DESIGN_REVIEW.md` §3.72), and contract 0.9, a consumed dataset's `inventory`
 (the same day, §3.73), and contract 0.10, a pattern's divisor named by a parameter
-(`{id div files_per_directory}`) and the layout parameters' standard names (the same day, §3.75). The workload catalog
+(`{id div files_per_directory}`) and the layout parameters' standard names (the same day, §3.75), and the step barrier every step by default in the training workloads, its latency measured on up to 32 ranks (2026-10-14, §3.71 point 4). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape

@@ -103,15 +103,16 @@ impl Coordinator for Local {
         let t = Instant::now();
         let my_gen = self.arrive(scope)?;
         let mut bars = self.bars.lock().unwrap();
+        // Checked before waiting: the last arrival released the generation in `arrive` and
+        // has no one left to notify it (waiting first cost it the whole timeout every barrier).
         loop {
-            let (guard, _) = self.cv.wait_timeout(bars, Duration::from_millis(50)).unwrap();
-            bars = guard;
             if bars.get(scope).map_or(true, |b| b.generation != my_gen) {
                 return Ok(t.elapsed());
             }
             if aborted.load(Ordering::Relaxed) {
                 bail!("barrier `{scope}`: run aborted while waiting");
             }
+            bars = self.cv.wait_timeout(bars, Duration::from_millis(50)).unwrap().0;
         }
     }
 
@@ -227,10 +228,21 @@ enum Msg {
 }
 
 fn send(w: &Mutex<TcpStream>, m: &Msg) -> Result<()> {
-    let body = serde_json::to_vec(m)?;
-    let mut s = w.lock().unwrap();
-    s.write_all(&(body.len() as u32).to_be_bytes())?;
-    s.write_all(&body)?;
+    send_frame(w, &frame(m)?)
+}
+
+/// A message's frame, length and body in one buffer, so it goes out in one `write` (one
+/// segment under `TCP_NODELAY`) and a broadcast encodes it once.
+fn frame(m: &Msg) -> Result<Vec<u8>> {
+    let mut f = vec![0u8; 4];
+    serde_json::to_writer(&mut f, m)?;
+    let n = (f.len() - 4) as u32;
+    f[..4].copy_from_slice(&n.to_be_bytes());
+    Ok(f)
+}
+
+fn send_frame(w: &Mutex<TcpStream>, f: &[u8]) -> Result<()> {
+    w.lock().unwrap().write_all(f)?;
     Ok(())
 }
 
@@ -687,8 +699,9 @@ struct ServerState {
 
 impl ServerState {
     fn broadcast(&self, s: &SState, m: &Msg) {
+        let Ok(f) = frame(m) else { return };
         for w in s.conns.values() {
-            let _ = send(w, m);
+            let _ = send_frame(w, &f);
         }
     }
 

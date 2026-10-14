@@ -28,7 +28,7 @@ def shape(name, pattern, make_format, doc):
     w.param("cycle", 4, unit="count", doc="[config] interleave cycle_length: shards one GPU's pipeline streams concurrently")
     w.param("prefetch", 1, unit="count", doc="[config] shards finished ahead of the training loop, per cycle slot")
     w.param("steps", 500, unit="count")
-    w.param("sync_every", 500, unit="count", doc="1 for DDP; 500 keeps the brief's reference workload")
+    w.param("sync_every", 1, unit="count", doc="synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)")
     w.param("step_time", 105 * ms, unit="ns", doc="[measure] GPU step time on the target accelerator")
     w.param("decode", 0, unit="ns", doc="[measure] decode compute per shard in the input pipeline; 0 = I/O bound")
     w.param("xfer", 256 * KiB, unit="bytes", doc="[verify] the reader library's read buffer (TFRecord)")

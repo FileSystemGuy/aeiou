@@ -28,9 +28,9 @@
       "unit": "count"
     },
     "sync_every": {
-      "default": 500,
+      "default": 1,
       "unit": "count",
-      "doc": "1 for DDP; 500 keeps the brief's reference workload"
+      "doc": "synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)"
     },
     "step_time": {
       "default": 105000000,
@@ -262,12 +262,12 @@
   "provenance": {
     "generator": {
       "script": "tfrecord_stream.py",
-      "sha256": "1f343a1508947fe542d5eaa3bdf3f967ff9d10912ccd8428d6639251d8f4e9dc",
+      "sha256": "0fafa4b7ba4e67ba84a1f5ff489318db9841f7bb0f5335ddf2a10d843fa6b1e1",
       "builder_version": "0.1.0",
-      "git": "4e84ba6615ad-dirty"
+      "git": "31e0b4543f2f-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "a7bb936d2301a8c45d4545632813c3767ba63e421e913cbc53e19ed029fd44de"
+    "ast_sha256": "ad97f921d6a77c7a292c2ed18265eb9826e028acab7e53fc195737f0ddcb5348"
   }
 }

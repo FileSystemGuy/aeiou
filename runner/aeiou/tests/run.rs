@@ -113,7 +113,7 @@ fn small_files_training_round_trip() {
         assert_eq!(r.stats.ops, ops);
         assert_eq!(r.stats.bytes_read, bytes, "every read returned the computed count");
         assert_eq!(r.stats.takes, 24);
-        assert_eq!(r.stats.barriers, 2, "`every(sync_every)` fires at step 0 on each of the two instances");
+        assert_eq!(r.stats.barriers, 24, "`every(sync_every)` fires every step (`sync_every` 1) on each of the two instances");
         assert_eq!(r.stats.expected_errors, 2 * 12 * 4, "ENOTTY on every ioctl");
         assert_eq!(r.actors.len(), 2);
         assert!(r.actors.iter().all(|a| a.takes.len() == 12));
@@ -760,4 +760,31 @@ fn a_corpus_larger_than_the_free_space_is_refused_before_anything_is_written() {
     // the check is the lines datagen prints, and --ignore-space keeps the line
     let lines = aeiou::datagen::check_space(loaded, model, &opts, true).unwrap();
     assert!(lines.len() == 1 && lines[0].starts_with("space: IGNORED: dataset(s) `big`"), "{lines:?}");
+}
+
+/// The arrival that completes a generation releases it and returns at once: it used to wait
+/// the 50 ms poll first, with no one left to wake it, so every barrier of a single-host run
+/// cost 50 ms (2,000 barriers of 8 GPUs took 105 s; DESIGN_REVIEW §3.71 point 4).
+#[test]
+fn a_local_barrier_releases_without_waiting_out_its_poll() {
+    use aeiou::coord::{Coordinator, Local};
+    use std::sync::atomic::AtomicBool;
+    let aborted = AtomicBool::new(false);
+    let one = Local::new(&[("global".into(), 1)]);
+    let t = std::time::Instant::now();
+    for _ in 0..20 {
+        one.barrier("global", &aborted).unwrap();
+    }
+    assert!(t.elapsed() < std::time::Duration::from_millis(500), "20 barriers of one participant took {:?}", t.elapsed());
+    let four = std::sync::Arc::new(Local::new(&[("global".into(), 4)]));
+    let aborted = std::sync::Arc::new(aborted);
+    let t = std::time::Instant::now();
+    let hs: Vec<_> = (0..4)
+        .map(|_| {
+            let (c, a) = (four.clone(), aborted.clone());
+            std::thread::spawn(move || (0..100).for_each(|_| { c.barrier("global", &a).unwrap(); }))
+        })
+        .collect();
+    hs.into_iter().for_each(|h| h.join().unwrap());
+    assert!(t.elapsed() < std::time::Duration::from_secs(2), "100 barriers of four threads took {:?}", t.elapsed());
 }

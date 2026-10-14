@@ -5840,6 +5840,37 @@ with point 1's projection moved into `aeiou dry-run` and the host facts into the
    training, adding no time of its own; the coordinator's barrier latency is measured (2, 8,
    32 hosts) to confirm it is small against `step_time`, and if it is not, the fix is a
    cheaper release, not a rarer barrier.
+   *(Built 2026-10-14.)* The five training workloads (`file_per_sample`, `npy_per_sample`,
+   `hdf5_map`, `tfrecord_stream`, `parquet_stream`) default `sync_every` to 1; only their
+   AST hashes changed (a barrier is no op, so no fingerprint and no dataset id did). The
+   measurement, an abstract of 2,000 steps of `compute(0)` and `barrier global` with four GPUs
+   a rank, found a bug first: on one host 2,000 barriers of eight GPUs took 104.8 s, 52 ms
+   each. `Local::barrier` waited out its 50 ms poll before looking at the generation, and the
+   arrival that completes a generation releases it inside `arrive`, so that thread, with no
+   one left to notify it, slept 50 ms every barrier and every other GPU waited for it at the
+   next. (`Tcp::barrier` looks first; the event loops use `arrive` and `released` and never
+   had it.) Under the old default a run paid it once; at one barrier a step it would have
+   added 50 ms to every step, half of `file_per_sample`'s 105 ms `step_time`. Fixed (look,
+   then wait), with a test that fails at 1.07 s for what now takes 0.01 s. Then the latency,
+   every rank a process on one 20-core host over loopback, a barrier being `elapsed / 2,000`:
+
+   | ranks (GPUs) | `sync` | `io_uring` |
+   |---|---|---|
+   | 1 (8) | 0.18 ms | 0.17 ms |
+   | 2 (8) | 0.11 ms | 0.12 ms |
+   | 8 (32) | 0.25 ms | 0.31 ms |
+   | 32 (128) | 0.79 ms | 0.90 ms |
+
+   (`sync` after the cheaper release below; `io_uring` before it.) The 32-rank row runs 128
+   GPU threads, 32 reader threads, and the server's 32 on 20 cores, so it is mostly
+   scheduling; real hosts add a round trip to the server and back (tens of microseconds on
+   a data-centre network) and remove the oversubscription. Against `step_time` (105 ms for
+   `file_per_sample`, 323 ms for `npy_per_sample`) that is under 1% at 32 hosts. A cheaper
+   release, done on the way: a frame is encoded once into one buffer and written in one
+   `write` (it was two, so two segments under `TCP_NODELAY`, and a broadcast encoded the
+   message once per host), 300 → 250 µs at eight ranks and 866 → 785 µs at 32. Not done:
+   a release tree or binary frames, which nothing measured asks for yet. A workload whose
+   step is a few milliseconds would; measure it on real hosts first.
 5. *The capacity check.* `datagen` refuses when the expected bytes plus a margin exceed the
    free space `statvfs` reports for a directory root; an object root cannot be checked and
    is warned about.

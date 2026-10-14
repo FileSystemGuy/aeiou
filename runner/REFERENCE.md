@@ -253,7 +253,11 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   refused). An instance that finishes leaves its barriers; a generation completed by
   departures is released and reported as a warning, since it means the instances did not all
   hit the barrier the same number of times. Across hosts the barrier is two-level (§6),
-  behind the same `Coordinator` trait.
+  behind the same `Coordinator` trait. Its own cost is small against a step: measured
+  2026-10-14 with no I/O and no compute (2,000 barriers, four GPUs a rank, every rank on one
+  20-core host over loopback), about 0.1 ms a barrier on two ranks, 0.25 ms on eight, and
+  0.8 ms on 32, the same under `sync` and `io_uring`; a network adds its round trip
+  (`DESIGN_REVIEW.md` §3.71 point 4).
 - **`compute`** sleeps for `ns × --time-scale` and is recorded unscaled. `--time-scale 0`
   runs the I/O back to back.
 - **Buffers.** Each thread has a 4 KiB-aligned read ring and a write ring of `--buffer-mib`

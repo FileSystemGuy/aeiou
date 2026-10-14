@@ -524,8 +524,10 @@ Other levers for more client throughput per host:
   (500 × 0.3 s). The first ~30% of the run is in the "free memory" regime and the rest is in the
   reclaim regime, so **results depend on run length**. O_DIRECT (or DONTCACHE) removes this
   dependence. Otherwise, report only the steady state after memory is full.
-- `steps` and `sync_every` are separate parameters. With `steps = sync_every = 500`, there is one
-  barrier, at the end.
+- `steps` and `sync_every` are separate parameters. ~~With `steps = sync_every = 500`, there is one
+  barrier, at the end.~~ *(2026-10-14, `DESIGN_REVIEW.md` §3.71 point 4: `sync_every` is 1 by
+  default, a barrier every step, since synchronous data-parallel training cannot start a step
+  before every GPU has finished the last.)*
 - **`--dry-run` prints total ops and bytes per host and compares bytes to the host's DRAM**, so the
   regime the run will be in (free memory, reclaim, or both) is known before it starts.
 

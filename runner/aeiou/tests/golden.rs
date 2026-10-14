@@ -39,19 +39,20 @@ fn hashes_match_check_py() {
     // a dataset's `inventory`, DESIGN_REVIEW §3.73, with file_per_sample and npy_per_sample's `enumerate` renamed `walk`
     // and an `inventory` read added, off by default, every fingerprint unchanged; all again the same day for
     // contract 0.10, `div` by a parameter, DESIGN_REVIEW §3.75, with the standard names `samples`,
-    // `samples_per_file`, and `files_per_directory`, every fingerprint unchanged).
+    // `samples_per_file`, and `files_per_directory`, every fingerprint unchanged; the five training
+    // abstracts again 2026-10-14, `sync_every` 1 by default, DESIGN_REVIEW §3.71 point 4, no fingerprint).
     let want = [
         ("dcp_load", "219c0f16212c1278fe027b72c3b0748c887ee8bc3b66c0851eb3edd4c54b9f26"),
         ("dcp_save", "2462d2ce607cf9a6ff4cf435467fb75e6c73b0bc614f185a2448cd924093fccd"),
         ("lmcache_local_disk", "1ec099cf87d61d4726171f3f231ebb8962a7483f0afd15f4138fc25b75914bcd"),
         ("safetensors_load", "2b116662c63cac0392d5f8498f1e489ef381b2079262bf930f7409ec030a35c7"),
-        ("npy_per_sample", "d5627edefb81daba63626b18228cc79578627acea75057c70728024b36e9df0b"),   // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13)
-        ("file_per_sample", "a4d7729c86b751a18d5dd6d395e9dd63a0774a5af2c7f8cf6a0f0ee9c8ed7071"),   // 2026-10-02: `enumerate` on by default
+        ("npy_per_sample", "eb3ca27489867bd894b5ee6e428bef9570ccfbc51dd38b9657b4929facc447b4"),   // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13)
+        ("file_per_sample", "45fbae4fbc75d23ecd452aefc73b727822cdde558b48c5616757b7f25c673a4e"),   // 2026-10-02: `enumerate` on by default
         ("diskann_build", "a6503c207fd28f297cd209cc35be0bc41849cb78c0e1e1e1c5ccf5ee92ea03d0"),
         ("diskann_search", "b61e510d7622bac8963f5ea8f7892d1baf00b24003e3da87dad5f874a65e2629"),
-        ("tfrecord_stream", "a7bb936d2301a8c45d4545632813c3767ba63e421e913cbc53e19ed029fd44de"),
-        ("parquet_stream", "51edca67c8644b6f199472cd10f2c97fe4ca0355436efb38182a9fcf82c30e04"),
-        ("hdf5_map", "2c1558de12b207ff6663bbe3b1ab2506f3212dce552bea26d5884ae98b9a4723"),
+        ("tfrecord_stream", "ad97f921d6a77c7a292c2ed18265eb9826e028acab7e53fc195737f0ddcb5348"),
+        ("parquet_stream", "14d3e882d669f12fdce815d696eab304273016b2ec0bf795d5bd11aa02744fd3"),
+        ("hdf5_map", "85e216d7676401f872500970a3fbd50282cfd8970b2e43933e0acd8704f1864f"),
         ("faiss_ivf_ondisk", "2df0aa609dbd6b28e0a5112bc54de5cd54719c68e0fcd9b57574f7deff96824f"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
         ("lmcache_shared_fs", "aa2846afa5058390c20218ebd3d01d9b6b52b4e79c1457abdd00ee4b6c3e23c7"),

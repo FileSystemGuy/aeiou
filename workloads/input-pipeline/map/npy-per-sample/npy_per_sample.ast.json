@@ -20,8 +20,9 @@
       "unit": "count"
     },
     "sync_every": {
-      "default": 500,
-      "unit": "count"
+      "default": 1,
+      "unit": "count",
+      "doc": "synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)"
     },
     "step_time": {
       "default": 323000000,
@@ -738,12 +739,12 @@
   "provenance": {
     "generator": {
       "script": "npy_per_sample.py",
-      "sha256": "7c38748a5f6a228248f24e54fc3b09b4efcd2ac7c825f50913278a023e0f5613",
+      "sha256": "f414083ddc6f3330cfe11b1aa6d0d78b71eefb958fe0bb3682665c10dc461ff6",
       "builder_version": "0.1.0",
-      "git": "4e84ba6615ad-dirty"
+      "git": "31e0b4543f2f-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "d5627edefb81daba63626b18228cc79578627acea75057c70728024b36e9df0b"
+    "ast_sha256": "eb3ca27489867bd894b5ee6e428bef9570ccfbc51dd38b9657b4929facc447b4"
   }
 }

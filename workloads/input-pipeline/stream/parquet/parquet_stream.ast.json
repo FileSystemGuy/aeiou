@@ -28,9 +28,9 @@
       "unit": "count"
     },
     "sync_every": {
-      "default": 500,
+      "default": 1,
       "unit": "count",
-      "doc": "1 for DDP; 500 keeps the brief's reference workload"
+      "doc": "synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)"
     },
     "step_time": {
       "default": 105000000,
@@ -789,12 +789,12 @@
   "provenance": {
     "generator": {
       "script": "parquet_stream.py",
-      "sha256": "d79b8e6ad7a8e5e485013af06bea35839dd128a9c731597e6117cc21f855c35d",
+      "sha256": "fc741008fe138ebc56bb22b340782debec02fa833a51c50460580406cede6f69",
       "builder_version": "0.1.0",
-      "git": "4e84ba6615ad-dirty"
+      "git": "31e0b4543f2f-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "51edca67c8644b6f199472cd10f2c97fe4ca0355436efb38182a9fcf82c30e04"
+    "ast_sha256": "14d3e882d669f12fdce815d696eab304273016b2ec0bf795d5bd11aa02744fd3"
   }
 }

@@ -98,7 +98,7 @@ workload train_small_files {
   param workers    = 8
   param prefetch   = 2
   param steps      = 500
-  param sync_every = 500          # real DDP all-reduces every step (=1); see Cuts
+  param sync_every = 1            # DDP waits for every GPU each step (500 until 2026-10-14, DESIGN_REVIEW §3.71 point 4)
   param step_time  = 105ms        # [measure] GPU step time on the target accelerator
   param hdr_read   = 1MiB         # Python BufferedReader request = st_blksize (traced 2026-10-01)
   param enumerate  = false        # include the startup directory walk (§9.8)
@@ -149,7 +149,7 @@ workload train_small_files {
 | `step_time` | measured on the accelerator; a distribution if it varies |
 | `hdr_read` | `strace`: the length argument of the first `read` (1 MiB on the traced mount) |
 | size distribution | the corpus (fit from `find -printf %s` or the manifest of the reference dataset) |
-| `sync_every` | 1 for DDP; 500 keeps the brief's reference workload |
+| `sync_every` | 1: synchronous data parallel (DDP, FSDP) waits for the slowest GPU every step; ~~500 keeps the brief's reference workload~~ (2026-10-14, `DESIGN_REVIEW.md` §3.71 point 4) |
 
 **Cuts (stated fidelity losses).**
 - Worker→main IPC through `/dev/shm` (the collated batch tensor is a shared-memory file) is
@@ -251,7 +251,7 @@ the archive that are not `x`'s data.
 
 ```
 workload train_large_samples {
-  param batch = 7, workers = 4, prefetch = 2, steps = 500, sync_every = 500
+  param batch = 7, workers = 4, prefetch = 2, steps = 500, sync_every = 1
   param step_time = 323ms                 # [measure]
   param hdr_read  = 1MiB                  # st_blksize (traced)
   param xfer      = 1MiB                  # buffer fill under the member read: st_blksize (traced)
@@ -1649,7 +1649,7 @@ confirm the builder covers what the paper form uses.
 from aeiou import Workload, lognormal, KiB, MiB, ms
 
 w = Workload("train_small_files")
-P = w.params(batch=32, workers=8, prefetch=2, steps=500, sync_every=500,
+P = w.params(batch=32, workers=8, prefetch=2, steps=500, sync_every=1,
              step_time=105 * ms, hdr_read=1 * MiB, enumerate=False)
 train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg",
                   count=50_000_000, size=lognormal(median=110 * KiB, sigma=0.45),
