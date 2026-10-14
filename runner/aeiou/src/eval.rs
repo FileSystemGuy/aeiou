@@ -591,9 +591,10 @@ impl<'a> DsMeta<'a> {
     pub fn with_count(&self, count: i64) -> DsMeta<'a> {
         let mut m = self.clone();
         match &mut m {
-            DsMeta::Files { count: c, pattern, dirs, ndirs, .. } => {
+            DsMeta::Files { count: c, spf, pattern, dirs, ndirs, .. } => {
                 *c = count;
-                (*dirs, *ndirs) = Model::dir_scheme(pattern, count);
+                let files = (count + *spf - 1) / *spf;
+                (*dirs, *ndirs) = Model::dir_scheme(pattern, files);
             }
             DsMeta::Array { count: c, .. } => *c = count,
         }
@@ -997,7 +998,10 @@ impl<'a> Model<'a> {
     }
 
     /// The pattern's directory scheme and count, from the `id` fields of its directory part.
-    pub fn dir_scheme(pattern: &Pattern, count: i64) -> (DirScheme, i64) {
+    /// `files` is the file count, not the sample count: the pattern's `id` is a file's (a shard's
+    /// under `compound`), so a compound dataset of 10 files of 1,024 samples under `{id div 10}`
+    /// is one directory, not 1,024 (`DESIGN_REVIEW.md` §3.76, fixed 2026-10-14).
+    pub fn dir_scheme(pattern: &Pattern, files: i64) -> (DirScheme, i64) {
         if pattern.dir_segments == 0 {
             return (DirScheme::NoDir, 0);
         }
@@ -1005,9 +1009,9 @@ impl<'a> Model<'a> {
         match ids.as_slice() {
             [] => (DirScheme::Constant, 1),
             [f] => match f.op {
-                None => (DirScheme::Plain, count),
-                Some((crate::pattern::FieldOp::Div, n)) => (DirScheme::Div(n), (count + n - 1) / n),
-                Some((crate::pattern::FieldOp::Mod, n)) => (DirScheme::Mod(n), count.min(n)),
+                None => (DirScheme::Plain, files),
+                Some((crate::pattern::FieldOp::Div, n)) => (DirScheme::Div(n), (files + n - 1) / n),
+                Some((crate::pattern::FieldOp::Mod, n)) => (DirScheme::Mod(n), files.min(n)),
             },
             _ => (DirScheme::Unsupported, 0),
         }
@@ -1130,7 +1134,7 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                         }
                     }
                 };
-                let (dirs, ndirs) = Model::dir_scheme(&pattern, count);
+                let (dirs, ndirs) = Model::dir_scheme(&pattern, (count + spf - 1) / spf);
                 let inventory = match &f.inventory {
                     Some(i) => {
                         let entry = vm.eval_int(&i.entry).with_context(|| format!("dataset `{name}`: inventory entry"))?;

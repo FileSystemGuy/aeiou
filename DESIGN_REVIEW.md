@@ -6312,13 +6312,16 @@ left the design open.
 - *`aeiou-catalog describe AST`* prints the same for any abstract, at its defaults or a
   parameter file, its shape measured at seeds 1, 2, and 3 (`--no-shapes` for none).
 
-**Found on the way, not changed.** A `compound` dataset whose pattern has a directory part gets
-its directory count from the sample count, not the file count: `Model::dir_scheme(pattern,
-count)` at model build, where `{id}` is a file id. `tfrecord_stream` with
-`train/{id div 10:03}/shard-{id:05}.tfrecord` and 10,240 samples projects 10 files in 1,024
-directories. No committed abstract has a compound dataset with directories, so nothing measured
-is affected; the describer, without a projection, counts directories from files. Reported to the
-user 2026-10-14.
+**Found on the way, ~~not changed~~ fixed the same day in a commit of its own (the user's
+choice).** A `compound` dataset whose pattern has a directory part got its directory count from
+the sample count, not the file count: `Model::dir_scheme(pattern, count)` at model build and in
+`DsMeta::with_count`, where `{id}` is a file id. `tfrecord_stream` with
+`train/{id div 10:03}/shard-{id:05}.tfrecord` and 10,240 samples projected 10 files in 1,024
+directories, and a walk over `dirs` would have listed 1,023 that do not exist. `dir_scheme` now
+takes the file count, `ceil(count / samples_per_file)`; `tests/golden.rs`
+`a_compound_datasets_directories_are_counted_from_its_files` fails without it. No committed
+abstract has a compound dataset with directories, so no fingerprint, dataset id, or shape
+changed; the describer, without a projection, counts directories from files as well.
 
 ## 4. Plan changes
 

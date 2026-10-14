@@ -568,6 +568,36 @@ fn a_divisor_parameter_binds_the_names_the_directories_and_the_dataset_id() {
     assert!(e.contains("`div files_per_directory` is 0: it needs a positive divisor"), "{e}");
 }
 
+/// A compound dataset's directories are counted from its files, not its samples: the pattern's
+/// `id` is a shard's (DESIGN_REVIEW §3.76, found 2026-10-14). 10,240 samples of 1,024 a shard are
+/// 10 shards, one directory of `{id div 10}`; it was 1,024 directories, the sample count over 10.
+#[test]
+fn a_compound_datasets_directories_are_counted_from_its_files() {
+    let text = r#"{
+      "ast": "0.10", "name": "shards_in_dirs",
+      "params": {"samples": {"default": 10240}},
+      "datasets": {"s": {"layout": "compound", "access": "stream", "pattern": "s/{id div 10:03}/shard-{id:05}", "count": {"param": "samples"},
+                         "samples_per_file": 1024, "size": {"const": 4096}, "seed": 7}},
+      "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "d", "to": {"dirs": "s"}, "body": [
+        {"let": {"name": "h", "value": {"dir": {"dataset": "s", "id": {"index": "d"}}}}},
+        {"stat": {"file": {"ref": "h"}}}]}}]}}
+    }"#;
+    let loaded = aeiou::load_str(text).unwrap();
+    for (samples, dirs) in [("10240", 1), ("10241", 2), ("1024", 1), ("102400", 10)] {
+        let cfg = config(1, 0, &[("samples", samples)]);
+        let params = Params::new(&loaded.ast, &cfg).unwrap();
+        let model = build_model(&loaded.ast, &cfg, &params).unwrap();
+        let meta = &model.datasets[model.dataset("s").unwrap()];
+        let ndirs = |m: &aeiou::eval::DsMeta| match m {
+            aeiou::eval::DsMeta::Files { ndirs, .. } => *ndirs,
+            _ => unreachable!(),
+        };
+        assert_eq!(ndirs(meta), dirs, "{samples} samples");
+        assert_eq!(aeiou::project::project(meta, 1).unwrap().directories, dirs);
+        assert_eq!(ndirs(&meta.with_count(20480)), 2, "a grown corpus counts its files too: 20 shards");
+    }
+}
+
 const INVENTORY: &str = r#"{
   "ast": "0.10", "name": "inventory_test",
   "params": {"files": {"default": 100000}},
