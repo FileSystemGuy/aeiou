@@ -6,7 +6,7 @@ missing, passes while testing nothing (DESIGN_REVIEW.md §3.75: `test_coord.py` 
 every job, and two bugs went unseen). A job names what it built, comma-separated, and a skip
 whose reason names one of them is reported as a failure, naming the capability:
 
-    AEIOU_REQUIRE=runner,formats,strace,header pytest ...
+    AEIOU_REQUIRE=runner,formats,strace,header,py-formats pytest ...
 """
 from __future__ import annotations
 
@@ -22,6 +22,9 @@ CAPABILITIES = {
     "strace": ("working strace",),
     "header": ("aeiou-header",),
     "minio": ("TEST_MINIO_BIN",),
+    # the builder's extras (pyproject.toml), as `pytest.importorskip` says a module is missing
+    "py-formats": tuple(f"could not import '{m}'" for m in ("pyarrow", "h5py", "numpy", "crc32c", "xxhash")),
+    "py-s3": ("could not import 'obstore'",),
 }
 
 

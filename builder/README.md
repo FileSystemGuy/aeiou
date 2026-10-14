@@ -114,7 +114,8 @@ REFERENCE.md     the reference: writing an abstract (§1), the discipline (§2),
 
 Tests that drive the runner use `../runner/target/release/aeiou` (or `$AEIOU_RUNNER`) and
 skip when it is not built; rebuild it after runner changes. `AEIOU_REQUIRE` names, comma-separated,
-what a job provides (`runner`, `formats`, `object`, `strace`, `header`, `minio`), and a test skipped
+what a job provides (`runner`, `formats`, `object`, `strace`, `header`, `minio`, and the extras `py-formats`,
+`py-s3`), and a test skipped
 for lacking one of them fails (`tests/conftest.py`); CI sets it, so a test that needs what a job
 built cannot be skipped there unseen, and every skip in the suite must name one
 (`tests/test_require.py`).

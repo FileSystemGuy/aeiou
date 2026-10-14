@@ -24,7 +24,7 @@ jobs:
         run: builder/.venv/bin/python schema/check.py
       - name: Builder tests
         working-directory: builder
-        run: .venv/bin/pytest -q -n 4
+        run: AEIOU_REQUIRE=py-formats .venv/bin/pytest -q -n 4
       - name: Hermetic build-twice of every abstract, compared with the committed ASTs
         working-directory: builder
         run: .venv/bin/aeiou-build --hermetic --twice --check $(find ../workloads -name '*.py' -not -path '*/kit/*' | LC_ALL=C sort)
@@ -79,7 +79,7 @@ jobs:
         run: |
           cargo build --release --features object,formats --bin aeiou --manifest-path ../runner/Cargo.toml
           ln -sf ../../../builder/.venv/bin/aeiou-header ../runner/target/release/aeiou-header
-          AEIOU_REQUIRE=runner,object,formats,header,minio TEST_MINIO_BIN=/tmp/minio AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_object.py
+          AEIOU_REQUIRE=runner,object,formats,header,minio,py-formats,py-s3 TEST_MINIO_BIN=/tmp/minio AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_object.py
 
   runner-integration:
     runs-on: ubuntu-latest
@@ -112,7 +112,7 @@ jobs:
         working-directory: builder
         run: |
           command -v strace || sudo apt-get install -y strace
-          AEIOU_REQUIRE=runner,formats,strace,header AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs
+          AEIOU_REQUIRE=runner,formats,strace,header,py-formats AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs
       - name: The workload catalog, every shape re-measured at its check length
         working-directory: builder
         run: .venv/bin/aeiou-catalog check --workloads ../workloads --runner ../runner/target/release/aeiou

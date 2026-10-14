@@ -6202,7 +6202,8 @@ files, which §3.74's space check refuses on rank 0 before the identities are co
 writes 100. Neither showed in CI, whose Python job builds no runner, so the test was skipped.
 (iii) So CI fails what it skips (asked by the user the same day): `AEIOU_REQUIRE` in
 `builder/tests/conftest.py` names the capabilities a job built (`runner`, `formats`, `object`,
-`strace`, `header`, `minio`), and a test skipped for lacking one of them fails, naming it. The
+`strace`, `header`, `minio`, and the Python extras `py-formats` and `py-s3`, which
+`pytest.importorskip` skips for), and a test skipped for lacking one of them fails, naming it. The
 integration job now runs the whole Python suite against its binary with
 `runner,formats,strace,header` (`test_coord.py`, `test_payload.py`, and `test_usage.py` had run
 in no job), the object job `test_object.py` with `object` and `minio` added; the `abstracts` job
