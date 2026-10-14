@@ -86,7 +86,8 @@ fn io_uring_knobs_keep_the_fingerprint() {
     // count, and bytes equal the dry run's. The io-wq cap is per loop's io-wq (one io-wq for
     // all loops under a shared SQPOLL thread), the kernel's own caps come back in the
     // report, and the counters see the SQPOLL threads. A kernel that refuses a setup flag
-    // (SQPOLL needs 5.13 unprivileged, DEFER_TASKRUN 6.1) skips that row.
+    // (SQPOLL needs 5.13 unprivileged, DEFER_TASKRUN 6.1) fails that row, naming it: a row
+    // skipped would pass with that knob untested, its message hidden.
     let root = tmpdir("uring-knobs");
     let params = [("samples", "300"), ("batch", "4"), ("workers", "3"), ("prefetch", "2"), ("steps", "10"), ("walk", "true")];
     let (loaded, cfg, model) = leaked_model("file_per_sample", config(3, 11, &params));
@@ -116,8 +117,7 @@ fn io_uring_knobs_keep_the_fingerprint() {
         let r = match run::run(model, o, std::collections::HashMap::new()) {
             Ok(r) => r,
             Err(e) if format!("{e:#}").contains("io_uring_setup") => {
-                eprintln!("skipping `{name}`: {e:#}");
-                continue;
+                panic!("`{name}`: this kernel refused the ring's setup flags (SQPOLL needs Linux 5.13 unprivileged, DEFER_TASKRUN 6.1): {e:#}")
             }
             Err(e) => panic!("`{name}`: {e:#}"),
         };

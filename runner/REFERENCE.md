@@ -1975,8 +1975,8 @@ read back to the dry run's fingerprint under `sync`, `posix-aio`, `mmap`, `io_ur
 `libaio`; the listing walk and directory `stat`s of `file_per_sample` over four prefixes of
 1,300 objects, with its header reads past every object's end, under `sync` and `io_uring`;
 and the refusals, which need no server. The tests that need one start MinIO from the binary `TEST_MINIO_BIN` names, on a free port with a
-directory of their own, and create the bucket with `curl --aws-sigv4`; they are skipped,
-saying so, when it is unset. CI's `runner-object` job downloads the last MinIO release that
+directory of their own, and create the bucket with `curl --aws-sigv4`; they fail, naming
+it, when it is unset (a Rust test has no skipped state; `DESIGN_REVIEW.md` §3.75 item iv). CI's `runner-object` job downloads the last MinIO release that
 has binaries (`RELEASE.2025-09-07T16-13-09Z`; the project stopped publishing them and archived
 its repository) and checks its SHA-256 before running them. Since the writes: the shared KV
 store (`lmcache_shared_fs`) written into a bucket with 6 MiB chunks in 5 MiB parts (every chunk

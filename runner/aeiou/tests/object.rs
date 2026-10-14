@@ -8,8 +8,9 @@
 //! refusals need no server.
 //!
 //! The tests that need a server start their own MinIO from the binary `TEST_MINIO_BIN` names
-//! (CI downloads the pinned release; `runner/REFERENCE.md` §16), and are skipped, saying so,
-//! when it is unset.
+//! (CI downloads the pinned release; `runner/REFERENCE.md` §16), and fail, naming it, when it
+//! is unset: a Rust test has no skipped state, and one that returned early would pass with
+//! nothing tested (its message hidden, as a passing test's output is).
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -67,10 +68,9 @@ impl Drop for Minio {
     }
 }
 
-fn minio(test: &str) -> Option<Minio> {
+fn minio(test: &str) -> Minio {
     let Some(bin) = std::env::var_os("TEST_MINIO_BIN") else {
-        eprintln!("{test}: skipped, TEST_MINIO_BIN is not set (a MinIO server binary)");
-        return None;
+        panic!("{test}: TEST_MINIO_BIN is not set: it names a MinIO server binary, the pinned release .github/workflows/ci.yml downloads (runner/REFERENCE.md §16)");
     };
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let dir = tmpdir("minio");
@@ -84,16 +84,16 @@ fn minio(test: &str) -> Option<Minio> {
         .expect("starting MinIO");
     let m = Minio { child, url: format!("http://127.0.0.1:{port}"), _dir: dir };
     let t0 = Instant::now();
-    while !curl(&m, &["-X", "PUT", &format!("{}/bench", m.url)]).status.success() {
+    while !curl(&m, "/bench", &["-X", "PUT"]).status.success() {
         assert!(t0.elapsed() < Duration::from_secs(30), "MinIO did not come up at {}", m.url);
         std::thread::sleep(Duration::from_millis(200));
     }
-    Some(m)
+    m
 }
 
-/// A request to the server signed with the test's credentials; fails on an HTTP error.
-fn curl(m: &Minio, args: &[&str]) -> Output {
-    Command::new("curl").args(["-sf", "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", &format!("{USER}:{SECRET}")]).args(args).env_remove("http_proxy").output().unwrap()
+/// A request for `path` on the server, signed with the test's credentials; fails on an HTTP error.
+fn curl(m: &Minio, path: &str, args: &[&str]) -> Output {
+    Command::new("curl").args(["-sf", "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", &format!("{USER}:{SECRET}")]).args(args).arg(format!("{}{path}", m.url)).env_remove("http_proxy").output().unwrap()
 }
 
 /// `aeiou` with the store of `m` in its environment (none when `m` is `None`).
@@ -127,7 +127,7 @@ fn fingerprint(out: &str) -> String {
 
 #[test]
 fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint() {
-    let Some(m) = minio("an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint") else { return };
+    let m = minio("an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint");
     let dir = tmpdir("large");
     let ast = object_variant("npy_per_sample", &["train"], &dir);
     let ast = ast.to_str().unwrap();
@@ -154,13 +154,13 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
     for id in [0, 5, 11] {
         let rel = format!("{:05}/sample_{id:09}.npz", 0);
         let file = std::fs::read(posix.join("train").join(&rel)).unwrap();
-        let obj = curl(&m, &[&format!("{}/bench/large/{rel}", m.url)]);
+        let obj = curl(&m, &format!("/bench/large/{rel}"), &[]);
         assert!(obj.status.success(), "GET {rel}: {}", String::from_utf8_lossy(&obj.stderr));
         assert_eq!(obj.stdout.len(), 20 << 20, "{rel}");
         assert!(obj.stdout == file, "{rel}: the object's bytes differ from the POSIX writer's");
     }
     // the manifest is an object at the prefix's root
-    assert!(curl(&m, &[&format!("{}/bench/large/.aeiou-dataset.json", m.url)]).status.success());
+    assert!(curl(&m, "/bench/large/.aeiou-dataset.json", &[]).status.success());
 
     let mut a = vec!["dry-run", ast, "--gpus", "1"];
     a.extend(params);
@@ -182,7 +182,7 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
 
 #[test]
 fn listings_and_stats_of_prefixes_read_like_directories() {
-    let Some(m) = minio("listings_and_stats_of_prefixes_read_like_directories") else { return };
+    let m = minio("listings_and_stats_of_prefixes_read_like_directories");
     let dir = tmpdir("small");
     let ast = object_variant("file_per_sample", &["train"], &dir);
     let ast = ast.to_str().unwrap();
@@ -216,7 +216,7 @@ fn listings_and_stats_of_prefixes_read_like_directories() {
 
 #[test]
 fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
-    let Some(m) = minio("a_namespace_is_written_as_objects_and_read_back_by_another_run") else { return };
+    let m = minio("a_namespace_is_written_as_objects_and_read_back_by_another_run");
     let dir = tmpdir("kv");
     // the shared KV store: every chunk file a header and a 6 MiB chunk written under a temporary
     // name and renamed, so with 5 MiB parts each is a multipart upload of two parts and a copy;
@@ -271,7 +271,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(posix.join("kv/.aeiou-namespace.json")).unwrap()).unwrap();
     let names: Vec<&str> = manifest["objects"].as_array().unwrap().iter().map(|o| o[0].as_str().unwrap()).collect();
     assert!(!names.is_empty() && names.iter().all(|n| n.ends_with(".data")), "{names:?}");
-    let listed = String::from_utf8_lossy(&curl(&m, &[&format!("{}/bench?list-type=2&prefix=kvs/", m.url)]).stdout).to_string();
+    let listed = String::from_utf8_lossy(&curl(&m, "/bench?list-type=2&prefix=kvs/", &[]).stdout).to_string();
     for n in &names {
         let rest = n.strip_prefix("kv/").unwrap();
         assert!(listed.contains(&format!("<Key>kvs/{rest}</Key>")), "{rest} not in the bucket");
@@ -279,7 +279,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     assert_eq!(listed.matches(".data</Key>").count(), names.len(), "only the renamed chunks remain: {listed}");
     for n in names.iter().take(3) {
         let rest = n.strip_prefix("kv/").unwrap();
-        let obj = curl(&m, &[&format!("{}/bench/kvs/{rest}", m.url)]);
+        let obj = curl(&m, &format!("/bench/kvs/{rest}"), &[]);
         assert!(obj.stdout == std::fs::read(posix.join(n)).unwrap(), "{n}: the object's bytes differ from the POSIX run's file");
     }
 

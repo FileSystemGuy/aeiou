@@ -6241,6 +6241,18 @@ in no job), the object job `test_object.py` with `object` and `minio` added; the
 keeps its runner-less run, where those skips are right. `test_require.py` holds the hook to that
 and requires every skip in the suite to name a capability, so a new one cannot escape it.
 
+(iv) The Rust tests fail what they lack (asked by the user 2026-10-14). A Rust test has no
+skipped state: the three MinIO tests in `tests/object.rs` returned early when `TEST_MINIO_BIN`
+was unset, and `tests/uring_knobs.rs` passed over a row whose ring setup the kernel refused
+(SQPOLL, DEFER_TASKRUN), each printing a message that cargo and nextest hide for a passing
+test, so the test passed with nothing tested. Both now panic, naming what is missing. A build
+with the cargo feature `object` therefore needs `TEST_MINIO_BIN` for its tests, as CI's
+`runner-object` job has it. Checked the same day: every one of the 123 Rust tests a local
+build with `object,formats` lists passed in some CI job of run 52d050b (119 under `formats`,
+8 object and endpoint tests under `object`), and the Python suite's 263 ran between the
+integration job (248, and `test_object.py` skipped for `obstore`, which that job does not
+install) and the object job (15); every early exit in the Python tests is a `pytest.skip`.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint
