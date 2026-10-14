@@ -286,6 +286,9 @@ Not built, in rough order of interest:
 - Fidelity for small datasets (item 28: per-node miss-ratio curves, cold-start time, a
   validation run on one realistic node), the harness's topology in the report (item 29),
   and concurrent mixes of cases (item 30, critical but not yet; `DESIGN_REVIEW.md` §3.67).
+- Retiring `aeiou-datagen`, the Python writer, now that `aeiou datagen` writes every format
+  class (item 32, decided 2026-10-14): deprecated meanwhile, no new features, the byte
+  reference in tests until then.
 
 ## License
 

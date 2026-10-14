@@ -680,6 +680,18 @@ numbers; the order is this note's.
     abstracts comply. The fix is a choice: the builder refuses those sizes at build time, or
     the layout gives a short last group its own header size (the runner's offset formula
     changes, and so does every Parquet dataset id).
+32. **Retire `aeiou-datagen` (backlog, decided by the user 2026-10-14, low on the list).** `aeiou
+    datagen` writes every format class (TFRecord, tar, HDF5, Parquet behind the cargo
+    feature `formats`, 2026-10-12), to directories and object stores, faster, and alone has
+    `--resume`, `--grow`, `--shrink`, and `--settle`; the Python writer is deprecated and
+    gets no new features (its free-space check, the twin of `DESIGN_REVIEW.md` §3.71
+    point 5, was dropped from the list for that reason). It stays the byte and behaviour reference in tests until it is
+    retired (`DESIGN_REVIEW.md` §3.70 item 5). Retiring it: whatever the tests compare
+    against it compared against committed bytes or hashes instead; its man page, CLI entry
+    point, and CI steps removed; the refusal of a container dataset by a build without
+    `formats` (`runner/aeiou/src/datagen.rs`), which today points at it, pointing at the
+    feature alone; the docs that name it (README, builder REFERENCE §6, the workloads'
+    READMEs, QUICKSTART). `aeiou.formats` stays: the format classes are the builder's.
 
 ## 7. Environment
 
