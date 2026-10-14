@@ -1,5 +1,5 @@
 {
-  "shape_version": 1,
+  "shape_version": 2,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -18,6 +18,25 @@
       "stable": true,
       "moving": [],
       "ops": 192000,
+      "counts": {
+        "close": 16000,
+        "fstat": 16000,
+        "open": 16000,
+        "read": 144000
+      },
+      "bytes_read": 3185920000,
+      "bytes_written": 0,
+      "datasets": [
+        {
+          "bytes": 196612001792,
+          "directories": 1,
+          "files": 1954,
+          "inventory_bytes": 0,
+          "mean_file": 100620267,
+          "name": "train",
+          "samples": 1000000
+        }
+      ],
       "attributes": {
         "run_length_read": {
           "value": 196608,

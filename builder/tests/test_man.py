@@ -23,7 +23,7 @@ TOOLS = {
     "aeiou-params": ("params", ["defaults", "check", "safetensors", "npz"]),
     "aeiou-datagen": ("datagen", []),
     "aeiou-trace": ("trace", ["metrics", "export", "compare"]),
-    "aeiou-catalog": ("catalog", ["check", "write"]),
+    "aeiou-catalog": ("catalog", ["check", "write", "describe"]),
     "aeiou-header": ("header", []),
 }
 PAGES = ["aeiou.1.md", "aeiou-build.1.md", "aeiou-params.1.md", "aeiou-datagen.1.md", "aeiou-trace.1.md",

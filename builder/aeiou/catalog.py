@@ -8,6 +8,7 @@ in, and their consistency with the abstracts they describe.
 
     aeiou-catalog check [--workloads DIR] [--runner PATH] [--no-shapes]   validate, re-derive, exit 1 on drift
     aeiou-catalog write [--workloads DIR] [--runner PATH] [--no-shapes]   re-derive and write
+    aeiou-catalog describe [--params-file FILE] [--gpus N] [--runner PATH] [--no-shapes] AST   print its description
 
 The records, each a TOML file:
 
@@ -53,9 +54,10 @@ import tempfile
 import tomllib
 
 from . import __version__, usage
+from .describe import Describer
 from .nodes import BuildError
 
-SHAPE_VERSION = 1
+SHAPE_VERSION = 2               # 2 (2026-10-14): the op counts, bytes, and each dataset's projection, which the description quotes
 SEEDS = (1, 2, 3)
 START = 64                      # the shortest check length tried is the case's over this
 BLOCK = 4096                    # the dry run's own default unit of the locality metrics
@@ -472,7 +474,7 @@ def _dry_run(runner: str, run: dict, gpus: int, block: int, seed: int, length: t
     p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     if p.returncode:
         raise BuildError(f"{' '.join(cmd)}: exit {p.returncode}\n{p.stderr.strip()}")
-    return json.loads(out.read_text())["total"]
+    return json.loads(out.read_text())
 
 
 def _median(xs: list):
@@ -483,11 +485,11 @@ def _median(xs: list):
     return xs[len(xs) // 2]
 
 
-def _at(runner: str, run: dict, gpus: int, block: int, length: tuple | None, pool, tmp) -> tuple[dict, list[dict], int]:
-    """The median of each measure over the seeds, each seed's numbers, and the ops of one seed's run."""
-    totals = list(pool.map(lambda seed: _dry_run(runner, run, gpus, block, seed, length, tmp), SEEDS))
-    values = [measure(t) for t in totals]
-    return {n: _median([v[n] for v in values]) for n in MEASURES}, values, totals[0]["ops"]
+def _at(runner: str, run: dict, gpus: int, block: int, length: tuple | None, pool, tmp) -> tuple[dict, list[dict], dict]:
+    """The median of each measure over the seeds, each seed's numbers, and the first seed's dry run."""
+    docs = list(pool.map(lambda seed: _dry_run(runner, run, gpus, block, seed, length, tmp), SEEDS))
+    values = [measure(d["total"]) for d in docs]
+    return {n: _median([v[n] for v in values]) for n in MEASURES}, values, docs[0]
 
 
 def _agrees(attrs: dict, a: dict, b: dict) -> list[str]:
@@ -505,7 +507,7 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
     full = pset.get(length_param, _params_of(run["abstract"]["doc"])[length_param]["default"]) if length_param else None
     with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
         tmp = pathlib.Path(tmp)
-        med, seeds, ops = _at(runner, run, gpus, block, (length_param, full) if full else None, pool, tmp)
+        med, seeds, first = _at(runner, run, gpus, block, (length_param, full) if full else None, pool, tmp)
         check = full
         if full:
             n = full // 2
@@ -520,7 +522,9 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
            "params": run["params"].name if run["params"] else None, "params_sha256": _sha256(run["params"]) if run["params"] else None,
            "gpus": gpus, "block": block, "seeds": list(SEEDS),
            "length": None if full is None else {"param": length_param, "case": full, "check": check},
-           "stable": not moving, "moving": moving, "ops": ops, "attributes": {}}
+           "stable": not moving, "moving": moving, "ops": first["total"]["ops"],
+           "counts": dict(sorted(first["total"]["counts"].items())), "bytes_read": first["total"]["bytes_read"],
+           "bytes_written": first["total"]["bytes_written"], "datasets": first.get("datasets", []), "attributes": {}}
     for name in MEASURES:
         out["attributes"][name] = {"value": _round(med[name]), "spread": _round(spread[name]), "class": classify(attrs[name], med[name])}
     return out
@@ -577,7 +581,11 @@ def stale_shapes(mechanisms: list[dict], root: pathlib.Path, attrs: dict, runner
             if not path.exists():
                 problems.append(f"{_rel(path, root)}: missing (aeiou-catalog write)")
                 continue
-            have = {s["ast"]: s for s in json.loads(path.read_text())["runs"]}
+            doc = json.loads(path.read_text())
+            if doc.get("shape_version") != SHAPE_VERSION:
+                problems.append(f"{_rel(path, root)}: shape_version {doc.get('shape_version')}, this aeiou-catalog writes {SHAPE_VERSION} (aeiou-catalog write)")
+                continue
+            have = {s["ast"]: s for s in doc["runs"]}
             if set(have) != {run["ast"] for run, *_ in runs}:
                 problems.append(f"{_rel(path, root)}: its runs are not the case's (aeiou-catalog write)")
                 continue
@@ -591,6 +599,91 @@ def stale_shapes(mechanisms: list[dict], root: pathlib.Path, attrs: dict, runner
                     if differ:
                         problems.append(f"{_rel(path, root)}: {run['ast']}: the dry run no longer gives the recorded {', '.join(differ)} (aeiou-catalog write)")
     return problems
+
+
+# ---------------------------------------------------------------- the descriptions
+
+def _description_path(m: dict, case: dict | None) -> pathlib.Path:
+    return case["dir"] / "DESCRIPTION.md" if case else m["dir"] / "DESCRIPTION.defaults.md"
+
+
+def _values(run: dict) -> dict:
+    return json.loads(run["params"].read_text())["params"] if run["params"] else {}
+
+
+def context(m: dict, case: dict | None, run: dict, gpus: int, attrs: dict) -> list[str]:
+    """What the records say of a run, in sentences: where the catalog files it, what the case is,
+    and what its captures say."""
+    a = m["attributes"]
+    joined = lambda v: ", ".join(v) if isinstance(v, list) else v
+    out = [f"In the catalog it is `{m['rel']}`: application `{a.get('application', '—')}`, format `{a.get('format', '—')}`, "
+           f"phase {joined(a.get('phase', '—'))}, domain {joined(a.get('domain', '—'))}"]
+    if case is None:
+        return out + [f"No case yet: the abstract at its defaults, at {gpus} GPU{'' if gpus == 1 else 's'}"]
+    ca = case["attributes"]
+    head = attrs["kind"]["values"][ca["kind"]]["meaning"].split(":")[0].split(".")[0]
+    family = ca.get("model-family")
+    about = ([f"{ca['modality']} data"] if "modality" in ca else []) + (
+        [f"{'an' if family[0] in 'aeiou' else 'a'} {family} model"] if family else [])
+    gp = " or ".join(map(str, case["gpus"]))
+    out.append(f"{head} (`{case['name']}`{': ' + ', '.join(about) if about else ''}), its parameters holding at {gp} "
+               f"GPU{'' if case['gpus'] == [1] else 's'}")
+    verdicts = [p["verdict"] for cap in case["captures"] for p in cap["pairs"] if p["ast"] == run["ast"]]
+    status = derived(run["abstract"], verdicts)["status"]
+    meaning = attrs["status"]["values"][status]["meaning"]
+    out.append("Not traced yet" if status == "untraced" else f"Traced: {meaning[0].lower()}{meaning[1:]}")
+    return out
+
+
+def describe_run(m: dict | None, case: dict | None, run: dict, gpus: int, attrs: dict | None, shape_run: dict | None) -> tuple[str, list[str]]:
+    """One run's paragraph and account."""
+    ctx = context(m, case, run, gpus, attrs) if m else []
+    return (Describer(run["abstract"]["doc"], _values(run), gpus, shape=shape_run).paragraph(ctx),
+            Describer(run["abstract"]["doc"], _values(run), gpus, shape=shape_run).account())
+
+
+def render_description(title: str, sources: str, described: list[tuple[str, str, list[str]]]) -> str:
+    """A description file: the paragraph of each run, then each run's account."""
+    out = [f"# {title}", "",
+           f"Generated by `aeiou-catalog` from {sources}; never edited by hand (`PROJECT_BRIEF.md` §6 item 27,",
+           "`DESIGN_REVIEW.md` §3.76). It says what the abstract does, not why the application does it (the",
+           "mechanism's README) or what a storage system should do about it.", "",
+           "## In brief", ""]
+    many = len(described) > 1
+    for ast, para, _ in described:
+        out += [(f"**`{ast}`.** " if many else "") + para, ""]
+    for ast, _, account in described:
+        out += [f"## The account of `{ast}`" if many else "## The account", ""] + account
+    while out[-1] == "":
+        out.pop()
+    return "\n".join(out) + "\n"
+
+
+def render_descriptions(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Path, str]) -> tuple[dict[pathlib.Path, str], list[str]]:
+    """Every case's DESCRIPTION.md (DESCRIPTION.defaults.md for a mechanism with no case), and the
+    paragraphs CATALOG.md shows."""
+    files, briefs = {}, []
+    for m, case, runs in _targets(mechanisms):
+        sp = _shape_path(m, case)
+        doc = json.loads(shapes[sp]) if sp in shapes else {"runs": []}
+        by_ast = {s["ast"]: s for s in doc["runs"]}
+        described = []
+        for run, gpus, *_ in runs:
+            para, account = describe_run(m, case, run, gpus, attrs, by_ast.get(run["ast"]))
+            described.append((run["ast"], para, account))
+        if case:
+            title = f"`{case['name']}`, a case of `{m['dir'].name}`"
+            sources = "the AST" + ("s" if len(runs) > 1 else "") + ", the case's parameter file" + ("s" if len(runs) > 1 else "") + ", its records, and its measured shape"
+        else:
+            title = f"`{m['dir'].name}` at its defaults"
+            sources = "the AST at its defaults, the mechanism's record, and its measured shape"
+        path = _description_path(m, case)
+        files[path] = render_description(title, sources, described)
+        rel = pathlib.Path(m["rel"]) / path.relative_to(m["dir"])
+        name = case["name"] if case else "*defaults*"
+        for ast, para, _ in described:
+            briefs += [f"**`{m['rel']}`, {name}" + (f" (`{ast}`)" if len(described) > 1 else "") + f"** ([description]({rel})). {para}", ""]
+    return files, briefs
 
 
 # ---------------------------------------------------------------- CATALOG.md
@@ -611,7 +704,7 @@ def _shown(attr: dict, a: dict) -> str:
     return f"{a['class']} ({num})" if num else a["class"]
 
 
-def render_catalog(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Path, str]) -> str:
+def render_catalog(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Path, str], briefs: list[str]) -> str:
     measured = [n for n, a in attrs.items() if a["source"] == "measured"]
     rows, shape_rows = [], []
     for m, case, runs in _targets(mechanisms):
@@ -663,6 +756,9 @@ def render_catalog(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Pat
            "## Cases", "",
            "| Mechanism | Case | Kind | Modality | Model family | AST | API | Writes | Inputs | Status | GPUs |",
            "|---|---|---|---|---|---|---|---|---|---|---|", *rows, "",
+           "## In brief", "",
+           "Each case in a paragraph, generated from its AST, parameters, records, and measured shape; its",
+           "`DESCRIPTION.md` has the account in full (`DESIGN_REVIEW.md` §3.76).", "", *briefs,
            "## Shape", "",
            "Measured by `aeiou dry-run --metrics-json` of the case at its own parameters and first GPU count,",
            "the median of seeds 1, 2, and 3. Each cell is the class and its number; sizes are byte-weighted",
@@ -742,7 +838,7 @@ def render_readmes(root: pathlib.Path, attrs: dict, mechanisms: list[dict]) -> d
 # ---------------------------------------------------------------- the command
 
 def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
-    ap = usage.Parser(prog="aeiou-catalog", description="The workload catalog (DESIGN_REVIEW.md §3.66): check the records under workloads/ against their dictionary, measure each case's shape, and render CATALOG.md",
+    ap = usage.Parser(prog="aeiou-catalog", description="The workload catalog (DESIGN_REVIEW.md §3.66): check the records under workloads/ against their dictionary, measure each case's shape, and render CATALOG.md and each case's description",
                       usage="aeiou-catalog <COMMAND> [OPTIONS]")
     ap.version(f"aeiou-catalog {__version__}")
     sub = ap.add_subparsers(dest="cmd")
@@ -754,6 +850,15 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
         p.add_argument("--runner", metavar="PATH", default="aeiou", help="The runner binary the shapes are measured with [default: aeiou, on the PATH]")
         p.add_argument("--no-shapes", action="store_true", help="Leave the shapes as committed (no dry run); check that each was measured on the AST and parameter file committed now")
         subs[name] = p
+    p = sub.add_parser("describe", help="Print an abstract's description at a parameter set: its paragraph and its account, with its shape measured by dry run",
+                       usage="aeiou-catalog describe [OPTIONS] <AST>")
+    p.add_argument("ast", nargs="?", metavar="AST", help="The abstract (*.ast.json)")
+    p.add_argument("--params-file", type=pathlib.Path, metavar="FILE", help="A parameter file for it (aeiou-params); its defaults when absent")
+    p.add_argument("--gpus", type=int, default=1, metavar="N", help="The GPU count [default: 1]")
+    p.add_argument("--workloads", type=pathlib.Path, default=pathlib.Path("workloads"), metavar="DIR", help="The workload tree whose dictionary classes the shape [default: workloads]")
+    p.add_argument("--runner", metavar="PATH", default="aeiou", help="The runner binary the shape is measured with [default: aeiou, on the PATH]")
+    p.add_argument("--no-shapes", action="store_true", help="No dry run: the description without its measured shape, op counts, or dataset projections")
+    subs["describe"] = p
     return ap, subs
 
 
@@ -763,14 +868,45 @@ def main(argv=None) -> int:
     try:
         a = ap.parse_args(argv)
         missing = usage.Missing(ap)
-        missing.want(a.cmd, "<COMMAND>", "one of check, write")
+        missing.want(a.cmd, "<COMMAND>", "one of check, write, describe")
         missing.check()
         sp = subs[a.cmd]
+        if a.cmd == "describe":
+            missing = usage.Missing(sp)
+            missing.want(a.ast, "<AST>", "the abstract to describe")
+            missing.check()
+            return _describe(a)
         return _main(a)
     except usage.UsageError as e:
         return usage.fail(e, sp)
     except BuildError as e:
         return usage.failed(sp.prog, e)
+
+
+def _describe(a) -> int:
+    """`describe`: any AST, at its defaults or a parameter file, outside the catalog's records."""
+    path = pathlib.Path(a.ast)
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        raise BuildError(f"{path}: {e}")
+    if a.gpus < 1:
+        raise BuildError("--gpus must be at least 1")
+    if a.params_file and not a.params_file.is_file():
+        raise BuildError(f"{a.params_file}: no such parameter file")
+    run = {"ast": doc.get("name"), "params": a.params_file, "abstract": {"path": path, "doc": doc, "sha256": _sha256(path)}}
+    measured = None
+    if not a.no_shapes:
+        if shutil.which(a.runner) is None:
+            raise BuildError(f"the runner {a.runner!r} is not there (--runner PATH; --no-shapes for the description without its shape)")
+        if not (a.workloads / "attributes.toml").is_file():
+            raise BuildError(f"{a.workloads}: not a workload tree (no attributes.toml), whose dictionary classes the shape (--workloads DIR; --no-shapes)")
+        with concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool:
+            measured = shape(a.runner, run, a.gpus, BLOCK, None, load_dictionary(a.workloads), pool)
+    para, account = describe_run(None, None, run, a.gpus, None, measured)
+    sources = "the AST" + (f", `{a.params_file.name}`" if a.params_file else " at its defaults") + (", and its shape by dry run" if measured else "")
+    sys.stdout.write(render_description(f"`{doc.get('name')}`", sources, [(doc.get("name"), para, account)]))
+    return 0
 
 
 def _main(a) -> int:
@@ -795,7 +931,9 @@ def _main(a) -> int:
         stale = stale_shapes(mechanisms, root, attrs, None if a.no_shapes else a.runner)
         shapes = {_shape_path(m, c): _shape_path(m, c).read_text() for m, c, _ in _targets(mechanisms) if _shape_path(m, c).exists()}
     files = dict(shapes) if a.cmd == "write" else {}
-    files[root / "CATALOG.md"] = render_catalog(mechanisms, attrs, shapes)
+    descriptions, briefs = render_descriptions(mechanisms, attrs, shapes)
+    files.update(descriptions)
+    files[root / "CATALOG.md"] = render_catalog(mechanisms, attrs, shapes, briefs)
     files.update(render_readmes(root, attrs, mechanisms))
     if a.cmd == "write":
         for path, text in files.items():

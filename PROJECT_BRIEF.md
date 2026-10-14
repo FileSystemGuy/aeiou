@@ -626,7 +626,9 @@ numbers; the order is this note's.
     `database`, `genomics`, `hpc`, `benchmarks`), each with its directory from the start; a
     `class` level only where a category is large; `phase` and `domain` as attributes of
     several values in place of an AI directory; `model-family` per case.
-27. **The abstract in prose (backlog, raised by the user 2026-10-10).** An AST is a compact,
+27. **The abstract in prose (backlog, raised by the user 2026-10-10; built 2026-10-14,
+    `DESIGN_REVIEW.md` §3.76: `DESCRIPTION.md` in every case, its paragraph in `CATALOG.md`,
+    `aeiou-catalog describe` for any AST; the raw-trace prose below not yet).** An AST is a compact,
     machine-readable account of a workload's I/O, so it can be rendered as English: a
     literal abstract, in the sense of a paper's, of the workload's patterns, for readers who
     will not read the JSON (WG reviewers, submitters, a catalog's visitors). Generated, not

@@ -1,5 +1,5 @@
 {
-  "shape_version": 1,
+  "shape_version": 2,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -25,6 +25,37 @@
         "reread"
       ],
       "ops": 5868,
+      "counts": {
+        "close": 978,
+        "fstat": 978,
+        "ioctl": 978,
+        "lseek": 978,
+        "open": 978,
+        "read": 596,
+        "write": 382
+      },
+      "bytes_read": 1874853888,
+      "bytes_written": 1201668096,
+      "datasets": [
+        {
+          "bytes": 988697288,
+          "directories": 50,
+          "files": 338,
+          "inventory_bytes": 0,
+          "mean_file": 2925139,
+          "name": "subp",
+          "samples": 50
+        },
+        {
+          "bytes": 11452416,
+          "directories": 2,
+          "files": 4,
+          "inventory_bytes": 0,
+          "mean_file": 2863104,
+          "name": "sysp",
+          "samples": 2
+        }
+      ],
       "attributes": {
         "run_length_read": {
           "value": 3145728,

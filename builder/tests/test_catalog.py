@@ -245,3 +245,158 @@ def test_a_case_remeasured_is_its_shape(tree):
     shapes = catalog.measure_all(mechanisms, ATTRS, str(RUNNER))
     assert shapes[tree / CASE / "shape.json"] == (WORKLOADS / CASE / "shape.json").read_text()
     assert catalog.stale_shapes(mechanisms, tree, ATTRS, str(RUNNER)) == []
+
+
+# ---------------------------------------------------------------- the descriptions (DESIGN_REVIEW.md §3.76)
+
+from aeiou import describe  # noqa: E402
+
+SCHEMA = json.loads((ROOT / "schema" / "abstract-ast.schema.json").read_text())["$defs"]
+
+
+def test_the_describer_has_words_for_every_kind_of_the_schema():
+    """A kind added to the contract fails here until the prose has words for it."""
+    assert set(describe.STATEMENTS) == set(SCHEMA["node"]["properties"])
+    assert set(describe.OPS) <= set(describe.STATEMENTS)
+    assert set(describe.DISTS) == set(SCHEMA["dist"]["properties"])
+    assert set(describe.EXPRS) == set(SCHEMA["expr"]["anyOf"][1]["properties"])
+    assert set(describe.HANDLES) == set(SCHEMA["handle"]["properties"])
+    assert set(describe.MEASURE_WORDS) == set(catalog.MEASURES)
+
+
+def every_kind() -> dict:
+    """An AST (not a valid workload) holding every statement, expression, handle, and distribution kind."""
+    p, i, r = (lambda n: {"param": n}), (lambda n: {"index": n}), (lambda n: {"ref": n})
+    exprs = [{"at": {"ref": "x", "index": {"sub": [i("i"), 1]}}}, {"actor": "id"}, {"actor": "count"},
+             {"elem": {"array": "arr", "index": 1}}, {"len": "arr"}, {"sum": "arr"}, {"size": r("f")}, {"offset": r("s")},
+             {"unit_index": r("s")}, {"units": r("f")}, {"chunks": r("f")}, {"count": "ds"}, {"dirs": "ds"},
+             {"mod": [i("i"), 3]}, {"ceil_div": [p("n"), 3]}, {"min": [1, 2]}, {"max": [1, 2]}, {"neg": 1}, {"div": [7, 2]},
+             {"and": [{"eq": [1, 1]}, {"ne": [1, 2]}]}, {"or": [{"lt": [i("i"), 1]}, {"le": [1, 2]}, {"gt": [r("x"), 1]}, {"ge": [1, 1]}]},
+             {"not": r("x")}, {"cond": {"if": r("x"), "then": 1, "else": 2}}, {"draw": {"uniform": {"lo": 0, "hi": 9}}}]
+    dists = [{"const": 4}, {"uniform64": {}}, {"normal": {"mean": 100, "sd": 10, "min": 0}},
+             {"lognormal": {"median": 4096, "sigma": 0.5, "max": 65536}}, {"empirical": {"values": [1, 2], "weights": [3, 1]}},
+             {"mixture": [{"weight": 1, "dist": None}, {"weight": 3, "dist": {"const": 1}}]}]
+    body = [{"let": {"name": f"e{n}", "value": e}} for n, e in enumerate(exprs)]
+    body += [{"let": {"name": f"d{n}", "value": {"draw": d}}} for n, d in enumerate(dists)]
+    body += [
+        {"let": {"name": "s", "value": {"consume": "ds"}}},
+        {"let": {"name": "f", "value": {"file": {"of": r("s")}}}},
+        {"let": {"name": "g", "value": {"file": {"dataset": "ds", "id": 0, "chunk": 1}}}},
+        {"let": {"name": "h", "value": {"dir": {"dataset": "ds", "id": 0}}}},
+        {"let": {"name": "o", "value": {"object": {"namespace": "out", "fields": {"k": i("i")}}}}},
+        {"let": {"name": "v", "value": {"inventory": "ds"}}},
+        {"let": {"name": "q", "value": {"pick": {"dataset": "ds", "dist": {"zipf": {"s": 1.1}}}}}},
+        {"let": {"name": "q2", "value": {"pick": {"dataset": "ds", "dist": {"hotset": {"fraction": 0.1, "weight": 0.9}}}}}},
+        {"let": {"name": "u", "value": {"unit": {"of": r("s")}}}},
+        {"let": {"name": "c", "value": {"column": {"of": r("u"), "index": 0}}}},
+        {"channel": {"name": "ch", "capacity": 4, "ordered": False}},
+        {"parallel": {"index": "w", "width": 2, "body": [{"put": {"channel": "ch", "seq": i("w")}}]}},
+        {"take": {"channel": "ch"}},
+        {"loader": {"name": "ld", "index": "b", "workers": 2, "prefetch": 2, "batches": p("n"), "body": [
+            {"loop": {"index": "j", "from": 1, "to": p("n"), "step": 2, "body": [{"compute": {"ns": 5000}}]}}]}},
+        {"take": {"channel": "ld"}},
+        {"barrier": {"scope": "global"}}, {"barrier": {"scope": "host"}}, {"barrier": {"scope": "pair"}},
+        {"choose": {"arms": [{"weight": 3, "body": [{"stat": {"file": r("f")}}]}, {"weight": 1, "body": []}]}},
+        {"cond": {"if": p("on"), "then": [{"fsync": {"file": r("f")}}], "else": [{"fdatasync": {"file": r("f")}}]}},
+        {"phase": {"name": "p1", "body": [{"trace": {"file": "app.trace", "sha256": "ab" * 32}}]}},
+        {"loop": {"index": "i", "to": {"dirs": "ds"}, "body": [
+            {"open": {"file": r("o"), "flags": ["WRONLY", "CREAT"], "mode": 0o644, "expect": ["EEXIST"]}},
+            {"write": {"file": r("o"), "len": p("n"), "offset": 0, "repeat": 2}},
+            {"read": {"file": r("o"), "len": 4096, "repeat": "until_eof"}},
+            {"read": {"file": r("o"), "len": 4096, "offset": {"offset": r("s")}}},
+            {"lseek": {"file": r("o"), "offset": 0, "whence": "END"}},
+            {"ioctl": {"file": r("o"), "request": "FIONREAD"}},
+            {"fadvise": {"file": r("o"), "advice": "WILLNEED", "offset": 0, "len": 0}},
+            {"ftruncate": {"file": r("o"), "len": 0}}, {"fallocate": {"file": r("o"), "len": 4096}},
+            {"close": {"file": r("o")}}, {"unlink": {"file": r("o")}},
+            {"mkdir": {"dir": r("h")}}, {"readdir": {"dir": r("h"), "repeat": "until_end"}}, {"rmdir": {"dir": r("h")}},
+            {"rename": {"from": r("o"), "to": r("o")}}]}},
+    ]
+    return {"ast": "0.10", "name": "every_kind", "doc": "Every kind.",
+            "params": {"n": {"default": 8, "unit": "bytes"}, "on": {"default": False}, "arr": {"default": [1, 2, 3]}},
+            "datasets": {"ds": {"pattern": "d/{id div 4}/f{id}", "layout": "compound", "access": "map", "count": 100,
+                                "samples_per_file": 5, "size": {"const": 4096}, "seed": 1,
+                                "format": {"class": "tfrecord", "framing": {"unit": 5, "columns": [{"weight": 1}]}},
+                                "inventory": {"name": "list.txt", "entry": 8}}},
+            "namespaces": {"out": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 2}},
+            "actors": {"gpu": {"body": body}}}
+
+
+def test_every_kind_is_put_in_words():
+    d = describe.Describer(every_kind(), {}, 2)
+    text = d.paragraph([]) + "\n" + "\n".join(describe.Describer(every_kind(), {}, 2).account())
+    assert "{'" not in text and "None" not in text, text
+    for words in ("the next sample of `ds` from the shuffle", "Zipf over the ids of `ds`", "90% of draws over the hottest 10%",
+                  "a mixture: 25% none; 75% always 1", "One of these, chosen by a positional draw", "Replays the captured trace",
+                  "`rename` `o` to `o`", "For each of the 5 directories `i` of `ds`", "`fallocate`", "If `on` (false here: skipped)",
+                  "Otherwise (taken here)", "Waits at the barrier `pair`", "2 requests of 8 bytes (`n`) at offset 0"):
+        assert words in text, words
+    # the compound dataset's directories: ceil(20 files / 4)
+    assert d.dirs("ds") == 5
+
+
+def test_numbers_are_worked_out_from_parameters():
+    ast = {"name": "t", "params": {"xfer": {"default": 1 << 20, "unit": "bytes"}, "n": {"default": 3, "unit": "count"},
+                                   "every": {"default": 1, "unit": "count"}}, "actors": {}}
+    d = describe.Describer(ast, {"n": 4}, 1)
+    assert d.value({"mul": [{"param": "xfer"}, 2]}) == "2 MiB (`xfer × 2`)"
+    assert d.value({"param": "n"}, "count") == "4 (`n`)"                        # the parameter file's value
+    assert d.value({"add": [{"index": "i"}, {"param": "n"}]}) == "`i + n`"     # a loop index keeps it a formula
+    assert d.fold({"eq": [{"mod": [{"index": "step"}, {"param": "every"}]}, 0]}).value is True   # every step
+    assert d.sym({"sub": [{"param": "a"}, {"mod": [{"param": "b"}, 64]}]}) == "a − (b mod 64)"
+    assert d.sym({"ceil_div": [{"sub": [{"param": "a"}, 1]}, {"param": "b"}]}) == "⌈(a − 1) / b⌉"
+
+
+def test_distributions_are_given_with_exact_percentiles():
+    d = describe.Describer({"name": "t", "params": {}, "actors": {}}, {}, 1)
+    assert d.dist({"lognormal": {"median": 110 * 1024, "sigma": 0.45}}, "bytes") == \
+        "lognormal, median 110 KiB, σ 0.45 (5th–95th percentile 52.5 KiB to 230.6 KiB)"
+    assert d.dist({"lognormal": {"median": 100, "sigma": 0.3, "min": 7, "max": 7}}, "bytes") == "always 7 bytes (a lognormal clamped to it)"
+    assert d.dist({"uniform": {"lo": 0, "hi": 10}}) == "uniform over 0 to 9"
+    many = {"empirical": {"values": list(range(1, 21)), "weights": [1] * 20}}
+    assert d.dist(many) == "one of 20 weighted values, median 10, 5th–95th percentile 1 to 19, mean 10.5"
+
+
+def test_dead_branches_leave_the_paragraph():
+    body = [{"cond": {"if": {"param": "walk"}, "then": [{"stat": {"file": {"ref": "f"}}}]}},
+            {"cond": {"if": {"not": {"param": "walk"}}, "then": [{"unlink": {"file": {"ref": "f"}}}]}}]
+    ast = {"name": "t", "doc": "T.", "params": {"walk": {"default": True}}, "actors": {"gpu": {"body": body}}}
+    assert describe.Describer(ast, {}, 1).paragraph([]).endswith("The one `gpu` actor (one per GPU): stat.")
+    assert describe.Describer(ast, {"walk": False}, 4).paragraph([]).endswith("Each of the 4 `gpu` actors (one per GPU): unlink.")
+
+
+def test_a_description_edited_by_hand_is_drift(tree, capsys):
+    path = tree / CASE / "DESCRIPTION.md"
+    path.write_text(path.read_text().replace("## In brief", "## In brief\n\nA note."))
+    assert catalog.main(["check", "--workloads", str(tree), "--no-shapes"]) == 1
+    assert f"{CASE}/DESCRIPTION.md: differs" in capsys.readouterr().out
+
+
+def test_a_shape_of_another_version_is_stale(tree, capsys):
+    shape = tree / CASE / "shape.json"
+    doc = json.loads(shape.read_text())
+    doc["shape_version"] = 1
+    shape.write_text(json.dumps(doc))
+    assert catalog.main(["check", "--workloads", str(tree), "--no-shapes"]) == 1
+    assert f"shape_version 1, this aeiou-catalog writes {catalog.SHAPE_VERSION}" in capsys.readouterr().out
+
+
+def test_describe_prints_any_abstract(capsys):
+    case = WORKLOADS / CASE
+    assert catalog.main(["describe", str(case.parent.parent / "dcp_save.ast.json"), "--params-file", str(case / "params.json"),
+                         "--gpus", "2", "--no-shapes"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("# `dcp_save`\n") and "from the AST, `params.json`;" in out
+    assert "### The `gpu` actor (2 instances, one per GPU)" in out and "### Measured shape" not in out
+    assert catalog.main(["describe"]) == 2
+    assert "<AST>" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_describe_measures_the_shape_with_the_runner(capsys):
+    case = WORKLOADS / CASE
+    assert catalog.main(["describe", str(case.parent.parent / "dcp_save.ast.json"), "--params-file", str(case / "params.json"),
+                         "--gpus", "2", "--workloads", str(WORKLOADS), "--runner", str(RUNNER)]) == 0
+    out = capsys.readouterr().out
+    committed = json.loads((case / "shape.json").read_text())["runs"][0]
+    assert "### Measured shape" in out and f"Ops in all (seed 1): {committed['ops']:,}:" in out

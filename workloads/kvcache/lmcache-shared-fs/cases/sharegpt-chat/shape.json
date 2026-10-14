@@ -1,5 +1,5 @@
 {
-  "shape_version": 1,
+  "shape_version": 2,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -25,6 +25,39 @@
         "reread"
       ],
       "ops": 8549,
+      "counts": {
+        "close": 976,
+        "fstat": 976,
+        "ioctl": 976,
+        "lseek": 976,
+        "open": 976,
+        "read": 1190,
+        "rename": 381,
+        "stat": 1336,
+        "write": 762
+      },
+      "bytes_read": 1871724820,
+      "bytes_written": 1198533036,
+      "datasets": [
+        {
+          "bytes": 988697288,
+          "directories": 50,
+          "files": 338,
+          "inventory_bytes": 0,
+          "mean_file": 2925139,
+          "name": "subp",
+          "samples": 50
+        },
+        {
+          "bytes": 11452416,
+          "directories": 2,
+          "files": 4,
+          "inventory_bytes": 0,
+          "mean_file": 2863104,
+          "name": "sysp",
+          "samples": 2
+        }
+      ],
       "attributes": {
         "run_length_read": {
           "value": 3145728,
@@ -96,6 +129,37 @@
         "reread"
       ],
       "ops": 7813,
+      "counts": {
+        "close": 902,
+        "fstat": 902,
+        "ioctl": 902,
+        "lseek": 902,
+        "open": 902,
+        "read": 1804,
+        "stat": 1499
+      },
+      "bytes_read": 2837471912,
+      "bytes_written": 0,
+      "datasets": [
+        {
+          "bytes": 988697288,
+          "directories": 50,
+          "files": 338,
+          "inventory_bytes": 0,
+          "mean_file": 2925139,
+          "name": "subp",
+          "samples": 50
+        },
+        {
+          "bytes": 11452416,
+          "directories": 2,
+          "files": 4,
+          "inventory_bytes": 0,
+          "mean_file": 2863104,
+          "name": "sysp",
+          "samples": 2
+        }
+      ],
       "attributes": {
         "run_length_read": {
           "value": 3145728,

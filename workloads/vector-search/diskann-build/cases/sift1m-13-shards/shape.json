@@ -1,5 +1,5 @@
 {
-  "shape_version": 1,
+  "shape_version": 2,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -18,6 +18,27 @@
       "stable": true,
       "moving": [],
       "ops": 1293972,
+      "counts": {
+        "close": 130,
+        "lseek": 825205,
+        "open": 130,
+        "read": 176041,
+        "unlink": 52,
+        "write": 292414
+      },
+      "bytes_read": 11772723290,
+      "bytes_written": 3451593990,
+      "datasets": [
+        {
+          "bytes": 512000000,
+          "directories": 0,
+          "files": 1,
+          "inventory_bytes": 0,
+          "mean_file": 512000000,
+          "name": "base",
+          "samples": 1000000
+        }
+      ],
       "attributes": {
         "run_length_read": {
           "value": 469762048,

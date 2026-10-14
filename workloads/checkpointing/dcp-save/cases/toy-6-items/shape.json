@@ -1,5 +1,5 @@
 {
-  "shape_version": 1,
+  "shape_version": 2,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -18,6 +18,21 @@
       "stable": true,
       "moving": [],
       "ops": 154,
+      "counts": {
+        "close": 6,
+        "fstat": 6,
+        "fsync": 6,
+        "ioctl": 6,
+        "lseek": 54,
+        "mkdir": 4,
+        "open": 6,
+        "rename": 2,
+        "stat": 6,
+        "write": 58
+      },
+      "bytes_read": 0,
+      "bytes_written": 304138284,
+      "datasets": [],
       "attributes": {
         "run_length_read": {
           "value": null,

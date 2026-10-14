@@ -1,5 +1,5 @@
 {
-  "shape_version": 1,
+  "shape_version": 2,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -18,6 +18,26 @@
       "stable": true,
       "moving": [],
       "ops": 1681,
+      "counts": {
+        "close": 125,
+        "fadvise": 528,
+        "fstat": 250,
+        "open": 125,
+        "read": 653
+      },
+      "bytes_read": 15965139747,
+      "bytes_written": 0,
+      "datasets": [
+        {
+          "bytes": 159724993133,
+          "directories": 1,
+          "files": 1252,
+          "inventory_bytes": 0,
+          "mean_file": 127575873,
+          "name": "shards",
+          "samples": 1281167
+        }
+      ],
       "attributes": {
         "run_length_read": {
           "value": 117440512,

@@ -6253,6 +6253,73 @@ build with `object,formats` lists passed in some CI job of run 52d050b (119 unde
 integration job (248, and `test_object.py` skipped for `obstore`, which that job does not
 install) and the object job (15); every early exit in the Python tests is a `pytest.skip`.
 
+### 3.76 The abstract in prose (decided with the user 2026-10-14; built the same day)
+
+**The problem.** `PROJECT_BRIEF.md` §6 item 27: an AST is a compact, machine-readable account of
+a workload's I/O, and the readers who most need that account (WG reviewers, submitters, a
+catalog's visitors) will not read the JSON. The item fixed the goal (generated, never written;
+checked like the man pages; two lengths; deterministic templates before any language model) and
+left the design open.
+
+**Decided** (proposed and accepted 2026-10-14):
+
+1. *Where.* `aeiou-catalog`, which already loads the records, the shapes, and the dictionary;
+   the walk is `builder/aeiou/describe.py`. It reads the AST (never the authoring script: the AST
+   is the contract), the parameter values in effect, the records, and the shape.
+2. *What it writes.* `DESCRIPTION.md` in every case directory (`DESCRIPTION.defaults.md` in a
+   mechanism with no case, as `shape.defaults.json`), and each case's paragraph in `CATALOG.md`.
+   `write` writes them; `check` re-renders and fails on a difference, so a parameter change is
+   a prose diff in review. Not `ABSTRACT.md`: here "abstract" already means the AST.
+3. *Two lengths.* A paragraph: the AST's `doc`, where the catalog files it and what the case
+   is, what each dataset holds, what each actor does in order, and the measured shape. An
+   account: every parameter with its value, default, unit, and `doc`; every dataset and
+   namespace; every actor's body in order with every op named (local calls like `lseek` and
+   `ioctl` included: the abstract is the application's call stream); the shape in full.
+4. *Numbers.* An expression over parameters and literals is worked out and shown with its
+   formula (`1 MiB (hdr_read)`); one that depends on a loop index, a binding, or a draw stays a
+   formula. A distribution is given in words with its 5th and 95th percentiles computed from its
+   parameters (and its bounds), never sampled.
+5. *Coverage.* `test_catalog.py` holds the describer's lists of statement, expression, handle, and
+   distribution kinds to the schema's, and renders one synthetic AST holding every kind, so a
+   contract change cannot leave the prose behind (as `test_man.py` holds the pages to `--help`).
+6. *Not now.* Prose for a raw trace (the user's note in item 27) and any polishing by a language
+   model.
+
+**Choices made in the build, open to revision.**
+
+- *The shape keeps what the prose quotes* (`shape_version` 2). The first seed's op counts by
+  kind and its bytes read and written, and each dataset's projection (samples, files,
+  directories, bytes), so the paragraph can say "3,200 files in 3 directories, 376.2 MiB" and the
+  description stays renderable without a runner (`check --no-shapes`). `aeiou dry-run
+  --metrics-json` gained `datasets`, the projection it already printed (`runner/REFERENCE.md`
+  §10). Every shape was re-measured: the measured attributes did not change.
+- *The paragraph follows this case.* A branch whose test is worked out from the parameters is
+  kept or dropped (ImageFolder's walk is there, its inventory read is not; a barrier under `every
+  1` is every step), a parallel of width 1 is its body, a loop of zero times and a compute of
+  zero are left out. The account keeps every branch, marked taken or not here.
+- *Ops in the paragraph* run together, consecutive equal ones counted (`lseek twice`), each run
+  prefixed by the handle the last binding named (`on the next sample of train`, `on the file
+  holding the next sample of train`). A long abstract gives a long paragraph (`dcp_load`'s item
+  reads); it is the call stream, and shortening it would be interpretation.
+- *Formulas.* Infix, parameters by name, `x@(i − d)` for a binding at an earlier index; `div` and
+  `mod` inside another operator are bracketed (`trailer − (item_bytes[t] mod 64)`), since the
+  precedence is not what a reader assumes.
+- *The unit of a value* is the slot's (a read's length is bytes, a compute's is time), else the
+  parameter's declared `unit`, carried through arithmetic (bytes over tokens times tokens is
+  bytes).
+- *A case of two runs* (a writer and its reader) is one file: both paragraphs, then each
+  account.
+- *`aeiou-catalog describe AST`* prints the same for any abstract, at its defaults or a
+  parameter file, its shape measured at seeds 1, 2, and 3 (`--no-shapes` for none).
+
+**Found on the way, not changed.** A `compound` dataset whose pattern has a directory part gets
+its directory count from the sample count, not the file count: `Model::dir_scheme(pattern,
+count)` at model build, where `{id}` is a file id. `tfrecord_stream` with
+`train/{id div 10:03}/shard-{id:05}.tfrecord` and 10,240 samples projects 10 files in 1,024
+directories. No committed abstract has a compound dataset with directories, so nothing measured
+is affected; the describer, without a projection, counts directories from files. Reported to the
+user 2026-10-14.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

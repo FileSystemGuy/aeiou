@@ -126,7 +126,7 @@ An abstract goes through five stages, each a tool of the suite.
 | `aeiou-params` | Python | parameter files: defaults, check, from real shards and archives | [aeiou-params(1)](man/aeiou-params.1.md) |
 | `aeiou-datagen` | Python | container datasets through their format classes | [aeiou-datagen(1)](man/aeiou-datagen.1.md) |
 | `aeiou-trace` | Python | metrics of an strace, comparison, the `trace` node's file | [aeiou-trace(1)](man/aeiou-trace.1.md) |
-| `aeiou-catalog` | Python | the workload catalog: records against their dictionary, each case's shape, `CATALOG.md` | [aeiou-catalog(1)](man/aeiou-catalog.1.md) |
+| `aeiou-catalog` | Python | the workload catalog: records against their dictionary, each case's shape, `CATALOG.md`, each case's description in prose | [aeiou-catalog(1)](man/aeiou-catalog.1.md) |
 | `aeiou-launch` | sh | one `aeiou run` or `aeiou datagen` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
 
 The option layers and the config file are [aeiou-config(5)](man/aeiou-config.5.md); the
@@ -236,7 +236,7 @@ id order from one queue on rank 0, and Ctrl-C stopping every host with the manif
 `compound`, `array`), an `access` (`map`, `stream`, `indexed`), and `format.framing`
 (2026-10-13, `DESIGN_REVIEW.md` §3.72), and contract 0.9, a consumed dataset's `inventory`
 (the same day, §3.73), and contract 0.10, a pattern's divisor named by a parameter
-(`{id div files_per_directory}`) and the layout parameters' standard names (the same day, §3.75), and the step barrier every step by default in the training workloads, its latency measured on up to 32 ranks (2026-10-14, §3.71 point 4). The workload catalog
+(`{id div files_per_directory}`) and the layout parameters' standard names (the same day, §3.75), and the step barrier every step by default in the training workloads, its latency measured on up to 32 ranks (2026-10-14, §3.71 point 4), and the abstract in prose: every case's `DESCRIPTION.md`, a paragraph and an account generated from its AST, parameters, records, and shape, each paragraph in `CATALOG.md`, and `aeiou-catalog describe` for any AST (the same day, §3.76). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
@@ -244,8 +244,9 @@ its dry run measures, checked in CI by `aeiou-catalog`.
 
 Not built, in rough order of interest:
 
-- The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's
-  measured shape; the workload catalog it would join is built (2026-10-10, below).
+- ~~The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's
+  measured shape; the workload catalog it would join is built (2026-10-10, below).~~ Built
+  2026-10-14 (`DESIGN_REVIEW.md` §3.76); the same for a raw trace not yet.
 - The access layers (decided 2026-10-09, `PROJECT_BRIEF.md` §6 item 25; mixed protocols included; the API
   and the cache mode as separate axes, contract 0.6, and the protocol and `--endpoint` per
   dataset and namespace built the same day, the mount counters still `--root`'s alone):

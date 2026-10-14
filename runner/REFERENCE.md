@@ -1380,7 +1380,9 @@ trace has a real order; the comparison is between distributions, and the per-thr
 unordered here; a server-side cache sees all instances, so its distances are larger than
 these by about the instance count for disjoint work, and smaller for shared hot blocks.
 (3) A run is tracked per path, not per open handle. (4) `--metrics-json` writes format
-`aeiou_metrics: 1` (the histograms in full, per template and in total); ~~the JSON report of
+`aeiou_metrics: 1` (the histograms in full, per template and in total, and, since
+2026-10-14, `datasets`: each dataset's projection as `dry-run` prints it, which
+`aeiou-catalog` records in a case's shape and its description quotes); ~~the JSON report of
 a run is a separate, later item and may absorb it.~~ the JSON report of a run (§12, built
 2026-10-01) does not absorb it: the metrics describe the op stream and come from a dry
 run, the report describes an execution, and the two share `(abstract sha256, seed, gpus,

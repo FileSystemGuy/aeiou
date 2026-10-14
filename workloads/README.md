@@ -21,7 +21,8 @@ workloads/
           README.md          the load, its kind, the GPU counts its parameters hold at
           case.toml          its curated attributes (kind, modality, model family), GPU counts, length, runs
           params.json        the parameter set (writer.params.json and reader.params.json for a pair)
-          shape.json         generated: the measured attributes of each run
+          shape.json         generated: the measured attributes of each run, its op counts, its datasets' projections
+          DESCRIPTION.md     generated: the abstract in prose at these parameters, a paragraph and an account
           captures/<capture>/
             capture.toml     where the raw trace is, and the verdict compare --judge gives on each trace
             trace.metrics.json, trace.tolerances.json, logs, fitted.params.json

@@ -645,14 +645,30 @@ requests once, when its shape is written; CI re-measures it at a fraction of tha
 
 `shape.json` (`shape.defaults.json` for a defaults row): per run the AST and parameter
 file with their SHA-256, the GPU count, the block, the seeds, the length (`param`, `case`,
-`check`), `stable` and `moving`, one seed's op count, and per attribute `value`, `spread`,
-`class`.
+`check`), `stable` and `moving`, one seed's op count, its counts by kind and bytes read and
+written, each dataset's projection as `dry-run --metrics-json` gives it (`datasets`), and per
+attribute `value`, `spread`, `class`. `shape_version` 2 since 2026-10-14 (the counts, bytes, and
+projections); `check` reports a shape of another version as stale.
+
+**The descriptions** (2026-10-14, `DESIGN_REVIEW.md` §3.76, `PROJECT_BRIEF.md` §6 item 27).
+`aeiou/describe.py` walks an AST at a parameter set and puts it in English: a paragraph (the
+AST's `doc`, the records' context, each dataset, each actor's ops in order with the parameters'
+values in place and the branches they switch off left out, the shape) and an account (the
+parameters with values, defaults, units, and `doc`; the datasets and namespaces; every
+statement in order, every op named, every branch marked taken or not; the shape in full).
+Expressions over parameters and literals are worked out and shown with their formula, others
+stay formulas; distributions are given with percentiles computed from their parameters. `write`
+writes each case's `DESCRIPTION.md` (`DESCRIPTION.defaults.md` for a defaults row) and the
+paragraphs into `CATALOG.md`; `check` holds them to what it renders. `aeiou-catalog describe AST
+[--params-file FILE] [--gpus N]` prints one for any abstract, its shape measured by dry run
+unless `--no-shapes`. `test_catalog.py` holds the describer's kinds to the schema's.
 
 **The commands.** `check` validates the records, re-measures every shape at its check
 length against the recorded numbers (their tolerances), renders `CATALOG.md`, and fails on
 any difference; with `--no-shapes` (the builder's tests, no runner) it checks instead that
 each shape is there and was measured on the AST, parameter file, GPU count, block, and length
-parameter committed now. `write` measures and writes the shapes and `CATALOG.md`. CI runs
+parameter committed now. `write` measures and writes the shapes, the descriptions, and
+`CATALOG.md`. CI runs
 `check` with the runner in the job that builds it.
 
 *Choices made in the build, open to revision:* the shape at the case's own length, re-checked

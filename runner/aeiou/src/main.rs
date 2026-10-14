@@ -1593,6 +1593,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
             "order": "round-robin",
             "templates": templates,
             "total": aeiou::metrics::to_json(&report.total),
+            "datasets": projections.iter().map(|p| p.json()).collect::<Vec<_>>(),
         });
         std::fs::write(path, serde_json::to_string_pretty(&doc)? + "\n").with_context(|| format!("{}", path.display()))?;
     }
