@@ -19,7 +19,7 @@ use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::path::Path;
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -230,6 +230,9 @@ pub struct MmapStats {
     pub advised: AtomicU64,
     pub touched_pages: AtomicU64,
     pub copied_bytes: AtomicU64,
+    /// The `fstat` calls the backend issued itself to learn a mapping's length: one per open
+    /// that is read before the abstract asks its size, none where it does.
+    pub sized: AtomicU64,
 }
 
 impl BackendKind {
@@ -699,6 +702,10 @@ pub struct OpenFile {
     object: Option<crate::object::Handle>,
     map: AtomicPtr<Mapping>,
     all: Mutex<Vec<Box<Mapping>>>,
+    /// The file's size as this open last learned it, or -1 before it has: the abstract's
+    /// `fstat` of it, else the one the `mmap` backend issues before its first map, then the
+    /// end of every write through it. The length a mapping is made at.
+    size: AtomicI64,
 }
 
 // SAFETY: a `Mapping` is a read-only shared mapping that is not unmapped while the
@@ -724,14 +731,14 @@ impl From<OwnedFd> for OpenFile {
     fn from(fd: OwnedFd) -> Self {
         let now = OPEN_FILES.fetch_add(1, Ordering::Relaxed) + 1;
         OPEN_FILES_PEAK.fetch_max(now, Ordering::Relaxed);
-        OpenFile { fd: Some(fd), object: None, map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()) }
+        OpenFile { fd: Some(fd), object: None, map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()), size: AtomicI64::new(-1) }
     }
 }
 
 impl OpenFile {
     /// An object's handle: no descriptor, so not counted among the open files.
     pub fn object(h: crate::object::Handle) -> OpenFile {
-        OpenFile { fd: None, object: Some(h), map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()) }
+        OpenFile { fd: None, object: Some(h), map: AtomicPtr::new(std::ptr::null_mut()), all: Mutex::new(Vec::new()), size: AtomicI64::new(-1) }
     }
 
     pub fn as_object(&self) -> Option<&crate::object::Handle> {
@@ -758,17 +765,21 @@ impl Drop for OpenFile {
 }
 
 /// Reads through a mapping: the first read of an open file maps the whole of it
-/// (`PROT_READ`, `MAP_SHARED`, the size from `fstat`), a read makes its range of the
+/// (`PROT_READ`, `MAP_SHARED`, at the size the open knows: `OpenFile::size`), a read makes its range of the
 /// mapping resident (one byte of every page is read, or under `MmapConsume::Copy` the range
 /// is copied into the actor's buffer), and the close unmaps (`OpenFile`: one mapping per
 /// open, shared with the sub-actors that inherit the descriptor). That is the shape of a
 /// safetensors or Arrow load: `open`, `fstat`, `mmap`, the consumer's accesses, `munmap`,
-/// `close`. The read returns only when every page of the range has arrived: a fault does
-/// not return before its page is read, and `MADV_POPULATE_READ` does not return before
-/// the range is. A read
-/// past the mapped length asks `fstat` again and remaps when the file has grown; a read at
-/// or past the end returns what `pread` would. Writes and every other op are `sync` (no
-/// loader writes through a mapping).
+/// `close`. The length is the application's: the size its own `fstat` of the open returned,
+/// which the abstract's `fstat` op records, so the backend issues none of its own; only an
+/// open read before the abstract asks its size costs one `fstat`, the backend's, inside the
+/// first read (`MmapStats::sized`). The read returns only when every page of the range has
+/// arrived: a fault does not return before its page is read, and `MADV_POPULATE_READ` does
+/// not return before the range is. A read past the size the open knows returns what `pread`
+/// would at that size and asks nothing; a file that grows is mapped again at the next read
+/// past the mapping once the open learns it, by the abstract's `fstat` or a write through
+/// the open, as an application must. Writes and every other op are `sync` (no loader writes
+/// through a mapping).
 ///
 /// Under `MmapMode::Fault` and `WillNeed` an I/O error or a file truncated underneath is a
 /// `SIGBUS`, as it is for the applications this models; `Populate` gets an errno.
@@ -786,29 +797,40 @@ pub struct Mmap {
 }
 
 impl Mmap {
-    /// The descriptor's mapping, made or remade so it covers `end` when the file does.
+    /// The descriptor's mapping and how much of it the reads may use, made or remade so it
+    /// covers `end` when the size the open knows does. The size is asked here only when the
+    /// open has not learned it.
     fn mapping(&mut self, file: &OpenFile, end: usize) -> io::Result<(*mut u8, usize)> {
         // SAFETY: a published mapping lives in `file.all` until the file is dropped
         let current = |p: *mut Mapping| if p.is_null() { None } else { Some(unsafe { ((*p).ptr, (*p).len) }) };
-        if let Some((ptr, len)) = current(file.map.load(Ordering::Acquire)) {
-            if end <= len {
-                return Ok((ptr, len));
+        let covers = || {
+            let known = file.size.load(Ordering::Acquire);
+            match current(file.map.load(Ordering::Acquire)) {
+                // all the open knows of the file is mapped: the reads stop at that size
+                Some((ptr, len)) if known >= 0 && known as usize <= len => Some((ptr, known as usize)),
+                Some((ptr, len)) if known < 0 && end <= len => Some((ptr, len)),
+                None if known == 0 => Some((std::ptr::null_mut(), 0)),
+                _ => None,
             }
+        };
+        if let Some(m) = covers() {
+            return Ok(m);
         }
-        // no mapping yet, or a read past it: one actor at a time asks the size and maps
+        // no mapping yet, or one the known size has outgrown: one actor at a time maps
         let mut all = file.all.lock().unwrap_or_else(|e| e.into_inner());
-        let now = current(file.map.load(Ordering::Acquire));
-        if let Some((ptr, len)) = now {
-            if end <= len {
-                return Ok((ptr, len));
+        if let Some(m) = covers() {
+            return Ok(m);
+        }
+        if file.size.load(Ordering::Acquire) < 0 {
+            // the abstract has not asked this open's size, and the technique needs it to map
+            let n = self.sync.fstat(file)?;
+            self.stats.sized.fetch_add(1, Ordering::Relaxed);
+            file.size.store(n, Ordering::Release);
+            if let Some(m) = covers() {
+                return Ok(m);
             }
         }
-        let size = self.sync.fstat(file)? as usize;
-        if let Some((ptr, len)) = now {
-            if len == size {
-                return Ok((ptr, len));
-            }
-        }
+        let size = file.size.load(Ordering::Acquire).max(0) as usize;
         if size == 0 {
             return Ok((std::ptr::null_mut(), 0));
         }
@@ -822,6 +844,18 @@ impl Mmap {
         file.map.store(&mut *m, Ordering::Release);
         all.push(m);
         Ok((ptr as *mut u8, size))
+    }
+
+    /// A write through the open ending at `end`: the least the file's size now is, when the
+    /// open knows it.
+    fn wrote(file: &OpenFile, end: Option<i64>) {
+        match end {
+            Some(end) => {
+                let _ = file.size.fetch_update(Ordering::AcqRel, Ordering::Acquire, |s| (s >= 0 && s < end).then_some(end));
+            }
+            // at the descriptor's position, which this backend does not follow: ask again
+            None => file.size.store(-1, Ordering::Release),
+        }
     }
 }
 
@@ -881,7 +915,9 @@ impl Backend for Mmap {
     }
 
     fn write(&mut self, file: &OpenFile, buf: &[u8], offset: Option<i64>) -> io::Result<usize> {
-        self.sync.write(file, buf, offset)
+        let n = self.sync.write(file, buf, offset)?;
+        Mmap::wrote(file, offset.map(|o| o + n as i64));
+        Ok(n)
     }
 
     fn lseek(&mut self, file: &OpenFile, offset: i64, whence: Whence) -> io::Result<i64> {
@@ -896,8 +932,11 @@ impl Backend for Mmap {
         self.sync.fadvise(file, offset, len, advice)
     }
 
+    /// The abstract's `fstat`: the application learning the length it maps.
     fn fstat(&mut self, file: &OpenFile) -> io::Result<i64> {
-        self.sync.fstat(file)
+        let n = self.sync.fstat(file)?;
+        file.size.store(n, Ordering::Release);
+        Ok(n)
     }
 
     fn stat(&mut self, path: &Path) -> io::Result<i64> {
@@ -917,11 +956,17 @@ impl Backend for Mmap {
     }
 
     fn ftruncate(&mut self, file: &OpenFile, len: i64) -> io::Result<()> {
-        self.sync.ftruncate(file, len)
+        self.sync.ftruncate(file, len)?;
+        // a shrink keeps the earlier mapping, whose pages past the new end are a SIGBUS:
+        // the reads stop at the new size
+        file.size.store(len, Ordering::Release);
+        Ok(())
     }
 
     fn fallocate(&mut self, file: &OpenFile, offset: i64, len: i64) -> io::Result<()> {
-        self.sync.fallocate(file, offset, len)
+        self.sync.fallocate(file, offset, len)?;
+        Mmap::wrote(file, Some(offset + len));
+        Ok(())
     }
 
     fn mkdir(&mut self, path: &Path, mode: u32) -> io::Result<()> {
@@ -966,10 +1011,13 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(stats.maps.load(Ordering::Relaxed), 1);
-        // a read at the end asks the size and maps nothing; a grown file is mapped again
+        // a read at the end maps nothing; a grown file is mapped again once the open's
+        // `fstat` (the abstract's) learns its new size, and not before
         assert_eq!(a.read(&file, &mut buf, Some(8192)).unwrap(), 0);
         assert_eq!(stats.maps.load(Ordering::Relaxed), 1);
         std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(&[9u8; 4096]).unwrap();
+        assert_eq!(a.read(&file, &mut buf, Some(8192)).unwrap(), 0);
+        assert_eq!(a.fstat(&file).unwrap(), 12288);
         assert_eq!(a.read(&file, &mut buf, Some(8192)).unwrap(), 4096);
         assert_eq!(buf[0], 9);
         assert_eq!((stats.maps.load(Ordering::Relaxed), stats.mapped_bytes.load(Ordering::Relaxed)), (2, 8192 + 12288));
@@ -977,6 +1025,53 @@ mod tests {
         let other = OpenFile::from(a.open(&path, 1 << (OpenFlag::RDONLY as u8), 0).unwrap());
         assert_eq!(a.read(&other, &mut buf, Some(0)).unwrap(), 4096);
         assert_eq!(stats.maps.load(Ordering::Relaxed), 3);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_mapping_is_made_at_the_size_the_abstract_asked_and_the_backend_asks_only_when_it_did_not() {
+        // RC1 review: the backend asked `fstat` for itself at the first read of every open,
+        // after the abstract's own, and again at every read past the mapping (each
+        // `until_eof` read's last two): syscalls the application never issues, timed as reads
+        let path = std::env::temp_dir().join(format!("aeiou-mmap-sized-{}", std::process::id()));
+        std::fs::write(&path, vec![7u8; 8192]).unwrap();
+        let stats = Arc::new(MmapStats::default());
+        let mut be = BackendKind::Mmap.make(MmapMode::Fault, MmapConsume::Copy, &stats);
+        let rd = 1 << (OpenFlag::RDONLY as u8);
+        let mut buf = vec![0u8; 16384];
+        // the safetensors shape: `open`, `fstat`, the mapping at the size that fstat returned
+        let file = OpenFile::from(be.open(&path, rd, 0).unwrap());
+        assert_eq!(be.fstat(&file).unwrap(), 8192);
+        // the file grows after the application learned its size: the mapping is the
+        // application's length, so the reads end there, as they would through its mapping
+        std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(&[9u8; 4096]).unwrap();
+        assert_eq!(be.read(&file, &mut buf[..4096], Some(0)).unwrap(), 4096);
+        assert_eq!(be.read(&file, &mut buf[..8193], Some(0)).unwrap(), 8192, "the read past the size the open knows is short");
+        assert_eq!(be.read(&file, &mut buf[..1], Some(8192)).unwrap(), 0, "and one at that size is the end");
+        assert_eq!((stats.sized.load(Ordering::Relaxed), stats.maps.load(Ordering::Relaxed), stats.mapped_bytes.load(Ordering::Relaxed)), (0, 1, 8192));
+        drop(file);
+        // an open read without the abstract's `fstat`: the backend asks once, at the first
+        // read, and never again for the reads past the end (`until_eof`'s size + 1, then 0)
+        let file = OpenFile::from(be.open(&path, rd, 0).unwrap());
+        assert_eq!(be.read(&file, &mut buf[..12289], Some(0)).unwrap(), 12288);
+        assert_eq!(be.read(&file, &mut buf[..1], Some(12288)).unwrap(), 0);
+        assert_eq!(be.read(&file, &mut buf[..1], Some(12288)).unwrap(), 0);
+        assert_eq!((stats.sized.load(Ordering::Relaxed), stats.maps.load(Ordering::Relaxed)), (1, 2));
+        drop(file);
+        // writes through the open grow the size it knows: the read-back is mapped again
+        // without asking
+        let file = OpenFile::from(be.open(&path, 1 << (OpenFlag::RDWR as u8), 0).unwrap());
+        assert_eq!(be.fstat(&file).unwrap(), 12288);
+        assert_eq!(be.read(&file, &mut buf[..1], Some(0)).unwrap(), 1);
+        assert_eq!(be.write(&file, &[5u8; 4096], Some(12288)).unwrap(), 4096);
+        assert_eq!(be.read(&file, &mut buf[..4097], Some(12288)).unwrap(), 4096);
+        assert_eq!(buf[0], 5);
+        // and a truncation shrinks it: the reads stop at the new end, never in a page past it
+        be.ftruncate(&file, 4096).unwrap();
+        assert_eq!(be.read(&file, &mut buf[..8192], Some(0)).unwrap(), 4096);
+        assert_eq!(be.read(&file, &mut buf[..1], Some(8192)).unwrap(), 0);
+        assert_eq!((stats.sized.load(Ordering::Relaxed), stats.maps.load(Ordering::Relaxed)), (1, 4));
+        drop(file);
         std::fs::remove_file(&path).unwrap();
     }
 }

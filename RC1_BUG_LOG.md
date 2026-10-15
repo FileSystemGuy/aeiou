@@ -1227,3 +1227,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   without the fix with the message above and passes with it; the unit test
   `uring::tests::a_read_or_write_over_max_rw_count_is_issued_at_it_never_at_its_low_32_bits`;
   `--test all -- uring aio run trace` 37 passed, `--lib` 43 passed.
+
+## 54. The mmap backend issued `fstat` calls the application never makes, timed as reads
+
+- **Where:** `runner/aeiou/src/backend.rs` (`OpenFile::size`, `Mmap::fstat`, `Mmap::mapping`,
+  `Mmap::write`/`fallocate`/`ftruncate`, `MmapStats::sized`); runner/REFERENCE.md §9, the
+  `mmap` bullet.
+- **Found by:** review of the execution engines, then `strace` of `aeiou run` of
+  `workloads/model-loading/safetensors-load` (`posix = "mmap"`, the synthetic params).
+- **Defect:** `Mmap::mapping` asked `fstat` itself inside the timed `read`: at the first read of
+  every open, even right after the abstract's own `fstat` of it, and at every read past the
+  mapped length (an `until_eof` loop's last two reads). A config file showed the abstract's two
+  `fstat`s plus two of the backend's, a shard its one plus one: syscalls safetensors never makes
+  (it maps at the size its `fstat` gave), charged to the reads, against the abstract being the
+  application's call stream.
+- **Fix:** each open records the size it learned (the abstract's `fstat`, a write through it, a
+  truncation); the mapping is made at that size, and the backend asks `fstat` itself only when
+  the open has none yet, once per open (the technique's real cost, counted in
+  `MmapStats::sized`); a read past the known size returns what `pread` would at that size
+  without a syscall; a file grown under the open is mapped again after the abstract's next
+  `fstat`, as an application must. The fingerprint (645003b9925d8ef4) and the mmap line (7
+  mappings, 417.84 KiB, 284 pages) are unchanged; after the fix the strace shows exactly the
+  abstract's calls.
+- **Evidence:** `backend::tests::a_mapping_is_made_at_the_size_the_abstract_asked_and_the_backend_asks_only_when_it_did_not`
+  and the amended `a_mapping_belongs_to_the_open_file_and_a_grown_file_is_mapped_again` fail on
+  the old code and pass on the new; `--test all` 98 passed, `--lib` 43, `test_formats.py` 38
+  (including the corpus run under `mmap`). Fixed in an isolated worktree and applied.
+  `MmapStats::sized` is not yet printed in the report (queued).

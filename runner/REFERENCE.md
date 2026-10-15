@@ -1140,10 +1140,21 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
   The interface is asynchronous only with `O_DIRECT`: a buffered read is carried out
   inside `io_submit`. The report's `libaio:` line says how long the loops spent there.
 - **`mmap`** (`backend.rs`). The first read of ~~a descriptor~~ an open file maps the whole file
-  (`PROT_READ`, `MAP_SHARED`, the size from an `fstat` the backend issues itself), a read
+  (`PROT_READ`, `MAP_SHARED`, ~~the size from an `fstat` the backend issues itself~~ at the
+  size the open knows), a read
   makes its range of the mapping resident, and `close` unmaps: the shape of a safetensors
-  or Arrow load. A read at or past the end returns what `pread` would; a read past the
-  mapped length asks `fstat` again and ~~remaps~~ maps the file again if it has grown.
+  or Arrow load. ~~A read at or past the end returns what `pread` would; a read past the
+  mapped length asks `fstat` again and maps the file again if it has grown.~~
+  **The length is the application's** (2026-10-14, RC1 review): the size the abstract's
+  own `fstat` of the open returned, as safetensors maps at the size its `fstat` gave, so
+  the backend issues no `fstat` of its own there. Before, it asked again inside the first
+  read of every open and at every read past the mapping (an `until_eof` read's last two),
+  syscalls the application never makes, timed as reads. Only an open read before the
+  abstract asks its size costs one `fstat`, the backend's, inside its first read (the
+  technique needs the length; `MmapStats::sized`). A write through the open extends the
+  size it knows, a truncation sets it; a read past that size returns what `pread` would at
+  that size and asks nothing, and a file grown under the open is mapped again only after
+  the abstract's next `fstat` learns it, as an application must.
   **The mapping belongs to the open file, not to the actor that reads** (2026-10-01,
   user; `backend::OpenFile`, `DESIGN_REVIEW.md` §3.36 Revised): the actor that opened the
   file and every sub-actor that inherited the descriptor at a fork read through the one
