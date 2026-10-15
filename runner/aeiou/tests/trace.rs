@@ -274,3 +274,61 @@ fn v16_a_writing_trace_needs_one_instance() {
     aeiou::trace::check_counts(&loaded.ast, &loaded.traces, &counts).unwrap();
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+#[test]
+fn a_path_outside_root_is_refused_at_load_and_nothing_outside_is_touched() {
+    let d = tmpdir("escape");
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(d.join("outside/victimdir")).unwrap();
+    std::fs::write(d.join("outside/victim"), b"precious").unwrap();
+    std::fs::write(d.join("outside/victimdir/keep"), b"precious").unwrap();
+    let victim = d.join("outside/victim");
+    let cases: [(&str, &str); 5] = [
+        // `..` in creates: --clean-namespaces would remove it, the open would truncate it
+        (r#"{"aeiou_trace":1,"lanes":1,"creates":["../outside/victimdir"]}
+{"lane":0,"op":"stat","path":"x"}"#, "line 1: path `../outside/victimdir` has a `..` component"),
+        // an absolute op path
+        (&format!(r#"{{"aeiou_trace":1,"lanes":1,"creates":[]}}
+{{"lane":0,"op":"open","fd":0,"path":"{}","flags":["WRONLY","CREAT","TRUNC"]}}"#, victim.display()), "line 2: path"),
+        // `..` hidden in a group's member and a rename's destination
+        (r#"{"aeiou_trace":1,"lanes":1,"creates":[]}
+{"lane":0,"op":"rename","path":"a","to":"b/../../c"}"#, "line 2: path `b/../../c` has a `..` component"),
+        // the root itself, changed
+        (r#"{"aeiou_trace":1,"lanes":1,"creates":["."]}"#, "line 1: path `.` is --root itself"),
+        (r#"{"aeiou_trace":1,"lanes":1,"creates":[]}
+
+{"lane":0,"op":"rmdir","path":""}"#, "line 3: an empty path"),
+    ];
+    for (lines, want) in cases {
+        let p = abstract_with(&d, lines, Some(1));
+        let e = match aeiou::load(&p) {
+            Ok(_) => panic!("a trace naming a path outside --root loaded: {lines}"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(e.contains(want), "{e}");
+        if want == "line 2: path" {
+            assert!(e.contains("is absolute"), "{e}");
+        }
+    }
+    // the root itself may be read (the exporter writes `.` for it)
+    let p = abstract_with(&d, r#"{"aeiou_trace":1,"lanes":1,"creates":[]}
+{"lane":0,"op":"open","fd":0,"path":".","flags":["RDONLY","DIRECTORY"]}
+{"lane":0,"op":"readdir","fd":0}
+{"lane":0,"op":"close","fd":0}
+{"lane":0,"op":"stat","path":"./"}"#, Some(1));
+    aeiou::load(&p).unwrap();
+    // and the reviewer's run, refused before anything is removed or truncated
+    let p = abstract_with(&d, r#"{"aeiou_trace":1,"lanes":1,"creates":["../outside/victim","../outside/victimdir"]}
+{"lane":0,"op":"open","fd":0,"path":"../outside/victim","flags":["WRONLY","CREAT","TRUNC"],"mode":420}
+{"lane":0,"op":"close","fd":0}"#, Some(1));
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
+        .args(["run", p.to_str().unwrap(), "--gpus", "1", "--root", root.to_str().unwrap(), "--clean-namespaces", "--time-scale", "0"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("`..` component"), "{err}");
+    assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
+    assert_eq!(std::fs::read(d.join("outside/victimdir/keep")).unwrap(), b"precious");
+    std::fs::remove_dir_all(&d).unwrap();
+}

@@ -135,3 +135,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `a b`, `n,m`) fail on the old trace.py (`'/r/caf\\303\\251'`; counts `{}`) and pass on the
   new; test_trace.py: 61 passed.
 
+## 7. A `trace` node's paths could reach outside `--root`, and `--clean-namespaces` deleted there
+
+- **Where:** `runner/aeiou/src/trace.rs`, `TraceFile::load` (new `check_path`/`check_paths`).
+- **Found by:** review of the runner's trace node against runner/REFERENCE.md §13 ("removes
+  nothing else"; a trace's root is never emptied): op paths and the header's `creates` were
+  joined to the root with `root.join(p)` and nothing refused `..` or an absolute path.
+- **Defect:** a trace with `creates: ["../outside/victim", "../outside/victimdir"]` and an
+  `open WRONLY|CREAT|TRUNC` of the first passed `aeiou check`, and `aeiou run --clean-namespaces`
+  removed the directory outside the root (`remove_dir_all`) and truncated the file ("precious" →
+  0 bytes). A safety bug: a hand-edited or buggy trace could destroy data outside the storage
+  under test.
+- **Fix:** at load (so `check`, `dry-run`, and `run` all refuse, before the gate), every
+  `creates` entry and every op path (open, stat, unlink, mkdir, rmdir, both sides of rename,
+  `submit` members) is refused if absolute, if it has a `..` component, or if empty, naming the
+  file line; the root itself (`.`) is allowed only to read (an open without CREAT/TRUNC, a stat),
+  never to create, truncate, or remove, so `creates: ["."]` cannot empty the root. runner
+  REFERENCE §13 *Loading* updated. No fingerprint or contract change; no committed trace file
+  exists.
+- **Evidence:** before: `check` ok, `run` exit 0 and the files outside destroyed; after: `FAIL …
+  trace t.jsonl: line 1: path ../outside/victim has a .. component` from all three commands,
+  files intact. `tests/trace.rs::a_path_outside_root_is_refused_at_load_and_nothing_outside_is_touched`
+  fails with the checks disabled and passes with them; `--test all`: 76 passed.
+- **Queued from it:** the Python exporter's `rel()` fallback returns a path not under the root
+  unchanged (the runner now refuses such a file at load).
+

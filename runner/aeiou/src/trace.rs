@@ -223,14 +223,18 @@ impl TraceFile {
         }
         let text = std::str::from_utf8(&bytes).map_err(|e| anyhow!("trace `{name}`: not UTF-8: {e}"))?;
         let mut it = text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty());
-        let (_, first) = it.next().ok_or_else(|| anyhow!("trace `{name}`: empty file"))?;
+        let (h, first) = it.next().ok_or_else(|| anyhow!("trace `{name}`: empty file"))?;
         let header: Header = serde_json::from_str(first).map_err(|e| anyhow!("trace `{name}`: header: {e}"))?;
         if header.aeiou_trace != FORMAT {
             bail!("trace `{name}`: aeiou_trace {} is not {FORMAT}", header.aeiou_trace);
         }
+        for p in &header.creates {
+            check_path(name, h + 1, p, false)?;
+        }
         let mut lines = Vec::with_capacity(header.lines);
         for (i, l) in it {
             let line: Line = serde_json::from_str(l).map_err(|e| anyhow!("trace `{name}`: line {}: {e}", i + 1))?;
+            check_paths(name, i + 1, &line.op)?;
             lines.push(line);
         }
         let mut tf = TraceFile { name: name.to_string(), path: path.to_path_buf(), sha256: got, header, lines, lanes: Vec::new(), opens: Vec::new(), read_extent: HashMap::new(), inputs: Vec::new(), peak_open: 0, ops: 0, deps: Vec::new(), deps2: HashMap::new(), changed: Vec::new() };
@@ -597,6 +601,46 @@ pub fn load_all(ast: &Ast, dir: &Path) -> Result<HashMap<String, Arc<TraceFile>>
 }
 
 // ---------------------------------------------------------------- before the gate
+
+/// A path in a trace file is taken under `--root`: it must be relative and stay below it
+/// (no `..`, not absolute, not empty), so nothing a trace opens, changes, creates, or
+/// `--clean-namespaces` removes is outside `--root`. The root itself (`.`, what the exporter
+/// writes for it) may be read (opened without `CREAT` or `TRUNC`, listed, stat'ed), never
+/// changed (`changes`).
+fn check_path(name: &str, line: usize, p: &str, root_ok: bool) -> Result<()> {
+    use std::path::Component;
+    let mut below = false;
+    for c in Path::new(p).components() {
+        match c {
+            Component::Normal(_) => below = true,
+            Component::CurDir => {}
+            Component::ParentDir => bail!("trace `{name}`: line {line}: path `{p}` has a `..` component: a trace's paths stay under --root"),
+            Component::RootDir | Component::Prefix(_) => bail!("trace `{name}`: line {line}: path `{p}` is absolute: a trace's paths are relative to --root"),
+        }
+    }
+    if p.is_empty() {
+        bail!("trace `{name}`: line {line}: an empty path: a trace's paths are relative to --root");
+    }
+    if !below && !root_ok {
+        bail!("trace `{name}`: line {line}: path `{p}` is --root itself, and the trace changes it");
+    }
+    Ok(())
+}
+
+/// `check_path` for every path one line names (a group's members each).
+fn check_paths(name: &str, line: usize, op: &LineOp) -> Result<()> {
+    match op {
+        LineOp::Open { path, flags, .. } => check_path(name, line, path, !flags.contains(&OpenFlag::CREAT) && !flags.contains(&OpenFlag::TRUNC)),
+        LineOp::Stat { path, .. } => check_path(name, line, path, true),
+        LineOp::Unlink { path, .. } | LineOp::Mkdir { path, .. } | LineOp::Rmdir { path, .. } => check_path(name, line, path, false),
+        LineOp::Rename { path, to, .. } => {
+            check_path(name, line, path, false)?;
+            check_path(name, line, to, false)
+        }
+        LineOp::Submit { ops } => ops.iter().try_for_each(|o| check_paths(name, line, o)),
+        _ => Ok(()),
+    }
+}
 
 /// What the check found about one trace file's paths under `--root`.
 #[derive(Debug, Clone, serde::Serialize)]

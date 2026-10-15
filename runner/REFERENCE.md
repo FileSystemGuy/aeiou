@@ -1605,7 +1605,11 @@ Lines: a header, then one op per line in the order the calls returned.
 
 **Loading.** `aeiou load` reads the node's `file` relative to the document's directory and
 refuses it before the gate when its sha256 is not the node's. Open ids must be ordinal; a
-use before its open is refused.
+use before its open is refused. Every path, in an op or in `creates`, must stay under the
+root: an absolute path, a `..` component, or an empty path is refused with its line number
+(2026-10-14, RC1 review), so nothing the trace opens, changes, or `--clean-namespaces`
+removes is outside `--root`. The root itself (`.`) may be read (opened without `CREAT` or
+`TRUNC`, listed, stat'ed), never changed.
 
 **The run** (`run.rs`; `uring.rs` under the event-loop backends, since 2026-10-03): one
 thread per lane under a blocking backend, one task per lane on the event loop that reached
