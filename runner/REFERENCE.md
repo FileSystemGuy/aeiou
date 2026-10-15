@@ -2024,7 +2024,11 @@ manifest as an object) the same night.
 
 **Where.** `--endpoint NAME=s3://BUCKET[/PREFIX]` places an object name's root at a prefix,
 as a directory endpoint places a `posix` name's (§4, `endpoint.rs`): the path `ROOT/a/b` is
-the key `PREFIX/a/b`. An object name has no default place, so `Endpoints::parse` refuses an
+the key `PREFIX/a/b`, byte for byte (`Path::parse`: `~ [ ] # %` and the like are not
+percent-encoded, so the bucket holds the names a POSIX run's directory holds, and a listed
+key is the name a run or a resume makes; empty components go, as POSIX resolves `a//b`; a
+`.` or `..` component or a control character, which no key holds as POSIX does, fails the
+op with `EINVAL`; RC1 review, bug R28). An object name has no default place, so `Endpoints::parse` refuses an
 abstract with one unplaced, an endpoint of the wrong kind for its name's protocol, and a
 `posix` name that would fall under a root placed in an object store. The store comes from
 the environment (`AmazonS3Builder::from_env`: `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`,

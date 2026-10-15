@@ -424,11 +424,16 @@ fn a_missing_object_is_enoent_whatever_its_key_and_a_read_past_the_end_is_eof() 
 /// A resume of an object dataset sends only the unfinished ids whose keys are missing, and
 /// counts the ones it finds there as a directory resume counts the ids it writes again
 /// (`runner/REFERENCE.md` §5, Resume): the corpus's totals are every file once (RC1 review).
+/// Its names hold `~` and `#`, which are keys as written: the listed keys are the names the
+/// resume makes, so it finds them (RC1 review, bug R28).
 #[test]
 fn a_resumed_object_dataset_counts_the_objects_it_finds() {
     let m = minio("a_resumed_object_dataset_counts_the_objects_it_finds");
     let dir = tmpdir("resume");
     let ast = object_variant("npy_per_sample", &["train"], &dir);
+    let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&ast).unwrap()).unwrap();
+    d["datasets"]["train"]["pattern"] = "train/{id div files_per_directory:05}/s~ample#{id:09}.npz".into();
+    std::fs::write(&ast, d.to_string()).unwrap();
     let root = dir.join("root");
     let mut a = vec!["datagen", ast.to_str().unwrap(), "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/res"];
     a.extend(["--param", "samples=10", "--param", "sample_mean=1000", "--param", "sample_sd=0"]);
@@ -445,7 +450,7 @@ fn a_resumed_object_dataset_counts_the_objects_it_finds() {
     std::fs::write(&wfile, serde_json::to_vec(&w).unwrap()).unwrap();
     assert!(curl(&m, "/bench/res/.aeiou-dataset.json", &["-X", "PUT", "--data-binary", &format!("@{}", wfile.display())]).status.success());
     for id in [3, 7] {
-        assert!(curl(&m, &format!("/bench/res/00000/sample_{id:09}.npz"), &["-X", "DELETE"]).status.success());
+        assert!(curl(&m, &format!("/bench/res/00000/s~ample%23{id:09}.npz"), &["-X", "DELETE"]).status.success());
     }
     let out = ok(&aeiou(Some(&m), &["datagen", "--resume", "s3://bench/res"]));
     let after = get();
@@ -459,6 +464,67 @@ fn a_resumed_object_dataset_counts_the_objects_it_finds() {
     assert!(out.contains("dataset train: 2 file(s), "), "{out}");
     assert!(out.contains(", 8 already there at "), "{out}");
     for id in [3, 7] {
-        assert!(curl(&m, &format!("/bench/res/00000/sample_{id:09}.npz"), &[]).status.success(), "object {id} was not sent again");
+        assert!(curl(&m, &format!("/bench/res/00000/s~ample%23{id:09}.npz"), &[]).status.success(), "object {id} was not sent again");
     }
+}
+
+/// An object's key is its name as the application writes it, byte for byte: `~ [ ] # %` are
+/// not percent-encoded, so the bucket holds the names the POSIX run's directory holds, and
+/// `--clean-namespaces` deletes the keys it lists, foreign and stale ones included, so the
+/// next run finds the root empty. A name no key holds as POSIX does is refused (RC1 review,
+/// bug R28).
+#[test]
+fn object_keys_are_the_names_as_written() {
+    let m = minio("object_keys_are_the_names_as_written");
+    let dir = tmpdir("keys");
+    let ast = |to: i64, pattern: &str, protocol: bool| {
+        let mut d = serde_json::json!({"ast": "0.10", "name": "sp",
+            "namespaces": {"o": {"pattern": pattern, "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
+            "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": to, "body": [
+                {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
+                {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}},
+                {"write": {"file": {"ref": "f"}, "len": 4096}},
+                {"close": {"file": {"ref": "f"}}},
+                {"stat": {"file": {"ref": "f"}}}]}}]}}});
+        if !protocol {
+            d["namespaces"]["o"].as_object_mut().unwrap().remove("protocol");
+        }
+        let p = dir.join(format!("sp{to}{protocol}{}.ast.json", pattern.len()));
+        std::fs::write(&p, d.to_string()).unwrap();
+        p
+    };
+    let name = "o/ck~pt [{k}]#%.bin";
+    let root = dir.join("root");
+    let root = root.to_str().unwrap();
+    let run = |ast: &Path, extra: &[&str]| aeiou(Some(&m), &[&["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "o=s3://bench/sp"][..], extra].concat());
+    let listed = || String::from_utf8_lossy(&curl(&m, "/bench?list-type=2&prefix=sp/", &[]).stdout).to_string();
+    let two = ast(2, name, true);
+    ok(&run(&two, &[]));
+    // the POSIX run's names are the keys
+    let posix = dir.join("posix");
+    ok(&aeiou(None, &["run", ast(2, name, false).to_str().unwrap(), "--gpus", "1", "--root", posix.to_str().unwrap()]));
+    let mut files: Vec<String> = std::fs::read_dir(posix.join("o")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).filter(|n| !n.starts_with(".aeiou")).collect();
+    files.sort();
+    assert_eq!(files, ["ck~pt [0]#%.bin", "ck~pt [1]#%.bin"]);
+    let l = listed();
+    for f in &files {
+        assert!(l.contains(&format!("<Key>sp/{f}</Key>")), "{f} not in the bucket: {l}");
+    }
+    let manifest = String::from_utf8_lossy(&curl(&m, "/bench/sp/.aeiou-namespace.json", &[]).stdout).to_string();
+    assert!(manifest.contains("o/ck~pt [0]#%.bin"), "{manifest}");
+    // a foreign key and a stale one: a run is refused, naming one as it is listed; with
+    // --clean-namespaces it deletes both, and its own one object is what is left
+    assert!(curl(&m, "/bench/sp/foreign~key", &["-X", "PUT", "--data-binary", "x"]).status.success());
+    let one = ast(1, name, true);
+    refused(&run(&one, &[]), "namespace `o` root s3://bench/sp is not empty (4 objects, e.g. s3://bench/sp/.aeiou-namespace.json)");
+    assert!(ok(&run(&one, &["--clean-namespaces"])).contains("namespace root o/ emptied"));
+    let l = listed();
+    assert_eq!(l.matches("<Key>").count(), 2, "{l}");
+    assert!(l.contains("<Key>sp/ck~pt [0]#%.bin</Key>") && l.contains("<Key>sp/.aeiou-namespace.json</Key>"), "{l}");
+    // the next run finds the root as the last one left it
+    refused(&run(&one, &[]), "namespace `o` root s3://bench/sp is not empty (2 objects");
+    assert!(ok(&run(&one, &["--clean-namespaces"])).contains("namespace root o/ emptied"));
+    // a `..` component no key holds as POSIX does
+    let o = aeiou(Some(&m), &["run", ast(1, "o/{k}/../x", true).to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "o=s3://bench/dots"]);
+    refused(&o, "s3://bench/dots/0/../x: no object key holds the component \"..\" (`.`, `..`, or a control character)");
 }

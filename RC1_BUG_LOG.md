@@ -2219,3 +2219,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   dry-run; on HEAD 0a71dd5 plus the change: `--test all` 139 passed, `--lib` 66, builder suite
   with MinIO 389, CI's checker diff empty, every committed parameter file ok, `aeiou-build
   --hermetic --twice --check` rc 0. Fixed in an isolated worktree and applied.
+
+## 96. S3 object keys were percent-encoded, so bucket names differed from POSIX names and `--clean-namespaces` silently missed keys
+
+- **Where:** `runner/aeiou/src/object.rs` (`Store::key` and its callers `read`, `upload`, `stat`,
+  `list_dir`, `delete`, `rename`, `non_empty`, `get`, `put`, `put_parts`, `keys_below`,
+  `delete_all`; `start` Open/Read arms); `runner/REFERENCE.md` §16 **Where.**; tests.
+- **Found by:** RC1 third-round object-engine review (RV3a). `Store::key` built keys with
+  object_store's `Path::from`, which percent-encodes `~ [ ] # % { } ^ | < > " \`` and controls,
+  while listing returns stored keys as they are: `keys_below` handed back encoded strings and
+  `delete_all` encoded them again (`%7E`→`%257E`), and S3 answers a DELETE of a missing key
+  with success. Repro `o/ck~pt [{k}]#%.bin`: the bucket held `ck%7Ept %5B0%5D%23%25.bin` (POSIX
+  writes `ck~pt [0]#%.bin`); after a foreign `foreign~key`, `--clean-namespaces` printed
+  "namespace root o/ emptied" yet all 4 keys stayed, and the next run was refused "not empty
+  (4 objects)". The same mismatch made datagen `--resume` (listed keys vs generated names)
+  send such objects again.
+- **Fix:** `key` joins prefix and name, drops empty components (as POSIX resolves `a//b`), and
+  builds the key with `Path::parse`, so the key is the name byte for byte; a `.`/`..`
+  component or a control character fails with EINVAL naming the raw name. `read`/`upload`
+  return `io::Result`; listed keys are raw, so re-keying them is the identity. No fingerprint,
+  dataset id, or AST change; object keys of names with those characters change (now the names).
+- **Evidence:** `object::object_keys_are_the_names_as_written` (keys equal the POSIX run's names,
+  manifest `o/ck~pt [0]#%.bin`, clean removes a foreign and a stale key, `..` gives EINVAL) and
+  `a_resumed_object_dataset_counts_the_objects_it_finds` (pattern now `s~ample#{id:09}.npz`;
+  before the fix it re-sent 10 objects where 2 were missing) fail with `Path::from` restored and
+  pass; on HEAD 0dd3c25 plus the change: `--test all` with MinIO 146 passed (after freeing disk
+  that had pushed MinIO into 507 storage-full), builder `test_object.py` + `test_formats.py` 53
+  passed, `cargo check --release` without features builds. Fixed in an isolated worktree and applied.

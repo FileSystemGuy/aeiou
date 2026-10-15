@@ -215,7 +215,10 @@ pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Share
             if bit(OpenFlag::APPEND) || bit(OpenFlag::RDWR) || bit(OpenFlag::EXCL) {
                 return refused("O_APPEND, O_RDWR, or O_EXCL");
             }
-            let upload = writes(flags).then(|| std::sync::Mutex::new(Some(store.upload(&rest))));
+            let upload = match writes(flags).then(|| store.upload(&rest)).transpose() {
+                Ok(u) => u.map(|u| std::sync::Mutex::new(Some(u))),
+                Err(e) => return Step::Done(Err(e)),
+            };
             let file = crate::backend::OpenFile::object(Handle { store: store.clone(), rest, upload });
             a.opened(sh, op.path, op.aux, file);
             Step::Done(Ok(0))
@@ -238,7 +241,10 @@ pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Share
                 return Step::Done(Err(io::Error::from_raw_os_error(libc::EBADF)));
             }
             let mut sink = sink.expect("a read is begun with its buffer");
-            let read = store.read(&rest, op.offset as u64);
+            let read = match store.read(&rest, op.offset as u64) {
+                Ok(r) => r,
+                Err(e) => return Step::Done(Err(e)),
+            };
             Step::Send(Box::pin(async move {
                 let r = read.into(sink.bytes()).await.map(|n| n as i64);
                 Answer::Read(r, sink.owned())
@@ -646,14 +652,18 @@ mod imp {
             &self.uri
         }
 
-        /// The key of `rest` (a path below the endpoint's root, `""` for the root itself).
-        fn key(&self, rest: &str) -> Path {
-            let rest = rest.trim_matches('/');
-            match (self.prefix.is_empty(), rest.is_empty()) {
-                (true, _) => Path::from(rest),
-                (false, true) => Path::from(self.prefix.as_str()),
-                (false, false) => Path::from(format!("{}/{rest}", self.prefix)),
+        /// The key of `rest` (a path below the endpoint's root, `""` for the root itself):
+        /// the name as the application writes it, byte for byte (`Path::parse`; `Path::from`
+        /// percent-encodes `~ [ ] # %` and more, so the bucket held other names than the POSIX
+        /// tree, and a listed key keyed again named another object). Empty components go, as
+        /// POSIX resolves `a//b`; a component no key holds as POSIX does (`.`, `..`, a control
+        /// character) is `EINVAL`.
+        fn key(&self, rest: &str) -> io::Result<Path> {
+            let parts: Vec<&str> = self.prefix.split('/').chain(rest.split('/')).filter(|c| !c.is_empty()).collect();
+            if let Some(c) = parts.iter().find(|c| **c == "." || **c == ".." || c.chars().any(|x| x.is_ascii_control())) {
+                return Err(error(libc::EINVAL, format!("{}: no object key holds the component {c:?} (`.`, `..`, or a control character)", self.show(rest))));
             }
+            Path::parse(parts.join("/")).map_err(|e| error(libc::EINVAL, format!("{}: {e}", self.show(rest))))
         }
 
         /// Where `rest` is, for messages.
@@ -662,8 +672,8 @@ mod imp {
         }
 
         /// The ranged `GET` of a read at `offset` of `rest`, owning what it needs.
-        pub fn read(&self, rest: &str, offset: u64) -> Reader {
-            Reader { s3: self.s3.clone(), key: self.key(rest), show: self.show(rest), offset }
+        pub fn read(&self, rest: &str, offset: u64) -> io::Result<Reader> {
+            Ok(Reader { s3: self.s3.clone(), key: self.key(rest)?, show: self.show(rest), offset })
         }
 
         /// `HEAD`: the object's size; for no object, size 0 when a `LIST` finds a key below
@@ -671,6 +681,7 @@ mod imp {
         pub fn stat(&self, rest: &str) -> Fut<'static, io::Result<i64>> {
             let (s3, key, show) = (self.s3.clone(), self.key(rest), self.show(rest));
             Box::pin(async move {
+                let key = key?;
                 match s3.head(&key).await {
                     Ok(m) => Ok(m.size as i64),
                     Err(object_store::Error::NotFound { .. }) => {
@@ -686,6 +697,7 @@ mod imp {
         pub fn list_dir(&self, rest: &str) -> Fut<'static, io::Result<usize>> {
             let (s3, key, show) = (self.s3.clone(), self.key(rest), self.show(rest));
             Box::pin(async move {
+                let key = key?;
                 let prefix = if key.as_ref().is_empty() { None } else { Some(&key) };
                 let l = s3.list_with_delimiter(prefix).await.map_err(|e| io_err(&show, e))?;
                 let hidden = |p: &Path| p.filename().is_some_and(|f| f.starts_with(".aeiou"));
@@ -695,19 +707,19 @@ mod imp {
 
         /// Is there any key below `rest`?
         pub fn non_empty(&self, rest: &str) -> io::Result<bool> {
-            let key = self.key(rest);
+            let key = self.key(rest)?;
             block(any_below(&self.s3, &key, None))
         }
 
         /// `non_empty`, but for objects named `except…` (a manifest another rank wrote).
         pub fn non_empty_except(&self, rest: &str, except: &str) -> io::Result<bool> {
-            let key = self.key(rest);
+            let key = self.key(rest)?;
             block(any_below(&self.s3, &key, Some(except)))
         }
 
         /// The whole object, or `None` when there is none.
         pub fn get(&self, rest: &str) -> io::Result<Option<Vec<u8>>> {
-            let key = self.key(rest);
+            let key = self.key(rest)?;
             block(async {
                 match self.s3.get(&key).await {
                     Ok(r) => r.bytes().await.map(|b| Some(b.to_vec())).map_err(|e| io_err(&self.show(rest), e)),
@@ -719,28 +731,31 @@ mod imp {
 
         /// An upload of the object at `rest`, in parts of `--object-part-mib`; nothing is
         /// sent until a part fills or the handle closes.
-        pub fn upload(&self, rest: &str) -> Upload {
-            Upload { s3: self.s3.clone(), key: self.key(rest), show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None, parts: 0 }
+        pub fn upload(&self, rest: &str) -> io::Result<Upload> {
+            Ok(Upload { s3: self.s3.clone(), key: self.key(rest)?, show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None, parts: 0 })
         }
 
         /// `DELETE` (a missing key is no error, as S3 has it).
         pub fn delete(&self, rest: &str) -> Fut<'static, io::Result<()>> {
             let (s3, key, show) = (self.s3.clone(), self.key(rest), self.show(rest));
-            Box::pin(async move { s3.delete(&key).await.map_err(|e| io_err(&show, e)) })
+            Box::pin(async move { s3.delete(&key?).await.map_err(|e| io_err(&show, e)) })
         }
 
         /// A copy on the server and a `DELETE` of the source.
         pub fn rename(&self, from: &str, to: &str) -> Fut<'static, io::Result<()>> {
             let (s3, f, t, show) = (self.s3.clone(), self.key(from), self.key(to), self.show(from));
             Box::pin(async move {
+                let (f, t) = (f?, t?);
                 s3.copy(&f, &t).await.map_err(|e| io_err(&show, e))?;
                 s3.delete(&f).await.map_err(|e| io_err(&show, e))
             })
         }
 
-        /// Every key below `rest` (a recursive `LIST`), as paths below the endpoint's prefix.
+        /// Every key below `rest` (a recursive `LIST`), as paths below the endpoint's prefix:
+        /// the names as stored, which `key` gives back unchanged (`delete_all`, a resume's
+        /// comparison with the names it makes).
         pub fn keys_below(&self, rest: &str) -> io::Result<Vec<String>> {
-            let key = self.key(rest);
+            let key = self.key(rest)?;
             let strip = if self.prefix.is_empty() { String::new() } else { format!("{}/", self.prefix) };
             block(async {
                 let prefix = if key.as_ref().is_empty() { None } else { Some(&key) };
@@ -758,7 +773,8 @@ mod imp {
 
         /// `DELETE` every key of `rests` (paths below the endpoint's prefix), in batches.
         pub fn delete_all(&self, rests: &[String]) -> io::Result<()> {
-            let keys: Vec<object_store::Result<Path>> = rests.iter().map(|r| Ok(self.key(r))).collect();
+            let keys = rests.iter().map(|r| self.key(r)).collect::<io::Result<Vec<Path>>>()?;
+            let keys: Vec<object_store::Result<Path>> = keys.into_iter().map(Ok).collect();
             block(async {
                 let mut s = self.s3.delete_stream(futures::stream::iter(keys).boxed());
                 while let Some(r) = s.next().await {
@@ -770,7 +786,7 @@ mod imp {
 
         /// One `PUT` of the whole object.
         pub fn put(&self, rest: &str, data: Vec<u8>) -> io::Result<()> {
-            let key = self.key(rest);
+            let key = self.key(rest)?;
             block(async { self.s3.put(&key, PutPayload::from(data)).await.map(|_| ()).map_err(|e| io_err(&self.show(rest), e)) })
         }
 
@@ -791,7 +807,7 @@ mod imp {
             if size <= part {
                 return self.put(rest, make(0, size));
             }
-            let key = self.key(rest);
+            let key = self.key(rest)?;
             block(async {
                 let mut up = self.s3.put_multipart(&key).await.map_err(|e| io_err(&show, e))?;
                 send_parts(up.as_mut(), size, part, &mut make).await.map_err(|e| io_err(&show, e))
@@ -978,7 +994,7 @@ mod imp {
         pub fn show(&self, _: &str) -> String {
             match *self {}
         }
-        pub fn read(&self, _: &str, _: u64) -> Reader {
+        pub fn read(&self, _: &str, _: u64) -> io::Result<Reader> {
             match *self {}
         }
         pub fn stat(&self, _: &str) -> Fut<'static, io::Result<i64>> {
@@ -999,7 +1015,7 @@ mod imp {
         pub fn put(&self, _: &str, _: Vec<u8>) -> io::Result<()> {
             match *self {}
         }
-        pub fn upload(&self, _: &str) -> Upload {
+        pub fn upload(&self, _: &str) -> io::Result<Upload> {
             match *self {}
         }
         pub fn delete(&self, _: &str) -> Fut<'static, io::Result<()>> {
