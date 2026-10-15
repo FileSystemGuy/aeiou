@@ -1676,7 +1676,10 @@ Lines: a header, then one op per line in the order the calls returned.
   with one it is positioned. `submit` is an `io_submit`: positioned ops issued together and
   reaped before the lane's next line. `readdir` is one line per listing and its entries
   are not checked. A write moves its traced count (0 when it failed) in the metrics and
-  the position it leaves, and is checked as its length when it runs.
+  the position it leaves, and is checked as its length when it runs. An `lseek` sets the
+  position to what it returned, and a failed one leaves it where it was, as the kernel does
+  (2026-10-15, RC1 review: a failed one reset it to 0); the root check places every read by
+  the same rule as the walk (`trace::moved`).
 - **The exporter resolves a shared position:** a sequential read or write on an open that
   more than one lane used is written positioned at the offset the trace shows it used,
   since the lanes' interleaving decided it; the header's notes count the rewrites

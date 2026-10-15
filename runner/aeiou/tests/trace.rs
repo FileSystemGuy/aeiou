@@ -431,3 +431,41 @@ fn a_malformed_line_is_refused_at_load_with_its_line_number() {
 {"lane":0,"op":"stat","path":"f"}"#, Some(1));
     aeiou::load(&p).unwrap();
 }
+
+#[test]
+fn the_root_check_places_a_read_where_the_walk_does_after_a_short_write_or_a_failed_lseek() {
+    // `index` (the extents `check_root` holds an input to) and `build` (the walk and the run)
+    // share one position rule: a short write moves the position by what it returned, so the
+    // read after it ends at 110, not 1100; a failed `lseek` leaves the position where it was
+    let lines = r#"
+{"aeiou_trace":1,"source":"strace","root":"/d","lanes":1,"lines":7,"opens":1,"creates":[],"notes":{}}
+{"lane":0,"t":0,"dur":100,"op":"open","fd":0,"path":"f","flags":["RDWR"]}
+{"lane":0,"t":200,"dur":100,"op":"write","fd":0,"len":1000,"ret":10}
+{"lane":0,"t":400,"dur":100,"op":"read","fd":0,"len":100,"ret":100}
+{"lane":0,"t":600,"dur":100,"op":"lseek","fd":0,"offset":-5,"whence":"SET","ret":"EINVAL"}
+{"lane":0,"t":800,"dur":100,"op":"read","fd":0,"len":50,"ret":50}
+{"lane":0,"t":1000,"dur":100,"op":"close","fd":0}
+"#;
+    let d = tmpdir("shortpos");
+    let p = abstract_with(&d, lines, Some(1));
+    let (loaded, model) = leaked(&p, 1);
+    let filter = dryrun::Filter { actor: Some(0), steps: None, limit: None };
+    let mut dry = dryrun::run(model, 1, Some(filter)).unwrap();
+    let walked = dry.total.take_lines();
+    assert!(walked[2].starts_with("app#0 [0,2] read f off=10 len=100"), "{}", walked[2]);
+    assert!(walked[4].starts_with("app#0 [0,4] read f off=110 len=50"), "{}", walked[4]);
+    let tf = loaded.traces.get("t.jsonl").unwrap();
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    // one byte short of where the application read to is refused, naming that end
+    std::fs::write(root.join("f"), vec![b'f'; 159]).unwrap();
+    let e = aeiou::trace::check_root(tf, &root, true).unwrap_err().to_string();
+    assert!(e.contains("159 bytes") && e.contains("reads to 160"), "{e}");
+    for be in [BackendKind::Sync, BackendKind::Uring, BackendKind::LibAio] {
+        // the run writes the call's length, so each run starts from the input's size
+        std::fs::write(root.join("f"), vec![b'f'; 160]).unwrap();
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap_or_else(|e| panic!("{}: {e:#}", be.describe()));
+        assert_eq!(rep.stats.fingerprint, dry.total.fingerprint, "{}", be.describe());
+        assert_eq!(rep.stats.bytes_read, 150, "{}", be.describe());
+    }
+}

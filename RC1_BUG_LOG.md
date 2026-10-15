@@ -1603,3 +1603,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   open, in the JSON and the text; `safetensors_load` reports 0) fails before (`left: Null`) and
   passes after; `--test all -- report run mmap` 41 passed on HEAD plus the change,
   `test_formats.py` 38 passed. Fixed in an isolated worktree and applied.
+
+## 69. The trace's root check placed reads after a short write wrongly, and a failed `lseek` reset the position
+
+- **Where:** `runner/aeiou/src/trace.rs` (new `moved`, used by `TraceFile::index` and
+  `build`); runner/REFERENCE.md §13; `runner/aeiou/tests/trace.rs`.
+- **Found by:** the regression review of the RC1 fixes (bug 27 had changed `build` only); the
+  fixer's audit of `index` against `build` found the `lseek` rule.
+- **Defect:** (1) `index`, which `check_root` uses, moved a no-offset write's position by its
+  `len`, while `build` (since bug 27) moves it by the traced count: a trace writing 1000 bytes
+  that returned 10 and then reading 100 dry-ran at `off=10` but `aeiou run --root` refused a
+  valid 200-byte file, "the trace reads to 1100". (2) Both set the position to an `lseek`'s
+  `ret.count().max(0)`, so a failed `lseek` (`EINVAL`) moved it to 0, where the kernel, the
+  Python reader, and a run under a non-positional backend leave it: later sequential offsets
+  in the dry run and the fingerprint were wrong.
+- **Fix:** one position rule, `moved`, for both: a read or write without an offset moves by the
+  traced count (checked for overflow), an `lseek` sets what it returned, a failed one leaves the
+  position. **The fingerprint changes** for a trace file with a failed `lseek` followed by a
+  sequential op on that open; no committed trace or fixture has an `lseek`, and every existing
+  trace fingerprint is unchanged. No AST or dataset id changes.
+- **Evidence:** `trace::the_root_check_places_a_read_where_the_walk_does_after_a_short_write_or_a_failed_lseek`
+  (write 1000 → 10, read 100, failed lseek, read 50: reads at 10 and 110, a 159-byte file
+  refused "reads to 160", a 160-byte one run under sync, io_uring, libaio to the dry run's
+  fingerprint) fails with the old `trace.rs` (the read after the failed lseek at off=0); the CLI
+  repro "reads to 1100" before, the dry run's fingerprint after; `--test all -- trace` 11
+  passed, `--lib` 61, test_trace.py 82.

@@ -317,26 +317,18 @@ impl TraceFile {
                     }
                     let path = info.path.clone();
                     match op {
-                        LineOp::Read { offset, len, ret, .. } => {
+                        LineOp::Read { offset, ret, .. } => {
                             let off = offset.unwrap_or(pos[fd]);
-                            let n = ret.count().max(0);
-                            let end = off.checked_add(n).ok_or_else(|| past("read's end"))?;
-                            if offset.is_none() {
-                                pos[fd] = end;
-                            }
+                            let end = off.checked_add(ret.count().max(0)).ok_or_else(|| past("read's end"))?;
                             if !created.contains(&path) {
                                 let e = extent.entry(path).or_insert(0);
                                 *e = (*e).max(end);
                             }
-                            let _ = len;
                         }
-                        LineOp::Write { offset, len, .. } => {
-                            if offset.is_none() {
-                                pos[fd] = pos[fd].checked_add(*len).ok_or_else(|| past("write's end"))?;
-                            }
-                        }
-                        LineOp::Lseek { ret, .. } => pos[fd] = ret.count().max(0),
                         _ => {}
+                    }
+                    if let Some(p) = moved(op, pos[fd]).map_err(past)? {
+                        pos[fd] = p;
                     }
                     continue;
                 }
@@ -452,7 +444,6 @@ impl TraceFile {
     /// sequential read or write; `pos_after` says what to set it to afterwards.
     pub fn build<'c>(&'c self, op: &'c LineOp, cur: impl Fn(usize) -> i64) -> Built<'c> {
         let path = |fd: &usize| self.opens[*fd].path.as_str();
-        let mut pos_after = None;
         let mut oid = op.fd();
         let built = match op {
             LineOp::Open { fd, path: p, flags, mode, ret } => {
@@ -463,22 +454,13 @@ impl TraceFile {
             LineOp::Close { fd, ret } => Op { kind: OpKind::Close, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Read { fd, offset, len, ret } => {
                 let off = offset.unwrap_or_else(|| cur(*fd));
-                let bytes = ret.count().max(0);
-                if offset.is_none() {
-                    pos_after = Some(off + bytes);
-                }
-                Op { kind: OpKind::Read, path: path(fd), path2: None, offset: off, len: *len, bytes, aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
+                Op { kind: OpKind::Read, path: path(fd), path2: None, offset: off, len: *len, bytes: ret.count().max(0), aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
             }
             LineOp::Write { fd, offset, len, ret } => {
                 let off = offset.unwrap_or_else(|| cur(*fd));
-                let bytes = ret.count().max(0);
-                if offset.is_none() {
-                    pos_after = Some(off + bytes);
-                }
-                Op { kind: OpKind::Write, path: path(fd), path2: None, offset: off, len: *len, bytes, aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
+                Op { kind: OpKind::Write, path: path(fd), path2: None, offset: off, len: *len, bytes: ret.count().max(0), aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
             }
             LineOp::Lseek { fd, offset, whence, ret } => {
-                pos_after = Some(ret.count().max(0));
                 Op { kind: OpKind::Lseek, path: path(fd), path2: None, offset: *offset, len: 0, bytes: 0, aux: *whence as u64, expect: ret.expect(), positioned: false, seed: 0, capped: false }
             }
             LineOp::Fstat { fd, ret } => Op { kind: OpKind::Fstat, path: path(fd), path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
@@ -496,8 +478,24 @@ impl TraceFile {
             LineOp::Rename { path: p, to, ret } => Op { kind: OpKind::Rename, path: p, path2: Some(to), offset: 0, len: 0, bytes: 0, aux: 0, expect: ret.expect(), positioned: false, seed: 0, capped: false },
             LineOp::Submit { .. } => unreachable!("build() on a group; build its members"),
         };
+        // `index` walked the same ops in the same order and refused an overflow
+        let pos_after = op.fd().and_then(|fd| moved(op, cur(fd)).expect("index checked every position"));
         Built { op: built, oid, pos_after }
     }
+}
+
+/// Where `op` leaves its open id's position, `cur` before it (`None`: where it was). The one
+/// rule for `index` (the extents the root check holds an input to) and `build` (the dry run's
+/// walk and the run): a read or write without `offset` moves it by what the call returned, 0
+/// when it failed; an `lseek` sets it to what it returned, and a failed one leaves it, as the
+/// kernel does. `Err` names what passed the largest file offset.
+fn moved(op: &LineOp, cur: i64) -> std::result::Result<Option<i64>, &'static str> {
+    Ok(match op {
+        LineOp::Read { offset: None, ret, .. } => Some(cur.checked_add(ret.count().max(0)).ok_or("read's end")?),
+        LineOp::Write { offset: None, ret, .. } => Some(cur.checked_add(ret.count().max(0)).ok_or("write's end")?),
+        LineOp::Lseek { ret: Ret::Int(n), .. } if *n >= 0 => Some(*n),
+        _ => None,
+    })
 }
 
 pub struct Built<'c> {
