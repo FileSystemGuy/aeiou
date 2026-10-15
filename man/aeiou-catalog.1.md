@@ -66,7 +66,8 @@ fixed dataset a reuse share grows with the run (a DiskANN search over SIFT1M re-
 its blocks at 500 queries and 97 % at 32,000), and a fixed load is amortized only over a long
 one. For a case with a length parameter, **write** also halves it, down to 1/64, while the
 numbers stay the case's within their tolerances, and records the smallest such length;
-**check** re-measures there, so a long case costs its full length once, when it is written.
+**check** re-measures there, so a long case costs its full length three times only when it is
+written, and once (the first seed, for the counts below) when it is checked.
 Sizes are byte-weighted medians (half the bytes move in runs or requests at least this
 large), read from the dry run's quarter-octave histograms, so a size is a bucket's lower
 bound. The shape also keeps the first seed's op counts by kind, its bytes read and written,
@@ -94,8 +95,10 @@ it (the mechanism's README) or what a storage system should do about it.
 ### aeiou-catalog check
 
 Validate the records, re-measure every shape at its recorded check length and render
-`CATALOG.md`, and fail when a committed file differs from what is derived now, or a shape was
-measured on another AST, parameter file, or case record than the one committed.
+`CATALOG.md`, and fail when a committed file differs from what is derived now, a shape was
+measured on another AST, parameter file, or case record than the one committed, or the dry run
+no longer gives its measures (within their tolerances) or, exactly, its op counts, bytes, and
+dataset projections (the first seed's at the case's own length, which the descriptions print).
 
 - **--workloads** *DIR*
 

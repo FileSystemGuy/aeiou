@@ -354,3 +354,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   host, a 100 ms heartbeat over a 3 s run) fails in 1.5 s with "no message for 600ms" without
   the fix and passes with it; `--test all`: 77 passed. Fixed in an isolated worktree and applied.
 
+## 17. `aeiou-catalog check --runner` never checked the counts the descriptions print
+
+- **Where:** `builder/aeiou/catalog.py`, `recheck` and `stale_shapes` (new `COUNTED`,
+  `_counted`, `_short`, `_case_run`); builder REFERENCE §8, aeiou-catalog(1), the CI step name.
+- **Found by:** review of aeiou-catalog: in a copy of `workloads/`, 12,345 added to a shape's
+  `counts.close` and 7 to its dataset's `directories`, `write --no-shapes`, then `check
+  --runner`: "13 mechanisms, 16 cases: ok" while the description printed "18,748 close" (6,403
+  real) and "10 directories". Commit 644006e had cited that check as evidence no projection
+  changed.
+- **Defect:** the re-measurement compared only the measured attributes, never the shape's
+  `ops`, `counts`, `bytes_read`, `bytes_written`, and `datasets` projection, which DESCRIPTION.md
+  and CATALOG.md print, so a runner change to counting or the projection left published numbers
+  wrong with `check` passing.
+- **Fix:** `recheck` also compares those five fields exactly with the seed-1 dry run at the
+  case's own length (the run they were recorded from): free for a case checked at its full
+  length; one extra dry run for a case whose check length is shorter (only kvcache agentx:
+  434M ops), started first in its own pool to overlap the rest. Check with the runner takes 5m15s
+  locally instead of ~40s, the price of verifying the printed numbers exactly (the alternative,
+  counts recorded at the check length, would verify a runner regression but not the printed
+  numbers). No shape format or fingerprint change.
+- **Evidence:** the doctored copy now fails ("the dry run no longer gives the recorded counts,
+  datasets"); `test_catalog.py::test_a_shapes_counts_are_checked_with_the_runner` and
+  `test_counts_are_the_cases_length_when_the_check_length_is_shorter` fail on the old catalog.py
+  and pass on the new; the committed tree checks ok; test_catalog.py + test_man.py: 68 passed.
+

@@ -113,6 +113,6 @@ jobs:
         run: |
           command -v strace || sudo apt-get install -y strace
           AEIOU_REQUIRE=runner,formats,strace,header,py-formats AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs
-      - name: The workload catalog, every shape re-measured at its check length
+      - name: The workload catalog, every shape re-measured at its check length and its counts at the case's
         working-directory: builder
         run: .venv/bin/aeiou-catalog check --workloads ../workloads --runner ../runner/target/release/aeiou

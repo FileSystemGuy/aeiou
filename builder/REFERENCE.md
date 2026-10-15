@@ -664,7 +664,8 @@ trend at the short end, where it barely moves. So the length is the case's, and 
 serves the cost instead: for a case with a `length`, `write` halves it (down to 1/64) while
 the medians stay the case's within their tolerances and records the smallest such length as
 `length.check`, and `check` re-measures there. The full AgentX corpus costs its 98,827
-requests once, when its shape is written; CI re-measures it at a fraction of that.
+requests three times, once a seed, when its shape is written; CI re-measures it at a fraction
+of that, and runs it once more at its full length, the first seed's, for the counts (below).
 
 `shape.json` (`shape.defaults.json` for a defaults row): per run the AST and parameter
 file with their SHA-256, the GPU count, the block, the seeds, the length (`param`, `case`,
@@ -687,8 +688,11 @@ paragraphs into `CATALOG.md`; `check` holds them to what it renders. `aeiou-cata
 unless `--no-shapes`. `test_catalog.py` holds the describer's kinds to the schema's.
 
 **The commands.** `check` validates the records, re-measures every shape at its check
-length against the recorded numbers (their tolerances), renders `CATALOG.md`, and fails on
-any difference; with `--no-shapes` (the builder's tests, no runner) it checks instead that
+length against the recorded numbers (their tolerances), holds the recorded op count, counts
+by kind, bytes, and `datasets` exactly to the first seed's dry run at the case's own length
+(the run they came from; one more dry run when the check length is shorter, started first
+beside the rest: the descriptions and `CATALOG.md` print these numbers, 2026-10-14), renders
+`CATALOG.md`, and fails on any difference; with `--no-shapes` (the builder's tests, no runner) it checks instead that
 each shape is there and was measured on the AST, parameter file, GPU count, block, and length
 parameter committed now. `write` measures and writes the shapes, the descriptions, and
 `CATALOG.md`. CI runs

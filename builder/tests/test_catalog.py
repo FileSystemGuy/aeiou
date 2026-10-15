@@ -247,6 +247,47 @@ def test_a_case_remeasured_is_its_shape(tree):
     assert catalog.stale_shapes(mechanisms, tree, ATTRS, str(RUNNER)) == []
 
 
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_a_shapes_counts_are_checked_with_the_runner(tree, capsys):
+    """The op counts, bytes, and datasets' projection a shape records (the descriptions and
+    CATALOG.md print them) are held exactly to the dry run, not only its measures."""
+    shape = tree / CASE / "shape.json"
+    doc = json.loads(shape.read_text())
+    doc["runs"][0]["counts"]["close"] += 12345
+    doc["runs"][0]["bytes_written"] += 1
+    shape.write_text(json.dumps(doc))
+    assert catalog.main(["write", "--workloads", str(tree), "--no-shapes"]) == 0   # the description follows the numbers
+    assert catalog.main(["check", "--workloads", str(tree), "--no-shapes"]) == 0, capsys.readouterr().out
+    capsys.readouterr()
+    assert catalog.main(["check", "--workloads", str(tree), "--runner", str(RUNNER)]) == 1
+    assert "dcp_save: the dry run no longer gives the recorded counts, bytes_written (aeiou-catalog write)" in capsys.readouterr().out
+
+
+FAISS = "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32"
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_counts_are_the_cases_length_when_the_check_length_is_shorter():
+    """A check length shorter than the case's re-measures there, but the counts the shape
+    records are the case's length's, and they are compared with a run at that length."""
+    mechanisms, problems = catalog.load(WORKLOADS, ATTRS)
+    assert problems == []
+    m = next(m for m in mechanisms if m["rel"] == str(pathlib.Path(FAISS).parent.parent))
+    case = next(c for c in m["cases"] if c["name"] == pathlib.Path(FAISS).name)
+    run = case["runs"][0]
+    recorded = json.loads((WORKLOADS / FAISS / "shape.json").read_text())["runs"][0]
+    length = recorded["length"]
+    assert length["check"] == length["case"] == 20
+    length["check"] = 10
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(len(catalog.SEEDS)) as pool:
+        differ = catalog.recheck(str(RUNNER), run, case["gpus"][0], case["block"], recorded, ATTRS, pool)
+        assert not set(differ) & set(catalog.COUNTED), differ
+        recorded["datasets"][0]["directories"] += 7
+        differ = catalog.recheck(str(RUNNER), run, case["gpus"][0], case["block"], recorded, ATTRS, pool)
+        assert "datasets" in differ and "ops" not in differ, differ
+
+
 # ---------------------------------------------------------------- the descriptions (DESIGN_REVIEW.md §3.76)
 
 from aeiou import describe  # noqa: E402

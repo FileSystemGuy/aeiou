@@ -35,7 +35,10 @@ their spread, and the numbers they disagree on beyond a tolerance. A shorter run
 taken for the case (on a fixed dataset reuse grows with the run, and a fixed load is amortized
 only over a long one), but for a case with a length parameter `write` also halves it, down to
 1/64, while the numbers stay the case's within their tolerances, and records the smallest
-such length: `check` re-measures there, so CI never pays for a long case. `CATALOG.md` is
+such length: `check` re-measures there, so CI never pays three seeds of a long case; the op
+counts, bytes, and datasets' projection the shape also records (the first seed's at the case's
+own length, which the descriptions print) are compared exactly, from one more dry run, the
+first seed's at the case's length, when the check length is shorter. `CATALOG.md` is
 rendered from the records, the shapes, and the dictionary. `check` re-measures every shape and re-renders the catalog, and fails when a
 committed one differs; `--no-shapes` skips the dry runs (no runner needed) and checks instead
 that each shape was measured on the AST, parameter file, and case record committed now.
@@ -530,13 +533,44 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
     return out
 
 
-def recheck(runner: str, run: dict, gpus: int, block: int, recorded: dict, attrs: dict, pool) -> list[str]:
+COUNTED = ("ops", "counts", "bytes_read", "bytes_written", "datasets")   # the first seed's, at the case's length; exact
+
+
+def _counted(first: dict) -> dict:
+    """What a shape records of the first seed's dry run at the case's own length, as `shape` records it."""
+    return {"ops": first["total"]["ops"], "counts": dict(first["total"]["counts"]), "bytes_read": first["total"]["bytes_read"],
+            "bytes_written": first["total"]["bytes_written"], "datasets": first.get("datasets", [])}
+
+
+def _short(recorded: dict) -> bool:
+    """Whether a shape's check length is shorter than its case's: its counts then need a run of their own."""
+    return recorded["length"] is not None and recorded["length"]["check"] != recorded["length"]["case"]
+
+
+def _case_run(runner: str, run: dict, gpus: int, block: int, recorded: dict, tmp: pathlib.Path) -> dict:
+    """The first seed's dry run at the case's own length, the one a shape's counts come from."""
+    length = recorded["length"]
+    return _dry_run(runner, run, gpus, block, SEEDS[0], (length["param"], length["case"]) if length else None, tmp)
+
+
+def recheck(runner: str, run: dict, gpus: int, block: int, recorded: dict, attrs: dict, pool, full=None) -> list[str]:
     """`check` with the runner: the run re-measured at its recorded check length, against
-    the recorded numbers; the measures that differ."""
+    the recorded numbers, and the first seed's op counts, bytes, and datasets' projection
+    against the recorded ones exactly (the description and CATALOG.md print them); the
+    measures and counts that differ. The counts are the case's own length's: when the check
+    length is shorter, one more dry run, the first seed's at the case's length, gives them
+    (`full`, its future when the caller started it ahead)."""
     length = recorded["length"]
     with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
-        med = _at(runner, run, gpus, block, (length["param"], length["check"]) if length else None, pool, pathlib.Path(tmp))[0]
-    return _agrees(attrs, med, {n: a["value"] for n, a in recorded["attributes"].items()})
+        tmp = pathlib.Path(tmp)
+        if _short(recorded) and full is None:
+            full = pool.submit(_case_run, runner, run, gpus, block, recorded, tmp)
+        med, _, first = _at(runner, run, gpus, block, (length["param"], length["check"]) if length else None, pool, tmp)
+        if full is not None:
+            first = full.result()
+    counted = _counted(first)
+    return (_agrees(attrs, med, {n: a["value"] for n, a in recorded["attributes"].items()})
+            + [n for n in COUNTED if counted[n] != recorded.get(n)])
 
 
 def _round(v):
@@ -572,32 +606,42 @@ def measure_all(mechanisms: list[dict], attrs: dict, runner: str) -> dict[pathli
 
 def stale_shapes(mechanisms: list[dict], root: pathlib.Path, attrs: dict, runner: str | None) -> list[str]:
     """The shape files missing, measured on an AST or parameter file other than the one
-    committed now, or (with the runner) whose numbers the dry run no longer gives at the
-    recorded check length."""
-    problems = []
-    with concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool:
-        for m, case, runs in _targets(mechanisms):
-            path = _shape_path(m, case)
-            if not path.exists():
-                problems.append(f"{_rel(path, root)}: missing (aeiou-catalog write)")
-                continue
-            doc = json.loads(path.read_text())
-            if doc.get("shape_version") != SHAPE_VERSION:
-                problems.append(f"{_rel(path, root)}: shape_version {doc.get('shape_version')}, this aeiou-catalog writes {SHAPE_VERSION} (aeiou-catalog write)")
-                continue
-            have = {s["ast"]: s for s in doc["runs"]}
-            if set(have) != {run["ast"] for run, *_ in runs}:
-                problems.append(f"{_rel(path, root)}: its runs are not the case's (aeiou-catalog write)")
-                continue
-            for run, gpus, block, length in runs:
-                s = have[run["ast"]]
-                if (s["ast_sha256"] != run["abstract"]["sha256"] or (run["params"] and s["params_sha256"] != _sha256(run["params"]))
-                        or s["gpus"] != gpus or s["block"] != block or (s["length"] or {}).get("param") != length):
-                    problems.append(f"{_rel(path, root)}: measured on another {run['ast']}, parameter file, or case.toml than the one committed (aeiou-catalog write)")
-                elif runner:
-                    differ = recheck(runner, run, gpus, block, s, attrs, pool)
-                    if differ:
-                        problems.append(f"{_rel(path, root)}: {run['ast']}: the dry run no longer gives the recorded {', '.join(differ)} (aeiou-catalog write)")
+    committed now, or (with the runner) whose numbers the dry run no longer gives: the
+    measures at the recorded check length, and the op counts, bytes, and datasets'
+    projection at the case's. The runs at a case's length that a shorter check length
+    leaves to do are started first, beside the rest, since they are the longest."""
+    problems, current = [], []
+    for m, case, runs in _targets(mechanisms):
+        path = _shape_path(m, case)
+        if not path.exists():
+            problems.append(f"{_rel(path, root)}: missing (aeiou-catalog write)")
+            continue
+        doc = json.loads(path.read_text())
+        if doc.get("shape_version") != SHAPE_VERSION:
+            problems.append(f"{_rel(path, root)}: shape_version {doc.get('shape_version')}, this aeiou-catalog writes {SHAPE_VERSION} (aeiou-catalog write)")
+            continue
+        have = {s["ast"]: s for s in doc["runs"]}
+        if set(have) != {run["ast"] for run, *_ in runs}:
+            problems.append(f"{_rel(path, root)}: its runs are not the case's (aeiou-catalog write)")
+            continue
+        for run, gpus, block, length in runs:
+            s = have[run["ast"]]
+            if (s["ast_sha256"] != run["abstract"]["sha256"] or (run["params"] and s["params_sha256"] != _sha256(run["params"]))
+                    or s["gpus"] != gpus or s["block"] != block or (s["length"] or {}).get("param") != length):
+                problems.append(f"{_rel(path, root)}: measured on another {run['ast']}, parameter file, or case.toml than the one committed (aeiou-catalog write)")
+            else:
+                current.append((path, run, gpus, block, s))
+    if not runner:
+        return problems
+    long = [c for c in current if _short(c[4])]
+    with (tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp,
+          concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool,
+          concurrent.futures.ThreadPoolExecutor(max(1, len(long))) as ahead):
+        full = {id(s): ahead.submit(_case_run, runner, run, gpus, block, s, pathlib.Path(tmp)) for _, run, gpus, block, s in long}
+        for path, run, gpus, block, s in current:
+            differ = recheck(runner, run, gpus, block, s, attrs, pool, full.get(id(s)))
+            if differ:
+                problems.append(f"{_rel(path, root)}: {run['ast']}: the dry run no longer gives the recorded {', '.join(differ)} (aeiou-catalog write)")
     return problems
 
 
