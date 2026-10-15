@@ -515,12 +515,12 @@ struct DryRunArgs {
     metrics: bool,
     #[arg(long = "no-metrics", hide = true, overrides_with = "metrics")]
     no_metrics: bool,
-    /// With --metrics: the block size of the reuse-distance and popularity units.
-    #[arg(long, value_name = "BYTES", default_value_t = 4096, help_heading = "Metrics")]
-    metrics_block: u64,
-    /// With --metrics: keep one block and one object in N, chosen by hash, and scale (1: exact).
-    #[arg(long, value_name = "N", default_value_t = 1, help_heading = "Metrics")]
-    metrics_sample: u64,
+    /// With --metrics: the block size of the reuse-distance and popularity units [default: 4096].
+    #[arg(long, value_name = "BYTES", help_heading = "Metrics")]
+    metrics_block: Option<u64>,
+    /// With --metrics: keep one block and one object in N, chosen by hash, and scale [default: 1, exact].
+    #[arg(long, value_name = "N", help_heading = "Metrics")]
+    metrics_sample: Option<u64>,
     /// Write the metrics, with their histograms, to FILE as JSON (implies --metrics).
     #[arg(long, value_name = "FILE", help_heading = "Metrics")]
     metrics_json: Option<PathBuf>,
@@ -1596,11 +1596,24 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("steps", &a.steps, a.steps.is_some())?;
     l.fixed("limit", &a.limit, a.limit.is_some())?;
     l.fixed("metrics", &(a.metrics || a.metrics_json.is_some()), a.metrics || a.no_metrics)?;
-    l.fixed("metrics-block", &a.metrics_block, a.metrics_block != 4096)?;
-    l.fixed("metrics-sample", &a.metrics_sample, a.metrics_sample != 1)?;
+    let (metrics_block, metrics_sample) = (a.metrics_block.unwrap_or(4096), a.metrics_sample.unwrap_or(1));
+    l.fixed("metrics-block", &metrics_block, a.metrics_block.is_some())?;
+    l.fixed("metrics-sample", &metrics_sample, a.metrics_sample.is_some())?;
     l.fixed("metrics-json", &a.metrics_json, a.metrics_json.is_some())?;
     let ranks = l.layered::<i64>("ranks", a.ranks, None)?;
     let threads = l.layered::<usize>("threads", a.threads, None)?;
+    // an option that only narrows another is never ignored in silence: what it needs joins
+    // the list, with every option given that needs it (all are the command line's alone)
+    let needed_by = |names: &[(&str, bool)]| -> Option<String> {
+        let by: Vec<String> = names.iter().filter(|(_, given)| *given).map(|(n, _)| format!("--{n}")).collect();
+        (!by.is_empty()).then(|| format!("needed by {}", by.join(", ")))
+    };
+    if let Some(why) = needed_by(&[("steps", a.steps.is_some()), ("limit", a.limit.is_some())]) {
+        miss.need(a.gpu.is_some(), "--gpu <G>", "the actor instance whose op stream is printed", Some(&why));
+    }
+    if let Some(why) = needed_by(&[("metrics-block", a.metrics_block.is_some()), ("metrics-sample", a.metrics_sample.is_some())]) {
+        miss.need(a.metrics || a.metrics_json.is_some(), "--metrics", "compute the locality metrics of the op stream (or --metrics-json <FILE>)", Some(&why));
+    }
     miss.check()?;
     l.finish()?;
     if let Some(r) = ranks.filter(|r| *r < 1) {
@@ -1626,10 +1639,10 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     if a.limit == Some(0) {
         aeiou::usage!("--limit 0: nothing would be printed");
     }
-    if a.metrics_block == 0 {
+    if metrics_block == 0 {
         aeiou::usage!("--metrics-block 0: the block size is at least 1 byte");
     }
-    if a.metrics_sample == 0 {
+    if metrics_sample == 0 {
         aeiou::usage!("--metrics-sample 0: N is at least 1 (1 keeps every block)");
     }
     let (abstract_path, gpus) = (abstract_path.expect("checked"), gpus.expect("checked"));
@@ -1640,8 +1653,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
 
-    let filter = if a.gpu.is_some() || a.steps.is_some() || a.limit.is_some() {
-        let actor = a.gpu.unwrap_or(0);
+    let filter = if let Some(actor) = a.gpu {
         // --gpu names an instance of any template: it must be below the largest count
         let counts = aeiou::vm::actor_counts(&model)?;
         let most = counts.iter().map(|(_, n)| *n).max().unwrap_or(0);
@@ -1656,7 +1668,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
 
     let started = std::time::Instant::now();
-    let metrics = (a.metrics || a.metrics_json.is_some()).then_some(aeiou::metrics::Opts { block: a.metrics_block, sample: a.metrics_sample });
+    let metrics = (a.metrics || a.metrics_json.is_some()).then_some(aeiou::metrics::Opts { block: metrics_block, sample: metrics_sample });
     let mut report = dryrun::run_with(&model, threads, filter, metrics)?;
     let projections = aeiou::project::project_all(&model, threads)?;
     let elapsed = started.elapsed();
@@ -1670,8 +1682,8 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
             "seed": cfg.seed,
             "gpus": cfg.gpus,
             "fingerprint": format!("{:016x}", report.total.fingerprint),
-            "block": a.metrics_block,
-            "sample": a.metrics_sample,
+            "block": metrics_block,
+            "sample": metrics_sample,
             "order": "round-robin",
             "templates": templates,
             "total": aeiou::metrics::to_json(&report.total),

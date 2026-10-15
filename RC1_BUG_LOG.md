@@ -1180,3 +1180,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   two, and two actors, under `sync` and `io_uring`, one thread failing at 100 ms and another
   meeting the abort at 400 ms) fails 3/3 without the fix with four wrong reports and passes
   10/10 with it; `--test all run` 29 passed, `coord` 21, `--lib` 42.
+
+## 52. `aeiou dry-run` silently ignored options given without the one they narrow
+
+- **Where:** `runner/aeiou/src/main.rs` (`DryRunArgs`, `dry_run`); man/aeiou.1.md (dry-run
+  output and metrics options), runner/REFERENCE.md (the `aeiou dry-run` row of the command
+  table); `runner/aeiou/tests/usage.rs`.
+- **Found by:** review of the coordinator/CLI against the help and the man page, which say
+  "With `--gpu`:" for `--steps`/`--limit` and "With `--metrics`:" for
+  `--metrics-block`/`--metrics-sample`.
+- **Defect:** `dry-run … --gpus 2 --limit 2` exited 0 and printed instance 0's stream as if
+  `--gpu 0` had been given (`a.gpu.unwrap_or(0)`), and `--metrics-block 8192 --metrics-sample
+  4` without `--metrics` exited 0 having computed nothing, with no word either way. The block
+  and sample were detected by comparing with their defaults, so an explicit default could not
+  be told from an absent one, and the options block showed it as `[default]`.
+- **Fix:** each is a usage error in the shared frame (§15, exit 2) when the option it narrows is
+  absent: `--gpu` "(needed by --limit)", `--metrics` "(needed by --metrics-block)", listed with
+  every other missing argument, as `run` does for `--report-takes`; `--metrics-json` implies
+  `--metrics`, and a later `--no-metrics` brings the error back. `--metrics-block` and
+  `--metrics-sample` are `Option`s with their defaults stated in the help. No fingerprint,
+  dataset id, or AST changes.
+- **Evidence:** `usage::an_option_narrowing_an_absent_one_is_a_usage_error` fails before the
+  fix (exit 0 where 2 was expected) and passes after; `--test all -- usage:: man:: options::
+  dry` 16 passed; test_trace.py, test_catalog.py, test_man.py 152 passed (their dry-run calls
+  pair the metrics options with `--metrics-json`). Fixed in an isolated worktree and applied.

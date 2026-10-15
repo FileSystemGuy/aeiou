@@ -131,8 +131,8 @@ fn a_meaningless_number_is_a_usage_error() {
     for s in ["1..x", "x..2", "3", "5..1", "2..2", "-1..2"] {
         assert_eq!(dry(&["--gpu", "0", &format!("--steps={s}")]), format!("--steps {s}: expected A..B, whole numbers with 0 <= A < B"));
     }
-    assert_eq!(dry(&["--metrics-block", "0"]), "--metrics-block 0: the block size is at least 1 byte");
-    assert_eq!(dry(&["--metrics-sample", "0"]), "--metrics-sample 0: N is at least 1 (1 keeps every block)");
+    assert_eq!(dry(&["--metrics", "--metrics-block", "0"]), "--metrics-block 0: the block size is at least 1 byte");
+    assert_eq!(dry(&["--metrics", "--metrics-sample", "0"]), "--metrics-sample 0: N is at least 1 (1 keeps every block)");
     assert_eq!(dry(&["--gpu", "0", "--limit", "0"]), "--limit 0: nothing would be printed");
     assert_eq!(dry(&["--gpu=-1"]), "--gpu -1: instance ids start at 0");
     // --gpu 2 of --gpus 2 named no instance and printed nothing, with status 0
@@ -171,4 +171,45 @@ fn an_unknown_dataset_name_is_a_usage_error() {
     assert_eq!(gen(&["--dataset", "train", "--dataset", "a", "--dataset", "b"]), "--dataset a, b: the abstract has no dataset `a`, `b` (its datasets: `train`)");
     assert_eq!(gen(&["--endpoint", "nosuch=/tmp"]), "--endpoint nosuch=/tmp: the abstract has no dataset or namespace `nosuch`");
     assert!(!root.exists(), "{} was created", root.display());
+}
+
+/// An option that only narrows another is never ignored in silence (RC1 review): dry-run's
+/// --steps and --limit without --gpu printed instance 0's stream as if --gpu 0 had been given,
+/// and --metrics-block and --metrics-sample without --metrics were dropped with status 0. What
+/// each needs joins the list with the options that need it, all at once, in the frame.
+#[test]
+fn an_option_narrowing_an_absent_one_is_a_usage_error() {
+    let ast = example("file_per_sample.ast.json");
+    let dry = |extra: &[&str]| frame(&mut aeiou(&[&["dry-run", &ast, "--gpus", "2"], extra].concat()), "aeiou dry-run").0;
+    let gpu = "the actor instance whose op stream is printed";
+    let metrics = "compute the locality metrics of the op stream (or --metrics-json <FILE>)";
+    assert_eq!(dry(&["--limit", "2"]), format!("{MISSING}\n  --gpu <G>  {gpu}\n             (needed by --limit)"));
+    assert_eq!(dry(&["--steps", "0..1", "--limit", "2"]), format!("{MISSING}\n  --gpu <G>  {gpu}\n             (needed by --steps, --limit)"));
+    assert_eq!(dry(&["--metrics-sample", "4"]), format!("{MISSING}\n  --metrics  {metrics}\n             (needed by --metrics-sample)"));
+    // --no-metrics after --metrics turns it off; an explicit default is given all the same
+    assert_eq!(dry(&["--metrics", "--no-metrics", "--metrics-block", "8192"]), format!("{MISSING}\n  --metrics  {metrics}\n             (needed by --metrics-block)"));
+    assert_eq!(dry(&["--metrics-block", "4096"]), format!("{MISSING}\n  --metrics  {metrics}\n             (needed by --metrics-block)"));
+    // every problem at once, with what is missing outright
+    let (message, _) = frame(&mut aeiou(&["dry-run", "--steps", "0..1", "--metrics-block", "8192", "--metrics-sample", "4"]), "aeiou dry-run");
+    assert_eq!(
+        message,
+        format!(
+            "{MISSING}\n  <ABSTRACT_PATH>  the abstract (`.ast.json`, written by aeiou-build from a builder script)\n  --gpus <GPUS>    number of instances of every actor template whose count is `gpus`\n  --gpu <G>        {gpu}\n                   (needed by --steps)\n  --metrics        {metrics}\n                   (needed by --metrics-block, --metrics-sample)"
+        )
+    );
+    // with what they narrow they run; --metrics-json implies --metrics
+    let dir = std::env::temp_dir().join(format!("aeiou-usage-narrow-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let json = dir.join("m.json");
+    for extra in [
+        &["--gpu", "1", "--steps", "0..1", "--limit", "2"][..],
+        &["--metrics", "--metrics-block", "8192", "--metrics-sample", "4"][..],
+        &["--metrics-json", json.to_str().unwrap(), "--metrics-block", "8192"][..],
+    ] {
+        let o = aeiou(&[&["dry-run", &ast, "--gpus", "2"], extra].concat()).output().unwrap();
+        assert!(o.status.success(), "{extra:?}: {}", String::from_utf8_lossy(&o.stderr));
+    }
+    let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+    assert_eq!((doc["block"].as_u64(), doc["sample"].as_u64()), (Some(8192), Some(1)));
+    std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -263,7 +263,8 @@ turns it off, and the last one on the line wins.
   With `--gpu`: only the operations whose outermost loop index is in `[A, B)`.
 - **--limit** *N*
 
-  With `--gpu`: stop printing after *N* operations.
+  With `--gpu`: stop printing after *N* operations. `--steps` or `--limit` without `--gpu`
+  is a usage error.
 
 **Metrics**
 
@@ -278,7 +279,8 @@ turns it off, and the last one on the line wins.
 - **--metrics-sample** *N*
 
   With `--metrics`: keep one block and one object in *N*, chosen by hash, and scale the
-  counts and distances. Default 1, exact.
+  counts and distances. Default 1, exact. `--metrics-block` or `--metrics-sample` without
+  `--metrics` or `--metrics-json` is a usage error.
 - **--metrics-json** *FILE*
 
   Write the metrics, with their histograms in full, to *FILE* as JSON (format
