@@ -11,7 +11,7 @@ token, so a 256-token chunk is 3,145,728 bytes).
 
 ```
 # lmcache.yaml: local_disk is the directory under test
-KV_BYTES=100663296 strace -f --seccomp-bpf -ttt -T -yy \
+KV_BYTES=100663296 strace -f --seccomp-bpf -ttt -T -yy -v \
     -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy,io_uring_setup,io_uring_enter \
     -o trace.txt sh kit/serve.sh &                                 # from this directory
 C=cases/sharegpt-chat/captures/2026-10-02
@@ -95,7 +95,7 @@ export is a directory on disk, not the 8 GB tmpfs of `runner/REFERENCE.md` §7.
 ```
 export PYTHONHASHSEED=0 KV_BYTES=2147483648 MAX_MODEL_LEN=131072 LMCACHE_CONFIG_FILE=kit/lmcache.agentx.yaml
 export VLLM_ARGS='--hf-overrides {"max_position_embeddings":131072,"rope_parameters":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
-strace -f --seccomp-bpf -ttt -T -yy \
+strace -f --seccomp-bpf -ttt -T -yy -v \
     -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy,io_uring_setup,io_uring_enter \
     -o trace.txt sh kit/serve.sh > serve.log 2>&1 &
 C=cases/agentx/captures/replay-2gib-pool

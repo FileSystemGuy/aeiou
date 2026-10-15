@@ -11,7 +11,7 @@ Versions: Python 3.12.3, faiss-cpu 1.15.1, numpy 2.5.3, Linux 6.18. The corpus i
 ```
 C=cases/sift1m-ivf1024-pq32                               # from this directory
 python kit/mkindex.py sift /mnt/nfs/out                   # train, four shard indexes, merge_ondisk
-strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
+strace -f -ttt -T -yy -v -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/search.py /mnt/nfs/out sift/sift_query.fvecs --queries 20 --threads 1
 aeiou-trace metrics trace.txt --root /mnt/nfs -o $C/captures/2026-10-01/trace.metrics.json
 python kit/params.py /mnt/nfs/out sift/sift_query.fvecs trace.txt "…" > $C/params.json

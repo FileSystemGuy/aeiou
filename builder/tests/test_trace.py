@@ -1023,3 +1023,49 @@ def test_an_append_whose_base_the_trace_cannot_know_is_noted():
     header, events = trace.export_of(lines, "/d")
     assert [e.get("offset") for e in events if e["op"] == "write"] == [0, 4096, 8192, 12288, 100, None]
     assert metrics_of(lines, ["/d"])["notes"] == {"append_to_unknown_size": 1}
+
+
+# strace prints the first 32 elements of an array unless given `-v`: a 40-request
+# io_submit, its 40 results, and a 40-iovec preadv, as a trace taken without it shows them
+_CB = "{{aio_data={d:#x}, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=3</d/idx>, aio_buf=0x7f, aio_nbytes=4096, aio_offset={o}}}"
+_EV = "{{data={d:#x}, obj=0x7f10, res=4096, res2=0}}"
+_IOV = '{iov_base="\\0\\0"..., iov_len=4096}'
+
+
+def _cut(elems, n=32):
+    return "[" + ", ".join(elems[:n]) + (", ...]" if len(elems) > n else "]")
+
+
+def _arrays(n):
+    cbs = [_CB.format(d=i + 1, o=i * 4096) for i in range(40)]
+    evs = [_EV.format(d=i + 1) for i in range(40)]
+    return f"""
+300 1700000003.000000 openat(AT_FDCWD</d>, "idx", O_RDONLY) = 3</d/idx> <0.000010>
+300 1700000003.000100 io_submit(0x7f00, 40, {_cut(cbs, n)}) = 40 <0.000010>
+300 1700000003.000200 io_getevents(0x7f00, 40, 40, {_cut(evs, n)}, NULL) = 40 <0.000050>
+300 1700000003.000300 preadv(3</d/idx>, {_cut([_IOV] * 40, n)}, 40, 0) = 163840 <0.000050>
+"""
+
+
+def test_arrays_strace_cut_at_32_elements_are_noted():
+    whole = total(_arrays(40))
+    assert whole["total"]["fan_out"] == {"40": 1}
+    assert not any("truncated" in k for k in whole["notes"])
+    cut = total(_arrays(32))
+    # the 8 requests past the 32nd are not in the trace: what and where they read is
+    # unknown, so they are not counted, and the notes say how many and to trace with -v
+    assert cut["total"]["fan_out"] == {"32": 1}
+    assert cut["notes"]["aio_requests_truncated"] == 8
+    assert cut["notes"]["aio_events_truncated"] == 8
+    assert cut["notes"]["iov_arrays_truncated"] == 1
+    assert "strace -v" in cut["notes"]["arrays_truncated"]
+    header, _ = trace.export_of(_arrays(32).strip().splitlines(), "/d")
+    assert header["notes"]["aio_requests_truncated"] == 8
+
+
+def test_a_cut_iovec_list_takes_the_bytes_the_call_moved():
+    # 32 of 40 iovecs shown sum to 131072; the call moved 163840, the whole list's length
+    one = lambda n: "\n".join(l for l in _arrays(n).strip().splitlines() if "io_" not in l)
+    whole, cut = total(one(40))["total"], total(one(32))["total"]
+    assert cut["bytes_read"] == whole["bytes_read"] == 163840
+    assert cut["request_size"] == whole["request_size"] and cut["request_size"]["read"]["max"] == 163840

@@ -1562,7 +1562,7 @@ both sides. It is never CLOSED (`PROJECT_BRIEF.md` §8), it declares no dataset 
 namespace, and it is one process of the application on one host.
 
 ```
-strace -f -ttt -T -yy -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>        # the application
+strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>        # the application
 aeiou-trace export trace.txt --root /mnt/data -o app.jsonl                       # prints the sha256
 # in the abstract: w.trace("app.jsonl", "<sha256>") in an actor with count=1
 aeiou dry-run app.ast.json --gpus 1 --metrics-json node.json     # equals `aeiou-trace metrics trace.txt`

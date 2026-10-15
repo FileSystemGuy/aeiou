@@ -1732,7 +1732,7 @@ One small run per workload on an NFS mount of the target class, one process, a f
 iterations, captured with:
 
 ```
-strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
+strace -f -ttt -T -yy -v -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
 nfsstat -c > before.txt; <run>; nfsstat -c > after.txt; cat /proc/self/mountstats
 ```
 

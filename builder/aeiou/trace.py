@@ -6,7 +6,7 @@ sizes, fan-out, depth, and the read/write mix on an abstract's op stream
 the same JSON form (`aeiou_metrics: 1`), from a trace of the application the abstract
 models, so the two can be compared (`GRAMMAR_OPTIONS.md` §5.4):
 
-    strace -f -ttt -T -yy -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy \
+    strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy \
         -o trace.txt <command>
     aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
     aeiou dry-run x.ast.json --gpus 1 --metrics-json abstract.metrics.json
@@ -35,7 +35,10 @@ What differs from the dry-run side, because a trace is not an abstract:
 The AIO calls are named: `strace` classes none of them in `%desc`, and a trace without
 them loses every libaio read and write. A context the trace shows `io_setup` make and no
 `io_submit` use is noted (`aio_contexts_without_io_submit`): either the application never
-used it or the trace left `io_submit` out.
+used it or the trace left `io_submit` out. `-v` prints whole arrays: without it `strace`
+cuts one at 32 elements, and the requests of a larger `io_submit`, the results of an
+`io_getevents`, and the iovecs of a `readv` or `writev` past the 32nd are lost; a cut
+array is noted (`aio_requests_truncated`, `aio_events_truncated`, `iov_arrays_truncated`).
 
 Not visible to `strace`, and so not counted: `io_uring` submissions and page faults on a
 mapping. Standard library only; the trace is read once, in a stream.
@@ -336,6 +339,12 @@ _IOV_LEN = re.compile(r"iov_len=(\d+)")
 _IOCB = re.compile(r"aio_data=(\w+), aio_lio_opcode=IOCB_CMD_(\w+).*?aio_fildes=(\d+)(?:<(.*?)>)?, .*?aio_nbytes=(\d+), aio_offset=(-?\d+)")
 _EVENT = re.compile(r"\{data=(\w+), obj=\w+, res=(-?\d+)")
 UNFINISHED = "<unfinished ...>"
+
+
+def truncated(arg: str) -> bool:
+    """Whether `strace` cut the array `arg` short (`[..., ...]`): it prints only the first
+    32 elements of an array unless `-v` is given."""
+    return arg.rstrip().endswith("...]")
 
 
 def shares_files(name: str, args: str) -> bool:
@@ -776,6 +785,12 @@ class Tracer:
             vector = name.endswith("v") or name.endswith("v2")
             if vector:
                 length = sum(int(x) for x in _IOV_LEN.findall(a[1])) if len(a) > 1 else 0
+                if len(a) > 1 and truncated(a[1]):
+                    # the iovecs past the 32nd are not in the trace: a successful call's
+                    # return value is a floor on the length the whole list asked for
+                    length = max(length, ret)
+                    if inst is not None and self.under(path or (f.path if f else None)):
+                        self.notes["iov_arrays_truncated"] += 1
                 off_tok = a[3] if name.startswith("p") and len(a) > 3 else None
             else:
                 length = int(a[2], 0) if len(a) > 2 and a[2].lstrip("-").isdigit() else 0
@@ -830,7 +845,12 @@ class Tracer:
             if a:
                 self.aio_unused.pop(a[0], None)
             got = []
-            for data, op, fd, path, nbytes, off in _IOCB.findall(a[2] if len(a) > 2 else ""):
+            iocbs = _IOCB.findall(a[2] if len(a) > 2 else "")
+            if inst is not None and len(a) > 2 and truncated(a[2]) and ret > len(iocbs):
+                # the requests past the 32nd are not in the trace, so neither is what or
+                # where they read or wrote: not counted, and the fan-out is short by them
+                self.notes["aio_requests_truncated"] += ret - len(iocbs)
+            for data, op, fd, path, nbytes, off in iocbs:
                 path = fd_path(path)
                 f = self.file(tid, int(fd), path or None)
                 p = self.under(path or (f.path if f else None))
@@ -856,7 +876,7 @@ class Tracer:
             members = None
             if ex is not None:
                 mem = []
-                for data, op, fd, path, nbytes, off in _IOCB.findall(a[2] if len(a) > 2 else ""):
+                for data, op, fd, path, nbytes, off in iocbs:
                     path = fd_path(path)
                     f = self.file(tid, int(fd), path or None)
                     if op in ("PREAD", "PWRITE") and f is not None and f.oid is not None and self.under(path or f.path):
@@ -872,7 +892,12 @@ class Tracer:
             if c:
                 c[1] = done
             ctx = a[0] if a else None
-            for data, res in _EVENT.findall(a[3] if len(a) > 3 else ""):
+            events = _EVENT.findall(a[3] if len(a) > 3 else "")
+            if len(a) > 3 and truncated(a[3]) and ret > len(events) and any(k[0] == ctx for k in self.aio):
+                # results the trace cut off: their requests stay waiting, and are taken as
+                # complete at the end (`aio_results_assumed_complete`)
+                self.notes["aio_events_truncated"] += ret - len(events)
+            for data, res in events:
                 waiting = self.aio.get((ctx, data))
                 if waiting:
                     kind, i, t, p, off, nbytes, member = waiting.pop(0)
@@ -1299,6 +1324,8 @@ def metrics_of(lines, roots, block=4096, sample=1, **kw) -> dict:
     notes = dict(sorted(t.notes.items()))
     if t.chain_gap is None and m.fan_out:
         notes["depth_not_computed"] = "give --chain-gap-us: the think time that ends a chain of io_submit rounds"
+    if any(k in notes for k in ("aio_requests_truncated", "aio_events_truncated", "iov_arrays_truncated")):
+        notes["arrays_truncated"] = "trace again with strace -v: without it strace prints only the first 32 elements of an array"
     total = m.out()
     if t.chain_gap is None:
         total["depth"] = {}
@@ -1557,7 +1584,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     ap = usage.Parser(prog="aeiou-trace", description="Locality metrics of a real application from an strace of it, and their comparison with an abstract's (aeiou dry-run --metrics-json)",
                       usage="aeiou-trace <COMMAND> [ARGS]...")
     sub = ap.add_subparsers(dest="cmd")
-    mp = sub.add_parser("metrics", help="Compute the metrics of a trace (strace -f -ttt -T -yy -e trace=%%file,%%desc,%%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o FILE)", usage="aeiou-trace metrics [OPTIONS] <TRACE>")
+    mp = sub.add_parser("metrics", help="Compute the metrics of a trace (strace -f -ttt -T -yy -v -e trace=%%file,%%desc,%%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o FILE)", usage="aeiou-trace metrics [OPTIONS] <TRACE>")
     mp.add_argument("trace", nargs="?", help="The strace output file, or - for stdin")
     mp.add_argument("--root", action="append", default=[], metavar="DIR", help="Count only calls on paths under DIR (repeatable; required for an strace, not for an exported trace file)")
     mp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")

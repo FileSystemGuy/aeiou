@@ -19,7 +19,7 @@ Versions: Python 3.12.3, NumPy 2.5.2, torch 2.14.1+cpu, Linux 6.18.
 ```
 C=cases/npy-140mib                                            # or: cases/npy-8mib; from this directory
 python kit/mkcorpus.py /srv/export/corpus 16                  # or: … 256 8388608 262144
-strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
+strace -f -ttt -T -yy -v -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/train.py /mnt/nfs/corpus/train 2 2 2 x         # or: … 4 2 2 x
 aeiou-trace metrics trace.txt --root /mnt/nfs/corpus -o $C/captures/2026-10-01/trace.metrics.json
 aeiou dry-run npy_per_sample.ast.json --gpus 1 \

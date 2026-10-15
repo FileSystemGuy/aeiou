@@ -302,3 +302,31 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   values taken from a compiled Rust program's output) fails on the old function and passes on
   the new; test_formats.py + test_payload.py: 43 passed.
 
+## 15. aeiou-trace took strace's 32-element arrays as whole arrays
+
+- **Where:** `builder/aeiou/trace.py` (`io_submit`, `io_getevents`, readv/writev/preadv/pwritev,
+  `metrics_of`; new `truncated`), and the capture command (now `strace … -v …`) in trace.py,
+  builder REFERENCE §7, aeiou-trace(1), runner REFERENCE §13, ABSTRACTS, nine workload READMEs.
+- **Found by:** review of aeiou-trace: a 40-request `io_submit` traced showed `= 40` with an
+  array ending `...]` after 32 elements; `kit/hops.py` of diskann-search already knew "strace
+  prints 32 elements", aeiou-trace did not. The fixer found `io_getevents` cut the same way.
+- **Defect:** strace prints at most 32 array elements unless `-v` (`-s N` also limits it), so
+  a 40-request submit measured as fan-out 32 and 32 reads, 8 requests and their bytes gone
+  without a note; cut `io_getevents` results left requests "assumed complete"; a preadv with
+  more than 32 iovecs had its request size summed from the 32 shown (2,048 for a 6,400-byte
+  call).
+- **Fix:** the capture command adds `-v` (whole arrays; a `-v` trace parses unchanged); a cut
+  array is detected (`...]`) and noted: `aio_requests_truncated` and `aio_events_truncated`
+  count what is missing (the unseen requests are not invented: their file, offset, and size are
+  not in the trace), `iov_arrays_truncated` counts cut iovec lists, whose request size becomes
+  the larger of the shown sum and the bytes the call returned, and `metrics` adds the hint
+  "trace again with strace -v". No fingerprint or contract change.
+- **Evidence:** `test_trace.py::test_arrays_strace_cut_at_32_elements_are_noted` and
+  `test_a_cut_iovec_list_takes_the_bytes_the_call_moved` (40 elements, complete and cut at 32)
+  fail on the old trace.py and pass on the new; with `-v` the real 40-PREAD program gives
+  fan-out {40: 1}; test_trace.py + test_man.py: 86 passed.
+- **Left open (queued):** diskann-search's kit `hops.py` relies on the cut array to tell the
+  node-cache bulk load from query hops, so its README keeps the old command; its committed
+  sift1m-cache capture shows fan-out `"32": 1`, probably that cut bulk load (a recapture needs
+  the application).
+

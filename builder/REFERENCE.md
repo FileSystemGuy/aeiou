@@ -352,7 +352,7 @@ the reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made whi
 and confirmed by the user the same day (decided 2026-10-01).**
 
 ```
-strace -f -ttt -T -yy -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
+strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
 aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--metrics-block BYTES] [--metrics-sample N]
             [--instance-root PID]… [--chain-gap-us US] [--cwd DIR] -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --metrics-json abstract.metrics.json
@@ -369,7 +369,16 @@ The AIO calls are named (`io_setup`, `io_submit`, `io_getevents`, `io_pgetevents
 `io_destroy`): `strace` classes none of them in `%desc`, and a trace without them loses
 every libaio read and write with nothing to show for it. A context the trace shows
 `io_setup` make and no `io_submit` name is noted (`aio_contexts_without_io_submit`): the
-application never used it, or the trace left `io_submit` out (fixed 2026-10-14).
+application never used it, or the trace left `io_submit` out (fixed 2026-10-14). `-v`,
+because without it `strace` prints only the first 32 elements of an array: the requests of
+an `io_submit` past the 32nd, the events of an `io_getevents`, and the iovecs of a `readv`
+or `writev` are cut off (`...]`). A cut array is noted, and `arrays_truncated` says to trace
+again: `aio_requests_truncated` counts the requests the return value says were submitted
+and the trace does not show (not counted: their file, offset, and size are not in the
+trace, and the fan-out is short by them), `aio_events_truncated` the results it does not
+show (their requests are taken as complete at the end), and `iov_arrays_truncated` the
+vector calls whose length is taken as the larger of the shown iovecs' sum and the bytes
+the call moved (fixed 2026-10-14).
 
 - **Which calls count.** Calls on paths under `--root`, less `--exclude` (a glob on the
   part below the root). Library loading, `/proc`, pipes, and sockets are not the workload.

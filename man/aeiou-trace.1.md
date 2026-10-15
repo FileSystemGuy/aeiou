@@ -26,7 +26,7 @@ strace as the file the runner's `trace` node executes literally. Standard librar
 The trace is taken with
 
 ```
-strace -f -ttt -T -yy -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
+strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
 ```
 
 `-f` follows threads and children; `-yy` puts the path behind every descriptor on the
@@ -34,8 +34,12 @@ line, which is how a call is known to be on the storage under test; `%process` r
 `clone`s, so descriptor tables and process trees are followed; the AIO calls are named
 because `strace` classes none of them in `%desc`, and without them every libaio read and
 write is lost (a context `io_setup` made and no `io_submit` named is noted,
-`aio_contexts_without_io_submit`); `-ttt -T` are needed only for `--chain-gap-us` and for
-`export`'s timings.
+`aio_contexts_without_io_submit`); `-v` prints whole arrays, where `strace` otherwise cuts
+one at 32 elements and the requests of a larger `io_submit`, the results of an
+`io_getevents`, and the iovecs of a `readv` or `writev` past the 32nd are lost (noted,
+`aio_requests_truncated`, `aio_events_truncated`, `iov_arrays_truncated`, with
+`arrays_truncated` saying to trace again); `-ttt -T` are needed only for `--chain-gap-us`
+and for `export`'s timings.
 
 **What counts.** Calls on paths under `--root`, less `--exclude`. Library loading, `/proc`,
 pipes, and sockets are not the workload. `open`, `openat`, `creat` are `open`; `read`,
@@ -228,7 +232,7 @@ Measure a trace of the application, measure the abstract at its fitted parameter
 the abstract against three other seeds of itself:
 
 ```
-strace -f -ttt -T -yy -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt python train.py /mnt/data/train
+strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt python train.py /mnt/data/train
 aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed 1 --metrics-json abstract.metrics.json
 for s in 2 3 4; do aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed $s --metrics-json self$s.json; done
