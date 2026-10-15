@@ -1126,3 +1126,28 @@ fn a_failed_io_uring_loop_drains_its_ring_before_it_ends() {
     assert!(e.contains("gpu#1") && e.contains("buffer allocation of 70368744177664 bytes failed"), "{e}");
     assert_eq!(aeiou::uring::undrained(), 0, "a ring was closed with a request still in the kernel");
 }
+
+/// The stream abstracts take the shards whose first sample is in a step's batch, so the steps
+/// take exactly the loader's `ceil_div(steps · batch, samples_per_file)` shards for any two
+/// positive values: a `batch` that divides `samples_per_file`, one that does not (once a take
+/// after the last shard, `every(samples_per_file div batch)` firing too often), and one above
+/// it (once a `mod` by zero, `samples_per_file div batch` being 0); RC1 review.
+#[cfg(feature = "formats")]
+#[test]
+fn stream_abstracts_take_every_shard_for_any_batch() {
+    for name in ["tfrecord_stream", "parquet_stream"] {
+        for (batch, steps) in [("32", "8"), ("48", "8"), ("200", "4")] {
+            let root = tmpdir(&format!("stream-{name}-{batch}"));
+            let params = [("samples", "768"), ("samples_per_file", "128"), ("sample_median", "20000"), ("cycle", "2"), ("batch", batch), ("steps", steps)];
+            let (loaded, cfg, model) = leaked_model(name, config(1, 5, &params));
+            gen(loaded, cfg, model, &root);
+            run::check_datasets(loaded, cfg, &root).unwrap();
+            run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
+            let (fp, ops, bytes) = dry_fingerprint(model);
+            let r = go(model, opts(&root, BackendKind::Sync));
+            let shards = (steps.parse::<u64>().unwrap() * batch.parse::<u64>().unwrap()).div_ceil(128);
+            assert_eq!(r.stats.takes, shards, "{name} batch {batch}: one take per shard dispatched");
+            assert_eq!((r.stats.fingerprint, r.stats.ops, r.stats.bytes_read), (fp, ops, bytes), "{name} batch {batch}");
+        }
+    }
+}

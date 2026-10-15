@@ -50,8 +50,11 @@ fn hashes_match_check_py() {
         ("file_per_sample", "45fbae4fbc75d23ecd452aefc73b727822cdde558b48c5616757b7f25c673a4e"),   // 2026-10-02: `enumerate` on by default
         ("diskann_build", "a6503c207fd28f297cd209cc35be0bc41849cb78c0e1e1e1c5ccf5ee92ea03d0"),
         ("diskann_search", "b61e510d7622bac8963f5ea8f7892d1baf00b24003e3da87dad5f874a65e2629"),
-        ("tfrecord_stream", "ad97f921d6a77c7a292c2ed18265eb9826e028acab7e53fc195737f0ddcb5348"),
-        ("parquet_stream", "14d3e882d669f12fdce815d696eab304273016b2ec0bf795d5bd11aa02744fd3"),
+        // 2026-10-15 (RC1 review): a step takes the shards whose first sample is in its batch, for
+        // any batch and samples_per_file, in place of `every(samples_per_file div batch)`; the
+        // fingerprints where batch divides samples_per_file unchanged
+        ("tfrecord_stream", "22929c8b95c0ff0bc17358dcfd3a8d0c8fdae07a4b23b220b4e57f4abed38426"),
+        ("parquet_stream", "863e072da997c16f968e25b3d92ffe3a0460eaaa0c8226590f8f8d57cbf78052"),
         ("hdf5_map", "85e216d7676401f872500970a3fbd50282cfd8970b2e43933e0acd8704f1864f"),
         ("faiss_ivf_ondisk", "2df0aa609dbd6b28e0a5112bc54de5cd54719c68e0fcd9b57574f7deff96824f"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)

@@ -1523,3 +1523,32 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   (500 µs and 1.9 ms waits last that long, 300 × 200 µs use under half their wall time in
   thread CPU, an eventfd write still wakes it) fails before ("woke after 4.641µs" on a 500 µs
   wait) and passes after, 5 of 5; `--lib` 63 passed, MinIO object tests 6 passed.
+
+## 66. The stream abstracts failed when `batch` did not divide `samples_per_file`
+
+- **Where:** `workloads/input-pipeline/stream/tfrecord/tfrecord_stream.py` and
+  `workloads/input-pipeline/stream/parquet/parquet_stream.py` (the training loop's take), their
+  regenerated ASTs, catalog pages, and shapes; `runner/aeiou/tests/golden.rs` (the two AST
+  hashes); `runner/aeiou/tests/run.rs`.
+- **Found by:** review of the runner's datagen/metrics: a cryptic error with
+  `samples_per_file < batch`; the fixer found a second failure the review had not.
+- **Defect:** the training loop took a shard `every(samples_per_file // batch)` steps. With
+  `batch > samples_per_file` the period was 0: `aeiou dry-run` failed "mod: overflow or
+  division by zero (0, 0)". With `samples_per_file` not a multiple of `batch` (1000 and 256),
+  the floored period took more shards than the loader dispatches
+  (`ceil_div(steps · batch, samples_per_file)`): the dry run passed and `aeiou run` failed
+  "take `shards`: take after the last of 6 items". The parameter's doc said "a multiple of
+  batch", but nothing stated or checked it, and the contract has no construct to refuse it.
+- **Fix:** each step takes the shards whose first sample falls in its batch,
+  `ceil_div((step + 1)·batch, spf) − ceil_div(step·batch, spf)` of them, which totals the
+  loader's dispatch for any two positive values and, when `batch` divides `samples_per_file`,
+  fires at exactly the old steps. **The two ASTs' hashes change** (tfrecord_stream
+  `22929c8b95c0…`, parquet_stream `863e072da997…`); their dry-run fingerprints for every
+  parameter set that ran before are unchanged (five sets each, the golden fingerprints
+  included). The catalog's measured shapes and op counts are unchanged.
+- **Evidence:** `run::stream_abstracts_take_every_shard_for_any_batch` (both abstracts at
+  `samples_per_file` 128 with batch 32, 48, 200: datagen and a run whose takes equal
+  `ceil(steps·batch/128)` and whose fingerprint, ops, and bytes equal the dry run's) fails with
+  the old ASTs ("take after the last of 3 items") and passes; on HEAD: `aeiou-build --hermetic
+  --twice --check` over every workload exits 0, `aeiou-catalog check` "13 mechanisms, 16
+  cases: ok", golden 21 passed. Fixed in an isolated worktree and applied.

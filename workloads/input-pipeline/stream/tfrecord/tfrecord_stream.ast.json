@@ -11,7 +11,7 @@
     "samples_per_file": {
       "default": 1024,
       "unit": "count",
-      "doc": "[config] samples per shard; a multiple of batch"
+      "doc": "[config] samples per shard"
     },
     "cycle": {
       "default": 4,
@@ -185,30 +185,52 @@
                   },
                   "body": [
                     {
-                      "cond": {
-                        "if": {
-                          "eq": [
+                      "loop": {
+                        "index": "k",
+                        "to": {
+                          "sub": [
                             {
-                              "mod": [
+                              "ceil_div": [
                                 {
-                                  "index": "step"
-                                },
-                                {
-                                  "div": [
+                                  "mul": [
                                     {
-                                      "param": "samples_per_file"
+                                      "add": [
+                                        {
+                                          "index": "step"
+                                        },
+                                        1
+                                      ]
                                     },
                                     {
                                       "param": "batch"
                                     }
                                   ]
+                                },
+                                {
+                                  "param": "samples_per_file"
                                 }
                               ]
                             },
-                            0
+                            {
+                              "ceil_div": [
+                                {
+                                  "mul": [
+                                    {
+                                      "index": "step"
+                                    },
+                                    {
+                                      "param": "batch"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "param": "samples_per_file"
+                                }
+                              ]
+                            }
                           ]
                         },
-                        "then": [
+                        "body": [
                           {
                             "take": {
                               "channel": "shards"
@@ -262,12 +284,11 @@
   "provenance": {
     "generator": {
       "script": "tfrecord_stream.py",
-      "sha256": "0fafa4b7ba4e67ba84a1f5ff489318db9841f7bb0f5335ddf2a10d843fa6b1e1",
+      "sha256": "2ee33f27457cc6cc108e4afb934199a004f4e3aafd08eddd2fb37854b38b068e",
       "builder_version": "0.1.0",
-      "git": "31e0b4543f2f-dirty"
+      "git": "4990966ecf1c-dirty"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "ad97f921d6a77c7a292c2ed18265eb9826e028acab7e53fc195737f0ddcb5348"
+    "ast_sha256": "22929c8b95c0ff0bc17358dcfd3a8d0c8fdae07a4b23b220b4e57f4abed38426"
   }
 }

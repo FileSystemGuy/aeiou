@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-pyarrow over Parquet shards: footer read, then WILLNEED and one pread per coalesced run of row groups. In the catalog it is `input-pipeline/stream/parquet`: application `pyarrow`, format `parquet`, phase training, domain ai. No case yet: the abstract at its defaults, at 1 GPU. `shards` holds 1,281,167 samples, 1,024 a file (148.8 GiB in 1,252 files), consumed shard by shard in a keyed shuffle; sizes lognormal, median 110 KiB, σ 0.45 (5th–95th percentile 52.5 KiB to 230.6 KiB). The one `gpu` actor (one per GPU): 4 loader workers build 125 batches, up to 1 ahead each; per batch, on the next shard of `shards`, open, fstat twice, read `min(65536, size(s))` at an offset; when `192 + 160 × units(s) + 8 > 65536`, read `192 + 160 × units(s) + 8 − 65536` at an offset; for each `piece` below `⌈units(s) / max(1, 33554432 div size(unit 0 of s))⌉`: on a unit of a unit of it, fadvise WILLNEED; for each `piece` below `⌈units(s) / max(1, 33554432 div size(unit 0 of s))⌉`: on a unit of a unit of it, read `offset(u1) + size(u1) − offset(u0)` at an offset; close; in phase `train`, 500 times: when `(step mod (samples_per_file div batch)) = 0`, take a batch from `shards`; compute for 105 ms; a barrier with every GPU. Measured by dry run at 1 GPU (1,681 ops: 653 read, 528 fadvise, 250 fstat, 125 close, 125 open; 14.9 GiB read, nothing written): read runs: large (112 MiB); read requests: medium (28 MiB); share of bytes read: read-only (100%); metadata ops per data op: medium (0.734); reads its own writes: no; share of block reads that are re-reads: none (0.0634%); share of accesses to the hottest 1% of blocks: uniform (1.06%).
+pyarrow over Parquet shards: footer read, then WILLNEED and one pread per coalesced run of row groups. In the catalog it is `input-pipeline/stream/parquet`: application `pyarrow`, format `parquet`, phase training, domain ai. No case yet: the abstract at its defaults, at 1 GPU. `shards` holds 1,281,167 samples, 1,024 a file (148.8 GiB in 1,252 files), consumed shard by shard in a keyed shuffle; sizes lognormal, median 110 KiB, σ 0.45 (5th–95th percentile 52.5 KiB to 230.6 KiB). The one `gpu` actor (one per GPU): 4 loader workers build 125 batches, up to 1 ahead each; per batch, on the next shard of `shards`, open, fstat twice, read `min(65536, size(s))` at an offset; when `192 + 160 × units(s) + 8 > 65536`, read `192 + 160 × units(s) + 8 − 65536` at an offset; for each `piece` below `⌈units(s) / max(1, 33554432 div size(unit 0 of s))⌉`: on a unit of a unit of it, fadvise WILLNEED; for each `piece` below `⌈units(s) / max(1, 33554432 div size(unit 0 of s))⌉`: on a unit of a unit of it, read `offset(u1) + size(u1) − offset(u0)` at an offset; close; in phase `train`, 500 times: for each `k` below `⌈(step + 1) × batch / samples_per_file⌉ − ⌈step × batch / samples_per_file⌉`: take a batch from `shards`; compute for 105 ms; a barrier with every GPU. Measured by dry run at 1 GPU (1,681 ops: 653 read, 528 fadvise, 250 fstat, 125 close, 125 open; 14.9 GiB read, nothing written): read runs: large (112 MiB); read requests: medium (28 MiB); share of bytes read: read-only (100%); metadata ops per data op: medium (0.734); reads its own writes: no; share of block reads that are re-reads: none (0.0634%); share of accesses to the hottest 1% of blocks: uniform (1.06%).
 
 ## The account
 
@@ -15,7 +15,7 @@ pyarrow over Parquet shards: footer read, then WILLNEED and one pread per coales
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
 | `batch` | 256 | same | count | [config] samples per step |
-| `samples_per_file` | 1,024 | same | count | [config] samples per shard; a multiple of batch |
+| `samples_per_file` | 1,024 | same | count | [config] samples per shard |
 | `cycle` | 4 | same | count | [config] interleave cycle_length: shards one GPU's pipeline streams concurrently |
 | `prefetch` | 1 | same | count | [config] shards finished ahead of the training loop, per cycle slot |
 | `steps` | 500 | same | count |  |
@@ -54,7 +54,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
   - Computes for 0 ns (`decode`), no I/O.
 - Phase `train`:
   - 500 times (`steps`), `step` = 0 to 499:
-    - If `(step mod (samples_per_file div batch)) = 0`:
+    - For `k` from 0 while below `⌈(step + 1) × batch / samples_per_file⌉ − ⌈step × batch / samples_per_file⌉`:
       - Takes the next batch from the loader `shards`.
     - Computes for 105 ms (`step_time`), no I/O.
     - If `(step mod sync_every) = 0` (true here):

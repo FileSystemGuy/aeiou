@@ -7,8 +7,10 @@ time, each streamed sequentially by its reader library; records are batched from
 interleaved stream and an in-memory shuffle buffer produces no I/O. In the model the unit of
 work a loader worker does is therefore a **shard**, not a batch: `consume` over a `stream`
 dataset draws shard ids from the epoch's permutation, the worker runs the format class's
-reader protocol over the whole shard, and the training loop takes a shard every
-`samples_per_file / batch` steps. This one: TFRecord through `tf.data.TFRecordDataset`.
+reader protocol over the whole shard, and the training loop takes a shard at the step whose
+batch holds the shard's first sample (every `samples_per_file / batch` steps when batch divides
+it, several in one step when `batch` exceeds `samples_per_file`). This one: TFRecord through
+`tf.data.TFRecordDataset`.
 `../parquet/parquet_stream.py` is the same shape over Parquet; the two repeat the
 shape on purpose, one mechanism per directory (`DESIGN_REVIEW.md` §3.66).
 
@@ -24,7 +26,7 @@ def shape(name, pattern, make_format, doc):
     w = Workload(name, doc=doc)
     P = w.P
     w.param("batch", 256, unit="count", doc="[config] samples per step")
-    w.param("samples_per_file", 1024, unit="count", doc="[config] samples per shard; a multiple of batch")
+    w.param("samples_per_file", 1024, unit="count", doc="[config] samples per shard")
     w.param("cycle", 4, unit="count", doc="[config] interleave cycle_length: shards one GPU's pipeline streams concurrently")
     w.param("prefetch", 1, unit="count", doc="[config] shards finished ahead of the training loop, per cycle slot")
     w.param("steps", 500, unit="count")
@@ -46,7 +48,10 @@ def shape(name, pattern, make_format, doc):
             worker.compute(P.decode)
 
         with gpu.phase("train"), gpu.loop("step", P.steps) as step:
-            with gpu.every(P.samples_per_file // P.batch):
+            # the shards whose first sample is in this step's batch: one every samples_per_file / batch
+            # steps when batch divides it, several in a step when a batch spans shards; the loader's
+            # ceil_div(steps · batch, samples_per_file) in all, for any two positive values
+            with gpu.loop("k", ceil_div((step + 1) * P.batch, P.samples_per_file) - ceil_div(step * P.batch, P.samples_per_file)):
                 gpu.take("shards")
             gpu.compute(P.step_time)
             with gpu.every(P.sync_every):
