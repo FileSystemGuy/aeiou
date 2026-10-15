@@ -1941,3 +1941,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   and passes in 0.26 s; the reviewer's shapes s1–s11 10/10 ok under io_uring and libaio at time
   scales 0 and 0.0001, 1 and 4 GPUs, no false report; on b108d7d plus the change `--test all`
   130 passed, `--lib` 65. Fixed in an isolated worktree and applied.
+
+## 84. Under the thread runner a loader worker's failure was reported as "run aborted"
+
+- **Where:** `runner/aeiou/src/run.rs` (`run_with`'s actor thread, new `Runner::abandon`,
+  `Shared::abort_error`; `Channel::begin`/`put`/`take` take `&Shared`; `Sink::op`).
+- **Found by:** the RC1 timing review of the channel machinery: `drive(...).and_then(|_|
+  sink.finish())` skipped `finish` when the main line erred, so the instance's loader workers
+  were never closed or joined and their errors were dropped; the channel waits returned a bare
+  "run aborted".
+- **Defect:** `channel c cap 4; loader q {put c seq (b==2 ? -1 : b)}; take c ×4; take q ×4` under
+  `--posix sync` ended 20/20 with only "gpu#0 [1] take `c`: run aborted" where io_uring named
+  "put -1 on `c`: seq -1 is below 0"; a reviewer's fuzzer found 112 of 4,800 sync runs of
+  random loader shapes disagreeing with io_uring on the cause; loader threads could outlive
+  the run, doing I/O.
+- **Fix:** on the main line's error (or panic) the actor sets `aborted`, closes the instance's
+  channels, joins its loader workers (stats merged), and ranks its error with theirs through
+  `keep_cause`, so a real cause beats an echo; every abort echo reads "run aborted: <reason>"
+  as `Sink::op`'s did; a put or take on a channel closed by an aborted run returns the echo,
+  not "on a closed channel". No fingerprint, op stream, dataset id, or AST changes.
+- **Evidence:** `run::a_loader_workers_failure_is_the_cause_whatever_the_main_line_waits_on`
+  (three shapes, Sync and Uring, time scales 0 ×3 and 0.001, hang-safe) failed "take `c`: run
+  aborted" on the old run.rs and passes; the fuzzer 0 disagreements in 4,800 runs after; on
+  HEAD 40392a7 (bug 83) plus the change: `--test all` 131 passed twice, `--lib` 65, builder suite
+  365 passed (object tests skipped, run in the final check). Fixed in an isolated worktree and
+  applied.

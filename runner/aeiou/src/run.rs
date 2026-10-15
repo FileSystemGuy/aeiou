@@ -748,7 +748,7 @@ impl Channel {
     }
 
     /// Loader worker: wait for a slot to start batch `b`.
-    fn begin(&self, b: i64, aborted: &AtomicBool) -> Result<()> {
+    fn begin(&self, b: i64, sh: &Shared) -> Result<()> {
         let mut st = self.m.lock().unwrap();
         let mut parked = None;
         let r = loop {
@@ -758,8 +758,8 @@ impl Channel {
             if b < st.next_take + self.capacity {
                 break Ok(());
             }
-            if aborted.load(Ordering::Relaxed) {
-                break Err(anyhow!("run aborted"));
+            if sh.aborted.load(Ordering::Relaxed) {
+                break Err(sh.abort_error());
             }
             st = self.park(st, &mut parked, &|| format!("to start batch {b}"))?;
         };
@@ -776,11 +776,15 @@ impl Channel {
 
     /// General producer: deliver item `seq`, blocking until `seq` is within `capacity` of the
     /// items taken (`admits`).
-    fn put(&self, seq: i64, aborted: &AtomicBool) -> Result<()> {
+    fn put(&self, seq: i64, sh: &Shared) -> Result<()> {
         let mut st = self.m.lock().unwrap();
         let mut parked = None;
         let r = loop {
             if st.closed {
+                // closed by a main line that failed (`Runner::abandon`): an echo, not a cause
+                if sh.aborted.load(Ordering::Relaxed) {
+                    break Err(sh.abort_error());
+                }
                 break Err(anyhow!("put {seq} on a closed channel"));
             }
             if let Err(e) = st.seqs.check(seq) {
@@ -792,8 +796,8 @@ impl Channel {
                 self.wake(&mut st);
                 break Ok(());
             }
-            if aborted.load(Ordering::Relaxed) {
-                break Err(anyhow!("run aborted"));
+            if sh.aborted.load(Ordering::Relaxed) {
+                break Err(sh.abort_error());
             }
             st = self.park(st, &mut parked, &|| format!("to put {seq}"))?;
         };
@@ -801,7 +805,7 @@ impl Channel {
         r
     }
 
-    fn take(&self, aborted: &AtomicBool) -> Result<i64> {
+    fn take(&self, sh: &Shared) -> Result<i64> {
         let mut st = self.m.lock().unwrap();
         let mut parked = None;
         let r = loop {
@@ -828,10 +832,13 @@ impl Channel {
                 break Ok(x);
             }
             if st.closed {
+                if sh.aborted.load(Ordering::Relaxed) {
+                    break Err(sh.abort_error());
+                }
                 break Err(anyhow!("take on a closed channel with nothing delivered"));
             }
-            if aborted.load(Ordering::Relaxed) {
-                break Err(anyhow!("run aborted"));
+            if sh.aborted.load(Ordering::Relaxed) {
+                break Err(sh.abort_error());
             }
             st = self.park(st, &mut parked, &|| "to take".to_string())?;
         };
@@ -886,6 +893,12 @@ impl Shared {
     /// This run's blocking backend: an actor thread's own, or an event loop's inline one.
     pub(crate) fn backend(&self) -> Box<dyn Backend> {
         self.opts.backend.make(self.opts.mmap, self.opts.mmap_consume, &self.mmap_stats)
+    }
+
+    /// What a thread that finds the run aborted reports: an echo (`echoes_abort`), never a
+    /// cause, with the other host's reason when the coordinator has one.
+    pub(crate) fn abort_error(&self) -> anyhow::Error {
+        anyhow!("run aborted: {}", self.coord.abort_reason().unwrap_or_else(|| "another actor failed".into()))
     }
 }
 
@@ -1633,6 +1646,24 @@ impl Runner {
         self.join_loaders(done)
     }
 
+    /// The main line failed with `e`: the run is aborted, the instance's channels are closed so
+    /// its loader workers stop, and they are joined, so none outlives the run and a worker's
+    /// error that is the cause (`keep_cause`) is reported over a main line that only waited on
+    /// a channel when the abort came (RC1 review, bug R15).
+    fn abandon(&mut self, e: anyhow::Error) -> anyhow::Error {
+        self.sh.aborted.store(true, Ordering::Relaxed);
+        let channels: Vec<Arc<Channel>> = self.inst.channels.lock().unwrap().values().cloned().collect();
+        for ch in &channels {
+            ch.close();
+        }
+        let loaders: Vec<_> = std::mem::take(&mut *self.inst.loaders.lock().unwrap());
+        let mut cause = Some(e);
+        if let Err(w) = self.join_loaders(loaders) {
+            keep_cause(&mut cause, w);
+        }
+        cause.expect("the main line's error")
+    }
+
     fn child(&self) -> Runner {
         Runner::new(self.sh.clone(), self.inst.clone(), self.a.template, self.a.actor, false, Some(self.a.fds.freeze()))
     }
@@ -1663,7 +1694,7 @@ impl Runner {
 impl Sink<'static, 'static> for Runner {
     fn op(&mut self, op: &Op, ctx: &OpCtx) -> Result<()> {
         if self.sh.aborted.load(Ordering::Relaxed) {
-            bail!("run aborted: {}", self.sh.coord.abort_reason().unwrap_or_else(|| "another actor failed".into()));
+            return Err(self.sh.abort_error());
         }
         self.a.check_align(&self.sh, op)?;
         let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, op);
@@ -1710,7 +1741,7 @@ impl Sink<'static, 'static> for Runner {
             }
             Control::Put { channel, seq } => {
                 let ch = self.inst.channels.lock().unwrap().get(channel).cloned().ok_or_else(|| anyhow!("put on undeclared channel `{channel}`"))?;
-                ch.put(seq, &self.sh.aborted).with_context(|| {
+                ch.put(seq, &self.sh).with_context(|| {
                     let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
                     format!("{}#{} [{}] put {seq} on `{channel}`", ctx.template, ctx.actor, idx.join(","))
                 })?;
@@ -1719,7 +1750,7 @@ impl Sink<'static, 'static> for Runner {
             Control::Take { channel } => {
                 let ch = self.inst.channels.lock().unwrap().get(channel).cloned().ok_or_else(|| anyhow!("take on undeclared channel `{channel}` (a loader declares one under its name)"))?;
                 let t = Instant::now();
-                ch.take(&self.sh.aborted).with_context(|| {
+                ch.take(&self.sh).with_context(|| {
                     let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
                     format!("{}#{} [{}] take `{channel}`", ctx.template, ctx.actor, idx.join(","))
                 })?;
@@ -1802,10 +1833,10 @@ impl Sink<'static, 'static> for Runner {
                     let chan = chan.clone();
                     let label = format!("{}#{} {index} worker {w}", self.a.template, self.a.actor);
                     let h = self.spawn_sub(snap.clone(), label, move |vm, sink| {
-                        let aborted = &sink.sh.clone().aborted;
+                        let sh = sink.sh.clone();
                         let mut b = w;
                         while b < batches {
-                            if let Err(e) = chan.begin(b, aborted) {
+                            if let Err(e) = chan.begin(b, &sh) {
                                 // closed by the consumer: not this worker's error
                                 if chan.m.lock().unwrap().closed {
                                     return Ok(());
@@ -2509,14 +2540,19 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
                 .name(format!("{template}#{actor}"))
                 .spawn(move || {
                     // a panic is this actor's error: `aborted` set, so no peer waits forever
+                    let mut sink = Runner::new(sh.clone(), inst, template, actor, true, None);
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let mut sink = Runner::new(sh.clone(), inst, template, actor, true, None);
                         let body = &model.ast.actors[template].body;
                         let mut vm = Vm::new(model, template, actor, count);
                         vm.start(body);
-                        drive(&mut vm, &mut sink).and_then(|_| sink.finish())
+                        drive(&mut vm, &mut sink)
                     }))
                     .unwrap_or_else(|p| Err(panicked(p)));
+                    // on an error the loader workers are still joined (`abandon`)
+                    let r = match r {
+                        Ok(()) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink.finish())).unwrap_or_else(|p| Err(panicked(p))),
+                        Err(e) => Err(sink.abandon(e)),
+                    };
                     if r.is_err() {
                         sh.aborted.store(true, Ordering::Relaxed);
                     }

@@ -1368,3 +1368,57 @@ fn an_instance_stuck_on_its_channels_is_an_error_while_a_sibling_waits_at_a_barr
         assert!(e.contains(says), "{backend:?}, {threads} loop(s): {e}");
     }
 }
+
+/// A loader worker, or a `parallel` sub-actor inside one, that failed while the main line waited
+/// on another channel (the RC1 review's R15) was reported under the thread runner only as
+/// "take `c`: run aborted": the main line's error skipped joining the loader workers, so their
+/// error, the cause, was dropped, and they could outlive the run. The main line's error now
+/// still closes the actor's channels and joins its workers, and the cause wins over the abort
+/// (`keep_cause`); a put or take the closing ends is an echo too. Under both engines the error
+/// names the put that failed, every time, and a wait nothing ends is named as one, never as the
+/// abort or a closed channel.
+#[test]
+fn a_loader_workers_failure_is_the_cause_whatever_the_main_line_waits_on() {
+    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"r15","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    // R6: the main line takes `c` while batch 2 puts -1 on it
+    let worker = doc(r#"{"channel":{"name":"c","capacity":4,"ordered":true}},
+        {"loader":{"name":"q","index":"b","workers":2,"prefetch":2,"batches":4,"body":[
+          {"put":{"channel":"c","seq":{"cond":{"if":{"eq":[{"index":"b"},2]},"then":-1,"else":{"index":"b"}}}}}]}},
+        {"loop":{"index":"s","to":4,"body":[{"take":{"channel":"c"}}]}},
+        {"loop":{"index":"s","to":4,"body":[{"take":{"channel":"q"}}]}}"#);
+    // R5: sub-actor 1 of a `parallel` in the loader's body puts -1 while sub-actor 0 computes
+    let sub = doc(r#"{"channel":{"name":"c","capacity":4,"ordered":true}},
+        {"loader":{"name":"q","index":"b","workers":1,"prefetch":1,"batches":2,"body":[
+          {"parallel":{"index":"p","width":2,"body":[{"cond":{"if":{"eq":[{"index":"p"},1]},
+            "then":[{"put":{"channel":"c","seq":-1}}],"else":[{"compute":{"ns":300000000}}]}}]}}]}},
+        {"take":{"channel":"q"}},{"take":{"channel":"q"}}"#);
+    // the fuzzer's shape: the workers' sub-actors put items the main line takes too late while
+    // it waits on the loader, a wait nothing ends
+    let takes: Vec<String> = "qqqcqqccccccqccqccccqqcccccccccccccc".chars().map(|c| format!(r#"{{"take":{{"channel":"{c}"}}}}"#)).collect();
+    let stuck = doc(&format!(r#"{{"channel":{{"name":"c","capacity":6,"ordered":false}}}},
+        {{"loader":{{"name":"q","index":"b","workers":4,"prefetch":2,"batches":9,"body":[
+          {{"parallel":{{"index":"p","width":3,"body":[{{"compute":{{"ns":{{"mul":[{{"index":"p"}},3922]}}}}}},
+            {{"put":{{"channel":"c","seq":{{"add":[{{"mul":[{{"index":"b"}},3]}},{{"index":"p"}}]}}}}}}]}}}}]}}}},
+        {}"#, takes.join(",")));
+    let (worker, sub, stuck) = (model_of(&worker), model_of(&sub), model_of(&stuck));
+    let root = tmpdir("r15-cause");
+    for backend in [BackendKind::Sync, BackendKind::Uring] {
+        for scale in [0.0, 0.0, 0.0, 0.001] {
+            let o = || {
+                let mut o = opts(&root, backend);
+                o.time_scale = scale;
+                o
+            };
+            for model in [worker, sub] {
+                let e = run_within(model, o()).err().expect("refused");
+                assert!(e.contains("put -1 on `c`: seq -1 is below 0"), "{backend:?}, time scale {scale}: {e}");
+            }
+            let e = run_within(stuck, o()).err().expect("refused");
+            let says = match backend {
+                BackendKind::Sync => "every thread of gpu#0 waits on a channel that nothing will change",
+                _ => "wait on channels or trace order nothing will complete",
+            };
+            assert!(e.contains(says) && !e.contains("run aborted") && !e.contains("closed channel"), "{backend:?}, time scale {scale}: {e}");
+        }
+    }
+}
