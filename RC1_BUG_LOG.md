@@ -482,3 +482,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   subcommands, `[]` and `{}`) and `test_bad_inputs_and_options_are_one_line_errors` (the rest):
   9 fail on the old params.py, 37 pass on the new; params, usage, man suites: 61 passed.
 
+## 23. aeiou-trace exported trace files the runner refuses, and `--root /` counted nothing
+
+- **Where:** `builder/aeiou/trace.py`: new module `normpath`, `Tracer.under`, `Exporter.open`,
+  `Exporter.path_op`, `Exporter.rel`.
+- **Found by:** the fixer of bug 7 noted that `rel()`'s fallback returned a path not under the
+  root unchanged; checking whether real strace input could make the exporter emit a path the
+  runner now refuses (bug 7's rules: absolute, `..`, empty, or the root itself changed) found
+  three ways that did not go through that fallback (which is unreachable).
+- **Defect:** (1) `os.path.normpath` keeps a leading `//`, which Linux reads as `/`: `export
+  --root //` wrote `"path":"/"` (absolute, refused), and root `/d` silently dropped calls on
+  `//d/x`. (2) `--root /` matched only `/` itself (the prefix test was `startswith("//")`), so
+  `metrics` and `export` counted 0 ops. (3) The realistic one: a call that changes the root
+  itself (`os.makedirs(root, exist_ok=True)` traces as `mkdir("/d") = -1 EEXIST`; likewise
+  `rmdir`, `unlink`, `rename`, `open` with CREAT/TRUNC of the root) exported as `mkdir .`, and
+  the runner refused the whole file ("path `.` is --root itself, and the trace changes it").
+- **Fix:** roots and paths go through `normpath` (normpath, then `//` → `/`); `under()` builds
+  its prefix as `root.rstrip("/") + "/"`, so `/` is every path; the exporter leaves out (and
+  counts under `calls_not_exported`) an open that creates or truncates the root and any other
+  path call that names the root; `rel()`'s fallback, and any result that is empty, absolute, or
+  has `..`, is now an internal-error assertion instead of a silent bad path.
+- **Evidence:** `test_trace.py::test_every_exported_path_is_one_the_runner_accepts` (five root
+  spellings; mkdir/open CREAT/rmdir of the root, `..`, `//`, rename, chdir),
+  `test_the_root_slash_is_every_path_and_double_slash_is_slash`,
+  `test_a_path_not_under_the_exporters_root_is_an_internal_error`, and
+  `test_the_runner_loads_an_export_that_mkdirs_its_root` (a real `aeiou dry-run`): 8 fail on the
+  old trace.py, 8 pass on the new; test_trace.py 80 passed (+1 xfail held for a pending fix).
+

@@ -430,6 +430,13 @@ def unescape(raw: str) -> str:
         return raw
 
 
+def normpath(path: str) -> str:
+    """`os.path.normpath` as Linux resolves names: POSIX lets a leading `//` mean something
+    else and `normpath` keeps it, but on Linux `//d` is `/d` (and `//` is `/`)."""
+    p = os.path.normpath(path)
+    return p[1:] if p.startswith("//") else p
+
+
 def _seconds(ts: str) -> float:
     if ":" in ts:
         h, m, s = ts.split(":")
@@ -480,7 +487,7 @@ class Tracer:
 
     def __init__(self, metrics: Metrics, roots: list[str], exclude: list[str] = (), cwd: str | None = None, instance_roots: list[int] = (), chain_gap_us: float | None = None):
         self.m = metrics
-        self.roots = [os.path.normpath(r) for r in roots]
+        self.roots = [normpath(r) for r in roots]
         self.exclude = list(exclude)
         self.cwd = cwd
         self.instance_roots = set(instance_roots)
@@ -517,11 +524,12 @@ class Tracer:
         hit = self._under.get(path, 0)
         if hit != 0:
             return hit
-        p = os.path.normpath(path)
+        p = normpath(path)
         out = None
         for r in self.roots:
-            if p == r or p.startswith(r + "/"):
-                rel = p[len(r) + 1 :]
+            base = r.rstrip("/") + "/"   # the root `/` is its own prefix
+            if p == r or p.startswith(base):
+                rel = p[len(base) :]
                 if not any(fnmatch.fnmatchcase(rel, g) for g in self.exclude):
                     out = p
                 break
@@ -1071,10 +1079,15 @@ class Exporter:
         return e
 
     def rel(self, path: str) -> str:
-        """The path below the root (the root itself is `.`)."""
-        if path.startswith(self.root):
-            return path[len(self.root) :] or "."
-        return "." if path == self.root[:-1] else path
+        """The path below the root (the root itself is `.`). `Tracer.under` hands over only
+        normalized paths at or under the normalized root, so the result is never absolute,
+        never empty, and has no `..`: what the runner accepts (`trace.rs`, `check_path`)."""
+        if path == self.root or path + "/" == self.root:
+            return "."
+        out = path[len(self.root) :] if path.startswith(self.root) else None
+        if not out or out.startswith("/") or ".." in out.split("/"):
+            raise AssertionError(f"aeiou-trace export: internal error: {path!r} is not a normalized path under the root {self.root!r}")
+        return out
 
     @staticmethod
     def _ret(ret, err):
@@ -1082,7 +1095,7 @@ class Exporter:
             return err
         return ret if ret not in (None, 0) else None
 
-    def open(self, when, path: str, flags: str, mode: str | None, err: str | None) -> int:
+    def open(self, when, path: str, flags: str, mode: str | None, err: str | None) -> int | None:
         names, dropped = [], 0
         for f in flags.split("|"):
             if f in OPEN_FLAGS:
@@ -1093,6 +1106,12 @@ class Exporter:
             self.notes["open_flags_dropped"] += dropped
         if not any(n in ("RDONLY", "WRONLY", "RDWR") for n in names):
             names.insert(0, "RDONLY")  # O_RDONLY is 0 and strace prints it, but be sure
+        if ("CREAT" in names or "TRUNC" in names) and self.rel(path) == ".":
+            # the runner refuses a trace that changes --root itself: the open is left out,
+            # and the calls on its descriptor with it
+            self.notes["calls_not_exported"] += 1
+            self.notes["not_exported:open:creates or truncates the root"] += 1
+            return None
         oid = len(self.opens)
         self.opens.append({"path": path, "lanes": set(), "creat": "CREAT" in names and err is None})
         m = None
@@ -1154,6 +1173,12 @@ class Exporter:
         if call == "truncate":
             self.notes["calls_not_exported"] += 1
             self.notes["not_exported:truncate"] += 1
+            return
+        if kind != "stat" and (self.rel(path) == "." or (to is not None and self.rel(to) == ".")):
+            # `mkdir` of the root (an `os.makedirs(..., exist_ok=True)`), its `rmdir`: the
+            # runner refuses a trace that changes --root itself, whatever the call returned
+            self.notes["calls_not_exported"] += 1
+            self.notes[f"not_exported:{kind}:the root itself"] += 1
             return
         f = {}
         if kind == "rename":

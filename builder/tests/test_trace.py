@@ -1120,3 +1120,74 @@ def test_stdin_is_utf8_and_the_console_escapes_what_it_cannot_spell(tmp_path):
     st.write_bytes(UNICODE_TRACE)
     r = _trace_tool("export", st, "--root", "/d", "-o", o, env={**base, "PYTHONIOENCODING": "ascii"})
     assert r.returncode == 0 and b"\\xe9.jsonl\n" in r.stdout, r.stderr
+
+
+# the exporter's paths (RC1 review): every path is what the runner accepts (`trace.rs`,
+# `check_path`): relative, non-empty, no `..`, and `.` (the root) only where the call leaves
+# the root as it is; a call that changes the root itself is left out with a counted note.
+# Paths and roots are normalized as Linux resolves them: `//d` is `/d`, and `/` is a root.
+ROOT_PATHS = """
+100 1700000001.000000 mkdir("{r}", 0755) = -1 EEXIST (File exists) <0.000010>
+100 1700000001.000100 openat(AT_FDCWD</cwd>, "{r}", O_RDONLY|O_CREAT, 0644) = -1 EISDIR (Is a directory) <0.000010>
+100 1700000001.000200 stat("{r}/", {{st_mode=S_IFDIR}}) = 0 <0.000010>
+100 1700000001.000300 openat(AT_FDCWD</cwd>, "{r}/../{b}/./a//b", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3 <0.000010>
+100 1700000001.000400 write(3, "y"..., 100) = 100 <0.000010>
+100 1700000001.000500 close(3) = 0 <0.000010>
+100 1700000001.000600 rename("{r}/a/b", "{r}/c") = 0 <0.000010>
+100 1700000001.000700 chdir("{r}") = 0 <0.000010>
+100 1700000001.000800 stat("../{b}/c", {{st_mode=S_IFREG}}) = 0 <0.000010>
+100 1700000001.000900 stat("/{r}/c", {{st_mode=S_IFREG}}) = 0 <0.000010>
+100 1700000001.001000 rmdir("{r}") = -1 ENOTEMPTY (Directory not empty) <0.000010>
+"""
+
+
+def _runner_accepts(e) -> bool:
+    """`check_path` of `runner/aeiou/src/trace.rs` for one exported line."""
+    keep = e["op"] == "stat" or (e["op"] == "open" and "CREAT" not in e["flags"] and "TRUNC" not in e["flags"])
+    for p in (e[k] for k in ("path", "to") if k in e):
+        parts = [c for c in p.split("/") if c not in ("", ".")]
+        if not p or p.startswith("/") or ".." in parts or (not parts and not keep):
+            return False
+    return True
+
+
+@pytest.mark.parametrize("root,spelled", [("/d", "/d"), ("/d/", "/d"), ("//d", "//d"), ("/d", "//d"), ("/d/sub/..", "/d")])
+def test_every_exported_path_is_one_the_runner_accepts(root, spelled):
+    b = spelled.rstrip("/").rsplit("/", 1)[1]
+    h, ev = _export(ROOT_PATHS.format(r=spelled, b=b), root)
+    assert h["root"] == "/d"
+    assert all(_runner_accepts(e) for e in ev), ev
+    assert [(e["op"], e.get("path"), e.get("to")) for e in ev if "path" in e] == [
+        ("stat", ".", None), ("open", "a/b", None), ("rename", "a/b", "c"), ("stat", "c", None), ("stat", "c", None)]
+    assert h["creates"] == ["a/b", "c"]
+    n = h["notes"]
+    assert n["calls_not_exported"] == 3 and n["not_exported:mkdir:the root itself"] == n["not_exported:rmdir:the root itself"] == 1
+    assert n["not_exported:open:creates or truncates the root"] == 1
+
+
+def test_the_root_slash_is_every_path_and_double_slash_is_slash():
+    for root in ("/", "//"):
+        h, ev = _export('100 1700000001.000000 stat("//", {st_mode=S_IFDIR}) = 0 <0.000010>\n'
+                        '100 1700000001.000100 stat("/x", {st_mode=S_IFREG}) = 0 <0.000010>\n', root)
+        assert h["root"] == "/" and [e["path"] for e in ev] == [".", "x"], (root, ev)
+    assert trace.metrics_of(['100 1700000001.000000 stat("/x", {st_mode=S_IFREG}) = 0 <0.000010>'], ["/"])["total"]["ops"] == 1
+
+
+def test_a_path_not_under_the_exporters_root_is_an_internal_error():
+    ex = trace.Exporter("/d")
+    assert (ex.rel("/d"), ex.rel("/d/x")) == (".", "x")
+    for bad in ("/e/x", "/dx", "/d//x", "/d/../x", "x"):
+        with pytest.raises(AssertionError, match="internal error"):
+            ex.rel(bad)
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_the_runner_loads_an_export_that_mkdirs_its_root(tmp_path):
+    h, ev = _export(ROOT_PATHS.format(r="/d", b="d"))
+    out = tmp_path / "app.jsonl"
+    sha = trace.write_export(str(out), h, ev)
+    node_ast = tmp_path / "node.ast.json"
+    node_ast.write_text(json.dumps({"ast": "0.10", "name": "trace_root", "doc": "calls on the root itself", "params": {}, "datasets": {},
+                                    "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
+    r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
