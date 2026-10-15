@@ -282,6 +282,8 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
 - **Buffers.** Each thread has a 4 KiB-aligned read ring and a write ring of `--buffer-mib`
   (default 8), allocated on first use and grown to the largest op, so successive copies land
   in successive slices and the aggregate across threads exceeds L3 (`NAPKIN_MATH.md` §2.2).
+  A ring is allocated, grown, and faulted in before the op's clock starts: its cost is the
+  runner's, never the first large op's latency (2026-10-15).
 - **Writes** carry the positional content of §5 for the object at that offset
   (`--write-compress` sets the ratio; no dedupe control on writes yet).
 - **`--cache direct`** (under any API but `mmap`) adds `O_DIRECT` to every regular-file open. An unaligned read (the
@@ -991,7 +993,8 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   interposition test (`PROJECT_BRIEF.md` §5). `lseek` is still issued (inline) and recorded.
 - **Buffers** are a pool of 4 KiB-aligned chunks per loop, one per op in flight, returned to
   the back of a FIFO and reused only once the pool holds `--buffer-mib`, so successive
-  copies land in different memory (`NAPKIN_MATH.md` §2.2). Memory is (ops in flight) ×
+  copies land in different memory (`NAPKIN_MATH.md` §2.2); a new chunk is faulted in when it
+  is allocated, and the op's clock starts once it has its chunk. Memory is (ops in flight) ×
   (op size), what any `io_uring` loader needs. An SQE's length is 32 bits, so a read or write
   is issued at no more than `MAX_RW_COUNT` (`INT_MAX` rounded down to a page), the most the
   kernel moves in one `pread`, `pwrite`, or AIO request: an op over it moves what it moves

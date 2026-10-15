@@ -1050,3 +1050,42 @@ fn libaio_teardown_is_not_in_the_elapsed_time() {
         assert!(over < std::time::Duration::from_millis(20), "{backend:?}: a compute of {ideal:?} took {:?}, {over:?} over it", r.elapsed);
     }
 }
+
+/// A thread's buffer ring is grown and faulted in before an op's clock starts: the first read
+/// larger than the ring is not charged its allocation and page faults (RC1 review: the first
+/// 32 MiB read of a `sync` run took 3.6 to 3.7× the mean of the others, about 1.2× with the
+/// ring sized beforehand). The best of three runs, so a busy host's one late wake-up does not
+/// decide it; 32 MiB of data, so it does not slow the timing tests that run beside it.
+#[test]
+fn the_first_large_read_is_not_charged_the_rings_growth() {
+    let root = tmpdir("ring-growth");
+    let mb16 = 16u64 << 20;
+    let ast = serde_json::json!({"ast": "0.10", "name": "ring", "params": {}, "datasets": {},
+        "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1}},
+        "actors": {"gpu": {"body": [
+            {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
+            {"open": {"file": {"ref": "f"}, "flags": ["RDWR", "CREAT", "TRUNC"]}},
+            {"loop": {"index": "i", "to": 2, "body": [{"write": {"file": {"ref": "f"}, "len": mb16, "offset": {"mul": [{"index": "i"}, mb16]}}}]}},
+            {"loop": {"index": "r", "to": 4, "body": [
+                {"loop": {"index": "i", "to": 2, "body": [{"read": {"file": {"ref": "f"}, "len": mb16, "offset": {"mul": [{"index": "i"}, mb16]}}}]}}]}},
+            {"close": {"file": {"ref": "f"}}}]}}});
+    let path = root.join("ring.ast.json");
+    std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&path).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(1, 0, &[])));
+    let p: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, p).unwrap()));
+    let mut ratios = vec![];
+    for n in 0..3 {
+        let data = root.join(format!("data{n}"));
+        std::fs::create_dir_all(data.join("o")).unwrap();
+        let r = go(model, opts(&data, BackendKind::Sync));
+        let h = &r.stats.lat[&aeiou::vm::OpKind::Read];
+        assert_eq!(h.count, 8);
+        let others = (h.sum - h.max) as f64 / (h.count - 1) as f64;
+        ratios.push(h.max as f64 / others);
+        std::fs::remove_dir_all(&data).unwrap();
+    }
+    let best = ratios.iter().cloned().fold(f64::INFINITY, f64::min);
+    assert!(best < 2.5, "the slowest 16 MiB read took {best:.2}× the mean of the others (runs: {ratios:.2?})");
+}

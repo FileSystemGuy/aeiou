@@ -29,7 +29,7 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::backend::{Backend, ALIGN};
 use crate::eval::Model;
-use crate::run::{fill, issue_blocking, round_out, AioReport, Ring, Shared};
+use crate::run::{fill, issue_timed, round_out, AioReport, Ring, Shared};
 use crate::uring::{spread, Engine, Issued, Loop, Pool, TaskIo, EFD};
 use crate::vm::{Op, OpKind};
 
@@ -178,9 +178,8 @@ impl AioIo {
     }
 
     fn inline_op(&mut self, sh: &Shared, t: &mut TaskIo, op: &Op) -> Issued {
-        let at = Instant::now();
-        let r = issue_blocking(&mut *self.inline, sh, &mut t.a, &mut self.rbuf, &mut self.wbuf, op);
-        Issued::Done(r, at.elapsed().as_nanos() as u64)
+        let (r, ns) = issue_timed(&mut *self.inline, sh, &mut t.a, &mut self.rbuf, &mut self.wbuf, op);
+        Issued::Done(r, ns)
     }
 
     /// `io_getevents`: wait up to `timeout` (forever when `None`) for one completion and
@@ -301,6 +300,8 @@ impl Engine for AioIo {
                     Ok(c) => c,
                     Err(e) => return Ok(Issued::Done(Err(e), 0)),
                 };
+                // a fresh chunk's allocation and faults are the runner's, not the op's
+                t.started = Instant::now();
                 let ptr = chunk.ptr;
                 t.round = rounded.then_some(lo);
                 t.buf = Some(chunk);
@@ -311,6 +312,7 @@ impl Engine for AioIo {
                     Ok(c) => c,
                     Err(e) => return Ok(Issued::Done(Err(e), 0)),
                 };
+                t.started = Instant::now();
                 let ptr = chunk.ptr;
                 fill(&mut t.a, op, unsafe { std::slice::from_raw_parts_mut(ptr, op.len as usize) });
                 t.buf = Some(chunk);

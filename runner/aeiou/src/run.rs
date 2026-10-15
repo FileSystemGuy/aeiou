@@ -804,8 +804,20 @@ pub(crate) fn alloc_failed(size: usize) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("buffer allocation of {size} bytes failed"))
 }
 
+/// Touches every page of a fresh buffer, so its page faults are the runner's, taken when it
+/// is allocated, and never inside the op the kernel first copies into it (RC1 review).
+pub(crate) fn prefault(ptr: *mut u8, len: usize) {
+    let mut i = 0;
+    while i < len {
+        // SAFETY: `ptr` is a live allocation of at least `len` bytes
+        unsafe { ptr.add(i).write_volatile(0) };
+        i += ALIGN;
+    }
+}
+
 /// A page-aligned buffer ring: successive I/Os land in successive slices so copies are not
-/// cache-hot (`NAPKIN_MATH.md` §2.2). Allocated on first use, grown to fit the largest op.
+/// cache-hot (`NAPKIN_MATH.md` §2.2). Allocated on first use, grown to fit the largest op,
+/// and pre-faulted; `reserve` does both before an op's clock starts.
 pub(crate) struct Ring {
     pub(crate) ptr: *mut u8,
     cap: usize,
@@ -829,6 +841,7 @@ impl Ring {
             if ptr.is_null() {
                 return Err(alloc_failed(cap));
             }
+            prefault(ptr, cap);
             self.free();
             self.ptr = ptr;
             self.cap = cap;
@@ -1206,6 +1219,31 @@ pub(crate) fn round_out(offset: i64, len: i64) -> (i64, i64) {
     (offset - offset.rem_euclid(al), (offset + len + al - 1) / al * al)
 }
 
+/// Sizes the ring `issue_blocking` takes `op`'s buffer from, before the op's clock starts: a
+/// ring is allocated, grown, and pre-faulted by the runner, never inside the op's latency.
+fn reserve(sh: &Shared, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> std::io::Result<()> {
+    match op.kind {
+        OpKind::Read => {
+            let len = op.issue_len();
+            // what `issue_blocking` asks for (an object read's is not rounded: at most a page more)
+            let len = if sh.opts.backend.direct() { let (lo, hi) = round_out(op.offset, len); hi - lo } else { len };
+            rbuf.ensure(len as usize)
+        }
+        OpKind::Write if sh.opts.endpoints.object(op.path).is_none() => wbuf.ensure(op.len as usize),
+        _ => Ok(()),
+    }
+}
+
+/// `issue_blocking` timed: its result and nanoseconds, the buffers sized before the clock.
+pub(crate) fn issue_timed(be: &mut dyn Backend, sh: &Shared, a: &mut ActorState, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> (std::io::Result<i64>, u64) {
+    if let Err(e) = reserve(sh, rbuf, wbuf, op) {
+        return (Err(e), 0);
+    }
+    let t = Instant::now();
+    let r = issue_blocking(be, sh, a, rbuf, wbuf, op);
+    (r, t.elapsed().as_nanos() as u64)
+}
+
 /// A write's content: the positional payload of the object at the op's offset (§5).
 pub(crate) fn fill(a: &mut ActorState, op: &Op, buf: &mut [u8]) {
     let seed = payload::object_seed(op.seed, op.path);
@@ -1459,9 +1497,7 @@ impl Sink<'static, 'static> for Runner {
             bail!("run aborted: {}", self.sh.coord.abort_reason().unwrap_or_else(|| "another actor failed".into()));
         }
         self.a.check_align(&self.sh, op)?;
-        let t = Instant::now();
-        let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, op);
-        let ns = t.elapsed().as_nanos() as u64;
+        let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, op);
         self.a.settle(op, ctx, r, ns)
     }
 
@@ -2717,9 +2753,7 @@ impl Runner {
         match o.kind {
             OpKind::Open => {
                 let oid = b_oid.expect("an open has its id");
-                let t = Instant::now();
-                let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
-                let ns = t.elapsed().as_nanos() as u64;
+                let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
                 // the descriptor belongs to the table, not to this lane's own files
                 table.publish(oid, self.a.fds.own.remove(key));
                 self.a.settle(o, ctx, r, ns)
@@ -2736,17 +2770,13 @@ impl Runner {
                 Some(oid) => {
                     let fd = table.acquire(oid, o.path, &self.sh.aborted)?;
                     self.a.fds.own.insert(key.clone(), fd);
-                    let t = Instant::now();
-                    let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
-                    let ns = t.elapsed().as_nanos() as u64;
+                    let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
                     self.a.fds.own.remove(key);
                     table.release(oid);
                     self.a.settle(o, ctx, r, ns)
                 }
                 None => {
-                    let t = Instant::now();
-                    let r = issue_blocking(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
-                    let ns = t.elapsed().as_nanos() as u64;
+                    let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
                     self.a.settle(o, ctx, r, ns)
                 }
             },
@@ -2783,9 +2813,7 @@ impl Runner {
                             Err(_) => return (Err(std::io::Error::from_raw_os_error(libc::EBADF)), 0),
                         };
                         a.fds.own.insert(Arc::from(o.path), fd);
-                        let t = Instant::now();
-                        let r = issue_blocking(&mut *be, &sh, &mut a, &mut rbuf, &mut wbuf, o);
-                        let ns = t.elapsed().as_nanos() as u64;
+                        let (r, ns) = issue_timed(&mut *be, &sh, &mut a, &mut rbuf, &mut wbuf, o);
                         table.release(oid);
                         tables.after(tf, g0 + j);
                         (r, ns)
@@ -2875,5 +2903,36 @@ impl Runner {
             Some((lane, e)) => Err(e.context(format!("trace `{}` lane {lane}", tf.name))),
             None => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pages of `[ptr, ptr + len)` the kernel has resident, by `mincore`.
+    fn resident(ptr: *mut u8, len: usize) -> usize {
+        let page = ALIGN;
+        let mut v = vec![0u8; (len + page - 1) / page];
+        let rc = unsafe { libc::mincore(ptr as *mut libc::c_void, len, v.as_mut_ptr()) };
+        assert_eq!(rc, 0, "mincore: {}", std::io::Error::last_os_error());
+        v.iter().filter(|b| **b & 1 != 0).count()
+    }
+
+    /// A buffer the runner allocates (a thread's ring, first or grown, and a loop's pool
+    /// chunk) is faulted in when it is allocated, so the first op that lands in it is not
+    /// charged its page faults (RC1 review: the first 32 MiB read of a `sync` run took 3.7×
+    /// the others').
+    #[test]
+    fn runner_buffers_are_prefaulted_when_allocated() {
+        let mut r = Ring::new(1 << 20);
+        r.ensure(4096).unwrap();
+        assert_eq!(resident(r.ptr, 1 << 20), 256, "a first ring");
+        r.ensure(32 << 20).unwrap();
+        assert_eq!(resident(r.ptr, 32 << 20), 8192, "a grown ring");
+        let mut p = crate::uring::Pool::new(0);
+        let c = p.get(16 << 20).unwrap();
+        assert_eq!(resident(c.ptr, 16 << 20), 4096, "a pool chunk");
+        p.put(c);
     }
 }

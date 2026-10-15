@@ -58,7 +58,7 @@ use io_uring::{opcode, squeue, types, IoUring, Probe};
 
 use crate::backend::{open_flags, Backend, OpenFile, ALIGN};
 use crate::eval::Model;
-use crate::run::{fill, issue_blocking, round_out, untaken, ActorState, Ring, Shared, UringReport};
+use crate::run::{fill, issue_timed, round_out, untaken, ActorState, Ring, Shared, UringReport};
 use crate::trace::{Built, LineOp, OwnedCtx, TraceFile};
 use crate::vm::{Control, Event, ForkKind, Op, OpKind, Vm};
 
@@ -234,6 +234,7 @@ impl Pool {
         if ptr.is_null() {
             return Err(crate::run::alloc_failed(size));
         }
+        crate::run::prefault(ptr, size);
         self.total += size;
         Ok(Chunk { ptr, size })
     }
@@ -460,9 +461,8 @@ impl LoopIo {
     }
 
     fn inline_op(&mut self, sh: &Shared, t: &mut TaskIo, op: &Op) -> Issued {
-        let at = Instant::now();
-        let r = issue_blocking(&mut *self.inline, sh, &mut t.a, &mut self.rbuf, &mut self.wbuf, op);
-        Issued::Done(r, at.elapsed().as_nanos() as u64)
+        let (r, ns) = issue_timed(&mut *self.inline, sh, &mut t.a, &mut self.rbuf, &mut self.wbuf, op);
+        Issued::Done(r, ns)
     }
 
 }
@@ -568,6 +568,8 @@ impl Engine for LoopIo {
                     Ok(c) => c,
                     Err(e) => return Ok(Issued::Done(Err(e), 0)),
                 };
+                // a fresh chunk's allocation and faults are the runner's, not the op's
+                t.started = Instant::now();
                 t.round = rounded.then_some(lo);
                 let e = opcode::Read::new(f, chunk.ptr, rw_len(len) as u32).offset(lo as u64).build();
                 t.buf = Some(chunk);
@@ -582,6 +584,7 @@ impl Engine for LoopIo {
                     Ok(c) => c,
                     Err(e) => return Ok(Issued::Done(Err(e), 0)),
                 };
+                t.started = Instant::now();
                 let len = rw_len(op.len);
                 let buf = unsafe { std::slice::from_raw_parts_mut(chunk.ptr, len as usize) };
                 fill(&mut t.a, op, buf);
@@ -757,13 +760,16 @@ impl Objects {
             }
         }
         self.total += len;
-        vec![0u8; len]
+        let mut v = vec![0u8; len];
+        crate::run::prefault(v.as_mut_ptr(), len);
+        v
     }
 
     fn issue(&mut self, sh: &Shared, t: &mut TaskIo, op: &Op, store: &Arc<crate::object::Store>, rest: String) -> Issued {
         use crate::object::{Sink, Step};
-        t.started = Instant::now();
+        // the buffer is the runner's, taken before the op's clock starts
         let sink = (op.kind == OpKind::Read).then(|| Sink::Owned(self.buffer(op.issue_len() as usize), op.issue_len() as usize));
+        t.started = Instant::now();
         match crate::object::start(store, rest, sh, &mut t.a, op, sink) {
             Step::Done(r) => Issued::Done(r, t.started.elapsed().as_nanos() as u64),
             Step::Send(f) => {

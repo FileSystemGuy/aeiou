@@ -1429,3 +1429,32 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   and pass with it; merged with bug 60's checker changes and run on HEAD f9afd6c: golden 20
   passed, test_builder, test_man, test_params 110 passed, both checkers ok over every committed
   AST. Fixed in an isolated worktree and applied.
+
+## 62. The runner's own buffer allocation and page faults were timed as part of ops
+
+- **Where:** `runner/aeiou/src/run.rs` (new `prefault`, `reserve`, `issue_timed`;
+  `Ring::ensure`; the timed sites of `Runner::op`, `trace_issue`, `trace_group`),
+  `runner/aeiou/src/uring.rs` (`Pool::get`, the object loop's `buffer`, `issue`'s clock,
+  `inline_op`), `runner/aeiou/src/aio.rs` (`issue`'s clock, `inline_op`); runner/REFERENCE.md,
+  both **Buffers** bullets.
+- **Found by:** review of the execution engines: `issue_blocking` sliced the thread's ring,
+  allocating or growing it, after every caller had started the op's clock, and no buffer was
+  touched when allocated.
+- **Defect:** the first op of a size, and every op landing on fresh pages, was charged the
+  runner's allocation and page faults: one actor writing 256 MiB in 32 MiB ops and reading it
+  back four times saw its slowest read under `sync` at 3.74× the mean of the others (19.3 ms
+  against 5.2 ms) and its slowest write at 2.16×; the event loops took their clock before
+  `pool.get` (writes 1.6–1.9×). Runner overhead in op latency, against charging a backend only
+  its API's costs; `trace_group`'s member threads paid it per member through their fresh rings.
+- **Fix:** a ring is pre-faulted (one write per 4 KiB) when allocated or grown, and so is a new
+  pool chunk or object buffer; `issue_timed` sizes the ring for the op (`reserve`: the issued
+  length, the `O_DIRECT` round-out) and only then starts the clock, at every timed site; the
+  loops start an op's clock once it has its chunk. A write's payload fill stays inside the
+  timer, as before. No fingerprint, dataset id, or AST changes.
+- **Evidence:** the same measurement after: `sync` 1.45× and 1.20× (reads), 1.18× and 1.07×
+  (writes), io_uring writes 1.05×; `run::tests::runner_buffers_are_prefaulted_when_allocated`
+  (`mincore`: a first ring, a grown ring, a pool chunk resident; 0 pages before) and
+  `run::the_first_large_read_is_not_charged_the_rings_growth` (best of 3, slowest 16 MiB read
+  under 2.5× the mean; 3.10× before) fail on the old code and pass on the new; `--test all --
+  run trace uring aio` 39 passed in 4 of 4 runs, `--lib` 45, builder test_object and test_trace
+  97 passed, MinIO object tests 6.
