@@ -78,8 +78,9 @@ struct Checker<'a> {
     ops: BTreeMap<&'static str, usize>,
     /// A `trace` node was seen: its files are under `--root`, POSIX names (V19).
     traces: bool,
-    /// The `consume`s inside a loop, by dataset, in actor-name then document order (V6).
-    consumes: BTreeMap<&'a str, Vec<P>>,
+    /// The `consume`s inside a loop, by dataset, in actor-name then document order, each with
+    /// the innermost enclosing loop whose count varies with an enclosing one, if any (V6).
+    consumes: BTreeMap<&'a str, Vec<(P, Option<P>)>>,
 }
 
 #[derive(Clone)]
@@ -92,6 +93,10 @@ struct Scope<'a> {
     forward: HashSet<&'a str>,
     /// The `let` names this body binds more than once: an `at` naming one is refused (V3).
     twice: HashSet<&'a str>,
+    /// per level of `bindings`, the bindings there whose value varies (V6)
+    varying: Vec<HashSet<&'a str>>,
+    /// the innermost enclosing frame whose count varies with an enclosing one (V6)
+    count_varies: Option<P>,
 }
 
 /// State shared across every scope of one actor, as `check.py` shares `channels` and `written`.
@@ -106,18 +111,19 @@ struct ActorState<'a> {
 
 impl<'a> Scope<'a> {
     fn new(fields: HashSet<&'a str>) -> Self {
-        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new() }
+        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], count_varies: None }
     }
 
     fn child(&self) -> Self {
         let mut s = self.clone();
         s.bindings.push(HashMap::new());
+        s.varying.push(HashSet::new());
         s.forward = HashSet::new();
         s.twice = HashSet::new();
         s
     }
 
-    fn with_index(&self, name: &'a str, nonneg: bool) -> Self {
+    fn with_index(&self, name: &'a str, nonneg: bool, count_varies: Option<P>) -> Self {
         let mut s = self.child();
         s.indices.push(name);
         if nonneg {
@@ -125,11 +131,24 @@ impl<'a> Scope<'a> {
         } else {
             s.nonneg_indices.remove(name);
         }
+        if count_varies.is_some() {
+            s.count_varies = count_varies;
+        }
         s
     }
 
-    fn bind(&mut self, name: &'a str, value: &'a ExprLike) {
+    fn bind(&mut self, name: &'a str, value: &'a ExprLike, varies: bool) {
         self.bindings.last_mut().unwrap().insert(name, value);
+        let v = self.varying.last_mut().unwrap();
+        if varies {
+            v.insert(name);
+        } else {
+            v.remove(name);
+        }
+    }
+
+    fn is_varying(&self, name: &str) -> bool {
+        self.bindings.iter().zip(&self.varying).rev().find(|(b, _)| b.contains_key(name)).map_or(false, |(_, v)| v.contains(name))
     }
 
     fn lookup(&self, name: &str) -> Option<&'a ExprLike> {
@@ -460,12 +479,66 @@ impl<'a> Checker<'a> {
     /// function of the actor's number and the ordinals of its enclosing frames alone
     /// (`runner/REFERENCE.md` §2), so two `consume`s of one dataset (in one body, in sibling
     /// loops, or in two actors) meet at the same positions and return the same samples.
+    /// A `consume` under a loop whose count varies with an enclosing loop repeats positions
+    /// alike: the ordinal assumes fixed counts.
     fn v6_one_consume(&mut self) {
         let consumes = std::mem::take(&mut self.consumes);
         for (ds, paths) in &consumes {
-            for path in paths.iter().skip(1) {
-                self.err(path, format!("a second `consume` of `{ds}` (the first is at {}): `consume` has no site, so its sample depends only on the actor and the enclosing loop indices, and two of them draw the same samples, a reuse the job does not have; consume once and use the handle in each place, or put the one `consume` in an inner loop so each draw has its own position (V6)", paths[0].join("/")));
+            for (i, (path, varies)) in paths.iter().enumerate() {
+                if let Some(lp) = varies {
+                    self.err(path, format!("a `consume` of `{ds}` under a loop whose count varies with an enclosing loop ({}): its position is the row-major ordinal of the enclosing loops at fixed counts, so a count that varies repeats positions and draws the same samples, a reuse the job does not have; give the loop a fixed count (the most it can be, with a `cond`, the builder's `when`, inside to skip the rest) (V6)", lp.join("/")));
+                }
+                if i > 0 {
+                    self.err(path, format!("a second `consume` of `{ds}` (the first is at {}): `consume` has no site, so its sample depends only on the actor and the enclosing loop indices, and two of them draw the same samples, a reuse the job does not have; consume once and use the handle in each place, or put the one `consume` in an inner loop so each draw has its own position (V6)", paths[0].0.join("/")));
+                }
             }
+        }
+    }
+
+    /// V6: whether an expression can take another value at another iteration of an enclosing
+    /// frame: it names a loop index (or `at`), a binding that varies, or draws inside a frame
+    /// (a draw is keyed on the enclosing indices). Parameters and the actor number are fixed
+    /// for an actor's walk. As `check.py`'s `varies`.
+    fn varies(&self, e: &Expr, scope: &Scope<'a>) -> bool {
+        let n = match e {
+            Expr::Lit(_) => return false,
+            Expr::Node(n) => n,
+        };
+        match &**n {
+            ExprNode::Index(_) | ExprNode::At { .. } => true,
+            ExprNode::Ref(name) => scope.is_varying(name),
+            ExprNode::Draw(_) => !scope.indices.is_empty(),
+            ExprNode::Param(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => false,
+            ExprNode::Elem { index, .. } => self.varies(index, scope),
+            ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => self.handle_varies(h, scope),
+            ExprNode::Add(x) | ExprNode::Sub(x) | ExprNode::Mul(x) | ExprNode::Div(x) | ExprNode::Mod(x) | ExprNode::CeilDiv(x) | ExprNode::Min(x) | ExprNode::Max(x)
+            | ExprNode::Eq(x) | ExprNode::Ne(x) | ExprNode::Lt(x) | ExprNode::Le(x) | ExprNode::Gt(x) | ExprNode::Ge(x) => x.iter().any(|e| self.varies(e, scope)),
+            ExprNode::And(x) | ExprNode::Or(x) => x.iter().any(|e| self.varies(e, scope)),
+            ExprNode::Neg(e) | ExprNode::Not(e) => self.varies(e, scope),
+            ExprNode::Cond(c) => self.varies(&c.test, scope) || self.exprlike_varies(&c.then, scope) || self.exprlike_varies(&c.otherwise, scope),
+        }
+    }
+
+    fn exprlike_varies(&self, v: &ExprLike, scope: &Scope<'a>) -> bool {
+        match v {
+            ExprLike::Expr(e) => self.varies(e, scope),
+            ExprLike::Dist(Dist::Const(e)) => self.varies(e, scope),
+            ExprLike::Dist(_) => !scope.indices.is_empty(),
+            ExprLike::Handle(h) => self.handle_varies(h, scope),
+        }
+    }
+
+    fn handle_varies(&self, h: &Handle, scope: &Scope<'a>) -> bool {
+        let opt = |e: &Option<Expr>| e.as_ref().map_or(false, |e| self.varies(e, scope));
+        match h {
+            Handle::Ref(name) => scope.is_varying(name),
+            Handle::File(f) => opt(&f.id) || f.of.as_ref().map_or(false, |h| self.handle_varies(h, scope)) || opt(&f.chunk),
+            Handle::Dir { id, .. } => self.varies(id, scope),
+            Handle::Object { fields, .. } => fields.values().any(|e| self.varies(e, scope)),
+            Handle::Consume(_) | Handle::Pick(_) => !scope.indices.is_empty(),
+            Handle::Inventory(_) => false,
+            Handle::Unit(u) => self.handle_varies(&u.of, scope) || opt(&u.index),
+            Handle::Column(c) => self.handle_varies(&c.of, scope) || self.varies(&c.index, scope),
         }
     }
 
@@ -564,7 +637,8 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["name"]), "not an identifier");
                 }
                 self.exprlike(value, &p(pp, &["value"]), scope, st, Some(name));
-                scope.bind(name, value);
+                let varies = self.exprlike_varies(value, scope);
+                scope.bind(name, value, varies);
             }
             Node::Loop { index, from, to, step, body } => {
                 if !is_ident(index) {
@@ -578,7 +652,8 @@ impl<'a> Checker<'a> {
                     self.expr(e, &p(pp, &["step"]), scope, st, None);
                 }
                 let nonneg = from.as_ref().map_or(true, |e| self.at_least(e, 0, scope));
-                let inner = scope.with_index(index, nonneg);
+                let varies = [from.as_ref(), Some(to), step.as_ref()].into_iter().flatten().any(|e| self.varies(e, scope));
+                let inner = scope.with_index(index, nonneg, varies.then(|| pp.clone()));
                 self.body(body, &p(pp, &["body"]), &inner, st);
             }
             Node::Parallel { index, width, body } => {
@@ -586,7 +661,7 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["index"]), "not an identifier");
                 }
                 self.expr(width, &p(pp, &["width"]), scope, st, None);
-                let inner = scope.with_index(index, true);
+                let inner = scope.with_index(index, true, self.varies(width, scope).then(|| pp.clone()));
                 let outer = st.fork_opens.replace(Vec::new());
                 self.body(body, &p(pp, &["body"]), &inner, st);
                 st.fork_opens = outer;
@@ -602,7 +677,7 @@ impl<'a> Checker<'a> {
                 self.expr(prefetch, &p(pp, &["prefetch"]), scope, st, None);
                 self.expr(batches, &p(pp, &["batches"]), scope, st, None);
                 st.channels.insert(name);
-                let inner = scope.with_index(index, true);
+                let inner = scope.with_index(index, true, self.varies(batches, scope).then(|| pp.clone()));
                 let outer = st.fork_opens.replace(Vec::new());
                 self.body(body, &p(pp, &["body"]), &inner, st);
                 st.fork_opens = outer;
@@ -1387,8 +1462,8 @@ impl<'a> Checker<'a> {
                     self.err(path, "`consume` outside any loop: its position needs an index");
                 } else {
                     let seen = self.consumes.entry(ds.as_str()).or_default();
-                    if !seen.contains(path) {
-                        seen.push(path.clone());
+                    if !seen.iter().any(|(q, _)| q == path) {
+                        seen.push((path.clone(), scope.count_varies.clone()));
                     }
                 }
             }

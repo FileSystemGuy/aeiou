@@ -137,7 +137,7 @@ those belong in one place.
 |---|---|
 | Python control flow over a node; `/`; callables or foreign objects in a node | every rule in `schema/README.md` §4, on the emitted AST, with JSON-pointer paths |
 | unknown flag, errno, ioctl, whence, unit; duplicate flag; `gpus` as a param | unresolved names (a `ref` never bound, an unknown dataset) |
-| `x @ e` on a binding of the same loop body (itself included) unless `e` is `i - d` with `d` provably ≥ 1: a literal, a draw with that minimum, or `add` of such a term and one provably ≥ 0 (a `mod`, a loop index, a draw with minimum ≥ 0; contract 0.5) (V3) | `consume` outside any loop, or a second `consume` of one dataset (V6) |
+| `x @ e` on a binding of the same loop body (itself included) unless `e` is `i - d` with `d` provably ≥ 1: a literal, a draw with that minimum, or `add` of such a term and one provably ≥ 0 (a `mod`, a loop index, a draw with minimum ≥ 0; contract 0.5) (V3) | `consume` outside any loop, a second `consume` of one dataset, or a `consume` under a loop, `parallel`, or `loader` whose count varies with an enclosing loop (V6) |
 | `until_eof` on an `as_written` object through a different binding (V4) | AST size |
 | index shadowing; `every` outside a loop; channel not declared; namespace fields vs pattern | |
 | three identical sibling statements (lint) | |

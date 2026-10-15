@@ -260,6 +260,14 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   an eval phase after a train phase, or in another actor) reaches the same positions and
   returns the same samples, a reuse the job does not have. The second is refused; consume once
   and use the handle (a `let`) in each place, or put the one `consume` in an inner loop.
+  Every loop, `parallel`, and `loader` around a `consume` has a count fixed for the actor
+  (added 2026-10-15, contract 0.10, no committed AST affected): the ordinal is row-major at
+  fixed counts, so a count (a loop's `from`, `to`, or `step`, a `parallel`'s `width`, a
+  `loader`'s `batches`) that names an enclosing index, an `at`, a binding that does, or a draw
+  inside a loop repeats positions (`loop i < 3 { loop j < 3 − i { consume } }` reaches
+  position 2 at (0, 2), (1, 0), and (2, 0)). It is refused, naming the loop; give the loop the
+  most it can be and skip the rest with a `cond`. Parameters, the actor number, and draws at
+  the actor's top are fixed for the actor.
 - **V7 Object fields match** the namespace's declared fields exactly.
 - **V8 `empirical`** has as many weights as values.
 - **V9 Access mode.** `map` over a container the format class cannot address randomly is

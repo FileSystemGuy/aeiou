@@ -922,3 +922,79 @@ def test_at_names_the_binding_its_body_shadows():
     e = check.Check(doc([{"let": {"name": "x", "value": {"index": "j"}}},
                          {"let": {"name": "x", "value": at(back)}}]), "x").run()
     assert any("`x @` names a binding this body defines more than once" in x for x in e), e
+
+
+def _consume_under(shape):
+    """A workload whose one `consume` of `d` sits under a loop whose count varies with an
+    enclosing loop (`to`, `from` through a binding, a draw, a `parallel` width), or under loops
+    of fixed count."""
+    w = Workload("t")
+    n = w.param("n", 3)
+    d = w.dataset("d", pattern="d/f{id:04}", layout="whole", access="map", count=64, size=const(1), seed=1)
+    with w.actor("gpu") as a:
+        if shape == "actor_draw":
+            m = a.let("m", draw(uniform(1, 4)))
+        with a.loop("i", 3) as i:
+            if shape == "to":
+                with a.loop("j", 3 - i):
+                    a.stat(d.consume())
+            elif shape == "from":
+                m = a.let("m", i)
+                with a.loop("j", 3, start=m):
+                    a.stat(d.consume())
+            elif shape == "draw":
+                m = a.let("m", draw(uniform(1, 4)))
+                with a.loop("j", m):
+                    a.stat(d.consume())
+            elif shape == "parallel":
+                with a.parallel("w", i + 1):
+                    with a.loop("j", 2):
+                        a.stat(d.consume())
+            elif shape == "when":
+                with a.loop("j", 3) as j:
+                    with a.when(j < 3 - i):
+                        a.stat(d.consume())
+            elif shape == "actor_draw":
+                with a.loop("j", m + n):
+                    a.stat(d.consume())
+            elif shape == "inside":
+                x = a.let("x", d.consume())
+                with a.loop("j", i + 1):
+                    a.stat(x)
+    return w
+
+
+def test_a_consume_is_under_loops_of_fixed_count(tmp_path):
+    """`consume`'s position is the row-major ordinal of its enclosing frames at fixed counts, so
+    a loop around it whose count varies with an enclosing loop repeats positions: `loop i < 3 {
+    loop j < 3 - i { stat consume d } }` statted `d/f0002` three times. Both checkers and the
+    builder refuse it, naming the loop, with one message (V6, RC1 review)."""
+    l0, l1 = "actors/gpu/body/0/loop/body/0", "actors/gpu/body/0/loop/body/1"
+
+    def want(at, lp):
+        return (f"t: {at}: a `consume` of `d` under a loop whose count varies with an enclosing loop ({lp}): "
+                "its position is the row-major ordinal of the enclosing loops at fixed counts, so a count that "
+                "varies repeats positions and draws the same samples, a reuse the job does not have; give the "
+                "loop a fixed count (the most it can be, with a `cond`, the builder's `when`, inside to skip the "
+                "rest) (V6)")
+
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+    for shape, at, lp in [
+        ("to", f"{l0}/loop/body/0/stat/file", f"{l0}/loop"),
+        ("from", f"{l1}/loop/body/0/stat/file", f"{l1}/loop"),
+        ("draw", f"{l1}/loop/body/0/stat/file", f"{l1}/loop"),
+        ("parallel", f"{l0}/parallel/body/0/loop/body/0/stat/file", f"{l0}/parallel"),
+    ]:
+        with pytest.raises(BuildError) as e:
+            _consume_under(shape).build()
+        assert want(at, lp) in str(e.value), str(e.value)
+        # the runner says the same of the same document
+        if runner.exists():
+            f = tmp_path / f"{shape}.ast.json"
+            f.write_text(json.dumps(_consume_under(shape).build(validate=False)))
+            out = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
+            assert out.returncode != 0 and want(at, lp) in out.stdout + out.stderr, out.stdout + out.stderr
+    # a fixed count, the rest skipped by a `when`; a count fixed for the actor; a varying loop
+    # inside the `consume`'s, not around it: accepted
+    for shape in ("when", "actor_draw", "inside"):
+        _consume_under(shape).build()

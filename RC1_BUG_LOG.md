@@ -1404,3 +1404,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `test_builder.py::test_at_names_the_binding_its_body_shadows` fails with the original
   `check.py` and passes; on HEAD f018912 plus the change, `--test all` 106 passed, `--lib` 44,
   test_builder and test_params 91 passed. Fixed in an isolated worktree and applied.
+
+## 61. One `consume` under a loop whose count varied drew the same samples
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (a varying-count record per
+  scope, `varies`, the `consume` record, `v6_one_consume`); schema/README.md §4 V6,
+  man/aeiou-abstract.7.md V6, the V6 cell of builder/REFERENCE.md's refusal table.
+- **Found by:** the fixer of bug 44: the consume position is the row-major ordinal of the
+  enclosing frames (runner/REFERENCE.md §2), which assumes fixed counts.
+- **Defect:** `loop i < 3 { loop j < 3 - i { stat consume d } }`: both checkers said ok and
+  `dry-run --gpu 0` statted `d/f0002` at (0, 2), (1, 0), and (2, 0), the same sample three
+  times, the silent reuse of bug 44 from a single `consume`.
+- **Fix:** both checkers refuse, with the same message and path, a `consume` under a loop,
+  `parallel`, or `loader` whose count (`from`, `to`, `step`, `width`, `batches`) names an
+  enclosing index, an `at`, a binding marked varying, or a draw inside a frame; parameters,
+  the actor number, `len`/`sum`/`count`/`dirs`/`inventory`, and draws at the actor's top stay
+  allowed. The message names the loop and the remedy (a fixed count, the most it can be, with
+  a `cond`/`when` inside). Deliberately conservative (`from: i, to: i + 4` is refused too). No
+  committed AST is affected (both checkers ok over all 14; `aeiou-build --hermetic --twice
+  --check` exits 0); no fingerprint, dataset id, or AST changes.
+- **Evidence:** `golden::a_consume_is_under_loops_of_fixed_count` and
+  `test_builder.py::test_a_consume_is_under_loops_of_fixed_count` (four refused shapes, three
+  accepted; the Python test also holds `aeiou check` to the same message) fail without the fix
+  and pass with it; merged with bug 60's checker changes and run on HEAD f9afd6c: golden 20
+  passed, test_builder, test_man, test_params 110 passed, both checkers ok over every committed
+  AST. Fixed in an isolated worktree and applied.

@@ -180,7 +180,9 @@ these, and the builder enforces most of them at construction:
 - **V4** Sizes are computed, never observed: `until_eof` on an `as_written` object only
   through the handle its writes used; `fstat` results are never consumed.
 - **V5** Finite and timing-free by construction. **V6** `consume` sits inside a loop, and a
-  dataset is consumed in one place (a second `consume` of it draws the same samples).
+  dataset is consumed in one place (a second `consume` of it draws the same samples), under
+  loops of counts fixed for the actor (a count that varies with an enclosing loop repeats
+  positions).
 - **V7** Object fields match the namespace's. **V8** `empirical` weights match its values.
 - **V9** The access mode is one the format class supports. **V10** Continuous draws round.
 - **V11** A `let` is visible to later siblings and child bodies only.

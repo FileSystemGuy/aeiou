@@ -902,3 +902,40 @@ fn at_names_the_binding_its_body_shadows() {
  ]}}}"#;
     rejects(twice, "`x @` names a binding this body defines more than once");
 }
+
+/// `consume`'s position is the row-major ordinal of its enclosing frames at fixed counts
+/// (`runner/REFERENCE.md` §2), so a loop around the `consume` whose count varies with an
+/// enclosing loop repeats positions: `loop i < 3 { loop j < 3 - i { stat consume d } }`
+/// statted `d/f0002` at (0, 2), (1, 0), and (2, 0). Both checkers refuse it, with check.py's
+/// message and path, naming the loop (V6, RC1 review).
+#[test]
+fn a_consume_is_under_loops_of_fixed_count() {
+    let doc = |body: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "t", "params": {{"n": {{"default": 3}}}},
+                "datasets": {{"d": {{"layout": "whole", "access": "map", "pattern": "d/f{{id:04}}", "count": 64, "size": {{"const": 1}}, "seed": 1}}}},
+                "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
+        )
+    };
+    let c = r#"{"stat": {"file": {"consume": "d"}}}"#;
+    let want = |at: &str, lp: &str| format!("t: {at}: a `consume` of `d` under a loop whose count varies with an enclosing loop ({lp}): its position is the row-major ordinal of the enclosing loops at fixed counts, so a count that varies repeats positions and draws the same samples, a reuse the job does not have; give the loop a fixed count (the most it can be, with a `cond`, the builder's `when`, inside to skip the rest) (V6)");
+    let l0 = "actors/gpu/body/0/loop/body/0";
+    let l1 = "actors/gpu/body/0/loop/body/1";
+    // the count is an expression of the outer index
+    rejects(&doc(&format!(r#"{{"loop": {{"index": "i", "to": 3, "body": [{{"loop": {{"index": "j", "to": {{"sub": [3, {{"index": "i"}}]}}, "body": [{c}]}}}}]}}}}"#)), &want(&format!("{l0}/loop/body/0/stat/file"), &format!("{l0}/loop")));
+    // its `from`, through a binding of the outer index
+    rejects(&doc(&format!(r#"{{"loop": {{"index": "i", "to": 3, "body": [{{"let": {{"name": "m", "value": {{"index": "i"}}}}}}, {{"loop": {{"index": "j", "from": {{"ref": "m"}}, "to": 3, "body": [{c}]}}}}]}}}}"#)), &want(&format!("{l1}/loop/body/0/stat/file"), &format!("{l1}/loop")));
+    // a draw inside the outer loop, keyed on its index
+    rejects(&doc(&format!(r#"{{"loop": {{"index": "i", "to": 3, "body": [{{"let": {{"name": "m", "value": {{"draw": {{"uniform": {{"lo": 1, "hi": 4}}}}}}}}}}, {{"loop": {{"index": "j", "to": {{"ref": "m"}}, "body": [{c}]}}}}]}}}}"#)), &want(&format!("{l1}/loop/body/0/stat/file"), &format!("{l1}/loop")));
+    // a `parallel` width, with the `consume` one loop further in
+    rejects(&doc(&format!(r#"{{"loop": {{"index": "i", "to": 3, "body": [{{"parallel": {{"index": "w", "width": {{"add": [{{"index": "i"}}, 1]}}, "body": [{{"loop": {{"index": "j", "to": 2, "body": [{c}]}}}}]}}}}]}}}}"#)), &want(&format!("{l0}/parallel/body/0/loop/body/0/stat/file"), &format!("{l0}/parallel")));
+    // accepted: the most it can be with a `cond` inside; a count fixed for the actor (a
+    // parameter, a draw at the actor's top); a varying loop inside the `consume`'s, not around it
+    for ok in [
+        format!(r#"{{"loop": {{"index": "i", "to": 3, "body": [{{"loop": {{"index": "j", "to": 3, "body": [{{"cond": {{"if": {{"lt": [{{"index": "j"}}, {{"sub": [3, {{"index": "i"}}]}}]}}, "then": [{c}]}}}}]}}}}]}}}}"#),
+        format!(r#"{{"let": {{"name": "m", "value": {{"draw": {{"uniform": {{"lo": 1, "hi": 4}}}}}}}}}}, {{"loop": {{"index": "i", "to": 3, "body": [{{"loop": {{"index": "j", "to": {{"add": [{{"ref": "m"}}, {{"param": "n"}}]}}, "body": [{c}]}}}}]}}}}"#),
+        r#"{"loop": {"index": "i", "to": 3, "body": [{"let": {"name": "x", "value": {"consume": "d"}}}, {"loop": {"index": "j", "to": {"add": [{"index": "i"}, 1]}, "body": [{"stat": {"file": {"ref": "x"}}}]}}]}}"#.to_string(),
+    ] {
+        aeiou::load_str(&doc(&ok)).unwrap_or_else(|e| panic!("{ok}: {e:#}"));
+    }
+}

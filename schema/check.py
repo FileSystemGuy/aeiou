@@ -91,6 +91,8 @@ class Check:
         self.fork_opens = None
         # the `consume`s inside a loop, by dataset, in document order (V6)
         self.consumes = {}
+        # V6: a `consume` under a loop whose count varies, by path: the innermost such loop's path
+        self.consume_varying = {}
 
     def err(self, path, msg):
         self.errors.append(f"{self.name}: {'/'.join(map(str, path))}: {msg}")
@@ -221,11 +223,22 @@ class Check:
         function of the actor's number and the ordinals of its enclosing frames alone
         (runner/REFERENCE.md §2), so two `consume`s of one dataset (in one body, in sibling
         loops, or in two actors) meet at the same positions and return the same samples.
-        Reported in the runner's order: datasets by name, actors by name, then document order."""
+        A `consume` under a loop whose count varies with an enclosing loop repeats positions alike:
+        the ordinal assumes fixed counts. Reported in the runner's order: datasets by name, actors
+        by name, then document order."""
         for ds in sorted(self.consumes):
             paths = sorted(self.consumes[ds], key=lambda q: q[1])  # stable: document order within an actor
             first = "/".join(map(str, paths[0]))
-            for q in paths[1:]:
+            for i, q in enumerate(paths):
+                loop = self.consume_varying.get(tuple(q))
+                if loop is not None:
+                    self.err(q, f"a `consume` of `{ds}` under a loop whose count varies with an enclosing loop "
+                                f"({'/'.join(map(str, loop))}): its position is the row-major ordinal of the "
+                                "enclosing loops at fixed counts, so a count that varies repeats positions and draws "
+                                "the same samples, a reuse the job does not have; give the loop a fixed count (the "
+                                "most it can be, with a `cond`, the builder's `when`, inside to skip the rest) (V6)")
+                if i == 0:
+                    continue
                 self.err(q, f"a second `consume` of `{ds}` (the first is at {first}): `consume` has no site, so its sample "
                             "depends only on the actor and the enclosing loop indices, and two of them draw the same samples, "
                             "a reuse the job does not have; consume once and use the handle in each place, or put the one "
@@ -284,24 +297,58 @@ class Check:
 
     def n_let(self, a, p, scope):
         self.exprlike(a["value"], p + ["value"], scope, dist_ok=False, binding=a["name"])
-        scope.bind(a["name"], a["value"])
+        scope.bind(a["name"], a["value"], self.varies(a["value"], scope))
 
     def n_loop(self, a, p, scope):
         for k in ("from", "to", "step"):
             if k in a:
                 self.expr(a[k], p + [k], scope)
         nonneg = "from" not in a or self.at_least(a["from"], 0, scope)
-        self.body(a["body"], p + ["body"], scope.with_index(a["index"], nonneg))
+        varies = any(self.varies(a[k], scope) for k in ("from", "to", "step") if k in a)
+        self.body(a["body"], p + ["body"], scope.with_index(a["index"], nonneg, p if varies else None))
 
     def n_parallel(self, a, p, scope):
         self.expr(a["width"], p + ["width"], scope)
-        self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"]))
+        varies = self.varies(a["width"], scope)
+        self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"], True, p if varies else None))
 
     def n_loader(self, a, p, scope):
         for k in ("workers", "prefetch", "batches"):
             self.expr(a[k], p + [k], scope)
         scope.channels.add(a["name"])
-        self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"]))
+        varies = self.varies(a["batches"], scope)
+        self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"], True, p if varies else None))
+
+    # V6: the kinds that draw (keyed on the enclosing indices), and those fixed for an actor
+    DRAWS = {"draw", "consume", "pick", "uniform", "uniform64", "normal", "lognormal", "empirical",
+             "zipf", "hotset", "mixture"}
+    INVARIANT = {"param", "actor", "len", "sum", "count", "dirs", "inventory"}
+
+    def varies(self, e, scope):
+        """V6: whether an expression, distribution, or handle can take another value at another
+        iteration of an enclosing frame: it names a loop index (or `at`), a binding that varies,
+        or draws inside a frame (a draw is keyed on the enclosing indices). Parameters and the
+        actor number are fixed for an actor's walk."""
+        if isinstance(e, list):
+            return any(self.varies(x, scope) for x in e)
+        if not isinstance(e, dict):
+            return False
+        k, a = next(iter(e.items()))
+        if k in ("index", "at"):
+            return True
+        if k == "ref":
+            return scope.is_varying(a)
+        if k in self.DRAWS:
+            return bool(scope.indices)
+        if k in self.INVARIANT:
+            return False
+        if k == "elem":
+            return self.varies(a["index"], scope)
+        if k in ("file", "dir", "unit", "column", "cond"):
+            return any(self.varies(v, scope) for v in a.values())
+        if k == "object":
+            return any(self.varies(v, scope) for v in a["fields"].values())
+        return self.varies(a, scope)
 
     def fork_body(self, nodes, path, scope):
         outer, self.fork_opens = self.fork_opens, []
@@ -742,6 +789,8 @@ class Check:
                 self.err(p, "`consume` outside any loop: its position needs an index")
             elif p not in self.consumes.setdefault(a, []):
                 self.consumes[a].append(p)
+                if scope.count_varies is not None:
+                    self.consume_varying[tuple(p)] = scope.count_varies
         elif k == "pick":
             if a["dataset"] not in self.datasets:
                 self.err(p, f"unknown dataset `{a['dataset']}`")
@@ -757,6 +806,9 @@ class Scope:
     def __init__(self, check, parent=None, fields=()):
         self.check, self.parent = check, parent
         self.bindings, self.indices = {}, list(parent.indices) if parent else []
+        self.varying = set()  # the bindings here whose value varies (V6)
+        # the innermost enclosing frame whose count varies with an enclosing one (V6), or None
+        self.count_varies = parent.count_varies if parent else None
         self.nonneg_indices = set(parent.nonneg_indices) if parent else set()
         self.channels = parent.channels if parent else set()
         self.written = parent.written if parent else set()
@@ -767,17 +819,31 @@ class Scope:
     def child(self):
         return Scope(self.check, self)
 
-    def with_index(self, name, nonneg=True):
+    def with_index(self, name, nonneg=True, count_varies=None):
         s = Scope(self.check, self)
         s.indices.append(name)
+        if count_varies is not None:
+            s.count_varies = count_varies
         if nonneg:
             s.nonneg_indices.add(name)
         else:
             s.nonneg_indices.discard(name)
         return s
 
-    def bind(self, name, value):
+    def bind(self, name, value, varies=False):
         self.bindings[name] = value
+        if varies:
+            self.varying.add(name)
+        else:
+            self.varying.discard(name)
+
+    def is_varying(self, name):
+        s = self
+        while s:
+            if name in s.bindings:
+                return name in s.varying
+            s = s.parent
+        return False
 
     def lookup(self, name):
         s = self
