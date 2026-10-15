@@ -1211,8 +1211,9 @@ fn a_channel_a_loaders_workers_use_is_not_declared_again_under_them() {
     assert!(e.contains("actors/gpu/body/1/loader/body/1/put: a `put` on channel `c` inside a `loader` body") && e.contains("(V26)"), "{e}");
     let root = tmpdir("ch-loader");
     for good in [
-        // unordered: the `seq`s of every iteration's batches are put on the one channel
-        doc(&format!(r#"{}, {{"loop":{{"index":"e","to":3,"body":[{lput}, {takes}]}}}}"#, chan.replace("8}", r#"8,"ordered":false}"#))),
+        // unordered: every iteration's batches are put on the one channel, numbered across the
+        // iterations (a `seq` is put once while its channel is declared, 2026-10-15)
+        doc(&format!(r#"{}, {{"loop":{{"index":"e","to":3,"body":[{}, {takes}]}}}}"#, chan.replace("8}", r#"8,"ordered":false}"#), lput.replace(r#""seq":{"index":"b"}"#, r#""seq":{"add":[{"mul":[{"index":"e"},4]},{"index":"b"}]}"#))),
         doc(&format!(r#"{{"loop":{{"index":"e","to":3,"body":[{chan}, {lput}, {takes}]}}}}"#)),
     ] {
         let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(&good).unwrap()));
@@ -1226,6 +1227,116 @@ fn a_channel_a_loaders_workers_use_is_not_declared_again_under_them() {
                 let r = go(model, o);
                 assert_eq!((r.stats.puts, r.stats.takes), (12, 24), "{backend:?}, time scale {scale}");
             }
+        }
+    }
+}
+
+/// An abstract given as text, leaked as a run needs it.
+fn model_of(doc: &str) -> &'static Model<'static> {
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(doc).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(1, 0, &[])));
+    let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()))
+}
+
+/// The run, or its error, or "hung" when it has not ended in 30 s (its threads are left
+/// behind; the test fails either way).
+fn run_within(model: &'static Model<'static>, o: RunOpts) -> Result<run::Report, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run::run(model, o, std::collections::HashMap::new()).map_err(|e| format!("{e:#}")));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap_or_else(|_| Err("hung".into()))
+}
+
+/// Loader workers putting on a channel smaller than their batches in flight (the RC1 review's
+/// R12: 2 workers × prefetch 2 on a channel of 2, the main line taking the loader's batch and
+/// then the channel's item) hung in some runs and finished in others under `sync`, as the
+/// workers happened to run: a later batch's put filled the channel while batch 0's waited, and
+/// the main line waited for batch 0. The loader written out in the primitives
+/// (`GRAMMAR_OPTIONS.md` §3), two producers of an ordered channel of 2, hung or failed alike.
+/// A put waits for its position since 2026-10-15 (`run::admits`), so each of these finishes,
+/// every time, under both engines.
+#[test]
+fn a_put_waits_for_its_position_so_no_run_hangs_by_timing() {
+    let doc = |name: &str, body: &str| format!(r#"{{"ast":"0.10","name":"{name}","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let loader = |cap: i64, ordered: bool, epochs: i64, seq: &str| doc("r12", &format!(r#"
+        {{"channel":{{"name":"c","capacity":{cap},"ordered":{ordered}}}}},
+        {{"loop":{{"index":"e","to":{epochs},"body":[
+          {{"loader":{{"name":"q","index":"b","workers":4,"prefetch":2,"batches":16,"body":[{{"put":{{"channel":"c","seq":{seq}}}}}]}}}},
+          {{"loop":{{"index":"s","to":16,"body":[{{"take":{{"channel":"q"}}}},{{"take":{{"channel":"c"}}}}]}}}}]}}}}"#));
+    let across = r#"{"add":[{"mul":[{"index":"e"},16]},{"index":"b"}]}"#;
+    let cases = [
+        (loader(1, false, 6, across), 96),
+        (loader(1, true, 6, across), 96),
+        (loader(3, false, 1, r#"{"index":"b"}"#), 16),
+        (doc("desugared", r#"{"channel":{"name":"c","capacity":2,"ordered":true}},
+            {"parallel":{"index":"w","width":3,"body":[{"cond":{"if":{"eq":[{"index":"w"},0]},
+              "then":[{"loop":{"index":"s","to":40,"body":[{"take":{"channel":"c"}}]}}],
+              "else":[{"loop":{"index":"k","to":20,"body":[{"put":{"channel":"c","seq":{"add":[{"mul":[{"index":"k"},2]},{"sub":[{"index":"w"},1]}]}}}]}}]}}]}}"#), 40),
+    ];
+    let root = tmpdir("ch-position");
+    for (d, puts) in &cases {
+        let model = model_of(d);
+        for backend in [BackendKind::Sync, BackendKind::Uring] {
+            for scale in [0.0, 0.0, 0.0, 0.0001] {
+                let mut o = opts(&root, backend);
+                o.time_scale = scale;
+                let r = run_within(model, o).unwrap_or_else(|e| panic!("{backend:?}, time scale {scale}: {e}\n{d}"));
+                assert_eq!(r.stats.puts, *puts, "{backend:?}, time scale {scale}");
+            }
+        }
+    }
+}
+
+/// An ordered channel declared once whose per-epoch loader put `seq b` again each epoch (the RC1
+/// review's R13) waited forever under `sync` for an item numbered past the repeats, and failed
+/// under the event loop only as "actor(s) wait on channels"; a seq below 0 was taken as given.
+/// Both are errors naming the put, its channel, and the seq, under both engines (2026-10-15).
+/// And a wait no thread can end, every thread of the actor parked on its channels, is an error
+/// under the thread runner as it was under the event loop: it had hung.
+#[test]
+fn a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs() {
+    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"r13","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let repeated = doc(r#"{"channel":{"name":"c","capacity":4}},
+        {"loop":{"index":"e","to":2,"body":[
+          {"loader":{"name":"q","index":"b","workers":2,"prefetch":1,"batches":4,"body":[{"put":{"channel":"c","seq":{"index":"b"}}}]}},
+          {"loop":{"index":"s","to":4,"body":[{"take":{"channel":"q"}},{"take":{"channel":"c"}}]}}]}}"#);
+    let below = doc(r#"{"channel":{"name":"c","capacity":1}}, {"put":{"channel":"c","seq":-1}}, {"take":{"channel":"c"}}"#);
+    let (repeated, below) = (model_of(&repeated), model_of(&below));
+    let root = tmpdir("ch-seq");
+    for backend in [BackendKind::Sync, BackendKind::Uring] {
+        for scale in [0.0, 0.0001] {
+            let o = || {
+                let mut o = opts(&root, backend);
+                o.time_scale = scale;
+                o
+            };
+            let e = run_within(repeated, o()).err().expect("refused");
+            assert!(e.contains("put 0 on `c`: seq 0 was put on this channel before"), "{backend:?}, time scale {scale}: {e}");
+            let e = run_within(below, o()).err().expect("refused");
+            assert!(e.contains("put -1 on `c`: seq -1 is below 0"), "{backend:?}, time scale {scale}: {e}");
+        }
+    }
+    // waits nothing ends: an ordered channel's item 0 never put; an unordered channel's items
+    // numbered with gaps (item 2 waits for two takes, of which one item exists); three
+    // sub-actors taking from a channel no one puts on, their parent waiting for them
+    let stuck = [
+        doc(r#"{"channel":{"name":"c","capacity":4}}, {"put":{"channel":"c","seq":1}}, {"take":{"channel":"c"}}"#),
+        doc(r#"{"channel":{"name":"c","capacity":1,"ordered":false}},
+            {"loader":{"name":"q","index":"b","workers":2,"prefetch":2,"batches":4,"body":[{"put":{"channel":"c","seq":{"mul":[{"index":"b"},2]}}}]}},
+            {"loop":{"index":"s","to":4,"body":[{"take":{"channel":"q"}},{"take":{"channel":"c"}}]}}"#),
+        doc(r#"{"channel":{"name":"c","capacity":1}}, {"parallel":{"index":"w","width":3,"body":[{"take":{"channel":"c"}}]}}"#),
+    ];
+    for d in &stuck {
+        let model = model_of(d);
+        for backend in [BackendKind::Sync, BackendKind::Uring] {
+            let e = run_within(model, opts(&root, backend)).err().expect("refused");
+            let says = match backend {
+                BackendKind::Sync => "every thread of gpu#0 waits on a channel that nothing will change",
+                _ => "wait on channels or trace order nothing will complete",
+            };
+            assert!(e.contains(says), "{backend:?}: {e}\n{d}");
         }
     }
 }

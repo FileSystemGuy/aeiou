@@ -82,7 +82,7 @@ A body is an array of statements: thirteen control forms and eighteen operations
 | `loop {index, from, to, step, body}` | `for index in [from, to) step step`. The index joins every random key inside. |
 | `parallel {index, width, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end. |
 | `channel {name, capacity, ordered}` | A bounded channel in the enclosing actor, shared by its sub-actors; never inside a `parallel` or `loader` body (V26). |
-| `put {channel, seq}`, `take {channel}` | Deliver item `seq` (blocks while full); wait for the next item (in `seq` order if ordered). |
+| `put {channel, seq}`, `take {channel}` | Deliver item `seq`, its position on the channel: 0, 1, 2, ... each put once while the channel is declared (one below 0 or put before is an error); blocks until `seq` is below the items taken plus `capacity`. Wait for the next item (in `seq` order if ordered). |
 | `loader {name, index, workers, prefetch, batches, ordered, body}` | PyTorch's DataLoader: `workers` sub-actors, worker `w` builds batches `w, w+W, ...`, an ordered channel of `workers x prefetch` slots bounding batches started, exactly `batches` batches. |
 | `barrier {scope}` | `global`, `host`, or a named group. |
 | `compute {ns}` | Emulated compute, scaled by the runner's `--time-scale`. |

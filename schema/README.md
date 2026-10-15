@@ -88,7 +88,7 @@ python3 schema/check.py path/to/x.ast.json   # one file
 | `loop {index, from, to, step, body}` | `for index in [from, to) step step`. The index joins every RNG key inside. |
 | `parallel {index, width, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end. |
 | `channel {name, capacity, ordered}` | Declare a bounded channel in the enclosing actor, shared by its sub-actors (never in a `parallel` or `loader` body, V26). |
-| `put {channel, seq}` / `take {channel}` | Deliver item `seq` (blocks while full) / wait for the next item (in `seq` order if ordered). |
+| `put {channel, seq}` / `take {channel}` | Deliver item `seq`, its position on the channel: 0, 1, 2, … each put once while the channel is declared (one below 0 or put before is a run-time error); blocks until `seq` is below the items taken plus `capacity` (2026-10-15; it had blocked while `capacity` items were held, which several producers could fill out of order) / wait for the next item (in `seq` order if ordered). |
 | `loader {name, index, workers, prefetch, batches, ordered, body}` | PyTorch sugar the runner keeps: `workers` sub-actors, worker `w` builds batches `w, w+W, …`; an ordered channel `name` of `workers × prefetch` slots; exactly `batches` batches. |
 | `barrier {scope}` | `global`, `host`, or a named group. |
 | `compute {ns}` | Emulated compute; scaled by `--time-scale`. |

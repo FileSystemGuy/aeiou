@@ -256,8 +256,21 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   its workers joined, when every one of its batches is taken, and declaring it again before
   then is an error (2026-10-14; `run` had refused the second declaration that `check` and the
   dry run accept).
-- **`channel` / `put` / `take`** are the general form: `put` blocks while `capacity` items are
-  delivered and untaken; `take` returns the next in `seq` order, or any item if unordered. A
+- **`channel` / `put` / `take`** are the general form: ~~`put` blocks while `capacity` items are
+  delivered and untaken~~ an item's `seq` is its position on the channel, 0, 1, 2, … each put
+  once while the channel is declared, and `put` blocks until `seq` is below the number of items
+  taken plus `capacity`, as a loader's batch waits for its slot, so at most `capacity` are
+  held; `take` returns the next in `seq` order, or any item if unordered (2026-10-15, RC1
+  review: bounding the count held let a later item take the room an earlier one needed when
+  several sub-actors put, so the loader written out in the primitives (`GRAMMAR_OPTIONS.md`
+  §3, Option A), or loader workers putting on a channel smaller than their batches in flight, hung or
+  finished as the threads happened to run). A `seq` below 0 or put before on the channel is
+  an error naming both (a channel declared once outside a loop numbers its items across the
+  iterations, `e·n + b`, or is declared in the loop; an ordered one had waited forever for an
+  item numbered past the repeats, an unordered one kept the item once). Under the thread
+  runner a wait that every thread of the actor is in, each parked on one of its channels with
+  nothing left to change one, is an error naming the actor, as it was in the event loop (§8)
+  (the same day; it had hung). A
   `channel` declared again (in a loop) replaces the last one when nothing put on it is left
   untaken, and is an error otherwise. A channel or loader is the actor's, declared outside any
   `parallel` or `loader` body (V26, 2026-10-15): declared by sub-actors, each replaced the

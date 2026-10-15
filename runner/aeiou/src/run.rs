@@ -574,15 +574,63 @@ pub struct ActorRecord {
 
 // ---------------------------------------------------------------- channels
 
+/// The `seq`s a channel's `put`s have delivered: an item's `seq` is its position on the
+/// channel, 0, 1, 2, … each put once while the channel is declared (`schema/README.md` §3).
+/// Every seq below `floor` has been put; `above` holds those put above it, at most a
+/// channel's capacity of them since a put waits for its window (`admits`). Shared by the
+/// event loop's channels (`uring.rs`).
+#[derive(Default)]
+pub(crate) struct Seqs {
+    floor: i64,
+    above: BTreeSet<i64>,
+}
+
+impl Seqs {
+    /// A seq below 0, or one put on this channel before, is an error (2026-10-15, RC1 review:
+    /// an ordered channel declared once whose loop put `seq b` again each iteration waited
+    /// forever for an item numbered past them, and an unordered one kept the item once).
+    pub(crate) fn check(&self, seq: i64) -> Result<()> {
+        if seq < 0 {
+            bail!("seq {seq} is below 0: a channel's items are numbered 0, 1, 2, …");
+        }
+        if seq < self.floor || self.above.contains(&seq) {
+            bail!("seq {seq} was put on this channel before: its items are numbered 0, 1, 2, … and each is put once while the channel is declared (number them across the enclosing loop, or declare the channel in it)");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record(&mut self, seq: i64) {
+        self.above.insert(seq);
+        while self.above.remove(&self.floor) {
+            self.floor += 1;
+        }
+    }
+}
+
+/// Whether a channel of `capacity` that has had `taken` items taken holds item `seq` yet: a
+/// put waits for its window, `seq < taken + capacity`, as a loader's batch waits for its slot
+/// (2026-10-15, RC1 review). Bounding the count of items held instead let a later item take
+/// the room an earlier one needed when several sub-actors put, so whether a run finished
+/// depended on which of them got there first.
+pub(crate) fn admits(capacity: i64, taken: i64, seq: i64) -> bool {
+    seq < taken.saturating_add(capacity)
+}
+
 struct ChanState {
     next_take: i64,
     done: BTreeSet<i64>,
+    seqs: Seqs,
     closed: bool,
     failed: Option<String>,
+    /// Threads parked on this channel and counted in `Watch::blocked`, and the number of
+    /// times the channel woke its waiters (each wake hands their count back).
+    waiting: i64,
+    wakes: u64,
 }
 
 /// A bounded channel. A `loader` bounds batches *started* (a worker takes a slot before it
-/// begins a batch, as PyTorch dispatches indices); a `channel` bounds items *delivered*.
+/// begins a batch, as PyTorch dispatches indices); a `channel` bounds items *delivered*, by
+/// position (`admits`).
 pub struct Channel {
     m: Mutex<ChanState>,
     cv: Condvar,
@@ -590,73 +638,179 @@ pub struct Channel {
     ordered: bool,
     /// Items the producer side will deliver in all (a loader's `batches`).
     total: Option<i64>,
+    watch: Arc<Watch>,
 }
 
 const POLL: Duration = Duration::from_millis(50);
 
+/// The threads of one actor instance, for the one wait the thread runner can prove endless:
+/// every thread of the instance parked on its channels with nothing left to wake them (the
+/// event loop sees the same as no task able to go on, `uring.rs`). A thread is `running`
+/// from its start (a sub-actor's from its fork) to its end, less a `parallel` parent while it
+/// waits for its sub-actors; `blocked` counts the threads parked on a channel since its last
+/// change. A channel's state changes only when a thread puts, takes, starts or ends a batch,
+/// or closes it, and each change hands its parked threads' count back before they retry, so
+/// `blocked == running` means no thread will ever change one again (2026-10-15, RC1 review:
+/// the thread runner hung where the event loop failed).
+pub(crate) struct Watch {
+    m: Mutex<WatchState>,
+    actor: String,
+}
+
+struct WatchState {
+    running: i64,
+    blocked: i64,
+}
+
+impl Watch {
+    fn new(actor: String) -> Self {
+        Watch { m: Mutex::new(WatchState { running: 1, blocked: 0 }), actor }
+    }
+
+    fn started(&self, n: i64) {
+        self.m.lock().unwrap().running += n;
+    }
+
+    fn ended(&self) {
+        self.m.lock().unwrap().running -= 1;
+    }
+
+    /// A `parallel` parent about to wait for its sub-actors stops running while some remain.
+    fn joining(&self, join: &Join) {
+        let mut w = self.m.lock().unwrap();
+        if join.remaining.load(Ordering::Acquire) != 0 {
+            w.running -= 1;
+            join.parked.store(true, Ordering::Release);
+        }
+    }
+
+    /// A `parallel` sub-actor has ended: the last of a fork whose parent waits hands its count
+    /// to the parent, which runs again.
+    fn sub_ended(&self, join: &Join, err: Option<(i64, anyhow::Error)>) {
+        let mut w = self.m.lock().unwrap();
+        let last = join.done(err);
+        if !(last && join.parked.swap(false, Ordering::AcqRel)) {
+            w.running -= 1;
+        }
+    }
+}
+
+/// A thread parked on a channel: `Some(wakes)` while it is counted in `Watch::blocked`.
+type Parked = Option<u64>;
+
 impl Channel {
-    fn new(capacity: i64, ordered: bool, total: Option<i64>) -> Self {
+    fn new(capacity: i64, ordered: bool, total: Option<i64>, watch: Arc<Watch>) -> Self {
         Channel {
-            m: Mutex::new(ChanState { next_take: 0, done: BTreeSet::new(), closed: false, failed: None }),
+            m: Mutex::new(ChanState { next_take: 0, done: BTreeSet::new(), seqs: Seqs::default(), closed: false, failed: None, waiting: 0, wakes: 0 }),
             cv: Condvar::new(),
             capacity: capacity.max(1),
             ordered,
             total,
+            watch,
+        }
+    }
+
+    /// The channel changed: its parked threads are no longer counted blocked, and retry.
+    fn wake(&self, st: &mut ChanState) {
+        if st.waiting > 0 {
+            self.watch.m.lock().unwrap().blocked -= st.waiting;
+            st.waiting = 0;
+        }
+        st.wakes += 1;
+        self.cv.notify_all();
+    }
+
+    /// Park for one poll, counted blocked (once per change of the channel); an error when every
+    /// thread of the actor is parked so (`Watch`). `what` names the wait.
+    fn park<'g>(&'g self, mut st: std::sync::MutexGuard<'g, ChanState>, parked: &mut Parked, what: &dyn Fn() -> String) -> Result<std::sync::MutexGuard<'g, ChanState>> {
+        if *parked != Some(st.wakes) {
+            st.waiting += 1;
+            *parked = Some(st.wakes);
+            self.watch.m.lock().unwrap().blocked += 1;
+        }
+        let stuck = {
+            let w = self.watch.m.lock().unwrap();
+            w.blocked >= w.running
+        };
+        if stuck {
+            self.unpark(&mut st, parked);
+            bail!("every thread of {} waits on a channel that nothing will change (this one waits {})", self.watch.actor, what());
+        }
+        Ok(self.cv.wait_timeout(st, POLL).unwrap().0)
+    }
+
+    /// No longer parked: still counted blocked if the channel has not changed since.
+    fn unpark(&self, st: &mut ChanState, parked: &mut Parked) {
+        if parked.take() == Some(st.wakes) {
+            st.waiting -= 1;
+            self.watch.m.lock().unwrap().blocked -= 1;
         }
     }
 
     /// Loader worker: wait for a slot to start batch `b`.
     fn begin(&self, b: i64, aborted: &AtomicBool) -> Result<()> {
         let mut st = self.m.lock().unwrap();
-        loop {
+        let mut parked = None;
+        let r = loop {
             if st.closed {
-                bail!("channel closed before batch {b} started");
+                break Err(anyhow!("channel closed before batch {b} started"));
             }
             if b < st.next_take + self.capacity {
-                return Ok(());
+                break Ok(());
             }
             if aborted.load(Ordering::Relaxed) {
-                bail!("run aborted");
+                break Err(anyhow!("run aborted"));
             }
-            st = self.cv.wait_timeout(st, POLL).unwrap().0;
-        }
+            st = self.park(st, &mut parked, &|| format!("to start batch {b}"))?;
+        };
+        self.unpark(&mut st, &mut parked);
+        r
     }
 
     /// Loader worker: batch `b` is complete.
     fn end(&self, b: i64) {
         let mut st = self.m.lock().unwrap();
         st.done.insert(b);
-        self.cv.notify_all();
+        self.wake(&mut st);
     }
 
-    /// General producer: deliver item `seq`, blocking while `capacity` items are undelivered.
+    /// General producer: deliver item `seq`, blocking until `seq` is within `capacity` of the
+    /// items taken (`admits`).
     fn put(&self, seq: i64, aborted: &AtomicBool) -> Result<()> {
         let mut st = self.m.lock().unwrap();
-        loop {
+        let mut parked = None;
+        let r = loop {
             if st.closed {
-                bail!("put {seq} on a closed channel");
+                break Err(anyhow!("put {seq} on a closed channel"));
             }
-            if (st.done.len() as i64) < self.capacity {
+            if let Err(e) = st.seqs.check(seq) {
+                break Err(e);
+            }
+            if admits(self.capacity, st.next_take, seq) {
+                st.seqs.record(seq);
                 st.done.insert(seq);
-                self.cv.notify_all();
-                return Ok(());
+                self.wake(&mut st);
+                break Ok(());
             }
             if aborted.load(Ordering::Relaxed) {
-                bail!("run aborted");
+                break Err(anyhow!("run aborted"));
             }
-            st = self.cv.wait_timeout(st, POLL).unwrap().0;
-        }
+            st = self.park(st, &mut parked, &|| format!("to put {seq}"))?;
+        };
+        self.unpark(&mut st, &mut parked);
+        r
     }
 
     fn take(&self, aborted: &AtomicBool) -> Result<i64> {
         let mut st = self.m.lock().unwrap();
-        loop {
+        let mut parked = None;
+        let r = loop {
             if let Some(e) = &st.failed {
-                bail!("producer failed: {e}");
+                break Err(anyhow!("producer failed: {e}"));
             }
             if let Some(total) = self.total {
                 if st.next_take >= total {
-                    bail!("take after the last of {total} items");
+                    break Err(anyhow!("take after the last of {total} items"));
                 }
             }
             let got = if self.ordered {
@@ -670,17 +824,19 @@ impl Channel {
             };
             if let Some(x) = got {
                 st.next_take += 1;
-                self.cv.notify_all();
-                return Ok(x);
+                self.wake(&mut st);
+                break Ok(x);
             }
             if st.closed {
-                bail!("take on a closed channel with nothing delivered");
+                break Err(anyhow!("take on a closed channel with nothing delivered"));
             }
             if aborted.load(Ordering::Relaxed) {
-                bail!("run aborted");
+                break Err(anyhow!("run aborted"));
             }
-            st = self.cv.wait_timeout(st, POLL).unwrap().0;
-        }
+            st = self.park(st, &mut parked, &|| "to take".to_string())?;
+        };
+        self.unpark(&mut st, &mut parked);
+        r
     }
 
     /// A producer failed: the first cause is kept, so a worker that only saw the abort another
@@ -691,13 +847,13 @@ impl Channel {
             st.failed = Some(msg);
         }
         st.closed = true;
-        self.cv.notify_all();
+        self.wake(&mut st);
     }
 
     fn close(&self) {
         let mut st = self.m.lock().unwrap();
         st.closed = true;
-        self.cv.notify_all();
+        self.wake(&mut st);
     }
 
     fn taken(&self) -> i64 {
@@ -737,6 +893,7 @@ impl Shared {
 struct Instance {
     channels: Mutex<HashMap<String, Arc<Channel>>>,
     loaders: Mutex<Vec<(String, JoinHandle<(Result<()>, Stats)>)>>,
+    watch: Arc<Watch>,
 }
 
 type Fds = HashMap<Arc<str>, Arc<OpenFile>>;
@@ -1273,16 +1430,21 @@ struct Join {
     remaining: AtomicUsize,
     parent: std::thread::Thread,
     errs: Mutex<Vec<(i64, anyhow::Error)>>,
+    /// The parent waits, not counted running (`Watch::joining`).
+    parked: AtomicBool,
 }
 
 impl Join {
-    fn done(&self, err: Option<(i64, anyhow::Error)>) {
+    /// Called through `Watch::sub_ended`; true for the last sub-actor of the fork.
+    fn done(&self, err: Option<(i64, anyhow::Error)>) -> bool {
         if let Some(e) = err {
             self.errs.lock().unwrap_or_else(|e| e.into_inner()).push(e);
         }
         if self.remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.parent.unpark();
+            return true;
         }
+        false
     }
 }
 
@@ -1309,7 +1471,7 @@ impl Pool {
     /// Grow to `threads` threads; returns how many were spawned. Called by the forking actor
     /// on its own thread, which is the one the pool's threads wake.
     fn grow(&mut self, threads: usize, sh: &Arc<Shared>, inst: &Arc<Instance>, template: &'static str, actor: i64) -> u64 {
-        let join = self.join.get_or_insert_with(|| Arc::new(Join { remaining: AtomicUsize::new(0), parent: std::thread::current(), errs: Mutex::new(Vec::new()) })).clone();
+        let join = self.join.get_or_insert_with(|| Arc::new(Join { remaining: AtomicUsize::new(0), parent: std::thread::current(), errs: Mutex::new(Vec::new()), parked: AtomicBool::new(false) })).clone();
         let mut spawned = 0;
         while self.workers.len() < threads {
             let (tx, rx) = mpsc::channel::<Job>();
@@ -1347,7 +1509,7 @@ impl Pool {
                         if err.is_some() {
                             sh.aborted.store(true, Ordering::Relaxed);
                         }
-                        join.done(err);
+                        sink.inst.watch.sub_ended(&join, err);
                         if dead {
                             break;
                         }
@@ -1491,6 +1653,7 @@ impl Runner {
                 if r.is_err() {
                     sink.sh.aborted.store(true, Ordering::Relaxed);
                 }
+                sink.inst.watch.ended();
                 (r, std::mem::take(&mut sink.a.st))
             })
             .expect("spawn")
@@ -1543,11 +1706,14 @@ impl Sink<'static, 'static> for Runner {
                     }
                     old.close();
                 }
-                ch.insert(name.to_string(), Arc::new(Channel::new(capacity, ordered, None)));
+                ch.insert(name.to_string(), Arc::new(Channel::new(capacity, ordered, None, self.inst.watch.clone())));
             }
             Control::Put { channel, seq } => {
                 let ch = self.inst.channels.lock().unwrap().get(channel).cloned().ok_or_else(|| anyhow!("put on undeclared channel `{channel}`"))?;
-                ch.put(seq, &self.sh.aborted)?;
+                ch.put(seq, &self.sh.aborted).with_context(|| {
+                    let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
+                    format!("{}#{} [{}] put {seq} on `{channel}`", ctx.template, ctx.actor, idx.join(","))
+                })?;
                 self.a.st.puts += 1;
             }
             Control::Take { channel } => {
@@ -1585,10 +1751,11 @@ impl Sink<'static, 'static> for Runner {
                 let join = self.pools[d].join.clone().expect("a grown pool has its join");
                 let (snap, fds) = (Arc::new(snap), self.a.fds.freeze());
                 join.remaining.store(width - 1, Ordering::Release);
+                self.inst.watch.started(width as i64 - 1);
                 for (j, (tx, _)) in self.pools[d].workers.iter().take(width - 1).enumerate() {
                     let k = j as i64 + 1;
                     if tx.send(Job { snap: snap.clone(), k, fds: fds.clone() }).is_err() {
-                        join.done(Some((k, anyhow!("a `{index}` sub-actor thread has ended (an earlier sub-actor panicked)"))));
+                        self.inst.watch.sub_ended(&join, Some((k, anyhow!("a `{index}` sub-actor thread has ended (an earlier sub-actor panicked)"))));
                     }
                 }
                 // sub-actor 0 here, while the others run; then wait for them
@@ -1596,6 +1763,7 @@ impl Sink<'static, 'static> for Runner {
                 if first.is_err() {
                     self.sh.aborted.store(true, Ordering::Relaxed);
                 }
+                self.inst.watch.joining(&join);
                 while join.remaining.load(Ordering::Acquire) != 0 {
                     std::thread::park();
                 }
@@ -1609,7 +1777,7 @@ impl Sink<'static, 'static> for Runner {
                 cause.map_or(Ok(true), Err)
             }
             ForkKind::Loader { name, index, workers, prefetch, batches, ordered } => {
-                let chan = Arc::new(Channel::new(workers * prefetch, ordered, Some(batches)));
+                let chan = Arc::new(Channel::new(workers * prefetch, ordered, Some(batches), self.inst.watch.clone()));
                 let retired = {
                     let mut ch = self.inst.channels.lock().unwrap();
                     let old = ch.get(name).cloned();
@@ -1629,6 +1797,7 @@ impl Sink<'static, 'static> for Runner {
                     self.retire_loader(name)?;
                 }
                 let mut handles = Vec::with_capacity(workers as usize);
+                self.inst.watch.started(workers);
                 for w in 0..workers {
                     let chan = chan.clone();
                     let label = format!("{}#{} {index} worker {w}", self.a.template, self.a.actor);
@@ -1638,10 +1807,11 @@ impl Sink<'static, 'static> for Runner {
                         while b < batches {
                             if let Err(e) = chan.begin(b, aborted) {
                                 // closed by the consumer: not this worker's error
-                                if !chan.m.lock().unwrap().closed {
-                                    chan.fail(format!("{e:#}"));
+                                if chan.m.lock().unwrap().closed {
+                                    return Ok(());
                                 }
-                                return Ok(());
+                                chan.fail(format!("{e:#}"));
+                                return Err(e);
                             }
                             vm.start_sub(b);
                             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drive(&mut *vm, &mut *sink)));
@@ -2334,7 +2504,7 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
     for (&(template, count), &(lo, hi)) in counts.iter().zip(&ranges) {
         for actor in lo..hi {
             let sh = sh.clone();
-            let inst = Arc::new(Instance { channels: Mutex::new(HashMap::new()), loaders: Mutex::new(Vec::new()) });
+            let inst = Arc::new(Instance { channels: Mutex::new(HashMap::new()), loaders: Mutex::new(Vec::new()), watch: Arc::new(Watch::new(format!("{template}#{actor}"))) });
             let h = std::thread::Builder::new()
                 .name(format!("{template}#{actor}"))
                 .spawn(move || {

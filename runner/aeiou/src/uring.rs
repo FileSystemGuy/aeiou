@@ -58,7 +58,7 @@ use io_uring::{opcode, squeue, types, IoUring, Probe};
 
 use crate::backend::{open_flags, Backend, OpenFile, ALIGN};
 use crate::eval::Model;
-use crate::run::{fill, issue_timed, round_out, untaken, ActorState, Ring, Shared, UringReport};
+use crate::run::{admits, fill, issue_timed, round_out, untaken, ActorState, Ring, Seqs, Shared, UringReport};
 use crate::trace::{Built, LineOp, OwnedCtx, TraceFile};
 use crate::vm::{Control, Event, ForkKind, Op, OpKind, Vm};
 
@@ -280,13 +280,15 @@ pub(crate) fn rw_len(len: i64) -> i64 {
 // ---------------------------------------------------------------- channels
 
 /// A loop-local channel with the semantics of `run::Channel`: a `loader` bounds batches
-/// started, a `channel` bounds items delivered, `take` is in order unless unordered.
+/// started, a `channel` bounds items delivered by position (`run::admits`), `take` is in
+/// order unless unordered.
 struct Chan {
     capacity: i64,
     ordered: bool,
     total: Option<i64>,
     next_take: i64,
     done: BTreeSet<i64>,
+    seqs: Seqs,
     closed: bool,
     /// Tasks parked on this channel; woken (all of them) on every change.
     waiters: Vec<usize>,
@@ -294,7 +296,7 @@ struct Chan {
 
 impl Chan {
     fn new(capacity: i64, ordered: bool, total: Option<i64>) -> Self {
-        Chan { capacity: capacity.max(1), ordered, total, next_take: 0, done: BTreeSet::new(), closed: false, waiters: Vec::new() }
+        Chan { capacity: capacity.max(1), ordered, total, next_take: 0, done: BTreeSet::new(), seqs: Seqs::default(), closed: false, waiters: Vec::new() }
     }
 
     /// `Ok(true)`: batch `b` may start; `Ok(false)`: wait; `Err`: closed.
@@ -313,7 +315,9 @@ impl Chan {
         if self.closed {
             bail!("put {seq} on a closed channel");
         }
-        if (self.done.len() as i64) < self.capacity {
+        self.seqs.check(seq)?;
+        if admits(self.capacity, self.next_take, seq) {
+            self.seqs.record(seq);
             self.done.insert(seq);
             return Ok(true);
         }
@@ -359,7 +363,7 @@ enum Role {
 #[derive(Clone, Copy)]
 enum ChanWait {
     Begin(i64),
-    Put(i64),
+    Put(i64, &'static str),
     Take,
 }
 
@@ -1281,8 +1285,8 @@ impl<E: Engine> Loop<E> {
                     }
                 }
             },
-            ChanWait::Put(seq) => {
-                if !self.chans[chan].try_put(seq)? {
+            ChanWait::Put(seq, name) => {
+                if !self.chans[chan].try_put(seq).with_context(|| format!("{} put {seq} on `{name}`", self.label(id)))? {
                     self.chans[chan].waiters.push(id);
                     return Ok(false);
                 }
@@ -1406,7 +1410,7 @@ impl<E: Engine> Loop<E> {
                         }
                         Control::Put { channel, seq } => {
                             let chan = *self.chan_names.get(&(inst, channel.to_string())).ok_or_else(|| anyhow!("put on undeclared channel `{channel}`"))?;
-                            self.tasks[id].wait = Wait::Chan { chan, what: ChanWait::Put(seq), since: Instant::now() };
+                            self.tasks[id].wait = Wait::Chan { chan, what: ChanWait::Put(seq, channel), since: Instant::now() };
                             if !self.retry_chan(id)? {
                                 return Ok(());
                             }

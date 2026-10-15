@@ -1837,3 +1837,48 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `--test all` 126, test_formats and test_builder 104, hdf5_map, parquet_stream,
   tfrecord_stream fingerprints at 1 and 4 GPUs unchanged. Fixed in an isolated worktree and
   applied.
+
+## 79. Several producers on a small channel hung or finished as the threads happened to run
+
+- **Where:** `runner/aeiou/src/run.rs` (channels: `Seqs`, `admits`, `Watch`, `Channel::park`/
+  `unpark`/`wake`, `Instance.watch`, `Join.parked`, `spawn_sub`, the `parallel` and `loader`
+  forks); `runner/aeiou/src/uring.rs` (`Chan::try_put`, `ChanWait::Put`); `schema/README.md`
+  §3, `man/aeiou-abstract.7.md`, `runner/REFERENCE.md` §4 (the `put`/`take` rows).
+- **Found by:** the RC1 fix of bug 77 (a repro that hung 3 in 32 runs).
+- **Defect:** `put` waited while `capacity` items were held, so with several producers a later
+  item could take the room an earlier one needed while the consumer waited for the earlier
+  one. Loader workers putting on a channel of 2 with 2 workers × prefetch 2 hung 7 in 12 runs
+  under sync at `--time-scale 0` and passed at 1; the loader written out in primitives
+  (`GRAMMAR_OPTIONS.md` §3) and wider shapes hung 12/12 under sync and failed 12/12 under
+  io_uring ("nothing will complete"). The thread runner hung where the event loop failed.
+- **Fix (runtime semantics, recorded in the docs, 2026-10-15):** an item's `seq` is its position
+  on the channel, and `put` waits for its window, `seq < taken + capacity`, as a loader's batch
+  waits for its slot (`admits`, shared by both engines); at most `capacity` are still held.
+  The thread runner now reports a wait every thread of the actor is in, each parked on one of
+  its channels with nothing left to change one (`Watch`), as the event loop did; a thread in
+  compute, I/O, or a barrier counts as live, so it never fires on a run that could finish. A
+  loader worker's slot wait that fails for a reason other than a closed channel returns the
+  error. No committed workload uses `channel`/`put`. No fingerprint, dataset id, or AST
+  changes (channel operations are never hashed).
+- **Evidence:** `run::a_put_waits_for_its_position_so_no_run_hangs_by_timing` (four shapes, both
+  engines, time scales 0 ×3 and 0.0001) failed "time scale 0: hung" on the old run.rs/uring.rs
+  and passes; the shapes passed 32/32 per engine and time scale after; on HEAD 2cc99f5 plus the
+  change: `--lib` 63, `--test all` 128 passed three times in a row, builder suite 365 passed
+  (14 object tests skipped without MinIO; run in the final check), `aeiou-build --hermetic
+  --twice --check` rc 0. Fixed in an isolated worktree and applied.
+
+## 80. A `seq` put twice on a channel waited forever instead of failing
+
+- **Where:** as bug 79 (`Seqs::check`; the error's context in `Control::Put` and `ChanWait::Put`).
+- **Found by:** the RC1 fix of bug 77.
+- **Defect:** an ordered channel declared once outside a loop whose loader put `seq b` again
+  each epoch waited forever under sync (4/4 runs) for an item numbered past the repeats, and
+  failed with only "2 actor(s) wait on channels … nothing will complete" under io_uring; an
+  unordered one kept the repeated item once, so it worked only when drained in between.
+- **Fix:** a `seq` below 0, or one put before on the channel while it is declared, is a run-time
+  error naming the put, the channel, and the seq, with the remedy (number the items across the
+  loop, `e·n + b`, or declare the channel in it). The record is bounded by the channel's
+  capacity. The bug-77 test's good shape now numbers its items `e*4+b`.
+- **Evidence:** `run::a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs` (repeated seq
+  and `seq -1` at two time scales, three stuck shapes, both engines) failed "hung" on the old
+  code and passes; suites as bug 79.
