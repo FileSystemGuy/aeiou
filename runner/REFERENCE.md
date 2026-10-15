@@ -937,7 +937,11 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   loop-local and lock-free. A task is a VM plus its `ActorState` (files, payload filler,
   statistics, created and removed paths), the type the thread-per-actor sink uses too, so
   the structural checks, `expect`, recording, and the namespace bookkeeping are one
-  implementation under every backend.
+  implementation under every backend. A sub-actor's task is dropped when it ends (its VM
+  and its view of the parent's files, as a thread's sink is when the thread returns), and
+  its slot goes to the next fork: a file a `parallel` used closes at the parent's `close`,
+  not at the end of the run, and the loop's tasks are the live ones (2026-10-14; until
+  then every ended task was kept, with a reference to each file it saw, RC1 review).
 - **One ring per loop; one op in flight per task.** An actor is a sequential program (a
   PyTorch worker blocks in `read`), so a task issues one SQE and parks; concurrency is the
   number of tasks on the loop. The loop steps every runnable task, submits, waits in

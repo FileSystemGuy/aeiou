@@ -235,3 +235,39 @@ fn the_declared_backend_is_the_default_and_another_is_named() {
     assert!(text.contains("posix sync  cache direct is not the abstract's (posix sync  cache per-open)"), "{text}");
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// An event loop drops a sub-actor's state when it ends, as the blocking path's thread does:
+/// a file a `parallel` read is closed when the abstract closes it, not when the run ends
+/// (the children's views of the parent's files held it open until then). The peak
+/// is the process's, so it is read from a run of the binary.
+#[test]
+fn a_parallel_s_file_closes_when_the_abstract_closes_it_under_every_engine() {
+    let root = tmpdir("forkclose");
+    let json = root.join("report.json");
+    let mut ast: Value = serde_json::from_str(&std::fs::read_to_string(crate::common::workload_ast("file_per_sample.ast.json")).unwrap()).unwrap();
+    ast["actors"] = serde_json::json!({"gpu": {"body": [{"loop": {"index": "j", "to": 40, "body": [
+        {"let": {"name": "f", "value": {"consume": "train"}}},
+        {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+        {"parallel": {"index": "p", "width": 2, "body": [{"read": {"file": {"ref": "f"}, "len": 4096, "offset": 0}}]}},
+        {"close": {"file": {"ref": "f"}}}]}}]}});
+    let path = root.join("forkclose.ast.json");
+    std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
+    let cmd = |sub: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.arg(sub).arg(&path).args(["--param", "samples=60", "--param", "walk=false", "--gpus", "1"]).arg("--root").arg(&root);
+        c
+    };
+    let (ok, _, err) = out(&mut cmd("datagen"));
+    assert!(ok, "{err}");
+    let mut fp = None;
+    for posix in ["sync", "io_uring", "libaio"] {
+        let (ok, text, err) = out(cmd("run").args(["--posix", posix, "--time-scale", "0"]).arg("--report-json").arg(&json));
+        assert!(ok, "{posix}: {text}\n{err}");
+        let d = read(&json);
+        assert_eq!(d["result"]["counters"]["open_files_peak"], 1, "{posix}: {text}");
+        assert_eq!(d["result"]["by_kind"]["read"], 80, "{posix}");
+        let f = d["fingerprint"].clone();
+        assert_eq!(fp.get_or_insert(f.clone()), &f, "{posix}");
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}

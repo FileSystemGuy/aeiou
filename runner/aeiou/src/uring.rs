@@ -369,10 +369,12 @@ pub(crate) struct TaskIo {
     pub(crate) started: Instant,
 }
 
-/// What a task runs: an actor's VM, or a lane of a `trace`.
+/// What a task runs: an actor's VM, or a lane of a `trace`; nothing once a sub-actor has
+/// ended and its slot is free.
 enum Prog {
     Vm(Vm<'static, 'static>),
     Lane(Lane),
+    Ended,
 }
 
 struct Task {
@@ -865,6 +867,8 @@ pub(crate) struct Loop<E: Engine> {
     index: usize,
     pub(crate) io: E,
     tasks: Vec<Task>,
+    /// Slots of ended sub-actors, for the next fork (`add_task`, `end_child`).
+    free: Vec<usize>,
     runnable: VecDeque<usize>,
     timers: BinaryHeap<Reverse<(Instant, usize)>>,
     chans: Vec<Chan>,
@@ -933,6 +937,7 @@ impl<E: Engine> Loop<E> {
             sh,
             index,
             tasks: Vec::new(),
+            free: Vec::new(),
             runnable: VecDeque::new(),
             timers: BinaryHeap::new(),
             chans: Vec::new(),
@@ -947,20 +952,36 @@ impl<E: Engine> Loop<E> {
         })
     }
 
+    /// A task in the slot of an ended sub-actor, or a new one. A slot is free only once its
+    /// task has ended, which it does with no op in flight and no timer set, so no completion
+    /// (`user_data`, the object engine's answers) can name it; a wake left over in a channel's
+    /// waiters is a spurious `ready`, which every wait tolerates. `queued` is kept: the old
+    /// task may still be in `runnable`, and that entry now runs the new one.
     fn add_task(&mut self, prog: Prog, a: ActorState, inst: Option<usize>, role: Role, active: bool) -> usize {
-        let id = self.tasks.len();
-        self.tasks.push(Task {
+        let (id, statx, queued) = match self.free.pop() {
+            Some(id) => {
+                let t = &mut self.tasks[id];
+                (id, std::mem::replace(&mut t.io.statx, Box::new(unsafe { std::mem::zeroed() })), t.queued)
+            }
+            None => (self.tasks.len(), Box::new(unsafe { std::mem::zeroed() }), false),
+        };
+        let task = Task {
             prog,
-            io: TaskIo { id, a, cpath: None, cpath2: None, statx: Box::new(unsafe { std::mem::zeroed() }), buf: None, fd: None, round: None, started: Instant::now() },
+            io: TaskIo { id, a, cpath: None, cpath2: None, statx, buf: None, fd: None, round: None, started: Instant::now() },
             inst: inst.unwrap_or(id),
             role,
             wait: Wait::None,
             active,
-            queued: false,
+            queued,
             done: false,
             workers_live: 0,
             loaders: Vec::new(),
-        });
+        };
+        if id == self.tasks.len() {
+            self.tasks.push(task);
+        } else {
+            self.tasks[id] = task;
+        }
         self.live += 1;
         self.ready(id);
         id
@@ -989,6 +1010,7 @@ impl<E: Engine> Loop<E> {
                 format!("{}#{} [{}]", ctx.template, ctx.actor, idx.join(","))
             }
             Prog::Lane(l) => l.label(),
+            Prog::Ended => format!("ended task {id}"),
         }
     }
 
@@ -1101,6 +1123,7 @@ impl<E: Engine> Loop<E> {
                     _ => self.ready(id),
                 }
             }
+            Prog::Ended => unreachable!("a completion for an ended task"),
         }
         Ok(())
     }
@@ -1351,12 +1374,21 @@ impl<E: Engine> Loop<E> {
         }
     }
 
+    /// A sub-actor has ended: its counts go to its parent, and what it holds is dropped now,
+    /// as the blocking path's thread drops it when it returns: its VM and its view of the
+    /// parent's files (the references that would otherwise keep a file the parent has closed
+    /// open until the run ends), and its slot goes to the next fork.
     fn end_child(&mut self, id: usize, parent: usize) {
         let t = &mut self.tasks[id];
+        debug_assert!(!matches!(t.wait, Wait::Io | Wait::Timer), "a sub-actor ended with an op or a timer outstanding");
         t.done = true;
         self.live -= 1;
         t.io.a.finish_shared(&self.sh);
         let st = std::mem::take(&mut t.io.a.st);
+        t.prog = Prog::Ended;
+        t.io.a = ActorState::new(&self.sh, t.io.a.template, t.io.a.actor, false, None, 0);
+        t.io.fd = None;
+        self.free.push(id);
         self.tasks[parent].io.a.st.merge(&st);
     }
 
@@ -1385,7 +1417,7 @@ impl Task {
     fn vm(&mut self) -> &mut Vm<'static, 'static> {
         match &mut self.prog {
             Prog::Vm(vm) => vm,
-            Prog::Lane(_) => unreachable!("a trace lane has no VM"),
+            Prog::Lane(_) | Prog::Ended => unreachable!("a trace lane has no VM"),
         }
     }
 }
@@ -1560,7 +1592,7 @@ impl<E: Engine> Loop<E> {
     fn lane(&mut self, id: usize) -> &mut Lane {
         match &mut self.tasks[id].prog {
             Prog::Lane(l) => l,
-            Prog::Vm(_) => unreachable!("a VM task stepped as a lane"),
+            Prog::Vm(_) | Prog::Ended => unreachable!("a VM task stepped as a lane"),
         }
     }
 

@@ -608,3 +608,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   fingerprint 1ed9742a4a884314; `--lib` 40 passed, `--test all` passed (one unrelated timing
   flake, queued). Fixed in an isolated worktree and applied.
 
+## 28. The event loops never freed a finished sub-actor: closes delayed to run end, memory grew per fork
+
+- **Where:** `runner/aeiou/src/uring.rs` (`end_child`, `add_task`, new `Prog::Ended`,
+  `Loop::free`); runner REFERENCE §8 *Tasks and loops*.
+- **Found by:** review of the execution engines: tasks were only ever pushed; `end_child` set
+  `done` but kept the task's VM and `ActorState`, whose frozen view held an `Arc` to the
+  parent's open files.
+- **Defect:** under `io_uring` and `libaio` an abstract's `close` of a file a `parallel` had read
+  only dropped one reference; the real `close(2)` came at run end, so the storage (NFS: the
+  CLOSE and its flush) did not see it during the run, the backend changing what reaches storage;
+  descriptors piled up (`open files peak 500` for a loop of 500 open/parallel-read/close, 1 under
+  `sync`), and memory grew ~0.8 MiB per fork (diskann_search: 413 MiB at 500 queries, 1.57 GiB at
+  2,000, against 71 MiB under sync).
+- **Fix:** when a sub-actor ends, its program becomes `Prog::Ended`, its state is replaced by an
+  empty one (dropping the parent's files), and its slot goes on a free list that `add_task`
+  reuses, so `tasks` holds at most the tasks alive at once. No generation counter is needed: a
+  task ends only with no op in flight and no timer, so no completion can name a freed slot
+  (checked by a debug assertion). Main tasks are never freed. No fingerprint change.
+- **Evidence:** the repro gives `open files peak 1` under sync, io_uring, and libaio with one
+  fingerprint; diskann_search's maxrss is flat (io_uring 41.4 MiB at 500 queries, 42.3 MiB at
+  2,000). `tests/report.rs::a_parallel_s_file_closes_when_the_abstract_closes_it_under_every_engine`
+  (peak 1 and 80 reads under each engine, equal fingerprints) fails on the old uring.rs (peak
+  40) and passes on the new; `--test all` 81, `uring_knobs`, `limits`, `--lib` passed.
+
