@@ -315,10 +315,10 @@ pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Share
             let Some((to_store, to_rest)) = sh.opts.endpoints.object(to) else {
                 return Step::Done(Err(error(libc::EXDEV, format!("rename {} to {to}: the target is not in the object store", op.path))));
             };
-            if !Arc::ptr_eq(store, &to_store) {
-                return Step::Done(Err(error(libc::EXDEV, format!("rename {} to {to}: the target is in another object store", op.path))));
+            if !store.same_bucket(&to_store) {
+                return Step::Done(Err(error(libc::EXDEV, format!("rename {} to {to}: the target is in another bucket ({})", op.path, to_store.uri()))));
             }
-            let f = store.rename(&rest, &to_rest);
+            let f = store.rename(&rest, &to_store, &to_rest);
             Step::Send(Box::pin(async move { Answer::Renamed(f.await) }))
         }
         OpKind::Mkdir | OpKind::Rmdir => Step::Done(Ok(0)),
@@ -363,7 +363,7 @@ mod imp {
     use std::sync::OnceLock;
 
     use futures::StreamExt;
-    use object_store::aws::{AmazonS3, AmazonS3Builder};
+    use object_store::aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey};
     use object_store::path::Path;
     use object_store::{GetOptions, GetRange, MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload};
 
@@ -538,11 +538,15 @@ mod imp {
         }
     }
 
-    /// One endpoint's store: a bucket and the prefix the name's root is placed at.
+    /// One endpoint's store: a bucket and the prefix the name's root is placed at. Every
+    /// endpoint has a store of its own, so two in one bucket are told apart by their prefixes,
+    /// never by the store: `place` is the bucket, the server's URL (every store is built from
+    /// the one environment) and the bucket's name.
     pub struct Store {
         uri: String,
         s3: AmazonS3,
         prefix: String,
+        place: (String, String),
     }
 
     fn io_err(what: &str, e: object_store::Error) -> io::Error {
@@ -644,12 +648,30 @@ mod imp {
             if std::env::var_os("AWS_VIRTUAL_HOSTED_STYLE_REQUEST").is_none() {
                 b = b.with_virtual_hosted_style_request(false);
             }
+            let place = (b.get_config_value(&AmazonS3ConfigKey::Endpoint).unwrap_or_default(), bucket.to_string());
             let s3 = b.build().map_err(|e| anyhow::anyhow!("{uri}: {e}"))?;
-            Ok(Store { uri: uri.trim_end_matches('/').to_string(), s3, prefix: prefix.trim_matches('/').to_string() })
+            Ok(Store { uri: uri.trim_end_matches('/').to_string(), s3, prefix: prefix.trim_matches('/').to_string(), place })
         }
 
         pub fn uri(&self) -> &str {
             &self.uri
+        }
+
+        /// `other` is the same bucket on the same server: its keys and this store's are one
+        /// key space, whatever their endpoints' prefixes.
+        pub fn same_bucket(&self, other: &Store) -> bool {
+            self.place == other.place
+        }
+
+        /// The name of `rest` in the bucket, its endpoint's prefix included (unencoded, as the
+        /// abstract and the endpoint spell it).
+        pub fn full(&self, rest: &str) -> String {
+            let rest = rest.trim_matches('/');
+            match (self.prefix.is_empty(), rest.is_empty()) {
+                (true, _) => rest.to_string(),
+                (false, true) => self.prefix.clone(),
+                (false, false) => format!("{}/{rest}", self.prefix),
+            }
         }
 
         /// The key of `rest` (a path below the endpoint's root, `""` for the root itself):
@@ -741,9 +763,10 @@ mod imp {
             Box::pin(async move { s3.delete(&key?).await.map_err(|e| io_err(&show, e)) })
         }
 
-        /// A copy on the server and a `DELETE` of the source.
-        pub fn rename(&self, from: &str, to: &str) -> Fut<'static, io::Result<()>> {
-            let (s3, f, t, show) = (self.s3.clone(), self.key(from), self.key(to), self.show(from));
+        /// A copy on the server and a `DELETE` of the source; `to` is below the prefix of
+        /// `into`, a store of the same bucket (`same_bucket`): this one or another endpoint's.
+        pub fn rename(&self, from: &str, into: &Store, to: &str) -> Fut<'static, io::Result<()>> {
+            let (s3, f, t, show) = (self.s3.clone(), self.key(from), into.key(to), self.show(from));
             Box::pin(async move {
                 let (f, t) = (f?, t?);
                 s3.copy(&f, &t).await.map_err(|e| io_err(&show, e))?;
@@ -1021,7 +1044,13 @@ mod imp {
         pub fn delete(&self, _: &str) -> Fut<'static, io::Result<()>> {
             match *self {}
         }
-        pub fn rename(&self, _: &str, _: &str) -> Fut<'static, io::Result<()>> {
+        pub fn rename(&self, _: &str, _: &Store, _: &str) -> Fut<'static, io::Result<()>> {
+            match *self {}
+        }
+        pub fn same_bucket(&self, _: &Store) -> bool {
+            match *self {}
+        }
+        pub fn full(&self, _: &str) -> String {
             match *self {}
         }
         pub fn keys_below(&self, _: &str) -> io::Result<Vec<String>> {

@@ -216,6 +216,38 @@ fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
     assert!(!root.join("kv").exists());
 }
 
+/// An input namespace placed by its endpoint inside an output namespace's directory is left
+/// alone when the output is emptied, as a dataset there is (V14: a run never empties an input
+/// root; RC1 review).
+#[test]
+fn an_input_namespace_inside_an_output_root_is_not_emptied() {
+    let base = tmpdir("nsinput");
+    let ast = base.join("r.ast.json");
+    std::fs::write(
+        &ast,
+        r#"{"ast": "0.10", "name": "r",
+            "namespaces": {"o": {"pattern": "o/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "input": true},
+                           "q": {"pattern": "q/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1}},
+            "actors": {"gpu": {"body": [{"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
+                {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}}, {"close": {"file": {"ref": "f"}}},
+                {"let": {"name": "g", "value": {"object": {"namespace": "q", "fields": {"k": 0}}}}},
+                {"open": {"file": {"ref": "g"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}}, {"close": {"file": {"ref": "g"}}}]}}}"#,
+    )
+    .unwrap();
+    let loaded = aeiou::load(&ast).unwrap();
+    let (root, out) = (base.join("root"), base.join("out"));
+    std::fs::create_dir_all(out.join("in")).unwrap();
+    std::fs::write(out.join("in/f0"), b"x").unwrap();
+    std::fs::write(out.join("in/.aeiou-namespace.json"), b"{}").unwrap();
+    std::fs::write(out.join("f0"), b"x").unwrap();
+    let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &[format!("o={}", out.join("in").display()), format!("q={}", out.display())]).unwrap();
+    let mut o = opts(&root, BackendKind::Sync);
+    o.endpoints = endpoints;
+    assert!(run::prepare_namespaces(&loaded.ast, &o, false).unwrap_err().to_string().contains("not empty (1 entries"));
+    assert_eq!(run::prepare_namespaces(&loaded.ast, &o, true).unwrap(), vec!["q".to_string()]);
+    assert!(!out.join("f0").exists() && out.join("in/f0").exists() && out.join("in/.aeiou-namespace.json").exists());
+}
+
 #[test]
 fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
     // lmcache_shared_fs and lmcache_shared_fs_reader come from one script and place their draws at the same sites:

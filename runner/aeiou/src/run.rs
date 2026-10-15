@@ -2326,14 +2326,21 @@ pub fn write_namespace_manifests(loaded: &crate::Loaded, cfg: &Config, root: &(i
 }
 
 /// Output namespace roots must be empty (`--clean-namespaces` empties them); input roots
-/// are left as they are; dataset roots inside a namespace root are left alone. Creates the
-/// output roots; one in an object store is a prefix, which a `LIST` finds empty or a
-/// `DELETE` of every key below it empties.
+/// are left as they are; dataset and input namespace roots inside a namespace root are left
+/// alone (V12, V14), wherever their endpoints place them: compared by the directory they are
+/// in, or by bucket and full key. Creates the output roots; one in an object store is a
+/// prefix, which a `LIST` finds empty or a `DELETE` of every key below it empties.
 pub fn prepare_namespaces(ast: &Ast, root: &(impl Place + ?Sized), clean: bool) -> Result<Vec<String>> {
-    let mut dataset_roots: Vec<PathBuf> = Vec::new();
+    let mut kept_rels: Vec<String> = Vec::new();
     for name in ast.datasets.keys() {
-        dataset_roots.push(root.at(&payload::dataset_root(ast, name)?));
+        kept_rels.push(payload::dataset_root(ast, name)?);
     }
+    for (name, n) in &ast.namespaces {
+        if n.input.unwrap_or(false) {
+            kept_rels.push(payload::namespace_root(ast, name)?);
+        }
+    }
+    let dataset_roots: Vec<PathBuf> = kept_rels.iter().filter(|r| root.object(r).is_none()).map(|r| root.at(r)).collect();
     let mut cleaned = Vec::new();
     let mut seen = BTreeSet::new();
     for (name, n) in &ast.namespaces {
@@ -2346,16 +2353,27 @@ pub fn prepare_namespaces(ast: &Ast, root: &(impl Place + ?Sized), clean: bool) 
             continue;
         }
         if let Some((store, rest)) = root.object(&rel) {
-            // the keys of a dataset placed under this prefix are the dataset's
+            // the keys of a dataset or an input namespace placed under this prefix, through
+            // its own endpoint in the same bucket or through this one, are its own; one whose
+            // root holds this prefix holds every key below it
+            let (base, top) = (store.full(&rest), store.full(""));
             let mut skip: Vec<String> = Vec::new();
-            for d in ast.datasets.keys() {
-                if let Some((s, r)) = root.object(&payload::dataset_root(ast, d)?) {
-                    if Arc::ptr_eq(&s, &store) {
-                        skip.push(format!("{r}/"));
-                    }
+            let mut held = false;
+            for r in &kept_rels {
+                let Some((s, r)) = root.object(r) else { continue };
+                if !s.same_bucket(&store) {
+                    continue;
+                }
+                let k = s.full(&r);
+                if k.is_empty() || k == base || base.starts_with(&format!("{k}/")) {
+                    held = true;
+                } else if top.is_empty() {
+                    skip.push(format!("{k}/"));
+                } else if let Some(below) = k.strip_prefix(&format!("{top}/")) {
+                    skip.push(format!("{below}/"));
                 }
             }
-            let stale: Vec<String> = store.keys_below(&rest)?.into_iter().filter(|k| !skip.iter().any(|d| k.starts_with(d.as_str()))).collect();
+            let stale: Vec<String> = if held { Vec::new() } else { store.keys_below(&rest)?.into_iter().filter(|k| !skip.iter().any(|d| k.starts_with(d.as_str()))).collect() };
             if !stale.is_empty() {
                 if !clean {
                     bail!("namespace `{name}` root {} is not empty ({} objects, e.g. {}); pass --clean-namespaces to empty it", store.show(&rest), stale.len(), store.show(&stale[0]));

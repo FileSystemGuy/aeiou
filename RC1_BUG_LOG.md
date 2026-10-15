@@ -2379,3 +2379,41 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** `test_launch.py::test_lines_stay_whole_in_a_file` fails with HEAD's launcher
   (spliced `[0 a] 984 line[1 b] 0 line…`) and passes; 3000 lines from each of two ranks: 68 bad
   lines before, 0 after; same suite runs as bug 106.
+
+## 108. `--clean-namespaces` deleted a read-only dataset (or an input namespace) placed by its own endpoint in the same bucket under the namespace's prefix
+
+- **Where:** `runner/aeiou/src/run.rs` (`prepare_namespaces`); `runner/aeiou/src/object.rs` (`Store::place`,
+  `same_bucket`, `full`); `runner/REFERENCE.md` §4 Startup and §16 **Namespaces**; tests.
+- **Found by:** RC1 third-round object-engine review (RV3a). A dataset's keys were skipped only when
+  `Arc::ptr_eq(&s, &store)`, and `Endpoints::parse` builds one `Store` per placed root, so a
+  dataset with its own endpoint was never skipped. Repro: indexed s3 dataset `d`, s3 namespace
+  `o`, `--endpoint d=s3://bench/ns/data --endpoint o=s3://bench/ns`: datagen, then `run
+  --clean-namespaces` printed "namespace root o/ emptied" and failed `read d/f_0 … 404`; dataset
+  and manifest gone. POSIX compared physical paths and was safe for datasets, but neither POSIX
+  nor objects protected input namespaces (V14: a run never empties an input root).
+- **Fix:** a `Store` knows its place (endpoint URL, bucket); the kept roots are every dataset root
+  and every input-namespace root; on POSIX the physical comparison covers both, on objects
+  every kept root in the same bucket becomes a skip prefix relative to the namespace's prefix,
+  and a kept root equal to or containing the namespace prefix keeps everything below it. No
+  fingerprint, dataset id, or AST change.
+- **Evidence:** `object::endpoints_in_one_bucket_share_its_keys` (dataset and input namespace
+  under an output prefix survive two cleans) and `run::an_input_namespace_inside_an_output_root_is_not_emptied`
+  fail with the change reverse-applied and pass; after the fix the repro keeps `ns/data/f_0`
+  (GET 200). Merged with bug 96's key change on HEAD 1ecdf00: `--test all` with MinIO 148
+  passed, `--lib` 68, `cargo check --release` without features clean, builder `test_object.py`
+  + `test_formats.py` 53 passed. Fixed in an isolated worktree and applied.
+
+## 109. A rename between two endpoints' prefixes in one bucket was refused with EXDEV ("another object store")
+
+- **Where:** `runner/aeiou/src/object.rs` (`Store::rename(from, into, to)`, the rename op); `runner/REFERENCE.md`
+  §16 op table; tests.
+- **Found by:** RV3a: the rename op used the same `Arc::ptr_eq` test as bug 108. Repro: namespaces
+  `a` and `b`, `--endpoint a=s3://bench/x/tmp --endpoint b=s3://bench/x/fin`: `rename tmp/f0 to
+  fin/f0: the target is in another object store (EXDEV)`, where POSIX with two directories on
+  one file system renames.
+- **Fix:** the op tests `same_bucket`; the rename copies to `into`'s key, so it moves across
+  prefixes of one bucket; into another bucket it is still EXDEV, now "the target is in another
+  bucket (s3://…)".
+- **Evidence:** `object::endpoints_in_one_bucket_share_its_keys` (cross-prefix rename succeeds,
+  `x/fin/f0` present and `x/tmp/f0` gone; another bucket EXDEV with the new message) fails with
+  the change reverse-applied and passes; same suite runs as bug 108.

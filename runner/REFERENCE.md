@@ -343,8 +343,9 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   provenance; the identity of a run is still the resolved values.
 - **Startup.** Every dataset's manifest must match the resolved definition (§5); the ids are
   printed and may be pinned with `--expect-dataset-id`. Namespace roots are created and must
-  be empty; `--clean-namespaces` empties them, leaving a dataset root that lies inside one
-  alone.
+  be empty; `--clean-namespaces` empties them, leaving a dataset root or an input namespace
+  root that lies inside one alone, wherever its endpoint places it (a directory, or a prefix
+  of the same bucket; 2026-10-15, RC1 review).
 - **Ranks.** `--rank r --ranks R` give this host its GPU id range, contiguous blocks of
   `ceil(G / R)`; `--rank-rotate k` makes it run rank `(r + k) mod R`'s range instead. Nothing
   in the op stream depends on the host, so rotating a read run against the write run's host
@@ -2061,7 +2062,7 @@ sample), and `aeiou datagen`.
 | `lseek`, `fadvise`, `fsync`, `fdatasync` | none (an upload is durable at its `close`; a seek away from the end shows at the next write) |
 | `ioctl` | none; `TCGETS` is `ENOTTY`, as for a regular file |
 | `unlink` | `DELETE`; a missing key is no error, as S3 has it, so an `expect: [ENOENT]` is never used |
-| `rename` | a copy on the server (`CopyObject`) and a `DELETE` of the source: two requests, not atomic, a reader between them sees both names; a target outside the store is `EXDEV` |
+| `rename` | a copy on the server (`CopyObject`) and a `DELETE` of the source: two requests, not atomic, a reader between them sees both names; the target may be under another endpoint's prefix in the same bucket (on the same server); one in another bucket or outside the object store is `EXDEV` |
 | `mkdir`, `rmdir` | none: a prefix is no object (and is not recorded among the objects created) |
 | `read` of a handle opened for writing | `EBADF`, as for `O_WRONLY` |
 | `open` with `APPEND`, `RDWR`, `EXCL`; `ftruncate`; `fallocate` | refused by V18 at `aeiou check` (`schema/README.md` §4); `EOPNOTSUPP` here should one come |
@@ -2074,7 +2075,9 @@ the store's message.
 **Namespaces.** An object namespace's root is a prefix (`run::prepare_namespaces`): rank 0
 `LIST`s every key below it before the gate and refuses a non-empty one, or, with
 `--clean-namespaces`, `DELETE`s them in batches (`delete_stream`), leaving the keys of a
-dataset placed below it; there is nothing to create. The namespace manifest is one `PUT` of
+dataset or an input namespace placed below it, through the namespace's endpoint or its own in
+the same bucket (endpoints are compared by server and bucket and their full keys, never by
+store: each has its own); there is nothing to create. The namespace manifest is one `PUT` of
 `.aeiou-namespace.json` at the prefix after the run (`NamespaceManifest::write_object`),
 atomic as the rename into place is for a directory, and a run reading the namespace as
 `input` `GET`s it (`read_object`) for the same checks (V14, V15, `--max-gap`). The objects a
@@ -2150,4 +2153,6 @@ that empties it but the system prompts' keys; each object's bytes equal to the f
 abstract writes under the same name, and no temporary name left; the reader
 (`lmcache_shared_fs_reader`) reading the namespace as `input` from its manifest object, to its
 fingerprint, under `sync` and `libaio`; and a write past the upload's end failing the run
-under V18.
+under V18. Endpoints in one bucket: a dataset and an input namespace placed below an output
+namespace's prefix through their own endpoints kept by `--clean-namespaces`, and a `rename`
+between two endpoints' prefixes done, one into another bucket `EXDEV`.

@@ -528,3 +528,64 @@ fn object_keys_are_the_names_as_written() {
     let o = aeiou(Some(&m), &["run", ast(1, "o/{k}/../x", true).to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "o=s3://bench/dots"]);
     refused(&o, "s3://bench/dots/0/../x: no object key holds the component \"..\" (`.`, `..`, or a control character)");
 }
+
+/// Two endpoints in one bucket are one key space, though each has a store of its own: a
+/// namespace emptied by `--clean-namespaces` keeps the keys of a dataset (V12) and of an
+/// input namespace (V14) placed below its prefix through their own endpoints, and a `rename`
+/// from one endpoint's prefix to another's is a copy between their keys, not `EXDEV`; one into
+/// another bucket is (RC1 review).
+#[test]
+fn endpoints_in_one_bucket_share_its_keys() {
+    let m = minio("endpoints_in_one_bucket_share_its_keys");
+    let dir = tmpdir("onebucket");
+    let root = dir.join("root");
+    let root = root.to_str().unwrap();
+    let write = |name: &str, more: &str, namespaces: &str, body: &str| {
+        let p = dir.join(format!("{name}.ast.json"));
+        let ast = format!(r#"{{"ast": "0.10", "name": "{name}", {more} "namespaces": {{{namespaces}}}, "actors": {{"gpu": {{"body": [{body}]}}}}}}"#);
+        std::fs::write(&p, ast).unwrap();
+        p
+    };
+    let ns = |name: &str, extra: &str| format!(r#""{name}": {{"pattern": "{name}/f{{k}}", "fields": {{"k": "int"}}, "size": "as_written", "seed": 1, "protocol": "s3"{extra}}}"#);
+    let bind = |v: &str, n: &str| format!(r#"{{"let": {{"name": "{v}", "value": {{"object": {{"namespace": "{n}", "fields": {{"k": 0}}}}}}}}}}"#);
+    let put = |v: &str| format!(r#"{{"open": {{"file": {{"ref": "{v}"}}, "flags": ["WRONLY", "CREAT", "TRUNC"]}}}}, {{"write": {{"file": {{"ref": "{v}"}}, "len": 4096}}}}, {{"close": {{"file": {{"ref": "{v}"}}}}}}"#);
+    let get = |v: &str| format!(r#"{{"open": {{"file": {{"ref": "{v}"}}, "flags": ["RDONLY"]}}}}, {{"read": {{"file": {{"ref": "{v}"}}, "len": 4096}}}}, {{"close": {{"file": {{"ref": "{v}"}}}}}}"#);
+    let run = |ast: &Path, extra: &[&str]| {
+        let mut a = vec!["run", ast.to_str().unwrap(), "--gpus", "1", "--root", root];
+        a.extend(extra);
+        aeiou(Some(&m), &a)
+    };
+    let present = |key: &str| curl(&m, &format!("/bench/{key}"), &[]).status.success();
+
+    // a dataset at ns/data, the namespace `o` at ns: emptied twice, the dataset stays and is read
+    let dataset = r#""datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f_{id}", "count": 2, "size": {"const": 4096}, "seed": 7, "protocol": "s3"}},"#;
+    let read_d = r#"{"let": {"name": "g", "value": {"file": {"dataset": "d", "id": 0}}}}"#;
+    let dn = write("dn", dataset, &ns("o", ""), &format!("{read_d}, {}, {}, {}", get("g"), bind("f", "o"), put("f")));
+    let at = ["--endpoint", "d=s3://bench/ns/data", "--endpoint", "o=s3://bench/ns"];
+    ok(&aeiou(Some(&m), &[&["datagen", dn.to_str().unwrap(), "--root", root][..], &at[..]].concat()));
+    ok(&run(&dn, &at));
+    for _ in 0..2 {
+        let out = ok(&run(&dn, &[&at[..], &["--clean-namespaces"]].concat()));
+        assert!(out.contains("namespace root o/ emptied"), "{out}");
+    }
+    assert!(present("ns/f0") && present("ns/data/f_0") && present("ns/data/f_1") && present("ns/data/.aeiou-dataset.json"));
+
+    // an input namespace at in/in, the output `q` at in: the input's objects and manifest stay
+    let w = write("w", "", &ns("o", ""), &format!("{}, {}", bind("f", "o"), put("f")));
+    ok(&run(&w, &["--endpoint", "o=s3://bench/in/in"]));
+    let r = write("r", "", &format!("{}, {}", ns("o", r#", "input": true"#), ns("q", "")), &format!("{}, {}, {}, {}", bind("f", "o"), get("f"), bind("g", "q"), put("g")));
+    let at = ["--endpoint", "o=s3://bench/in/in", "--endpoint", "q=s3://bench/in"];
+    ok(&run(&r, &at));
+    for _ in 0..2 {
+        let out = ok(&run(&r, &[&at[..], &["--clean-namespaces"]].concat()));
+        assert!(out.contains("namespace root q/ emptied"), "{out}");
+    }
+    assert!(present("in/in/f0") && present("in/in/.aeiou-namespace.json") && present("in/f0"));
+
+    // a rename from one endpoint's prefix to another's in the bucket, and into another bucket
+    let rn = write("rn", "", &format!("{}, {}", ns("a", ""), ns("b", "")), &format!(r#"{}, {}, {}, {{"rename": {{"from": {{"ref": "f"}}, "to": {{"ref": "g"}}}}}}"#, bind("f", "a"), bind("g", "b"), put("f")));
+    ok(&run(&rn, &["--endpoint", "a=s3://bench/x/tmp", "--endpoint", "b=s3://bench/x/fin"]));
+    assert!(present("x/fin/f0") && !present("x/tmp/f0"));
+    assert!(curl(&m, "/other", &["-X", "PUT"]).status.success());
+    refused(&run(&rn, &["--endpoint", "a=s3://bench/y/tmp", "--endpoint", "b=s3://other/fin"]), "rename a/f0 to b/f0: the target is in another bucket (s3://other/fin)");
+}
