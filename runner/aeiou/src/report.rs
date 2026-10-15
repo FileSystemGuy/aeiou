@@ -232,6 +232,7 @@ pub fn result(r: &Report, full_takes: bool) -> anyhow::Result<Value> {
     m.insert("mmap".into(), serde_json::to_value(&r.mmap)?);
     m.insert("cold".into(), serde_json::to_value(&r.cold)?);
     m.insert("objects_created".into(), json!(r.created.len()));
+    m.insert("object".into(), r.object.as_ref().map_or(Value::Null, |o| json!({"retries": o.total(), "retries_by_cause": o.retries})));
     let departures: Map<String, Value> = r.departure_releases.iter().map(|(scope, n)| (scope.clone(), json!(n))).collect();
     m.insert("departure_releases".into(), Value::Object(departures));
     m.insert("take_summary".into(), take_summary(&r.actors, r.time_scale));
@@ -257,6 +258,9 @@ pub fn result(r: &Report, full_takes: bool) -> anyhow::Result<Value> {
     let mut warnings = Vec::new();
     if r.stats.warm_opens > 0 {
         warnings.push(format!("{} read(s) of input objects hit the host that wrote them (page cache, not storage)", r.stats.warm_opens));
+    }
+    if let Some(o) = r.object.as_ref().filter(|o| o.total() > 0) {
+        warnings.push(crate::run::object_warning(o));
     }
     for (scope, n) in &r.departure_releases {
         warnings.push(format!("barrier `{scope}` was released {n} time(s) by instances finishing: not every instance hit it the same number of times"));

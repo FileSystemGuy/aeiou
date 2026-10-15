@@ -866,6 +866,9 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
+    if resume.is_none() {
+        endpoints.datasets_apart(&loaded.ast, Some(&root))?;
+    }
     let object_threads = object_engine(&endpoints, object_threads, &mut l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
     l.show_default("writers", format!("{writers} (all cores)"));
@@ -1140,6 +1143,7 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &a.endpoints)?;
+    endpoints.datasets_apart(&loaded.ast, Some(&a.root))?;
     let used = aeiou::validate::protocols(&loaded.ast, !loaded.traces.is_empty());
     if !used.posix {
         let why = "every dataset and namespace is `protocol: s3`";

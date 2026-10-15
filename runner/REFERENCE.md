@@ -218,6 +218,14 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   `protocol: object` is refused by `run` and `datagen` until the object engine is built.~~
   An endpoint is a directory for a `posix` name and `s3://BUCKET[/PREFIX]` for an `s3`
   one (`object` until contract 0.7), which has no default place (2026-10-09, §16).
+  No two datasets land in one place (2026-10-15, RC1 review, bug R34): their roots, resolved
+  (`--endpoint` or `--root`; a directory made absolute, `.` and `..` gone, symbolic links of
+  its existing part followed; a prefix with its bucket and server), may be neither equal nor
+  one inside the other, as V13 asks of the abstract's roots, since `datagen` wants each
+  empty and writes one manifest at each. `Endpoints::parse` compares the placed ones, and
+  `datagen` (not on a resume) and `run` compare them all against `--root`
+  (`Endpoints::datasets_apart`); a usage error names both places. A namespace's place may
+  hold a dataset's (the lmcache layout), so namespaces are not compared.
 - **Threads.** One OS thread per actor instance. A `loader` spawns `workers` threads that
   live until the actor ends; a `parallel` ~~spawns `width` threads and joins them before the
   node returns~~ runs its `width` sub-actors on threads the forking actor keeps (the
@@ -1630,6 +1638,7 @@ latency {kind: {count, sum_ns, mean_ns, p50_ns, p90_ns, p99_ns, p999_ns, max_ns,
 compute_ns, io_ns, barriers, barrier_wait_ns, takes, puts, expected_errors, threads, threads_peak,
 input_opens, warm_opens, objects_created, departure_releases {scope: n}, warnings [text],
 counters {…§4…}, io_uring, libaio, mmap (null unless that backend ran), cold [{host, dropped, residency}],
+object {retries, retries_by_cause {cause: n}} (null without an object endpoint; §16, 2026-10-15),
 take_summary {per_instance, instances, takes, stall_ns, compute_ns, stall_mean_ns, stall_p99_ns, stall_max_ns, busy,
               steps [{from, to, takes, stall_mean_ns, stall_p99_ns, stall_max_ns, busy}]},
 instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_records [[stall_ns, compute_ns], …]}]
@@ -2155,6 +2164,29 @@ runtime threads N` ~~`object engine: object_store 0.14.2  runtime threads N`~~ a
 endpoint, that the mount counters and the residency sample do not cover it; the JSON report
 records `object_threads`, `object_part_mib`, and each endpoint's `uri`.
 
+**Timeouts and retries (2026-10-15, RC1 review, bug R31).** A request has no deadline:
+`object_store`'s default of 30 s from the first byte sent to the last received cut off any
+part the store took longer to take (a 40 MiB part at 1 MiB/s was sent six times and the op
+failed `EIO` after 180 s), and a POSIX op has no deadline either; how long the store takes is
+what the run measures, so a store that stops answering stalls the op, as a hard NFS mount
+does (Ctrl-C stops the run). The connect timeout (5 s) stays: a server that accepts no
+connection is down. The client keys of the environment (`AWS_TIMEOUT`,
+`AWS_CONNECT_TIMEOUT`, …) still apply for whoever wants a deadline. The retry policy is
+`object_store`'s, pinned in `object.rs` (`retry_config`): a request the store answers 5xx,
+429, or 408, or whose connection fails (a timeout or an interruption only when the request is
+idempotent), is sent again after a backoff from 100 ms doubling to 15 s, at most 10 times
+within 180 s of the first. Retrying is what every S3 SDK does, so it is the application's API
+and part of the op, its backoff inside the op's latency; a benchmark must not hide a
+throttling store there, so every failed request is counted by cause (`object::retries`, in
+the HTTP client the engine plugs into `object_store`) and the report says so: the text line
+`object retries N  (503 ×n, timeout ×m)` under any object endpoint, a `WARNING` when N > 0, and
+`result.object` and a warning in the JSON report (§12). The count is the process's, the
+checks before the gate included; a run that fails reports no result, and its error names the
+retries `object_store` made. Not counted: a `200` whose body holds an error, which
+`object_store` retries only for a `CompleteMultipartUpload`. Refusing to retry was weighed
+and rejected: an idle connection the server closed is a transport error any long run meets,
+and failing the run on it would measure luck.
+
 **`aeiou datagen`.** A dataset declared `s3`: the prefix must hold no key (a
 `LIST`); each file (or chunk object) is one `PUT`, or a multipart upload in parts of
 `object::DEFAULT_PART` (8 MiB) when larger, or of the whole MiB that keeps an object over
@@ -2186,4 +2218,6 @@ abstract writes under the same name, and no temporary name left; the reader
 fingerprint, under `sync` and `libaio`; and a write past the upload's end failing the run
 under V18. Endpoints in one bucket: a dataset and an input namespace placed below an output
 namespace's prefix through their own endpoints kept by `--clean-namespaces`, and a `rename`
-between two endpoints' prefixes done, one into another bucket `EXDEV`.
+between two endpoints' prefixes done, one into another bucket `EXDEV`. A store that throttles:
+a proxy answering two requests `503 SlowDown`, the run succeeding with `object retries 2
+(503 ×2)`, its warning, and `result.object` in the JSON report.

@@ -662,7 +662,9 @@ has its file `kv/sys/0001/blk_0002` at `/fast/0001/blk_0002`. A path falls under
 longest root that has an endpoint and is a prefix of it, so a dataset whose root lies
 inside a placed namespace's moves with the namespace unless it has its own endpoint; every
 other path stays under `--root`. Namespaces sharing a root share its place, and two
-endpoints for one root must agree. The run prints each endpoint, and warns when one lies on
+endpoints for one root must agree. Two datasets never share a place: an endpoint that would
+put one dataset's root at another's, or inside it, or around it (under `--root` included) is
+a usage error, since each dataset root holds its own manifest. The run prints each endpoint, and warns when one lies on
 another file system than `--root`: the report's mount counters cover `--root`'s mount
 only. Placement never changes the operation stream, the fingerprint, or a dataset id.
 
@@ -713,6 +715,13 @@ the upload has not reached fails the run with `ESPIPE`: V18 refuses what it can 
 abstract, and offsets are positional, so the order is checked at the write. The report's
 mount counters and the residency sample of `--require-cold` do not cover an object store,
 and the run says so.
+
+A request has no deadline: a large part takes what the store takes, as a POSIX op does
+(`AWS_TIMEOUT` sets one; the connect timeout is 5 s). A request the store answers 5xx, 429,
+or 408, or whose connection fails, is sent again, as S3 SDKs do, up to 10 times within 180 s,
+inside its op's latency; the run prints `object retries N` with the causes, and a warning
+when there was any, and the JSON report has them under `result.object`, so a throttling
+store (`503 SlowDown`) shows.
 
 ## METRICS
 

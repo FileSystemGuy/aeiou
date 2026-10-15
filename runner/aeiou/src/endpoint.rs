@@ -74,6 +74,37 @@ pub struct Endpoints {
     placed: Vec<Placed>,
 }
 
+/// `p` as a comparable path: absolute, `.` and `..` resolved, and its longest existing
+/// ancestor as the file system resolves it (symbolic links), the rest as written.
+fn resolved(p: &Path) -> PathBuf {
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut lex = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                lex.pop();
+            }
+            c => lex.push(c),
+        }
+    }
+    let mut base = lex.as_path();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(mut out) = base.canonicalize() {
+            out.extend(rest.iter().rev());
+            return out;
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                base = parent;
+            }
+            _ => return lex,
+        }
+    }
+}
+
 /// A dataset's or namespace's protocol and root, by name.
 fn lookup(ast: &Ast, name: &str) -> Result<Option<(Protocol, String)>> {
     if let Some(d) = ast.datasets.get(name) {
@@ -140,7 +171,65 @@ impl Endpoints {
                 _ => {}
             }
         }
+        e.datasets_apart(ast, None)?;
         Ok(e)
+    }
+
+    /// Every dataset in a place of its own: no two resolved dataset roots the same directory
+    /// or bucket prefix, nor one inside the other (V13 for the abstract's roots, here for where
+    /// the endpoints put them: `aeiou datagen` wants each root empty and to itself, and writes
+    /// one manifest at each). `root` is `--root`, for the datasets without an endpoint; with
+    /// `None` (`parse`) only the placed ones are compared. A namespace may still hold a
+    /// dataset's root (bug 108), so namespaces are not compared.
+    pub fn datasets_apart(&self, ast: &Ast, root: Option<&Path>) -> Result<()> {
+        enum At {
+            Dir(PathBuf),
+            Key(Arc<Store>, String),
+        }
+        let mut names: Vec<&String> = ast.datasets.keys().collect();
+        names.sort();
+        let mut at: Vec<(&String, At, String)> = Vec::new();
+        for name in names {
+            let rel = payload::dataset_root(ast, name)?;
+            let (place, shown) = match (self.placement(&rel), root) {
+                (Some(p), _) => {
+                    let rest = if p.root.is_empty() { rel.as_str() } else { rel[p.root.len()..].trim_start_matches('/') };
+                    let via = if p.names.iter().any(|n| n == name) { format!("--endpoint {name}={}", p.dir.display()) } else { format!("under `{}`, --endpoint {}={}", p.names.join("`, `"), p.names[0], p.dir.display()) };
+                    match &p.store {
+                        Some(s) => (At::Key(s.clone(), s.full(rest)), format!("{} ({via})", s.show(rest))),
+                        None => {
+                            let d = if rest.is_empty() { p.dir.clone() } else { p.dir.join(rest) };
+                            (At::Dir(resolved(&d)), format!("{} ({via})", d.display()))
+                        }
+                    }
+                }
+                (None, Some(r)) => {
+                    let d = r.join(&rel);
+                    (At::Dir(resolved(&d)), format!("{} (under --root)", d.display()))
+                }
+                (None, None) => continue,
+            };
+            at.push((name, place, shown));
+        }
+        let nested = |a: &str, b: &str| {
+            let (a, b): (Vec<&str>, Vec<&str>) = (a.split('/').filter(|c| !c.is_empty()).collect(), b.split('/').filter(|c| !c.is_empty()).collect());
+            a.starts_with(&b) || b.starts_with(&a)
+        };
+        for (i, (n1, a1, s1)) in at.iter().enumerate() {
+            for (n2, a2, s2) in &at[i + 1..] {
+                let clash = match (a1, a2) {
+                    (At::Dir(x), At::Dir(y)) => x.starts_with(y) || y.starts_with(x),
+                    (At::Key(s, x), At::Key(t, y)) => s.same_bucket(t) && nested(x, y),
+                    _ => false,
+                };
+                if clash {
+                    crate::usage!(
+                        "datasets `{n1}` and `{n2}` would share a place: `{n1}` at {s1}, `{n2}` at {s2}; each dataset's root is a directory or prefix of its own, never the same as or inside another's (one manifest at each, V13)"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The placed root a path falls under: the longest that is a prefix of it.
@@ -276,6 +365,55 @@ mod tests {
         assert!(err(&["kv"]).contains("expected NAME=DIR"));
         assert!(err(&["kv=s3://b/kv"]).contains("`kv` is a `posix` dataset or namespace; its endpoint is a directory"));
         assert!(err(&["obj=/o"]).contains("`obj` is declared `protocol: s3`; its endpoint is s3://BUCKET[/PREFIX]"));
+    }
+
+    #[test]
+    fn two_datasets_are_never_placed_at_one_directory_or_one_inside_the_other() {
+        let a = ast();
+        let parse = |g: &[&str]| Endpoints::parse(&a, &g.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let err = |g: &[&str]| format!("{:#}", parse(g).unwrap_err());
+        let e = err(&["sysp=/s", "flat=/s"]);
+        assert!(e.contains("datasets `flat` and `sysp` would share a place: `flat` at /s (--endpoint flat=/s), `sysp` at /s (--endpoint sysp=/s)"), "{e}");
+        assert!(parse(&["sysp=/s", "flat=/s"]).unwrap_err().downcast_ref::<crate::usage::UsageError>().is_some());
+        assert!(err(&["sysp=/s", "flat=/s/x"]).contains("would share a place"));
+        assert!(err(&["sysp=/s/./x/..", "flat=/s"]).contains("would share a place"));
+        assert!(err(&["sysp=/s/x", "flat=/s"]).contains("would share a place"));
+        // `sysp` moves with the namespace `kv`, to /n/sys
+        let e = err(&["kv=/n", "flat=/n/sys"]);
+        assert!(e.contains("`sysp` at /n/sys (under `kv`, --endpoint kv=/n)"), "{e}");
+        // apart, and a namespace's place holding a dataset's, are fine
+        parse(&["sysp=/s", "flat=/sx"]).unwrap();
+        parse(&["sysp=/s/a", "flat=/s/b"]).unwrap();
+        parse(&["kv=/n", "flat=/n/flat"]).unwrap();
+        // against --root: `flat` placed where `sysp` is by default, or around it
+        let r = Path::new("/r");
+        let e = format!("{:#}", parse(&["flat=/r/kv"]).unwrap().datasets_apart(&a, Some(r)).unwrap_err());
+        assert!(e.contains("`flat` at /r/kv (--endpoint flat=/r/kv), `sysp` at /r/kv/sys (under --root)"), "{e}");
+        assert!(format!("{:#}", parse(&["sysp=/r/flat/x"]).unwrap().datasets_apart(&a, Some(r)).unwrap_err()).contains("would share a place"));
+        assert!(format!("{:#}", parse(&["sysp=/r"]).unwrap().datasets_apart(&a, Some(r)).unwrap_err()).contains("would share a place"));
+        parse(&["flat=/r/flat"]).unwrap().datasets_apart(&a, Some(r)).unwrap();
+        parse(&["flat=/r/f2"]).unwrap().datasets_apart(&a, Some(r)).unwrap();
+        Endpoints::default().datasets_apart(&a, Some(r)).unwrap();
+    }
+
+    #[cfg(feature = "object")]
+    #[test]
+    fn two_object_datasets_are_never_placed_at_one_prefix_or_one_inside_the_other() {
+        let a = crate::load_str(
+            r#"{"ast": "0.10", "name": "t",
+                "datasets": {"x": {"layout": "whole", "access": "map", "pattern": "x/f_{id}", "count": 2, "size": {"const": 1}, "seed": 1, "protocol": "s3"},
+                             "y": {"layout": "whole", "access": "map", "pattern": "y/f_{id}", "count": 2, "size": {"const": 1}, "seed": 2, "protocol": "s3"}},
+                "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "x", "id": 0}}}}]}}}"#,
+        )
+        .unwrap()
+        .ast;
+        let parse = |g: &[&str]| Endpoints::parse(&a, &g.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let e = format!("{:#}", parse(&["x=s3://b/p", "y=s3://b/p"]).unwrap_err());
+        assert!(e.contains("`x` at s3://b/p (--endpoint x=s3://b/p), `y` at s3://b/p (--endpoint y=s3://b/p)"), "{e}");
+        assert!(format!("{:#}", parse(&["x=s3://b/p", "y=s3://b/p/q"]).unwrap_err()).contains("would share a place"));
+        assert!(format!("{:#}", parse(&["x=s3://b", "y=s3://b/q"]).unwrap_err()).contains("would share a place"));
+        parse(&["x=s3://b/p", "y=s3://b/pq"]).unwrap();
+        parse(&["x=s3://b/p", "y=s3://c/p"]).unwrap();
     }
 
     #[cfg(not(feature = "object"))]

@@ -127,6 +127,24 @@ impl Handle {
 
 pub use imp::{block, set_threads, spawn, threads, Reader, Store, Upload};
 
+/// The requests of the process's engine that the store or the connection failed in a way
+/// `object_store` sends again (`runner/REFERENCE.md` §16, *Timeouts and retries*), by cause:
+/// the status (`500`, `503`, `429`, `408`, …) or the transport error (`connect`, `request`,
+/// `timeout`, `interrupted`). In a run that succeeds each was sent again; in one that fails
+/// the last may be the error. A retry is inside its op's latency, so the report shows them
+/// (a throttling store's `503 SlowDown` is never hidden in a slow op).
+static RETRIES: std::sync::Mutex<std::collections::BTreeMap<String, u64>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+#[cfg_attr(not(feature = "object"), allow(dead_code))]
+fn count_retry(cause: String) {
+    *RETRIES.lock().unwrap().entry(cause).or_insert(0) += 1;
+}
+
+/// The failed requests so far, by cause (empty without any).
+pub fn retries() -> std::collections::BTreeMap<String, u64> {
+    RETRIES.lock().unwrap().clone()
+}
+
 /// A future of the engine: what an op sends and receives, run by the runtime.
 pub type Fut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
@@ -624,14 +642,61 @@ mod imp {
             Self: 'b,
         {
             Box::pin(async move {
-                let r = self.0.execute(req).await?;
-                if r.status().as_u16() != 416 {
+                use object_store::client::HttpErrorKind as K;
+                let r = match self.0.execute(req).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // the kinds `object_store` sends again (a timeout or an interruption
+                        // when the request is idempotent)
+                        let cause = match e.kind() {
+                            K::Connect => Some("connect"),
+                            K::Request => Some("request"),
+                            K::Timeout => Some("timeout"),
+                            K::Interrupted => Some("interrupted"),
+                            _ => None,
+                        };
+                        if let Some(c) = cause {
+                            super::count_retry(c.to_string());
+                        }
+                        return Err(e);
+                    }
+                };
+                let status = r.status();
+                if status.is_server_error() || status.as_u16() == 429 || status.as_u16() == 408 {
+                    super::count_retry(status.as_u16().to_string());
+                }
+                if status.as_u16() != 416 {
                     return Ok(r);
                 }
                 let _ = r.into_body().bytes().await;
                 Err(object_store::client::HttpError::new(object_store::client::HttpErrorKind::Unknown, RangeNotSatisfiable))
             })
         }
+    }
+
+    /// The engine's HTTP client: `object_store`'s defaults but the request timeout, which is
+    /// none (`runner/REFERENCE.md` §16, *Timeouts and retries*). The crate's 30 s from the first
+    /// byte sent to the last received cut off a part of `--object-part-mib` that the store
+    /// takes longer to take, sent it again, and failed the op; a POSIX op has no deadline
+    /// either, and how long the store takes is what the run measures. The connect timeout
+    /// (5 s) stays: a server that does not accept a connection is down. The client keys of the
+    /// environment (`AWS_TIMEOUT`, `AWS_CONNECT_TIMEOUT`, `AWS_ALLOW_HTTP`, …) apply as before.
+    fn client_options() -> object_store::ClientOptions {
+        let mut o = object_store::ClientOptions::new().with_timeout_disabled();
+        for (k, v) in std::env::vars() {
+            if let Some(key) = k.to_ascii_lowercase().strip_prefix("aws_").and_then(|k| k.parse::<object_store::ClientConfigKey>().ok()) {
+                o = o.with_config(key, v);
+            }
+        }
+        o
+    }
+
+    /// `object_store`'s retry policy, pinned here: a request the store answers 5xx, 429, or
+    /// 408, or the connection fails, is sent again up to 10 times within 180 s of the first,
+    /// after a backoff from 100 ms doubling to 15 s, as an S3 SDK does (the application's
+    /// API, so part of the op), each retry counted (`retries`) and reported.
+    fn retry_config() -> object_store::RetryConfig {
+        object_store::RetryConfig { backoff: object_store::BackoffConfig::default(), max_retries: 10, retry_timeout: std::time::Duration::from_secs(180) }
     }
 
     /// Some object below `key` other than one whose last component starts with `except`.
@@ -658,7 +723,7 @@ mod imp {
             if bucket.is_empty() {
                 anyhow::bail!("{uri}: no bucket");
             }
-            let mut b = AmazonS3Builder::from_env().with_bucket_name(bucket).with_http_connector(Ranged);
+            let mut b = AmazonS3Builder::from_env().with_bucket_name(bucket).with_http_connector(Ranged).with_client_options(client_options()).with_retry(retry_config());
             if std::env::var_os("AWS_VIRTUAL_HOSTED_STYLE_REQUEST").is_none() {
                 b = b.with_virtual_hosted_style_request(false);
             }
@@ -967,6 +1032,19 @@ mod imp {
             // dropped unfinished, the upload is aborted
             drop(up);
             assert_eq!(*log.lock().unwrap(), ["part 10000 1", "abort"]);
+        }
+
+        #[test]
+        fn a_request_has_no_deadline_but_its_connect_and_its_retries_are_pinned() {
+            use object_store::ClientConfigKey as C;
+            let o = super::client_options();
+            // no total deadline: a large part takes what the store takes (the crate's 30 s cut it off)
+            if std::env::var_os("AWS_TIMEOUT").is_none() {
+                assert_eq!(o.get_config_value(&C::Timeout), None);
+            }
+            assert!(o.get_config_value(&C::ConnectTimeout).is_some());
+            let r = super::retry_config();
+            assert_eq!((r.max_retries, r.retry_timeout), (10, std::time::Duration::from_secs(180)));
         }
     }
 }

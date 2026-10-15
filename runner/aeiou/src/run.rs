@@ -2508,10 +2508,45 @@ pub struct Report {
     /// the busy fraction applies to the unscaled `compute` recorded beside a wall-clock stall.
     #[serde(default = "one")]
     pub time_scale: f64,
+    /// The object engine's requests sent again, when a name is placed in an object store.
+    #[serde(default)]
+    pub object: Option<ObjectReport>,
 }
 
 fn one() -> f64 {
     1.0
+}
+
+/// The object engine's retries (`object::retries`): the requests the store answered 5xx,
+/// 429, or 408 or whose connection failed, sent again inside their op, by cause; the
+/// process's, the checks before the gate included.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ObjectReport {
+    pub retries: BTreeMap<String, u64>,
+}
+
+impl ObjectReport {
+    pub fn total(&self) -> u64 {
+        self.retries.values().sum()
+    }
+
+    fn merge(&mut self, o: &ObjectReport) {
+        for (k, n) in &o.retries {
+            *self.retries.entry(k.clone()).or_insert(0) += n;
+        }
+    }
+
+    /// `503 ×2, timeout ×1`, most first.
+    pub fn causes(&self) -> String {
+        let mut v: Vec<(&String, &u64)> = self.retries.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        v.iter().map(|(k, n)| format!("{k} ×{n}")).collect::<Vec<_>>().join(", ")
+    }
+}
+
+/// The warning of a run whose object store failed requests that were sent again.
+pub fn object_warning(o: &ObjectReport) -> String {
+    format!("{} object request(s) failed and were sent again inside their ops' latency ({}); a 503 or 429 is the store throttling", o.total(), o.causes())
 }
 
 impl Report {
@@ -2521,7 +2556,7 @@ impl Report {
     pub fn merge_all(reports: Vec<Report>) -> Report {
         let mut it = reports.into_iter();
         let Some(mut m) = it.next() else {
-            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, aio: None, mmap: None, cold: vec![], created: vec![], removed: vec![], host: String::new(), time_scale: 1.0 };
+            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, aio: None, mmap: None, cold: vec![], created: vec![], removed: vec![], host: String::new(), time_scale: 1.0, object: None };
         };
         let mut hosts = vec![m.host.clone()];
         let mut departures: BTreeMap<String, u64> = m.departure_releases.drain(..).collect();
@@ -2548,6 +2583,11 @@ impl Report {
             match (&mut m.mmap, &r.mmap) {
                 (Some(a), Some(b)) => a.merge(b),
                 (None, Some(b)) => m.mmap = Some(b.clone()),
+                _ => {}
+            }
+            match (&mut m.object, &r.object) {
+                (Some(a), Some(b)) => a.merge(b),
+                (None, Some(b)) => m.object = Some(b.clone()),
                 _ => {}
             }
             m.cold.extend(r.cold);
@@ -2741,6 +2781,7 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
         removed,
         host: sh.host.clone(),
         time_scale: sh.opts.time_scale,
+        object: sh.opts.endpoints.any_object().then(|| ObjectReport { retries: crate::object::retries() }),
     })
 }
 
@@ -2870,6 +2911,13 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
         writeln!(out, "input objects opened {}  of which written on the opening host ({}) {}", s.input_opens, r.host, s.warm_opens)?;
         if s.warm_opens > 0 {
             writeln!(out, "WARNING: {} read(s) of input objects hit the host that wrote them (page cache, not storage); run the reader on other hosts or with --rank-rotate", s.warm_opens)?;
+        }
+    }
+    if let Some(o) = &r.object {
+        let n = o.total();
+        writeln!(out, "object retries {n}{}", if n > 0 { format!("  ({})", o.causes()) } else { String::new() })?;
+        if n > 0 {
+            writeln!(out, "WARNING: {}", object_warning(o))?;
         }
     }
     for (scope, n) in &r.departure_releases {

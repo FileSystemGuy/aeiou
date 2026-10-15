@@ -589,3 +589,96 @@ fn endpoints_in_one_bucket_share_its_keys() {
     assert!(curl(&m, "/other", &["-X", "PUT"]).status.success());
     refused(&run(&rn, &["--endpoint", "a=s3://bench/y/tmp", "--endpoint", "b=s3://other/fin"]), "rename a/f0 to b/f0: the target is in another bucket (s3://other/fin)");
 }
+
+/// A proxy to `m` on a free port that answers the first `fail` connections' first request
+/// itself, `503 SlowDown` as S3 throttles, and closes them; it pipes every other connection
+/// to the server. Its URL.
+fn throttling_proxy(m: &Minio, fail: usize) -> String {
+    use std::io::{Read, Write};
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    let upstream = m.url.trim_start_matches("http://").to_string();
+    std::thread::spawn(move || {
+        for (n, c) in l.incoming().enumerate() {
+            let Ok(mut c) = c else { return };
+            if n < fail {
+                // the request's head and body, then the answer
+                let mut got = Vec::new();
+                let mut buf = [0u8; 65536];
+                let head = loop {
+                    let k = c.read(&mut buf).unwrap_or(0);
+                    if k == 0 {
+                        break None;
+                    }
+                    got.extend_from_slice(&buf[..k]);
+                    if let Some(i) = got.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(i + 4);
+                    }
+                };
+                let Some(head) = head else { continue };
+                let text = String::from_utf8_lossy(&got[..head]).to_ascii_lowercase();
+                let len: usize = text.lines().find_map(|l| l.strip_prefix("content-length:")).map_or(0, |v| v.trim().parse().unwrap());
+                while got.len() < head + len {
+                    let k = c.read(&mut buf).unwrap_or(0);
+                    if k == 0 {
+                        break;
+                    }
+                    got.extend_from_slice(&buf[..k]);
+                }
+                let body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>";
+                let _ = write!(c, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                continue;
+            }
+            let s = std::net::TcpStream::connect(&upstream).unwrap();
+            let (mut c2, mut s2) = (c.try_clone().unwrap(), s.try_clone().unwrap());
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut c2, &mut s2);
+                let _ = s2.shutdown(std::net::Shutdown::Write);
+            });
+            std::thread::spawn(move || {
+                let (mut s, mut c) = (s, c);
+                let _ = std::io::copy(&mut s, &mut c);
+                let _ = c.shutdown(std::net::Shutdown::Write);
+            });
+        }
+    });
+    url
+}
+
+#[test]
+fn a_store_throttling_is_retried_and_every_retry_reported() {
+    let m = minio("a_store_throttling_is_retried_and_every_retry_reported");
+    let dir = tmpdir("throttled");
+    let ast = dir.join("put.ast.json");
+    std::fs::write(
+        &ast,
+        r#"{"ast": "0.10", "name": "put",
+            "namespaces": {"o": {"pattern": "put/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
+            "actors": {"gpu": {"body": [
+              {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
+              {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}},
+              {"write": {"file": {"ref": "f"}, "len": 65536}},
+              {"close": {"file": {"ref": "f"}}}]}}}"#,
+    )
+    .unwrap();
+    let json = dir.join("report.json");
+    let run = |url: &str, prefix: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", &format!("o=s3://bench/{prefix}"), "--report-json", json.to_str().unwrap()]);
+        c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", SECRET).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
+        let out = ok(&c.output().unwrap());
+        let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+        (out, report)
+    };
+    // straight to the server: none
+    let (out, report) = run(&m.url, "calm");
+    assert!(out.lines().any(|l| l == "object retries 0"), "{out}");
+    assert_eq!(report["result"]["object"], serde_json::json!({"retries": 0, "retries_by_cause": {}}));
+    // two requests answered 503 SlowDown: the run succeeds, and says so
+    let (out, report) = run(&throttling_proxy(&m, 2), "throttled");
+    assert!(out.lines().any(|l| l == "object retries 2  (503 ×2)"), "{out}");
+    assert!(out.contains("WARNING: 2 object request(s) failed and were sent again inside their ops' latency (503 ×2); a 503 or 429 is the store throttling"), "{out}");
+    assert_eq!(report["result"]["object"], serde_json::json!({"retries": 2, "retries_by_cause": {"503": 2}}));
+    assert!(report["result"]["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().starts_with("2 object request(s) failed")), "{report}");
+    assert!(curl(&m, "/bench/throttled/f0", &["-I"]).status.success());
+}

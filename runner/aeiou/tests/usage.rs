@@ -298,3 +298,23 @@ fn messages_say_what_is_wrong() {
     let o = aeiou(&["dry-run", &ast, "--gpus", "1", "--param", "samples=-4"]).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&o.stderr), "aeiou dry-run: dataset `train`: count -4: a count is 0 or more\n");
 }
+
+/// Two datasets placed at one directory, or one inside the other's (by an endpoint, or by an
+/// endpoint into the other's place under --root), are a usage error before anything is
+/// written (RC1 review): datagen wrote both into one directory, one manifest lost, exit 0.
+#[test]
+fn two_datasets_in_one_place_are_a_usage_error() {
+    let ast = example("faiss_ivf_ondisk.ast.json");
+    let dir = crate::common::tmpdir("usage", "datasets-apart");
+    let (root, shared) = (dir.join("root"), dir.join("shared"));
+    let (r, s) = (root.to_str().unwrap(), shared.to_str().unwrap());
+    let params = ["--param", "lists=40", "--param", "index_bytes=5000"];
+    let gen = |extra: &[&str]| frame(&mut aeiou(&[&["datagen", &ast, "--root", r][..], &params[..], extra].concat()), "aeiou datagen").0;
+    let m = gen(&["--endpoint", &format!("lists={s}"), "--endpoint", &format!("index={s}")]);
+    assert_eq!(m, format!("datasets `index` and `lists` would share a place: `index` at {s} (--endpoint index={s}), `lists` at {s} (--endpoint lists={s}); each dataset's root is a directory or prefix of its own, never the same as or inside another's (one manifest at each, V13)"));
+    let m = gen(&["--endpoint", &format!("index={r}/ivf")]);
+    assert!(m.contains(&format!("`index` at {r}/ivf (--endpoint index={r}/ivf), `lists` at {r}/ivf (under --root)")), "{m}");
+    let m = frame(&mut aeiou(&[&["run", &ast, "--gpus", "1", "--root", r][..], &params[..], &["--endpoint", &format!("index={r}/ivf/x")]].concat()), "aeiou run").0;
+    assert!(m.contains("would share a place"), "{m}");
+    assert!(!root.exists() && !shared.exists(), "something was written");
+}

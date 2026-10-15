@@ -2719,3 +2719,43 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** `coord::grow_and_shrink_make_the_corpus_of_the_new_count` and
   `coord::an_unfinished_corpus_points_at_resume_and_settle` fail on HEAD and pass; same suite runs as
   bug 126.
+
+## 132. An object request slower than 30 s failed the run after minutes of silent retries, each re-sending the whole part
+
+- **Where:** `runner/aeiou/src/object.rs` (`ClientOptions::with_timeout_disabled`, `retry_config()`,
+  `RangedService` counting retries by cause, `object::retries()`), `runner/aeiou/src/run.rs` and
+  `report.rs` (`result.object {retries, retries_by_cause}`, merged across hosts; text line and
+  WARNING); `runner/REFERENCE.md` §12 and §16 "Timeouts and retries"; `man/aeiou.1.md` OBJECT
+  STORES; tests.
+- **Found by:** RC1 third-round object-engine review (RV3a): `AmazonS3Builder::from_env()` kept
+  object_store's 30 s per-request timeout and 10 retries within 180 s, while `--object-part-mib`
+  allows 5120. With upstream throttled to 1 MiB/s, a 40 MiB part failed after 2m50s "… in 180.6s,
+  after 5 retries … (EIO)", sent 6 times; the report showed no retries.
+- **Fix:** no deadline per request (a POSIX op has none; the store's time is what is measured; the
+  5 s connect timeout stays, `AWS_TIMEOUT` still applies); retries stay (every S3 SDK retries: part
+  of the API), pinned in code (10 within 180 s, 100 ms doubling to 15 s, on 5xx/429/408/connection
+  failures), and every retry is counted by cause and reported (`object retries N (503 ×n)` plus a
+  WARNING; `result.object` in the JSON, `aeiou_report` stays 1), so a throttling store shows.
+- **Evidence:** unit test `object::imp::tests::a_request_has_no_deadline_but_its_connect_and_its_retries_are_pinned`
+  and `object::a_store_throttling_is_retried_and_every_retry_reported` (a proxy answering two `503
+  SlowDown`: `object retries 2 (503 ×2)`, `result.object == {"retries":2,…}`) fail with the change
+  undone and pass; the throttled 40 MiB repro now exits 0. Merged on HEAD 0a872a9: `--tests --lib
+  --bins` with MinIO all pass (all 160, lib 73), `--features formats` usage 10, builder suite with
+  MinIO 407, `aeiou-catalog check` ok. Fixed in an isolated worktree and applied.
+
+## 133. Two datasets placed at one directory (or one inside the other) overwrote each other's manifest, exit 0
+
+- **Where:** `runner/aeiou/src/endpoint.rs` (`Endpoints::datasets_apart`, called from `parse` and with
+  `--root` from datagen and run in `main.rs`); `runner/REFERENCE.md` §4; `man/aeiou.1.md` ENDPOINTS; tests.
+- **Found by:** RC1 third-round datagen review (RV3c): `Endpoints::parse` refused two names only with
+  one abstract root. `aeiou datagen --endpoint lists=shared --endpoint index=shared …
+  faiss_ivf_ondisk.ast.json` exited 0 with both datasets in `shared/` and its manifest naming only
+  `lists`; a later run could not find `index`.
+- **Fix:** every dataset's root is resolved to where it lands (its endpoint, a placed namespace it
+  moves with, or `--root`; for s3 the server, bucket, and full prefix), directories made absolute
+  with `.`/`..` dropped and symlinks followed; equal or nested places (whole components) are a
+  usage error naming both, before anything is written. Namespaces holding datasets stay allowed.
+- **Evidence:** unit tests `endpoint::tests::two_datasets_are_never_placed_at_one_directory_or_one_inside_the_other`,
+  `two_object_datasets_are_never_placed_at_one_prefix_or_one_inside_the_other`, and
+  `usage::two_datasets_in_one_place_are_a_usage_error` fail with `datasets_apart` short-circuited and
+  pass; same suite runs as bug 132.
