@@ -11,7 +11,7 @@ Versions: Python 3.12.3, torch 2.14.1+cpu, safetensors 0.8.0, transformers 5.18.
 C=cases/gpt2-random                                   # from this directory
 mkdir /mnt/nfs/out
 HF_HUB_OFFLINE=1 python kit/mkmodel.py /mnt/nfs/out/model
-HF_HUB_OFFLINE=1 strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt \
+HF_HUB_OFFLINE=1 strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/loadmodel.py --notouch /mnt/nfs/out/model
 aeiou-trace metrics trace.txt --root /mnt/nfs/out -o $C/captures/2026-10-01/trace.metrics.json
 aeiou-params safetensors safetensors_load.ast.json \

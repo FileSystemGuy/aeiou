@@ -13,7 +13,7 @@ corpus is `ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz`.
 ```
 C=cases/sift1m-13-shards                              # from this directory
 python kit/build.py --fbin sift/sift_base.fvecs /mnt/nfs/base/base.fbin
-strace -f --seccomp-bpf -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt \
+strace -f --seccomp-bpf -ttt -T -yy -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/build.py /mnt/nfs/base/base.fbin /mnt/nfs/index
 aeiou-trace metrics trace.txt --root /mnt/nfs -o $C/captures/2026-10-02/trace.metrics.json
 python kit/params.py trace.txt /mnt/nfs/base/base.fbin /mnt/nfs/index "…" > $C/params.json

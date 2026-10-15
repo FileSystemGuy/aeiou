@@ -70,3 +70,26 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Noted, not changed:** the hermetic failure message names the script twice ("FAIL dup.py:
   dup.py: child build failed"), a pre-existing cosmetic issue (queued separately).
 
+## 4. The documented strace command recorded no libaio I/O, and nothing noticed
+
+- **Where:** the capture command in `builder/aeiou/trace.py` (docstring and `metrics --help`),
+  `builder/REFERENCE.md` §7, `man/aeiou-trace.1.md`, `runner/REFERENCE.md` §13, `ABSTRACTS.md`,
+  and eight workloads' READMEs; `Tracer.call`/`finish` in trace.py.
+- **Found by:** review of aeiou-trace: a C program submitting 40 PREADs through raw
+  `io_submit`, traced with the documented `-e trace=%file,%desc,%process`, showed no `io_submit`
+  line (strace does not class the AIO calls as `%desc`); `aeiou-trace metrics` gave counts
+  `{open: 1}`, no fan-out, no note. The diskann and lmcache-local-disk kits escaped it only
+  because their READMEs list the calls themselves.
+- **Defect:** every libaio read and write of an application traced as documented was lost
+  silently: op mix, bytes, fan-out, and depth wrong, the trace judged against an abstract on
+  what is left.
+- **Fix:** the command names `io_setup,io_submit,io_getevents,io_pgetevents,io_destroy`
+  everywhere it is written; `metrics` and `export` note `aio_contexts_without_io_submit` when a
+  traced `io_setup`'s context is never named by an `io_submit` (a note, not a refusal: an unused
+  context is a valid trace; it catches a hand-written `-e` list missing the submits). No
+  fingerprint, dataset id, or contract change.
+- **Evidence:** the 40-PREAD program traced with the old command: counts `{open: 1}`; with the
+  new: `{open: 1, read: 32}`, fan-out `{32: 1}` (32, not 40, is strace's array truncation,
+  queued separately). `test_trace.py::test_an_aio_context_no_io_submit_names_is_noted` fails on
+  the old trace.py and passes on the new; test_trace.py + test_man.py: 77 passed.
+

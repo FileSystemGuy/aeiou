@@ -16,7 +16,7 @@ Versions: Python 3.12.3, torch 2.14.1+cpu, torchvision 0.29.1+cpu, Pillow 12.3.0
 ```
 C=cases/imagefolder-jpeg                              # from this directory
 python kit/mkcorpus.py /srv/export/corpus 3200        # behind the server
-strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt \
+strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/train.py /mnt/nfs/corpus/train 16 2 2  # through the mount
 aeiou-trace metrics trace.txt --root /mnt/nfs/corpus -o $C/captures/2026-10-01/trace.metrics.json
 aeiou dry-run file_per_sample.ast.json --gpus 1 \

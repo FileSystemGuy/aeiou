@@ -6,7 +6,8 @@ sizes, fan-out, depth, and the read/write mix on an abstract's op stream
 the same JSON form (`aeiou_metrics: 1`), from a trace of the application the abstract
 models, so the two can be compared (`GRAMMAR_OPTIONS.md` §5.4):
 
-    strace -f -ttt -T -yy -e trace=%file,%desc,%process -o trace.txt <command>
+    strace -f -ttt -T -yy -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy \
+        -o trace.txt <command>
     aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
     aeiou dry-run x.ast.json --gpus 1 --metrics-json abstract.metrics.json
     aeiou-trace compare trace.metrics.json abstract.metrics.json
@@ -30,6 +31,11 @@ What differs from the dry-run side, because a trace is not an abstract:
   `io_submit` are a fan-out, and consecutive `io_submit`s of a thread, with no other
   counted call of its own between them and at most `--chain-gap-us` of think time, are a
   chain. Without `--chain-gap-us` no depth is reported: there is no default think time.
+
+The AIO calls are named: `strace` classes none of them in `%desc`, and a trace without
+them loses every libaio read and write. A context the trace shows `io_setup` make and no
+`io_submit` use is noted (`aio_contexts_without_io_submit`): either the application never
+used it or the trace left `io_submit` out.
 
 Not visible to `strace`, and so not counted: `io_uring` submissions and page faults on a
 mapping. Standard library only; the trace is read once, in a stream.
@@ -434,7 +440,7 @@ PATH_OPS = {
     "mkdir": ("mkdir", None, 0), "mkdirat": ("mkdir", 0, 1), "rmdir": ("rmdir", None, 0),
     "rename": ("rename", None, 0), "renameat": ("rename", 0, 1), "renameat2": ("rename", 0, 1),
 }
-HANDLED = OPENS | READS | WRITES | CLONES | DUPS | set(FD_OPS) | set(PATH_OPS) | {"close", "lseek", "io_submit", "io_getevents", "io_pgetevents", "chdir", "fchdir", "mmap"}
+HANDLED = OPENS | READS | WRITES | CLONES | DUPS | set(FD_OPS) | set(PATH_OPS) | {"close", "lseek", "io_setup", "io_submit", "io_getevents", "io_pgetevents", "chdir", "fchdir", "mmap"}
 
 
 class Tracer:
@@ -458,6 +464,8 @@ class Tracer:
         self.chain: dict[int, list] = {}  # tid -> [length, time the last round ended]
         # AIO requests submitted and not yet reaped: (context, aio_data) -> the requests, oldest first
         self.aio: dict[tuple, list] = {}
+        # AIO contexts `io_setup` made (inside an instance) that no `io_submit` has named yet
+        self.aio_unused: Counter = Counter()
         self.clock = 0.0
         self.relative = False
         self.notes: Counter = Counter()
@@ -777,7 +785,14 @@ class Tracer:
             ex.notes["mmap_as_read"] += 1
             ex.data(when, "read", f.oid, off, length, True, length, None)
             return
+        if name == "io_setup":
+            # `io_setup(nr, [ctx]) = 0`: a context no `io_submit` names by the end is noted
+            if ret == 0 and inst is not None and len(a) > 1:
+                self.aio_unused[a[1].strip("[]")] += 1
+            return
         if name == "io_submit":
+            if a:
+                self.aio_unused.pop(a[0], None)
             got = []
             for data, op, fd, path, nbytes, off in _IOCB.findall(a[2] if len(a) > 2 else ""):
                 f = self.file(tid, int(fd), path or None)
@@ -887,6 +902,12 @@ class Tracer:
                 self.notes["aio_results_assumed_complete"] += 1
                 self.m.data(kind, i, t, p, off, nbytes, nbytes)
         self.aio = {}
+        # contexts made and never submitted to: unused, or `io_submit` left out of the trace's
+        # `-e trace=` (strace classes no AIO call in `%desc`), and every request lost with it
+        unused = sum(self.aio_unused.values())
+        if unused:
+            self.notes["aio_contexts_without_io_submit"] += unused
+        self.aio_unused = Counter()
         self.m.finish()
 
 
@@ -1462,7 +1483,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     ap = usage.Parser(prog="aeiou-trace", description="Locality metrics of a real application from an strace of it, and their comparison with an abstract's (aeiou dry-run --metrics-json)",
                       usage="aeiou-trace <COMMAND> [ARGS]...")
     sub = ap.add_subparsers(dest="cmd")
-    mp = sub.add_parser("metrics", help="Compute the metrics of a trace (strace -f -ttt -T -yy -e trace=%%file,%%desc,%%process -o FILE)", usage="aeiou-trace metrics [OPTIONS] <TRACE>")
+    mp = sub.add_parser("metrics", help="Compute the metrics of a trace (strace -f -ttt -T -yy -e trace=%%file,%%desc,%%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o FILE)", usage="aeiou-trace metrics [OPTIONS] <TRACE>")
     mp.add_argument("trace", nargs="?", help="The strace output file, or - for stdin")
     mp.add_argument("--root", action="append", default=[], metavar="DIR", help="Count only calls on paths under DIR (repeatable; required for an strace, not for an exported trace file)")
     mp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")

@@ -21,7 +21,7 @@ Versions: Python 3.12.3, torch 2.14.1+cpu, Linux 6.18.
 C=cases/mixed-9-items                                 # from this directory
 mkdir /mnt/nfs/out
 python kit/load.py --save /mnt/nfs/out 2 200 32,1,64,0.004,0.004,1,32,0.004,16   # ranks, step, items in MiB
-strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt \
+strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/load.py /mnt/nfs/out 2 200 32,1,64,0.004,0.004,1,32,0.004,16
 aeiou-trace metrics trace.txt --root /mnt/nfs/out \
     --instance-root <pid of rank 0> --instance-root <pid of rank 1> -o $C/captures/2026-10-01/trace.metrics.json

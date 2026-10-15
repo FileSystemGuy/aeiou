@@ -14,7 +14,7 @@ only `kit/lmcache.yaml` differs (`remote_url` in place of `local_disk`).
 export PYTHONHASHSEED=0       # LMCache's chunk hash is Python's: two processes agree on names only with one seed
 K=../lmcache-local-disk/kit                          # from this directory
 C=cases/sharegpt-chat/captures/2026-10-02
-TRACE='strace -f --seccomp-bpf -ttt -T -yy -e trace=%file,%desc,%process'
+TRACE='strace -f --seccomp-bpf -ttt -T -yy -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy'
 # the writer: an empty store
 KV_BYTES=100663296 LMCACHE_CONFIG_FILE=kit/lmcache.yaml $TRACE -o writer.txt sh $K/serve.sh &
 python $K/replay.py ShareGPT_V3_unfiltered_cleaned_split.json --save replies.json > replay.log   # once /health answers; then stop the server

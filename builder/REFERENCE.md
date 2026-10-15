@@ -350,7 +350,7 @@ the reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made whi
 and confirmed by the user the same day (decided 2026-10-01).**
 
 ```
-strace -f -ttt -T -yy -e trace=%file,%desc,%process -o trace.txt <command>
+strace -f -ttt -T -yy -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
 aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--metrics-block BYTES] [--metrics-sample N]
             [--instance-root PID]… [--chain-gap-us US] [--cwd DIR] -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --metrics-json abstract.metrics.json
@@ -363,6 +363,11 @@ which is how a call is known to be on the storage under test), `%process` (the `
 so descriptor tables and process trees are followed; without it a thread that uses a
 descriptor it did not open is attached to the table that has that descriptor and path, and
 the document notes `threads_without_clone`). `-ttt -T` are needed only for `--chain-gap-us`.
+The AIO calls are named (`io_setup`, `io_submit`, `io_getevents`, `io_pgetevents`,
+`io_destroy`): `strace` classes none of them in `%desc`, and a trace without them loses
+every libaio read and write with nothing to show for it. A context the trace shows
+`io_setup` make and no `io_submit` name is noted (`aio_contexts_without_io_submit`): the
+application never used it, or the trace left `io_submit` out (fixed 2026-10-14).
 
 - **Which calls count.** Calls on paths under `--root`, less `--exclude` (a glob on the
   part below the root). Library loading, `/proc`, pipes, and sockets are not the workload.

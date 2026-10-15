@@ -12,7 +12,7 @@ Versions: Python 3.12.3, torch 2.14.1+cpu, Linux 6.18.
 ```
 C=cases/toy-6-items                                   # from this directory
 mkdir /mnt/nfs/out
-strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process -o trace.txt \
+strace -f -ttt -T -yy -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/save.py /mnt/nfs/out 2 2               # ranks, checkpoints
 aeiou-trace metrics trace.txt --root /mnt/nfs/out \
     --instance-root <pid of rank 0> --instance-root <pid of rank 1> -o $C/captures/2026-10-01/trace.metrics.json

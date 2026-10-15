@@ -176,6 +176,21 @@ def test_io_submit_is_fan_out_and_chains_need_a_gap():
     assert total(AIO, chain_gap_us=50_000)["total"]["depth"] == {"4": 1}
 
 
+def test_an_aio_context_no_io_submit_names_is_noted():
+    # strace classes no AIO call in `%desc`: a trace taken with `-e trace=%file,%desc,…` and
+    # `io_setup` but not `io_submit` shows the context made and none of its requests
+    setup = '300 1700000002.900000 io_setup(64, [0x7f00]) = 0 <0.000100>\n'
+    lost = setup + "\n".join(l for l in AIO.strip().splitlines() if "io_submit" not in l and "io_getevents" not in l)
+    d = total(lost)
+    assert d["total"]["counts"] == {"open": 1}
+    assert d["notes"] == {"aio_contexts_without_io_submit": 1}
+    header, _ = trace.export_of(lost.strip().splitlines(), "/d")
+    assert header["notes"]["aio_contexts_without_io_submit"] == 1
+    # the context used: no note; one made outside every instance: none either
+    assert "aio_contexts_without_io_submit" not in total(setup + AIO)["notes"]
+    assert "aio_contexts_without_io_submit" not in total(lost, instance_roots=[999])["notes"]
+
+
 FORKED = """
 400 1700000004.000000 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f) = 401 <0.000100>
 400 1700000004.000100 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f) = 402 <0.000100>
