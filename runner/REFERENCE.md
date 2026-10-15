@@ -989,7 +989,10 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
 - **Buffers** are a pool of 4 KiB-aligned chunks per loop, one per op in flight, returned to
   the back of a FIFO and reused only once the pool holds `--buffer-mib`, so successive
   copies land in different memory (`NAPKIN_MATH.md` §2.2). Memory is (ops in flight) ×
-  (op size), what any `io_uring` loader needs.
+  (op size), what any `io_uring` loader needs. An SQE's length is 32 bits, so a read or write
+  is issued at no more than `MAX_RW_COUNT` (`INT_MAX` rounded down to a page), the most the
+  kernel moves in one `pread`, `pwrite`, or AIO request: an op over it moves what it moves
+  under `sync`, never its length modulo 4 GiB (2026-10-14).
 - **Control.** `compute` is a timer (a heap of deadlines; the enter timeout is the nearest);
   `take`, `put`, and a loader's slot park the task on the loop-local channel, and every
   change to the channel wakes its waiters to retry; a `parallel` parent parks until its

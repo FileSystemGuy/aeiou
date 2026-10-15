@@ -192,6 +192,32 @@ fn runs_with_the_dry_runs_fingerprint_under_every_backend() {
 }
 
 #[test]
+fn a_read_over_4_gib_moves_what_sync_moves_under_every_backend() {
+    // An SQE carries its length in 32 bits: a read of 4 GiB + 4096 cast whole went to the
+    // ring as a read of 4096, and on an 8 KiB file returned 4096 where `pread` returns 8192.
+    // The kernel moves at most MAX_RW_COUNT in one call whatever the API, so every backend
+    // issues the length `sync` does and returns the same count. Nothing over 8 KiB is touched.
+    let lines = r#"
+{"aeiou_trace":1,"source":"strace","root":"/d","lanes":1,"lines":3,"opens":1,"creates":[],"notes":{}}
+{"lane":0,"t":0,"dur":100,"op":"open","fd":0,"path":"big","flags":["RDONLY"]}
+{"lane":0,"t":200,"dur":100,"op":"read","fd":0,"offset":0,"len":4294971392,"ret":8192}
+{"lane":0,"t":400,"dur":100,"op":"close","fd":0}
+"#;
+    let d = tmpdir("over4g");
+    let p = abstract_with(&d, lines, Some(1));
+    let (_, model) = leaked(&p, 1);
+    let dry = dryrun::run(model, 1, None).unwrap();
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("big"), vec![b'z'; 8192]).unwrap();
+    for be in [BackendKind::Sync, BackendKind::Uring, BackendKind::UringDirect, BackendKind::LibAio] {
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap_or_else(|e| panic!("{}: {e:#}", be.describe()));
+        assert_eq!(rep.stats.fingerprint, dry.total.fingerprint, "{}", be.describe());
+        assert_eq!(rep.stats.bytes_read, 8192, "{}", be.describe());
+    }
+}
+
+#[test]
 fn path_order_makes_a_reader_wait_for_the_writer_whatever_the_lanes_timing() {
     // lane 1 reads a file lane 0 writes much later in the trace; with a time scale the
     // reader would start first, and path order holds it until the write and close are done

@@ -1204,3 +1204,26 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   fix (exit 0 where 2 was expected) and passes after; `--test all -- usage:: man:: options::
   dry` 16 passed; test_trace.py, test_catalog.py, test_man.py 152 passed (their dry-run calls
   pair the metrics options with `--metrics-json`). Fixed in an isolated worktree and applied.
+
+## 53. io_uring issued a read or write over 4 GiB at its length modulo 2^32
+
+- **Where:** `runner/aeiou/src/uring.rs` `LoopIo::issue` (the Read and Write SQEs), new
+  `rw_len`; runner/REFERENCE.md §8, the **Buffers** bullet; `runner/aeiou/tests/trace.rs`.
+- **Found by:** review of the execution engines: `opcode::Read::new(f, ptr, len as u32)` and
+  `opcode::Write::new(f, ptr, op.len as u32)`, the SQE's length field being 32 bits.
+- **Defect:** an op of 4 GiB + 4096 bytes was issued as 4096: under io_uring a read of an 8 KiB
+  file at that length returned 4096 bytes and failed "expected 8192 bytes, got 4096: the corpus
+  does not match the dataset definition", where `sync` (one `pread` the kernel clamps to
+  `MAX_RW_COUNT`) and `libaio` (a u64 `aio_nbytes`, clamped alike) moved 8192: the backend
+  changed what an op moves, and a length of exactly 4 GiB was issued as 0.
+- **Fix:** the SQE length is `rw_len(len)`, the length clamped to `MAX_RW_COUNT` (`INT_MAX`
+  rounded down to a page, page-aligned so `O_DIRECT` lengths stay aligned), the most the kernel
+  moves in one call under every backend; the buffer is still the op's whole length, as under
+  `sync`, and a write fills the issued prefix (the payload depends only on position). An op
+  over the limit moves what it moves under `sync`, judged by the same settle. No fingerprint,
+  dataset id, or AST changes.
+- **Evidence:** `trace::a_read_over_4_gib_moves_what_sync_moves_under_every_backend` (Sync,
+  Uring, UringDirect, LibAio; the dry-run fingerprint and 8192 bytes read) fails under io_uring
+  without the fix with the message above and passes with it; the unit test
+  `uring::tests::a_read_or_write_over_max_rw_count_is_issued_at_it_never_at_its_low_32_bits`;
+  `--test all -- uring aio run trace` 37 passed, `--lib` 43 passed.

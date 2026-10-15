@@ -254,6 +254,17 @@ impl Drop for Pool {
     }
 }
 
+/// The length a ring read or write is issued with: at most `MAX_RW_COUNT`, `INT_MAX` rounded
+/// down to a page, the most one `read`, `write`, or AIO request moves (the kernel clamps a
+/// longer one to it, so `sync` and `libaio` return that much). An SQE carries its length in
+/// 32 bits, so a longer op cast whole would be issued at its length modulo 4 GiB; clamped, it
+/// moves what `sync` moves, and the settle check judges it the same way. The buffer is the
+/// op's whole length, as `sync`'s is (an allocation that fails there fails here).
+pub(crate) fn rw_len(len: i64) -> i64 {
+    let page = (unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as i64).max(4096);
+    len.min(i32::MAX as i64 & !(page - 1))
+}
+
 // ---------------------------------------------------------------- channels
 
 /// A loop-local channel with the semantics of `run::Channel`: a `loader` bounds batches
@@ -540,7 +551,7 @@ impl Engine for LoopIo {
                     Err(e) => return Ok(Issued::Done(Err(e), 0)),
                 };
                 t.round = rounded.then_some(lo);
-                let e = opcode::Read::new(f, chunk.ptr, len as u32).offset(lo as u64).build();
+                let e = opcode::Read::new(f, chunk.ptr, rw_len(len) as u32).offset(lo as u64).build();
                 t.buf = Some(chunk);
                 e
             }
@@ -553,9 +564,10 @@ impl Engine for LoopIo {
                     Ok(c) => c,
                     Err(e) => return Ok(Issued::Done(Err(e), 0)),
                 };
-                let buf = unsafe { std::slice::from_raw_parts_mut(chunk.ptr, op.len as usize) };
+                let len = rw_len(op.len);
+                let buf = unsafe { std::slice::from_raw_parts_mut(chunk.ptr, len as usize) };
                 fill(&mut t.a, op, buf);
-                let e = opcode::Write::new(f, chunk.ptr, op.len as u32).offset(op.offset as u64).build();
+                let e = opcode::Write::new(f, chunk.ptr, len as u32).offset(op.offset as u64).build();
                 t.buf = Some(chunk);
                 e
             }
@@ -1862,5 +1874,22 @@ impl<E: Engine> Loop<E> {
         let inst = l.inst;
         self.wake_trace(inst);
         Ok(if ended { Advance::Ended } else { Advance::Go })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rw_len;
+
+    #[test]
+    fn a_read_or_write_over_max_rw_count_is_issued_at_it_never_at_its_low_32_bits() {
+        let page = (unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as i64).max(4096);
+        let max = i32::MAX as i64 & !(page - 1);
+        assert_eq!(rw_len(4096), 4096);
+        assert_eq!(rw_len(max), max);
+        assert_eq!(rw_len(max + 1), max);
+        assert_eq!(rw_len((1 << 32) + 4096), max, "not 4096");
+        assert_eq!(rw_len(1 << 32), max, "not 0");
+        assert!(rw_len(i64::MAX) <= u32::MAX as i64);
     }
 }
