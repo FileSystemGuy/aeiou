@@ -893,7 +893,14 @@ building it is `DESIGN_REVIEW.md` §3.25.
   per line, `#` comments), and a name may carry one bracket range as `pdsh` writes it
   (`n[1-4]`, `n[01-10]` zero-padded, `n[1,3,5-7]`, `n[1-4]-ib`), expanded in the script; the
   shell's own `n{1..4}` works too (2026-10-04, for the 50- and 200-host fleets of
-  `DESIGN_REVIEW.md` §3.62). `aeiou datagen` across hosts is the same loop (§5); the
+  `DESIGN_REVIEW.md` §3.62). Since 2026-10-15 Ctrl-C (or `SIGTERM`) on the launcher reaches
+  every rank's command: a command run over ssh without a tty gets no signal, and ssh started
+  by a script ignores `SIGINT`, so each remote command line is preceded by a watcher that
+  turns a line `INT` or `TERM` on the session's stdin into that signal for the `exec`ed
+  command, and the launcher writes that line to every rank, waits for them, and exits 130 or
+  143 (`aeiou-launch(1)`, SIGNALS); each rank's lines are prefixed by a shell `read` loop, one
+  write per line, so they stay whole in a file or a pipe (a block-buffered `sed` spliced
+  them). `aeiou datagen` across hosts is the same loop (§5); the
   `Done` message and `Server::gathered` are its reduction, a JSON document per rank. Since
   2026-10-12 a datagen also sends `Claim { dataset, ticket }` (a writer asks for the next run),
   answered by rank 0 with `Grant { dataset, ticket, run }` (a run, or none: the queue is empty

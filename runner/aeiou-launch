@@ -9,8 +9,11 @@
 # written), `n[1,3,5-7]`, `n[1-4]-ib` (the shell's own `n{1..4}` works too, expanded before this
 # script runs). The i-th host is rank i; HOST0:PORT (default 7311) is the coordinator address
 # rank 0 listens on and every rank connects to, so HOST0 must be reachable from the others
-# under that name. Each host's output is prefixed with its rank; the exit status is non-zero
-# if any rank's is. AEIOU_RSH replaces `ssh` (it is called as `$AEIOU_RSH HOST COMMAND`).
+# under that name. Each host's output is prefixed with its rank, a whole line at a time; the
+# exit status is non-zero if any rank's is. Ctrl-C (SIGINT) or SIGTERM here is sent to every
+# rank's command over its ssh session's stdin (below); then the ranks are waited for and the
+# exit status is 130 or 143. AEIOU_RSH replaces `ssh` (it is called as
+# `$AEIOU_RSH HOST COMMAND`, and must pass its stdin to COMMAND).
 #
 # Usage errors are printed in the suite's frame (runner/REFERENCE.md §15): the command, what is
 # missing, the usage line, the pointer to the help; exit status 2.
@@ -39,8 +42,10 @@ Options:
   -f <FILE>   Hosts from a file too, one or more per line, # comments, bracket ranges as above
   -h, --help  Print help
 
-Each host's output is prefixed with its rank; the exit status is non-zero if any rank's is. AEIOU_RSH replaces
-\`ssh\` (it is called as \$AEIOU_RSH HOST COMMAND).
+Each host's output is prefixed with its rank; the exit status is non-zero if any rank's is. Ctrl-C (SIGINT) or
+SIGTERM is sent to every rank, which are then waited for; the exit status is 130 or 143. AEIOU_RSH replaces
+\`ssh\` (it is called as \$AEIOU_RSH HOST COMMAND and must pass its stdin to COMMAND, which is how the signal
+travels).
 EOT
     exit 0
 fi
@@ -129,8 +134,14 @@ if [ -n "$missing" ]; then
 $missing"
 fi
 shift
-# the remote command, every argument single-quoted for the remote shell
-cmd=
+# The remote command: every argument single-quoted for the remote shell, behind a watcher that
+# turns each line arriving on the session's stdin, INT or TERM, into that signal for the
+# command, which `exec` leaves at the remote shell's pid. A command run over ssh without a
+# tty gets no signal when the session ends, and ssh started here ignores SIGINT as every
+# background job of a script does, so Ctrl-C reaches the ranks this way, over plain ssh. The
+# command's stdin is /dev/null; an EOF with no line (the command ended, or ssh went away)
+# ends the watcher and signals nothing.
+cmd='exec 3<&0 </dev/null; { while read -r s <&3; do case $s in INT|TERM) kill -s $s $$ ;; esac; done; } >/dev/null 2>&1 & exec 3<&-'
 for a in "$@"; do
     q=$(printf '%s' "$a" | sed "s/'/'\\\\''/g")
     cmd="$cmd '$q'"
@@ -139,32 +150,82 @@ set -- $hosts
 ranks=$#
 host0=$1
 rsh=${AEIOU_RSH:-ssh}
+tmp=$(mktemp -d) || exit 1
+# A rank's ssh reads its stdin from a FIFO held open by a holder, which writes INT on SIGUSR1
+# and TERM on SIGUSR2, a line each time (a second Ctrl-C is a second SIGINT for the command,
+# which then exits at once), ends on SIGHUP (an EOF for the watcher), and ends by itself once
+# this script is gone. The holder, ssh, and the prefixing loop ignore SIGTERM (and, as
+# background jobs, SIGINT), so a signal sent to the whole process group reaches the ranks
+# through this script alone.
+holder="trap '' PIPE TERM; trap 'echo INT' USR1; trap 'echo TERM' USR2; trap 'kill -s KILL \$p 2>/dev/null; exit 0' HUP
+p=; while kill -0 $$ 2>/dev/null; do kill -0 \"\$p\" 2>/dev/null || { sleep 60 >/dev/null & p=\$!; }; wait \$p; done; kill -s KILL \$p 2>/dev/null"
+stopping=
+holders=
+stop() {
+    [ -n "$stopping" ] || echo "aeiou-launch: SIG$1: stopping every rank" >&2
+    stopping=$1
+    case $1 in INT) u=USR1 ;; *) u=USR2 ;; esac
+    for hp in $holders; do
+        kill -s $u "$hp" 2>/dev/null
+    done
+}
+trap 'stop INT' INT
+trap 'stop TERM' TERM
 rank=0
 pids=
-tmp=$(mktemp -d)
 for h in "$@"; do
+    [ -z "$stopping" ] || break
+    mkfifo "$tmp/in$rank" || exit 1
+    sh -c "$holder" > "$tmp/in$rank" &
+    holders="$holders $!"
+    # each line whole and prefixed as it arrives (`read` takes a pipe byte by byte, and each
+    # printf is one write): a block-buffered filter splices the ranks' lines into each other
+    # in a file or a pipe
     (
-        $rsh "$h" "$cmd --ranks $ranks --rank $rank --coordinator $host0:$port" 2>&1
+        trap '' TERM
+        $rsh "$h" "$cmd --ranks $ranks --rank $rank --coordinator $host0:$port" < "$tmp/in$rank" 2>&1
         echo $? > "$tmp/$rank"
-    ) | sed "s/^/[$rank $h] /" &
+    ) | {
+        trap '' TERM
+        while IFS= read -r line || [ -n "$line" ]; do
+            printf '[%s %s] %s\n' "$rank" "$h" "$line"
+        done
+    } &
     pids="$pids $!"
     if [ $rank -eq 0 ]; then
         sleep 1
     fi
     rank=$((rank + 1))
 done
+started=$rank
+# a trapped signal ends a `wait` early: wait again while the rank's pipeline is there
 for p in $pids; do
-    wait "$p"
+    while :; do
+        wait "$p" && break
+        kill -0 "$p" 2>/dev/null || break
+    done
+done
+for hp in $holders; do
+    kill -s HUP "$hp" 2>/dev/null
 done
 status=0
 rank=0
 for h in "$@"; do
-    s=$(cat "$tmp/$rank" 2>/dev/null || echo 1)
-    if [ "$s" != 0 ]; then
-        echo "aeiou-launch: rank $rank ($h) exited with status $s" >&2
+    if [ $rank -ge $started ]; then
+        echo "aeiou-launch: rank $rank ($h) was not started" >&2
         status=1
+    else
+        s=$(cat "$tmp/$rank" 2>/dev/null || echo 1)
+        if [ "$s" != 0 ]; then
+            echo "aeiou-launch: rank $rank ($h) exited with status $s" >&2
+            status=1
+        fi
     fi
     rank=$((rank + 1))
 done
 rm -rf "$tmp"
+case $stopping in
+INT) exit 130 ;;
+TERM) exit 143 ;;
+esac
 exit $status

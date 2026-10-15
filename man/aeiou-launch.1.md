@@ -20,7 +20,8 @@ the `aeiou run`, `aeiou datagen`, or `aeiou-datagen` command line given after `-
 host named, rank 0 first, appending `--ranks`, `--rank`, and `--coordinator` to each: the *i*-th host is rank
 *i*, and `HOST0:PORT` is the coordinator address rank 0 listens on and every rank connects
 to, so the first host must be reachable from the others under that name. Each host's output
-is prefixed with its rank and host. The exit status is non-zero if any rank's is.
+is prefixed with its rank and host, a line at a time as it arrives, every line whole even when
+the output is a file or a pipe. The exit status is non-zero if any rank's is.
 
 The hosts are the command line's, then the file's (`-f`). A name may carry one bracket range
 as **pdsh**(1) writes it: `n[1-4]` is `n1` to `n4`, `n[01-10]` keeps the zero padding,
@@ -60,11 +61,32 @@ the gate, show what each host resolved.
 
   Print the help.
 
+## SIGNALS
+
+Ctrl-C (`SIGINT`) on **aeiou-launch** stops every host: it sends `SIGINT` to the command on
+each host, prints `aeiou-launch: SIGINT: stopping every rank`, waits for every rank, prints
+each rank's exit status, and exits 130; what each command does on `SIGINT` is its own
+(**aeiou**(1): a `datagen` stops every host and leaves its manifests `stopped`). A second
+Ctrl-C sends a second `SIGINT`, which makes an `aeiou` exit at once. `SIGTERM` is forwarded
+the same way, and the exit status is then 143. A rank not yet started when the signal came
+is not started.
+
+A command run over ssh without a terminal gets no signal when the session ends, so the
+signal travels over the session's standard input instead: each remote command line is
+preceded by a small watcher, in the remote shell, that reads that input and sends the
+signal named by each line, `INT` or `TERM`, to the command (which the remote shell `exec`s,
+so it keeps the shell's pid); the end of the input with no line, when the command has
+exited or ssh has gone, signals nothing. The command's own standard input is `/dev/null`. So
+the remote login shell must be a POSIX shell, and the ssh of `AEIOU_RSH` must pass its
+standard input to the remote command (no `ssh -n`); no terminal (`ssh -t`) is needed or
+wanted. If **aeiou-launch** itself is killed (`SIGKILL`), the commands are not stopped.
+
 ## ENVIRONMENT
 
 - **AEIOU_RSH**
 
-  Replaces `ssh`. It is called as `$AEIOU_RSH HOST COMMAND`.
+  Replaces `ssh`. It is called as `$AEIOU_RSH HOST COMMAND`, with the launcher's signals
+  arriving as lines on its standard input, which it must pass to COMMAND (SIGNALS).
 
 ## EXIT STATUS
 
@@ -78,6 +100,9 @@ the gate, show what each host resolved.
 - **2**
 
   A usage error, in the frame every tool of the suite shares.
+- **130**, **143**
+
+  Stopped by `SIGINT` (Ctrl-C) or `SIGTERM`, forwarded to every rank (SIGNALS).
 
 ## EXAMPLES
 

@@ -2343,3 +2343,39 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** `test_usage.py::test_aeiou_params_check_words_a_missing_file_as_the_runner_does`
   (compared byte for byte with the runner's line) fails on the old code and passes; same suite
   runs as bug 97.
+
+## 106. Ctrl-C on `aeiou-launch` returned at once while every rank kept running
+
+- **Where:** `runner/aeiou-launch` (remote command, rank start, trap, wait); `man/aeiou-launch.1.md`
+  (DESCRIPTION, new SIGNALS, ENVIRONMENT, EXIT STATUS); `runner/REFERENCE.md` §6 aeiou-launch
+  bullet; `builder/tests/test_launch.py`.
+- **Found by:** RC1 third-round UI review (RV3b): each rank was `( $rsh … ) | sed … &`; a
+  non-interactive sh starts async lists with SIGINT ignored, ssh keeps it ignored, and a remote
+  command without a tty gets no signal. Simulated with `AEIOU_RSH` in its own session: the
+  launcher exited 130 at once, both `aeiou run` ranks ran to their fingerprints, the mktemp dir
+  leaked; aeiou(1) promises "Ctrl-C on any host stops every host", and datagen never got its
+  `stopped` manifest.
+- **Fix:** the signal travels over each ssh session's stdin (no tty needed, any `AEIOU_RSH` that
+  passes stdin): a POSIX-sh watcher before the `exec`ed remote command kills it with INT/TERM on
+  a line `INT`/`TERM`, and does nothing at EOF; the launcher traps INT/TERM, writes the line to
+  each rank's FIFO holder (a second Ctrl-C sends a second INT), waits again for every rank,
+  prints each one's status, removes its temp dir, and exits 130/143; a rank not yet started is
+  not started. Limits documented: a POSIX remote shell, stdin passed (no `ssh -n`), SIGKILL of
+  the launcher stops nothing.
+- **Evidence:** `test_launch.py::test_ctrl_c_stops_every_rank[SIGINT-130]` and `[SIGTERM-143]`
+  fail with HEAD's launcher (`-2 == 130`, `-15 == 143`) and pass; a real two-rank `aeiou run` of
+  file_per_sample stopped in 0.07 s with no aeiou left, both ranks status 130; checked under dash
+  and `bash --posix`; on HEAD 1cd5eb2 plus the change `test_launch.py test_man.py test_usage.py`
+  37 passed, Rust `man` tests 9 passed, `sh -n` clean.
+
+## 107. `aeiou-launch` spliced ranks' lines into each other when its output went to a file or pipe
+
+- **Where:** `runner/aeiou-launch` (the per-rank prefixer); `builder/tests/test_launch.py`.
+- **Found by:** RV3b: the per-rank `sed` is block-buffered when stdout is not a tty, so two ranks'
+  buffers interleave mid-line (`[0 127.0.0.1]   lseek … [default]` carrying rank 1's tail, an
+  unprefixed `n=32`).
+- **Fix:** a `while IFS= read -r line` loop with one `printf` per line (read takes a pipe byte by
+  byte, each printf is one write), the same on GNU and BSD; awk avoided since mawk buffers input.
+- **Evidence:** `test_launch.py::test_lines_stay_whole_in_a_file` fails with HEAD's launcher
+  (spliced `[0 a] 984 line[1 b] 0 line…`) and passes; 3000 lines from each of two ranks: 68 bad
+  lines before, 0 after; same suite runs as bug 106.
