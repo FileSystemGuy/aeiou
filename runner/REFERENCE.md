@@ -270,7 +270,9 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   item numbered past the repeats, an unordered one kept the item once). Under the thread
   runner a wait that every thread of the actor is in, each parked on one of its channels with
   nothing left to change one, is an error naming the actor, as it was in the event loop (§8)
-  (the same day; it had hung). A
+  (the same day; it had hung), unless a thread that failed left it so: then it is that
+  failure's echo, and the failure the cause (the same day; a sub-actor parked as its sibling
+  failed was reported stuck in a run in hundreds). A
   `channel` declared again (in a loop) replaces the last one when nothing put on it is left
   untaken, and is an error otherwise. A channel or loader is the actor's, declared outside any
   `parallel` or `loader` body (V26, 2026-10-15): declared by sub-actors, each replaced the
@@ -278,7 +280,26 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   loader's workers put or take on is declared at one site, outside every loop or in the body
   the loader is in, the loader declared at one site (V26, 2026-10-15): workers run beside
   the actor and look a name up when they put or take, so a channel declared again under them
-  was the old one or the new one as timing had it.
+  was the old one or the new one as timing had it. A `take` in a loader's body is refused
+  (V26, 2026-10-15): the workers took beside each other and the actor, so which of them got
+  the item the actor put, and whether the run finished, was timing (`channel c; loader q
+  {take c}; loop {put c; take q}` passed both checkers, then failed or passed by time scale
+  and backend). A channel has one taker at a time (2026-10-15, RC1 review): each sub-actor
+  carries its fork path, (fork instance, index) per fork from the main line, and a `take` by
+  a sub-actor of the same fork instance as the channel's last taker but another index is a
+  run-time error naming the channel and both indices, under every engine; two takers of one
+  `parallel` had got whichever items they reached first, so the run finished or waited
+  forever by timing and work went out by timing. Each sub-actor's op stream is fixed, so two
+  takers of one fork always both take and the error is every run's outcome. The main line
+  before and after a fork, the sub-actors of successive forks (a `parallel` in a loop), and a
+  sub-actor and the sub-actors of a fork inside it take in turn and are not refused. A put's
+  window starts at the lowest seq not yet put when that is below the items taken (the same
+  day): an ordered channel never takes past it, an unordered one had, keeping every seq
+  above the gap (memory without bound) and taking the gap for a full run; now the record
+  stays within `capacity` and a seq never put is a wait nothing ends, its error saying which
+  seq ("to put 2 (seq 0 is not put yet)"). So on an unordered channel too a put runs at most
+  `capacity` seqs past the lowest one not yet put: a producer putting `7` before `1` on a
+  channel of 2 waits for `1` (an error if it is the one to put it), where it had gone on.
 - **Barrier.** The participants of `barrier {scope}` are the instances of every template
   whose body contains it outside any `parallel` or `loader` (a barrier inside a sub-actor is
   refused). An instance that finishes leaves its barriers; a generation completed by

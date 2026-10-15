@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -576,9 +576,10 @@ pub struct ActorRecord {
 
 /// The `seq`s a channel's `put`s have delivered: an item's `seq` is its position on the
 /// channel, 0, 1, 2, … each put once while the channel is declared (`schema/README.md` §3).
-/// Every seq below `floor` has been put; `above` holds those put above it, at most a
-/// channel's capacity of them since a put waits for its window (`admits`). Shared by the
-/// event loop's channels (`uring.rs`).
+/// Every seq below `floor` has been put; `above` holds those put above it, below `floor` plus
+/// the channel's capacity since a put waits for its window from `window` (`admits`), ordered
+/// or not (2026-10-15; an unordered channel's had been bounded only by the items taken).
+/// Shared by the event loop's channels (`uring.rs`).
 #[derive(Default)]
 pub(crate) struct Seqs {
     floor: i64,
@@ -605,6 +606,53 @@ impl Seqs {
             self.floor += 1;
         }
     }
+
+    /// Where a channel's put window starts with `taken` items taken: the items taken, or the
+    /// lowest seq not yet put if that is lower (2026-10-15, RC1 review). An ordered channel
+    /// takes in seq order, so it has taken none at or above that seq and the two agree; an
+    /// unordered one could take past a seq never put, and `above` had grown by an item per
+    /// put without bound while the gap was taken for a full run. Now `above` stays within
+    /// `capacity` of `floor` on both, and a seq never put is a wait nothing ends.
+    pub(crate) fn window(&self, taken: i64) -> i64 {
+        taken.min(self.floor)
+    }
+
+    /// What a put of `seq` waits for, for the error of a wait nothing ends: its window, and the
+    /// seq it is waiting to be put when that is what holds it.
+    pub(crate) fn put_wait(&self, capacity: i64, taken: i64, seq: i64) -> String {
+        if admits(capacity, taken, seq) {
+            format!("to put {seq} (seq {} is not put yet)", self.floor)
+        } else {
+            format!("to put {seq}")
+        }
+    }
+}
+
+/// The forks from an actor's main line to one of its sub-actors (`ActorState::fork`).
+pub(crate) type ForkPath = Vec<(u64, &'static str, i64)>;
+
+/// A channel has one taker at a time (2026-10-15, RC1 review): two sub-actors of one fork
+/// instance that both take on a channel (declared by the actor, V26) got whichever items they
+/// happened to reach first, so which of them went on, and whether the run finished or waited
+/// forever, was timing, and work was handed out by timing. `last` is the fork path of the
+/// channel's last taker, `me` this one's: a take by a sub-actor of the same fork instance as
+/// the last taker but another index is an error. A fork joins before its parent goes on, so
+/// the main line and a later fork (a `parallel` in a loop) take in turn and are not refused.
+/// Every sub-actor's op stream is fixed, so two takers of one fork always both take: the
+/// error is the outcome of every run, not of the run where they collide.
+pub(crate) fn one_taker(last: &mut Option<ForkPath>, me: &[(u64, &'static str, i64)]) -> Result<()> {
+    if let Some(r) = last.as_ref() {
+        match r.iter().zip(me).find(|(a, b)| a != b) {
+            Some((a, b)) if a.0 == b.0 => {
+                let (lo, hi) = (a.2.min(b.2), a.2.max(b.2));
+                bail!("sub-actors `{}` = {lo} and {hi} of one `parallel` both take on this channel: a channel has one taker at a time, or which of them got which item, and so whether the run finished, would depend on timing; take in one sub-actor, or before or after the `parallel`, and hand items on over channels of their own", a.1);
+            }
+            None if r.len() == me.len() => return Ok(()),
+            _ => {}
+        }
+    }
+    *last = Some(me.to_vec());
+    Ok(())
 }
 
 /// Whether a channel of `capacity` that has had `taken` items taken holds item `seq` yet: a
@@ -620,6 +668,8 @@ struct ChanState {
     next_take: i64,
     done: BTreeSet<i64>,
     seqs: Seqs,
+    /// The fork path of the last `take` (`one_taker`).
+    taker: Option<ForkPath>,
     closed: bool,
     failed: Option<String>,
     /// Threads parked on this channel and counted in `Watch::blocked`, and the number of
@@ -701,7 +751,7 @@ type Parked = Option<u64>;
 impl Channel {
     fn new(capacity: i64, ordered: bool, total: Option<i64>, watch: Arc<Watch>) -> Self {
         Channel {
-            m: Mutex::new(ChanState { next_take: 0, done: BTreeSet::new(), seqs: Seqs::default(), closed: false, failed: None, waiting: 0, wakes: 0 }),
+            m: Mutex::new(ChanState { next_take: 0, done: BTreeSet::new(), seqs: Seqs::default(), taker: None, closed: false, failed: None, waiting: 0, wakes: 0 }),
             cv: Condvar::new(),
             capacity: capacity.max(1),
             ordered,
@@ -721,8 +771,12 @@ impl Channel {
     }
 
     /// Park for one poll, counted blocked (once per change of the channel); an error when every
-    /// thread of the actor is parked so (`Watch`). `what` names the wait.
-    fn park<'g>(&'g self, mut st: std::sync::MutexGuard<'g, ChanState>, parked: &mut Parked, what: &dyn Fn() -> String) -> Result<std::sync::MutexGuard<'g, ChanState>> {
+    /// thread of the actor is parked so (`Watch`). `what` names the wait. A thread that ended
+    /// by failing sets `aborted` before it stops counting as running, so a wait it left with
+    /// nothing to end is that failure's echo, not a cause of its own (2026-10-15, RC1 review:
+    /// a sub-actor parked as its sibling failed on a second take of their channel was reported
+    /// stuck, over the sibling's error, in a run in hundreds).
+    fn park<'g>(&'g self, mut st: std::sync::MutexGuard<'g, ChanState>, parked: &mut Parked, sh: &Shared, what: &dyn Fn() -> String) -> Result<std::sync::MutexGuard<'g, ChanState>> {
         if *parked != Some(st.wakes) {
             st.waiting += 1;
             *parked = Some(st.wakes);
@@ -734,6 +788,9 @@ impl Channel {
         };
         if stuck {
             self.unpark(&mut st, parked);
+            if sh.aborted.load(Ordering::Relaxed) {
+                return Err(sh.abort_error());
+            }
             bail!("every thread of {} waits on a channel that nothing will change (this one waits {})", self.watch.actor, what());
         }
         Ok(self.cv.wait_timeout(st, POLL).unwrap().0)
@@ -761,7 +818,7 @@ impl Channel {
             if sh.aborted.load(Ordering::Relaxed) {
                 break Err(sh.abort_error());
             }
-            st = self.park(st, &mut parked, &|| format!("to start batch {b}"))?;
+            st = self.park(st, &mut parked, sh, &|| format!("to start batch {b}"))?;
         };
         self.unpark(&mut st, &mut parked);
         r
@@ -775,7 +832,7 @@ impl Channel {
     }
 
     /// General producer: deliver item `seq`, blocking until `seq` is within `capacity` of the
-    /// items taken (`admits`).
+    /// items taken (`admits`), or of the lowest seq not yet put if lower (`Seqs::window`).
     fn put(&self, seq: i64, sh: &Shared) -> Result<()> {
         let mut st = self.m.lock().unwrap();
         let mut parked = None;
@@ -790,7 +847,7 @@ impl Channel {
             if let Err(e) = st.seqs.check(seq) {
                 break Err(e);
             }
-            if admits(self.capacity, st.next_take, seq) {
+            if admits(self.capacity, st.seqs.window(st.next_take), seq) {
                 st.seqs.record(seq);
                 st.done.insert(seq);
                 self.wake(&mut st);
@@ -799,14 +856,17 @@ impl Channel {
             if sh.aborted.load(Ordering::Relaxed) {
                 break Err(sh.abort_error());
             }
-            st = self.park(st, &mut parked, &|| format!("to put {seq}"))?;
+            let what = st.seqs.put_wait(self.capacity, st.next_take, seq);
+            st = self.park(st, &mut parked, sh, &|| what.clone())?;
         };
         self.unpark(&mut st, &mut parked);
         r
     }
 
-    fn take(&self, sh: &Shared) -> Result<i64> {
+    /// Take the next item; `me` is the taker's fork path (`one_taker`).
+    fn take(&self, sh: &Shared, me: &[(u64, &'static str, i64)]) -> Result<i64> {
         let mut st = self.m.lock().unwrap();
+        one_taker(&mut st.taker, me)?;
         let mut parked = None;
         let r = loop {
             if let Some(e) = &st.failed {
@@ -840,7 +900,7 @@ impl Channel {
             if sh.aborted.load(Ordering::Relaxed) {
                 break Err(sh.abort_error());
             }
-            st = self.park(st, &mut parked, &|| "to take".to_string())?;
+            st = self.park(st, &mut parked, sh, &|| "to take".to_string())?;
         };
         self.unpark(&mut st, &mut parked);
         r
@@ -905,6 +965,8 @@ impl Shared {
 /// Per actor instance: its channels and its loader threads.
 struct Instance {
     channels: Mutex<HashMap<String, Arc<Channel>>>,
+    /// Forks made so far by the instance's threads, numbering each (`ActorState::fork`).
+    fork: AtomicU64,
     loaders: Mutex<Vec<(String, JoinHandle<(Result<()>, Stats)>)>>,
     watch: Arc<Watch>,
 }
@@ -1069,6 +1131,10 @@ pub(crate) struct ActorState {
     pub(crate) removed: Vec<String>,
     /// The actor instance's main line (not a sub-actor).
     pub(crate) main: bool,
+    /// The forks from the main line to this sub-actor: per fork, its instance (`Instance::fork`
+    /// or the event loop's count), its index name, and this sub-actor's index; empty on the main
+    /// line. Which of them takes on a channel is checked against it (`one_taker`).
+    pub(crate) fork: ForkPath,
     pub(crate) template: &'static str,
     pub(crate) actor: i64,
     pub(crate) started: Instant,
@@ -1089,6 +1155,7 @@ impl ActorState {
             created: Vec::new(),
             removed: Vec::new(),
             main,
+            fork: Vec::new(),
             template,
             actor,
             started: Instant::now(),
@@ -1096,9 +1163,18 @@ impl ActorState {
         }
     }
 
-    /// A sub-actor's state: sees the files this one has open at the fork.
+    /// A sub-actor's state: sees the files this one has open at the fork, and has its forks.
     pub(crate) fn child(&self, sh: &Shared, threads: u64) -> ActorState {
-        ActorState::new(sh, self.template, self.actor, false, Some(self.fds.freeze()), threads)
+        let mut a = ActorState::new(sh, self.template, self.actor, false, Some(self.fds.freeze()), threads);
+        a.fork = self.fork.clone();
+        a
+    }
+
+    /// Sub-actor `k` (index name `index`) of fork instance `fork` of this one.
+    pub(crate) fn sub(&self, sh: &Shared, threads: u64, fork: u64, index: &'static str, k: i64) -> ActorState {
+        let mut a = self.child(sh, threads);
+        a.fork.push((fork, index, k));
+        a
     }
 
     /// An `O_DIRECT` backend: an unaligned write cannot be issued (it would need
@@ -1435,6 +1511,8 @@ struct Job {
     snap: Arc<Snapshot<'static, 'static>>,
     k: i64,
     fds: Arc<FdTable>,
+    /// The sub-actor's fork path (`ActorState::fork`).
+    fork: ForkPath,
 }
 
 /// How the forking actor waits for a fork's sub-actors: a count the pool threads take down,
@@ -1495,9 +1573,10 @@ impl Pool {
                     let mut sink = Runner::new(sh.clone(), inst, template, actor, false, None);
                     sink.a.st.threads = 0;
                     let mut vm: Option<Vm<'static, 'static>> = None;
-                    while let Ok(Job { snap, k, fds }) = rx.recv() {
+                    while let Ok(Job { snap, k, fds, fork }) = rx.recv() {
                         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             sink.a.fds = FdTable { own: HashMap::new(), inherited: Some(fds), closed: HashSet::new() };
+                            sink.a.fork = fork;
                             sink.a.takes.clear();
                             let vm = match &mut vm {
                                 Some(vm) => {
@@ -1590,7 +1669,7 @@ impl Runner {
     /// Run sub-actor 0 of a fork on this thread, as the sub-actor it is: it sees the files
     /// open at the fork and its own opens end with it, it is not the main line (no barrier,
     /// no take record), and a fork inside it uses the next pool.
-    fn run_inline(&mut self, snap: &Snapshot<'static, 'static>, fds: Arc<FdTable>) -> Result<()> {
+    fn run_inline(&mut self, snap: &Snapshot<'static, 'static>, fds: Arc<FdTable>, fork: (u64, &'static str)) -> Result<()> {
         let d = self.depth;
         if self.subs.len() <= d {
             self.subs.resize_with(d + 1, || None);
@@ -1605,10 +1684,12 @@ impl Runner {
         let table = FdTable { own: HashMap::new(), inherited: Some(fds), closed: HashSet::new() };
         let (fds, takes, main) = (std::mem::replace(&mut self.a.fds, table), std::mem::take(&mut self.a.takes), self.a.main);
         self.a.main = false;
+        self.a.fork.push((fork.0, fork.1, 0));
         self.depth += 1;
         vm.start_sub(0);
         let r = drive(&mut vm, self);
         self.depth -= 1;
+        self.a.fork.pop();
         self.a.fds = fds;
         self.a.takes = takes;
         self.a.main = main;
@@ -1668,8 +1749,10 @@ impl Runner {
         Runner::new(self.sh.clone(), self.inst.clone(), self.a.template, self.a.actor, false, Some(self.a.fds.freeze()))
     }
 
-    fn spawn_sub(&self, snap: Snapshot<'static, 'static>, label: String, work: impl FnOnce(&mut Vm<'static, 'static>, &mut Runner) -> Result<()> + Send + 'static) -> JoinHandle<(Result<()>, Stats)> {
+    fn spawn_sub(&self, snap: Snapshot<'static, 'static>, label: String, fork: (u64, &'static str, i64), work: impl FnOnce(&mut Vm<'static, 'static>, &mut Runner) -> Result<()> + Send + 'static) -> JoinHandle<(Result<()>, Stats)> {
         let mut sink = self.child();
+        sink.a.fork = self.a.fork.clone();
+        sink.a.fork.push(fork);
         std::thread::Builder::new()
             .name(label)
             .spawn(move || {
@@ -1750,7 +1833,7 @@ impl Sink<'static, 'static> for Runner {
             Control::Take { channel } => {
                 let ch = self.inst.channels.lock().unwrap().get(channel).cloned().ok_or_else(|| anyhow!("take on undeclared channel `{channel}` (a loader declares one under its name)"))?;
                 let t = Instant::now();
-                ch.take(&self.sh).with_context(|| {
+                ch.take(&self.sh, &self.a.fork).with_context(|| {
                     let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
                     format!("{}#{} [{}] take `{channel}`", ctx.template, ctx.actor, idx.join(","))
                 })?;
@@ -1783,14 +1866,17 @@ impl Sink<'static, 'static> for Runner {
                 let (snap, fds) = (Arc::new(snap), self.a.fds.freeze());
                 join.remaining.store(width - 1, Ordering::Release);
                 self.inst.watch.started(width as i64 - 1);
+                let fork = self.inst.fork.fetch_add(1, Ordering::Relaxed);
                 for (j, (tx, _)) in self.pools[d].workers.iter().take(width - 1).enumerate() {
                     let k = j as i64 + 1;
-                    if tx.send(Job { snap: snap.clone(), k, fds: fds.clone() }).is_err() {
+                    let mut path = self.a.fork.clone();
+                    path.push((fork, index, k));
+                    if tx.send(Job { snap: snap.clone(), k, fds: fds.clone(), fork: path }).is_err() {
                         self.inst.watch.sub_ended(&join, Some((k, anyhow!("a `{index}` sub-actor thread has ended (an earlier sub-actor panicked)"))));
                     }
                 }
                 // sub-actor 0 here, while the others run; then wait for them
-                let first = self.run_inline(&snap, fds);
+                let first = self.run_inline(&snap, fds, (fork, index));
                 if first.is_err() {
                     self.sh.aborted.store(true, Ordering::Relaxed);
                 }
@@ -1829,10 +1915,11 @@ impl Sink<'static, 'static> for Runner {
                 }
                 let mut handles = Vec::with_capacity(workers as usize);
                 self.inst.watch.started(workers);
+                let fork = self.inst.fork.fetch_add(1, Ordering::Relaxed);
                 for w in 0..workers {
                     let chan = chan.clone();
                     let label = format!("{}#{} {index} worker {w}", self.a.template, self.a.actor);
-                    let h = self.spawn_sub(snap.clone(), label, move |vm, sink| {
+                    let h = self.spawn_sub(snap.clone(), label, (fork, index, w), move |vm, sink| {
                         let sh = sink.sh.clone();
                         let mut b = w;
                         while b < batches {
@@ -2535,7 +2622,7 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
     for (&(template, count), &(lo, hi)) in counts.iter().zip(&ranges) {
         for actor in lo..hi {
             let sh = sh.clone();
-            let inst = Arc::new(Instance { channels: Mutex::new(HashMap::new()), loaders: Mutex::new(Vec::new()), watch: Arc::new(Watch::new(format!("{template}#{actor}"))) });
+            let inst = Arc::new(Instance { channels: Mutex::new(HashMap::new()), fork: AtomicU64::new(0), loaders: Mutex::new(Vec::new()), watch: Arc::new(Watch::new(format!("{template}#{actor}"))) });
             let h = std::thread::Builder::new()
                 .name(format!("{template}#{actor}"))
                 .spawn(move || {

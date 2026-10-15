@@ -88,7 +88,7 @@ python3 schema/check.py path/to/x.ast.json   # one file
 | `loop {index, from, to, step, body}` | `for index in [from, to) step step`. The index joins every RNG key inside. |
 | `parallel {index, width, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end. |
 | `channel {name, capacity, ordered}` | Declare a bounded channel in the enclosing actor, shared by its sub-actors (never in a `parallel` or `loader` body, V26). |
-| `put {channel, seq}` / `take {channel}` | Deliver item `seq`, its position on the channel: 0, 1, 2, … each put once while the channel is declared (one below 0 or put before is a run-time error); blocks until `seq` is below the items taken plus `capacity` (2026-10-15; it had blocked while `capacity` items were held, which several producers could fill out of order) / wait for the next item (in `seq` order if ordered). |
+| `put {channel, seq}` / `take {channel}` | Deliver item `seq`, its position on the channel: 0, 1, 2, … each put once while the channel is declared (one below 0 or put before is a run-time error); blocks until `seq` is below the items taken plus `capacity` (2026-10-15; it had blocked while `capacity` items were held, which several producers could fill out of order), or the lowest seq not yet put plus `capacity` if lower (2026-10-15: an unordered channel took past a seq never put and its record grew without bound) / wait for the next item (in `seq` order if ordered). A channel has one taker at a time (2026-10-15): two sub-actors of one `parallel` taking on it is a run-time error (which took which item was timing); the main line and the sub-actors of successive forks take in turn; never in a `loader` body (V26). |
 | `loader {name, index, workers, prefetch, batches, ordered, body}` | PyTorch sugar the runner keeps: `workers` sub-actors, worker `w` builds batches `w, w+W, …`; an ordered channel `name` of `workers × prefetch` slots; exactly `batches` batches. |
 | `barrier {scope}` | `global`, `host`, or a named group. |
 | `compute {ns}` | Emulated compute; scaled by `--time-scale`. |
@@ -395,6 +395,9 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   in the body the loader is in, the loader then declared at one site too (2026-10-15): the
   actor declaring it again while the workers ran (in a loop the loader was declared outside
   of, or at a second site), a worker reached the old channel or the new one as timing had it.
+  A `take` in a loader's body, at any depth, is refused (2026-10-15): the workers took beside
+  each other and the actor, so which of them got the item the actor put, and whether the run
+  finished, was timing (it had passed both checkers); a loader's body only puts.
 - **V27 a value is of a kind the runner reads where it stands** (added 2026-10-15, contract
   0.10, no committed AST affected). The schema lets any scalar stand where an expression
   does, so `"count": "gpus"` passed both checkers and failed `run` with "expected an

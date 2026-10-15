@@ -82,7 +82,7 @@ A body is an array of statements: thirteen control forms and eighteen operations
 | `loop {index, from, to, step, body}` | `for index in [from, to) step step`. The index joins every random key inside. |
 | `parallel {index, width, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end. |
 | `channel {name, capacity, ordered}` | A bounded channel in the enclosing actor, shared by its sub-actors; never inside a `parallel` or `loader` body (V26). |
-| `put {channel, seq}`, `take {channel}` | Deliver item `seq`, its position on the channel: 0, 1, 2, ... each put once while the channel is declared (one below 0 or put before is an error); blocks until `seq` is below the items taken plus `capacity`. Wait for the next item (in `seq` order if ordered). |
+| `put {channel, seq}`, `take {channel}` | Deliver item `seq`, its position on the channel: 0, 1, 2, ... each put once while the channel is declared (one below 0 or put before is an error); blocks until `seq` is below the items taken plus `capacity`, or the lowest seq not yet put plus `capacity` if lower. Wait for the next item (in `seq` order if ordered). A channel has one taker at a time: two sub-actors of one `parallel` taking on it is an error; never in a `loader` body (V26). |
 | `loader {name, index, workers, prefetch, batches, ordered, body}` | PyTorch's DataLoader: `workers` sub-actors, worker `w` builds batches `w, w+W, ...`, an ordered channel of `workers x prefetch` slots bounding batches started, exactly `batches` batches. |
 | `barrier {scope}` | `global`, `host`, or a named group. |
 | `compute {ns}` | Emulated compute, scaled by the runner's `--time-scale`. |
@@ -210,7 +210,7 @@ these, and the builder enforces most of them at construction:
 - **V26** No `channel` or `loader` inside a `parallel` or `loader` body: a channel is the
   actor's, shared by its sub-actors, so it is declared before the fork. A channel a
   loader's body puts or takes on is declared at one site, outside every loop or in the body
-  the loader is in, the loader declared at one site.
+  the loader is in, the loader declared at one site. No `take` in a `loader` body.
 - **V27** A value whose kind the document shows (a literal, a parameter by its value in
   effect, a binding by its value) is of a kind the runner reads where it stands: an integer
   or a number (a float, a bool) for a count, bound, size, offset, id, or distribution

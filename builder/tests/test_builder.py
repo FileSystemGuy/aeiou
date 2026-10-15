@@ -1188,7 +1188,7 @@ def test_a_channel_a_loaders_workers_use_is_declared_once_or_beside_it():
     # accepted: declared once, outside every loop; declared beside the loader in its loop
     assert errs(chan, lp(lput)) == []
     assert errs(lp(chan, lput)) == []
-    assert errs(cond(chan), lp(ltake)) == []
+    assert errs(cond(chan), lp(lput)) == []
     for body, path, kind, ch in [
         ([chan, lput, lp(chan)], "1/loader/body/0", "put", "c"),
         ([lp(chan), lput], "1/loader/body/0", "put", "c"),
@@ -1201,7 +1201,7 @@ def test_a_channel_a_loaders_workers_use_is_declared_once_or_beside_it():
         e = errs(*body)
         assert len(e) == 1, e
         assert e[0].startswith(f"v26: actors/gpu/body/{path}/{kind}: a `{kind}` on channel `{ch}` inside a `loader` body")
-        assert e[0].endswith("depend on timing (V26)")
+        assert "would depend on timing" in e[0] and e[0].endswith("(V26)")
 
 
 def test_a_value_of_a_kind_the_runner_refuses_is_refused_at_check():
@@ -1262,3 +1262,32 @@ def test_a_value_of_a_kind_the_runner_refuses_is_refused_at_check():
         (1, [obj(3, 1)], "actors/gpu/body/0/open/file/fields/name: expected a string, got an integer (V27)"),
     ]:
         assert errs(count, *body) == [f"v27: {want}"], (count, body)
+
+
+def test_a_take_inside_a_loader_body_is_refused():
+    """V26 (RC1 review, R20), as the runner has it: a `take` inside a `loader` body, at any
+    depth, is refused; the workers run beside each other and the actor, so which of them took
+    the item the actor put, and whether the run finished, was timing. A loader's body puts."""
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def errs(*body):
+        return check.Check({"ast": "0.10", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+
+    chan = {"channel": {"name": "c", "capacity": 4}}
+
+    def loader(name, *body):
+        return {"loader": {"name": name, "index": "b", "workers": 2, "prefetch": 1, "batches": 8, "body": list(body)}}
+
+    take = {"take": {"channel": "c"}}
+    take_q = {"take": {"channel": "q"}}
+    feed = {"loop": {"index": "j", "to": 8, "body": [{"put": {"channel": "c", "seq": {"index": "j"}}}, take_q]}}
+    # accepted: the loader's body puts, the actor takes
+    assert errs(chan, loader("q", {"put": {"channel": "c", "seq": {"index": "b"}}}), {"loop": {"index": "j", "to": 8, "body": [take_q, take]}}) == []
+    for body, path, ch in [
+        ([chan, loader("q", {"compute": {"ns": 1000}}, take), feed], "1/loader/body/1", "c"),
+        ([chan, loader("q", {"loop": {"index": "i", "to": 1, "body": [{"cond": {"if": 1, "then": [take]}}]}}), feed], "1/loader/body/0/loop/body/0/cond/then/0", "c"),
+        ([chan, loader("q", {"parallel": {"index": "p", "width": 1, "body": [take]}}), feed], "1/loader/body/0/parallel/body/0", "c"),
+        ([loader("r", {"compute": {"ns": 1}}), loader("q", {"take": {"channel": "r"}}), {"loop": {"index": "j", "to": 8, "body": [take_q]}}], "1/loader/body/0", "r"),
+    ]:
+        assert errs(*body) == [f"v26: actors/gpu/body/{path}/take: a `take` on channel `{ch}` inside a `loader` body: the loader's workers run beside each other and the actor, so which of them took which item, and whether the run finished, would depend on timing; take in the actor, a loader's body only puts (V26)"]

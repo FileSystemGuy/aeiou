@@ -388,7 +388,13 @@ impl<'a> Checker<'a> {
     /// V26: a loader's workers run beside the actor, so a channel they put or take on that the
     /// actor declares again while they run (in a loop the loader is not declared again in, or
     /// at a second site) would be the old one or the new one as timing had it.
+    /// A `take` there is refused outright (2026-10-15): the workers take beside each other and
+    /// the actor, so which of them got which item, and whether the run finished, was timing.
     fn used_by_workers(&mut self, kind: &str, channel: &str, pp: &P, st: &ActorState<'a>) {
+        if st.loader.is_some() && kind == "take" {
+            self.err(pp, format!("a `take` on channel `{channel}` inside a `loader` body: the loader's workers run beside each other and the actor, so which of them took which item, and whether the run finished, would depend on timing; take in the actor, a loader's body only puts (V26)"));
+            return;
+        }
         let (Some((lname, lbody)), Some(sites)) = (&st.loader, st.sites.get(channel)) else { return };
         if sites.len() == 1 && (!sites[0].1 || (&sites[0].0 == lbody && st.sites.get(lname).map_or(0, |s| s.len()) == 1)) {
             return;

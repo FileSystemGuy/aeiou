@@ -2036,3 +2036,68 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   failed `dry-run` before; on HEAD 6a748fc plus the change: `--test all` 133 passed, `--lib` 66,
   builder suite with MinIO 381 passed, CI's checker diff empty, `aeiou-build --hermetic --twice
   --check` rc 0. Fixed in an isolated worktree and applied.
+
+## 88. A `take` in a loader's body passed both checkers, then failed or passed by timing and engine
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (`used_by_workers`, V26);
+  `schema/README.md` §4 V26; `man/aeiou-abstract.7.md`; `runner/REFERENCE.md` §4.
+- **Found by:** the second regression review: bug 77's rule kept a channel from being declared
+  again under a loader's workers, but which worker took which item the actor put was still
+  timing.
+- **Defect:** `channel c; loader q workers 2 batches 8 {compute; take c}; loop j<8 {put c seq j;
+  take q}` was `ok` in both checkers; `run` under sync failed 10/10 at time scale 0 and
+  passed 1/10 at 1 ("every thread of gpu#0 waits …"), io_uring and libaio failed 10/10 at 0
+  and passed 10/10 at 1.
+- **Fix:** a `take` inside a `loader` body, at any depth, on a plain channel or another
+  loader's, is refused by both checkers with one path and message ("… which of them took which
+  item, and whether the run finished, would depend on timing; take in the actor, a loader's
+  body only puts (V26)"); puts stay allowed. Bug 77's tests now use a put in their accepted
+  shape. No committed AST takes in a loader body. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `golden::a_take_inside_a_loader_body_is_refused` and
+  `test_builder.py::test_a_take_inside_a_loader_body_is_refused` (1 accepted, 4 refused) fail
+  with the rule undone and pass; suites as bug 90.
+
+## 89. Two sub-actors of one `parallel` taking on one channel finished or deadlocked by timing
+
+- **Where:** `runner/aeiou/src/run.rs` (`ForkPath`, `one_taker`, `ActorState.fork`,
+  `Instance::fork`, `Channel::take`, `Channel::park`); `runner/aeiou/src/uring.rs` (`Loop::forks`,
+  the take path); `runner/REFERENCE.md` §4; `schema/README.md` §3; `man/aeiou-abstract.7.md`.
+- **Found by:** the RC1 timing review of the channels: which taker got which item was timing,
+  so work was distributed by timing (CLAUDE.md invariant) and the run's outcome varied.
+- **Defect:** `parallel w<3` with w0 `put c 0; take d; put c 1`, w1 `take c; put d 0`, w2
+  `take c` failed under sync 1/20 at time scale 0 and 7/20 at 1, passed 20/20 under io_uring
+  and libaio; with w1/w2 swapped sync failed 10–14 of 20 and the event loop 20/20.
+- **Fix:** each actor state carries its fork path (fork instance, index name, index per fork
+  from the main line) and each channel its last taker's; a take by a sibling of the last taker
+  in the same fork instance is an error in both engines, naming the channel and both indices;
+  the main line before or after a fork, a sub-actor and the forks nested in it, and successive
+  fork instances (a `parallel` in a loop) stay allowed. Every sub-actor's op stream is fixed,
+  so two takers always both take and the error is every run's. A thread runner `park` that saw
+  a just-failed sibling as not running reported "stuck" over its error; `park` now returns the
+  abort echo when the run is aborted, so the cause wins. Bug 75's and 80's tests now take in one
+  sub-actor. No fingerprint, dataset id, or AST changes (channel ops are never hashed).
+- **Evidence:** `run::two_takers_in_one_fork_are_an_error_in_every_run` (four refused shapes, a
+  good shape taking in turn across forks, Sync, Uring, LibAio at time scales 0 ×3 and 0.001)
+  fails with `one_taker` disabled and passes; a fuzzer of 800 two-taker shapes × 8 runs (6 sync
+  at three time scales, io_uring, libaio, under load) gave one outcome per shape; the
+  reviewers' fuzzers 0 sync/io_uring disagreements; suites as bug 90.
+
+## 90. An unordered channel missing a `seq` grew its record without bound and finished
+
+- **Where:** `runner/aeiou/src/run.rs` (`Seqs::window`, `admits`, the stuck message);
+  `runner/aeiou/src/uring.rs` (`Chan::try_put`, `Loop::parked_label`); `runner/REFERENCE.md`
+  §4; `schema/README.md` §3.
+- **Found by:** the RC1 timing review (bug 79's `Seqs` was bounded only for ordered channels).
+- **Defect:** an unordered channel of 2 whose puts were `seq s+1` (seq 0 never put) succeeded
+  at maxrss 81 MB against 40 MB without the gap (about 20 B per item held), the gap accepted.
+- **Fix:** a put is admitted while `seq < min(taken, lowest seq not yet put) + capacity`, the
+  same for ordered channels as before, so at most `capacity` seqs are held past the gap and a
+  missing seq is the existing wait-nothing-ends error, which now names it ("waits to put 2
+  (seq 0 is not put yet)") alike in both engines. An unordered producer can no longer run more
+  than `capacity` seqs ahead of a seq not yet put (documented). No fingerprint, dataset id, or
+  AST changes.
+- **Evidence:** `run::an_unordered_channels_missing_seq_is_a_wait_nothing_ends` (1000 items, Sync,
+  Uring, LibAio) succeeded with the old window and passes; the gap shape is refused at about 9 MB.
+  For bugs 88–90 on HEAD c7764af plus the change: `--test all` 136 passed twice, `--lib` 66, builder
+  suite with MinIO 382 passed, CI's checker diff empty, `aeiou-build --hermetic --twice
+  --check` rc 0. Fixed in an isolated worktree and applied.

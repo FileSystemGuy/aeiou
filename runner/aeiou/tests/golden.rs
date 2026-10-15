@@ -1150,7 +1150,7 @@ fn a_channel_a_loaders_workers_use_is_declared_once_or_beside_it() {
     // accepted: declared once, outside every loop; declared beside the loader in its loop
     aeiou::load_str(&doc(&format!("{chan}, {}", lp(&lput)))).unwrap();
     aeiou::load_str(&doc(&lp(&format!("{chan}, {lput}")))).unwrap();
-    aeiou::load_str(&doc(&format!(r#"{{"cond":{{"if":1,"then":[{chan}]}}}}, {}"#, lp(&ltake)))).unwrap();
+    aeiou::load_str(&doc(&format!(r#"{{"cond":{{"if":1,"then":[{chan}]}}}}, {}"#, lp(&lput)))).unwrap();
     for (body, path, kind, ch) in [
         (format!("{chan}, {lput}, {}", lp(chan)), "1/loader/body/0", "put", "c"),
         (format!("{}, {lput}", lp(chan)), "1/loader/body/0", "put", "c"),
@@ -1161,7 +1161,36 @@ fn a_channel_a_loaders_workers_use_is_declared_once_or_beside_it() {
         (format!("{}, {}", lp(&loader("r", compute)), loader("q", r#"{"take":{"channel":"r"}}"#)), "1/loader/body/0", "take", "r"),
     ] {
         rejects(&doc(&body), &format!("actors/gpu/body/{path}/{kind}: a `{kind}` on channel `{ch}` inside a `loader` body"));
-        rejects(&doc(&body), "depend on timing (V26)");
+        rejects(&doc(&body), "would depend on timing");
+        rejects(&doc(&body), "(V26)");
+    }
+}
+
+/// A `take` inside a `loader` body, at any depth, is refused (V26, 2026-10-15): the loader's
+/// workers run beside each other and the actor, so which worker took the item the actor put,
+/// and whether the run finished, was timing. The RC1 review's R20, `channel c; loader q {take c};
+/// loop {put c; take q}`, passed both checkers with `c` declared once (bug 77's rule), then
+/// failed 10 in 10 runs under `sync` at `--time-scale 0` and 9 in 10 at 1, and passed under
+/// io_uring at 1. A loader's body still puts (bug 77's rule).
+#[test]
+fn a_take_inside_a_loader_body_is_refused() {
+    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let chan = r#"{"channel":{"name":"c","capacity":4}}"#;
+    let loader = |name: &str, body: &str| format!(r#"{{"loader":{{"name":"{name}","index":"b","workers":2,"prefetch":1,"batches":8,"body":[{body}]}}}}"#);
+    let take = r#"{"take":{"channel":"c"}}"#;
+    let feed = r#"{"loop":{"index":"j","to":8,"body":[{"put":{"channel":"c","seq":{"index":"j"}}},{"take":{"channel":"q"}}]}}"#;
+    // accepted: the loader's body puts, the actor takes
+    aeiou::load_str(&doc(&format!(r#"{chan}, {}, {{"loop":{{"index":"j","to":8,"body":[{{"take":{{"channel":"q"}}}},{take}]}}}}"#, loader("q", r#"{"put":{"channel":"c","seq":{"index":"b"}}}"#)))).unwrap();
+    for (body, path, ch) in [
+        // R20 as the reviewer had it
+        (format!(r#"{chan}, {}, {feed}"#, loader("q", &format!(r#"{{"compute":{{"ns":1000}}}}, {take}"#))), "1/loader/body/1", "c"),
+        // deeper: in a loop and a cond, or a `parallel`, of the loader's body
+        (format!(r#"{chan}, {}, {feed}"#, loader("q", &format!(r#"{{"loop":{{"index":"i","to":1,"body":[{{"cond":{{"if":1,"then":[{take}]}}}}]}}}}"#))), "1/loader/body/0/loop/body/0/cond/then/0", "c"),
+        (format!(r#"{chan}, {}, {feed}"#, loader("q", &format!(r#"{{"parallel":{{"index":"p","width":1,"body":[{take}]}}}}"#))), "1/loader/body/0/parallel/body/0", "c"),
+        // another loader's channel, declared once
+        (format!(r#"{}, {}, {{"loop":{{"index":"j","to":8,"body":[{{"take":{{"channel":"q"}}}}]}}}}"#, loader("r", r#"{"compute":{"ns":1}}"#), loader("q", r#"{"take":{"channel":"r"}}"#)), "1/loader/body/0", "r"),
+    ] {
+        rejects(&doc(&body), &format!("actors/gpu/body/{path}/take: a `take` on channel `{ch}` inside a `loader` body: the loader's workers run beside each other and the actor, so which of them took which item, and whether the run finished, would depend on timing; take in the actor, a loader's body only puts (V26)"));
     }
 }
 

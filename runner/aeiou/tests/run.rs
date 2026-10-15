@@ -1157,8 +1157,9 @@ fn stream_abstracts_take_every_shard_for_any_batch() {
 /// declared again once it is empty (bug 37), each sub-actor's declaration replaced the
 /// other's when it happened to be empty, so `run` failed ("declared again with 1 item(s) put
 /// and not taken"), hung, or passed as timing had it (RC1 regression review). The shape that
-/// means it, the actor declaring the channel in each iteration and its sub-actors putting and
-/// taking, runs alike under both engines whatever the timing.
+/// means it, the actor declaring the channel in each iteration and its sub-actors putting, one
+/// of them taking (a channel has one taker at a time), runs alike under both engines whatever
+/// the timing.
 #[test]
 fn a_channel_declared_inside_a_fork_is_refused_whatever_the_timing() {
     let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"ch_fork","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
@@ -1169,7 +1170,7 @@ fn a_channel_declared_inside_a_fork_is_refused_whatever_the_timing() {
                 {decl}
                 {{"put":{{"channel":"c","seq":{{"index":"p"}}}}}},
                 {{"compute":{{"ns":100000000}}}},
-                {{"take":{{"channel":"c"}}}}]}}}}"#
+                {{"cond":{{"if":{{"eq":[{{"index":"p"}},0]}},"then":[{{"take":{{"channel":"c"}}}},{{"take":{{"channel":"c"}}}}]}}}}]}}}}"#
         )
     };
     let chan = r#"{"channel":{"name":"c","capacity":1}},"#;
@@ -1320,14 +1321,14 @@ fn a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs() {
         }
     }
     // waits nothing ends: an ordered channel's item 0 never put; an unordered channel's items
-    // numbered with gaps (item 2 waits for two takes, of which one item exists); three
-    // sub-actors taking from a channel no one puts on, their parent waiting for them
+    // numbered with gaps (item 2 waits for item 1, never put); a
+    // sub-actor taking from a channel no one puts on, its parent waiting for it
     let stuck = [
         doc(r#"{"channel":{"name":"c","capacity":4}}, {"put":{"channel":"c","seq":1}}, {"take":{"channel":"c"}}"#),
         doc(r#"{"channel":{"name":"c","capacity":1,"ordered":false}},
             {"loader":{"name":"q","index":"b","workers":2,"prefetch":2,"batches":4,"body":[{"put":{"channel":"c","seq":{"mul":[{"index":"b"},2]}}}]}},
             {"loop":{"index":"s","to":4,"body":[{"take":{"channel":"q"}},{"take":{"channel":"c"}}]}}"#),
-        doc(r#"{"channel":{"name":"c","capacity":1}}, {"parallel":{"index":"w","width":3,"body":[{"take":{"channel":"c"}}]}}"#),
+        doc(r#"{"channel":{"name":"c","capacity":1}}, {"parallel":{"index":"w","width":3,"body":[{"cond":{"if":{"eq":[{"index":"w"},2]},"then":[{"take":{"channel":"c"}}]}}]}}"#),
     ];
     for d in &stuck {
         let model = model_of(d);
@@ -1420,5 +1421,88 @@ fn a_loader_workers_failure_is_the_cause_whatever_the_main_line_waits_on() {
             };
             assert!(e.contains(says) && !e.contains("run aborted") && !e.contains("closed channel"), "{backend:?}, time scale {scale}: {e}");
         }
+    }
+}
+
+/// Two sub-actors of one `parallel` taking on one channel got whichever items they reached
+/// first, so which of them went on, and whether the run finished, was timing (the RC1 review's
+/// R16: w0 `put c 0; take d; put c 1`, w1 `take c; put d 0`, w2 `take c` failed 1 in 40 runs
+/// under `sync`; with w1 and w2 swapped, 36 in 40 under `sync` and 40 in 40 under io_uring).
+/// A channel has one taker at a time (2026-10-15): a second sub-actor of the same fork
+/// instance taking is an error naming both, in every run, under every engine, since both
+/// always take. Sub-actors of later forks (a `parallel` in a loop, a `parallel` inside the
+/// taker), and the main line before and after a fork, take in turn and are not refused.
+#[test]
+fn two_takers_in_one_fork_are_an_error_in_every_run() {
+    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"r16","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let take = r#"{"take":{"channel":"c"}}"#;
+    let put = |seq: &str| format!(r#"{{"put":{{"channel":"c","seq":{seq}}}}}"#);
+    let when = |index: &str, k: i64, then: &str, otherwise: &str| format!(r#"{{"cond":{{"if":{{"eq":[{{"index":"{index}"}},{k}]}},"then":[{then}],"else":[{otherwise}]}}}}"#);
+    let par = |index: &str, width: i64, body: &str| format!(r#"{{"parallel":{{"index":"{index}","width":{width},"body":[{body}]}}}}"#);
+    let r16 = |taker: i64| {
+        doc(&format!(
+            r#"{{"channel":{{"name":"c","capacity":2}}}}, {{"channel":{{"name":"d","capacity":1}}}}, {}"#,
+            par("w", 3, &when("w", 0, &format!(r#"{}, {{"take":{{"channel":"d"}}}}, {}"#, put("0"), put("1")), &when("w", taker, &format!(r#"{take}, {{"put":{{"channel":"d","seq":0}}}}"#), take)))
+        ))
+    };
+    let refused = [
+        (r16(1), "sub-actors `w` = 1 and 2 of one `parallel` both take on this channel"),
+        (r16(2), "sub-actors `w` = 1 and 2 of one `parallel` both take on this channel"),
+        // nested: sub-actor 0 of each outer sub-actor's own fork takes, so the outer two collide
+        (doc(&format!(r#"{{"channel":{{"name":"c","capacity":2}}}}, {}, {}, {}"#, put("0"), put("1"), par("a", 2, &par("b", 2, &when("b", 0, take, ""))))), "sub-actors `a` = 0 and 1 of one `parallel` both take on this channel"),
+        // three takers: which two meet first is timing, that two do is not
+        (doc(&format!(r#"{{"channel":{{"name":"c","capacity":3,"ordered":false}}}}, {}, {}, {}, {}"#, put("0"), put("1"), put("2"), par("w", 3, take))), "of one `parallel` both take on this channel: a channel has one taker at a time"),
+    ];
+    // taken in turn: the main line, then one sub-actor of each of two forks per iteration, then
+    // a sub-actor of a fork inside a sub-actor and that sub-actor after it, then the main line
+    let seq2 = |odd: i64| format!(r#"{{"add":[{{"mul":[{{"index":"e"}},2]}},{odd}]}}"#);
+    let good = doc(&format!(
+        r#"{{"channel":{{"name":"c","capacity":2}}}}, {}, {take},
+        {{"loop":{{"index":"e","to":3,"body":[{}, {}]}}}}, {}, {}, {take}"#,
+        put("0"),
+        par("w", 2, &when("w", 0, take, &put(&seq2(1)))),
+        par("v", 2, &when("v", 1, take, &put(&seq2(2)))),
+        par("a", 2, &when("a", 0, &format!("{}, {take}", par("b", 2, &when("b", 1, take, ""))), &format!("{}, {}", put("7"), put("8")))),
+        put("9"),
+    ));
+    let root = tmpdir("r16-takers");
+    let good = model_of(&good);
+    for backend in [BackendKind::Sync, BackendKind::Uring, BackendKind::LibAio] {
+        for scale in [0.0, 0.0, 0.0, 0.001] {
+            let o = || {
+                let mut o = opts(&root, backend);
+                o.time_scale = scale;
+                o
+            };
+            for (d, says) in &refused {
+                let e = run_within(model_of(d), o()).err().expect("refused");
+                assert!(e.contains(says) && e.contains("take `c`"), "{backend:?}, time scale {scale}: {e}\n{d}");
+            }
+            let r = run_within(good, o()).unwrap_or_else(|e| panic!("{backend:?}, time scale {scale}: {e}"));
+            assert_eq!((r.stats.puts, r.stats.takes), (10, 10), "{backend:?}, time scale {scale}");
+        }
+    }
+}
+
+/// An unordered channel whose items skip a seq (the RC1 review's R17: `put c seq s+1; take c`
+/// in a loop, so 0 is never put) took the run's items past the gap and kept every seq above it,
+/// a record that grew without bound (80 MB at 2,000,000 items against 40 MB without the gap)
+/// for a gap silently taken. A put's window starts at the lowest seq not yet put when that is
+/// below the items taken (2026-10-15, `Seqs::window`), on an unordered channel as on an
+/// ordered one, so the record stays within the capacity and the gap is a wait nothing ends,
+/// whose error says which seq it waits for, under both engines.
+#[test]
+fn an_unordered_channels_missing_seq_is_a_wait_nothing_ends() {
+    let d = r#"{"ast":"0.10","name":"r17","actors":{"gpu":{"body":[{"channel":{"name":"c","capacity":2,"ordered":false}},
+        {"loop":{"index":"s","to":1000,"body":[{"put":{"channel":"c","seq":{"add":[{"index":"s"},1]}}},{"take":{"channel":"c"}}]}}]}}}"#;
+    let model = model_of(d);
+    let root = tmpdir("r17-gap");
+    for backend in [BackendKind::Sync, BackendKind::Uring, BackendKind::LibAio] {
+        let e = run_within(model, opts(&root, backend)).err().expect("refused");
+        let says = match backend {
+            BackendKind::Sync => "every thread of gpu#0 waits on a channel that nothing will change (this one waits to put 2 (seq 0 is not put yet))",
+            _ => "1 actor(s) wait on channels or trace order nothing will complete: gpu#0 [1] on `c` waits to put 2 (seq 0 is not put yet)",
+        };
+        assert!(e.contains(says), "{backend:?}: {e}");
     }
 }

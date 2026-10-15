@@ -58,7 +58,7 @@ use io_uring::{opcode, squeue, types, IoUring, Probe};
 
 use crate::backend::{open_flags, Backend, OpenFile, ALIGN};
 use crate::eval::Model;
-use crate::run::{admits, fill, issue_timed, round_out, untaken, ActorState, Ring, Seqs, Shared, UringReport};
+use crate::run::{admits, fill, issue_timed, one_taker, round_out, untaken, ActorState, ForkPath, Ring, Seqs, Shared, UringReport};
 use crate::trace::{Built, LineOp, OwnedCtx, TraceFile};
 use crate::vm::{Control, Event, ForkKind, Op, OpKind, Vm};
 
@@ -289,6 +289,8 @@ struct Chan {
     next_take: i64,
     done: BTreeSet<i64>,
     seqs: Seqs,
+    /// The fork path of the last `take` (`run::one_taker`).
+    taker: Option<ForkPath>,
     closed: bool,
     /// Tasks parked on this channel; woken (all of them) on every change.
     waiters: Vec<usize>,
@@ -296,7 +298,7 @@ struct Chan {
 
 impl Chan {
     fn new(capacity: i64, ordered: bool, total: Option<i64>) -> Self {
-        Chan { capacity: capacity.max(1), ordered, total, next_take: 0, done: BTreeSet::new(), seqs: Seqs::default(), closed: false, waiters: Vec::new() }
+        Chan { capacity: capacity.max(1), ordered, total, next_take: 0, done: BTreeSet::new(), seqs: Seqs::default(), taker: None, closed: false, waiters: Vec::new() }
     }
 
     /// `Ok(true)`: batch `b` may start; `Ok(false)`: wait; `Err`: closed.
@@ -316,7 +318,7 @@ impl Chan {
             bail!("put {seq} on a closed channel");
         }
         self.seqs.check(seq)?;
-        if admits(self.capacity, self.next_take, seq) {
+        if admits(self.capacity, self.seqs.window(self.next_take), seq) {
             self.seqs.record(seq);
             self.done.insert(seq);
             return Ok(true);
@@ -981,6 +983,8 @@ pub(crate) struct Loop<E: Engine> {
     timers: BinaryHeap<Reverse<(Instant, usize)>>,
     chans: Vec<Chan>,
     chan_names: HashMap<(usize, String), usize>,
+    /// Forks made so far on this loop, numbering each (`ActorState::fork`).
+    forks: u64,
     barrier_waiters: Vec<usize>,
     /// The `trace` instances begun on this loop.
     traces: Vec<TraceInst>,
@@ -1052,6 +1056,7 @@ impl<E: Engine> Loop<E> {
             timers: BinaryHeap::new(),
             chans: Vec::new(),
             chan_names: HashMap::new(),
+            forks: 0,
             barrier_waiters: Vec::new(),
             traces: Vec::new(),
             efd,
@@ -1131,6 +1136,18 @@ impl<E: Engine> Loop<E> {
         }
     }
 
+    /// A task in the error of a wait nothing ends: its label and, for a put, what it waits for
+    /// in the thread runner's words (`Seqs::put_wait`: its window, or a seq not yet put).
+    fn parked_label(&self, id: usize) -> String {
+        match self.tasks[id].wait {
+            Wait::Chan { chan, what: ChanWait::Put(seq, name), .. } => {
+                let c = &self.chans[chan];
+                format!("{} on `{name}` waits {}", self.label(id), c.seqs.put_wait(c.capacity, c.next_take, seq))
+            }
+            _ => self.label(id),
+        }
+    }
+
     fn label(&self, id: usize) -> String {
         match &self.tasks[id].prog {
             Prog::Vm(vm) => {
@@ -1183,7 +1200,7 @@ impl<E: Engine> Loop<E> {
                 self.efd_posted = true;
             }
             if self.io.in_flight() == 0 && self.timers.is_empty() && !self.efd_posted {
-                let parked: Vec<String> = (0..self.tasks.len()).filter(|i| !self.tasks[*i].done).map(|i| self.label(i)).collect();
+                let parked: Vec<String> = (0..self.tasks.len()).filter(|i| !self.tasks[*i].done).map(|i| self.parked_label(i)).collect();
                 bail!("event loop {}: {} actor(s) wait on channels or trace order nothing will complete: {}", self.index, parked.len(), parked.join(", "));
             }
             let now = Instant::now();
@@ -1253,7 +1270,7 @@ impl<E: Engine> Loop<E> {
             seen[t.inst] = seen[t.inst].max(if parked { 1 } else { 2 });
         }
         let Some(inst) = seen.iter().position(|&s| s == 1) else { return Ok(()) };
-        let parked: Vec<String> = (0..self.tasks.len()).filter(|&i| !self.tasks[i].done && self.tasks[i].inst == inst).map(|i| self.label(i)).collect();
+        let parked: Vec<String> = (0..self.tasks.len()).filter(|&i| !self.tasks[i].done && self.tasks[i].inst == inst).map(|i| self.parked_label(i)).collect();
         bail!("event loop {}: {} actor(s) wait on channels or trace order nothing will complete: {}", self.index, parked.len(), parked.join(", "));
     }
 
@@ -1445,6 +1462,7 @@ impl<E: Engine> Loop<E> {
                         Control::Take { channel } => {
                             let idx: Vec<String> = ctx.indices.iter().map(|i| i.to_string()).collect();
                             let chan = *self.chan_names.get(&(inst, channel.to_string())).ok_or_else(|| anyhow!("{}#{} [{}] take on undeclared channel `{channel}` (a loader declares one under its name)", ctx.template, ctx.actor, idx.join(",")))?;
+                            one_taker(&mut self.chans[chan].taker, &t.io.a.fork).with_context(|| format!("{}#{} [{}] take `{channel}`", ctx.template, ctx.actor, idx.join(",")))?;
                             self.tasks[id].wait = Wait::Chan { chan, what: ChanWait::Take, since: Instant::now() };
                             if !self.retry_chan(id)? {
                                 return Ok(());
@@ -1457,8 +1475,11 @@ impl<E: Engine> Loop<E> {
                     vm.accept_fork();
                     let inst = t.inst;
                     match kind {
-                        ForkKind::Parallel { width, .. } => {
-                            let children: Vec<ActorState> = (0..width).map(|_| t.io.a.child(&sh, 0)).collect();
+                        ForkKind::Parallel { index, width } => {
+                            let fork = self.forks;
+                            self.forks += 1;
+                            let t = &self.tasks[id];
+                            let children: Vec<ActorState> = (0..width).map(|k| t.io.a.sub(&sh, 0, fork, index, k)).collect();
                             for (k, a) in children.into_iter().enumerate() {
                                 let mut vm = Vm::resume(snap.clone());
                                 vm.start_sub(k as i64);
@@ -1469,7 +1490,7 @@ impl<E: Engine> Loop<E> {
                                 return Ok(());
                             }
                         }
-                        ForkKind::Loader { name, workers, prefetch, batches, ordered, .. } => {
+                        ForkKind::Loader { name, index, workers, prefetch, batches, ordered } => {
                             // a loader in a loop declares its channel again each iteration: the last
                             // one is retired once every batch is taken (its workers have ended)
                             if let Some(&old) = self.chan_names.get(&(inst, name.to_string())) {
@@ -1481,7 +1502,9 @@ impl<E: Engine> Loop<E> {
                                 }
                             }
                             let chan = self.declare(inst, name, Chan::new(workers * prefetch, ordered, Some(batches)));
-                            let children: Vec<ActorState> = (0..workers).map(|_| self.tasks[id].io.a.child(&sh, 0)).collect();
+                            let fork = self.forks;
+                            self.forks += 1;
+                            let children: Vec<ActorState> = (0..workers).map(|w| self.tasks[id].io.a.sub(&sh, 0, fork, index, w)).collect();
                             for (w, a) in children.into_iter().enumerate() {
                                 let w = w as i64;
                                 let vm = Vm::resume(snap.clone());
