@@ -427,6 +427,11 @@ class Check:
             for kk, vv in a.items():
                 if isinstance(vv, (dict, list)) or kk in ("lo", "hi", "mean", "sd", "median", "min", "max"):
                     self.expr(vv, p + [kk], scope)
+            if k in ("normal", "lognormal"):
+                # clamped to `min` and then to `max`: every draw `max`, and a `min` rule V3 would believe
+                lo, hi = self.number(a.get("min")), self.number(a.get("max"))
+                if lo is not None and hi is not None and lo > hi:
+                    self.err(p, f"{k}: min {lo} is above max {hi}")
         elif k == "const":
             self.expr(a, p, scope)
 
@@ -521,11 +526,18 @@ class Check:
         if kind == "uniform":
             return isinstance(a["lo"], (int, float)) and a["lo"] >= k
         if kind in ("normal", "lognormal"):
-            return isinstance(a.get("min"), (int, float)) and a["min"] >= k
+            # the runner clamps to `min` and then to `max`: `min` bounds a draw only when no
+            # `max` below it can win (none, or one known and not below it)
+            lo = self.number(a.get("min"))
+            hi = self.number(a.get("max"))
+            return (lo is not None and lo >= k and isinstance(a["min"], (int, float))
+                    and ("max" not in a or (hi is not None and hi >= lo)))
         if kind == "empirical":
             return all(isinstance(v, (int, float)) and v >= k for v in a["values"])
         if kind == "mixture":
-            return all(arm["dist"] is None or self.at_least(arm["dist"], k, scope) for arm in a)
+            # a `none` arm draws no number, so at least one arm must draw one
+            return (any(arm["dist"] is not None for arm in a)
+                    and all(arm["dist"] is None or self.at_least(arm["dist"], k, scope) for arm in a))
         if kind == "const":
             return self.at_least(a, k, scope)
         if kind == "add":
@@ -538,6 +550,12 @@ class Check:
             if kind == "index":
                 return a in scope.nonneg_indices
         return False
+
+    def number(self, e):
+        """The number `e` is known to be: a literal, or a `param` whose default is a number."""
+        if isinstance(e, dict) and set(e) == {"param"}:
+            e = self.ast.get("params", {}).get(e["param"], {}).get("default")
+        return e if isinstance(e, (int, float)) and not isinstance(e, bool) else None
 
     def handle(self, h, p, scope):
         k, a = next(iter(h.items()))

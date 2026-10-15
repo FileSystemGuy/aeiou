@@ -691,3 +691,58 @@ def test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory():
         ast["actors"]["gpu"]["body"] = [{kind: {"dir": {"dir": {"dataset": "d", "id": 0}}}}]
         errs = check.Check(ast, "x").run()
         assert any(f"{kind} on dataset `d`: datasets are read-only (V12)" in e for e in errs), errs
+
+
+def _v3_chain(dist, params=None):
+    """The `x @ i - d` loop of the rule V3 review (RC1, bug 30), `d` drawn from `dist`."""
+    return {
+        "ast": "0.10", "name": "v3_chain", "params": params or {},
+        "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 4,
+                           "size": {"const": 4096}, "seed": 1}},
+        "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "i", "to": 4, "body": [
+            {"let": {"name": "d", "value": {"draw": dist}}},
+            {"let": {"name": "x", "value": {"cond": {"if": {"gt": [{"index": "i"}, 0]},
+             "then": {"add": [{"at": {"ref": "x", "index": {"sub": [{"index": "i"}, {"ref": "d"}]}}}, 1]},
+             "else": 0}}}},
+            {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},
+            {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+            {"read": {"file": {"ref": "f"}, "len": {"add": [{"ref": "x"}, 1]}, "offset": 0}},
+            {"close": {"file": {"ref": "f"}}}]}}]}},
+    }
+
+
+def test_at_rule_believes_no_minimum_a_maximum_undercuts():
+    """The runner clamps a normal or lognormal to `min` and then to `max`, so a `max` below
+    `min` makes every draw `max`; and a mixture whose every arm is `none` draws no number.
+    Neither is an offset provably >= 1 (V3), in check.py or in the builder (RC1, bug 30)."""
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def errs(dist, params=None):
+        return check.Check(_v3_chain(dist, params), "x").run()
+
+    e = errs({"normal": {"mean": 5, "sd": 1, "min": 1, "max": 0}})
+    assert any("normal: min 1 is above max 0" in x for x in e) and any("provably >= 1" in x for x in e), e
+    e = errs({"lognormal": {"median": 5, "sigma": 1.0, "min": 2.5, "max": 1}})
+    assert any("lognormal: min 2.5 is above max 1" in x for x in e) and any("provably >= 1" in x for x in e), e
+    assert any("provably >= 1" in x for x in errs({"mixture": [{"weight": 1, "dist": None}]}))
+    assert not errs({"normal": {"mean": 5, "sd": 1, "min": 1, "max": 9}})
+    assert not errs({"mixture": [{"weight": 1, "dist": None}, {"weight": 1, "dist": {"const": 2}}]})
+    # a `max` that is a parameter is judged on its default (the runner judges the value given)
+    hi = {"normal": {"mean": 5, "sd": 1, "min": 1, "max": {"param": "hi"}}}
+    assert not errs(hi, {"hi": {"default": 9}})
+    e = errs(hi, {"hi": {"default": 0}})
+    assert any("normal: min 1 is above max 0" in x for x in e) and any("provably >= 1" in x for x in e), e
+    # the builder: the same judgement at construction
+    w = Workload("t")
+    P = w.params(n=4, hi=9, lo=0)
+    with w.actor("a") as a:
+        with a.loop("r", P.n) as r:
+            d = a.draw("d", normal(5, 1, min=1, max=P.hi))
+            a.let("x", when(d <= r, a.ref("x").at(r - d), 0))
+            e2 = a.draw("e", normal(5, 1, min=1, max=P.lo))
+            with pytest.raises(BuildError, match="provably >= 1"):
+                a.let("z", when(True, a.ref("z").at(r - e2), 0))
+            e3 = a.draw("e3", mixture((1, none)))
+            with pytest.raises(BuildError, match="provably >= 1"):
+                a.let("z", when(True, a.ref("z").at(r - e3), 0))

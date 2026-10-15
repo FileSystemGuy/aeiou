@@ -850,3 +850,31 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   "panicked") fails on the old trace.rs ("a malformed trace loaded") and passes; trace tests 9
   passed. Fixed in an isolated worktree and applied.
 
+## 39. The V3 proof trusted a `min` that a lower `max` undercuts, and the runner overflowed its stack
+
+- **Where:** the three provers of "provably ≥ k" (`builder/aeiou/nodes.py` `Dist.lower_bound`,
+  `builder.py` `_dist_at_least`, `schema/check.py` `at_least`, `runner/aeiou/src/validate.rs`
+  `dist_at_least` and `check_given`), the mixture rule in both checkers, `vm.rs` `at`;
+  schema/README §4 (V3).
+- **Found by:** review of the builder core: `d = draw(normal(5, 1, min=1, max=0)); x = when(i >
+  0, x.at(i - d) + 1, 0)`.
+- **Defect:** the runner clamps to `min` then `max`, so that normal always draws 0, yet every
+  prover took `min` as the lower bound and called `i - d` provably below `i`: aeiou-build wrote
+  it, both checkers said ok, and `aeiou dry-run` died with "thread has overflowed its stack" (a
+  core dump), the self-reference at the same index recursing forever. A mixture whose only arm
+  is `none` was "≥ 1" (an empty `all()`). Bug 13 refuses a literal min > max in the builder,
+  but a hand-written AST or a parameter `max` given at run time still reached the provers.
+- **Fix:** a literal `min` bounds below only when `max` is absent or a known number (a literal,
+  or a parameter's value: its default in the builder and check.py, the given value in the
+  runner's `check_given`) not below it; both checkers refuse "normal: min 1 is above max 0" (and
+  lognormal) when both bounds are known, and the runner now holds a distribution given by
+  `--param` or a parameter file to every distribution rule; a mixture needs a non-null arm; and
+  `at` refuses an index not below the one being evaluated (a clean error naming the binding)
+  instead of recursing. No AST, hash, or fingerprint changes; the checkers' outputs over every
+  committed AST are identical.
+- **Evidence:** `golden.rs::the_at_rule_believes_no_minimum_a_maximum_undercuts`,
+  `golden.rs::an_at_that_does_not_decrease_is_an_error_not_a_stack_overflow` (SIGABRT without
+  the fix, a clean error with it), and `test_builder.py::test_at_rule_believes_no_minimum_a_maximum_undercuts`
+  fail on the old code and pass on the new; golden 15 passed, builder 88 passed. Fixed in an
+  isolated worktree and applied.
+

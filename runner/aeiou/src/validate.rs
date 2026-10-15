@@ -287,7 +287,8 @@ impl<'a> Checker<'a> {
                     self.err(&p(&path, &["unit"]), format!("unknown unit `{u}`"));
                 }
             }
-            self.pvalue(&param.default, &path);
+            // on a run, the value in effect: a given distribution is checked as the default is
+            self.pvalue(self.given.and_then(|g| g.get(pname.as_str())).unwrap_or(&param.default), &path);
         }
         let mut roots: BTreeMap<String, &str> = BTreeMap::new();
         for (dname, d) in &ast.datasets {
@@ -936,6 +937,7 @@ impl<'a> Checker<'a> {
                 if let Some(e) = max {
                     self.expr(e, &p(path, &["max"]), scope, st, None);
                 }
+                self.bounds("normal", min.as_deref(), max.as_deref(), path);
             }
             Dist::Lognormal { median, sigma, min, max } => {
                 if !(*sigma > 0.0) {
@@ -948,6 +950,7 @@ impl<'a> Checker<'a> {
                 if let Some(e) = max {
                     self.expr(e, &p(path, &["max"]), scope, st, None);
                 }
+                self.bounds("lognormal", min.as_deref(), max.as_deref(), path);
             }
             Dist::Zipf { s } => {
                 if !(*s > 0.0) {
@@ -1109,16 +1112,71 @@ impl<'a> Checker<'a> {
         let lit_ge = |e: &Expr| matches!(e, Expr::Lit(Literal::Int(n)) if *n >= k) || matches!(e, Expr::Lit(Literal::Float(x)) if *x >= k as f64);
         match d {
             Dist::Uniform { lo, .. } => lit_ge(lo),
-            Dist::Normal { min: Some(m), .. } | Dist::Lognormal { min: Some(m), .. } => lit_ge(m),
+            // the runner clamps to `min` and then to `max`, so `min` bounds a draw only when no
+            // `max` below it can win: none, or one whose value in effect is known and not below
+            Dist::Normal { min: Some(m), max, .. } | Dist::Lognormal { min: Some(m), max, .. } => {
+                lit_ge(m)
+                    && match max {
+                        None => true,
+                        Some(x) => matches!((self.number(m), self.number(x)), (Some(lo), Some(hi)) if hi >= lo),
+                    }
+            }
             Dist::Normal { .. } | Dist::Lognormal { .. } => false,
             Dist::Empirical { values, .. } => values.iter().all(|v| match v {
                 Literal::Int(n) => *n >= k,
                 Literal::Float(x) => *x >= k as f64,
                 _ => false,
             }),
-            Dist::Mixture(arms) => arms.iter().all(|a| a.dist.as_ref().map_or(true, |d| self.distref_at_least(d, k, scope))),
+            // a `none` arm draws no number, so at least one arm must draw one
+            Dist::Mixture(arms) => {
+                arms.iter().any(|a| a.dist.is_some()) && arms.iter().all(|a| a.dist.as_ref().map_or(true, |d| self.distref_at_least(d, k, scope)))
+            }
             Dist::Const(e) => self.at_least(e, k, scope),
             _ => false,
+        }
+    }
+
+    /// The number an expression is known to be: a literal, or a `param` whose value in effect
+    /// (given, else the default) is a number. Anything else is not known before the run.
+    fn number(&self, e: &Expr) -> Option<f64> {
+        match self.number_lit(e)? {
+            Literal::Int(n) => Some(*n as f64),
+            Literal::Float(x) => Some(*x),
+            _ => None,
+        }
+    }
+
+    fn number_lit<'e>(&'e self, e: &'e Expr) -> Option<&'e Literal> {
+        let l = match e {
+            Expr::Lit(l) => l,
+            Expr::Node(n) => match n.as_ref() {
+                ExprNode::Param(name) => match self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).map(|p| &p.default)) {
+                    Some(PValue::Scalar(l)) => l,
+                    _ => return None,
+                },
+                _ => return None,
+            },
+        };
+        matches!(l, Literal::Int(_) | Literal::Float(_)).then_some(l)
+    }
+
+    /// `min` above `max` on a `normal` or `lognormal`: the runner clamps to `min` and then to
+    /// `max`, so every draw is `max` and the declared minimum is a lie rule V3 would believe.
+    fn bounds(&mut self, kind: &str, min: Option<&Expr>, max: Option<&Expr>, path: &P) {
+        let text = |l: &Literal| match l {
+            Literal::Int(n) => n.to_string(),
+            Literal::Float(x) => format!("{x:?}"),
+            _ => String::new(),
+        };
+        let (Some(min), Some(max)) = (min, max) else {
+            return;
+        };
+        let (Some(lo), Some(hi)) = (self.number_lit(min), self.number_lit(max)) else {
+            return;
+        };
+        let (a, b) = (text(lo), text(hi));
+        if self.number(min) > self.number(max) {
+            self.err(path, format!("{kind}: min {a} is above max {b}"));
         }
     }
 

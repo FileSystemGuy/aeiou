@@ -941,6 +941,15 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         if let Some(v) = key.as_ref().and_then(|k| self.at_cache.get(k)) {
             return Ok(v.clone());
         }
+        // Rule V3 says an `at` inside a loop body's own bindings goes to a strictly smaller index.
+        // The checkers prove it; this is the net under a proof they got wrong: a body already
+        // being evaluated at index j may only be asked for an index below j, or the recursion
+        // never ends (it ended in a stack overflow).
+        if let Some(s) = self.shifts.iter().rev().find(|s| s.frame == frame && std::ptr::eq(s.body, body)) {
+            if i >= s.idx {
+                return other(format!("`{name} @ {i}`: index not below {}, the index of its loop body already being evaluated (rule V3: an `at` on a binding of the same loop body must go to a smaller index)", s.idx));
+            }
+        }
         let saved_depth = self.depth;
         self.shifts.push(Shift { frame, idx: i, body, depth, memo: HashMap::new() });
         self.depth = depth;

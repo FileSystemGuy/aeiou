@@ -205,8 +205,9 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   must use an index of the form `{sub: [{index: i}, e]}` where `i` is the innermost loop
   index and `e` is provably `≥ 1`. A binding of an enclosing body is free. Provably `≥ k`,
   for `k` 1 or 0: a literal `≥ k`; a `ref`, `param`, or `draw` whose distribution has `min ≥
-  k` (`uniform` with `lo ≥ k`, `normal` or `lognormal` with `min ≥ k`, `empirical` with all
-  values `≥ k`, a `mixture` whose non-null arms all qualify, `const` of such a term); `add`
+  k` (`uniform` with `lo ≥ k`, `normal` or `lognormal` with `min ≥ k` and either no `max`
+  or a `max` known not to be below it, `empirical` with all values `≥ k`, a `mixture` with
+  at least one non-null arm and every non-null arm qualifying, `const` of such a term); `add`
   of a term `≥ k` and a term `≥ 0` (contract 0.5); and for `k = 0` also any `mod` (the
   runner's `mod` is Euclidean, so the result is in `[0, |b|)`) and a loop index whose loop
   has no `from` or a `from` provably `≥ 0` (steps are positive; `parallel` and `loader`
@@ -216,7 +217,12 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   falls below the loop's `from` evaluates the binding's non-recursive arm (the "fresh draw"
   of `ABSTRACTS.md` §9.5). The rule is judged on the document's parameter defaults; the
   runner judges it again on the parameter values in effect, before a run or a dry run, since
-  a value may replace a distribution with one whose minimum is lower.
+  a value may replace a distribution with one whose minimum is lower. The runner clamps a
+  `normal` or `lognormal` to `min` and then to `max`, so `min` bounds it only under a `max`
+  that is known (a literal, or a parameter whose value is a number) and not below it, and a
+  `min` above a known `max` is an error in its own right (2026-10-14). Under a proof that
+  is wrong anyway, the runner refuses an `at` that would evaluate a loop body at an index not
+  below one it is already evaluating, rather than recursing without end.
 - **V4 Sizes are computed, never observed.** For a namespace with `size: as_written`, an
   object's size is the sum of the write lengths in the sequence that created it. `until_eof`
   on such an object is allowed only through the handle binding those writes used, which pins

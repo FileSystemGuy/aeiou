@@ -727,8 +727,14 @@ class Cursor:
         return False
 
     def _dist_at_least(self, d: Dist, k: int) -> bool:
-        lb = d.lower_bound()
+        lb = d.lower_bound(self._number)
         return lb is not None and lb >= k
+
+    def _number(self, e):
+        """The number `e` is known to be: a parameter's default when it is one, else None."""
+        if isinstance(e, Param):
+            e = self.wl._param_specs.get(e.name, {}).get("default")
+        return e if isinstance(e, (int, float)) and not isinstance(e, bool) else None
 
     # ---- control statements ----
     @contextlib.contextmanager

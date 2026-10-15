@@ -650,3 +650,68 @@ fn an_inventory_is_count_times_entry_and_a_subset_caps_its_reads() {
     assert_eq!(b.iter().map(|r| r.3).collect::<Vec<_>>(), vec![1048576, size - 1048576, 0], "capped: the tail short, the end read 0");
     assert_eq!(dryrun::run(&plain, 1, None).unwrap().total.fingerprint, dryrun::run(&capped, 1, None).unwrap().total.fingerprint);
 }
+
+/// The `x @ i - d` loop of the rule V3 review (RC1, bug 30): `d` drawn from `DIST`.
+fn v3_chain(dist: &str, params: &str) -> String {
+    r#"{
+  "ast": "0.10", "name": "v3_chain", "params": PARAMS,
+  "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 4, "size": {"const": 4096}, "seed": 1}},
+  "actors": {"gpu": {"count": 1, "body": [
+    {"loop": {"index": "i", "to": 4, "body": [
+      {"let": {"name": "d", "value": {"draw": DIST}}},
+      {"let": {"name": "x", "value": {"cond": {"if": {"gt": [{"index": "i"}, 0]},
+          "then": {"add": [{"at": {"ref": "x", "index": {"sub": [{"index": "i"}, {"ref": "d"}]}}}, 1]}, "else": 0}}}},
+      {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},
+      {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+      {"read": {"file": {"ref": "f"}, "len": {"add": [{"ref": "x"}, 1]}, "offset": 0}},
+      {"close": {"file": {"ref": "f"}}}
+    ]}}
+  ]}}
+}"#
+    .replace("DIST", dist)
+    .replace("PARAMS", params)
+}
+
+/// The runner clamps a `normal` or `lognormal` to `min` and then to `max`, so a `max` below
+/// `min` makes every draw `max`: `min` is no lower bound then, and an `at` offset drawn from
+/// such a distribution is not provably >= 1 (rule V3). Nor is a mixture whose every arm is
+/// `none`. Both used to pass the check and the first overflowed the VM's stack (RC1, bug 30).
+#[test]
+fn the_at_rule_believes_no_minimum_a_maximum_undercuts() {
+    let refused = |dist: &str, want: &[&str]| {
+        let e = aeiou::load_str(&v3_chain(dist, "{}")).err().map(|e| format!("{e:#}")).unwrap_or_else(|| panic!("accepted {dist}"));
+        for w in want {
+            assert!(e.contains(w), "{dist}: {e}");
+        }
+    };
+    refused(r#"{"normal": {"mean": 5, "sd": 1, "min": 1, "max": 0}}"#, &["normal: min 1 is above max 0", "provably >= 1"]);
+    refused(r#"{"lognormal": {"median": 5, "sigma": 1.0, "min": 2.5, "max": 1}}"#, &["lognormal: min 2.5 is above max 1", "provably >= 1"]);
+    refused(r#"{"mixture": [{"weight": 1, "dist": null}]}"#, &["provably >= 1"]);
+    // a `max` known and not below `min` leaves `min` the bound, as it always was
+    assert!(aeiou::load_str(&v3_chain(r#"{"normal": {"mean": 5, "sd": 1, "min": 1, "max": 9}}"#, "{}")).is_ok());
+    // a `max` that is a parameter: judged on the default by the check, on the value given by the run
+    let text = v3_chain(r#"{"normal": {"mean": 5, "sd": 1, "min": 1, "max": {"param": "hi"}}}"#, r#"{"hi": {"default": 9}}"#);
+    let loaded = aeiou::load_str(&text).expect("max 9 is above min 1");
+    assert!(Params::new(&loaded.ast, &config(1, 1, &[("hi", "3")])).is_ok());
+    let e = Params::new(&loaded.ast, &config(1, 1, &[("hi", "0")])).err().map(|e| format!("{e:#}")).expect("max 0 under min 1 accepted");
+    assert!(e.contains("with the parameters given") && e.contains("normal: min 1 is above max 0") && e.contains("provably >= 1"), "{e}");
+    // a whole distribution given for a parameter is held to the same rules as a default
+    let text = v3_chain(r#"{"param": "back"}"#, r#"{"back": {"default": {"const": 1}}}"#);
+    let loaded = aeiou::load_str(&text).unwrap();
+    let e = Params::new(&loaded.ast, &config(1, 1, &[("back", r#"{"normal": {"mean": 5, "sd": 1, "min": 1, "max": 0}}"#)])).err().map(|e| format!("{e:#}")).expect("accepted");
+    assert!(e.contains("params/back: normal: min 1 is above max 0") && e.contains("provably >= 1"), "{e}");
+}
+
+/// Under a proof the checkers got wrong, an `at` that does not go to a smaller index is an
+/// error naming the binding and the index, not a recursion that ends in a stack overflow.
+#[test]
+fn an_at_that_does_not_decrease_is_an_error_not_a_stack_overflow() {
+    let text = v3_chain(r#"{"normal": {"mean": 5, "sd": 1, "min": 1, "max": 0}}"#, "{}");
+    let ast = aeiou::ast::parse(&text).unwrap(); // the checks skipped, as a wrong proof would
+    aeiou::sites::annotate(&ast);
+    let cfg = config(1, 1, &[]);
+    let params = Params { values: BTreeMap::new() };
+    let model = build_model(&ast, &cfg, &params).unwrap();
+    let e = run_actor(&model, "gpu", 0, 1, Collect::default()).err().map(|e| format!("{e:#}")).expect("a non-decreasing `at` ran");
+    assert!(e.contains("`x @ 1`: index not below 1") && e.contains("rule V3"), "{e}");
+}

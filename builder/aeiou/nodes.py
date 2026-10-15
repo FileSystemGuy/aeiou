@@ -133,23 +133,34 @@ class Dist(Node):
     def ast(self):
         return {self.kind: _ast_dist_args(self.args)}
 
-    def lower_bound(self) -> float | None:
-        """Provable minimum of a draw, or None. Used by the `at` rule (schema/README.md V3)."""
+    def lower_bound(self, number=None) -> float | None:
+        """Provable minimum of a draw, or None. Used by the `at` rule (schema/README.md V3).
+        `number` gives the number a node is known to be (a parameter's default), or None."""
         a = self.args
+        num = lambda e: (e if isinstance(e, (int, float)) and not isinstance(e, bool)
+                         else number(e) if number is not None else None)
         if self.kind == "const":
             return a if isinstance(a, (int, float)) and not isinstance(a, bool) else None
         if self.kind == "uniform":
             lo = a["lo"]
             return lo if isinstance(lo, (int, float)) else None
         if self.kind in ("normal", "lognormal"):
+            # the runner clamps to `min` and then to `max`: `min` bounds a draw only when no
+            # `max` below it can win (none, or one known and not below it)
             lo = a.get("min")
-            return lo if isinstance(lo, (int, float)) else None
+            if not isinstance(lo, (int, float)) or isinstance(lo, bool):
+                return None
+            if "max" in a:
+                hi = num(a["max"])
+                if hi is None or hi < lo:
+                    return None
+            return lo
         if self.kind == "empirical":
             vs = a["values"]
             return min(vs) if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vs) else None
         if self.kind == "mixture":
             los = [arm["dist"] for arm in a if arm["dist"] is not None]
-            bounds = [lower_bound_of(d) for d in los]
+            bounds = [lower_bound_of(d, number) for d in los]
             return min(bounds) if bounds and all(b is not None for b in bounds) else None
         return None
 
@@ -162,13 +173,13 @@ def _ast_dist_args(a):
     return ast_of(a)
 
 
-def lower_bound_of(d: Any) -> float | None:
+def lower_bound_of(d: Any, number=None) -> float | None:
     """Lower bound of a serialized distribution (dict) or Dist."""
     if isinstance(d, Dist):
-        return d.lower_bound()
+        return d.lower_bound(number)
     if isinstance(d, dict) and len(d) == 1:
         k, a = next(iter(d.items()))
-        return Dist(k, a).lower_bound()
+        return Dist(k, a).lower_bound(number)
     return None
 
 
