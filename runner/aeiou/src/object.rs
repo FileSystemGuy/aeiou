@@ -68,6 +68,21 @@ pub fn part_size() -> u64 {
     PART.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The bounds S3 sets on a multipart upload: at most 10,000 parts, and an object of at most
+/// 5 TiB.
+pub const MAX_PARTS: u64 = 10_000;
+pub const MAX_OBJECT: u64 = 5 << 40;
+
+/// The part size of an upload of `size` bytes known up front: `part`, or, when that would
+/// take more than `MAX_PARTS` parts, `size / MAX_PARTS` rounded up to a whole MiB; `None`
+/// for an object over `MAX_OBJECT`, which no part size uploads.
+pub fn part_for(size: u64, part: u64) -> Option<u64> {
+    if size > MAX_OBJECT {
+        return None;
+    }
+    Some(part.max(size.div_ceil(MAX_PARTS).next_multiple_of(1 << 20)))
+}
+
 /// An error of the engine as the run sees it: an errno for the statement's `expect` list
 /// and the structural check, with the store's message.
 #[derive(Debug)]
@@ -393,6 +408,8 @@ mod imp {
         buf: Vec<u8>,
         written: u64,
         multi: Option<Box<dyn MultipartUpload>>,
+        /// Parts sent (or being sent): S3 takes at most `MAX_PARTS`.
+        parts: u64,
     }
 
     impl Upload {
@@ -407,6 +424,9 @@ mod imp {
         pub fn fill(&mut self, offset: u64, len: u64, fill: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<Vec<Vec<u8>>> {
             if offset != self.written {
                 return Err(io::Error::from_raw_os_error(libc::ESPIPE));
+            }
+            if offset.saturating_add(len) > super::MAX_OBJECT {
+                return Err(error(libc::EFBIG, format!("{}: {} bytes are over S3's largest object, {} (5 TiB)", self.show, offset.saturating_add(len), super::MAX_OBJECT)));
             }
             let mut full = Vec::new();
             let mut at = 0u64;
@@ -430,10 +450,15 @@ mod imp {
         /// Send `parts` in order, the first one starting the multipart upload.
         pub async fn send(&mut self, parts: Vec<Vec<u8>>) -> io::Result<()> {
             for data in parts {
+                if self.parts == super::MAX_PARTS {
+                    let max = super::MAX_PARTS * self.part as u64;
+                    return Err(error(libc::EFBIG, format!("{}: over {max} bytes, S3's limit of {} parts per upload in parts of {} MiB; a larger --object-part-mib uploads it", self.show, super::MAX_PARTS, self.part >> 20)));
+                }
                 if self.multi.is_none() {
                     self.multi = Some(self.s3.put_multipart(&self.key).await.map_err(|e| io_err(&self.show, e))?);
                 }
                 let up = self.multi.as_mut().expect("started");
+                self.parts += 1;
                 up.put_part(PutPayload::from(data)).await.map_err(|e| io_err(&self.show, e))?;
             }
             Ok(())
@@ -695,7 +720,7 @@ mod imp {
         /// An upload of the object at `rest`, in parts of `--object-part-mib`; nothing is
         /// sent until a part fills or the handle closes.
         pub fn upload(&self, rest: &str) -> Upload {
-            Upload { s3: self.s3.clone(), key: self.key(rest), show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None }
+            Upload { s3: self.s3.clone(), key: self.key(rest), show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None, parts: 0 }
         }
 
         /// `DELETE` (a missing key is no error, as S3 has it).
@@ -750,32 +775,145 @@ mod imp {
         }
 
         /// An object of `size` bytes whose content `fill(offset, part)` writes, part by part:
-        /// one `PUT` when it fits in one part, a multipart upload in parts of `part` bytes
-        /// otherwise, each part sent before the next is made.
+        /// one `PUT` when it fits in one part, a multipart upload otherwise, in parts of `part`
+        /// bytes or of the size that keeps them within S3's 10,000 (`part_for`), each part sent
+        /// before the next is made. An object over 5 TiB is refused before anything is sent.
         pub fn put_parts(&self, rest: &str, size: u64, part: u64, fill: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<()> {
-            let make = |fill: &mut dyn FnMut(u64, &mut [u8]), at: u64, len: u64| {
+            let show = self.show(rest);
+            let Some(part) = super::part_for(size, part) else {
+                return Err(error(libc::EFBIG, format!("{show}: {size} bytes are over S3's largest object, {} (5 TiB)", super::MAX_OBJECT)));
+            };
+            let mut make = |at: u64, len: u64| {
                 let mut v = vec![0u8; len as usize];
                 fill(at, &mut v);
                 v
             };
             if size <= part {
-                return self.put(rest, make(fill, 0, size));
+                return self.put(rest, make(0, size));
             }
             let key = self.key(rest);
-            let show = self.show(rest);
             block(async {
                 let mut up = self.s3.put_multipart(&key).await.map_err(|e| io_err(&show, e))?;
-                let mut at = 0u64;
-                while at < size {
-                    let len = (size - at).min(part);
-                    if let Err(e) = up.put_part(PutPayload::from(make(fill, at, len))).await {
-                        let _ = up.abort().await;
-                        return Err(io_err(&show, e));
-                    }
-                    at += len;
-                }
-                up.complete().await.map(|_| ()).map_err(|e| io_err(&show, e))
+                send_parts(up.as_mut(), size, part, &mut make).await.map_err(|e| io_err(&show, e))
             })
+        }
+    }
+
+    /// The parts of an object of `size` bytes, `part` bytes each, made by `make(at, len)`,
+    /// sent in order through `up` and completed; on any error the upload is aborted, so the
+    /// store keeps no parts of it, and the error is the one that stopped it.
+    async fn send_parts(up: &mut dyn MultipartUpload, size: u64, part: u64, make: &mut dyn FnMut(u64, u64) -> Vec<u8>) -> object_store::Result<()> {
+        let r = async {
+            let mut at = 0u64;
+            while at < size {
+                let len = (size - at).min(part);
+                up.put_part(PutPayload::from(make(at, len))).await?;
+                at += len;
+            }
+            up.complete().await.map(|_| ())
+        }
+        .await;
+        if r.is_err() {
+            let _ = up.abort().await;
+        }
+        r
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::{Arc, Mutex};
+
+        use object_store::{MultipartUpload, PutPayload, PutResult, UploadPart};
+
+        use super::*;
+
+        /// A multipart upload that sends nothing: it logs its calls, and fails the part
+        /// numbered `fail_part` (from 1) or the completion when told to.
+        #[derive(Debug, Default)]
+        struct Fake {
+            log: Arc<Mutex<Vec<String>>>,
+            parts: u64,
+            fail_part: Option<u64>,
+            fail_complete: bool,
+        }
+
+        fn failed(what: &str) -> object_store::Error {
+            object_store::Error::Generic { store: "fake", source: what.into() }
+        }
+
+        impl MultipartUpload for Fake {
+            fn put_part(&mut self, data: PutPayload) -> UploadPart {
+                self.parts += 1;
+                self.log.lock().unwrap().push(format!("part {} {}", self.parts, data.content_length()));
+                let fail = self.fail_part == Some(self.parts);
+                Box::pin(async move { if fail { Err(failed("part refused")) } else { Ok(()) } })
+            }
+
+            fn complete<'a, 'b>(&'a mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = object_store::Result<PutResult>> + Send + 'b>>
+            where
+                'a: 'b,
+                Self: 'b,
+            {
+                self.log.lock().unwrap().push("complete".into());
+                let fail = self.fail_complete;
+                Box::pin(async move { if fail { Err(failed("completion refused")) } else { Ok(PutResult { e_tag: None, version: None, extensions: Default::default() }) } })
+            }
+
+            fn abort<'a, 'b>(&'a mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = object_store::Result<()>> + Send + 'b>>
+            where
+                'a: 'b,
+                Self: 'b,
+            {
+                self.log.lock().unwrap().push("abort".into());
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        fn send(fake: &mut Fake, size: u64, part: u64) -> object_store::Result<()> {
+            block(send_parts(fake, size, part, &mut |_, len| vec![0; len as usize]))
+        }
+
+        #[test]
+        fn a_multipart_upload_that_fails_is_aborted_with_the_error_that_stopped_it() {
+            let mut ok = Fake::default();
+            send(&mut ok, 25, 10).unwrap();
+            assert_eq!(*ok.log.lock().unwrap(), ["part 1 10", "part 2 10", "part 3 5", "complete"]);
+
+            // the completion refused (the parts were once left on the store)
+            let mut bad = Fake { fail_complete: true, ..Fake::default() };
+            let e = send(&mut bad, 25, 10).unwrap_err();
+            assert!(e.to_string().contains("completion refused"), "{e}");
+            assert_eq!(*bad.log.lock().unwrap(), ["part 1 10", "part 2 10", "part 3 5", "complete", "abort"]);
+
+            // a part refused: no more parts, no completion
+            let mut bad = Fake { fail_part: Some(2), ..Fake::default() };
+            let e = send(&mut bad, 25, 10).unwrap_err();
+            assert!(e.to_string().contains("part refused"), "{e}");
+            assert_eq!(*bad.log.lock().unwrap(), ["part 1 10", "part 2 10", "abort"]);
+        }
+
+        #[test]
+        fn a_run_upload_refuses_part_10001_and_the_5_tib_object_before_sending() {
+            let s3 = AmazonS3Builder::new().with_bucket_name("b").with_region("us-east-1").with_endpoint("http://127.0.0.1:9").with_allow_http(true).build().unwrap();
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let part = 5usize << 20;
+            let fake = Fake { log: log.clone(), parts: super::super::MAX_PARTS - 1, ..Fake::default() };
+            let mut up = Upload { s3, key: Path::from("k"), show: "s3://b/k".into(), part, buf: Vec::new(), written: 0, multi: Some(Box::new(fake)), parts: super::super::MAX_PARTS - 1 };
+            // part 10,000 goes out
+            block(up.send(vec![vec![0; 1]])).unwrap();
+            assert_eq!(*log.lock().unwrap(), ["part 10000 1"]);
+            // part 10,001 is refused here, never sent
+            let e = block(up.send(vec![vec![0; 1]])).unwrap_err();
+            assert_eq!(super::super::errno_of(&e), Some(libc::EFBIG));
+            assert!(e.to_string().contains("10000 parts per upload in parts of 5 MiB"), "{e}");
+            assert_eq!(log.lock().unwrap().len(), 1);
+            // a write past 5 TiB is refused before its bytes are made
+            up.written = super::super::MAX_OBJECT - 1;
+            let e = up.fill(super::super::MAX_OBJECT - 1, 2, &mut |_, _| panic!("no bytes made")).unwrap_err();
+            assert_eq!(super::super::errno_of(&e), Some(libc::EFBIG));
+            // dropped unfinished, the upload is aborted
+            drop(up);
+            assert_eq!(*log.lock().unwrap(), ["part 10000 1", "abort"]);
         }
     }
 }
@@ -879,5 +1017,30 @@ mod imp {
         pub fn put_parts(&self, _: &str, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<()> {
             match *self {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_part_size_keeps_an_upload_within_10000_parts() {
+        const MIB: u64 = 1 << 20;
+        // small objects keep the part asked for
+        assert_eq!(part_for(0, DEFAULT_PART), Some(DEFAULT_PART));
+        assert_eq!(part_for(MAX_PARTS * DEFAULT_PART, DEFAULT_PART), Some(DEFAULT_PART));
+        // one byte more takes a part a MiB larger
+        assert_eq!(part_for(MAX_PARTS * DEFAULT_PART + 1, DEFAULT_PART), Some(DEFAULT_PART + MIB));
+        // 100 GiB in parts of 11 MiB (10.24 MiB rounded up)
+        let p = part_for(100 << 30, DEFAULT_PART).unwrap();
+        assert_eq!(p, 11 * MIB);
+        assert!((100u64 << 30).div_ceil(p) <= MAX_PARTS);
+        // a larger part asked for is kept
+        assert_eq!(part_for(100 << 30, 64 * MIB), Some(64 * MIB));
+        // 5 TiB is the largest object, in parts S3 takes
+        let p = part_for(MAX_OBJECT, DEFAULT_PART).unwrap();
+        assert!(MAX_OBJECT.div_ceil(p) <= MAX_PARTS && p <= MAX_PART && p % MIB == 0);
+        assert_eq!(part_for(MAX_OBJECT + 1, DEFAULT_PART), None);
     }
 }

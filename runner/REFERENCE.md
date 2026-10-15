@@ -1984,7 +1984,10 @@ atomic as the rename into place is for a directory, and a run reading the namesp
 run records as created are the ones it opened with `CREAT` or renamed to, as under POSIX.
 `--object-part-mib` (default 8, 5 to 5120, S3's bounds on a part; `run` only, layered,
 refused without an object name) sets the part size; `aeiou datagen` keeps 8 MiB. Memory: one
-part per handle open for writing, allocated at its first write.
+part per handle open for writing, allocated at its first write. S3 takes at most 10,000 parts
+and 5 TiB per object, so a run's upload, whose size is not known up front, refuses the write
+that would send part 10,001 or pass 5 TiB (`EFBIG`, naming the limit) before sending it; a
+failed upload is aborted, so the store keeps no parts of it.
 
 **Threads.** One multi-thread tokio runtime per process, built on the first object call
 with `--object-threads` workers (default 2; `run` and `datagen`, layered, refused when no
@@ -2023,8 +2026,10 @@ records `object_threads`, `object_part_mib`, and each endpoint's `uri`.
 
 **`aeiou datagen`.** A dataset declared `s3`: the prefix must hold no key (a
 `LIST`); each file (or chunk object) is one `PUT`, or a multipart upload in parts of
-`object::DEFAULT_PART` (8 MiB) when larger, each part made from the payload and sent before
-the next; the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix (atomic, so no
+`object::DEFAULT_PART` (8 MiB) when larger, or of the whole MiB that keeps an object over
+78 GiB within 10,000 parts (`object::part_for`; over 5 TiB is refused before a request), each
+part made from the payload and sent before the next, and the upload aborted should a part or
+the completion fail; the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix (atomic, so no
 temporary name), and there is no `syncfs`. An `array` dataset is refused: a sparse layout
 written at offsets has no object form. The writers' threads make the requests, as actors do.
 A container dataset in a store is `aeiou-datagen`'s, which streams each file from its format

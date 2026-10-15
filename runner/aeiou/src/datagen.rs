@@ -27,7 +27,8 @@
 //!
 //! **Object datasets** (`protocol: s3`, `object.rs`): each file is one object, sent as
 //! one `PUT` or, when larger than `object::DEFAULT_PART`, a multipart upload in parts of
-//! that size, each part made and sent before the next; the root's emptiness is a `LIST`, the
+//! that size (larger for an object over 78 GiB, `object::part_for`), each part made and sent
+//! before the next; the root's emptiness is a `LIST`, the
 //! manifest one `PUT` (atomic, so no temporary name), and there is no `syncfs`. An `array`
 //! dataset, a sparse layout written at offsets, has no object form and is refused.
 //!

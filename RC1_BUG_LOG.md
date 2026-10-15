@@ -1005,3 +1005,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   golden 16 passed, test_builder + test_man 69 passed. Fixed in an isolated worktree and
   applied. Left open: one `consume` under an inner loop whose count depends on an outer index
   can still repeat a position (queued separately).
+
+## 45. A multipart upload that failed at completion was left on the store, and big objects hit S3's 10,000-part limit late
+
+- **Where:** `runner/aeiou/src/object.rs` (`Store::put_parts`, new `send_parts` and
+  `part_for`, `Upload::send`/`fill`, `MAX_PARTS`, `MAX_OBJECT`); runner/REFERENCE.md §16
+  (`--object-part-mib`, "`aeiou datagen`"); the `datagen.rs` module comment.
+- **Found by:** review of the object engine against `object_store` 0.14.2, whose
+  `S3MultiPartUpload` has no `Drop`: an upload is aborted only by an explicit `abort()`.
+- **Defect:** (a) datagen's `put_parts` aborted on a failed part but returned a failed
+  `complete()` without aborting, leaving an orphaned multipart upload: billed parts on real
+  S3, invisible to the `LIST` a resume uses. (The run path's `Upload` already aborted.)
+  (b) `put_parts` always used 8 MiB parts and the run's `Upload` never counted parts, so an
+  object over 78.1 GiB failed at part 10,001 after uploading 78 GiB, with the store's cryptic
+  error.
+- **Fix:** `put_parts` sends through `send_parts`, which aborts on any error, a part's or the
+  completion's, and returns the original error; its part size is `part_for(size, 8 MiB)`, the
+  whole MiB that keeps the object within 10,000 parts (about 525 MiB at 5 TiB), and an object
+  over 5 TiB is refused with `EFBIG` before any request. A run's `Upload`, whose size is not
+  known up front, refuses part 10,001 ("a larger --object-part-mib uploads it") and a write
+  past 5 TiB with `EFBIG` before sending, and its `Drop` aborts it. Part size never changes the
+  bytes, the manifest, a fingerprint, or a dataset id.
+- **Evidence:** lib tests `object::tests::the_part_size_keeps_an_upload_within_10000_parts`,
+  `object::imp::tests::a_multipart_upload_that_fails_is_aborted_with_the_error_that_stopped_it`
+  (a fake upload logging its calls: no "abort" after a failed completion before the fix) and
+  `object::imp::tests::a_run_upload_refuses_part_10001_and_the_5_tib_object_before_sending`
+  fail on the old behaviour and pass on the new; `--lib` 44 passed, MinIO `--test all object` 6
+  passed. Fixed in an isolated worktree and applied.
