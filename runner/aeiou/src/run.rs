@@ -2136,6 +2136,14 @@ pub struct Report {
     pub removed: Vec<String>,
     /// The host, or the hosts joined with `,` once merged.
     pub host: String,
+    /// `--time-scale` (the same on every host: it is in the coordinator's identity), which
+    /// the busy fraction applies to the unscaled `compute` recorded beside a wall-clock stall.
+    #[serde(default = "one")]
+    pub time_scale: f64,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 impl Report {
@@ -2145,7 +2153,7 @@ impl Report {
     pub fn merge_all(reports: Vec<Report>) -> Report {
         let mut it = reports.into_iter();
         let Some(mut m) = it.next() else {
-            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, aio: None, mmap: None, cold: vec![], created: vec![], removed: vec![], host: String::new() };
+            return Report { elapsed: Duration::ZERO, stats: Stats::default(), templates: vec![], ranks: vec![], actors: vec![], departure_releases: vec![], threads_peak: 0, counters: HostCounters::default(), uring: None, aio: None, mmap: None, cold: vec![], created: vec![], removed: vec![], host: String::new(), time_scale: 1.0 };
         };
         let mut hosts = vec![m.host.clone()];
         let mut departures: BTreeMap<String, u64> = m.departure_releases.drain(..).collect();
@@ -2352,6 +2360,7 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
         created,
         removed,
         host: sh.host.clone(),
+        time_scale: sh.opts.time_scale,
     })
 }
 
@@ -2497,11 +2506,11 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
         let total_takes: u64 = with_takes.iter().map(|a| a.takes.len() as u64).sum();
         writeln!(
             out,
-            "takes: {} per instance over {} instance(s); stall/take mean {}; busy {:.3} (compute / (compute + stall))",
+            "takes: {} per instance over {} instance(s); stall/take mean {}; busy {:.3} (compute × time-scale / (compute × time-scale + stall))",
             n,
             with_takes.len(),
             us(if total_takes > 0 { total_stall / total_takes } else { 0 }),
-            if total_compute + total_stall > 0 { total_compute as f64 / (total_compute + total_stall) as f64 } else { 0.0 }
+            crate::report::busy(total_compute, total_stall, r.time_scale)
         )?;
         writeln!(out, "  {:<12} {:>10} {:>10} {:>10} {:>8}", "steps", "stall/take", "p99", "max", "busy")?;
         for b in 0..buckets {
@@ -2518,7 +2527,7 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
                     compute += t.compute_ns;
                 }
             }
-            let busy = if compute + h.sum > 0 { compute as f64 / (compute + h.sum) as f64 } else { 0.0 };
+            let busy = crate::report::busy(compute, h.sum, r.time_scale);
             writeln!(out, "  {:<12} {:>10} {:>10} {:>10} {:>8.3}", format!("{lo}..{hi}"), us(h.mean()), us(h.quantile(0.99)), us(h.max), busy)?;
         }
     }

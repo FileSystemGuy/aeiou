@@ -1275,3 +1275,23 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   "loops 3") fails without the fix ("the run's loops are every host's: … loops 2") and passes
   with it; `--test all -- coord report run` 53 passed, `--lib` 44, builder test_trace,
   test_formats, test_builder 172 passed.
+
+## 56. The busy fraction set unscaled compute against wall-clock stall
+
+- **Where:** `runner/aeiou/src/report.rs` (new `busy`, `take_summary`, `result`),
+  `runner/aeiou/src/run.rs` (`Report::time_scale`, `assemble`, `merge_all`, `write_report`);
+  runner/REFERENCE.md §3, the "Measurement" bullet; `runner/aeiou/tests/report.rs`.
+- **Found by:** review of the coordinator/CLI: §3 defines busy as `compute / (compute +
+  stall)`, and `compute` is recorded unscaled while it sleeps `ns × --time-scale`.
+- **Defect:** the fraction mixed units, so it depended on `--time-scale` in the wrong way:
+  `file_per_sample` (1000 samples, 10 steps) reported busy 0.988 at scale 0.5 where the compute
+  slept gives 0.976, and 0.992 at `--time-scale 0`, where nothing was slept and busy is 0.
+- **Fix:** `busy(compute, stall, ts) = compute·ts / (compute·ts + stall)` (0 when both are 0),
+  used by the JSON summary and the text report (overall and per step bucket, labelled with the
+  formula); the report carries `time_scale` (serde default 1.0; every rank has the same, as it
+  is in the coordinator's identity). `compute_ns` stays unscaled. No report field removed; no
+  fingerprint, dataset id, or AST changes.
+- **Evidence:** `report::busy_is_the_compute_slept_against_the_stall` (scales 0, 0.5, 2, the
+  JSON and the text) fails when `busy` ignores the scale ("scale 0: busy 0.992…, slept 0 ns
+  against stall 3317507 ns gives 0") and passes with the fix; `--test all -- run report coord`
+  54 passed, `--lib` 44.

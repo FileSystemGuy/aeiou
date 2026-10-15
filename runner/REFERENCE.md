@@ -321,7 +321,10 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   p99, max), per-phase ops, bytes, and I/O time, barrier count and wait, and per `take` the
   stall (time blocked) and the compute issued before the next take, kept per instance in
   take order and reported in ten step buckets with the busy fraction
-  `compute / (compute + stall)`, so steady state is selected after the run. The fingerprint is
+  `compute × time-scale / (compute × time-scale + stall)`, the compute actually slept
+  against the wall-clock stall (2026-10-14, RC1 review: the unscaled compute against the stall
+  overstated it below a scale of 1 and gave `--time-scale 0`, where nothing was slept, nearly
+  1), so steady state is selected after the run. `compute_ns` stays unscaled in the report. The fingerprint is
   summed over the ops actually issued; `--expect-fingerprint` (from `dry-run`) makes a
   mismatch an error.
 - **Cold start** (`cold.rs`, added 2026-10-01, `DESIGN_REVIEW.md` §3.31). Between the

@@ -149,14 +149,24 @@ fn stats(s: &Stats, secs: f64) -> Map<String, Value> {
     m
 }
 
+/// The busy fraction of takes whose `compute` (recorded unscaled) was slept `× time_scale`
+/// and whose stall is wall-clock: the compute actually slept against the stall, like with like.
+/// 0 when neither took any time (`--time-scale 0` with no stall).
+pub fn busy(compute_ns: u64, stall_ns: u64, time_scale: f64) -> f64 {
+    let compute = compute_ns as f64 * time_scale;
+    let total = compute + stall_ns as f64;
+    if total > 0.0 { compute / total } else { 0.0 }
+}
+
 /// The take table of the text report: stall per take and the busy fraction
-/// (compute / (compute + stall)), over all takes and by take ordinal in at most ten ranges.
-pub fn take_summary(actors: &[ActorRecord]) -> Value {
+/// (compute × time-scale / (compute × time-scale + stall)), over all takes and by take
+/// ordinal in at most ten ranges. `compute_ns` stays unscaled, as recorded.
+pub fn take_summary(actors: &[ActorRecord], time_scale: f64) -> Value {
     let with: Vec<&ActorRecord> = actors.iter().filter(|a| !a.takes.is_empty()).collect();
     if with.is_empty() {
         return Value::Null;
     }
-    let busy = |compute: u64, stall: u64| if compute + stall > 0 { compute as f64 / (compute + stall) as f64 } else { 0.0 };
+    let busy = |compute: u64, stall: u64| busy(compute, stall, time_scale);
     let n = with.iter().map(|a| a.takes.len()).max().unwrap_or(0);
     let ranges = n.clamp(1, 10);
     let per = n.div_ceil(ranges);
@@ -224,7 +234,7 @@ pub fn result(r: &Report, full_takes: bool) -> anyhow::Result<Value> {
     m.insert("objects_created".into(), json!(r.created.len()));
     let departures: Map<String, Value> = r.departure_releases.iter().map(|(scope, n)| (scope.clone(), json!(n))).collect();
     m.insert("departure_releases".into(), Value::Object(departures));
-    m.insert("take_summary".into(), take_summary(&r.actors));
+    m.insert("take_summary".into(), take_summary(&r.actors, r.time_scale));
     let instances: Vec<Value> = r
         .actors
         .iter()

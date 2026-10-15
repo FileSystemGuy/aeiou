@@ -261,3 +261,32 @@ fn a_parallel_s_file_closes_when_the_abstract_closes_it_under_every_engine() {
         assert_eq!(fp.get_or_insert(f.clone()), &f, "{posix}");
     }
 }
+
+/// The busy fraction sets the compute slept (recorded unscaled, slept `× --time-scale`)
+/// against the wall-clock stall, in the document and the text alike: under `--time-scale 0`
+/// nothing was slept and it is 0, under 0.5 half the recorded compute counts.
+#[test]
+fn busy_is_the_compute_slept_against_the_stall() {
+    let root = tmpdir("busy");
+    let json = root.join("report.json");
+    let params = ["samples=200", "batch=4", "workers=2", "prefetch=2", "steps=4"];
+    let (ok, _, err) = out(aeiou("datagen", "file_per_sample.ast.json", &params).arg("--root").arg(&root).args(["--gpus", "1"]));
+    assert!(ok, "{err}");
+    for scale in [0.0, 0.5, 2.0] {
+        let mut c = aeiou("run", "file_per_sample.ast.json", &params);
+        c.arg("--root").arg(&root).args(["--gpus", "1", "--time-scale", &scale.to_string()]).arg("--report-json").arg(&json);
+        let (ok, text, err) = out(&mut c);
+        assert!(ok, "{text}\n{err}");
+        let t = &read(&json)["result"]["take_summary"];
+        let (compute, stall) = (t["compute_ns"].as_u64().unwrap(), t["stall_ns"].as_u64().unwrap());
+        assert!(compute > 0, "compute_ns is recorded unscaled, even at scale {scale}");
+        let slept = compute as f64 * scale;
+        let want = if slept + stall as f64 > 0.0 { slept / (slept + stall as f64) } else { 0.0 };
+        let busy = t["busy"].as_f64().unwrap();
+        assert!((busy - want).abs() < 1e-9, "scale {scale}: busy {busy}, slept {slept} ns against stall {stall} ns gives {want}");
+        assert!(text.contains(&format!("; busy {want:.3} (")), "scale {scale}: {text}");
+        if scale == 0.0 {
+            assert_eq!(busy, 0.0, "nothing was slept");
+        }
+    }
+}
