@@ -216,7 +216,9 @@ these, and the builder enforces most of them at construction:
   runner reads where it stands: an integer
   or a number (a float, a bool) for a count, bound, size, offset, id, or distribution
   argument; a number for an operand of arithmetic; a bool or an integer for a condition; the
-  field's type for a namespace object's field.
+  field's type for a namespace object's field; two numbers, two strings, two bools, two
+  handles, or `null` and anything for a comparison; an array for `elem`, `len`, `sum` (of
+  numbers).
 
 ## PARAMETER FILES
 

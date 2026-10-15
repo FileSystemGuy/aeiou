@@ -1413,6 +1413,34 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// V27: the runner compares two numbers, two strings, two bools, two handles, or `null`
+    /// with anything (unequal unless both are); any other pair of kinds the document shows is
+    /// refused, as the run would. As `check.py`'s `compared`.
+    fn compared(&mut self, name: &str, a: &[Expr; 2], path: &P, scope: &Scope<'a>) {
+        let (Some(x), Some(y)) = (self.kind(&a[0], scope), self.kind(&a[1], scope)) else { return };
+        let number = |k: &str| k == "int" || k == "float";
+        if x == "none" || y == "none" || (number(x) && number(y)) || (x == y && matches!(x, "str" | "bool" | "handle")) {
+            return;
+        }
+        self.err(path, format!("{name}: cannot compare {} with {} (V27)", kind_name(x), kind_name(y)));
+    }
+
+    /// V27: the parameter `elem`, `len`, or `sum` reads is an array by its value in effect, and
+    /// for `sum` (`numbers`) of integers and floats only, as the runner reads it.
+    fn array(&mut self, name: &str, op: &str, path: &P, numbers: bool) {
+        match self.param_value(name) {
+            Some(PValue::Array(a)) => {
+                if numbers {
+                    if let Some(k) = a.iter().map(pvalue_kind).find(|k| !matches!(*k, "int" | "float")) {
+                        self.err(path, format!("{op}: an element of `{name}` is {} (V27)", kind_name(k)));
+                    }
+                }
+            }
+            Some(_) => self.err(path, format!("{op}: parameter `{name}` is not an array (V27)")),
+            None => {}
+        }
+    }
+
     fn int(&mut self, e: &Expr, path: &P, scope: &Scope<'a>) {
         self.typed(e, path, scope, "an integer", NOT_NUMBER);
     }
@@ -1541,13 +1569,24 @@ impl<'a> Checker<'a> {
             ExprNode::Elem { array, index } => {
                 if !self.ast.params.contains_key(array) {
                     self.err(path, format!("unknown parameter array `{array}`"));
+                } else {
+                    self.array(array, "elem", path, false);
                 }
                 self.expr(index, &p(path, &["index"]), scope, st, None);
                 self.int(index, &p(path, &["index"]), scope);
             }
-            ExprNode::Len(name) | ExprNode::Sum(name) => {
+            ExprNode::Len(name) => {
                 if !self.ast.params.contains_key(name) {
                     self.err(path, format!("unknown parameter array `{name}`"));
+                } else {
+                    self.array(name, "len", path, false);
+                }
+            }
+            ExprNode::Sum(name) => {
+                if !self.ast.params.contains_key(name) {
+                    self.err(path, format!("unknown parameter array `{name}`"));
+                } else {
+                    self.array(name, "sum", path, true);
                 }
             }
             ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => self.handle(h, path, scope, st),
@@ -1579,6 +1618,15 @@ impl<'a> Checker<'a> {
                 for (i, x) in a.iter().enumerate() {
                     self.expr(x, &p(path, &[&i.to_string()]), scope, st, None);
                 }
+                let name = match node {
+                    ExprNode::Eq(_) => "eq",
+                    ExprNode::Ne(_) => "ne",
+                    ExprNode::Lt(_) => "lt",
+                    ExprNode::Le(_) => "le",
+                    ExprNode::Gt(_) => "gt",
+                    _ => "ge",
+                };
+                self.compared(name, a, path, scope);
             }
             // V27: and of `and`, `or`, `not` a condition
             ExprNode::And(a) | ExprNode::Or(a) => {

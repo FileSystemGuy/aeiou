@@ -427,6 +427,11 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   whose value is a distribution what that distribution yields, any other value its own kind;
   `{"const": {"param": "pb"}}` with `pb` a distribution, drawn as an op's `ns`, had passed both
   checkers and failed the run with "expected an integer, got dist".
+  The two operands of a comparison (`eq`, `ne`, `lt`, `le`, `gt`, `ge`) are two numbers, two
+  strings, two bools, two handles, or `null` and anything, as the runner compares them, and
+  the parameter an `elem`, `len`, or `sum` reads is an array, a `sum`'s of numbers only
+  (2026-10-15): `{"eq": [1, "a"]}` as a condition had passed both checkers and failed the run
+  with "eq: cannot compare int with str".
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)

@@ -1444,3 +1444,74 @@ def test_a_draw_of_a_kind_the_runner_refuses_is_refused_at_check(tmp_path):
     if runner.exists():
         r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)], capture_output=True, text=True, cwd=str(tmp_path))
         assert r.returncode == 1 and want in r.stderr, r.stderr
+
+
+def test_a_comparison_or_array_read_the_runner_refuses_is_refused_at_check(tmp_path):
+    """V27 (RC1 review, R26), as the runner has it: the runner compares two numbers, two
+    strings, two bools, two handles, or `null` with anything, so `{"eq": [1, "a"]}` as a
+    condition passed both checkers and failed `run` with "eq: cannot compare int with str"; an
+    `elem`, `len`, or `sum` of a parameter that is not an array, or a `sum` of one holding other
+    than numbers, likewise. What the document does not show is left to the run, and a value a
+    parameter file gives is held to it too."""
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def doc(body):
+        return {"ast": "0.10", "name": "v27",
+                "params": {"n": {"default": 3}, "s": {"default": "x"}, "z": {"default": None}, "arr": {"default": [1, 2.5]},
+                           "sarr": {"default": ["a", "b"]}, "d": {"default": {"uniform": {"lo": 1, "hi": 4}}}},
+                "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 10, "seed": 1}},
+                "actors": {"gpu": {"body": [{"let": {"name": "h", "value": {"file": {"dataset": "ds", "id": 0}}}}, body]}}}
+
+    def when(c):
+        return {"cond": {"if": c, "then": [{"compute": {"ns": 1}}]}}
+
+    def compute(ns):
+        return {"compute": {"ns": ns}}
+
+    accepted = [
+        when({"eq": [1, 2.5]}),
+        when({"lt": [{"param": "s"}, "a"]}),
+        when({"ne": [True, {"lt": [1, 2]}]}),
+        when({"eq": [None, {"param": "d"}]}),
+        when({"eq": [{"ref": "h"}, {"ref": "h"}]}),
+        when({"eq": [{"add": [1, 2]}, "a"]}),
+        when({"eq": [{"elem": {"array": "sarr", "index": 0}}, "a"]}),
+        compute({"add": [{"len": "sarr"}, {"sum": "arr"}]}),
+    ]
+    for body in accepted:
+        assert check.Check(doc(body), "v27").run() == [], body
+    refused = [
+        (when({"eq": [1, "a"]}), "actors/gpu/body/1/cond/if: eq: cannot compare an integer with a string (V27)"),
+        (when({"ge": [{"param": "n"}, True]}), "actors/gpu/body/1/cond/if: ge: cannot compare an integer with a bool (V27)"),
+        (when({"not": {"ne": [{"param": "d"}, {"param": "d"}]}}),
+         "actors/gpu/body/1/cond/if: ne: cannot compare a distribution with a distribution (V27)"),
+        (when({"lt": [{"ref": "h"}, {"elem": {"array": "sarr", "index": 1}}]}),
+         "actors/gpu/body/1/cond/if: lt: cannot compare a handle with a string (V27)"),
+        (when({"eq": [{"param": "arr"}, {"count": "ds"}]}), "actors/gpu/body/1/cond/if: eq: cannot compare an array with an integer (V27)"),
+        (compute({"len": "n"}), "actors/gpu/body/1/compute/ns: len: parameter `n` is not an array (V27)"),
+        (compute({"elem": {"array": "z", "index": 0}}), "actors/gpu/body/1/compute/ns: elem: parameter `z` is not an array (V27)"),
+        (compute({"sum": "sarr"}), "actors/gpu/body/1/compute/ns: sum: an element of `sarr` is a string (V27)"),
+    ]
+    for body, want in refused:
+        assert check.Check(doc(body), "v27").run() == [f"v27: {want}"], body
+    # the runner refuses the same documents with the same messages, and a parameter file giving
+    # `arr` a string element is refused by aeiou-params check and the run alike
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
+    if runner.exists():
+        for i, (body, *want) in enumerate([(b,) for b in accepted] + refused):
+            f = tmp_path / f"c{i}.ast.json"
+            f.write_text(json.dumps(doc(body)), encoding="utf-8")
+            r = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
+            got = [ln.strip() for ln in r.stdout.splitlines() if "(V27)" in ln]
+            assert got == [f"v27: {w}" for w in want] and r.returncode == (1 if want else 0), r.stdout + r.stderr
+    a, f = tmp_path / "v27.ast.json", tmp_path / "v27.params.json"
+    a.write_text(json.dumps(doc(compute({"sum": "arr"}))), encoding="utf-8")
+    f.write_text(json.dumps({"params_version": 1, "abstract": "v27", "params": {"arr": [4, "a"]}}), encoding="utf-8")
+    want = "v27: actors/gpu/body/1/compute/ns: sum: an element of `arr` is a string (V27)"
+    r = subprocess.run([sys.executable, "-m", "aeiou.params", "check", str(a), str(f)], capture_output=True, text=True,
+                       cwd=str(BUILDER), env={**os.environ, "PYTHONPATH": str(BUILDER)})
+    assert r.returncode == 1 and want in r.stdout, r.stdout + r.stderr
+    if runner.exists():
+        r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)], capture_output=True, text=True, cwd=str(tmp_path))
+        assert r.returncode == 1 and want in r.stderr, r.stderr

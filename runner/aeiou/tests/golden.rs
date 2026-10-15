@@ -1372,3 +1372,52 @@ fn a_draw_of_a_kind_the_runner_refuses_is_refused_at_check() {
     let e = Params::new(&loaded.ast, &config(1, 1, &[("cn", r#"{"const": {"param": "d"}}"#)])).err().map(|e| format!("{e:#}")).expect("accepted a draw of a distribution");
     assert!(e.contains("with the parameters given") && e.contains("v27: actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"), "{e}");
 }
+
+/// V27 (RC1 review): two operands of a comparison of kinds the runner cannot compare, and an
+/// `elem`, `len`, or `sum` of a parameter that is not an array (or, for `sum`, holds other
+/// than numbers), were accepted and failed the run ("eq: cannot compare int with str").
+#[test]
+fn a_comparison_or_array_read_the_runner_refuses_is_refused_at_check() {
+    let doc = |body: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "v27",
+                "params": {{"n": {{"default": 3}}, "s": {{"default": "x"}}, "z": {{"default": null}}, "arr": {{"default": [1, 2.5]}},
+                            "sarr": {{"default": ["a", "b"]}}, "d": {{"default": {{"uniform": {{"lo": 1, "hi": 4}}}}}}}},
+                "datasets": {{"ds": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": 10, "seed": 1}}}},
+                "actors": {{"gpu": {{"body": [{{"let": {{"name": "h", "value": {{"file": {{"dataset": "ds", "id": 0}}}}}}}}, {body}]}}}}}}"#
+        )
+    };
+    let when = |c: &str| format!(r#"{{"cond": {{"if": {c}, "then": [{{"compute": {{"ns": 1}}}}]}}}}"#);
+    let compute = |ns: &str| format!(r#"{{"compute": {{"ns": {ns}}}}}"#);
+    // accepted: the pairs the runner compares, and kinds the document does not show
+    for body in [
+        when(r#"{"eq": [1, 2.5]}"#),
+        when(r#"{"lt": [{"param": "s"}, "a"]}"#),
+        when(r#"{"ne": [true, {"lt": [1, 2]}]}"#),
+        when(r#"{"eq": [null, {"param": "d"}]}"#),
+        when(r#"{"eq": [{"ref": "h"}, {"ref": "h"}]}"#),
+        when(r#"{"eq": [{"add": [1, 2]}, "a"]}"#),
+        when(r#"{"eq": [{"elem": {"array": "sarr", "index": 0}}, "a"]}"#),
+        compute(r#"{"add": [{"len": "sarr"}, {"sum": "arr"}]}"#),
+    ] {
+        aeiou::load_str(&doc(&body)).unwrap_or_else(|e| panic!("{body}: {e:#}"));
+    }
+    for (body, want) in [
+        (when(r#"{"eq": [1, "a"]}"#), "actors/gpu/body/1/cond/if: eq: cannot compare an integer with a string (V27)"),
+        (when(r#"{"ge": [{"param": "n"}, true]}"#), "actors/gpu/body/1/cond/if: ge: cannot compare an integer with a bool (V27)"),
+        (when(r#"{"not": {"ne": [{"param": "d"}, {"param": "d"}]}}"#), "actors/gpu/body/1/cond/if: ne: cannot compare a distribution with a distribution (V27)"),
+        (when(r#"{"lt": [{"ref": "h"}, {"elem": {"array": "sarr", "index": 1}}]}"#), "actors/gpu/body/1/cond/if: lt: cannot compare a handle with a string (V27)"),
+        (when(r#"{"eq": [{"param": "arr"}, {"count": "ds"}]}"#), "actors/gpu/body/1/cond/if: eq: cannot compare an array with an integer (V27)"),
+        (compute(r#"{"len": "n"}"#), "actors/gpu/body/1/compute/ns: len: parameter `n` is not an array (V27)"),
+        (compute(r#"{"elem": {"array": "z", "index": 0}}"#), "actors/gpu/body/1/compute/ns: elem: parameter `z` is not an array (V27)"),
+        (compute(r#"{"sum": "sarr"}"#), "actors/gpu/body/1/compute/ns: sum: an element of `sarr` is a string (V27)"),
+    ] {
+        rejects(&doc(&body), &format!("v27: {want}"));
+    }
+    // the parameters in effect are held to it too
+    let text = doc(&compute(r#"{"sum": "arr"}"#));
+    let loaded = aeiou::load_str(&text).unwrap();
+    assert!(Params::new(&loaded.ast, &config(1, 1, &[("arr", "[4, 5]")])).is_ok());
+    let e = Params::new(&loaded.ast, &config(1, 1, &[("arr", r#"[4, "a"]"#)])).err().map(|e| format!("{e:#}")).expect("accepted a sum of a string");
+    assert!(e.contains("with the parameters given") && e.contains("v27: actors/gpu/body/1/compute/ns: sum: an element of `arr` is a string (V27)"), "{e}");
+}

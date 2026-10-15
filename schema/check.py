@@ -899,11 +899,15 @@ class Check:
         elif k in ("elem",):
             if a["array"] not in self.params:
                 self.err(p, f"unknown parameter array `{a['array']}`")
+            else:
+                self.array(a["array"], "elem", p)
             self.expr(a["index"], p + ["index"], scope)
             self.typed(a["index"], p + ["index"], scope)
         elif k in ("len", "sum"):
             if a not in self.params:
                 self.err(p, f"unknown parameter array `{a}`")
+            else:
+                self.array(a, k, p, numbers=k == "sum")
         elif k in ("size", "offset", "unit_index", "units", "chunks"):
             self.handle(a, p, scope)
         elif k == "count":
@@ -921,6 +925,8 @@ class Check:
             for i, x in enumerate(a):
                 self.expr(x, p + [i], scope)
                 self.operand(k, x, p + [i], scope)
+            if k in self.COMPARISONS and len(a) == 2:
+                self.compared(k, a, p, scope)
         elif k in ("neg", "not"):
             self.expr(a, p, scope)
             self.operand(k, a, p, scope)
@@ -937,6 +943,30 @@ class Check:
             self.typed(x, p, scope, "a number", self.NOT_OPERAND)
         elif k in ("and", "or", "not"):
             self.typed(x, p, scope, "a condition", self.NOT_CONDITION)
+
+    COMPARISONS = {"eq", "ne", "lt", "le", "gt", "ge"}
+
+    def compared(self, k, a, p, scope):
+        """V27: the runner compares two numbers, two strings, two bools, two handles, or `null`
+        with anything (unequal unless both are); any other pair of kinds the document shows is
+        refused, as the run would. As the runner's `compared`."""
+        x, y = self.kind(a[0], scope), self.kind(a[1], scope)
+        if x is None or y is None or "none" in (x, y):
+            return
+        if {x, y} <= {"int", "float"} or (x == y and x in ("str", "bool", "handle")):
+            return
+        self.err(p, f"{k}: cannot compare {self.KINDS[x]} with {self.KINDS[y]} (V27)")
+
+    def array(self, name, op, p, numbers=False):
+        """V27: the parameter `elem`, `len`, or `sum` reads is an array by its value in effect,
+        and for `sum` (`numbers`) of integers and floats only, as the runner reads it."""
+        v = self.param_value(name)
+        if not isinstance(v, list):
+            self.err(p, f"{op}: parameter `{name}` is not an array (V27)")
+        elif numbers:
+            k = next((k for k in map(self.pkind, v) if k not in ("int", "float")), None)
+            if k is not None:
+                self.err(p, f"{op}: an element of `{name}` is {self.KINDS[k]} (V27)")
 
     def at(self, a, p, scope, binding):
         name, idx = a["ref"], a["index"]

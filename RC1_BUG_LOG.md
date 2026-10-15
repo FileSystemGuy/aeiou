@@ -2195,3 +2195,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   failing HEAD's dry-run; on HEAD 088919c plus the change: `--test all` 138 passed, `--lib` 66,
   builder suite with MinIO 388, CI's checker diff empty, every committed parameter file ok,
   `aeiou-build --hermetic --twice --check` rc 0. Fixed in an isolated worktree and applied.
+
+## 95. A comparison of kinds the runner cannot compare, or an array read of a non-array, passed both checkers
+
+- **Where:** `schema/check.py` (`COMPARISONS`, `compared`, `array`) and `runner/aeiou/src/validate.rs`
+  (`Checker::compared`, `Checker::array`), V27; `schema/README.md` §4 V27;
+  `man/aeiou-abstract.7.md`; tests.
+- **Found by:** the RC1 fix of bug 94: V27 judged single operands but not a comparison's pair,
+  nor what `elem`, `len`, `sum` read.
+- **Defect:** `cond if {eq: [1, "a"]}` was `ok` in both checkers and failed `dry-run`/`run`
+  "eq: cannot compare int with str"; `len`/`elem`/`sum` of a parameter that is no array failed
+  "parameter `x` is not an array", `sum` of an array with a string "element of `x` is str".
+- **Fix:** where both operands' kinds are known and the runner refuses the pair (it compares
+  int with float, str with str, bool with bool, handle with handle, null with anything), both
+  checkers refuse it at the comparison's path, `…/cond/if: eq: cannot compare an integer with a
+  string (V27)`; `elem`, `len`, `sum` judge their parameter's value in effect (`len: parameter
+  `n` is not an array (V27)`, `sum: an element of `sarr` is a string (V27)`). Unknown kinds stay
+  accepted; given values are judged alike. No fingerprint, dataset id, AST, or schema change.
+- **Evidence:** `golden::a_comparison_or_array_read_the_runner_refuses_is_refused_at_check` and
+  `test_builder.py::test_a_comparison_or_array_read_the_runner_refuses_is_refused_at_check` (8
+  accepted, 8 refused, a parameter file) fail on the old checkers and pass; a 689-document
+  battery gives identical errors in both checkers, 317 refused (0 before), each failing HEAD's
+  dry-run; on HEAD 0a71dd5 plus the change: `--test all` 139 passed, `--lib` 66, builder suite
+  with MinIO 389, CI's checker diff empty, every committed parameter file ok, `aeiou-build
+  --hermetic --twice --check` rc 0. Fixed in an isolated worktree and applied.
