@@ -1202,3 +1202,63 @@ def test_a_channel_a_loaders_workers_use_is_declared_once_or_beside_it():
         assert len(e) == 1, e
         assert e[0].startswith(f"v26: actors/gpu/body/{path}/{kind}: a `{kind}` on channel `{ch}` inside a `loader` body")
         assert e[0].endswith("depend on timing (V26)")
+
+
+def test_a_value_of_a_kind_the_runner_refuses_is_refused_at_check():
+    """V27 (RC1 review, R18), as the runner has it: a value whose kind the document shows (a
+    literal, a parameter by its value in effect, a binding by its value) where the runner
+    refuses that kind is refused at check time, not when the run reaches it: `"count": "gpus"`
+    passed both checkers and failed `run` with "expected an integer, got str". A float or a
+    bool where an integer is needed is read as the runner reads it, and a kind the document
+    does not show (a draw, a `cond` whose arms differ) is left to the run."""
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def errs(count, *body):
+        actor = {"body": list(body)}
+        if count is not None:
+            actor["count"] = count
+        return check.Check({
+            "ast": "0.10", "name": "v27",
+            "params": {"s": {"default": "x"}, "n": {"default": 2}, "d": {"default": {"uniform": {"lo": 1, "hi": 4}}},
+                       "a": {"default": [1, 2]}},
+            "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 10, "seed": 1}},
+            "namespaces": {"o": {"pattern": "o/{name}-{k:03}", "fields": {"name": "str", "k": "int"}, "size": 10, "seed": 2}},
+            "actors": {"gpu": actor}}, "v27").run()
+
+    def compute(ns):
+        return {"compute": {"ns": ns}}
+
+    def obj(name, k):
+        return {"open": {"file": {"object": {"namespace": "o", "fields": {"name": name, "k": k}}}, "flags": ["WRONLY", "CREAT"]}}
+
+    # accepted: what the runner reads as an integer, and what the document does not show
+    for count, body in [
+        (1.5, [compute(True)]),
+        ({"param": "n"}, [compute({"draw": {"param": "d"}})]),
+        ({"actor": "count"}, [compute({"cond": {"if": True, "then": 1, "else": "x"}})]),
+        (1, [{"let": {"name": "x", "value": 3}}, compute({"add": [{"ref": "x"}, 1.5]})]),
+        (1, [obj({"param": "s"}, 1.5)]),
+        (None, [compute(1)]),
+    ]:
+        assert errs(count, *body) == [], (count, body)
+    for count, body, want in [
+        ("gpus", [compute(1)], "actors/gpu/count: expected an integer, got a string (V27)"),
+        ({"param": "s"}, [compute(1)], "actors/gpu/count: expected an integer, got a string (V27)"),
+        (1, [compute({"param": "d"})], "actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"),
+        (1, [compute({"param": "a"})], "actors/gpu/body/0/compute/ns: expected an integer, got an array (V27)"),
+        (1, [{"let": {"name": "x", "value": "x"}}, {"let": {"name": "y", "value": {"ref": "x"}}}, compute({"ref": "y"})],
+         "actors/gpu/body/2/compute/ns: expected an integer, got a string (V27)"),
+        (1, [{"let": {"name": "f", "value": {"file": {"dataset": "ds", "id": 0}}}}, compute({"ref": "f"})],
+         "actors/gpu/body/1/compute/ns: expected an integer, got a handle (V27)"),
+        (1, [compute({"add": [1, True]})], "actors/gpu/body/0/compute/ns/1: expected a number, got a bool (V27)"),
+        (1, [compute({"neg": {"elem": {"array": "a", "index": "x"}}})], "actors/gpu/body/0/compute/ns/index: expected an integer, got a string (V27)"),
+        (1, [compute({"cond": {"if": 0.5, "then": 1, "else": 2}})], "actors/gpu/body/0/compute/ns/if: expected a condition, got a float (V27)"),
+        (1, [compute({"draw": {"normal": {"mean": "m", "sd": 1, "min": 0}}})], "actors/gpu/body/0/compute/ns/mean: expected a number, got a string (V27)"),
+        (1, [{"loop": {"index": "i", "to": {"cond": {"if": True, "then": "a", "else": "b"}}, "body": []}}],
+         "actors/gpu/body/0/loop/to: expected an integer, got a string (V27)"),
+        (1, [{"stat": {"file": {"pick": {"dataset": "ds", "dist": "x"}}}}], "actors/gpu/body/0/stat/file/dist: expected an integer, got a string (V27)"),
+        (1, [obj("a", True)], "actors/gpu/body/0/open/file/fields/k: expected an integer, got a bool (V27)"),
+        (1, [obj(3, 1)], "actors/gpu/body/0/open/file/fields/name: expected a string, got an integer (V27)"),
+    ]:
+        assert errs(count, *body) == [f"v27: {want}"], (count, body)

@@ -82,6 +82,50 @@ enum Least {
     Unbounded,
 }
 
+/// V27: what each kind of value is called in a message.
+fn kind_name(kind: &str) -> &'static str {
+    match kind {
+        "int" => "an integer",
+        "float" => "a float",
+        "bool" => "a bool",
+        "str" => "a string",
+        "none" => "null",
+        "dist" => "a distribution",
+        "array" => "an array",
+        _ => "a handle",
+    }
+}
+
+fn literal_kind(l: &Literal) -> &'static str {
+    match l {
+        Literal::Null => "none",
+        Literal::Bool(_) => "bool",
+        Literal::Int(_) => "int",
+        Literal::Float(_) => "float",
+        Literal::Str(_) => "str",
+    }
+}
+
+fn pvalue_kind(v: &PValue) -> &'static str {
+    match v {
+        PValue::Scalar(l) => literal_kind(l),
+        PValue::Dist(_) => "dist",
+        PValue::Array(_) => "array",
+    }
+}
+
+/// V27: where the runner needs an integer or a number it reads a float, rounded, and a bool as
+/// 0 or 1.
+const NOT_NUMBER: &[&str] = &["str", "none", "dist", "array", "handle"];
+/// An operand of arithmetic is an integer or a float.
+const NOT_OPERAND: &[&str] = &["str", "none", "dist", "array", "handle", "bool"];
+/// A condition is a bool or an integer.
+const NOT_CONDITION: &[&str] = &["str", "none", "dist", "array", "handle", "float"];
+/// A size or a pick's distribution is a distribution or a number.
+const NOT_DRAWN: &[&str] = &["str", "none", "array", "handle"];
+/// A `str` field of a namespace object takes a string.
+const NOT_STRING: &[&str] = &["int", "float", "bool", "none", "dist", "array", "handle"];
+
 struct Checker<'a> {
     ast: &'a Ast,
     /// the parameter values in effect, when the check is on a run and not on the document
@@ -107,6 +151,8 @@ struct Scope<'a> {
     twice: HashSet<&'a str>,
     /// per level of `bindings`, the bindings there whose value varies (V6)
     varying: Vec<HashSet<&'a str>>,
+    /// per level of `bindings`, the kind each binding there is known to have (V27)
+    kinds: Vec<HashMap<&'a str, Option<&'static str>>>,
     /// the innermost enclosing frame whose count varies with an enclosing one (V6)
     count_varies: Option<P>,
 }
@@ -128,13 +174,14 @@ struct ActorState<'a> {
 
 impl<'a> Scope<'a> {
     fn new(fields: HashSet<&'a str>) -> Self {
-        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], count_varies: None }
+        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], kinds: vec![HashMap::new()], count_varies: None }
     }
 
     fn child(&self) -> Self {
         let mut s = self.clone();
         s.bindings.push(HashMap::new());
         s.varying.push(HashSet::new());
+        s.kinds.push(HashMap::new());
         s.forward = HashSet::new();
         s.twice = HashSet::new();
         s
@@ -154,8 +201,9 @@ impl<'a> Scope<'a> {
         s
     }
 
-    fn bind(&mut self, name: &'a str, value: &'a ExprLike, varies: bool) {
+    fn bind(&mut self, name: &'a str, value: &'a ExprLike, varies: bool, kind: Option<&'static str>) {
         self.bindings.last_mut().unwrap().insert(name, value);
+        self.kinds.last_mut().unwrap().insert(name, kind);
         let v = self.varying.last_mut().unwrap();
         if varies {
             v.insert(name);
@@ -166,6 +214,10 @@ impl<'a> Scope<'a> {
 
     fn is_varying(&self, name: &str) -> bool {
         self.bindings.iter().zip(&self.varying).rev().find(|(b, _)| b.contains_key(name)).map_or(false, |(_, v)| v.contains(name))
+    }
+
+    fn kind_of(&self, name: &str) -> Option<&'static str> {
+        self.bindings.iter().zip(&self.kinds).rev().find(|(b, _)| b.contains_key(name)).and_then(|(_, k)| k.get(name).copied().flatten())
     }
 
     fn lookup(&self, name: &str) -> Option<&'a ExprLike> {
@@ -398,21 +450,21 @@ impl<'a> Checker<'a> {
             self.inventory(d, &path);
             let f = d;
             self.distref(&f.size, &p(&path, &["size"]), &scope, &mut st);
+            self.drawn(&f.size, &p(&path, &["size"]), &scope);
             if f.layout != Layout::Array {
                 self.size_not_negative(&f.size, &p(&path, &["size"]));
             }
             self.expr(&f.count, &p(&path, &["count"]), &scope, &mut st, None);
-            if let Some(e) = &f.samples_per_file {
-                self.expr(e, &p(&path, &["samples_per_file"]), &scope, &mut st, None);
-            }
-            if let Some(e) = &f.chunk {
-                self.expr(e, &p(&path, &["chunk"]), &scope, &mut st, None);
-            }
-            if let Some(e) = &f.slot {
-                self.expr(e, &p(&path, &["slot"]), &scope, &mut st, None);
+            self.int(&f.count, &p(&path, &["count"]), &scope);
+            for (k, e) in [("samples_per_file", &f.samples_per_file), ("chunk", &f.chunk), ("slot", &f.slot)] {
+                if let Some(e) = e {
+                    self.expr(e, &p(&path, &[k]), &scope, &mut st, None);
+                    self.int(e, &p(&path, &[k]), &scope);
+                }
             }
             if let Some(i) = &f.inventory {
                 self.expr(&i.entry, &p(&path, &["inventory", "entry"]), &scope, &mut st, None);
+                self.int(&i.entry, &p(&path, &["inventory", "entry"]), &scope);
             }
             if let Some(fm) = &f.format {
                 if !is_ident(&fm.class) {
@@ -437,6 +489,7 @@ impl<'a> Checker<'a> {
                     ] {
                         if let Some(e) = e {
                             self.expr(e, &p(&lp, &[k]), &scope, &mut st, None);
+                            self.int(e, &p(&lp, &[k]), &scope);
                         }
                     }
                     if let Some(cols) = &l.columns {
@@ -454,6 +507,7 @@ impl<'a> Checker<'a> {
                             for (k, e) in [("header", &c.header), ("fixed", &c.fixed), ("row_header", &c.row_header), ("row_footer", &c.row_footer), ("row_align", &c.row_align), ("align", &c.align)] {
                                 if let Some(e) = e {
                                     self.expr(e, &p(&cp, &[k]), &scope, &mut st, None);
+                                    self.int(e, &p(&cp, &[k]), &scope);
                                 }
                             }
                         }
@@ -494,6 +548,7 @@ impl<'a> Checker<'a> {
                 let scope = Scope::new(n.fields.keys().map(|s| s.as_str()).collect());
                 let mut st = ActorState::default();
                 self.expr(e, &p(&path, &["size"]), &scope, &mut st, None);
+                self.int(e, &p(&path, &["size"]), &scope);
             }
             if n.pattern.is_empty() {
                 self.err(&p(&path, &["pattern"]), "empty pattern");
@@ -533,6 +588,7 @@ impl<'a> Checker<'a> {
             let mut st = ActorState::default();
             if let Some(c) = &a.count {
                 self.expr(c, &p(&path, &["count"]), &scope, &mut st, None);
+                self.int(c, &p(&path, &["count"]), &scope);
             }
             channel_sites(&a.body, &p(&path, &["body"]), false, &mut st.sites);
             self.body(&a.body, &p(&path, &["body"]), &scope, &mut st);
@@ -704,18 +760,18 @@ impl<'a> Checker<'a> {
                 }
                 self.exprlike(value, &p(pp, &["value"]), scope, st, Some(name));
                 let varies = self.exprlike_varies(value, scope);
-                scope.bind(name, value, varies);
+                let kind = self.like_kind(value, scope);
+                scope.bind(name, value, varies, kind);
             }
             Node::Loop { index, from, to, step, body } => {
                 if !is_ident(index) {
                     self.err(&p(pp, &["index"]), "not an identifier");
                 }
-                if let Some(e) = from {
-                    self.expr(e, &p(pp, &["from"]), scope, st, None);
-                }
-                self.expr(to, &p(pp, &["to"]), scope, st, None);
-                if let Some(e) = step {
-                    self.expr(e, &p(pp, &["step"]), scope, st, None);
+                for (k, e) in [("from", from.as_ref()), ("to", Some(to)), ("step", step.as_ref())] {
+                    if let Some(e) = e {
+                        self.expr(e, &p(pp, &[k]), scope, st, None);
+                        self.int(e, &p(pp, &[k]), scope);
+                    }
                 }
                 let nonneg = from.as_ref().map_or(true, |e| self.at_least(e, 0, scope));
                 let varies = [from.as_ref(), Some(to), step.as_ref()].into_iter().flatten().any(|e| self.varies(e, scope));
@@ -727,6 +783,7 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["index"]), "not an identifier");
                 }
                 self.expr(width, &p(pp, &["width"]), scope, st, None);
+                self.int(width, &p(pp, &["width"]), scope);
                 let inner = scope.with_index(index, true, self.varies(width, scope).then(|| pp.clone()));
                 let outer = st.fork_opens.replace(Vec::new());
                 self.body(body, &p(pp, &["body"]), &inner, st);
@@ -739,9 +796,10 @@ impl<'a> Checker<'a> {
                 if !is_ident(index) {
                     self.err(&p(pp, &["index"]), "not an identifier");
                 }
-                self.expr(workers, &p(pp, &["workers"]), scope, st, None);
-                self.expr(prefetch, &p(pp, &["prefetch"]), scope, st, None);
-                self.expr(batches, &p(pp, &["batches"]), scope, st, None);
+                for (k, e) in [("workers", workers), ("prefetch", prefetch), ("batches", batches)] {
+                    self.expr(e, &p(pp, &[k]), scope, st, None);
+                    self.int(e, &p(pp, &[k]), scope);
+                }
                 self.declared_outside_forks("loader", pp, st);
                 st.channels.insert(name);
                 let inner = scope.with_index(index, true, self.varies(batches, scope).then(|| pp.clone()));
@@ -756,6 +814,7 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["name"]), "not an identifier");
                 }
                 self.expr(capacity, &p(pp, &["capacity"]), scope, st, None);
+                self.int(capacity, &p(pp, &["capacity"]), scope);
                 self.declared_outside_forks("channel", pp, st);
                 st.channels.insert(name);
             }
@@ -765,6 +824,7 @@ impl<'a> Checker<'a> {
                 }
                 self.used_by_workers("put", channel, pp, st);
                 self.expr(seq, &p(pp, &["seq"]), scope, st, None);
+                self.int(seq, &p(pp, &["seq"]), scope);
             }
             Node::Take { channel } => {
                 if !st.channels.contains(channel.as_str()) {
@@ -777,9 +837,13 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["scope"]), "not `global`, `host`, or an identifier");
                 }
             }
-            Node::Compute { ns } => self.expr(ns, &p(pp, &["ns"]), scope, st, None),
+            Node::Compute { ns } => {
+                self.expr(ns, &p(pp, &["ns"]), scope, st, None);
+                self.int(ns, &p(pp, &["ns"]), scope);
+            }
             Node::Cond { test, then, otherwise } => {
                 self.expr(test, &p(pp, &["if"]), scope, st, None);
+                self.typed(test, &p(pp, &["if"]), scope, "a condition", NOT_CONDITION);
                 self.body(then, &p(pp, &["then"]), scope, st);
                 if let Some(b) = otherwise {
                     self.body(b, &p(pp, &["else"]), scope, st);
@@ -931,6 +995,7 @@ impl<'a> Checker<'a> {
         }
         for (key, e) in &exprs {
             self.expr(e, &p(pp, &[key]), scope, st, None);
+            self.int(e, &p(pp, &[key]), scope);
         }
         if let Node::Write { file, .. } = node {
             self.note_write(file, scope, st);
@@ -1063,6 +1128,76 @@ impl<'a> Checker<'a> {
         }
     }
 
+    // ---- V27: the kind a value is known to have ----
+
+    /// The value in effect of parameter `name`: given, else the default.
+    fn param_value(&self, name: &str) -> Option<&PValue> {
+        self.given.and_then(|g| g.get(name)).or_else(|| self.ast.params.get(name).map(|p| &p.default))
+    }
+
+    /// V27: the kind a value is known to have where the document shows it: a literal, a
+    /// parameter by its value in effect, an element of a parameter array whose elements are of
+    /// one kind, a binding by its value, an expression whose result is an integer or a bool
+    /// whatever its operands, a `cond` whose arms are of one kind. `None` when it is not known
+    /// before the run. As `check.py`'s `kind`.
+    fn kind(&self, e: &Expr, scope: &Scope<'a>) -> Option<&'static str> {
+        let node = match e {
+            Expr::Lit(l) => return Some(literal_kind(l)),
+            Expr::Node(n) => n.as_ref(),
+        };
+        match node {
+            ExprNode::Ref(name) | ExprNode::Index(name) if scope.fields.contains(name.as_str()) => None,
+            ExprNode::Ref(name) => scope.kind_of(name),
+            ExprNode::At { name, .. } => if scope.forward.contains(name.as_str()) { None } else { scope.kind_of(name) },
+            ExprNode::Param(name) => self.param_value(name).map(pvalue_kind),
+            ExprNode::Elem { array, .. } => match self.param_value(array) {
+                Some(PValue::Array(a)) if !a.is_empty() => {
+                    let k = pvalue_kind(&a[0]);
+                    a.iter().all(|x| pvalue_kind(x) == k).then_some(k)
+                }
+                _ => None,
+            },
+            ExprNode::Index(_) | ExprNode::Actor(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Len(_) | ExprNode::Size(_)
+            | ExprNode::Offset(_) | ExprNode::UnitIndex(_) | ExprNode::Units(_) | ExprNode::Chunks(_) => Some("int"),
+            ExprNode::Eq(_) | ExprNode::Ne(_) | ExprNode::Lt(_) | ExprNode::Le(_) | ExprNode::Gt(_) | ExprNode::Ge(_) | ExprNode::And(_)
+            | ExprNode::Or(_) | ExprNode::Not(_) => Some("bool"),
+            ExprNode::Cond(c) => {
+                let t = self.like_kind(&c.then, scope);
+                if t == self.like_kind(&c.otherwise, scope) { t } else { None }
+            }
+            _ => None,
+        }
+    }
+
+    fn like_kind(&self, v: &ExprLike, scope: &Scope<'a>) -> Option<&'static str> {
+        match v {
+            ExprLike::Expr(e) => self.kind(e, scope),
+            ExprLike::Dist(_) => Some("dist"),
+            ExprLike::Handle(_) => Some("handle"),
+        }
+    }
+
+    /// V27: a value the runner needs as `want` is not of a kind it refuses there.
+    fn typed(&mut self, e: &Expr, path: &P, scope: &Scope<'a>, want: &str, refuse: &[&str]) {
+        if let Some(k) = self.kind(e, scope) {
+            if refuse.contains(&k) {
+                self.err(path, format!("expected {want}, got {} (V27)", kind_name(k)));
+            }
+        }
+    }
+
+    fn int(&mut self, e: &Expr, path: &P, scope: &Scope<'a>) {
+        self.typed(e, path, scope, "an integer", NOT_NUMBER);
+    }
+
+    /// V27: a size or a pick's distribution that is an expression is drawn as a constant and
+    /// read as an integer, unless it is a distribution.
+    fn drawn(&mut self, d: &DistRef, path: &P, scope: &Scope<'a>) {
+        if let DistRef::Expr(e) = d {
+            self.typed(e, path, scope, "an integer", NOT_DRAWN);
+        }
+    }
+
     // ---- expressions ----
 
     fn exprlike(&mut self, v: &'a ExprLike, path: &P, scope: &Scope<'a>, st: &mut ActorState<'a>, binding: Option<&'a str>) {
@@ -1101,18 +1236,18 @@ impl<'a> Checker<'a> {
             }
             Dist::Const(e) => self.expr(e, path, scope, st, None),
             Dist::Uniform { lo, hi } => {
-                self.expr(lo, &p(path, &["lo"]), scope, st, None);
-                self.expr(hi, &p(path, &["hi"]), scope, st, None);
+                for (k, e) in [("lo", lo), ("hi", hi)] {
+                    self.expr(e, &p(path, &[k]), scope, st, None);
+                    self.int(e, &p(path, &[k]), scope);
+                }
             }
             Dist::Uniform64 {} => {}
             Dist::Normal { mean, sd, min, max } => {
-                self.expr(mean, &p(path, &["mean"]), scope, st, None);
-                self.expr(sd, &p(path, &["sd"]), scope, st, None);
-                if let Some(e) = min {
-                    self.expr(e, &p(path, &["min"]), scope, st, None);
-                }
-                if let Some(e) = max {
-                    self.expr(e, &p(path, &["max"]), scope, st, None);
+                for (k, e) in [("mean", Some(mean)), ("sd", Some(sd)), ("min", min.as_ref()), ("max", max.as_ref())] {
+                    if let Some(e) = e {
+                        self.expr(e, &p(path, &[k]), scope, st, None);
+                        self.typed(e, &p(path, &[k]), scope, "a number", NOT_NUMBER);
+                    }
                 }
                 self.bounds("normal", min.as_deref(), max.as_deref(), path);
             }
@@ -1120,12 +1255,11 @@ impl<'a> Checker<'a> {
                 if !(*sigma > 0.0) {
                     self.err(&p(path, &["sigma"]), "sigma must be > 0");
                 }
-                self.expr(median, &p(path, &["median"]), scope, st, None);
-                if let Some(e) = min {
-                    self.expr(e, &p(path, &["min"]), scope, st, None);
-                }
-                if let Some(e) = max {
-                    self.expr(e, &p(path, &["max"]), scope, st, None);
+                for (k, e) in [("median", Some(median)), ("min", min.as_ref()), ("max", max.as_ref())] {
+                    if let Some(e) = e {
+                        self.expr(e, &p(path, &[k]), scope, st, None);
+                        self.typed(e, &p(path, &[k]), scope, "a number", NOT_NUMBER);
+                    }
                 }
                 self.bounds("lognormal", min.as_deref(), max.as_deref(), path);
             }
@@ -1180,6 +1314,7 @@ impl<'a> Checker<'a> {
                     self.err(path, format!("unknown parameter array `{array}`"));
                 }
                 self.expr(index, &p(path, &["index"]), scope, st, None);
+                self.int(index, &p(path, &["index"]), scope);
             }
             ExprNode::Len(name) | ExprNode::Sum(name) => {
                 if !self.ast.params.contains_key(name) {
@@ -1199,25 +1334,41 @@ impl<'a> Checker<'a> {
             }
             ExprNode::Cond(c) => {
                 self.expr(&c.test, &p(path, &["if"]), scope, st, None);
+                self.typed(&c.test, &p(path, &["if"]), scope, "a condition", NOT_CONDITION);
                 self.exprlike(&c.then, &p(path, &["then"]), scope, st, binding);
                 self.exprlike(&c.otherwise, &p(path, &["else"]), scope, st, binding);
             }
+            // V27: an operand of arithmetic is a number
             ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a)
-            | ExprNode::Min(a) | ExprNode::Max(a) | ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a)
-            | ExprNode::Gt(a) | ExprNode::Ge(a) => {
+            | ExprNode::Min(a) | ExprNode::Max(a) => {
+                for (i, x) in a.iter().enumerate() {
+                    self.expr(x, &p(path, &[&i.to_string()]), scope, st, None);
+                    self.typed(x, &p(path, &[&i.to_string()]), scope, "a number", NOT_OPERAND);
+                }
+            }
+            ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a) | ExprNode::Gt(a) | ExprNode::Ge(a) => {
                 for (i, x) in a.iter().enumerate() {
                     self.expr(x, &p(path, &[&i.to_string()]), scope, st, None);
                 }
             }
+            // V27: and of `and`, `or`, `not` a condition
             ExprNode::And(a) | ExprNode::Or(a) => {
                 if a.len() < 2 {
                     self.err(path, "and/or need at least two operands");
                 }
                 for (i, x) in a.iter().enumerate() {
                     self.expr(x, &p(path, &[&i.to_string()]), scope, st, None);
+                    self.typed(x, &p(path, &[&i.to_string()]), scope, "a condition", NOT_CONDITION);
                 }
             }
-            ExprNode::Neg(x) | ExprNode::Not(x) => self.expr(x, path, scope, st, None),
+            ExprNode::Neg(x) => {
+                self.expr(x, path, scope, st, None);
+                self.typed(x, path, scope, "a number", NOT_OPERAND);
+            }
+            ExprNode::Not(x) => {
+                self.expr(x, path, scope, st, None);
+                self.typed(x, path, scope, "a condition", NOT_CONDITION);
+            }
             ExprNode::Actor(_) => {}
         }
     }
@@ -1248,6 +1399,7 @@ impl<'a> Checker<'a> {
             self.err(path, format!("`{name} @` names a binding this body defines more than once, so which one it reads is not defined"));
         }
         self.expr(idx, &p(path, &["index"]), scope, st, None);
+        self.int(idx, &p(path, &["index"]), scope);
     }
 
     /// `e` provably ≥ `k`, `k` ∈ {0, 1} (rule V3): a literal ≥ k; a `ref`, `param`, or `draw` whose distribution has
@@ -1502,12 +1654,14 @@ impl<'a> Checker<'a> {
                             self.err(path, format!("unknown dataset `{ds}`"));
                         }
                         self.expr(id, &p(path, &["id"]), scope, st, None);
+                        self.int(id, &p(path, &["id"]), scope);
                     }
                     (None, None, Some(of)) => self.handle(of, &p(path, &["of"]), scope, st),
                     _ => self.err(path, "file handle needs either {dataset, id} or {of}"),
                 }
                 if let Some(e) = &f.chunk {
                     self.expr(e, &p(path, &["chunk"]), scope, st, None);
+                    self.int(e, &p(path, &["chunk"]), scope);
                 }
             }
             Handle::Dir { dataset, id } => {
@@ -1515,6 +1669,7 @@ impl<'a> Checker<'a> {
                     self.err(path, format!("`dir` needs a dataset named by ids, not an `array`: got `{dataset}`"));
                 }
                 self.expr(id, &p(path, &["id"]), scope, st, None);
+                self.int(id, &p(path, &["id"]), scope);
             }
             Handle::Object { namespace, fields } => match self.ast.namespaces.get(namespace) {
                 None => self.err(path, format!("unknown namespace `{namespace}`")),
@@ -1526,6 +1681,12 @@ impl<'a> Checker<'a> {
                     }
                     for (f, e) in fields {
                         self.expr(e, &p(path, &["fields", f]), scope, st, None);
+                        // V27: an `int` field takes an integer or a float, rounded (never a bool); a `str` field a string
+                        match ns.fields.get(f) {
+                            Some(FieldType::Int) => self.typed(e, &p(path, &["fields", f]), scope, "an integer", NOT_OPERAND),
+                            Some(FieldType::Str) => self.typed(e, &p(path, &["fields", f]), scope, "a string", NOT_STRING),
+                            None => {}
+                        }
                     }
                 }
             },
@@ -1555,17 +1716,20 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(d) = &pk.dist {
                     self.distref(d, &p(path, &["dist"]), scope, st);
+                    self.drawn(d, &p(path, &["dist"]), scope);
                 }
             }
             Handle::Unit(u) => {
                 self.handle(&u.of, &p(path, &["of"]), scope, st);
                 if let Some(e) = &u.index {
                     self.expr(e, &p(path, &["index"]), scope, st, None);
+                    self.int(e, &p(path, &["index"]), scope);
                 }
             }
             Handle::Column(c) => {
                 self.handle(&c.of, &p(path, &["of"]), scope, st);
                 self.expr(&c.index, &p(path, &["index"]), scope, st, None);
+                self.int(&c.index, &p(path, &["index"]), scope);
             }
         }
     }

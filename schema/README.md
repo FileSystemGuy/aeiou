@@ -395,6 +395,26 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   in the body the loader is in, the loader then declared at one site too (2026-10-15): the
   actor declaring it again while the workers ran (in a loop the loader was declared outside
   of, or at a second site), a worker reached the old channel or the new one as timing had it.
+- **V27 a value is of a kind the runner reads where it stands** (added 2026-10-15, contract
+  0.10, no committed AST affected). The schema lets any scalar stand where an expression
+  does, so `"count": "gpus"` passed both checkers and failed `run` with "expected an
+  integer, got str". The validator refuses a value whose kind the document shows (a literal;
+  a `param` by its value in effect, judged on the defaults and by the runner again on the
+  values given, as V3; an `elem` of a parameter array whose elements are of one kind; a
+  `ref` or `at` by the value its binding was given; a handle or a distribution; an
+  expression whose result is an integer (`index`, `actor`, `count`, `size`, …) or a bool (a
+  comparison, `and`, `or`, `not`) whatever its operands; a `cond` whose arms are of one kind)
+  where the runner refuses that kind: a string, `null`, a distribution, an array, or a
+  handle where it reads an integer (an actor's `count`, a dataset's `count`, geometry, and
+  framing, a namespace's `size`, `from`, `to`, `step`, `width`, `workers`, `prefetch`,
+  `batches`, `capacity`, `seq`, `ns`, an op's `len`, `offset`, and `repeat`, a handle's
+  `id`, `chunk`, and `index`, `at` and `elem` indices, `uniform` bounds) or a number (the
+  other distributions' arguments); in addition a bool for an operand of arithmetic and a
+  float for a condition (`if`, `and`, `or`, `not`); a `size` or a `pick`'s `dist` may also
+  be a distribution. An `int` field of a namespace object takes an integer or a float, a
+  `str` field a string. A `null` where the key is optional is the key left out, as the
+  runner reads it. What the document does not show (a draw, a `cond` whose arms differ,
+  arithmetic) is left to the run.
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)

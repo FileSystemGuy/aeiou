@@ -2005,3 +2005,34 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   files of 100/100/20, packed and TFRecord, sizes and offsets equal `DsMeta`'s, all 220 ids at
   the production bound) failed "100 offsets held after file 0" with the gate undone and
   passes; suites as bug 85.
+
+## 87. A value of a kind the runner refuses (`"count": "gpus"`) passed both checkers
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (new rule V27: `kind`, `typed`,
+  `drawn`, `operand`, a binding's kind in `Scope`; `check_given` judges given values too);
+  `schema/README.md` §4 V27; `man/aeiou-abstract.7.md`; `runner/aeiou/tests/golden.rs`.
+- **Found by:** the RC1 timing review of the channels (an aside): neither checker inferred a
+  value's kind.
+- **Defect:** `{"actors":{"gpu":{"count":"gpus",…}}}` was `ok` in check.py and `aeiou check`, and
+  `dry-run`/`run` failed "actor `gpu` count: expected an integer, got str"; the same at every
+  integer or number site (loop bounds, widths, loader counts, capacity, seq, ns, len, offset,
+  ids, distribution arguments), condition, arithmetic operand, and namespace field; `--param
+  n=abc` reached the run.
+- **Fix:** a value's kind where the document shows it (a literal, a parameter by its value in
+  effect, an element of a one-kind parameter array, a binding by its value, a handle, a
+  distribution, an expression whose result kind is fixed, a `cond` with arms of one kind) is
+  judged at each site against the kinds the runner refuses there, with one path and message in
+  both checkers, e.g. `actors/gpu/count: expected an integer, got a string (V27)`; a float or
+  bool where an integer is read stays accepted (the runner rounds it, reads a bool as 0/1); a
+  literal `null` on an optional key is the key left out. Two parity gaps on the way: check.py
+  read a `ref` where an expression or handle may stand as a handle (message differed), and
+  passed a file handle `{dataset, id: null}` the runner refuses. A golden V3 case that used a
+  distribution parameter as an `add` operand (which the runner refuses) now draws it. No
+  fingerprint, dataset id, AST, or schema change.
+- **Evidence:** `golden::a_value_of_a_kind_the_runner_refuses_is_refused_at_check` and
+  `test_builder.py::test_a_value_of_a_kind_the_runner_refuses_is_refused_at_check` (6 accepted,
+  14 refused, exact messages; `--param n=abc`) fail on the old checkers and pass; a 724-document
+  battery (24 sites × 23 kinds) gives identical errors in both checkers, and every V27 refusal
+  failed `dry-run` before; on HEAD 6a748fc plus the change: `--test all` 133 passed, `--lib` 66,
+  builder suite with MinIO 381 passed, CI's checker diff empty, `aeiou-build --hermetic --twice
+  --check` rc 0. Fixed in an isolated worktree and applied.

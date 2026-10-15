@@ -448,7 +448,8 @@ fn validator_rejects_what_check_py_rejects() {
     let chain = |e: &str| format!(r#"{{"loop": {{"index": "i", "to": 4, "body": [{{"let": {{"name": "d", "value": {{"draw": {{"uniform": {{"lo": 1, "hi": 5}}}}}}}}}}, {{"let": {{"name": "x", "value": {{"cond": {{"if": true, "then": {{"at": {{"ref": "x", "index": {{"sub": [{{"index": "i"}}, {e}]}}}}}}, "else": 1}}}}}}}}]}}}}"#);
     accepts(&base(ds, &chain(r#"{"add": [{"mod": [{"index": "i"}, {"ref": "d"}]}, 1]}"#))); // the per-round draw: r − (r mod d + 1)
     accepts(&base(ds, &chain(r#"{"add": [{"index": "i"}, {"ref": "d"}]}"#))); // index >= 0 (no `from`) plus a draw >= 1
-    accepts(&base(ds, &chain(r#"{"add": [{"add": [{"mod": [3, 2]}, 0]}, {"param": "n"}]}"#)).replace(r#""n": {"default": 3}"#, r#""n": {"default": {"uniform": {"lo": 1, "hi": 2}}}"#));
+    // a parameter whose value is a distribution is drawn: as an operand it is a distribution (V27)
+    accepts(&base(ds, &chain(r#"{"add": [{"add": [{"mod": [3, 2]}, 0]}, {"draw": {"param": "n"}}]}"#)).replace(r#""n": {"default": 3}"#, r#""n": {"default": {"uniform": {"lo": 1, "hi": 2}}}"#));
     rejects(&base(ds, &chain(r#"{"add": [{"mod": [{"index": "i"}, {"ref": "d"}]}, 0]}"#)), "provably >= 1"); // >= 0 only
     rejects(&base(ds, &chain(r#"{"add": [{"index": "i"}, {"index": "i"}]}"#)), "provably >= 1");
     rejects(&base(ds, &chain(r#"{"mul": [{"ref": "d"}, 2]}"#)), "provably >= 1"); // `mul` is not a form the rule knows
@@ -1188,4 +1189,65 @@ fn float_literals_are_read_as_check_py_reads_them() {
         &doc(r#"{"normal": {"mean": 0, "sd": 1, "min": 9007199254740992, "max": 4503599627370495.5}}"#),
         "t: datasets/d/size: normal: min 9007199254740992 is above max 4503599627370495.5",
     );
+}
+
+/// V27 (RC1 review, R18), as `check.py` has it: a value whose kind the document shows (a
+/// literal, a parameter by its value in effect, a binding by its value) where the runner
+/// refuses that kind is refused at check time, not when the run reaches it: `"count": "gpus"`
+/// passed both checkers and failed `run` with "expected an integer, got str". A float or a bool
+/// where an integer is needed is read as the runner reads it, and a kind the document does not
+/// show (a draw, a `cond` whose arms differ) is left to the run.
+#[test]
+fn a_value_of_a_kind_the_runner_refuses_is_refused_at_check() {
+    let doc = |count: &str, body: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "v27",
+                "params": {{"s": {{"default": "x"}}, "n": {{"default": 2}}, "d": {{"default": {{"uniform": {{"lo": 1, "hi": 4}}}}}}, "a": {{"default": [1, 2]}}}},
+                "datasets": {{"ds": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": 10, "seed": 1}}}},
+                "namespaces": {{"o": {{"pattern": "o/{{name}}-{{k:03}}", "fields": {{"name": "str", "k": "int"}}, "size": 10, "seed": 2}}}},
+                "actors": {{"gpu": {{"count": {count}, "body": [{body}]}}}}}}"#
+        )
+    };
+    let compute = |ns: &str| format!(r#"{{"compute": {{"ns": {ns}}}}}"#);
+    // accepted: what the runner reads as an integer, and what the document does not show
+    for (count, body) in [
+        ("1.5", compute("true")),
+        (r#"{"param": "n"}"#, compute(r#"{"draw": {"param": "d"}}"#)),
+        (r#"{"actor": "count"}"#, compute(r#"{"cond": {"if": true, "then": 1, "else": "x"}}"#)),
+        ("1", format!(r#"{{"let": {{"name": "x", "value": 3}}}}, {}"#, compute(r#"{"add": [{"ref": "x"}, 1.5]}"#))),
+        ("1", r#"{"open": {"file": {"object": {"namespace": "o", "fields": {"name": {"param": "s"}, "k": 1.5}}}, "flags": ["WRONLY", "CREAT"]}}"#.to_string()),
+        // a `null` count is no count, as serde reads an absent key
+        ("null", compute("1")),
+    ] {
+        aeiou::load_str(&doc(count, &body)).unwrap_or_else(|e| panic!("{count} {body}: {e:#}"));
+    }
+    for (count, body, want) in [
+        (r#""gpus""#, compute("1"), "actors/gpu/count: expected an integer, got a string (V27)"),
+        (r#"{"param": "s"}"#, compute("1"), "actors/gpu/count: expected an integer, got a string (V27)"),
+        ("1", compute(r#"{"param": "d"}"#), "actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"),
+        ("1", compute(r#"{"param": "a"}"#), "actors/gpu/body/0/compute/ns: expected an integer, got an array (V27)"),
+        ("1", format!(r#"{{"let": {{"name": "x", "value": "x"}}}}, {{"let": {{"name": "y", "value": {{"ref": "x"}}}}}}, {}"#, compute(r#"{"ref": "y"}"#)),
+         "actors/gpu/body/2/compute/ns: expected an integer, got a string (V27)"),
+        ("1", format!(r#"{{"let": {{"name": "f", "value": {{"file": {{"dataset": "ds", "id": 0}}}}}}}}, {}"#, compute(r#"{"ref": "f"}"#)),
+         "actors/gpu/body/1/compute/ns: expected an integer, got a handle (V27)"),
+        ("1", compute(r#"{"add": [1, true]}"#), "actors/gpu/body/0/compute/ns/1: expected a number, got a bool (V27)"),
+        ("1", compute(r#"{"neg": {"elem": {"array": "a", "index": "x"}}}"#), "actors/gpu/body/0/compute/ns/index: expected an integer, got a string (V27)"),
+        ("1", compute(r#"{"cond": {"if": 0.5, "then": 1, "else": 2}}"#), "actors/gpu/body/0/compute/ns/if: expected a condition, got a float (V27)"),
+        ("1", compute(r#"{"draw": {"normal": {"mean": "m", "sd": 1, "min": 0}}}"#), "actors/gpu/body/0/compute/ns/mean: expected a number, got a string (V27)"),
+        ("1", r#"{"loop": {"index": "i", "to": {"cond": {"if": true, "then": "a", "else": "b"}}, "body": []}}"#.to_string(),
+         "actors/gpu/body/0/loop/to: expected an integer, got a string (V27)"),
+        ("1", r#"{"stat": {"file": {"pick": {"dataset": "ds", "dist": "x"}}}}"#.to_string(), "actors/gpu/body/0/stat/file/dist: expected an integer, got a string (V27)"),
+        ("1", r#"{"open": {"file": {"object": {"namespace": "o", "fields": {"name": "a", "k": true}}}, "flags": ["WRONLY", "CREAT"]}}"#.to_string(),
+         "actors/gpu/body/0/open/file/fields/k: expected an integer, got a bool (V27)"),
+        ("1", r#"{"open": {"file": {"object": {"namespace": "o", "fields": {"name": 3, "k": 1}}}, "flags": ["WRONLY", "CREAT"]}}"#.to_string(),
+         "actors/gpu/body/0/open/file/fields/name: expected a string, got an integer (V27)"),
+    ] {
+        rejects(&doc(count, &body), &format!("v27: {want}"));
+    }
+    // the parameters in effect are held to it too: a string given where the default was a number
+    let text = doc(r#"{"param": "n"}"#, &compute("1"));
+    let loaded = aeiou::load_str(&text).unwrap();
+    assert!(Params::new(&loaded.ast, &config(1, 1, &[("n", "3")])).is_ok());
+    let e = Params::new(&loaded.ast, &config(1, 1, &[("n", "abc")])).err().map(|e| format!("{e:#}")).expect("accepted n=abc");
+    assert!(e.contains("with the parameters given") && e.contains("v27: actors/gpu/count: expected an integer, got a string (V27)"), "{e}");
 }

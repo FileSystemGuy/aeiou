@@ -216,14 +216,18 @@ class Check:
             self.layout_fields(body, ["datasets", dname])
             self.inventory(body, ["datasets", dname])
             self.exprlike(body["size"], ["datasets", dname, "size"], Scope(self), dist_ok=True)
+            self.drawn(body["size"], ["datasets", dname, "size"], Scope(self))
             if body.get("layout") != "array":
                 self.size_not_negative(body["size"], ["datasets", dname, "size"])
             self.expr(body["count"], ["datasets", dname, "count"], Scope(self))
+            self.typed(body["count"], ["datasets", dname, "count"], Scope(self))
             for k in ("samples_per_file", "chunk", "slot"):
                 if k in body:
                     self.expr(body[k], ["datasets", dname, k], Scope(self))
+                    self.typed(body[k], ["datasets", dname, k], Scope(self), optional=True)
             if "inventory" in body:
                 self.expr(body["inventory"]["entry"], ["datasets", dname, "inventory", "entry"], Scope(self))
+                self.typed(body["inventory"]["entry"], ["datasets", dname, "inventory", "entry"], Scope(self))
             framing = body.get("format", {}).get("framing")
             if framing:
                 lp = ["datasets", dname, "format", "framing"]
@@ -238,8 +242,10 @@ class Check:
                             for ck, cv in c.items():
                                 if ck != "weight":
                                     self.expr(cv, lp + ["columns", i, ck], Scope(self))
+                                    self.typed(cv, lp + ["columns", i, ck], Scope(self), optional=True)
                     elif k != "writer":
                         self.expr(v, lp + [k], Scope(self))
+                        self.typed(v, lp + [k], Scope(self), optional=True)
             self.reserved(body["pattern"], ["datasets", dname])
             root = dataset_root(d)
             if root in roots:
@@ -253,6 +259,7 @@ class Check:
         for nname, n in self.namespaces.items():
             if n["size"] != "as_written":
                 self.expr(n["size"], ["namespaces", nname, "size"], Scope(self, fields=set(n["fields"])))
+                self.typed(n["size"], ["namespaces", nname, "size"], Scope(self, fields=set(n["fields"])))
             self.reserved(n["pattern"], ["namespaces", nname])
             nroot = n["pattern"].split("{", 1)[0].rpartition("/")[0]
             for root, dname in roots.items():
@@ -274,6 +281,7 @@ class Check:
             scope = Scope(self)
             if "count" in a:
                 self.expr(a["count"], ["actors", aname, "count"], scope)
+                self.typed(a["count"], ["actors", aname, "count"], scope, optional=True)
             self.sites = {}
             self.channel_sites(a["body"], ["actors", aname, "body"], False)
             self.body(a["body"], ["actors", aname, "body"], scope)
@@ -337,6 +345,84 @@ class Check:
             elif not (isinstance(p.get("default"), int) and not isinstance(p.get("default"), bool)):
                 self.err(path + ["pattern"], f"divisor `{name}` is a parameter whose default is not an integer (V23)")
 
+    # ---- V27: the kind a value is known to have ----
+    KINDS = {"int": "an integer", "float": "a float", "bool": "a bool", "str": "a string", "none": "null",
+             "dist": "a distribution", "array": "an array", "handle": "a handle"}
+    # where the runner needs an integer or a number it reads a float, rounded, and a bool as 0 or 1
+    NOT_NUMBER = {"str", "none", "dist", "array", "handle"}
+    # an operand of arithmetic is an integer or a float
+    NOT_OPERAND = NOT_NUMBER | {"bool"}
+    # a condition is a bool or an integer
+    NOT_CONDITION = NOT_NUMBER | {"float"}
+    # a size or a pick's distribution is a distribution or a number
+    NOT_DRAWN = NOT_NUMBER - {"dist"}
+
+    @staticmethod
+    def pkind(v):
+        """The kind of a parameter value."""
+        if isinstance(v, bool):
+            return "bool"
+        if isinstance(v, int):
+            return "int"
+        if isinstance(v, float):
+            return "float"
+        if isinstance(v, str):
+            return "str"
+        if v is None:
+            return "none"
+        return "array" if isinstance(v, list) else "dist"
+
+    def kind(self, e, scope):
+        """V27: the kind (`KINDS`) a value, distribution, or handle is known to have where the
+        document shows it: a literal, a parameter by its value in effect, an element of a
+        parameter array whose elements are of one kind, a binding by its value, a handle, a
+        distribution, an expression whose result is an integer or a bool whatever its operands, a
+        `cond` whose arms are of one kind. None when it is not known before the run."""
+        if not isinstance(e, dict):
+            return self.pkind(e)
+        if len(e) != 1:
+            return None
+        k, a = next(iter(e.items()))
+        if k in ("ref", "index") and a in scope.fields:
+            return None
+        if k == "ref":
+            return scope.kind_of(a)
+        if k == "at":
+            return None if a["ref"] in scope.forward else scope.kind_of(a["ref"])
+        if k == "param":
+            return self.pkind(self.param_value(a)) if a in self.params else None
+        if k == "elem":
+            v = self.param_value(a["array"]) if a["array"] in self.params else None
+            kinds = {self.pkind(x) for x in v} if isinstance(v, list) else set()
+            return kinds.pop() if len(kinds) == 1 else None
+        if k in ("index", "actor", "count", "dirs", "len", "size", "offset", "unit_index", "units", "chunks"):
+            return "int"
+        if k in ("eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"):
+            return "bool"
+        if k == "cond":
+            t = self.kind(a["then"], scope)
+            return t if t == self.kind(a["else"], scope) else None
+        if k in SCHEMA["$defs"]["handle"]["properties"]:
+            return "handle"
+        if k in SCHEMA["$defs"]["dist"]["properties"]:
+            return "dist"
+        return None
+
+    def typed(self, e, p, scope, want="an integer", refuse=NOT_NUMBER, optional=False):
+        """V27: a value the runner needs as `want` is not of a kind it refuses there. A `null`
+        where a key is `optional` is the key left out, as the runner reads it."""
+        if optional and e is None:
+            return
+        k = self.kind(e, scope)
+        if k in refuse:
+            self.err(p, f"expected {want}, got {self.KINDS[k]} (V27)")
+
+    def drawn(self, d, p, scope, optional=False):
+        """V27: a size or a pick's distribution that is an expression is drawn as a constant
+        and read as an integer, unless it is a distribution."""
+        if not (isinstance(d, dict) and len(d) == 1 and next(iter(d)) in SCHEMA["$defs"]["dist"]["properties"]):
+            self.typed(d, p, scope, refuse=self.NOT_DRAWN, optional=optional)
+
     def value(self, v, path):
         if isinstance(v, list):
             for i, x in enumerate(v):
@@ -360,18 +446,20 @@ class Check:
 
     def n_let(self, a, p, scope):
         self.exprlike(a["value"], p + ["value"], scope, dist_ok=False, binding=a["name"])
-        scope.bind(a["name"], a["value"], self.varies(a["value"], scope))
+        scope.bind(a["name"], a["value"], self.varies(a["value"], scope), self.kind(a["value"], scope))
 
     def n_loop(self, a, p, scope):
         for k in ("from", "to", "step"):
             if k in a:
                 self.expr(a[k], p + [k], scope)
+                self.typed(a[k], p + [k], scope, optional=k != "to")
         nonneg = "from" not in a or self.at_least(a["from"], 0, scope)
         varies = any(self.varies(a[k], scope) for k in ("from", "to", "step") if k in a)
         self.body(a["body"], p + ["body"], scope.with_index(a["index"], nonneg, p if varies else None))
 
     def n_parallel(self, a, p, scope):
         self.expr(a["width"], p + ["width"], scope)
+        self.typed(a["width"], p + ["width"], scope)
         varies = self.varies(a["width"], scope)
         self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"], True, p if varies else None))
 
@@ -411,6 +499,7 @@ class Check:
     def n_loader(self, a, p, scope):
         for k in ("workers", "prefetch", "batches"):
             self.expr(a[k], p + [k], scope)
+            self.typed(a[k], p + [k], scope)
         self.declared_outside_forks("loader", p)
         scope.channels.add(a["name"])
         varies = self.varies(a["batches"], scope)
@@ -456,6 +545,7 @@ class Check:
 
     def n_channel(self, a, p, scope):
         self.expr(a["capacity"], p + ["capacity"], scope)
+        self.typed(a["capacity"], p + ["capacity"], scope)
         self.declared_outside_forks("channel", p)
         scope.channels.add(a["name"])
 
@@ -464,6 +554,7 @@ class Check:
             self.err(p, f"channel `{a['channel']}` not declared")
         self.used_by_workers("put", a["channel"], p)
         self.expr(a["seq"], p + ["seq"], scope)
+        self.typed(a["seq"], p + ["seq"], scope)
 
     def n_take(self, a, p, scope):
         if a["channel"] not in scope.channels:
@@ -475,9 +566,11 @@ class Check:
 
     def n_compute(self, a, p, scope):
         self.expr(a["ns"], p + ["ns"], scope)
+        self.typed(a["ns"], p + ["ns"], scope)
 
     def n_cond(self, a, p, scope):
         self.expr(a["if"], p + ["if"], scope)
+        self.typed(a["if"], p + ["if"], scope, "a condition", self.NOT_CONDITION)
         self.body(a["then"], p + ["then"], scope)
         if "else" in a:
             self.body(a["else"], p + ["else"], scope)
@@ -501,9 +594,11 @@ class Check:
         for key in ("len", "offset"):
             if key in a:
                 self.expr(a[key], p + [key], scope)
+                self.typed(a[key], p + [key], scope, optional=key == "offset" or kind == "fadvise")
         rep = a.get("repeat")
         if rep not in (None, "until_eof", "until_end"):
             self.expr(rep, p + ["repeat"], scope)
+            self.typed(rep, p + ["repeat"], scope)
         if kind == "write":
             self.note_write(a["file"], scope)
         # V24: a sub-actor shares the descriptors it inherits, and with them the kernel's file
@@ -609,7 +704,8 @@ class Check:
     def exprlike(self, v, p, scope, dist_ok, binding=None):
         if isinstance(v, dict) and len(v) == 1:
             k = next(iter(v))
-            if k in SCHEMA["$defs"]["handle"]["properties"]:
+            # a `ref` is an expression first, as the runner reads it
+            if k in SCHEMA["$defs"]["handle"]["properties"] and k != "ref":
                 return self.handle(v, p, scope)
             if k in SCHEMA["$defs"]["dist"]["properties"]:
                 return self.dist(v, p, scope)
@@ -627,6 +723,8 @@ class Check:
             for kk, vv in a.items():
                 if isinstance(vv, (dict, list)) or kk in ("lo", "hi", "mean", "sd", "median", "min", "max"):
                     self.expr(vv, p + [kk], scope)
+                if kk in ("lo", "hi", "mean", "sd", "median", "min", "max"):
+                    self.typed(vv, p + [kk], scope, "an integer" if k == "uniform" else "a number", optional=kk in ("min", "max"))
             if k in ("normal", "lognormal"):
                 # clamped to `min` and then to `max`: every draw `max`, and a `min` rule V3 would believe.
                 # Compared as the runner clamps, in f64: 2^53 + 1 is not above 2^53 there.
@@ -663,6 +761,7 @@ class Check:
             if a["array"] not in self.params:
                 self.err(p, f"unknown parameter array `{a['array']}`")
             self.expr(a["index"], p + ["index"], scope)
+            self.typed(a["index"], p + ["index"], scope)
         elif k in ("len", "sum"):
             if a not in self.params:
                 self.err(p, f"unknown parameter array `{a}`")
@@ -676,17 +775,29 @@ class Check:
                 self.err(p, f"`dirs` needs a dataset named by ids, not an `array`: got `{a}`")
         elif k == "cond":
             self.expr(a["if"], p + ["if"], scope)
+            self.typed(a["if"], p + ["if"], scope, "a condition", self.NOT_CONDITION)
             self.exprlike(a["then"], p + ["then"], scope, dist_ok=True, binding=binding)
             self.exprlike(a["else"], p + ["else"], scope, dist_ok=True, binding=binding)
         elif isinstance(a, list):
             for i, x in enumerate(a):
                 self.expr(x, p + [i], scope)
+                self.operand(k, x, p + [i], scope)
         elif k in ("neg", "not"):
             self.expr(a, p, scope)
+            self.operand(k, a, p, scope)
         elif k == "actor":
             pass
         else:
             self.err(p, f"unhandled expression kind `{k}`")
+
+    ARITHMETIC = {"add", "sub", "mul", "div", "mod", "ceil_div", "min", "max", "neg"}
+
+    def operand(self, k, x, p, scope):
+        """V27: an operand of arithmetic is a number, of `and`, `or`, `not` a condition."""
+        if k in self.ARITHMETIC:
+            self.typed(x, p, scope, "a number", self.NOT_OPERAND)
+        elif k in ("and", "or", "not"):
+            self.typed(x, p, scope, "a condition", self.NOT_CONDITION)
 
     def at(self, a, p, scope, binding):
         name, idx = a["ref"], a["index"]
@@ -708,6 +819,7 @@ class Check:
             self.err(p, f"`{name} @` names a binding this body defines more than once, "
                         f"so which one it reads is not defined")
         self.expr(idx, p + ["index"], scope)
+        self.typed(idx, p + ["index"], scope)
 
     def at_least(self, e, k, scope):
         """e provably >= k, k in {0, 1} (rule V3): a literal >= k; a ref/param/draw whose
@@ -865,14 +977,19 @@ class Check:
             if scope.lookup(a) is None:
                 self.err(p, f"handle binding `{a}` not in scope")
         elif k == "file":
-            if "dataset" in a:
+            if "dataset" in a and a.get("id") is None:
+                # a `null` id is no id, as the runner reads it
+                self.err(p, "file handle needs either {dataset, id} or {of}")
+            elif "dataset" in a:
                 if a["dataset"] not in self.datasets:
                     self.err(p, f"unknown dataset `{a['dataset']}`")
                 self.expr(a["id"], p + ["id"], scope)
+                self.typed(a["id"], p + ["id"], scope)
             else:
                 self.handle(a["of"], p + ["of"], scope)
             if "chunk" in a:
                 self.expr(a["chunk"], p + ["chunk"], scope)
+                self.typed(a["chunk"], p + ["chunk"], scope, optional=True)
         elif k == "inventory":
             if a not in self.datasets:
                 self.err(p, f"unknown dataset `{a}`")
@@ -882,6 +999,7 @@ class Check:
             if a["dataset"] not in self.datasets or self.datasets[a["dataset"]]["layout"] == "array":
                 self.err(p, f"`dir` needs a dataset named by ids, not an `array`: got `{a['dataset']}`")
             self.expr(a["id"], p + ["id"], scope)
+            self.typed(a["id"], p + ["id"], scope)
         elif k == "object":
             ns = self.namespaces.get(a["namespace"])
             if ns is None:
@@ -890,6 +1008,12 @@ class Check:
                 self.err(p, f"object fields {sorted(a['fields'])} != namespace fields {sorted(ns['fields'])}")
             for f, e in a["fields"].items():
                 self.expr(e, p + ["fields", f], scope)
+                # V27: an `int` field takes an integer or a float, rounded (never a bool); a `str` field a string
+                t = ns["fields"].get(f) if ns is not None else None
+                if t == "int":
+                    self.typed(e, p + ["fields", f], scope, "an integer", self.NOT_OPERAND)
+                elif t == "str":
+                    self.typed(e, p + ["fields", f], scope, "a string", set(self.KINDS) - {"str"})
         elif k == "consume":
             if a not in self.datasets:
                 self.err(p, f"unknown dataset `{a}`")
@@ -906,10 +1030,12 @@ class Check:
                 self.err(p, f"unknown dataset `{a['dataset']}`")
             if "dist" in a:
                 self.distref(a["dist"], p + ["dist"], scope)
+                self.drawn(a["dist"], p + ["dist"], scope, optional=True)
         elif k in ("unit", "column"):
             self.handle(a["of"], p + ["of"], scope)
             if "index" in a:
                 self.expr(a["index"], p + ["index"], scope)
+                self.typed(a["index"], p + ["index"], scope, optional=k == "unit")
 
 
 class Scope:
@@ -917,6 +1043,7 @@ class Scope:
         self.check, self.parent = check, parent
         self.bindings, self.indices = {}, list(parent.indices) if parent else []
         self.varying = set()  # the bindings here whose value varies (V6)
+        self.kinds = {}  # the kind each binding here is known to have, or None (V27)
         # the innermost enclosing frame whose count varies with an enclosing one (V6), or None
         self.count_varies = parent.count_varies if parent else None
         self.nonneg_indices = set(parent.nonneg_indices) if parent else set()
@@ -940,8 +1067,9 @@ class Scope:
             s.nonneg_indices.discard(name)
         return s
 
-    def bind(self, name, value, varies=False):
+    def bind(self, name, value, varies=False, kind=None):
         self.bindings[name] = value
+        self.kinds[name] = kind
         if varies:
             self.varying.add(name)
         else:
@@ -954,6 +1082,14 @@ class Scope:
                 return name in s.varying
             s = s.parent
         return False
+
+    def kind_of(self, name):
+        s = self
+        while s:
+            if name in s.bindings:
+                return s.kinds[name]
+            s = s.parent
+        return None
 
     def lookup(self, name):
         s = self

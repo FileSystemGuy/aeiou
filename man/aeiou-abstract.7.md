@@ -211,6 +211,11 @@ these, and the builder enforces most of them at construction:
   actor's, shared by its sub-actors, so it is declared before the fork. A channel a
   loader's body puts or takes on is declared at one site, outside every loop or in the body
   the loader is in, the loader declared at one site.
+- **V27** A value whose kind the document shows (a literal, a parameter by its value in
+  effect, a binding by its value) is of a kind the runner reads where it stands: an integer
+  or a number (a float, a bool) for a count, bound, size, offset, id, or distribution
+  argument; a number for an operand of arithmetic; a bool or an integer for a condition; the
+  field's type for a namespace object's field.
 
 ## PARAMETER FILES
 
