@@ -377,8 +377,10 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   and an `sd` not 0, a `lognormal` with a `median` below 0, and `uniform64`, are unbounded
   below), or a `mixture` with such an arm of positive weight; a size whose least value is not
   a finite number (an overflow past f64, `inf − inf`) is refused too, and the value printed is
-  the runner's rounding, unsaturated (2026-10-15). An `array`'s sizes are clamped
-  to `[0, slot]` and are exempt. Judged on the parameter defaults, and by the runner again on
+  the runner's rounding, unsaturated (2026-10-15); a `min` or `max` with an operand not a
+  number, and a `mixture` with an arm of positive weight whose least value is not finite, are
+  no finite number either, whatever the order of operands and arms (2026-10-15). An
+  `array`'s sizes are clamped to `[0, slot]` and are exempt. Judged on the parameter defaults, and by the runner again on
   the values in effect (as V3); what the document does not show (a bound through `div`, say)
   the runner refuses when it draws it, naming the dataset and the sample.
 

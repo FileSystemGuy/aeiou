@@ -63,6 +63,18 @@ pub fn check_given(ast: &Ast, given: &BTreeMap<String, PValue>) -> Vec<String> {
     c.errors
 }
 
+/// The lesser of two V25 values, NaN when either is (an undefined value, refused as no finite
+/// size): `f64::min` drops a NaN and Python's `min` answers by argument order, and the two
+/// checkers must judge one document alike.
+fn least_of(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() { f64::NAN } else { x.min(y) }
+}
+
+/// The greater of two V25 values, NaN when either is (`least_of`).
+fn most_of(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() { f64::NAN } else { x.max(y) }
+}
+
 /// The least a dataset's size can be (rule V25): a number, or no bound at all.
 #[derive(Clone, Copy)]
 enum Least {
@@ -1322,8 +1334,8 @@ impl<'a> Checker<'a> {
             ExprNode::Add([a, b]) => self.exact(a)? + self.exact(b)?,
             ExprNode::Sub([a, b]) => self.exact(a)? - self.exact(b)?,
             ExprNode::Mul([a, b]) => self.exact(a)? * self.exact(b)?,
-            ExprNode::Min([a, b]) => self.exact(a)?.min(self.exact(b)?),
-            ExprNode::Max([a, b]) => self.exact(a)?.max(self.exact(b)?),
+            ExprNode::Min([a, b]) => least_of(self.exact(a)?, self.exact(b)?),
+            ExprNode::Max([a, b]) => most_of(self.exact(a)?, self.exact(b)?),
             ExprNode::Neg(x) => -self.exact(x)?,
             _ => return None,
         })
@@ -1368,19 +1380,24 @@ impl<'a> Checker<'a> {
                 }
                 least.map(Least::Known)
             }
-            // the arms that can be drawn: any one unbounded or below 0 is; else every one known
+            // the arms that can be drawn: any one not a finite number is no finite size, whatever
+            // the order of the arms; else any one unbounded or below 0 is; else every one known
             Dist::Mixture(arms) => {
-                let (mut least, mut unknown) = (None::<f64>, false);
+                let (mut least, mut unknown, mut unbounded) = (None::<f64>, false, false);
                 for d in arms.iter().filter(|a| a.weight > 0.0).filter_map(|a| a.dist.as_ref()) {
                     let l = match d {
                         DistRef::Dist(d) => self.least_dist(d),
                         DistRef::Expr(e) => self.least_expr(e),
                     };
                     match l {
-                        Some(Least::Unbounded) => return Some(Least::Unbounded),
+                        Some(Least::Unbounded) => unbounded = true,
+                        Some(Least::Known(x)) if !x.is_finite() => return Some(Least::Known(f64::NAN)),
                         Some(Least::Known(x)) => least = Some(least.map_or(x, |l| l.min(x))),
                         None => unknown = true,
                     }
+                }
+                if unbounded {
+                    return Some(Least::Unbounded);
                 }
                 match least {
                     Some(x) if x.round() < 0.0 || !unknown => Some(Least::Known(x)),
@@ -1398,13 +1415,13 @@ impl<'a> Checker<'a> {
             let m = self.exact(m)?;
             least = Least::Known(match least {
                 Least::Unbounded => m,
-                Least::Known(v) => v.max(m),
+                Least::Known(v) => most_of(v, m),
             });
         }
         if let Some(m) = max {
             least = match (least, self.exact(m)) {
                 (Least::Unbounded, _) => Least::Unbounded,
-                (Least::Known(v), Some(m)) => Least::Known(v.min(m)),
+                (Least::Known(v), Some(m)) => Least::Known(least_of(v, m)),
                 (Least::Known(_), None) => return None,
             };
         }

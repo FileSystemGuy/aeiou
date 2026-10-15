@@ -1041,3 +1041,29 @@ def test_min_above_max_is_judged_and_printed_as_the_runner_judges_and_prints_it(
     assert _size_errs({"normal": {"mean": 0, "sd": 1, "min": 9007199254740993, "max": 9007199254740992}}) == []
     chain = _v3_chain({"normal": {"mean": 5, "sd": 1, "min": 9007199254740993, "max": 9007199254740992}})
     assert check.Check(chain, "x").run() == []
+
+
+def test_a_size_that_is_not_a_number_is_refused_whatever_the_order():
+    """A size whose least value is not a number (`inf - inf`) is judged as the runner judges it
+    whatever the order of a `mixture`'s arms or of a `min`'s or `max`'s operands, and in the
+    clamp of a `normal`: Python's `min` answered by argument order where the runner's
+    `f64::min` dropped the NaN (RC1 review). An arm of `+inf` is no finite size either, and
+    outranks an arm unbounded below."""
+    nan = {"add": [{"mul": [1e308, 10]}, {"mul": [-1e308, 10]}]}
+
+    def arm(x):
+        return {"weight": 1, "dist": {"const": x}}
+
+    normal = {"weight": 1, "dist": {"normal": {"mean": 0, "sd": 1}}}
+    infinite = ["t: datasets/d/size: a size that is not a finite number (V25)"]
+    for a, b in [(arm(nan), arm(5)), (arm(nan), arm(-3)), (arm({"mul": [1e308, 10]}), arm(5)), (arm(nan), normal)]:
+        assert _size_errs({"mixture": [a, b]}) == infinite
+        assert _size_errs({"mixture": [b, a]}) == infinite
+    for op, x in [("min", 5), ("max", -5)]:
+        assert _size_errs({op: [nan, x]}) == infinite
+        assert _size_errs({op: [x, nan]}) == infinite
+    assert _size_errs({"normal": {"mean": nan, "sd": 0, "min": 5}}) == infinite
+    assert _size_errs({"normal": {"mean": nan, "sd": 0, "max": -5}}) == infinite
+    assert _size_errs({"normal": {"mean": 0, "sd": 1, "min": nan, "max": 5}}) == infinite
+    # a weight of 0 is never drawn
+    assert _size_errs({"mixture": [{"weight": 0, "dist": {"const": nan}}, arm(5)]}) == []

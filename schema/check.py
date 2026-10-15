@@ -58,6 +58,18 @@ def round_away(x: float) -> float:
     return math.copysign(float(r), x)
 
 
+def least_of(x: float, y: float) -> float:
+    """The lesser of two V25 values, NaN when either is (an undefined value, refused as no finite
+    size). Python's `min` answers by argument order with a NaN, and Rust's `f64::min` drops it:
+    neither is the value, and the two checkers must judge one document alike."""
+    return math.nan if math.isnan(x) or math.isnan(y) else min(x, y)
+
+
+def most_of(x: float, y: float) -> float:
+    """The greater of two V25 values, NaN when either is (`least_of`)."""
+    return math.nan if math.isnan(x) or math.isnan(y) else max(x, y)
+
+
 def integral(x: float) -> str:
     """A rounded value as the runner prints it in a message (`{:.0}` of the f64): every digit,
     never saturated at 64 bits nor in exponent form."""
@@ -704,7 +716,7 @@ class Check:
             return None if n is None else float(n)
         kind, a = next(iter(e.items()))
         ops = {"add": lambda x, y: x + y, "sub": lambda x, y: x - y, "mul": lambda x, y: x * y,
-               "min": min, "max": max}
+               "min": least_of, "max": most_of}
         if kind in ops:
             x, y = self.exact(a[0]), self.exact(a[1])
             return None if x is None or y is None else ops[kind](x, y)
@@ -744,12 +756,12 @@ class Check:
                 m = self.exact(a["min"])
                 if m is None:
                     return None
-                raw = m if raw == self.UNBOUNDED else max(raw, m)
+                raw = m if raw == self.UNBOUNDED else most_of(raw, m)
             if "max" in a and raw != self.UNBOUNDED:
                 m = self.exact(a["max"])
                 if m is None:
                     return None
-                raw = min(raw, m)
+                raw = least_of(raw, m)
             return raw
         if kind == "empirical":
             vals = a["values"]
@@ -757,18 +769,23 @@ class Check:
                 return None
             return float(min(vals))
         if kind == "mixture":
-            # the arms that can be drawn: any one unbounded or below 0 is; else every one known
-            least, unknown = None, False
+            # the arms that can be drawn: any one not a finite number is no finite size, whatever
+            # the order of the arms; else any one unbounded or below 0 is; else every one known
+            least, unknown, unbounded = None, False, False
             for arm in a:
                 if not arm["weight"] > 0 or arm["dist"] is None:
                     continue
                 x = self.least(arm["dist"])
                 if x == self.UNBOUNDED:
-                    return self.UNBOUNDED
-                if x is None:
+                    unbounded = True
+                elif x is None:
                     unknown = True
+                elif not math.isfinite(x):
+                    return math.nan
                 else:
                     least = x if least is None else min(least, x)
+            if unbounded:
+                return self.UNBOUNDED
             return least if least is not None and (round_away(least) < 0 or not unknown) else None
         if kind in ("zipf", "hotset"):
             return None

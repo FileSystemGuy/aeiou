@@ -1046,3 +1046,36 @@ fn min_above_max_is_judged_and_printed_as_check_py_judges_and_prints_it() {
     aeiou::load_str(&doc(r#"{"normal": {"mean": 0, "sd": 1, "min": 9007199254740993, "max": 9007199254740992}}"#)).unwrap_or_else(|e| panic!("{e:#}"));
     aeiou::load_str(&v3_chain(r#"{"normal": {"mean": 5, "sd": 1, "min": 9007199254740993, "max": 9007199254740992}}"#, "{}")).unwrap_or_else(|e| panic!("{e:#}"));
 }
+
+/// A size whose least value is not a number (`inf − inf`) is judged alike by both checkers
+/// whatever the order of a `mixture`'s arms or of a `min`'s or `max`'s operands, and in the
+/// clamp of a `normal`: `f64::min` dropped the NaN here (ok, or "it can be -3") where
+/// check.py's `min` answered by argument order (RC1 review). An arm of `+inf` is no finite
+/// size either, and outranks an arm unbounded below.
+#[test]
+fn a_size_that_is_not_a_number_is_refused_whatever_the_order() {
+    let doc = |size: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "t",
+                "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}},
+                "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
+        )
+    };
+    let nan = r#"{"add": [{"mul": [1e308, 10]}, {"mul": [-1e308, 10]}]}"#;
+    let arm = |x: &str| format!(r#"{{"weight": 1, "dist": {{"const": {x}}}}}"#);
+    let normal = r#"{"weight": 1, "dist": {"normal": {"mean": 0, "sd": 1}}}"#;
+    let infinite = "t: datasets/d/size: a size that is not a finite number (V25)";
+    for (a, b) in [(arm(nan), arm("5")), (arm(nan), arm("-3")), (arm(r#"{"mul": [1e308, 10]}"#), arm("5")), (arm(nan), normal.to_string())] {
+        rejects(&doc(&format!(r#"{{"mixture": [{a}, {b}]}}"#)), infinite);
+        rejects(&doc(&format!(r#"{{"mixture": [{b}, {a}]}}"#)), infinite);
+    }
+    for (op, x) in [("min", "5"), ("max", "-5")] {
+        rejects(&doc(&format!(r#"{{"{op}": [{nan}, {x}]}}"#)), infinite);
+        rejects(&doc(&format!(r#"{{"{op}": [{x}, {nan}]}}"#)), infinite);
+    }
+    rejects(&doc(&format!(r#"{{"normal": {{"mean": {nan}, "sd": 0, "min": 5}}}}"#)), infinite);
+    rejects(&doc(&format!(r#"{{"normal": {{"mean": {nan}, "sd": 0, "max": -5}}}}"#)), infinite);
+    rejects(&doc(&format!(r#"{{"normal": {{"mean": 0, "sd": 1, "min": {nan}, "max": 5}}}}"#)), infinite);
+    // a weight of 0 is never drawn
+    aeiou::load_str(&doc(&format!(r#"{{"mixture": [{{"weight": 0, "dist": {{"const": {nan}}}}}, {}]}}"#, arm("5")))).unwrap_or_else(|e| panic!("{e:#}"));
+}

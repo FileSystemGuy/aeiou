@@ -1705,3 +1705,24 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** `options::datagen_takes_a_bare_relative_root_that_does_not_exist_yet` (the binary
   run in a temporary directory with `--root dg1`) fails before with the message above and passes
   after; `--test all -- usage options datagen` 20 passed, `--lib` 61.
+
+## 74. The two checkers judged a size that is not a number by the order of its operands
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (V25: `exact` `min`/`max`,
+  the `normal`/`lognormal` clamp, `mixture` in `least`); `schema/README.md` §4 V25.
+- **Found by:** the regression review of the RC1 fixes (bugs 71 and 72's rule).
+- **Defect:** a NaN (an overflow such as `1e308*10 - 1e308*10`) reaching a `min`/`max` node, a
+  clamp, or a mixture arm was dropped by Rust's `f64::min`/`max` and kept or dropped by
+  Python's `min`/`max` according to argument order; a mixture also returned at its first
+  unbounded arm. `mixture [NaN, 5]` was refused by check.py and accepted by `aeiou check`,
+  `[5, NaN]` accepted by both, `max(NaN, -5)` refused as "not finite" by one and "-5" by the
+  other; a `+inf` arm was accepted by both.
+- **Fix:** `least_of`/`most_of` (NaN when either side is) in both checkers for the `min`/`max`
+  nodes and the clamp; a mixture with a positive-weight arm whose least is not finite is not a
+  finite number, and "unbounded" is decided after every arm, so arm order never matters. No
+  fingerprint, dataset id, or AST changes; every committed AST is still accepted.
+- **Evidence:** `golden::a_size_that_is_not_a_number_is_refused_whatever_the_order` and
+  `test_builder.py::test_a_size_that_is_not_a_number_is_refused_whatever_the_order` (every
+  mixture pair both ways, `min`/`max` both ways, three clamps, a weight-0 NaN arm still
+  accepted) fail on the old code and pass; on HEAD df06a74 plus the change: golden 24 passed,
+  test_builder and test_params 101 passed, check.py ok over every committed AST.
