@@ -79,15 +79,43 @@ def test_value_rules():
     assert "elements are a scalar" in params.check(ast, {**base, "abstract": "safetensors_load", "params": {"off": [1, [2]]}})[0]
 
 
+def test_an_integral_float_is_the_integer_its_default_is(tmp_path):
+    """A value keeps its default's kind down to the number, as the runner has it (RC1 review):
+    where the default is an integer, 3000.0 is 3000 (a divisor too: `files_per_directory`
+    1300.0 was refused "not an integer" while `samples` 3000.0 went into the manifest as
+    3000.0) and 20.7 is refused (the runner rounded it); an array's integer elements alike."""
+    ast, _ = _ast("file_per_sample")
+    base = {"params_version": 1, "abstract": "file_per_sample", "params": {}}
+    assert params.check(ast, {**base, "params": {"samples": 3000.0, "files_per_directory": 1.3e3}}) == []
+    assert params.check(ast, {**base, "params": {"samples": 20.7}}) == ["params: samples: the default is an integer, the value 20.7 is not"]
+    sast, _ = _ast("safetensors_load")
+    sbase = {**base, "abstract": "safetensors_load"}
+    assert params.check(sast, {**sbase, "params": {"off": [1, 2.0]}}) == []
+    assert params.check(sast, {**sbase, "params": {"off": [1, 2.5]}}) == ["params: off[1]: the default is an integer, the value 2.5 is not"]
+    # the runner takes and refuses the same files
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
+    if not runner.exists():
+        pytest.skip("runner binary not built")
+    for value, ok in ((3000.0, True), (20.7, False)):
+        f = tmp_path / "f.params.json"
+        f.write_text(json.dumps({**base, "params": {"samples": value, "files_per_directory": 1300.0}}))
+        r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(ast_path("file_per_sample")), "--params-file", str(f), "--param", "steps=1"],
+                           capture_output=True, text=True, cwd=str(tmp_path))
+        assert (r.returncode == 0) == ok, r.stderr
+        assert ok or "samples: the default is an integer, the value 20.7 is not" in r.stderr, r.stderr
+
+
 def test_given_values_are_judged_as_the_runner_judges_them(tmp_path):
     """Past their kinds, the runner judges given values again (V3, `validate::check_given`; V23,
     `eval::bind_pattern`): `check` refuses what `aeiou dry-run --params-file` refuses."""
     ast, sha = _ast("file_per_sample")
     base = {"params_version": 1, "abstract": "file_per_sample", "params": {}}
+    # a fractional value for an integer default is refused before the pattern sees it (RC1 review)
     errs = params.check(ast, {**base, "params": {"files_per_directory": 2.5}})
-    assert errs == ["params: dataset `train`: pattern `train/{id div files_per_directory:05}/img_{id:09}.jpg`: "
-                    "divisor `files_per_directory`: parameter `files_per_directory` is not an integer"]
-    assert params.check(ast, {**base, "params": {"files_per_directory": True}})[0].endswith("is not an integer")
+    assert errs == ["params: files_per_directory: the default is an integer, the value 2.5 is not"]
+    assert params.check(ast, {**base, "params": {"files_per_directory": True}}) == [
+        "params: dataset `train`: pattern `train/{id div files_per_directory:05}/img_{id:09}.jpg`: "
+        "divisor `files_per_directory`: parameter `files_per_directory` is not an integer"]
     assert params.check(ast, {**base, "params": {"files_per_directory": 0}})[0].endswith(
         "`div files_per_directory` is 0: it needs a positive divisor")
     assert params.check(ast, {**base, "params": {"files_per_directory": 7}}) == []

@@ -811,6 +811,8 @@ fn grow_and_shrink_make_the_corpus_of_the_new_count() {
 
         let outs = resize_ranks("--shrink", 2100, &root.join("train"), 3 - ranks, &[]);
         assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s): {outs:?}");
+        // the ids handed out, and what becomes of them (it said "2900 id(s) of 2100")
+        assert!(outs[0].1.contains("dataset train: the ids from 2100 to 4999 of 5000 (those from 2100 up removed), in "), "{}", outs[0].1);
         assert!(tree(&root) == tree(&fresh21), "{ranks} rank(s): the shrunk corpus is not the 2100-file one");
         assert!(!root.join("train/00002").exists() && !root.join("train/00003").exists(), "the emptied directories are removed");
         let (m, f) = (id(&root), id(&fresh21));
@@ -1331,4 +1333,123 @@ fn the_merged_report_counts_every_hosts_event_loops() {
         let text = &outs[0].1;
         assert!(text.contains(&format!("{block}: loops 3 ")), "{posix}: the merged text report: {text}");
     }
+}
+
+/// `aeiou datagen` with `args`: (success, stdout, stderr).
+fn datagen_cli(args: &[&std::ffi::OsStr]) -> (bool, String, String) {
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").args(args).output().unwrap();
+    (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+}
+
+/// What `O_DIRECT` and unaligned tails are learned per dataset root (RC1 review): an
+/// `--endpoint` may be another file system than `--root`. One finding per datagen made a root
+/// that takes unaligned direct tails (tmpfs since Linux 6.6, NFS) pad and truncate every file
+/// once an ext4 root had refused one, and an `O_DIRECT` refusal on one root sent every later
+/// dataset through the page cache and recorded `direct: false` for all.
+#[test]
+fn the_direct_findings_are_each_roots_own() {
+    struct Gone(PathBuf);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let shm = Path::new("/dev/shm");
+    if !shm.is_dir() {
+        eprintln!("no /dev/shm: skipped");
+        return;
+    }
+    let root = tmpdir("dg-mode");
+    let elsewhere = Gone(shm.join(format!("aeiou-coord-{}-dg-mode", std::process::id())));
+    // `config` (written first) on the test's root, `model` on tmpfs; both with unaligned tails
+    let a = crate::common::workload_ast("safetensors_load.ast.json");
+    let ep = format!("model={}", elsewhere.0.join("model").display());
+    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--endpoint".as_ref(), ep.as_ref(), "--param".as_ref(), "config_bytes=5000".as_ref(), "--param".as_ref(), "shard_bytes=10000".as_ref(), "--writers".as_ref(), "1".as_ref()]);
+    assert!(o.0, "{o:?}");
+    let part = |dir: &Path| aeiou::payload::Manifest::read(dir).unwrap().provenance["hosts"][0].clone();
+    let (config, model) = (part(&root.join("config")), part(&elsewhere.0.join("model")));
+    // what each file system does with an unaligned direct write, asked here directly
+    let probe = |dir: &Path| -> Option<bool> {
+        use std::os::unix::fs::{FileExt, OpenOptionsExt};
+        let path = dir.join("probe");
+        let f = std::fs::OpenOptions::new().write(true).create(true).custom_flags(libc::O_DIRECT).open(&path).ok()?;
+        let layout = std::alloc::Layout::from_size_align(4096, 4096).unwrap();
+        let buf = unsafe { std::alloc::alloc_zeroed(layout) };
+        let r = f.write_at(unsafe { std::slice::from_raw_parts(buf, 100) }, 0);
+        unsafe { std::alloc::dealloc(buf, layout) };
+        let _ = std::fs::remove_file(&path);
+        Some(r.is_ok())
+    };
+    let (here, there) = (probe(&root), probe(&elsewhere.0));
+    assert_eq!((config["direct"].as_bool(), model["direct"].as_bool()), (Some(here.is_some()), Some(there.is_some())), "{config} {model}");
+    assert_eq!((config["pad_tails"].as_bool(), model["pad_tails"].as_bool()), (Some(here == Some(false)), Some(there == Some(false))), "{config} {model}");
+}
+
+/// A root that cannot be made takes back the roots this datagen made before it, so a refused
+/// datagen leaves nothing (RC1 review): the earlier dataset's root stayed behind, empty.
+#[test]
+fn a_root_that_cannot_be_made_leaves_nothing_behind() {
+    let root = tmpdir("dg-unmake");
+    std::fs::write(root.join("blocker"), b"").unwrap();
+    let fresh = root.join("fresh");
+    // `config` is made first under --root; `model` cannot be, a file is in its way
+    let a = crate::common::workload_ast("safetensors_load.ast.json");
+    let ep = format!("model={}", root.join("blocker/model").display());
+    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), fresh.as_os_str(), "--endpoint".as_ref(), ep.as_ref(), "--param".as_ref(), "shard_bytes=10000".as_ref()]);
+    assert!(!o.0 && o.2.contains("blocker/model: Not a directory"), "{o:?}");
+    assert!(!fresh.exists(), "left behind: {:?}", listing(&root));
+}
+
+/// A root holding a corpus a datagen did not finish is refused with the ways to finish it
+/// (RC1 review): a killed datagen run again without `--resume` was told only "is not empty
+/// … remove it first".
+#[test]
+fn an_unfinished_corpus_points_at_resume_and_settle() {
+    let root = tmpdir("dg-unfinished");
+    datagen_one(&root, 30);
+    let at = root.join("train");
+    let path = at.join(aeiou::payload::MANIFEST_NAME);
+    let mut m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    m["state"] = "writing".into();
+    std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
+    let a = crate::common::workload_ast("file_per_sample.ast.json");
+    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--param".as_ref(), "samples=30".as_ref()]);
+    let want = format!("dataset `train`: {d} holds a corpus a datagen did not finish (its manifest is `writing`): `aeiou datagen --resume {d}` finishes it, `--settle {d}` keeps what it reached, or remove it first", d = at.display());
+    assert!(!o.0 && o.2.contains(&want), "{o:?}");
+    // a complete one is a dataset, read-only
+    m["state"] = "complete".into();
+    std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
+    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--param".as_ref(), "samples=30".as_ref()]);
+    assert!(!o.0 && o.2.contains("is not empty (") && o.2.contains("datasets are read-only, remove it first"), "{o:?}");
+}
+
+/// A ratio that does not divide 4096 is made as the nearest a 4 KiB piece holds, and the
+/// manifest says so (RC1 review): `--compress 1000` made 819.2 and recorded 1000 alone. The
+/// payload, and so the dataset id, is the ratio asked, as it was.
+#[test]
+fn a_compress_ratio_a_piece_cannot_hold_is_recorded_as_made() {
+    let a = crate::common::workload_ast("file_per_sample.ast.json");
+    for (c, made) in [("3", Some(4096.0 / 1366.0)), ("1000", Some(819.2)), ("4", None), ("4096", None)] {
+        let root = tmpdir("dg-compress");
+        let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--param".as_ref(), "samples=2".as_ref(), "--compress".as_ref(), c.as_ref()]);
+        assert!(o.0, "{o:?}");
+        let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+        assert_eq!(m.payload.compress.to_string(), c);
+        assert_eq!(m.provenance["compress_achieved"].as_f64(), made, "--compress {c}");
+        assert_eq!(o.1.contains("so the ratio made is"), made.is_some(), "--compress {c}: {}", o.1);
+    }
+}
+
+/// The progress line of an array file shows its bytes, rate, and time left while it is
+/// written (RC1 review): it said "0/1 files, 0 B written, 0 B/s" until the file was whole. The
+/// manifest still counts the file once whole.
+#[test]
+fn an_array_files_progress_is_live() {
+    let root = tmpdir("dg-array-progress");
+    let a = crate::common::workload_ast("faiss_ivf_ondisk.ast.json");
+    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--dataset".as_ref(), "lists".as_ref(), "--param".as_ref(), "lists=4096".as_ref(), "--writers".as_ref(), "1".as_ref(), "--progress-secs".as_ref(), "0.01".as_ref()]);
+    assert!(o.0, "{o:?}");
+    let partial: Vec<&str> = o.1.lines().filter(|l| l.starts_with("progress ") && l.contains(" 0/1 files")).collect();
+    assert!(!partial.is_empty(), "no window while the file was written: {}", o.1);
+    assert!(partial.iter().any(|l| !l.contains(" 0 B written") && l.contains(" s left")), "{partial:?}");
 }

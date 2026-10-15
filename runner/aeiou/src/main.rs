@@ -536,6 +536,9 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     if o.write_compress == 0 {
         aeiou::usage!("--write-compress 0: the compression ratio is at least 1{}", l.from(&["write-compress"]));
     }
+    if o.write_compress > aeiou::payload::MAX_COMPRESS {
+        aeiou::usage!("--write-compress {}: the compression ratio is at most {} (one random byte in each 4 KiB piece){}", o.write_compress, aeiou::payload::MAX_COMPRESS, l.from(&["write-compress"]));
+    }
     if !(o.time_scale >= 0.0 && o.time_scale.is_finite()) {
         aeiou::usage!("--time-scale {}: a factor of 0 or more{}", o.time_scale, l.from(&["time-scale"]));
     }
@@ -776,6 +779,9 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     }
     if a.compress == 0 {
         aeiou::usage!("--compress 0: the compression ratio is at least 1");
+    }
+    if a.compress > aeiou::payload::MAX_COMPRESS {
+        aeiou::usage!("--compress {}: the compression ratio is at most {} (one random byte in each 4 KiB piece)", a.compress, aeiou::payload::MAX_COMPRESS);
     }
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
     // at a dataset root, rank 0 alone reads the manifest (DESIGN_REVIEW.md §3.70): with several

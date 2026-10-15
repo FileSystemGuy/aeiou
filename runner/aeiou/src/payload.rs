@@ -182,6 +182,15 @@ pub fn random_per_piece(compress: u64) -> usize {
     PIECE.div_ceil(compress.max(1) as usize)
 }
 
+/// The largest compression ratio a piece holds: one stream byte in 4 KiB.
+pub const MAX_COMPRESS: u64 = PIECE as u64;
+
+/// The ratio `compress` makes, `4096 / ⌈4096 / C⌉`: `C` itself when it divides 4096 (1, 2, 4,
+/// …), near it otherwise (3 makes 2.9985, 1000 makes 819.2).
+pub fn achieved_compress(compress: u64) -> f64 {
+    PIECE as f64 / random_per_piece(compress) as f64
+}
+
 /// A block being made in order: the block offset of its next byte, and the generator there
 /// (with what is left of the last output, for a range that ended inside one).
 struct Cursor {
@@ -528,19 +537,28 @@ pub fn namespace_root(ast: &Ast, name: &str) -> Result<String> {
 /// The parameter values in effect as JSON, for substitution and provenance.
 pub fn param_values(doc: &Value, cfg: &Config) -> Result<BTreeMap<String, Value>> {
     let mut out = BTreeMap::new();
+    let mut defaults = BTreeMap::new();
     if let Some(params) = doc.get("params").and_then(|p| p.as_object()) {
         for (k, p) in params {
-            out.insert(k.clone(), p.get("default").cloned().unwrap_or(Value::Null));
+            let d = p.get("default").cloned().unwrap_or(Value::Null);
+            defaults.insert(k.as_str(), d.clone());
+            out.insert(k.clone(), d);
         }
     }
+    // an integral float where the default is an integer is that integer, as `Params::new`
+    // has it: the resolved definition, and the dataset id, are those of the integer
+    let keep = |name: &str, v: Value| match defaults.get(name) {
+        Some(d) => crate::eval::keep_int_json(name, d, v),
+        None => Ok(v),
+    };
     for set in &cfg.sets {
         for (name, v) in &set.values {
-            out.insert(name.clone(), v.clone());
+            out.insert(name.clone(), keep(name, v.clone())?);
         }
     }
     for (name, text) in &cfg.overrides {
         let v = serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()));
-        out.insert(name.clone(), v);
+        out.insert(name.clone(), keep(name, v)?);
     }
     out.insert("gpus".into(), json!(cfg.gpus));
     Ok(out)

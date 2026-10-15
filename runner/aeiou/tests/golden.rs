@@ -583,6 +583,35 @@ fn an_at_in_a_short_loop_nested_in_a_long_one_stays_linear() {
     assert!(took < std::time::Duration::from_secs(20), "200,000 outer indices took {took:?}");
 }
 
+/// A value keeps its default's kind down to the number (schema/README.md §8; RC1 review): where
+/// the default is an integer, `samples=3e3` and `3000.0` are 3000 (the manifest recorded
+/// `"count": 3000.0`, so the dataset id was another one for the same files and `run --param
+/// samples=3000` refused it, "count: 3000 vs 3000.0"), a divisor `1300.0` binds as 1300 (it was
+/// refused "not an integer"), and a fractional value is refused (it was rounded), from
+/// `--param` and a parameter file alike.
+#[test]
+fn an_integral_float_is_the_integer_its_default_is() {
+    use aeiou::eval::ParamSet;
+    let path = crate::common::workload_ast("file_per_sample.ast.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let loaded = aeiou::load_str(&text).unwrap();
+    let file = |json: &str| Config { sets: vec![ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"file_per_sample","params":{json}}}"#), "x.params.json").unwrap()], ..config(1, 0, &[]) };
+    let resolved = |cfg: &Config| aeiou::payload::resolved_dataset(&doc, "train", cfg).unwrap();
+    let want = resolved(&config(1, 0, &[("samples", "3000"), ("files_per_directory", "1300")]));
+    assert_eq!(want["count"], serde_json::json!(3000));
+    for cfg in [config(1, 0, &[("samples", "3e3"), ("files_per_directory", "1300.0")]), config(1, 0, &[("samples", "3000.0")]), file(r#"{"samples":3000.0,"files_per_directory":1.3e3}"#)] {
+        assert_eq!(resolved(&cfg), want, "{:?} {:?}", cfg.overrides, cfg.sets.first().map(|s| &s.values));
+        let params = Params::new(&loaded.ast, &cfg).unwrap();
+        assert!(matches!(params.values["samples"], aeiou::ast::PValue::Scalar(aeiou::ast::Literal::Int(3000))), "{:?}", params.values["samples"]);
+        build_model(&loaded.ast, &cfg, &params).unwrap();
+    }
+    let refused = |cfg: &Config| Params::new(&loaded.ast, cfg).err().map(|e| format!("{e:#}")).unwrap_or_default();
+    assert_eq!(refused(&config(1, 0, &[("samples", "20.7")])), "--param samples: the default is an integer, the value 20.7 is not");
+    assert_eq!(refused(&file(r#"{"samples":1.5}"#)), "x.params.json: samples: the default is an integer, the value 1.5 is not");
+    assert!(aeiou::payload::resolved_dataset(&doc, "train", &config(1, 0, &[("samples", "20.7")])).is_err());
+}
+
 /// A divisor named in a pattern (contract 0.10, DESIGN_REVIEW §3.75) is bound to the parameter's
 /// value: the names, the directory count, and the resolved definition use the number, so at the
 /// default the dataset id is the literal pattern's, and another width is another dataset.

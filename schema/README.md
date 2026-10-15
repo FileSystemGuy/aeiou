@@ -564,7 +564,10 @@ the committed sets; the reasoning is `DESIGN_REVIEW.md` §3.27.
   The kind rule exists because the builder fixed at build time how each slot is consumed (a
   distribution is drawn, an array is indexed), so a change of kind would not be a change of
   value. `cli: false` restricts `--param`, not parameter files: the file *is* the published
-  set. `--param` now keeps the kind too.
+  set. `--param` now keeps the kind too. Down to the number (2026-10-15): where the default
+  is an integer (an array's elements are), an integral float is that integer (`3e3`,
+  `3000.0`: the resolved definition and the dataset id are those of `3000`), and a fractional
+  one is refused, never rounded.
 - **Precedence.** `aeiou run AST --params-file A --params-file B --param k=v`: the defaults, then `A`,
   then `B`, then `--param`. What a result reports is still the parameters in effect (§6: a
   result is the AST hash, the parameters in effect, and the dataset ids); the file names and

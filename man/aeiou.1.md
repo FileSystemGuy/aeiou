@@ -336,6 +336,9 @@ turns it off, and the last one on the line wins.
   Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest
   0x5A, so every file and every piece compresses at C. Default 1. Part of the payload the
   manifest records.
+  At most 4096; a C that does not divide 4096 makes 4096/⌈4096/C⌉ (3 makes 2.9985, 1000
+  makes 819.2), which datagen prints and the manifest's provenance records as
+  `compress_achieved`.
 - **--dataset** *NAME*
 
   Write only these datasets; repeatable. Default all.
@@ -489,7 +492,7 @@ turns it off, and the last one on the line wins.
   The per-thread read and write buffer rings, in MiB. Default 8. *Layered.*
 - **--write-compress** *C*
 
-  Compression ratio of the bytes written to namespaces. Default 1. *Layered.*
+  Compression ratio of the bytes written to namespaces, at most 4096. Default 1. *Layered.*
 - **--time-scale** *X*
 
   Multiply every `compute` sleep by *X*; 0 runs the I/O back to back. Default 1.

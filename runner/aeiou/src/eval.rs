@@ -144,6 +144,47 @@ fn check_kind(name: &str, default: &PValue, v: &PValue, source: &str) -> Result<
     Ok(())
 }
 
+/// `f` as an integer when it is one (`3e3`, `3000.0`) within 64 bits.
+pub fn integral(f: f64) -> Option<i64> {
+    (f.fract() == 0.0 && (-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(&f)).then_some(f as i64)
+}
+
+/// A value keeps its default's kind down to the number (`schema/README.md` §8): where the
+/// default is an integer (an array's elements are), an integral float is that integer, so
+/// `samples=3e3` resolves, and makes the dataset id, as `samples=3000` does, and a fractional
+/// one is refused, never rounded. `payload::param_values` judges the JSON the same way.
+fn keep_int(name: &str, default: &PValue, v: &mut PValue, source: &str) -> Result<()> {
+    match (default, v) {
+        (PValue::Scalar(Literal::Int(_)), PValue::Scalar(l)) => {
+            if let Literal::Float(f) = *l {
+                *l = Literal::Int(integral(f).ok_or_else(|| anyhow!("{source} {name}: the default is an integer, the value {f} is not"))?);
+            }
+        }
+        (PValue::Array(d), PValue::Array(a)) => {
+            if let Some(first) = d.first() {
+                for (i, x) in a.iter_mut().enumerate() {
+                    keep_int(&format!("{name}[{i}]"), first, x, source)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// `keep_int` on JSON: `v` given for a parameter whose default is `default`.
+pub fn keep_int_json(name: &str, default: &serde_json::Value, v: serde_json::Value) -> Result<serde_json::Value> {
+    use serde_json::Value as J;
+    Ok(match (default, v) {
+        (d, J::Number(n)) if (d.is_i64() || d.is_u64()) && n.is_f64() => {
+            let f = n.as_f64().unwrap_or(f64::NAN);
+            J::from(integral(f).ok_or_else(|| anyhow!("{name}: the default is an integer, the value {f} is not"))?)
+        }
+        (J::Array(d), J::Array(a)) if !d.is_empty() => J::Array(a.into_iter().enumerate().map(|(i, x)| keep_int_json(&format!("{name}[{i}]"), &d[0], x)).collect::<Result<_>>()?),
+        (_, v) => v,
+    })
+}
+
 impl Params {
     pub fn new(ast: &Ast, cfg: &Config) -> Result<Params> {
         let mut values: BTreeMap<String, PValue> = ast.params.iter().map(|(k, p)| (k.clone(), p.default.clone())).collect();
@@ -157,8 +198,9 @@ impl Params {
                     bail!("{source} `gpus` is set with --gpus, not by a parameter file");
                 }
                 let param = ast.params.get(name).ok_or_else(|| anyhow!("{source} no parameter `{name}` in `{}`", ast.name))?;
-                let pv: PValue = serde_json::from_value(v.clone()).map_err(|e| anyhow!("{source} {name}: not a parameter value (a scalar, a distribution, or an array of these): {e}"))?;
+                let mut pv: PValue = serde_json::from_value(v.clone()).map_err(|e| anyhow!("{source} {name}: not a parameter value (a scalar, a distribution, or an array of these): {e}"))?;
                 check_kind(name, &param.default, &pv, &source)?;
+                keep_int(name, &param.default, &mut pv, &source)?;
                 values.insert(name.clone(), pv);
             }
         }
@@ -170,7 +212,7 @@ impl Params {
             if param.cli == Some(false) {
                 bail!("--param {name}: not overridable (cli: false)");
             }
-            let v: PValue = match serde_json::from_str(text) {
+            let mut v: PValue = match serde_json::from_str(text) {
                 Ok(v) => {
                     if let Some(e) = crate::canon::int_range_errors(text).first() {
                         bail!("--param {name}: {}", e.trim_start_matches(": "));
@@ -180,6 +222,7 @@ impl Params {
                 Err(_) => PValue::Scalar(Literal::Str(text.clone())),
             };
             check_kind(name, &param.default, &v, "--param")?;
+            keep_int(name, &param.default, &mut v, "--param")?;
             values.insert(name.clone(), v);
         }
         // rule V3 again on what was given: a distribution whose minimum is below the default's

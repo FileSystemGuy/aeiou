@@ -15,7 +15,8 @@ sets and a fitted set can be reviewed and hashed on its own. The runner applies 
 The value rules are the runner's (`runner/aeiou/src/eval.rs`): a name must be declared, `gpus`
 may not appear, and a value replaces a default of the same kind (scalar, array, distribution;
 an array may change length, its elements keep the default's element kind), because the
-builder decided at build time how each slot is consumed; and, as the runner does, rule V3 is
+builder decided at build time how each slot is consumed, and where the default is an integer
+an integral float is that integer and a fractional one is refused; and, as the runner does, rule V3 is
 judged again on the distributions given and a pattern's divisor must bind to a positive integer
 (V23), so `check` refuses every file `aeiou run --params-file` refuses.
 """
@@ -42,6 +43,29 @@ def kind_of(v) -> str:
     if isinstance(v, list):
         return "an array"
     return "a scalar"
+
+
+def _is_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def keep_int(pname: str, default, v):
+    """A value keeps its default's kind down to the number, as the runner has it
+    (`eval::keep_int`): where the default is an integer (an array's elements are), an integral
+    float is that integer (`3e3`, `3000.0`), so the dataset id is the integer's, and a
+    fractional one is refused, never rounded. Returns (value, errors)."""
+    if _is_int(default) and isinstance(v, float):
+        if v.is_integer() and -2**63 <= v < 2**63:
+            return int(v), []
+        return v, [f"{pname}: the default is an integer, the value {v!r} is not"]
+    if isinstance(default, list) and default and isinstance(v, list):
+        out, errors = [], []
+        for i, x in enumerate(v):
+            y, e = keep_int(f"{pname}[{i}]", default[0], x)
+            out.append(y)
+            errors += e
+        return out, errors[:1]
+    return v, []
 
 
 def load(path) -> dict:
@@ -93,6 +117,7 @@ def check(ast: dict, pset: dict, *, ast_sha256: str | None = None, name: str = "
     if want and ast_sha256 and want != ast_sha256:
         errors.append(f"{name}: for AST {want[:16]}…, not {ast_sha256[:16]}…")
     declared = ast.get("params", {})
+    given = {}
     for pname, v in pset.get("params", {}).items():
         if pname == "gpus":
             errors.append(f"{name}: `gpus` is set with --gpus, not by a parameter file")
@@ -108,8 +133,11 @@ def check(ast: dict, pset: dict, *, ast_sha256: str | None = None, name: str = "
                 if kind_of(x) != kind_of(default[0]):
                     errors.append(f"{name}: {pname}[{i}]: the default's elements are {kind_of(default[0])}, this one is {kind_of(x)}")
                     break
+        v, e = keep_int(pname, default, v)
+        errors += [f"{name}: {x}" for x in e]
+        given[pname] = v
     if not errors:
-        errors += given_rules(ast, pset.get("params", {}), name=name)
+        errors += given_rules(ast, given, name=name)
     return errors
 
 

@@ -354,7 +354,10 @@ impl Drop for Aligned {
 
 unsafe impl Send for Aligned {}
 
-/// What this root turned out to support, learned once and shared by every thread.
+/// What one dataset's root turned out to support, learned once and shared by every thread
+/// writing it: each dataset has its own (an endpoint may be another file system, one that
+/// refuses `O_DIRECT` or an unaligned tail when `--root` does not), and its manifest records
+/// its own `direct`.
 pub struct Mode {
     /// `O_DIRECT` opens succeed here.
     direct: AtomicBool,
@@ -362,13 +365,17 @@ pub struct Mode {
     pad_tails: AtomicBool,
     notes: Mutex<Vec<String>>,
     /// The datagen is stopping (Ctrl-C, or another host failed): claim nothing more, and
-    /// leave the file in hand.
-    halt: AtomicBool,
+    /// leave the file in hand. One for the datagen, shared by every dataset's mode.
+    halt: Arc<AtomicBool>,
 }
 
 impl Mode {
     pub fn new() -> Self {
-        Mode { direct: AtomicBool::new(true), pad_tails: AtomicBool::new(false), notes: Mutex::new(Vec::new()), halt: AtomicBool::new(false) }
+        Self::sharing(&Arc::new(AtomicBool::new(false)))
+    }
+    /// A mode that stops with `halt`.
+    pub fn sharing(halt: &Arc<AtomicBool>) -> Self {
+        Mode { direct: AtomicBool::new(true), pad_tails: AtomicBool::new(false), notes: Mutex::new(Vec::new()), halt: halt.clone() }
     }
     pub fn direct(&self) -> bool {
         self.direct.load(Ordering::Relaxed)
@@ -753,6 +760,8 @@ struct Plan<'m, 'a> {
     /// settle's asked one): an id's names under it that this count lacks are removed.
     remove: Option<DsMeta<'a>>,
     track: Track,
+    /// What this dataset's root supports.
+    mode: Mode,
 }
 
 /// Rank 0's queue of one dataset's runs (`DESIGN_REVIEW.md` §3.70): handed out in order, to
@@ -792,6 +801,10 @@ struct Track {
     found_bytes: AtomicU64,
     /// The array file is written.
     whole: AtomicBool,
+    /// The array file's 64 MiB pieces, and those written: the progress line's share of a file
+    /// that counts once whole.
+    pieces: AtomicU64,
+    pieces_done: AtomicU64,
     /// Names removed (a shrink, a settle).
     removed: AtomicU64,
 }
@@ -897,10 +910,12 @@ impl Plan<'_, '_> {
     /// file is id 0), how many runs it has received (`seen`: rank 0 counts the ones it sent
     /// after them as not done), and the files and bytes of the rest (and of those bytes, those
     /// of the objects a resume found already in the store), read together: every writer's lock is
-    /// held while its cursor and the counts are read, and an array file counts once whole.
+    /// held while its cursor and the counts are read, and an array file counts once whole
+    /// (until then `live`: its bytes so far and the part written, for the progress line alone).
     fn note(&self, tcp: Option<&Tcp>) -> Value {
         let mut v = Vec::new();
         let mut seen = 0u64;
+        let mut live = Value::Null;
         let counts = || (self.track.files.load(Ordering::Relaxed), self.track.bytes.load(Ordering::Relaxed), self.track.found_bytes.load(Ordering::Relaxed));
         let (files, bytes, found) = match self.share {
             Share::Other { .. } => (0, 0, 0),
@@ -909,6 +924,8 @@ impl Plan<'_, '_> {
                     counts()
                 } else {
                     v.push((0, 1));
+                    let (done, of) = (self.track.pieces_done.load(Ordering::Relaxed), self.track.pieces.load(Ordering::Relaxed));
+                    live = json!({"bytes": self.track.bytes.load(Ordering::Relaxed), "part": if of > 0 { done as f64 / of as f64 } else { 0.0 }});
                     (0, 0, 0)
                 }
             }
@@ -929,7 +946,11 @@ impl Plan<'_, '_> {
                 counts()
             }
         };
-        json!({"unfinished": ranges_json(&merge_ranges(v)), "seen": seen, "files": files, "bytes": bytes, "found_bytes": found})
+        let mut n = json!({"unfinished": ranges_json(&merge_ranges(v)), "seen": seen, "files": files, "bytes": bytes, "found_bytes": found});
+        if !live.is_null() {
+            n["live"] = live;
+        }
+        n
     }
 }
 
@@ -980,6 +1001,16 @@ fn objects_of(meta: &DsMeta<'_>, id: i64) -> Result<u64> {
     match meta {
         DsMeta::Files { chunk: Some(_), .. } => Ok(meta.chunks(id)? as u64),
         _ => Ok(1),
+    }
+}
+
+/// Remove `dir` and each parent up to `top`, which this datagen created, while they are empty.
+fn unmake(dir: &Path, top: &Path) {
+    for d in dir.ancestors().take_while(|d| d.starts_with(top)) {
+        match std::fs::remove_dir(d) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => break,
+            _ => {}
+        }
     }
 }
 
@@ -1200,6 +1231,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
             // the slots' tails, and a last slot's that is empty, are holes
             f.set_len(size).with_context(|| format!("sizing {}", full.display()))?;
             let pieces = (size + REGIONS_PIECE - 1) / REGIONS_PIECE;
+            track.pieces.store(pieces, Ordering::Relaxed);
             let next = AtomicU64::new(0);
             let nthreads = writers.min(pieces.max(1) as usize);
             let seed_of = |blk: u64| payload::array_block_seed(seed, blk, dedupe);
@@ -1222,6 +1254,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                             match write_slots(&f, direct, mode, meta, slot, count, &seed_of, at, at + len, &mut filler, &mut buf, &full) {
                                 Ok(n) => {
                                     track.bytes.fetch_add(n, Ordering::Relaxed);
+                                    track.pieces_done.fetch_add(1, Ordering::Relaxed);
                                 }
                                 Err(e) => {
                                     if e.is::<Halted>() {
@@ -1257,14 +1290,28 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
     })
 }
 
+/// A root that is not empty because a datagen there did not finish (its manifest is not
+/// `complete`): refused with the ways to finish it, not with "remove it first" alone.
+fn unfinished_corpus(name: &str, root: &str, m: Option<Manifest>) -> Result<()> {
+    match m {
+        Some(m) if m.state != payload::STATE_COMPLETE => bail!(
+            "dataset `{name}`: {root} holds a corpus a datagen did not finish (its manifest is `{}`): `aeiou datagen --resume {root}` finishes it, `--settle {root}` keeps what it reached, or remove it first",
+            m.state
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// A payload as an error message names it.
 fn payload_line(p: &PayloadSpec) -> String {
     format!("{} {} ({}, block {}, dedupe {}, compress {})", p.generator, p.version, p.wrapper, p.block, p.dedupe, p.compress)
 }
 
 /// One rank's part of one dataset, as sent to rank 0 (`Done`) and recorded in the manifest.
-fn part_json(rank: i64, host: &str, w: &Written) -> Value {
-    let mut v = json!({"rank": rank, "host": host, "files_written": w.files, "bytes_written": w.bytes, "started": w.started, "finished": w.finished});
+fn part_json(rank: i64, host: &str, w: &Written, mode: &Mode) -> Value {
+    // how this host wrote the dataset's root: with `O_DIRECT`, and its unaligned tails padded
+    // and truncated
+    let mut v = json!({"rank": rank, "host": host, "direct": mode.direct(), "pad_tails": mode.pad_tails.load(Ordering::Relaxed), "files_written": w.files, "bytes_written": w.bytes, "started": w.started, "finished": w.finished});
     // a resume's objects found already in the store, which only the totals count
     if w.found.0 > 0 {
         v["files_found"] = json!(w.found.0);
@@ -1303,6 +1350,12 @@ impl Base {
         };
         if let Some(c) = p.container.as_ref().filter(|c| !c.headers.is_null()) {
             m.provenance["headers"] = c.headers.clone();
+        }
+        // a ratio that does not divide 4096 is made as the nearest a piece holds: what the
+        // bytes have, beside the ratio asked (the payload's, unchanged, so is the id)
+        let made = payload::achieved_compress(spec.compress);
+        if made != spec.compress as f64 {
+            m.provenance["compress_achieved"] = json!(made);
         }
         Ok(m)
     }
@@ -1388,6 +1441,9 @@ impl Ticker<'_, '_, '_> {
         docs.insert(rank, mine);
         let ranks = self.opts.ranks.max(1);
         let (mut total, mut left, mut bytes) = (0i64, 0i64, 0u64);
+        // an array file being written: its bytes so far and the part of it done, which the
+        // line shows and the manifest does not count until the file is whole
+        let (mut live_bytes, mut part) = (0u64, 0f64);
         for (p, base) in self.plans.iter().zip(self.manifests) {
             let mut unfinished = Vec::new();
             let (mut files, mut b, mut found_b) = (0u64, 0u64, 0u64);
@@ -1399,6 +1455,8 @@ impl Ticker<'_, '_, '_> {
                         files += d["files"].as_u64().unwrap_or(0);
                         b += d["bytes"].as_u64().unwrap_or(0);
                         found_b += d["found_bytes"].as_u64().unwrap_or(0);
+                        live_bytes += d["live"]["bytes"].as_u64().unwrap_or(0);
+                        part += d["live"]["part"].as_f64().unwrap_or(0.0);
                     }
                     None if p.queue.is_none() => unfinished.extend(share_of(p, r)),
                     None => {}
@@ -1434,8 +1492,10 @@ impl Ticker<'_, '_, '_> {
         let secs = self.t0.elapsed().as_secs_f64();
         let done = total - left;
         // the rate of this datagen alone: a resume starts with the work of the one before
-        let now = self.plans.iter().map(|p| p.work.iter().map(|(a, b)| b - a).sum::<i64>()).sum::<i64>() - left;
-        let eta = if now > 0 && left > 0 { format!(", about {:.0} s left", secs * left as f64 / now as f64) } else { String::new() };
+        let now = (self.plans.iter().map(|p| p.work.iter().map(|(a, b)| b - a).sum::<i64>()).sum::<i64>() - left) as f64 + part;
+        let rest = left as f64 - part;
+        let eta = if now > 0.0 && rest > 0.0 { format!(", about {:.0} s left", secs * rest / now) } else { String::new() };
+        let bytes = bytes + live_bytes;
         let mut l = log.lock().unwrap();
         writeln!(l, "progress {secs:.1} s: {done}/{total} files, {} written, {}/s{eta}", crate::dryrun::human_bytes(bytes), crate::dryrun::human_bytes((bytes as f64 / secs.max(1e-9)) as u64))?;
         l.flush()?;
@@ -1593,6 +1653,10 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     if ranks > 1 && hosts.is_none() {
         bail!("{ranks} ranks and no coordinator");
     }
+    let made = payload::achieved_compress(spec.compress);
+    if made != spec.compress as f64 && rank == 0 {
+        writeln!(log, "compress {}: each 4 KiB piece holds {} random bytes, so the ratio made is {}; the manifest records it as compress_achieved", spec.compress, payload::random_per_piece(spec.compress), format!("{made:.4}").trim_end_matches('0'))?;
+    }
     let host = crate::run::hostname();
     let base = Base { params_json: payload::params_json(&loaded.doc, cfg, params)?, host: host.clone() };
     let resume = opts.resume.as_ref();
@@ -1658,6 +1722,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     // aside); a resume, whose format writer was checked above, does not
     let mut plans = Vec::new();
     let mut array_index = 0usize;
+    let halt = Arc::new(AtomicBool::new(false));
     for (meta, name, container, root, object) in checked {
         let mut present = std::collections::HashSet::new();
         if let (Some((store, rest)), true) = (&object, resume.is_some() && opts.resize.is_none()) {
@@ -1665,13 +1730,16 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         } else if let (Some((store, rest)), true) = (&object, resume.is_none()) {
             let busy = if rank == 0 { store.non_empty(rest)? } else { store.non_empty_except(rest, payload::MANIFEST_NAME)? };
             if busy {
-                bail!("dataset `{name}`: {} is not empty; datasets are read-only, remove it first", store.show(rest));
+                let shown = store.show(rest);
+                unfinished_corpus(name, &shown, Manifest::read_object(store, rest).ok())?;
+                bail!("dataset `{name}`: {shown} is not empty; datasets are read-only, remove it first");
             }
         } else if resume.is_none() && root.exists() {
             let n = std::fs::read_dir(&root)?
                 .filter(|e| rank == 0 || !e.as_ref().is_ok_and(|e| e.file_name().to_string_lossy().starts_with(payload::MANIFEST_NAME)))
                 .count();
             if n > 0 {
+                unfinished_corpus(name, &root.display().to_string(), Manifest::read(&root).ok())?;
                 bail!("dataset `{name}`: {} is not empty ({n} entries); datasets are read-only, remove it first", root.display());
             }
         }
@@ -1745,7 +1813,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if let Some(s) = &settle {
             carry.insert("settle".into(), s.clone());
         }
-        plans.push(Plan { meta, name, root, object, container, share, owner, present, work, desc, queue, book: Mutex::new(Book { last: None, mark }), before, from, carry, remove, track: Track::default() });
+        plans.push(Plan { meta, name, root, object, container, share, owner, present, work, desc, queue, book: Mutex::new(Book { last: None, mark }), before, from, carry, remove, track: Track::default(), mode: Mode::sharing(&halt) });
     }
     for p in &plans {
         let w = p.work.iter().map(|(a, b)| b - a).sum::<i64>();
@@ -1760,7 +1828,19 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
         match &p.share {
             Share::Files => {
-                let what = if resume.is_some() && opts.resize.is_none() { format!("{w} unfinished id(s) of {}", p.meta.files()) } else { format!("{w} id(s) of {}", p.meta.files()) };
+                let unfinished = if resume.is_some() && opts.resize.is_none() { "unfinished " } else { "" };
+                let files = p.meta.files();
+                let end = p.work.last().map_or(0, |r| r.1);
+                let what = if end > files {
+                    // a shrink's or settle's ids reach past the count: say which, and what
+                    // becomes of them
+                    let ids = p.work.iter().map(|(a, b)| if b - a == 1 { format!("{a}") } else { format!("from {a} to {}", b - 1) }).collect::<Vec<_>>().join(", ");
+                    let kept = p.work.iter().map(|(a, b)| (*b).min(files) - (*a).min(files)).sum::<i64>();
+                    let again = if kept > 0 { format!("{kept} written, ") } else { String::new() };
+                    format!("the {unfinished}ids {ids} of {end} ({again}those from {files} up removed)")
+                } else {
+                    format!("{w} {unfinished}id(s) of {files}")
+                };
                 let order = if p.desc { ", from the top down" } else { "" };
                 match p.queue.as_ref().map(|q| q.lock().unwrap().runs.len()) {
                     Some(n) if ranks > 1 => writeln!(log, "dataset {}: {what}, in {n} run(s) handed out by this rank in order{order}", p.name)?,
@@ -1798,9 +1878,21 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     }
     // the roots, after every refusal the plan and the headers decide (a missing or failing
     // aeiou-header among them): a refused datagen leaves nothing behind
+    let mut made: Vec<(&Path, PathBuf)> = Vec::new();
     for p in &plans {
         if p.object.is_none() {
-            std::fs::create_dir_all(&p.root).with_context(|| format!("creating {}", p.root.display()))?;
+            // the topmost directory this creates, so a root that cannot be made takes back the
+            // ones made before it (each only while empty)
+            let top = p.root.ancestors().take_while(|a| !a.exists()).last().map(Path::to_path_buf);
+            if let Some(top) = top {
+                made.push((&p.root, top));
+            }
+            if let Err(e) = std::fs::create_dir_all(&p.root) {
+                for (root, top) in made.iter().rev() {
+                    unmake(root, top);
+                }
+                return Err(e).with_context(|| format!("creating {}", p.root.display()));
+            }
         }
     }
 
@@ -1873,7 +1965,6 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     // stopping, and on rank 0 the answers to the other ranks' claims; then the metadata to
     // stable storage, a last note, and (several hosts) this rank's part to rank 0, whose
     // window runs until every part is in
-    let mode = Mode::new();
     if opts.sigint {
         catch_sigint();
     }
@@ -1885,7 +1976,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     let mut parts: BTreeMap<i64, Value> = BTreeMap::new();
     let mut written = Vec::new();
     let phase: Result<()> = std::thread::scope(|s| {
-        let (ticker, log_m, mode, over, plans) = (&ticker, &log_m, &mode, &over, &plans);
+        let (ticker, log_m, halt, over, plans) = (&ticker, &log_m, &*halt, &over, &plans);
         s.spawn(move || loop {
             match stopped.recv_timeout(opts.progress) {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -1906,14 +1997,14 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                     match hosts {
                         Some(h) => {
                             if h.tcp.halt().is_err() {
-                                mode.halt.store(true, Ordering::Relaxed);
+                                halt.store(true, Ordering::Relaxed);
                             }
                         }
-                        None => mode.halt.store(true, Ordering::Relaxed),
+                        None => halt.store(true, Ordering::Relaxed),
                     }
                 }
                 if hosts.is_some_and(|h| h.tcp.halted() || h.tcp.abort_reason().is_some()) {
-                    mode.halt.store(true, Ordering::Relaxed);
+                    halt.store(true, Ordering::Relaxed);
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -1923,7 +2014,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 while !over.load(Ordering::Relaxed) {
                     let Some((r, ds, ticket)) = server.next_claim(Duration::from_millis(50)) else { continue };
                     let run = match plans.iter().find(|p| p.name == ds && p.queue.is_some()) {
-                        Some(p) => p.take(r, mode.halted()),
+                        Some(p) => p.take(r, halt.load(Ordering::Relaxed)),
                         None => Ok(None),
                     };
                     match run {
@@ -1938,8 +2029,8 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
         let r = (|| {
             for p in plans {
-                let w = write_share(p, opts, &spec, mode, remote);
-                for n in mode.take_notes() {
+                let w = write_share(p, opts, &spec, &p.mode, remote);
+                for n in p.mode.take_notes() {
                     writeln!(log_m.lock().unwrap(), "  {n}")?;
                 }
                 if p.remove.is_some() {
@@ -1950,9 +2041,8 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             flush(opts)?;
             let mine = json!({
                 "host": host,
-                "direct": mode.direct(),
-                "halted": mode.halted(),
-                "datasets": plans.iter().zip(&written).map(|(p, w)| (p.name.to_string(), part_json(rank, &host, w))).collect::<serde_json::Map<_, _>>(),
+                "halted": halt.load(Ordering::Relaxed),
+                "datasets": plans.iter().zip(&written).map(|(p, w)| (p.name.to_string(), part_json(rank, &host, w, &p.mode))).collect::<serde_json::Map<_, _>>(),
             });
             match hosts {
                 None => {
@@ -1983,12 +2073,13 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         return Err(e);
     }
     let log = log_m.into_inner().unwrap();
-    if let Some(reason) = hosts.and_then(|h| h.tcp.abort_reason()).filter(|_| mode.halted()) {
+    let halted = halt.load(Ordering::Relaxed);
+    if let Some(reason) = hosts.and_then(|h| h.tcp.abort_reason()).filter(|_| halted) {
         // stopped because another host failed (or the coordinator went away): a failure, so
         // its reason and exit 1, not a Ctrl-C's 130; rank 0's own gathering fails the same way
         return Err(anyhow::anyhow!("{reason}"));
     }
-    if mode.halted() {
+    if halted {
         // stopped: every rank has noted what it finished; rank 0 records it once more
         let mut msg = "stopped".to_string();
         if rank == 0 {
@@ -2031,11 +2122,12 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         let mut host_parts = Vec::new();
         let mut direct = true;
         for (_, doc) in &parts {
-            direct &= doc["direct"].as_bool().unwrap_or(false);
             let d = &doc["datasets"][p.name];
             if d.is_null() {
                 continue;
             }
+            // this dataset's root on that host
+            direct &= d["direct"].as_bool().unwrap_or(false);
             total_files += d["files_written"].as_u64().unwrap_or(0);
             total_bytes += d["bytes_written"].as_u64().unwrap_or(0);
             found_files += d["files_found"].as_u64().unwrap_or(0);
@@ -2106,7 +2198,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
         if wrote_manifest {
             let count = manifest.dataset["count"].as_i64().unwrap_or_else(|| p.meta.count());
-            if let Err(e) = write_inventory(p, count, opts, &spec, &mode) {
+            if let Err(e) = write_inventory(p, count, opts, &spec, &p.mode) {
                 manifest_error = Some(format!("{e:#}"));
                 break;
             }

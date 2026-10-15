@@ -154,6 +154,9 @@ fn a_meaningless_number_is_a_usage_error() {
     assert_eq!(gen(&["--writers", "0"]), "--writers 0: the datagen needs a writer (leave it out for one per core)");
     assert_eq!(gen(&["--dedupe", "0"]), "--dedupe 0: the dedupe ratio is at least 1");
     assert_eq!(gen(&["--compress", "0"]), "--compress 0: the compression ratio is at least 1");
+    // a piece holds one random byte at least: 5000 made 4096 and was recorded as 5000
+    assert_eq!(gen(&["--compress", "5000"]), "--compress 5000: the compression ratio is at most 4096 (one random byte in each 4 KiB piece)");
+    assert_eq!(run(&["--write-compress", "4097"]), "--write-compress 4097: the compression ratio is at most 4096 (one random byte in each 4 KiB piece)");
     // a window too long for a Duration panicked in the conversion
     assert!(gen(&["--progress-secs", "1e30"]).ends_with(": a positive number of seconds"));
 }

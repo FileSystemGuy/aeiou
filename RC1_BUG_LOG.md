@@ -2636,3 +2636,86 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Fix:** the lists follow the code, with datagen's fixed forms (`--resume`, `--grow`, `--shrink`,
   `--settle`) named.
 - **Evidence:** man tests (`man.rs`, `test_man.py`) pass; same suite runs as bug 119.
+
+## 126. An integral float for an integer parameter (`samples=3e3`) gave another dataset id, and a fractional one (`samples=20.7`) was taken and rounded
+
+- **Where:** `runner/aeiou/src/eval.rs` (`integral`, `keep_int`, `keep_int_json`), applied in
+  `Params::new` and `runner/aeiou/src/payload.rs` `param_values`; `builder/aeiou/params.py`
+  (`keep_int` in `check`, normalized values to `given_rules`); `schema/README.md` §8 Rules; tests.
+- **Found by:** RC1 third-round datagen review (RV3c): `--param samples=3e1` recorded `"count": 30.0`,
+  id 51a94b9a… against 8b486790… for `samples=30`, byte-identical files; `run --param samples=30`
+  was refused "count: 30 vs 30.0"; `samples=20.7` wrote 21 files with `count: 20.7`; yet
+  `files_per_directory=10.0` was refused "not an integer".
+- **Fix:** where a parameter's default (or an array default's elements) is an integer, an integral
+  float within i64 becomes that integer and a fractional or out-of-range one is refused ("--param
+  samples: the default is an integer, the value 20.7 is not"), in parameter files and `--param`
+  alike, in the runner and the Python checker. No id changes for any value already an integer; no
+  committed parameter file has such a float.
+- **Evidence:** `golden::an_integral_float_is_the_integer_its_default_is` and
+  `test_params.py::test_an_integral_float_is_the_integer_its_default_is` fail on HEAD and pass;
+  `samples=3e1` now gives id 8b486790… and the run accepts it. Merged on HEAD 44969ca:
+  `--tests --lib --bins` with MinIO all pass (all 158, lib 70), builder suite with MinIO 407, CI's
+  checker diff empty, 22 parameter files ok, `aeiou-build --hermetic --twice --check` rc 0,
+  `aeiou-catalog check` 13 mechanisms, 16 cases ok. Fixed in an isolated worktree and applied.
+
+## 127. Progress on an array file read "0 B written, 0 B/s" with no ETA for its whole life
+
+- **Where:** `runner/aeiou/src/datagen.rs` (`Track::pieces`/`pieces_done`, `Plan::note` `live`,
+  `Ticker::tick`); tests.
+- **Found by:** RV3c: faiss `--dataset lists --param lists=20000 --writers 1 --progress-secs 0.5` printed
+  `0/1 files, 0 B written, 0 B/s` until the end; the default corpus is a 256 GiB file.
+- **Fix:** the manifest's counts stay whole-file only; the printed line adds the live bytes of an
+  unfinished array file, its rate, and an ETA from the pieces done.
+- **Evidence:** `coord::an_array_files_progress_is_live` fails on HEAD and passes ("32.53 MiB written,
+  644.55 MiB/s, about 0 s left"; id unchanged 2e3da472…); same suite runs as bug 126.
+
+## 128. The O_DIRECT and unaligned-tail findings were made once per datagen and applied to every root
+
+- **Where:** `runner/aeiou/src/datagen.rs` (`Mode` per dataset via `Mode::sharing(&halt)`, `part_json`
+  `direct`/`pad_tails` per dataset per host, manifest `direct` the AND for that dataset); 
+  `runner/REFERENCE.md` §5; tests.
+- **Found by:** RV3c: lmcache with `--root` on ext4 (refuses unaligned direct tails) and an endpoint on
+  tmpfs: strace showed an `ftruncate` after every tmpfs write; by the same path an O_DIRECT refusal
+  on one root would send every later dataset through the page cache and record `direct: false` for all.
+- **Fix:** each dataset keeps its own mode, sharing only the halt flag; notes and the recorded
+  `direct`/`pad_tails` are per dataset.
+- **Evidence:** `coord::the_direct_findings_are_each_roots_own` (probes each file system) fails on HEAD
+  and passes; strace after: 0 `ftruncate` on tmpfs; an outright O_DIRECT refusal is covered by
+  structure only (no local file system refuses it); same suite runs as bug 126.
+
+## 129. A failed root creation left the roots made before it
+
+- **Where:** `runner/aeiou/src/datagen.rs` (topmost new ancestor per plan, `unmake` on failure); tests.
+- **Found by:** RV3c: `--endpoint sysp=/mnt/nfs/sys` (not writable) failed "Permission denied" and left
+  `d15/kv/sub/`, against the comment that a refused datagen leaves nothing.
+- **Fix:** on a `create_dir_all` failure the directories this datagen made are removed in reverse
+  order with `remove_dir` (empty ones only, NotFound tolerated).
+- **Evidence:** `coord::a_root_that_cannot_be_made_leaves_nothing_behind` fails on HEAD and passes; same
+  suite runs as bug 126.
+
+## 130. `--compress` ratios a 4 KiB piece cannot hold were recorded as asked, not as made
+
+- **Where:** `runner/aeiou/src/payload.rs` (`compress_achieved`), `datagen.rs` (note and provenance),
+  `main.rs` (`--compress`/`--write-compress` at most 4096); `man/aeiou.1.md`; tests.
+- **Found by:** RV3c: `random_per_piece` gives `4096/ceil(4096/C)`: `--compress 5000` made 4096,
+  2049–4095 made 2048, 1000 made 819.2, while the manifest recorded C.
+- **Fix:** C above 4096 is a usage error (exit 2) for both flags; a C the pieces cannot hold exactly
+  is accepted (3 makes 2.9985), a note says what is made, and the provenance records
+  `compress_achieved`; the payload still records C, so no dataset id changes for any C.
+- **Evidence:** `coord::a_compress_ratio_a_piece_cannot_hold_is_recorded_as_made` and
+  `usage::a_meaningless_number_is_a_usage_error` fail on HEAD and pass; `--compress 1000` id
+  c92e609f… before and after; same suite runs as bug 126.
+
+## 131. A shrink's plan line read "3266 id(s) of 1234", and a killed corpus rerun was told to remove it
+
+- **Where:** `runner/aeiou/src/datagen.rs` (the plan line; `unfinished_corpus` in the directory and
+  object non-empty checks); tests.
+- **Found by:** RV3c: `--shrink 1234` on 4,500 files printed "3266 id(s) of 1234 … from the top down";
+  rerunning a killed datagen without `--resume` said "is not empty … remove it first" although the
+  root held a `writing` manifest.
+- **Fix:** "the ids from 12 to 44 of 45 (those from 12 up removed)" (with "N written" when the new
+  short last file is rewritten); a root holding an unfinished corpus says "`aeiou datagen --resume
+  ROOT` finishes it, `--settle ROOT` keeps what it reached, or remove it first".
+- **Evidence:** `coord::grow_and_shrink_make_the_corpus_of_the_new_count` and
+  `coord::an_unfinished_corpus_points_at_resume_and_settle` fail on HEAD and pass; same suite runs as
+  bug 126.
