@@ -1254,3 +1254,24 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   the old code and pass on the new; `--test all` 98 passed, `--lib` 43, `test_formats.py` 38
   (including the corpus run under `mmap`). Fixed in an isolated worktree and applied.
   `MmapStats::sized` is not yet printed in the report (queued).
+
+## 55. A multi-host run's merged report counted rank 0's io_uring loops only
+
+- **Where:** `runner/aeiou/src/run.rs` (new `UringReport::merge`, `Report::merge_all`, the doc
+  of `Report::uring`); runner/REFERENCE.md §8, the "Knobs" paragraph;
+  `runner/aeiou/tests/coord.rs`.
+- **Found by:** review of the coordinator/CLI: `merge_all` merged only `in_flight_peak` of the
+  `io_uring` section and passed rank 0's `loops` through, while `libaio`'s
+  `AioReport::merge` sums its loops.
+- **Defect:** `file_per_sample`, `--gpus 3` over two ranks under `--posix io_uring`: the hosts
+  reported loops 2 and 1, the merged `result.io_uring.loops` said 2 (with `threads` 3, summed)
+  and the merged text line "io_uring: loops 2", so the run-scope report misstated the run.
+- **Fix:** `UringReport::merge` sums the loops over the hosts and keeps the largest in-flight
+  peak, as `AioReport::merge` does; the knobs and io-wq caps stay rank 0's (a host's tuning and
+  facts, each host's in its own report), as documented. No report field, fingerprint, dataset
+  id, or AST changes.
+- **Evidence:** `coord::the_merged_report_counts_every_hosts_event_loops` (io_uring and libaio,
+  3 GPUs over 2 ranks: hosts 2 and 1, merged 3, the peak the hosts' largest, the text line
+  "loops 3") fails without the fix ("the run's loops are every host's: … loops 2") and passes
+  with it; `--test all -- coord report run` 53 passed, `--lib` 44, builder test_trace,
+  test_formats, test_builder 172 passed.

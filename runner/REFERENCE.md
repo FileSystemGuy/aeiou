@@ -1014,7 +1014,8 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   fingerprint, and the `sync` backends refuse them rather than ignore them, so a row of the
   A/B matrix cannot be mislabeled. Like `--threads` they are a host's tuning, not part of
   the configuration the coordinator compares; the report prints them (`io_uring:` line,
-  rank 0's once merged).
+  rank 0's once merged, beside the loops summed over the hosts and the largest in-flight
+  peak).
 
   | flag | kernel | what it does |
   |---|---|---|

@@ -1305,3 +1305,30 @@ fn a_failing_datagen_host_fails_the_others_with_its_reason() {
     let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert!(m.state == "writing" && !m.progress["stopped"].is_null(), "{}", m.progress);
 }
+
+/// The event-loop blocks of a run on two hosts (RC1 review, bug 54): rank 0's merged report
+/// counts every host's loops and takes the largest in-flight peak, never rank 0's alone; the
+/// knobs and the kernel's io-wq caps are rank 0's. 3 GPUs over 2 ranks, so the hosts differ.
+#[test]
+fn the_merged_report_counts_every_hosts_event_loops() {
+    let root = tmpdir("loops");
+    datagen_one(&root, 500);
+    let params = ["samples=500", "batch=4", "steps=3"];
+    for (posix, block) in [("io_uring", "io_uring"), ("libaio", "libaio")] {
+        let json = root.join(format!("report-{posix}.json"));
+        let outs = run_ranks("file_per_sample.ast.json", &root, "3", &params, 2, &["--posix", posix, "--threads", "4", "--report-json", json.to_str().unwrap()]);
+        assert!(outs.iter().all(|(ok, _, _)| *ok), "{posix}: {outs:?}");
+        let d: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+        let d1: serde_json::Value = serde_json::from_slice(&std::fs::read(json.with_extension("json.rank1")).unwrap()).unwrap();
+        let (run, h0, h1) = (&d["result"][block], &d["this_host"][block], &d1["result"][block]);
+        let n = |v: &serde_json::Value, k: &str| v[k].as_u64().unwrap_or_else(|| panic!("{posix}: no {k} in {v}"));
+        assert_eq!((n(h0, "loops"), n(h1, "loops")), (2, 1), "{posix}: one loop per instance, at most 4: {h0} {h1}");
+        assert_eq!(n(run, "loops"), 3, "{posix}: the run's loops are every host's: {run}");
+        assert_eq!(n(run, "in_flight_peak"), n(h0, "in_flight_peak").max(n(h1, "in_flight_peak")), "{posix}: {run}");
+        if posix == "io_uring" {
+            assert_eq!((&run["opts"], &run["iowq_defaults"]), (&h0["opts"], &h0["iowq_defaults"]), "rank 0's knobs and caps");
+        }
+        let text = &outs[0].1;
+        assert!(text.contains(&format!("{block}: loops 3 ")), "{posix}: the merged text report: {text}");
+    }
+}

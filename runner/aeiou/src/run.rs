@@ -124,6 +124,14 @@ impl UringReport {
         };
         format!("loops {}  in-flight peak {}  {}  knobs: {}", self.loops, self.in_flight_peak, caps, self.opts.describe())
     }
+
+    /// Another host's rings into the run's: the loops summed and the peak the largest, as
+    /// `AioReport::merge`; the knobs and the kernel's io-wq caps stay rank 0's (a host's
+    /// tuning and facts, each host's in its own report).
+    pub fn merge(&mut self, o: &UringReport) {
+        self.loops += o.loops;
+        self.in_flight_peak = self.in_flight_peak.max(o.in_flight_peak);
+    }
 }
 
 /// What the `libaio` backends report about their AIO contexts (`Report::aio`), summed over
@@ -2109,7 +2117,8 @@ pub struct Report {
     pub threads_peak: u64,
     /// What the host did meanwhile (`counters`): tasks, io-wq workers, CPU, the mount's RPCs.
     pub counters: HostCounters,
-    /// The rings' setup under the `io_uring` backends (rank 0's once merged); `None` under `sync`.
+    /// The rings under the `io_uring` backends (once merged: the loops summed over the hosts,
+    /// the peak the largest, the knobs and io-wq caps rank 0's); `None` under `sync`.
     pub uring: Option<UringReport>,
     /// The AIO contexts under the `libaio` backends, and the mappings under `mmap`.
     #[serde(default)]
@@ -2150,8 +2159,10 @@ impl Report {
             }
             m.threads_peak += r.threads_peak;
             m.counters.merge(&r.counters);
-            if let (Some(a), Some(b)) = (&mut m.uring, &r.uring) {
-                a.in_flight_peak = a.in_flight_peak.max(b.in_flight_peak);
+            match (&mut m.uring, &r.uring) {
+                (Some(a), Some(b)) => a.merge(b),
+                (None, Some(b)) => m.uring = Some(b.clone()),
+                _ => {}
             }
             match (&mut m.aio, &r.aio) {
                 (Some(a), Some(b)) => a.merge(b),
