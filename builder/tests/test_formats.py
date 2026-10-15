@@ -104,6 +104,10 @@ def test_specs_probes_and_v9():
     with pytest.raises(BuildError, match="V9"):
         formats.tfrecord().spec("map", const(10), {})
     assert formats.webdataset().spec("stream", const(10), {})["framing"]["columns"][0]["row_footer"] == 1024
+    # a fixed member past ustar's 11-digit octal size field (8 GiB - 1) cannot be framed
+    assert formats.webdataset(members=(("jpg", None), ("bin", 8**11 - 1))).members[1] == ("bin", 8**11 - 1)
+    with pytest.raises(BuildError, match="ustar's 8 GiB"):
+        formats.webdataset(members=(("jpg", None), ("bin", 8**11)))
     assert formats.tfrecord().spec("stream", lognormal(median=110 * KiB, sigma=0.45), {})["framing"]["columns"] == [{"row_header": 12, "row_footer": 4, "weight": 1}]
     with pytest.raises(BuildError, match="binary"):
         formats.parquet(columns=(("a", "int64"),))

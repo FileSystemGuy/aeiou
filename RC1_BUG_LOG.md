@@ -1106,3 +1106,26 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   -100]") and `test_builder.py::test_a_dataset_size_is_never_below_zero` fail before and pass
   after; golden 17 passed, `--test all` 95 passed, test_builder + test_man 70 passed, both
   checkers over every committed AST unchanged. Fixed in an isolated worktree and applied.
+
+## 49. A WebDataset member of 8 GiB or more panicked the tar header writer
+
+- **Where:** `runner/aeiou/src/formats.rs` (`octal`, `tar_header`, `USTAR_MAX_SIZE`),
+  `builder/aeiou/formats.py` (`WebDataset.__init__`, a fixed member).
+- **Found by:** the fixer of bug 46, whose pre-flight drove the writer over a webdataset
+  geometry with an 8 GiB sample.
+- **Defect:** ustar's 12-byte size field holds 11 octal digits (at most 8 GiB − 1); `octal()`
+  wrote the longer string past the field: "index out of bounds: the len is 12 but the index is
+  12", a panic mid-dataset before bug 46 and "a format check thread panicked" after it. The
+  Python format class accepted a fixed member of 8**11 bytes.
+- **Fix:** `octal` returns an error when the value needs more digits than its field (mode,
+  uid, gid, mtime, and the checksum now go through it too; their bytes are unchanged), and
+  `tar_header` refuses "tar member `NAME` of N bytes: more than ustar's 8 GiB − 1
+  (8589934591) size field", reached in datagen's pre-flight before anything is written. The
+  Python class refuses a fixed member over `USTAR_MAX_SIZE` at build time (a sample member's
+  size is the runner's to check). No GNU base-256 or pax extension; header bytes of every
+  member that fits are unchanged.
+- **Evidence:** `layout::tar_member_past_ustar_refused_before_anything_is_written` panics
+  without the fix and passes with it, leaving the root empty (no 8 GiB file is written);
+  `tar_header_is_cpythons` gains the 8 GiB − 1 and 8 GiB cases; a `test_formats.py` case for
+  the Python refusal; `--test all layout` 7 passed, `--lib formats` 5 passed,
+  `test_formats.py` 38 passed. Fixed in an isolated worktree and applied.

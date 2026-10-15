@@ -296,12 +296,21 @@ fn masked_crc32c(c: u32) -> u32 {
     c.rotate_right(15).wrapping_add(0xA282_EAD8)
 }
 
-/// `n` in octal, `digits - 1` digits and a NUL (`tarfile.itn` for ustar).
-fn octal(out: &mut [u8], n: u64) {
+/// `n` in octal, `digits - 1` digits and a NUL (`tarfile.itn` for ustar); refused when `n` needs
+/// more digits than the field has (ustar has no wider form, and GNU base-256 or pax would change
+/// the bytes the format class predicts).
+fn octal(out: &mut [u8], n: u64, field: &str) -> Result<()> {
     let s = format!("{:0w$o}", n, w = out.len() - 1);
+    if s.len() >= out.len() {
+        bail!("a tar {field} of {n}: more than ustar's {}-digit octal field holds ({})", out.len() - 1, (1u64 << (3 * (out.len() - 1))) - 1);
+    }
     out[..s.len()].copy_from_slice(s.as_bytes());
     out[s.len()] = 0;
+    Ok(())
 }
+
+/// The largest tar member ustar's 11-digit size field can say: 8 GiB − 1.
+const USTAR_MAX_SIZE: u64 = (1 << 33) - 1;
 
 /// The ustar header of a regular member, as `tarfile.TarInfo.tobuf(USTAR_FORMAT)` makes it.
 fn tar_header(name: &str, size: u64) -> Result<[u8; 512]> {
@@ -309,18 +318,21 @@ fn tar_header(name: &str, size: u64) -> Result<[u8; 512]> {
     if name.len() > 100 {
         bail!("tar member name `{name}` is longer than 100 bytes");
     }
+    if size > USTAR_MAX_SIZE {
+        bail!("tar member `{name}` of {size} bytes: more than ustar's 8 GiB − 1 ({USTAR_MAX_SIZE}) size field");
+    }
     h[..name.len()].copy_from_slice(name.as_bytes());
-    octal(&mut h[100..108], 0o644);
-    octal(&mut h[108..116], 0);
-    octal(&mut h[116..124], 0);
-    octal(&mut h[124..136], size);
-    octal(&mut h[136..148], 0);
+    octal(&mut h[100..108], 0o644, "mode")?;
+    octal(&mut h[108..116], 0, "uid")?;
+    octal(&mut h[116..124], 0, "gid")?;
+    octal(&mut h[124..136], size, "size")?;
+    octal(&mut h[136..148], 0, "mtime")?;
     h[148..156].fill(b' ');
     h[156] = b'0';
     h[257..265].copy_from_slice(b"ustar\x0000");
+    // at most 512 · 255 = 0o376800: six digits, a NUL, and the field's last space
     let sum: u64 = h.iter().map(|&b| b as u64).sum();
-    let s = format!("{sum:06o}\0");
-    h[148..148 + s.len()].copy_from_slice(s.as_bytes());
+    octal(&mut h[148..155], sum, "checksum")?;
     Ok(h)
 }
 
@@ -882,6 +894,13 @@ mod tests {
         assert_eq!(&h[148..156], b"007410\0 ");
         assert_eq!(&h[257..265], b"ustar\x0000");
         assert!(h[329..345].iter().all(|&b| b == 0));
+        // the largest member ustar can say, and one byte more refused, never a panic
+        let h = tar_header("000000007.bin", USTAR_MAX_SIZE).unwrap();
+        assert_eq!(&h[124..136], b"77777777777\0");
+        let e = tar_header("000000007.bin", USTAR_MAX_SIZE + 1).unwrap_err().to_string();
+        assert!(e.contains("8589934592 bytes") && e.contains("8 GiB"), "{e}");
+        let e = octal(&mut [0u8; 8], 1 << 21, "mode").unwrap_err().to_string();
+        assert!(e.contains("mode of 2097152") && e.contains("7-digit"), "{e}");
     }
 
     fn unhex_test(s: &str) -> Vec<u8> {

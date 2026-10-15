@@ -261,6 +261,9 @@ class TfRecord(FormatClass):
 # WebDataset (tar)
 # ----------------------------------------------------------------------------------------------
 
+USTAR_MAX_SIZE = 8**11 - 1
+
+
 class WebDataset(FormatClass):
     """WebDataset: a POSIX tar of `{id}.jpg`, `{id}.cls`, … per sample (512-byte headers, data
     padded to 512, two zero blocks, the archive padded to 10240). Streamed through Python's
@@ -275,6 +278,11 @@ class WebDataset(FormatClass):
         self.members = [(str(ext), None if n is None else _plain_int(n, f"member {ext} bytes")) for ext, n in members]
         if sum(1 for _, n in self.members if n is None) != 1:
             raise BuildError("webdataset: exactly one member is the sample (bytes None)")
+        for ext, n in self.members:
+            # ustar's size field is 11 octal digits; the sample member's size the runner's
+            # datagen checks before writing (it depends on parameters)
+            if n is not None and n > USTAR_MAX_SIZE:
+                raise BuildError(f"webdataset: member {ext} of {n} bytes: more than ustar's 8 GiB − 1 ({USTAR_MAX_SIZE}) size field")
         self.xfer = lift(xfer, "webdataset xfer")
 
     def framing(self, mean_bytes):

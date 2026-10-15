@@ -346,3 +346,30 @@ fn parquet_geometry_refused_before_anything_is_written() {
     let err = err.expect("refused");
     assert!(err.contains("dataset `t`: file p/0000.parquet: a Parquet page of 2560000256 bytes: more than a page holds (2 GiB)"), "{err}");
 }
+
+/// A WebDataset of one 8 GiB sample per tar: past ustar's 11-digit octal size field.
+#[cfg(feature = "formats")]
+const TAR_WRITE: &str = r#"{
+  "ast": "0.10", "name": "tar_write",
+  "datasets": {"t": {"layout": "compound", "pattern": "w/{id:04}.tar", "count": 2, "samples_per_file": 1,
+     "size": {"const": 8589934592}, "seed": 7, "access": "stream",
+     "format": {"class": "webdataset", "reader": "tarfile (CPython)", "framing": {"file_footer": 1024, "file_align": 10240,
+       "columns": [{"row_header": 512, "row_footer": 1024, "row_align": 512, "weight": 1}],
+       "writer": {"members": [["jpg", null], ["cls", 4]]}}}}},
+  "actors": {"gpu": {"body": [
+    {"let": {"name": "f", "value": {"file": {"dataset": "t", "id": 0}}}},
+    {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+    {"close": {"file": {"ref": "f"}}}
+  ]}}
+}"#;
+
+/// A tar member ustar's size field cannot say (8 GiB or more) is refused before datagen writes
+/// anything, with the limit named, never a panic in the octal field (RC1 review).
+#[cfg(feature = "formats")]
+#[test]
+fn tar_member_past_ustar_refused_before_anything_is_written() {
+    let (err, left) = datagen_left(TAR_WRITE, "tar-big");
+    assert!(left.is_empty(), "left behind: {left:?}");
+    let err = err.expect("refused");
+    assert!(err.contains("dataset `t`: file w/0000.tar: tar member `000000000.jpg` of 8589934592 bytes: more than ustar's 8 GiB − 1 (8589934591) size field"), "{err}");
+}
