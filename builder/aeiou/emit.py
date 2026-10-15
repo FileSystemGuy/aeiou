@@ -42,11 +42,11 @@ def git_describe(path) -> str | None:
     path = pathlib.Path(path).resolve()
     try:
         head = subprocess.run(["git", "-C", str(path.parent), "rev-parse", "--short=12", "HEAD"],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         if head.returncode:
             return None
         status = subprocess.run(["git", "-C", str(path.parent), "status", "--porcelain", "--", str(path)],
-                                capture_output=True, text=True, timeout=10)
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         dirty = "-dirty" if status.stdout.strip() else ""
         return head.stdout.strip() + dirty
     except (OSError, subprocess.SubprocessError):
@@ -102,7 +102,7 @@ def load(path) -> dict:
         raise UsageError(f"{path}: a builder script, not an abstract; `aeiou-build {path}` writes the abstracts it authors "
                          f"(`<name>.ast.json`) next to it, and those are what this tool takes")
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except OSError as e:
         hint = "" if path.suffix == ".json" else f"; {WHAT_AN_ABSTRACT}"
         raise UsageError(f"{path}: {e.strerror} (os error {e.errno}){hint}") from None
@@ -123,5 +123,5 @@ def write(wl, path=None, *, provenance: bool = True, built_twice: bool | None = 
     text = render(ast, prov)
     if len(text) > 16 * 1024 * 1024:
         raise BuildError("AST too large")
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     return path

@@ -17,7 +17,7 @@ from collections import Counter
 import jsonschema
 
 HERE = pathlib.Path(__file__).resolve().parent
-SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text())
+SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-8"))
 
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "choose", "phase", "trace"}
@@ -612,7 +612,7 @@ def main(argv):
     validator = jsonschema.Draft202012Validator(SCHEMA)
     failed = 0
     for f in files:
-        ast = json.loads(f.read_text())
+        ast = json.loads(f.read_text(encoding="utf-8"))
         schema_errors = sorted(validator.iter_errors(ast), key=lambda e: list(e.absolute_path))
         errors = [f"{f.name}: {'/'.join(map(str, e.absolute_path))}: {e.message[:200]}" for e in schema_errors]
         if not errors:

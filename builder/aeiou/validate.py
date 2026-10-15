@@ -30,7 +30,7 @@ def schema_dir() -> pathlib.Path:
 @functools.lru_cache(maxsize=1)
 def _load():
     d = schema_dir()
-    schema = json.loads((d / "abstract-ast.schema.json").read_text())
+    schema = json.loads((d / "abstract-ast.schema.json").read_text(encoding="utf-8"))
     spec = importlib.util.spec_from_file_location("aeiou_schema_check", d / "check.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

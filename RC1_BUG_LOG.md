@@ -220,3 +220,26 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** `test_a_legacy_clone_shares_the_descriptor_table_as_clone3_does[True]` raises
   RecursionError with the guard removed and passes with it.
 
+## 11. The builder's tools read and wrote files in the locale's encoding
+
+- **Where:** `builder/aeiou/emit.py` (`load`, `write`, `git_describe`), `cli.py` (the AST write,
+  the hermetic child's pipe), `params.py` (every read and write), `validate.py`, and
+  `schema/check.py` (schema and AST reads); new `usage.console()`.
+- **Found by:** review of the builder core (suspected: `read_text`/`write_text` with no
+  encoding, while ASTs and docs hold "×", "−", "—", "§"); confirmed by the fixer under
+  `LC_ALL=C PYTHONUTF8=0`, where Python's preferred encoding is ASCII.
+- **Defect:** `aeiou-build lmcache_local_disk.py` under that locale died with
+  `UnicodeEncodeError: 'ascii' codec can't encode character '\xa7'` and left a 0-byte AST;
+  `--check` of a committed (UTF-8) AST failed to read it; with the file write fixed, the
+  console line "wrote … sha256=…" itself raised on its `…`.
+- **Fix:** every text read and write of repo files names `encoding="utf-8"` (git and child
+  pipes with `errors="replace"`); `usage.console()` sets stdout/stderr to
+  `errors="backslashreplace"`, called first in `aeiou-build` and `aeiou-params`. Bytes written
+  under a UTF-8 locale are unchanged: no AST, fingerprint, or contract change.
+- **Evidence:** `builder/tests/test_encoding.py::test_build_and_params_under_an_ascii_locale`
+  (build, `--check`, `aeiou-params defaults`/`check` under C.UTF-8 and under ASCII; outputs
+  byte-identical) fails without the fix (`UnicodeEncodeError … '\xd7'`) and passes with it;
+  builder suite 300 passed; build-twice of the committed scripts 14 ok.
+- **Queued from it:** the same gaps in `catalog.py` (CATALOG.md and DESCRIPTION.md writes) and
+  in `trace.py` (stdin, console).
+

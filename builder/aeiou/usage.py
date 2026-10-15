@@ -60,6 +60,18 @@ def fail(e: UsageError, default: Parser) -> int:
     return 2
 
 
+def console() -> None:
+    """Make the console tolerate a locale that cannot spell the tools' messages (`…`, `×`
+    under `LC_ALL=C` without UTF-8 mode): a character the terminal's encoding lacks is
+    printed as its escape instead of failing the tool after its work is done. Files are
+    written in UTF-8 whatever the locale; this is the terminal only."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):  # replaced by a non-TextIOWrapper, or closed
+            pass
+
+
 def failed(prog: str, e: BaseException) -> int:
     """Print a failure during the work (`prog: message`) to stderr; the exit status to return."""
     print(f"{prog}: {e}", file=sys.stderr)

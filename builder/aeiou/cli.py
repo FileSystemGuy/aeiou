@@ -76,7 +76,7 @@ def _spawn_child(script: pathlib.Path, hermetic: bool, hashseed: int) -> dict:
     cmd = [sys.executable, "-s", "-B", "-c", boot, str(script), "--schema-dir", str(schema_dir())]
     if hermetic:
         cmd.append("--hermetic")
-    r = subprocess.run(cmd, env=env, capture_output=True, text=True, cwd=str(script.parent))
+    r = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(script.parent))
     if r.returncode:
         tail = r.stderr.strip().splitlines()[-12:]
         raise BuildError(f"child build failed (PYTHONHASHSEED={hashseed}):\n  "
@@ -98,6 +98,7 @@ def parser() -> usage.Parser:
 
 
 def main(argv=None) -> int:
+    usage.console()
     ap = parser()
     try:
         a = ap.parse_args(argv)
@@ -156,7 +157,7 @@ def main(argv=None) -> int:
                     print(f"ok   {path.name}  sha256={digest[:16]}…")
                 continue
             out_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(emit.render(ast, prov))
+            path.write_text(emit.render(ast, prov), encoding="utf-8")
             from .validate import op_counts
             ops = " ".join(f"{k}={v}" for k, v in op_counts(ast).items())
             print(f"wrote {path}  sha256={digest[:16]}…  ops: {ops}")

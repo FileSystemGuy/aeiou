@@ -49,18 +49,18 @@ def load(path) -> dict:
     from .validate import schema_dir
     path = pathlib.Path(path)
     try:
-        doc = json.loads(path.read_text())
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise BuildError(f"{path}: {e}") from None
     d = schema_dir()
     registry = None
     try:
         from referencing import Registry, Resource
-        ast_schema = json.loads((d / "abstract-ast.schema.json").read_text())
+        ast_schema = json.loads((d / "abstract-ast.schema.json").read_text(encoding="utf-8"))
         registry = Registry().with_resource("abstract-ast.schema.json", Resource.from_contents(ast_schema))
     except ImportError:  # old jsonschema without `referencing`: skip the cross-file refs
         pass
-    schema = json.loads((d / "params.schema.json").read_text())
+    schema = json.loads((d / "params.schema.json").read_text(encoding="utf-8"))
     if registry is not None:
         v = jsonschema.Draft202012Validator(schema, registry=registry)
         errors = [f"{path.name}: {'/'.join(map(str, e.absolute_path))}: {e.message[:300]}"
@@ -317,6 +317,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
 
 
 def main(argv=None) -> int:
+    usage.console()
     ap, subs = parser()
     sp = ap
     try:
@@ -347,7 +348,7 @@ def _main(a) -> int:
     if a.cmd == "defaults":
         pset = defaults(ast, doc=a.doc, pin=a.pin)
         out = a.out or pathlib.Path(f"{ast['name']}.defaults.params.json")
-        out.write_text(render(pset, {"tool": f"aeiou-params {__version__}", "command": "defaults", "ast_sha256": sha}))
+        out.write_text(render(pset, {"tool": f"aeiou-params {__version__}", "command": "defaults", "ast_sha256": sha}), encoding="utf-8")
         print(f"wrote {out}  ({len(pset['params'])} parameters)")
         return 0
     if a.cmd == "check":
@@ -379,7 +380,7 @@ def _main(a) -> int:
         prov = {"tool": f"aeiou-params {__version__}", "command": "safetensors", "ast_sha256": sha,
                 "shards": [{"file": p.name, "sha256": file_sha256(p)} for p in a.shards],
                 "column": a.column, "row": a.row}
-        a.out.write_text(render(pset, prov))
+        a.out.write_text(render(pset, prov), encoding="utf-8")
         print(f"wrote {a.out}  ({len(values['shard'])} tensors in {values['shards']} shard(s))")
         return 0
     if a.cmd == "npz":
@@ -402,7 +403,7 @@ def _main(a) -> int:
                 raise BuildError("\n  ".join(errors))
             prov = {"tool": f"aeiou-params {__version__}", "command": "npz", "ast_sha256": sha, "member": a.member,
                     "archives": [{"file": p.name, "bytes": r["bytes"], "members": r["members"]} for p, r in zip(a.archives, recs)]}
-            a.out.write_text(render(pset, prov))
+            a.out.write_text(render(pset, prov), encoding="utf-8")
             print(f"wrote {a.out}")
         return 1 if differs and not a.out else 0
     return 1
