@@ -379,3 +379,24 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `test_counts_are_the_cases_length_when_the_check_length_is_shorter` fail on the old catalog.py
   and pass on the new; the committed tree checks ok; test_catalog.py + test_man.py: 68 passed.
 
+## 18. aeiou-trace answered bad input with tracebacks, a late exit 1, and locale-dependent bytes
+
+- **Where:** `builder/aeiou/trace.py`, `main` (new `_open_trace`, the usage check of
+  `--max-distance`), the `-o` writes of `metrics` and `export`, and `_judged`.
+- **Found by:** review of the Python tools against runner REFERENCE §15 (the usage-error frame
+  every tool shares) and the encoding fix of bug 11.
+- **Defect:** a missing trace (`metrics nofile`, `export nofile`) or an `-o` in a missing
+  directory printed a Python traceback; `compare --judge --max-distance 0.1`, two rules that
+  exclude each other, exited 1 after starting work instead of a usage error (exit 2); under an
+  ASCII locale `export -` decoded stdin in the locale (é exported as two lone surrogates, a
+  different sha256) and a non-ASCII `-o` path crashed the summary line after the work was done.
+- **Fix:** inputs open through `_open_trace` (stdin read as UTF-8, an unopenable file a one-line
+  error naming it, exit 1), `-o` write failures likewise; `--max-distance` with `--judge`,
+  `--tolerances`, or `--self` is a `UsageError` before anything is read (the frame, exit 2);
+  `main` calls `usage.console()`. `-o -` still names a file `-`: nothing documents it as stdout.
+- **Evidence:** `test_trace.py::test_a_file_the_tool_cannot_open_is_an_error_naming_it`,
+  `test_max_distance_with_a_judging_rule_is_a_usage_error`, and
+  `test_stdin_is_utf8_and_the_console_escapes_what_it_cannot_spell` fail on the old trace.py
+  (traceback; exit 1; byte mismatch) and pass on the new; trace, usage, man, encoding suites: 97
+  passed.
+

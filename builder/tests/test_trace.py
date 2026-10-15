@@ -1069,3 +1069,54 @@ def test_a_cut_iovec_list_takes_the_bytes_the_call_moved():
     whole, cut = total(one(40))["total"], total(one(32))["total"]
     assert cut["bytes_read"] == whole["bytes_read"] == 163840
     assert cut["request_size"] == whole["request_size"] and cut["request_size"]["read"]["max"] == 163840
+# the command line (RC1 review): a file the tool cannot open is a one-line error naming it,
+# exit 1, never a traceback; two rules for `compare` are a usage error, exit 2, before any
+# work; `-` is UTF-8 whatever the locale, and a message the console cannot spell is escaped
+def _trace_tool(*args, env=None, stdin=None):
+    return subprocess.run([sys.executable, "-m", "aeiou.trace", *map(str, args)], capture_output=True, cwd=BUILDER, env=env, input=stdin)
+
+
+UNICODE_TRACE = """
+100 1700000001.000000 openat(AT_FDCWD</cwd>, "/d/\u00e9", O_RDONLY|O_CLOEXEC) = 3</d/\u00e9> <0.000010>
+100 1700000001.000100 read(3</d/\u00e9>, "x"..., 4096) = 4096 <0.000010>
+100 1700000001.000200 close(3</d/\u00e9>) = 0 <0.000010>
+""".lstrip().encode("utf-8")
+
+
+def test_a_file_the_tool_cannot_open_is_an_error_naming_it(tmp_path):
+    st = tmp_path / "st.txt"
+    st.write_bytes(UNICODE_TRACE)
+    absent, nodir = tmp_path / "absent", tmp_path / "no" / "x.json"
+    for args, path in ((["metrics", absent, "--root", "/d"], absent), (["export", absent, "--root", "/d", "-o", tmp_path / "x.jsonl"], absent),
+                       (["metrics", st, "--root", "/d", "-o", nodir], nodir), (["export", st, "--root", "/d", "-o", nodir], nodir)):
+        r = _trace_tool(*args)
+        assert (r.returncode, r.stderr.decode()) == (1, f"aeiou-trace {args[0]}: {path}: No such file or directory (os error 2)\n"), r.stderr
+
+
+def test_max_distance_with_a_judging_rule_is_a_usage_error(tmp_path):
+    tol = tmp_path / "tol.json"
+    for rule, said in ((["--judge"], "--judge"), (["--tolerances", tol], "--tolerances (which implies --judge)"), (["--self", tol], "--self (which implies --judge)")):
+        r = _trace_tool("compare", tmp_path / "a.json", tmp_path / "b.json", "--max-distance", "0.1", *rule)
+        err = r.stderr.decode()
+        assert r.returncode == 2 and r.stdout == b"", err
+        assert err.startswith(f"aeiou-trace compare: --max-distance cannot be used with {said}: they are two rules; give one\n\nUsage: aeiou-trace compare "), err
+        assert err.endswith("For more information, try 'aeiou-trace compare --help'.\n"), err
+
+
+def test_stdin_is_utf8_and_the_console_escapes_what_it_cannot_spell(tmp_path):
+    # LC_ALL=C without UTF-8 mode: stdin decodes as ASCII (a path's é two lone surrogates in
+    # the export, a different sha256); PYTHONIOENCODING=ascii is a console with no escape for
+    # the -o path aeiou-trace prints after the work
+    base = {k: v for k, v in os.environ.items() if not k.startswith("LC_") and k not in ("LANG", "PYTHONIOENCODING", "PYTHONUTF8")}
+    out = {}
+    for locale, mode in (("C.UTF-8", "1"), ("C", "0")):
+        o = tmp_path / f"{locale}.jsonl"
+        r = _trace_tool("export", "-", "--root", "/d", "-o", o, env={**base, "LC_ALL": locale, "PYTHONUTF8": mode}, stdin=UNICODE_TRACE)
+        assert r.returncode == 0, r.stderr
+        out[locale] = o.read_bytes()
+    assert out["C"] == out["C.UTF-8"]
+    assert [e.get("path") for e in map(json.loads, out["C"].splitlines())][1] == "\u00e9"
+    st, o = tmp_path / "st.txt", tmp_path / "\u00e9.jsonl"
+    st.write_bytes(UNICODE_TRACE)
+    r = _trace_tool("export", st, "--root", "/d", "-o", o, env={**base, "PYTHONIOENCODING": "ascii"})
+    assert r.returncode == 0 and b"\\xe9.jsonl\n" in r.stdout, r.stderr

@@ -53,6 +53,7 @@ numbers. `aeiou-trace metrics` reads an exported file too (`TraceReader`).
 from __future__ import annotations
 
 import fnmatch
+import io
 import itertools
 import json
 import os
@@ -1614,6 +1615,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
 
 
 def main(argv=None) -> int:
+    usage.console()
     ap, subs = parser()
     sp = ap
     try:
@@ -1632,6 +1634,9 @@ def main(argv=None) -> int:
             missing.want(args.a, "<A>", "a metrics document (aeiou_metrics: 1), the trace's")
             missing.want(args.b, "<B>", "the metrics document A is compared with, the abstract's")
         missing.check()
+        if args.cmd == "compare" and args.max_distance is not None and (args.judge or args.tolerances or args.selfs):
+            rule = "--judge" if args.judge else "--tolerances (which implies --judge)" if args.tolerances else "--self (which implies --judge)"
+            raise usage.UsageError(f"--max-distance cannot be used with {rule}: they are two rules; give one", sp)
         return _main(args, subs)
     except usage.UsageError as e:
         return usage.fail(e, sp)
@@ -1644,7 +1649,7 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
     if args.cmd == "metrics":
         if args.metrics_block < 1 or args.metrics_sample < 1:
             mp.error("--metrics-block and --metrics-sample must be at least 1")
-        f = sys.stdin if args.trace == "-" else open(args.trace, encoding="utf-8", errors="replace")
+        f = _open_trace(args.trace)
         with f:
             first = f.readline()
             lines = itertools.chain([first], f)
@@ -1659,8 +1664,11 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
         doc["trace"] = args.trace
         text = json.dumps(doc, indent=2) + "\n"
         if args.out:
-            with open(args.out, "w", encoding="utf-8") as out:
-                out.write(text)
+            try:
+                with open(args.out, "w", encoding="utf-8") as out:
+                    out.write(text)
+            except OSError as e:
+                raise BuildError(f"{args.out}: {_cause(e)}")
             t = doc["total"]
             print(f"{t['ops']} ops under {', '.join(doc['roots'])}: read {t['bytes_read']} bytes, wrote {t['bytes_written']} bytes; {doc['contexts']} thread(s); {args.out}")
             for k, v in doc["notes"].items():
@@ -1670,10 +1678,13 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
         return 0
 
     if args.cmd == "export":
-        f = sys.stdin if args.trace == "-" else open(args.trace, encoding="utf-8", errors="replace")
+        f = _open_trace(args.trace)
         with f:
             header, events = export_of(f, os.path.abspath(args.root), exclude=args.exclude, cwd=args.cwd)
-        sha = write_export(args.out, header, events)
+        try:
+            sha = write_export(args.out, header, events)
+        except OSError as e:
+            raise BuildError(f"{args.out}: {_cause(e)}")
         print(f"{header['lines']} line(s) on {header['lanes']} lane(s), {header['opens']} open(s), {len(header['creates'])} path(s) created under {header['root']}; {args.out}")
         print(f"sha256 {sha}")
         for k, v in header["notes"].items():
@@ -1714,9 +1725,19 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
     return 0
 
 
+def _open_trace(path: str):
+    """The trace to read, `-` for stdin: UTF-8 whatever the locale, an undecodable byte
+    replaced (strace escapes what it prints of buffers; a path in a foreign encoding is still
+    a path to count)."""
+    if path == "-":
+        return io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
+    try:
+        return open(path, encoding="utf-8", errors="replace")
+    except OSError as e:
+        raise BuildError(f"{path}: {_cause(e)}")
+
+
 def _judged(args, rows, a, b, docs) -> int:
-    if args.max_distance is not None:
-        raise BuildError("--max-distance and --judge are two rules; give one")
     selfs = []
     for path in args.selfs:
         try:
