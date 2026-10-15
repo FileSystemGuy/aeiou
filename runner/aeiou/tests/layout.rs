@@ -373,3 +373,218 @@ fn tar_member_past_ustar_refused_before_anything_is_written() {
     let err = err.expect("refused");
     assert!(err.contains("dataset `t`: file w/0000.tar: tar member `000000000.jpg` of 8589934592 bytes: more than ustar's 8 GiB − 1 (8589934591) size field"), "{err}");
 }
+
+/// A container dataset of `n` samples (a parameter, so a grow can change it) over `format`, and
+/// a reader of every file, whole, to its end.
+#[cfg(feature = "formats")]
+fn container(pattern: &str, n: i64, spf: i64, size: i64, format: &str) -> String {
+    format!(
+        r#"{{"ast": "0.10", "name": "container_rt", "params": {{"n": {{"default": {n}}}}},
+  "datasets": {{"d": {{"layout": "compound", "pattern": "{pattern}", "count": {{"param": "n"}}, "samples_per_file": {spf},
+     "size": {{"const": {size}}}, "seed": 11, "access": "stream", "format": {format}}}}},
+  "actors": {{"gpu": {{"body": [
+    {{"loop": {{"index": "i", "to": {{"ceil_div": [{{"param": "n"}}, {spf}]}}, "body": [
+      {{"let": {{"name": "f", "value": {{"file": {{"dataset": "d", "id": {{"index": "i"}}}}}}}}}},
+      {{"open": {{"file": {{"ref": "f"}}, "flags": ["RDONLY"]}}}},
+      {{"read": {{"file": {{"ref": "f"}}, "len": 65536, "repeat": "until_eof"}}}},
+      {{"close": {{"file": {{"ref": "f"}}}}}}
+    ]}}}}
+  ]}}}}
+}}"#
+    )
+}
+
+#[cfg(feature = "formats")]
+const FMT_TFRECORD: &str = r#"{"class": "tfrecord", "reader": "tf.data", "framing": {"columns": [{"row_header": 12, "row_footer": 4, "weight": 1}]}}"#;
+#[cfg(feature = "formats")]
+const FMT_WEBDATASET: &str = r#"{"class": "webdataset", "reader": "tarfile (CPython)", "framing": {"file_footer": 1024, "file_align": 10240,
+  "columns": [{"row_header": 512, "row_footer": 1024, "row_align": 512, "weight": 1}], "writer": {"members": [["jpg", null], ["cls", 4]]}}}"#;
+/// 4-row groups of 100-byte samples: page headers of 21 bytes (binary) and 19 (int64).
+#[cfg(feature = "formats")]
+const FMT_PARQUET: &str = r#"{"class": "parquet", "reader": "pyarrow", "version": "25.0.1", "framing": {"unit": 4, "file_header": 4, "file_footer": 2000,
+  "columns": [{"header": 21, "fixed": 4, "weight": 1.0}, {"header": 19, "fixed": 8, "weight": 0}],
+  "writer": {"rows_per_group": 4, "columns": [["image", "binary"], ["label", "int64"]]}}}"#;
+
+/// The container cases: (tag, abstract of 25 samples, a short last file).
+#[cfg(feature = "formats")]
+fn containers() -> Vec<(&'static str, String)> {
+    vec![
+        ("tfrecord", container("s/{id:04}.tfrecord", 25, 10, 1000, FMT_TFRECORD)),
+        ("webdataset", container("w/{id:04}.tar", 25, 10, 1000, FMT_WEBDATASET)),
+        ("parquet", container("p/{id:04}.parquet", 25, 8, 100, FMT_PARQUET)),
+    ]
+}
+
+/// Every file under `root` but the manifest, with its bytes.
+#[cfg(feature = "formats")]
+fn tree_bytes(root: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if !p.ends_with(".aeiou-dataset.json") {
+                out.insert(p.strip_prefix(root).unwrap().display().to_string(), std::fs::read(&p).unwrap());
+            }
+        }
+    }
+    out
+}
+
+/// Each writer of `aeiou datagen` (TFRecord, WebDataset, Parquet) makes files of the sizes the
+/// layout computes, a short last file among them, that `aeiou run` reads to the dry run's
+/// fingerprint, byte counts checked; and two datagens of one dataset make the same bytes.
+#[cfg(feature = "formats")]
+#[test]
+fn container_datagen_reads_back_to_the_dry_run_fingerprint() {
+    for (tag, text) in containers() {
+        let root = crate::common::tmpdir("layout", &format!("rt-{tag}"));
+        let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(&text).unwrap()));
+        let cfg: &'static Config = Box::leak(Box::new(config(1)));
+        let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+        let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
+        let ds = &model.datasets[0];
+        let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 2, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: true };
+        datagen(loaded, cfg, params, model, &opts, None, &mut Vec::new()).unwrap_or_else(|e| panic!("{tag}: {e:#}"));
+        let files = tree_bytes(&root);
+        assert_eq!(files.len() as i64, ds.files(), "{tag}");
+        let mut total = 0;
+        for f in 0..ds.files() {
+            let size = files[&ds.file_path(f, None).unwrap().to_string()].len() as i64;
+            assert_eq!(size, ds.file_size(f).unwrap(), "{tag}: file {f}");
+            total += size;
+        }
+        assert!(ds.file_size(ds.files() - 1).unwrap() < ds.file_size(0).unwrap(), "{tag}: a short last file");
+        let dry = dryrun::run(model, 1, None).unwrap();
+        let r = run::run(
+            model,
+            RunOpts {
+                root: root.clone(),
+                endpoints: Default::default(),
+                backend: BackendKind::Sync,
+                s3: aeiou::backend::S3Api::Blocking,
+                buffer_bytes: 1 << 20,
+                threads: 0,
+                write_compress: 1,
+                time_scale: 0.0,
+                uring: Default::default(),
+                mmap: Default::default(),
+                mmap_consume: Default::default(),
+                aio_depth: 0,
+                clean_namespaces: false,
+                expect_fingerprint: None,
+                expect_dataset_ids: vec![],
+                rank: 0,
+                ranks: 1,
+                rank_rotate: 0,
+                max_gap: None,
+                require_cold: false,
+                drop_caches: false,
+            },
+            std::collections::HashMap::new(),
+        )
+        .unwrap_or_else(|e| panic!("{tag}: {e:#}"));
+        assert_eq!(r.stats.fingerprint, dry.total.fingerprint, "{tag}");
+        assert_eq!(r.stats.bytes_read as i64, total, "{tag}");
+        // the same dataset again, with one writer: the same bytes
+        let again = crate::common::tmpdir("layout", &format!("rt-{tag}-again"));
+        let opts = DatagenOpts { root: again.clone(), writers: 1, ..opts };
+        datagen(loaded, cfg, params, model, &opts, None, &mut Vec::new()).unwrap();
+        assert!(tree_bytes(&again) == files, "{tag}: a second datagen made other bytes");
+    }
+}
+
+/// A container layout its writer does not make is refused before datagen writes anything,
+/// naming the file and both sizes: a 10-byte TFRecord header where the writer's is 12, a
+/// WebDataset framing without the blocks of its 4-byte member.
+#[cfg(feature = "formats")]
+#[test]
+fn container_layout_drift_refused_before_anything_is_written() {
+    let bad = container("s/{id:04}.tfrecord", 25, 10, 1000, &FMT_TFRECORD.replace("\"row_header\": 12", "\"row_header\": 10"));
+    let (err, left) = datagen_left(&bad, "tfr-drift");
+    assert!(left.is_empty(), "left behind: {left:?}");
+    let err = err.expect("refused");
+    assert!(err.contains("dataset `d`: file s/0000.tfrecord: the writer made 10160 bytes, the layout predicts 10140: the format class's layout does not match its writer"), "{err}");
+    let bad = container("w/{id:04}.tar", 25, 10, 1000, &FMT_WEBDATASET.replace("\"row_footer\": 1024, ", ""));
+    let (err, left) = datagen_left(&bad, "tar-drift");
+    assert!(left.is_empty(), "left behind: {left:?}");
+    let err = err.expect("refused");
+    assert!(err.contains("dataset `d`: file w/0000.tar: the writer made 30720 bytes, the layout predicts 20480"), "{err}");
+}
+
+/// Datagen of an HDF5 dataset where no `aeiou-header` sits beside the test binary (None when
+/// one does): the error and what is left under the root.
+#[cfg(feature = "formats")]
+fn hdf5_without_header_tool() -> Option<(Option<String>, Vec<String>)> {
+    let beside = std::env::current_exe().unwrap().canonicalize().unwrap().with_file_name("aeiou-header");
+    if beside.exists() {
+        return None;
+    }
+    let h5 = container("h/{id:04}.h5", 10, 4, 300, r#"{"class": "hdf5", "reader": "h5py", "version": "test", "framing": {"file_header": 2048, "writer": {"dataset": "records", "shape": [300], "dtype": "u1"}}}"#);
+    Some(datagen_left(&h5, "h5-notool"))
+}
+
+/// An HDF5 dataset needs `aeiou-header` beside the binary: without it, datagen is refused with
+/// where the tool must go, before any file or manifest is written.
+#[cfg(feature = "formats")]
+#[test]
+fn hdf5_without_its_header_tool_is_refused() {
+    let Some((err, left)) = hdf5_without_header_tool() else { return };
+    let err = err.expect("refused");
+    assert!(err.contains("aeiou-header not found: aeiou-header makes HDF5 headers and must sit beside aeiou"), "{err}");
+    assert!(left.iter().all(|p| p == "h"), "left behind: {left:?}");
+}
+
+/// The same refusal leaves nothing at all, as a geometry refusal does (bug 44's standard).
+#[cfg(feature = "formats")]
+#[test]
+#[ignore = "RC1 bug: a missing aeiou-header is found after datagen creates the dataset's root, so the refusal leaves an empty directory"]
+fn hdf5_without_its_header_tool_refused_before_anything_is_written() {
+    let Some((err, left)) = hdf5_without_header_tool() else { return };
+    assert!(err.is_some());
+    assert!(left.is_empty(), "left behind: {left:?}");
+}
+
+/// `aeiou datagen` (the binary) with `args`: whether it succeeded, and what it printed.
+#[cfg(feature = "formats")]
+fn datagen_cli(args: &[&std::ffi::OsStr]) -> (bool, String) {
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").args(args).args(["--writers", "2"]).env_remove("AEIOU_CONFIG").output().unwrap();
+    (o.status.success(), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+}
+
+/// A grow and a shrink of a container corpus (`DESIGN_REVIEW.md` §3.70) leave the files a
+/// datagen of the new count writes, byte for byte (the short last file made whole), and the
+/// new count's id; a resume of the complete corpus has nothing to write.
+#[cfg(feature = "formats")]
+#[test]
+fn container_grow_and_shrink_make_the_corpus_of_the_new_count() {
+    for (tag, text) in containers() {
+        let dir = crate::common::tmpdir("layout", &format!("resize-{tag}"));
+        let ast = dir.join("container.ast.json");
+        std::fs::write(&ast, &text).unwrap();
+        let fresh = |n: i64| -> crate::common::TempDir {
+            let r = crate::common::tmpdir("layout", &format!("fresh-{tag}-{n}"));
+            let n = format!("n={n}");
+            let (ok, out) = datagen_cli(&[ast.as_os_str(), "--root".as_ref(), r.as_os_str(), "--param".as_ref(), n.as_ref()]);
+            assert!(ok, "{tag}: {out}");
+            r
+        };
+        let (f45, f15) = (fresh(45), fresh(15));
+        let root = fresh(25);
+        let sub = std::fs::read_dir(&*root).unwrap().flatten().next().unwrap().path();
+        let name = sub.file_name().unwrap().to_owned();
+        let id = |r: &std::path::Path| aeiou::payload::Manifest::read(&r.join(&name)).unwrap();
+        let (ok, out) = datagen_cli(&["--grow".as_ref(), "45".as_ref(), sub.as_os_str()]);
+        assert!(ok, "{tag}: {out}");
+        assert!(tree_bytes(&root) == tree_bytes(&f45), "{tag}: the grown corpus is not the 45-sample one");
+        assert_eq!((id(&root).state, id(&root).id()), ("complete".to_string(), id(&f45).id()), "{tag}");
+        let (ok, out) = datagen_cli(&["--shrink".as_ref(), "15".as_ref(), sub.as_os_str()]);
+        assert!(ok, "{tag}: {out}");
+        assert!(tree_bytes(&root) == tree_bytes(&f15), "{tag}: the shrunk corpus is not the 15-sample one");
+        assert_eq!(id(&root).id(), id(&f15).id(), "{tag}");
+        let (ok, out) = datagen_cli(&["--resume".as_ref(), sub.as_os_str()]);
+        assert!(ok && out.contains("the manifest says `complete`; nothing to write"), "{tag}: {out}");
+    }
+}

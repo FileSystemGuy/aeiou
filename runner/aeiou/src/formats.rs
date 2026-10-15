@@ -938,4 +938,424 @@ mod tests {
             assert_eq!(&t[t.len() - 8..t.len() - 4], &(target as u32).to_le_bytes());
         }
     }
+
+    // ------------------------------------------------------------ helpers and the writers' paths
+
+    /// The model of `text` (one dataset), handed to `f` with its first dataset and its `format`.
+    fn with_meta<R>(text: &str, f: impl FnOnce(&DsMeta<'_>, &Value) -> R) -> R {
+        let loaded = crate::load_str(text).unwrap();
+        let cfg = crate::eval::Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![] };
+        let params = crate::eval::Params::new(&loaded.ast, &cfg).unwrap();
+        let model = crate::eval::build_model(&loaded.ast, &cfg, &params).unwrap();
+        let doc: Value = serde_json::from_str(text).unwrap();
+        let format = doc["datasets"]["d"]["format"].clone();
+        f(&model.datasets[0], &format)
+    }
+
+    fn abstract_of(dataset: &str) -> String {
+        format!(r#"{{"ast": "0.10", "name": "fmt_unit", "datasets": {{"d": {{{dataset}}}}}, "actors": {{"gpu": {{"body": []}}}}}}"#)
+    }
+
+    fn seed_of(b: u64) -> u64 {
+        0x5eed ^ b
+    }
+
+    /// File `file` of `meta` as `writer` streams it, pulled in pieces of `piece` bytes.
+    fn file_bytes(writer: &Writer, meta: &DsMeta<'_>, file: i64, piece: usize) -> Vec<u8> {
+        let mut filler = Filler::new(1);
+        let mut s = Stream::new(writer, meta, file, &seed_of, &mut filler).unwrap();
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; piece];
+        loop {
+            let n = s.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+            assert_eq!(s.pos(), out.len() as u64);
+        }
+        out
+    }
+
+    /// The payload stream of a file, logical bytes `[at, at + len)`.
+    fn payload(at: u64, len: u64) -> Vec<u8> {
+        let mut b = vec![0u8; len as usize];
+        Filler::new(1).fill_range(seed_of, at, &mut b);
+        b
+    }
+
+    #[test]
+    fn hex_round_trips_and_refuses_bad_text() {
+        let b = [0u8, 1, 0x7f, 0x80, 0xff];
+        assert_eq!(hex(&b), "00017f80ff");
+        assert_eq!(unhex("00017f80ff").unwrap(), b);
+        assert_eq!(unhex("").unwrap(), Vec::<u8>::new());
+        assert!(unhex("abc").unwrap_err().to_string().contains("odd-length hex"));
+        assert!(unhex("zz").unwrap_err().to_string().starts_with("hex: "));
+    }
+
+    #[test]
+    fn tar_header_refuses_a_long_name_and_sums_a_full_name() {
+        let e = tar_header(&"n".repeat(101), 1).unwrap_err().to_string();
+        assert!(e.contains("longer than 100 bytes"), "{e}");
+        // a 100-byte name fills the field, with no NUL after it
+        let h = tar_header(&"n".repeat(100), 0).unwrap();
+        assert_eq!(&h[..100], "n".repeat(100).as_bytes());
+        let sum: u64 = h.iter().enumerate().map(|(i, &b)| if (148..156).contains(&i) { b' ' as u64 } else { b as u64 }).sum();
+        assert_eq!(&h[148..156], format!("{sum:06o}\0 ").as_bytes());
+    }
+
+    #[test]
+    fn thrift_long_field_deltas_and_long_lists() {
+        // a field id delta outside 1..=15 is the type byte and the id as a zigzag varint
+        let mut t = Thrift::new();
+        t.i32(20, 1);
+        assert_eq!(t.out, [T_I32, 40, 2]);
+        t.i32(3, -1);
+        assert_eq!(&t.out[3..], [T_I32, 6, 1]);
+        // a list of 15 or more elements: 0xF ‖ type, then the count as a varint
+        let mut t = Thrift::new();
+        t.list(1, 15, T_I32);
+        assert_eq!(t.out, [0x10 | T_LIST, 0xF0 | T_I32, 15]);
+        let mut t = Thrift::new();
+        t.list(1, 300, T_BINARY);
+        assert_eq!(t.out, [0x10 | T_LIST, 0xF0 | T_BINARY, 0xAC, 0x02]);
+        // zigzag: 0, −1, 1, −2, i64::MIN
+        let mut t = Thrift::new();
+        for v in [0, -1, 1, -2] {
+            t.zigzag(v);
+        }
+        assert_eq!(t.out, [0, 1, 2, 3]);
+        let mut t = Thrift::new();
+        t.zigzag(i64::MIN);
+        assert_eq!(t.out, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]);
+    }
+
+    #[test]
+    fn parquet_types_parse_and_write_as_pyarrow_does() {
+        let all = ["binary", "int64", "int32", "int16", "int8", "uint8", "float64", "float32"];
+        let types: Vec<PqType> = all.iter().map(|t| PqType::parse(t).unwrap()).collect();
+        assert_eq!(PqType::parse("string"), None);
+        assert_eq!(types.iter().map(|t| t.physical()).collect::<Vec<_>>(), [6, 2, 1, 1, 1, 1, 5, 4]);
+        assert_eq!(types[1..].iter().map(|t| t.width()).collect::<Vec<_>>(), [8, 4, 4, 4, 4, 8, 4]);
+        assert_eq!(types.iter().map(|t| t.narrow()).collect::<Vec<_>>(), [None, None, None, Some((16, 16, true)), Some((15, 8, true)), Some((11, 8, false)), None, None]);
+        // `(id % 1000).astype(t)`, wrapping, widened to INT32 for the narrow types; floats of the id
+        let v = |t: PqType, id: i64| {
+            let mut o = Vec::new();
+            t.value(id, &mut o);
+            o
+        };
+        assert_eq!(v(PqType::Int64, 1999), 999i64.to_le_bytes());
+        assert_eq!(v(PqType::Int32, 1999), 999i32.to_le_bytes());
+        assert_eq!(v(PqType::Int16, 1999), 999i32.to_le_bytes());
+        assert_eq!(v(PqType::Int8, 1999), (999i32 as i8 as i32).to_le_bytes());
+        assert_eq!(v(PqType::Int8, 200), (-56i32).to_le_bytes());
+        assert_eq!(v(PqType::UInt8, 300), 44i32.to_le_bytes());
+        assert_eq!(v(PqType::Float64, 1999), 1999f64.to_le_bytes());
+        assert_eq!(v(PqType::Float32, 1999), 1999f32.to_le_bytes());
+    }
+
+    #[test]
+    #[should_panic(expected = "the binary column is the sample")]
+    fn parquet_binary_has_no_fixed_value() {
+        PqType::Binary.value(0, &mut Vec::new());
+    }
+
+    #[test]
+    fn writers_from_format_and_their_refusals() {
+        let w = |f: Value| Writer::from_format("d", &f);
+        let err = |f: Value| format!("{:#}", w(f).unwrap_err());
+        assert_eq!(w(json!({"class": "tfrecord"})).unwrap().library(), "aeiou datagen tfrecord writer");
+        // the defaults: a jpg sample and a 4-byte cls; an image and an int64 label
+        match w(json!({"class": "webdataset"})).unwrap() {
+            Writer::WebDataset { members } => assert_eq!(members, [("jpg".to_string(), None), ("cls".to_string(), Some(4))]),
+            o => panic!("{o:?}"),
+        }
+        assert_eq!(w(json!({"class": "webdataset"})).unwrap().library(), "aeiou datagen ustar writer");
+        match w(json!({"class": "parquet"})).unwrap() {
+            Writer::Parquet { columns } => assert_eq!(columns, [("image".to_string(), PqType::Binary), ("label".to_string(), PqType::Int64)]),
+            o => panic!("{o:?}"),
+        }
+        assert_eq!(w(json!({"class": "parquet"})).unwrap().library(), PARQUET_CREATED_BY);
+        assert_eq!(w(json!({"class": "hdf5", "version": "h5py 3, hdf5 2"})).unwrap().library(), "aeiou datagen hdf5 writer (header: aeiou-header, h5py 3, hdf5 2)");
+        assert_eq!(w(json!({"class": "hdf5"})).unwrap().library(), "aeiou datagen hdf5 writer (header: aeiou-header, ?)");
+        let wds = |m: Value| json!({"class": "webdataset", "framing": {"writer": {"members": m}}});
+        assert!(err(wds(json!([[3, null]]))).contains("dataset `d`: webdataset member [3,null]: expected [extension, bytes or null]"));
+        assert!(err(wds(json!([["jpg", null], ["cls", -4]]))).contains("bytes must be a non-negative integer or null"));
+        assert!(err(wds(json!([["jpg", null], ["png", null]]))).contains("dataset `d`: webdataset: exactly one member is the sample (bytes null)"));
+        assert!(err(wds(json!([["cls", 4]]))).contains("exactly one member is the sample"));
+        let pq = |c: Value| json!({"class": "parquet", "framing": {"writer": {"columns": c}}});
+        assert!(err(pq(json!([["image", "binary"], ["label", "string"]]))).contains("dataset `d`: parquet column [\"label\",\"string\"]: expected [name, binary or a fixed-width type]"));
+        assert!(err(pq(json!([["image", "binary"], [7, "int64"]]))).contains("expected [name, binary or a fixed-width type]"));
+        assert!(err(pq(json!([["a", "binary"], ["b", "binary"]]))).contains("dataset `d`: parquet: exactly one `binary` column carries the sample"));
+        assert!(err(pq(json!([["a", "int64"]]))).contains("exactly one `binary` column"));
+        assert!(err(json!({"class": "npz"})).contains("dataset `d`: no writer for format class `npz`"));
+        assert!(err(json!({})).contains("no writer for format class ``"));
+    }
+
+    #[test]
+    fn hdf5_header_rows_are_the_full_and_the_short_last_file() {
+        let h = Writer::Hdf5 { headers: BTreeMap::new(), version: String::new() };
+        assert_eq!(h.header_rows(64, 16), [16]);
+        assert_eq!(h.header_rows(70, 16), [16, 6]);
+        assert_eq!(h.header_rows(10, 16), [10]);
+        assert_eq!(h.header_rows(0, 16), Vec::<i64>::new());
+        assert_eq!(Writer::TfRecord.header_rows(70, 16), Vec::<i64>::new());
+        // headers are kept by an HDF5 writer alone
+        let mut t = Writer::TfRecord;
+        t.set_headers(BTreeMap::from([(1, vec![1])]));
+        assert!(matches!(t, Writer::TfRecord));
+    }
+
+    /// A fake `aeiou-header`: a script printing `out` and exiting `code`.
+    fn fake_tool(dir: &std::path::Path, out: &str, code: i32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join(format!("tool-{code}-{}", out.len()));
+        std::fs::write(&p, format!("#!/bin/sh\nprintf '%s' '{out}'\necho \"args: $*\" >&2\nexit {code}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    #[test]
+    fn header_tool_output_is_split_and_checked() {
+        let dir = std::env::temp_dir().join(format!("aeiou-formats-unit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fmt = json!({"class": "hdf5", "framing": {"file_header": 4}});
+        let got = run_header_tool(&fake_tool(&dir, "AAAABBBB", 0), &fmt, &[16, 6]).unwrap();
+        assert_eq!(got, BTreeMap::from([(16, b"AAAA".to_vec()), (6, b"BBBB".to_vec())]));
+        let e = run_header_tool(&fake_tool(&dir, "AAAABBB", 0), &fmt, &[16, 6]).unwrap_err().to_string();
+        assert!(e.contains("gave 7 bytes for 2 header(s) of 4 bytes, the framing's file_header"), "{e}");
+        let e = run_header_tool(&fake_tool(&dir, "", 3), &fmt, &[16]).unwrap_err().to_string();
+        assert!(e.contains("failed (exit status: 3)") && e.contains("args: --format") && e.contains("--rows 16"), "{e}");
+        let e = run_header_tool(&fake_tool(&dir, "AAAA", 0), &json!({"class": "hdf5"}), &[16]).unwrap_err().to_string();
+        assert!(e.contains("the framing has no file_header"), "{e}");
+        let e = format!("{:#}", run_header_tool(&dir.join("absent"), &fmt, &[16]).unwrap_err());
+        assert!(e.contains("running ") && e.contains("absent"), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
+        // the tool is looked for beside this binary alone, never on PATH
+        let beside = std::env::current_exe().unwrap().canonicalize().unwrap().with_file_name("aeiou-header");
+        match header_tool() {
+            Ok(t) => assert_eq!(t, beside),
+            Err(e) => assert!(!beside.exists() && e.to_string().contains("not found: aeiou-header makes HDF5 headers and must sit beside aeiou"), "{e}"),
+        }
+    }
+
+    const TFR: &str = r#""layout": "compound", "pattern": "s/{id:04}.tfrecord", "count": 25, "samples_per_file": 10,
+        "size": {"const": 1000}, "seed": 7, "access": "stream",
+        "format": {"class": "tfrecord", "framing": {"columns": [{"row_header": 12, "row_footer": 4, "weight": 1}]}}"#;
+
+    #[test]
+    fn tfrecord_files_are_framed_records_of_the_payload_stream() {
+        with_meta(&abstract_of(TFR), |meta, fmt| {
+            let w = Writer::from_format("d", fmt).unwrap();
+            w.check(meta, 4).unwrap();
+            for file in 0..meta.files() {
+                let b = file_bytes(&w, meta, file, 4096);
+                assert_eq!(b.len() as i64, meta.file_size(file).unwrap());
+                // pulled in odd pieces, the same bytes
+                assert_eq!(file_bytes(&w, meta, file, 7), b);
+                let (mut at, mut logical, mut n) = (0usize, 0u64, 0);
+                while at < b.len() {
+                    let len = u64::from_le_bytes(b[at..at + 8].try_into().unwrap());
+                    assert_eq!(len, 1000);
+                    assert_eq!(&b[at + 8..at + 12], &masked_crc32c(crc32c::crc32c(&b[at..at + 8])).to_le_bytes());
+                    let data = &b[at + 12..at + 12 + len as usize];
+                    assert_eq!(data, payload(logical, len), "file {file} record {n}");
+                    let crc = &b[at + 12 + len as usize..at + 16 + len as usize];
+                    assert_eq!(crc, masked_crc32c(crc32c::crc32c(data)).to_le_bytes());
+                    at += 16 + len as usize;
+                    logical += len;
+                    n += 1;
+                }
+                assert_eq!(n, meta.samples_in_file(file).unwrap());
+            }
+        });
+    }
+
+    #[test]
+    fn a_layout_other_than_the_writers_is_refused_by_check() {
+        // a 10-byte record header where the writer makes 12: the size, not the bytes, decides
+        let bad = abstract_of(&TFR.replace("\"row_header\": 12", "\"row_header\": 10"));
+        with_meta(&bad, |meta, fmt| {
+            let w = Writer::from_format("d", fmt).unwrap();
+            let e = format!("{:#}", w.check(meta, 3).unwrap_err());
+            assert!(e.contains("file s/0000.tfrecord: the writer made 10160 bytes, the layout predicts 10140: the format class's layout does not match its writer"), "{e}");
+            // one thread, the same refusal: the lowest file's
+            let e1 = format!("{:#}", w.check(meta, 1).unwrap_err());
+            assert_eq!(e, e1);
+        });
+    }
+
+    const WDS: &str = r#""layout": "compound", "pattern": "w/{id:04}.tar", "count": 25, "samples_per_file": 10,
+        "size": {"const": 1000}, "seed": 7, "access": "stream",
+        "format": {"class": "webdataset", "framing": {"file_footer": 1024, "file_align": 10240,
+          "columns": [{"row_header": 512, "row_footer": 1024, "row_align": 512, "weight": 1}],
+          "writer": {"members": [["jpg", null], ["cls", 4]]}}}"#;
+
+    #[test]
+    fn webdataset_files_are_cpythons_ustar_archives() {
+        with_meta(&abstract_of(WDS), |meta, fmt| {
+            let w = Writer::from_format("d", fmt).unwrap();
+            w.check(meta, 2).unwrap();
+            assert_eq!(meta.files(), 3);
+            for file in 0..3 {
+                let b = file_bytes(&w, meta, file, 1 << 16);
+                assert_eq!(b.len() as i64, meta.file_size(file).unwrap());
+                assert_eq!(b.len() % TAR_RECORD as usize, 0);
+                assert_eq!(file_bytes(&w, meta, file, 333), b);
+                let (mut at, mut logical) = (0usize, 0u64);
+                let n = meta.samples_in_file(file).unwrap();
+                for k in 0..n {
+                    for (ext, size) in [("jpg", 1000usize), ("cls", 4)] {
+                        let h = &b[at..at + 512];
+                        let name = format!("{:09}.{ext}", file * 10 + k);
+                        assert_eq!(&h[..name.len()], name.as_bytes());
+                        assert_eq!(h[name.len()], 0);
+                        assert_eq!(&h[124..136], format!("{size:011o}\0").as_bytes());
+                        assert_eq!(h[156], b'0');
+                        let sum: u64 = h.iter().enumerate().map(|(i, &x)| if (148..156).contains(&i) { b' ' as u64 } else { x as u64 }).sum();
+                        assert_eq!(&h[148..156], format!("{sum:06o}\0 ").as_bytes());
+                        let data = &b[at + 512..at + 512 + size];
+                        if ext == "jpg" {
+                            assert_eq!(data, payload(logical, 1000), "file {file} sample {k}");
+                            logical += 1000;
+                        } else {
+                            assert!(data.iter().all(|&x| x == 0));
+                        }
+                        let padded = size.div_ceil(512) * 512;
+                        assert!(b[at + 512 + size..at + 512 + padded].iter().all(|&x| x == 0), "padding");
+                        at += 512 + padded;
+                    }
+                }
+                // two zero blocks at least, then zeros to the record
+                assert!(b.len() - at >= 1024);
+                assert!(b[at..].iter().all(|&x| x == 0));
+            }
+        });
+        // members whose sizes fill their blocks exactly: no padding item
+        let exact = WDS.replace("\"count\": 25, \"samples_per_file\": 10", "\"count\": 9, \"samples_per_file\": 9")
+            .replace("\"const\": 1000", "\"const\": 512").replace("[\"cls\", 4]", "[\"cls\", 512]");
+        with_meta(&abstract_of(&exact), |meta, fmt| {
+            let w = Writer::from_format("d", fmt).unwrap();
+            w.check(meta, 1).unwrap();
+            let b = file_bytes(&w, meta, 0, 4096);
+            // 9 × (2 × 1024) + 1024 = 19456 → 20480
+            assert_eq!((b.len() as i64, meta.file_size(0).unwrap()), (20480, 20480));
+        });
+    }
+
+    const H5: &str = r#""layout": "compound", "pattern": "h/{id:04}.h5", "count": 10, "samples_per_file": 4,
+        "size": {"const": 300}, "seed": 7, "access": "map",
+        "format": {"class": "hdf5", "version": "test", "framing": {"file_header": 16}}"#;
+
+    #[test]
+    fn hdf5_files_are_the_header_then_the_rows() {
+        with_meta(&abstract_of(H5), |meta, fmt| {
+            let mut w = Writer::from_format("d", fmt).unwrap();
+            // HDF5 frames nothing before the header exists: check passes at once
+            w.check(meta, 2).unwrap();
+            assert_eq!(w.header_rows(10, 4), [4, 2]);
+            // without the short file's header, that file is refused, never a panic
+            w.set_headers(BTreeMap::from([(4, vec![0xA4; 16])]));
+            let mut filler = Filler::new(1);
+            let mut s = Stream::new(&w, meta, 2, &seed_of, &mut filler).unwrap();
+            let e = s.read(&mut [0u8; 64]).unwrap_err().to_string();
+            assert_eq!(e, "no HDF5 header for a file of 2 rows");
+            w.set_headers(BTreeMap::from([(4, vec![0xA4; 16]), (2, vec![0xA2; 16])]));
+            for (file, rows, mark) in [(0, 4u64, 0xA4u8), (1, 4, 0xA4), (2, 2, 0xA2)] {
+                let b = file_bytes(&w, meta, file, 100);
+                assert_eq!(b.len() as i64, meta.file_size(file).unwrap());
+                assert_eq!(b.len() as u64, 16 + 300 * rows);
+                assert!(b[..16].iter().all(|&x| x == mark));
+                assert_eq!(&b[16..], payload(0, 300 * rows));
+            }
+        });
+    }
+
+    /// Parquet over every column type: 4-row groups, two per full file, a short last file of one
+    /// 2-row group; the page headers 19 bytes (fixed) and 21 (binary), the footer padded to 4000.
+    const PQ: &str = r#""layout": "compound", "pattern": "p/{id:04}.parquet", "count": 10, "samples_per_file": 8,
+        "size": {"const": 100}, "seed": 7, "access": "stream",
+        "format": {"class": "parquet", "reader": "pyarrow", "version": "25.0.1", "framing": {
+          "unit": 4, "file_header": 4, "file_footer": 4000,
+          "columns": [{"header": 19, "fixed": 4, "weight": 0}, {"header": 19, "fixed": 4, "weight": 0}, {"header": 19, "fixed": 4, "weight": 0},
+                      {"header": 21, "fixed": 4, "weight": 1}, {"header": 19, "fixed": 4, "weight": 0}, {"header": 19, "fixed": 4, "weight": 0},
+                      {"header": 19, "fixed": 8, "weight": 0}, {"header": 19, "fixed": 8, "weight": 0}],
+          "writer": {"rows_per_group": 4, "columns": [["a", "int8"], ["b", "uint8"], ["c", "int16"], ["i", "binary"], ["d", "float32"], ["e", "int32"], ["f", "float64"], ["g", "int64"]]}}}"#;
+
+    #[test]
+    fn parquet_files_of_every_column_type() {
+        with_meta(&abstract_of(PQ), |meta, fmt| {
+            let w = Writer::from_format("d", fmt).unwrap();
+            let Writer::Parquet { columns } = &w else { panic!() };
+            w.check(meta, 2).unwrap();
+            for file in 0..meta.files() {
+                let b = file_bytes(&w, meta, file, 4096);
+                assert_eq!(b.len() as i64, meta.file_size(file).unwrap());
+                assert_eq!(file_bytes(&w, meta, file, 13), b);
+                assert_eq!(&b[..4], b"PAR1");
+                assert_eq!(&b[b.len() - 4..], b"PAR1");
+                assert_eq!(u32::from_le_bytes(b[b.len() - 8..b.len() - 4].try_into().unwrap()), 4000 - 8);
+                // the first row group: each chunk its page header and rows, in the layout's places
+                let rows = meta.samples_in_file(file).unwrap().min(4);
+                let mut at = 4usize;
+                let mut logical = 0u64;
+                for (ci, (_, ty)) in columns.iter().enumerate() {
+                    let data = if *ty == PqType::Binary { rows as u64 * 104 } else { ty.width() * rows as u64 };
+                    let head = parquet_page_header(data, rows).unwrap();
+                    assert_eq!(&b[at..at + head.len()], head, "column {ci}");
+                    at += head.len();
+                    for r in 0..rows {
+                        if *ty == PqType::Binary {
+                            assert_eq!(&b[at..at + 4], 100u32.to_le_bytes());
+                            assert_eq!(&b[at + 4..at + 104], payload(logical, 100));
+                            logical += 100;
+                            at += 104;
+                        } else {
+                            let mut v = Vec::new();
+                            ty.value(file * 8 + r, &mut v);
+                            assert_eq!(&b[at..at + v.len()], v);
+                            at += v.len();
+                        }
+                    }
+                }
+                assert_eq!(at as i64 - 4, meta.unit_lens(file).unwrap()[0]);
+            }
+        });
+    }
+
+    #[test]
+    fn parquet_geometry_the_writer_cannot_meet_is_refused() {
+        let refusal = |text: String| -> String {
+            with_meta(&abstract_of(&text), |meta, fmt| format!("{:#}", Writer::from_format("d", fmt).unwrap().check(meta, 2).unwrap_err()))
+        };
+        // a footer smaller than the writer's
+        let e = refusal(PQ.replace("\"file_footer\": 4000", "\"file_footer\": 200"));
+        assert!(e.contains("file p/0000.parquet: the Parquet footer (") && e.contains("bytes) exceeds the layout's 192: the format class's footer margins are too small"), "{e}");
+        // an 8-byte file header, where the writer's `PAR1` is 4: the file's size drifts
+        let e = refusal(PQ.replace("\"file_header\": 4,", "\"file_header\": 8,"));
+        assert!(e.contains("file p/0000.parquet: the writer made 5432 bytes, the layout predicts 5436: the format class's layout does not match its writer"), "{e}");
+        // an int8 column of 5 bytes a row, where the writer's are 4: the second row group drifts
+        let e = refusal(PQ.replacen("{\"header\": 19, \"fixed\": 4, \"weight\": 0}", "{\"header\": 19, \"fixed\": 5, \"weight\": 0}", 1));
+        assert!(e.contains("file p/0000.parquet: row group 1 starts at ") && e.contains("the format class's layout does not match its writer"), "{e}");
+        // a page header the layout puts outside the writer's varint band
+        let e = refusal(PQ.replace("{\"header\": 21, \"fixed\": 4, \"weight\": 1}", "{\"header\": 22, \"fixed\": 4, \"weight\": 1}"));
+        assert!(e.contains("row group 0 column 3: a 21-byte page header, the layout predicts 22"), "{e}");
+        // a target below the natural footer, refused by the tail itself
+        let tail = parquet_tail(&[("i".to_string(), PqType::Binary)], &[Chunk { at: 4, len: 30, rows: 1, raw: 5 }], 10);
+        assert!(tail.unwrap_err().to_string().contains("exceeds the layout's 10"));
+    }
+
+    #[test]
+    fn an_array_dataset_has_no_container() {
+        let arr = abstract_of(r#""pattern": "d/one.bin", "layout": "array", "access": "indexed", "slot": 4, "count": 10, "size": {"const": 4}, "seed": 1"#);
+        with_meta(&arr, |meta, _| {
+            let w = Writer::TfRecord;
+            // nothing to frame: the check passes, a stream is refused
+            w.check(meta, 2).unwrap();
+            let mut filler = Filler::new(1);
+            let e = Stream::new(&w, meta, 0, &seed_of, &mut filler).err().unwrap().to_string();
+            assert_eq!(e, "`d` is an array dataset: no container");
+        });
+    }
 }
