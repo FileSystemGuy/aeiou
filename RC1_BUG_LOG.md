@@ -287,3 +287,18 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   RAISE" without the fix, pass with it; edges that must still build included); builder suite
   304 passed.
 
+## 14. `rng.rust_round` was not Rust's `round() as i64`
+
+- **Where:** `builder/aeiou/rng.py`, `rust_round` (used by `sample` for normal/lognormal draws
+  and `sample_size`, which tests/test_formats.py holds against the runner's sizes).
+- **Found by:** review of the builder core, against runner `eval.rs` (`clamp(x, min,
+  max).round() as i64`).
+- **Defect:** `floor(x + 0.5)` loses precision: 0.49999999999999994 → 1 (Rust 0),
+  4503599627370497.0 → …498 (Rust …497); no saturation (1e30 → a 31-digit int; Rust i64::MAX);
+  NaN raised ValueError (Rust 0). Python's size draws could then disagree with the runner's.
+- **Fix:** round half away from zero on the magnitude with an exact subtraction, restore the
+  sign, saturate to [i64::MIN, i64::MAX], NaN → 0, ±inf → the bounds.
+- **Evidence:** `test_formats.py::test_rust_round_is_rusts_round_then_saturating_cast` (20
+  values taken from a compiled Rust program's output) fails on the old function and passes on
+  the new; test_formats.py + test_payload.py: 43 passed.
+

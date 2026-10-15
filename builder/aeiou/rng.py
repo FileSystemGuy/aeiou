@@ -74,9 +74,23 @@ class Words:
         return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
 
 
+I64_MIN, I64_MAX = -(1 << 63), (1 << 63) - 1
+
+
 def rust_round(x: float) -> int:
-    """`f64::round`: half away from zero."""
-    return int(math.floor(x + 0.5)) if x >= 0 else -int(math.floor(-x + 0.5))
+    """`x.round() as i64`: half away from zero, then Rust's saturating cast (NaN is 0, the
+    infinities and anything past the range are `i64::MIN`/`i64::MAX`). No `x + 0.5`: that sum
+    rounds itself, 0.49999999999999994 to 1 and 2^52 + 1 to 2^52 + 2."""
+    if math.isnan(x):
+        return 0
+    if math.isinf(x):
+        return I64_MAX if x > 0 else I64_MIN
+    a = abs(x)
+    r = math.floor(a)
+    if a - r >= 0.5:  # exact: `a - r` is a float's fraction part
+        r += 1
+    r = r if x >= 0 else -r
+    return min(max(r, I64_MIN), I64_MAX)
 
 
 def _clamp(x, lo, hi):

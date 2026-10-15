@@ -657,3 +657,23 @@ def test_npz_framing_of_the_installed_numpy_is_the_abstracts_default():
         np.savez(b, x=x, y=np.array([0]))
         size, cd = len(b.getvalue()), zipfile.ZipFile(b).start_dir
         assert {"framing": size - x.nbytes, "cd_len": size - cd - 22} == want, np.__version__
+
+
+def test_rust_round_is_rusts_round_then_saturating_cast():
+    """`rust_round` is `x.round() as i64` (eval.rs, V10): half away from zero with no `x + 0.5`
+    precision loss, then saturation, NaN to 0. Values checked against a compiled `rustc` program."""
+    from aeiou.rng import rust_round
+
+    i64_max, i64_min = (1 << 63) - 1, -(1 << 63)
+    cases = [
+        (0.49999999999999994, 0), (-0.49999999999999994, 0),
+        (4503599627370497.0, 4503599627370497), (-4503599627370497.0, -4503599627370497),
+        (1e30, i64_max), (-1e30, i64_min), (float("nan"), 0),
+        (float("inf"), i64_max), (float("-inf"), i64_min),
+        (9.223372036854775807e18, i64_max), (-9.223372036854775808e18, i64_min),
+        (2.5, 3), (-2.5, -3), (0.5, 1), (-0.5, -1), (1.5, 2), (-1.5, -2),
+        (-0.0, 0), (3.0, 3), (20000.4999, 20000),
+    ]
+    for x, want in cases:
+        got = rust_round(x)
+        assert got == want and type(got) is int, (x, got, want)
