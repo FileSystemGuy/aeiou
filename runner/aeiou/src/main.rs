@@ -749,6 +749,18 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
         _ => {
             let loaded = aeiou::load(&abstract_path.expect("checked"))?;
             cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
+            // a --dataset that names none of the abstract's datasets would write nothing and
+            // exit 0: a typo in a tuning loop would look like success
+            let unknown: Vec<&String> = a.datasets.iter().filter(|d| !loaded.ast.datasets.contains_key(d.as_str())).collect();
+            if !unknown.is_empty() {
+                let quote = |v: Vec<&String>| v.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
+                aeiou::usage!(
+                    "--dataset {}: the abstract has no dataset {} (its datasets: {})",
+                    unknown.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", "),
+                    quote(unknown.clone()),
+                    quote(loaded.ast.datasets.keys().collect())
+                );
+            }
             (loaded, root.expect("checked"), endpoints, a.dedupe, a.compress, None)
         }
     };

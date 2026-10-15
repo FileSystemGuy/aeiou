@@ -789,3 +789,18 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Noted:** with two loader workers failing, the reported error was once the secondary "run
   aborted: another actor failed" rather than the cause (queued).
 
+## 36. `aeiou datagen --dataset` with an unknown name exited 0 and wrote nothing
+
+- **Where:** `runner/aeiou/src/main.rs`, `datagen_cmd`.
+- **Found by:** review of datagen: `aeiou datagen --root R --param samples=100 --dataset nosuch
+  tfrecord_stream.ast.json` printed its options and exited 0; the root was never created.
+- **Defect:** the `--dataset` filter matched nothing and datagen did nothing, successfully: a
+  typo in a scripted tuning loop looked like a written corpus.
+- **Fix:** every `--dataset` name not among the abstract's datasets is a usage error (exit 2, the
+  frame), all unknown names listed with the known ones, before anything is printed or created
+  (a namespace name is refused too: datagen writes datasets). `--endpoint` with an unknown name
+  was already refused; `--subset` takes no name.
+- **Evidence:** `tests/usage.rs::an_unknown_dataset_name_is_a_usage_error` (one unknown, two
+  unknown among a known one, the endpoint case, no root created) fails without the fix and
+  passes; `--test all` 86 passed. Fixed in an isolated worktree and applied.
+

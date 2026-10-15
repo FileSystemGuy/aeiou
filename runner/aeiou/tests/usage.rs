@@ -157,3 +157,18 @@ fn a_meaningless_number_is_a_usage_error() {
     // a window too long for a Duration panicked in the conversion
     assert!(gen(&["--progress-secs", "1e30"]).ends_with(": a positive number of seconds"));
 }
+
+/// A name that is none of the abstract's datasets is a usage error naming the ones it has, and
+/// nothing is written (RC1 review): `datagen --dataset nosuch` wrote nothing and exited 0, so
+/// a typo in a tuning loop looked like success. `--endpoint` with such a name was refused already.
+#[test]
+fn an_unknown_dataset_name_is_a_usage_error() {
+    let ast = example("file_per_sample.ast.json");
+    let root = std::env::temp_dir().join(format!("aeiou-usage-dataset-{}", std::process::id()));
+    let r = root.to_str().unwrap();
+    let gen = |extra: &[&str]| frame(&mut aeiou(&[&["datagen", &ast, "--root", r, "--param", "samples=4"], extra].concat()), "aeiou datagen").0;
+    assert_eq!(gen(&["--dataset", "nosuch"]), "--dataset nosuch: the abstract has no dataset `nosuch` (its datasets: `train`)");
+    assert_eq!(gen(&["--dataset", "train", "--dataset", "a", "--dataset", "b"]), "--dataset a, b: the abstract has no dataset `a`, `b` (its datasets: `train`)");
+    assert_eq!(gen(&["--endpoint", "nosuch=/tmp"]), "--endpoint nosuch=/tmp: the abstract has no dataset or namespace `nosuch`");
+    assert!(!root.exists(), "{} was created", root.display());
+}
