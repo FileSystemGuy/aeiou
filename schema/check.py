@@ -202,6 +202,8 @@ class Check:
         self.consumes = {}
         # V6: a `consume` under a loop whose count varies, by path: the innermost such loop's path
         self.consume_varying = {}
+        # V27: the parameters whose distributions `drawkind` is following
+        self.drawing = set()
 
     def param_value(self, name):
         """The value in effect of parameter `name` (None when it is not declared): its default
@@ -446,8 +448,6 @@ class Check:
     NOT_OPERAND = NOT_NUMBER | {"bool"}
     # a condition is a bool or an integer
     NOT_CONDITION = NOT_NUMBER | {"float"}
-    # a size or a pick's distribution is a distribution or a number
-    NOT_DRAWN = NOT_NUMBER - {"dist"}
 
     @staticmethod
     def pkind(v):
@@ -494,11 +494,50 @@ class Check:
         if k == "cond":
             t = self.kind(a["then"], scope)
             return t if t == self.kind(a["else"], scope) else None
+        if k == "draw":
+            return self.drawkind(a, scope)
         if k in SCHEMA["$defs"]["handle"]["properties"]:
             return "handle"
         if k in SCHEMA["$defs"]["dist"]["properties"]:
             return "dist"
         return None
+
+    def drawkind(self, d, scope):
+        """V27: the kind a draw of `d` (a distribution, or an expression) yields where the
+        document shows it: a `const` its argument's kind; `uniform`, `uniform64`, `normal`,
+        `lognormal`, `zipf`, `hotset` an integer; an `empirical` whose values are of one kind
+        that kind; a `mixture` whose arms yield one kind that kind (a `null` arm null); a
+        parameter whose value is a distribution what that distribution yields; a `cond` whose
+        arms yield one kind that kind; any other expression its own kind, drawn as a constant.
+        None when it is not known before the run. As the runner's `draw_kind`."""
+        if isinstance(d, dict) and len(d) == 1:
+            k, a = next(iter(d.items()))
+            if k in SCHEMA["$defs"]["dist"]["properties"]:
+                if k == "const":
+                    return self.kind(a, scope)
+                if k == "empirical":
+                    kinds = {self.pkind(v) for v in a["values"]}
+                elif k == "mixture":
+                    kinds = {"none" if arm["dist"] is None else self.drawkind(arm["dist"], scope) for arm in a}
+                else:
+                    return "int"
+                return kinds.pop() if len(kinds) == 1 else None
+            if k == "param" and a in self.params and isinstance(self.param_value(a), dict):
+                # a parameter defined through itself is refused by V1 (after the parameters'
+                # values are walked, so this walk may meet one first)
+                if a in self.drawing:
+                    return None
+                self.drawing.add(a)
+                try:
+                    # a parameter's distribution is judged where it is declared, no binding in scope
+                    return self.drawkind(self.param_value(a), Scope(self))
+                finally:
+                    self.drawing.discard(a)
+            if k == "cond":
+                t = self.drawkind(a["then"], scope)
+                return t if t == self.drawkind(a["else"], scope) else None
+        k = self.kind(d, scope)
+        return None if k == "dist" else k
 
     def typed(self, e, p, scope, want="an integer", refuse=NOT_NUMBER, optional=False):
         """V27: a value the runner needs as `want` is not of a kind it refuses there. A `null`
@@ -510,10 +549,13 @@ class Check:
             self.err(p, f"expected {want}, got {self.KINDS[k]} (V27)")
 
     def drawn(self, d, p, scope, optional=False):
-        """V27: a size or a pick's distribution that is an expression is drawn as a constant
-        and read as an integer, unless it is a distribution."""
-        if not (isinstance(d, dict) and len(d) == 1 and next(iter(d)) in SCHEMA["$defs"]["dist"]["properties"]):
-            self.typed(d, p, scope, refuse=self.NOT_DRAWN, optional=optional)
+        """V27: a size or a pick's distribution is drawn (an expression that is not a
+        distribution as a constant) and what it yields is read as an integer."""
+        if optional and d is None:
+            return
+        k = self.drawkind(d, scope)
+        if k in self.NOT_NUMBER:
+            self.err(p, f"expected an integer, got {self.KINDS[k]} (V27)")
 
     def value(self, v, path):
         if isinstance(v, list):

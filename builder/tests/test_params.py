@@ -412,7 +412,7 @@ def test_a_parameter_file_closing_a_cycle_is_refused_as_the_runner_refuses_it(tm
     review, R22): the runner's `check_given` and `aeiou-params check` refuse it with the cycle,
     rather than recursing without end in the rules that follow a `param` to its value."""
     a, f = tmp_path / "g.ast.json", tmp_path / "g.params.json"
-    a.write_text(json.dumps({"ast": "0.10", "name": "g", "params": {"pa": {"default": {"const": {"param": "pb"}}}, "pb": {"default": {"const": 3}}},
+    a.write_text(json.dumps({"ast": "0.10", "name": "g", "params": {"pa": {"default": {"mixture": [{"weight": 1, "dist": {"param": "pb"}}]}}, "pb": {"default": {"const": 3}}},
                              "actors": {"gpu": {"body": [{"compute": {"ns": {"draw": {"param": "pa"}}}}]}}}))
     f.write_text(json.dumps({"params_version": 1, "abstract": "g", "params": {"pb": {"const": {"param": "pa"}}}}))
     want = ["g: params/pa: parameter `pa` is defined through itself (pa -> pb -> pa) (V1)",

@@ -4,6 +4,7 @@
 //! are checked here too. Messages carry the `/`-joined path of the offending node, as
 //! `check.py` prints it.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::*;
@@ -37,14 +38,14 @@ pub fn protocols(ast: &Ast, traces: bool) -> Protocols {
 }
 
 pub fn check(ast: &Ast) -> Vec<String> {
-    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new() };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()) };
     c.run();
     c.errors
 }
 
 /// Validate and return the op-kind counts (as `check.py` prints them) when there are no errors.
 pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<String>> {
-    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new() };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()) };
     c.run();
     if c.errors.is_empty() {
         Ok(c.ops)
@@ -58,7 +59,7 @@ pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<St
 /// replace that distribution with one whose minimum is lower. Without this an `at` offset
 /// of zero is a loop in the VM. Called from `Params::new`, so every subcommand gets it.
 pub fn check_given(ast: &Ast, given: &BTreeMap<String, PValue>) -> Vec<String> {
-    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new() };
+    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new(), drawing: RefCell::new(Vec::new()) };
     c.run();
     c.errors
 }
@@ -121,8 +122,6 @@ const NOT_NUMBER: &[&str] = &["str", "none", "dist", "array", "handle"];
 const NOT_OPERAND: &[&str] = &["str", "none", "dist", "array", "handle", "bool"];
 /// A condition is a bool or an integer.
 const NOT_CONDITION: &[&str] = &["str", "none", "dist", "array", "handle", "float"];
-/// A size or a pick's distribution is a distribution or a number.
-const NOT_DRAWN: &[&str] = &["str", "none", "array", "handle"];
 /// A `str` field of a namespace object takes a string.
 const NOT_STRING: &[&str] = &["int", "float", "bool", "none", "dist", "array", "handle"];
 
@@ -137,6 +136,8 @@ struct Checker<'a> {
     /// The `consume`s inside a loop, by dataset, in actor-name then document order, each with
     /// the innermost enclosing loop whose count varies with an enclosing one, if any (V6).
     consumes: BTreeMap<&'a str, Vec<(P, Option<P>)>>,
+    /// V27: the parameters whose distributions `draw_kind` is following.
+    drawing: RefCell<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -1324,8 +1325,75 @@ impl<'a> Checker<'a> {
                 let t = self.like_kind(&c.then, scope);
                 if t == self.like_kind(&c.otherwise, scope) { t } else { None }
             }
+            ExprNode::Draw(d) => self.draw_kind(&d.dist, scope),
             _ => None,
         }
+    }
+
+    /// V27: the kind a draw of `d` yields where the document shows it: a distribution what
+    /// `draw_kind_dist` says; a parameter whose value is a distribution what that distribution
+    /// yields; a `cond` whose arms yield one kind that kind; any other expression its own kind,
+    /// drawn as a constant. `None` when it is not known before the run. As `check.py`'s
+    /// `drawkind`.
+    fn draw_kind(&self, d: &DistRef, scope: &Scope<'a>) -> Option<&'static str> {
+        match d {
+            DistRef::Dist(d) => self.draw_kind_dist(d, scope),
+            DistRef::Expr(e) => self.draw_kind_expr(e, scope),
+        }
+    }
+
+    fn draw_kind_expr(&self, e: &Expr, scope: &Scope<'a>) -> Option<&'static str> {
+        if let Expr::Node(n) = e {
+            match n.as_ref() {
+                ExprNode::Param(name) => {
+                    if let (true, Some(PValue::Dist(pd))) = (self.ast.params.contains_key(name), self.param_value(name)) {
+                        // a parameter defined through itself is refused by V1 (after the
+                        // parameters' values are walked, so this walk may meet one first)
+                        if self.drawing.borrow().iter().any(|x| x == name) {
+                            return None;
+                        }
+                        self.drawing.borrow_mut().push(name.clone());
+                        // a parameter's distribution is judged where it is declared, no binding in scope
+                        let k = self.draw_kind_dist(pd, &Scope::new(HashSet::new()));
+                        self.drawing.borrow_mut().pop();
+                        return k;
+                    }
+                }
+                ExprNode::Cond(c) => {
+                    let arm = |v: &ExprLike| match v {
+                        ExprLike::Expr(e) => self.draw_kind_expr(e, scope),
+                        ExprLike::Dist(d) => self.draw_kind_dist(d, scope),
+                        ExprLike::Handle(_) => Some("handle"),
+                    };
+                    let t = arm(&c.then);
+                    return if t == arm(&c.otherwise) { t } else { None };
+                }
+                _ => {}
+            }
+        }
+        match self.kind(e, scope) {
+            Some("dist") => None,
+            k => k,
+        }
+    }
+
+    /// V27: the kind a draw of the distribution `d` yields: a `const` its argument's kind;
+    /// `uniform`, `uniform64`, `normal`, `lognormal`, `zipf`, `hotset` an integer; an
+    /// `empirical` whose values are of one kind that kind; a `mixture` whose arms yield one kind
+    /// that kind (a `null` arm null).
+    fn draw_kind_dist(&self, d: &Dist, scope: &Scope<'a>) -> Option<&'static str> {
+        let mut kinds: Vec<Option<&'static str>> = match d {
+            Dist::Const(e) => return self.kind(e, scope),
+            Dist::Empirical { values, .. } => values.iter().map(|v| Some(literal_kind(v))).collect(),
+            Dist::Mixture(arms) => arms.iter().map(|arm| match &arm.dist {
+                None => Some("none"),
+                Some(d) => self.draw_kind(d, scope),
+            }).collect(),
+            _ => return Some("int"),
+        };
+        kinds.sort();
+        kinds.dedup();
+        if kinds.len() == 1 { kinds[0] } else { None }
     }
 
     fn like_kind(&self, v: &ExprLike, scope: &Scope<'a>) -> Option<&'static str> {
@@ -1349,11 +1417,13 @@ impl<'a> Checker<'a> {
         self.typed(e, path, scope, "an integer", NOT_NUMBER);
     }
 
-    /// V27: a size or a pick's distribution that is an expression is drawn as a constant and
-    /// read as an integer, unless it is a distribution.
+    /// V27: a size or a pick's distribution is drawn (an expression that is not a distribution
+    /// as a constant) and what it yields is read as an integer.
     fn drawn(&mut self, d: &DistRef, path: &P, scope: &Scope<'a>) {
-        if let DistRef::Expr(e) = d {
-            self.typed(e, path, scope, "an integer", NOT_DRAWN);
+        if let Some(k) = self.draw_kind(d, scope) {
+            if NOT_NUMBER.contains(&k) {
+                self.err(path, format!("expected an integer, got {} (V27)", kind_name(k)));
+            }
         }
     }
 

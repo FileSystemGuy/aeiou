@@ -419,8 +419,14 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   float for a condition (`if`, `and`, `or`, `not`); a `size` or a `pick`'s `dist` may also
   be a distribution. An `int` field of a namespace object takes an integer or a float, a
   `str` field a string. A `null` where the key is optional is the key left out, as the
-  runner reads it. What the document does not show (a draw, a `cond` whose arms differ,
-  arithmetic) is left to the run.
+  runner reads it. What the document does not show (a `cond` whose arms differ,
+  arithmetic) is left to the run. A draw, and a `size` or a pick's `dist`, which are drawn,
+  yield a kind the document shows (2026-10-15): a `const` its argument's kind, the other
+  distributions an integer, an `empirical` whose values are of one kind that kind, a
+  `mixture` or a `cond` whose arms yield one kind that kind (a `null` arm null), a parameter
+  whose value is a distribution what that distribution yields, any other value its own kind;
+  `{"const": {"param": "pb"}}` with `pb` a distribution, drawn as an op's `ns`, had passed both
+  checkers and failed the run with "expected an integer, got dist".
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)

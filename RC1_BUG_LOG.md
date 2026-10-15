@@ -2168,3 +2168,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   passed, `--lib` 66, builder suite with MinIO 387 passed, CI's checker diff empty, every
   committed parameter file ok, `aeiou-build --hermetic --twice --check` rc 0. Fixed in an
   isolated worktree and applied.
+
+## 94. A draw whose result the runner refuses (`const` of a distribution parameter) passed both checkers
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (V27: new `drawkind`/`draw_kind`,
+  `kind` of a `draw`, `drawn`); `schema/README.md` §4 V27; `man/aeiou-abstract.7.md`; tests.
+- **Found by:** the RC1 fix of bug 93: V27 (bug 87) took every `draw` as of unknown kind.
+- **Defect:** `params.pa = {const: {param: pb}}`, `pb = {const: 3}`, `compute ns {draw {param: pa}}`
+  was `ok` in both checkers and failed `dry-run`/`run` "expected an integer, got dist"; so did a
+  draw yielding a distribution, string, null, array, or (for a condition) float: `empirical`
+  over strings, mixtures of such arms, a size `{const: {param: d}}`, a `let` bound to such a
+  draw, `if: draw {const: 0.5}`.
+- **Fix:** the kind a draw yields where the document shows it (`const` its argument's; the
+  numeric distributions an integer; `empirical`, `mixture`, `cond` with one kind throughout;
+  a parameter's distribution by its value in effect) feeds every V27 site, so the refusal lands
+  where the runner blames, e.g. `actors/gpu/body/0/compute/ns: expected an integer, got a
+  distribution (V27)`; `drawn` (a size, a pick's dist) refuses any non-number. A set of
+  parameters being followed keeps the walk finite before V1's cycle check. Values given
+  (`check_given`, aeiou-params, `--params-file`) are judged alike. Bug 93's tests named a
+  parameter through this very shape and now name it through a mixture arm. No fingerprint,
+  dataset id, AST, or schema change.
+- **Evidence:** `golden::a_draw_of_a_kind_the_runner_refuses_is_refused_at_check` and
+  `test_builder.py::test_a_draw_of_a_kind_the_runner_refuses_is_refused_at_check` (5 accepted,
+  11 refused, a given value) fail on the old checkers and pass; a 455-document battery (11
+  sites × 41 draw forms) gives identical errors in both checkers, 213 refused (10 before), each
+  failing HEAD's dry-run; on HEAD 088919c plus the change: `--test all` 138 passed, `--lib` 66,
+  builder suite with MinIO 388, CI's checker diff empty, every committed parameter file ok,
+  `aeiou-build --hermetic --twice --check` rc 0. Fixed in an isolated worktree and applied.

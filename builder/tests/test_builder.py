@@ -1349,7 +1349,7 @@ def test_a_parameter_defined_through_itself_is_refused_with_its_cycle(tmp_path):
          ["params/pa: parameter `pa` is defined through itself (pa -> pb -> pc -> pa) (V1)",
           "params/pb: parameter `pb` is defined through itself (pb -> pc -> pa -> pb) (V1)",
           "params/pc: parameter `pc` is defined through itself (pc -> pa -> pb -> pc) (V1)"]),
-        ({"pa": {"default": {"const": {"param": "pb"}}}, "pb": {"default": {"const": 3}}}, []),
+        ({"pa": {"default": {"mixture": [{"weight": 1, "dist": {"param": "pb"}}]}}, "pb": {"default": {"const": 3}}}, []),
     ]):
         f = tmp_path / f"c{i}.ast.json"
         f.write_text(doc(params), encoding="utf-8")
@@ -1361,3 +1361,86 @@ def test_a_parameter_defined_through_itself_is_refused_with_its_cycle(tmp_path):
             r = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
             got = sorted(ln.strip().split(": ", 1)[1] for ln in r.stdout.splitlines() if "(V1)" in ln)
             assert got == want and r.returncode == (1 if want else 0), r.stdout + r.stderr
+
+
+def test_a_draw_of_a_kind_the_runner_refuses_is_refused_at_check(tmp_path):
+    """V27 (RC1 review, R25), as the runner has it: a draw yields a kind the document shows (a
+    `const` its argument's, an `empirical` of one kind of value that kind, a `mixture` or `cond`
+    whose arms yield one kind that kind, a parameter whose value is a distribution what that
+    distribution yields), judged where the drawn value is read: `pa` given `{"const": {"param":
+    "pb"}}` with `pb` a distribution, drawn as a `compute`'s `ns`, passed both checkers and
+    failed `run` with "expected an integer, got dist". What the document does not show is left
+    to the run, and a value a parameter file gives is held to it too."""
+    from aeiou.validate import _load
+    _, check = _load()
+    U = {"uniform": {"lo": 1, "hi": 4}}
+
+    def doc(size, *body):
+        return {"ast": "0.10", "name": "v27",
+                "params": {"n": {"default": 3}, "d": {"default": U}, "cd": {"default": {"const": {"param": "d"}}},
+                           "cn": {"default": {"const": {"param": "n"}}}, "cs": {"default": {"const": "x"}}},
+                "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": size, "seed": 1}},
+                "namespaces": {"o": {"pattern": "o/{name}-{k:03}", "fields": {"name": "str", "k": "int"}, "size": 10, "seed": 2}},
+                "actors": {"gpu": {"body": list(body)}}}
+
+    def errs(size, *body):
+        return check.Check(doc(size, *body), "v27").run()
+
+    def compute(ns):
+        return {"compute": {"ns": ns}}
+
+    def obj(name, k):
+        return {"open": {"file": {"object": {"namespace": "o", "fields": {"name": name, "k": k}}}, "flags": ["WRONLY", "CREAT"]}}
+
+    redraw = {"let": {"name": "x", "value": {"draw": {"param": "cd"}}}}
+    accepted = [
+        ({"param": "cn"}, [compute({"draw": {"param": "cn"}})]),
+        (10, [compute({"draw": {"cond": {"if": True, "then": {"param": "cn"}, "else": U}}})]),
+        (10, [compute({"draw": {"mixture": [{"weight": 1, "dist": None}, {"weight": 1, "dist": 2}]}})]),
+        (10, [redraw, compute({"draw": {"ref": "x"}})]),
+        (10, [obj({"draw": {"param": "cs"}}, {"draw": {"empirical": {"values": [1.5, 2], "weights": [1, 1]}}})]),
+    ]
+    for size, body in accepted:
+        assert errs(size, *body) == [], (size, body)
+    refused = [
+        (10, [compute({"draw": {"param": "cd"}})], "actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"),
+        (10, [compute({"draw": {"const": {"param": "d"}}})], "actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"),
+        (10, [compute({"draw": {"mixture": [{"weight": 1, "dist": {"param": "cd"}}]}})],
+         "actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"),
+        (10, [compute({"draw": {"param": "cs"}})], "actors/gpu/body/0/compute/ns: expected an integer, got a string (V27)"),
+        (10, [compute({"add": [1, {"draw": {"empirical": {"values": ["a", "b"], "weights": [1, 1]}}}]})],
+         "actors/gpu/body/0/compute/ns/1: expected a number, got a string (V27)"),
+        (10, [{"cond": {"if": {"draw": {"const": 0.5}}, "then": []}}], "actors/gpu/body/0/cond/if: expected a condition, got a float (V27)"),
+        (10, [redraw, compute({"ref": "x"})], "actors/gpu/body/1/compute/ns: expected an integer, got a distribution (V27)"),
+        (10, [obj("a", {"draw": {"param": "cs"}})], "actors/gpu/body/0/open/file/fields/k: expected an integer, got a string (V27)"),
+        (10, [{"stat": {"file": {"pick": {"dataset": "ds", "dist": {"param": "cd"}}}}}],
+         "actors/gpu/body/0/stat/file/dist: expected an integer, got a distribution (V27)"),
+        ({"const": {"param": "d"}}, [compute(1)], "datasets/ds/size: expected an integer, got a distribution (V27)"),
+        ({"mixture": [{"weight": 1, "dist": None}]}, [compute(1)], "datasets/ds/size: expected an integer, got null (V27)"),
+    ]
+    for size, body, want in refused:
+        assert errs(size, *body) == [f"v27: {want}"], (size, body)
+    # a parameter drawn through itself is V1's, and following it does not recurse
+    cyc = doc(10, compute(1))
+    cyc["params"]["n"] = {"default": {"uniform": {"lo": {"draw": {"param": "n"}}, "hi": 9}}}
+    assert check.Check(cyc, "v27").run() == ["v27: params/n: parameter `n` is defined through itself (n -> n) (V1)"]
+    # the runner refuses the same documents with the same messages, and a parameter file giving
+    # `cn` the const of a distribution is refused by aeiou-params check and the run alike
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
+    if runner.exists():
+        for i, (size, body, *want) in enumerate(accepted + refused):
+            f = tmp_path / f"c{i}.ast.json"
+            f.write_text(json.dumps(doc(size, *body)), encoding="utf-8")
+            r = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
+            got = [ln.strip() for ln in r.stdout.splitlines() if "(V27)" in ln]
+            assert got == [f"v27: {w}" for w in want] and r.returncode == (1 if want else 0), r.stdout + r.stderr
+    a, f = tmp_path / "v27.ast.json", tmp_path / "v27.params.json"
+    a.write_text(json.dumps(doc(10, compute({"draw": {"param": "cn"}}))), encoding="utf-8")
+    f.write_text(json.dumps({"params_version": 1, "abstract": "v27", "params": {"cn": {"const": {"param": "d"}}}}), encoding="utf-8")
+    want = "v27: actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"
+    r = subprocess.run([sys.executable, "-m", "aeiou.params", "check", str(a), str(f)], capture_output=True, text=True,
+                       cwd=str(BUILDER), env={**os.environ, "PYTHONPATH": str(BUILDER)})
+    assert r.returncode == 1 and want in r.stdout, r.stdout + r.stderr
+    if runner.exists():
+        r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)], capture_output=True, text=True, cwd=str(tmp_path))
+        assert r.returncode == 1 and want in r.stderr, r.stderr

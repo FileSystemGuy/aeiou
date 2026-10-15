@@ -1307,9 +1307,68 @@ fn a_parameter_defined_through_itself_is_refused_with_its_cycle() {
     assert!(e.contains("cyc: params/pb: parameter `pb` is defined through itself (pb -> pa -> pb) (V1)"), "{e}");
     assert!(!e.contains("params/pc: parameter"), "{e}");
     // a parameter naming another is no cycle
-    let chain = r#""pa": {"default": {"const": {"param": "pb"}}}, "pb": {"default": {"const": 3}}"#;
+    let chain = r#""pa": {"default": {"mixture": [{"weight": 1, "dist": {"param": "pb"}}]}}, "pb": {"default": {"const": 3}}"#;
     let loaded = aeiou::load_str(&doc(chain)).unwrap_or_else(|e| panic!("{e:#}"));
     // and a value given to `pb` that names `pa` closes one: refused before the run
     let e = Params::new(&loaded.ast, &config(1, 1, &[("pb", r#"{"const": {"param": "pa"}}"#)])).err().map(|e| format!("{e:#}")).expect("accepted a given cycle");
     assert!(e.contains("with the parameters given") && e.contains("cyc: params/pb: parameter `pb` is defined through itself (pb -> pa -> pb) (V1)"), "{e}");
+}
+
+/// V27 (RC1 review, R25), as `check.py` has it: a draw yields a kind the document shows (a
+/// `const` its argument's, an `empirical` of one kind of value that kind, a `mixture` or `cond`
+/// whose arms yield one kind that kind, a parameter whose value is a distribution what that
+/// distribution yields), judged where the drawn value is read: `pa` given `{"const": {"param":
+/// "pb"}}` with `pb` a distribution, drawn as a `compute`'s `ns`, passed both checkers and failed
+/// `run` with "expected an integer, got dist". What the document does not show (arms of
+/// different kinds, a binding's distribution drawn again) is left to the run, and a value given
+/// to a run is held to it too.
+#[test]
+fn a_draw_of_a_kind_the_runner_refuses_is_refused_at_check() {
+    let doc = |size: &str, body: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "v27",
+                "params": {{"n": {{"default": 3}}, "d": {{"default": {{"uniform": {{"lo": 1, "hi": 4}}}}}}, "cd": {{"default": {{"const": {{"param": "d"}}}}}},
+                            "cn": {{"default": {{"const": {{"param": "n"}}}}}}, "cs": {{"default": {{"const": "x"}}}}}},
+                "datasets": {{"ds": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}},
+                "namespaces": {{"o": {{"pattern": "o/{{name}}-{{k:03}}", "fields": {{"name": "str", "k": "int"}}, "size": 10, "seed": 2}}}},
+                "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
+        )
+    };
+    let compute = |ns: &str| format!(r#"{{"compute": {{"ns": {ns}}}}}"#);
+    let obj = |name: &str, k: &str| format!(r#"{{"open": {{"file": {{"object": {{"namespace": "o", "fields": {{"name": {name}, "k": {k}}}}}}}, "flags": ["WRONLY", "CREAT"]}}}}"#);
+    // accepted: what the runner reads where it stands, and what the document does not show
+    for (size, body) in [
+        (r#"{"param": "cn"}"#, compute(r#"{"draw": {"param": "cn"}}"#)),
+        ("10", compute(r#"{"draw": {"cond": {"if": true, "then": {"param": "cn"}, "else": {"uniform": {"lo": 1, "hi": 2}}}}}"#)),
+        ("10", compute(r#"{"draw": {"mixture": [{"weight": 1, "dist": null}, {"weight": 1, "dist": 2}]}}"#)),
+        ("10", format!(r#"{{"let": {{"name": "x", "value": {{"draw": {{"param": "cd"}}}}}}}}, {}"#, compute(r#"{"draw": {"ref": "x"}}"#))),
+        ("10", obj(r#"{"draw": {"param": "cs"}}"#, r#"{"draw": {"empirical": {"values": [1.5, 2], "weights": [1, 1]}}}"#)),
+    ] {
+        aeiou::load_str(&doc(size, &body)).unwrap_or_else(|e| panic!("{size} {body}: {e:#}"));
+    }
+    for (size, body, want) in [
+        ("10", compute(r#"{"draw": {"param": "cd"}}"#), "actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"),
+        ("10", compute(r#"{"draw": {"const": {"param": "d"}}}"#), "actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"),
+        ("10", compute(r#"{"draw": {"mixture": [{"weight": 1, "dist": {"param": "cd"}}]}}"#), "actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"),
+        ("10", compute(r#"{"draw": {"param": "cs"}}"#), "actors/gpu/body/0/compute/ns: expected an integer, got a string (V27)"),
+        ("10", compute(r#"{"add": [1, {"draw": {"empirical": {"values": ["a", "b"], "weights": [1, 1]}}}]}"#), "actors/gpu/body/0/compute/ns/1: expected a number, got a string (V27)"),
+        ("10", r#"{"cond": {"if": {"draw": {"const": 0.5}}, "then": []}}"#.to_string(), "actors/gpu/body/0/cond/if: expected a condition, got a float (V27)"),
+        ("10", format!(r#"{{"let": {{"name": "x", "value": {{"draw": {{"param": "cd"}}}}}}}}, {}"#, compute(r#"{"ref": "x"}"#)),
+         "actors/gpu/body/1/compute/ns: expected an integer, got a distribution (V27)"),
+        ("10", obj(r#""a""#, r#"{"draw": {"param": "cs"}}"#), "actors/gpu/body/0/open/file/fields/k: expected an integer, got a string (V27)"),
+        ("10", r#"{"stat": {"file": {"pick": {"dataset": "ds", "dist": {"param": "cd"}}}}}"#.to_string(), "actors/gpu/body/0/stat/file/dist: expected an integer, got a distribution (V27)"),
+        (r#"{"const": {"param": "d"}}"#, compute("1"), "datasets/ds/size: expected an integer, got a distribution (V27)"),
+        (r#"{"mixture": [{"weight": 1, "dist": null}]}"#, compute("1"), "datasets/ds/size: expected an integer, got null (V27)"),
+    ] {
+        rejects(&doc(size, &body), &format!("v27: {want}"));
+    }
+    // a parameter drawn through itself is V1's, and following it does not recurse
+    let cyc = doc("10", &compute("1")).replace(r#""n": {"default": 3}"#, r#""n": {"default": {"uniform": {"lo": {"draw": {"param": "n"}}, "hi": 9}}}"#);
+    rejects(&cyc, "v27: params/n: parameter `n` is defined through itself (n -> n) (V1)");
+    // the parameters in effect are held to it too
+    let text = doc("10", &compute(r#"{"draw": {"param": "cn"}}"#));
+    let loaded = aeiou::load_str(&text).unwrap();
+    assert!(Params::new(&loaded.ast, &config(1, 1, &[("cn", r#"{"const": 7}"#)])).is_ok());
+    let e = Params::new(&loaded.ast, &config(1, 1, &[("cn", r#"{"const": {"param": "d"}}"#)])).err().map(|e| format!("{e:#}")).expect("accepted a draw of a distribution");
+    assert!(e.contains("with the parameters given") && e.contains("v27: actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"), "{e}");
 }
