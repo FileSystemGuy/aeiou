@@ -1486,3 +1486,23 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `undrained()` counts rings closed with requests in the kernel) fails with the drain disabled
   ("a ring was closed with a request still in the kernel, left: 1") and passes with it;
   `--test all` 113 passed, 1 ignored; `--lib` 60; builder test_trace 82 passed.
+
+## 64. An HDF5 datagen refused for its header tool left an empty dataset root
+
+- **Where:** `runner/aeiou/src/datagen.rs` `datagen` (the roots' `create_dir_all` moved from
+  the plan loop to after the headers); `runner/aeiou/tests/layout.rs` (the test un-ignored).
+- **Found by:** the coverage tests of `formats.rs` (8ca2bd3), which marked
+  `layout::hdf5_without_its_header_tool_refused_before_anything_is_written` ignored.
+- **Defect:** the plan loop created each directory root before rank 0 made the HDF5 headers,
+  so a missing or failing `aeiou-header` ("not found: aeiou-header makes HDF5 headers and must
+  sit beside aeiou", or a version it refuses) exited 1 with `out/h` left behind, empty: short of
+  the standard of bugs 2 and 46 that a refused datagen leaves nothing.
+- **Fix:** the roots are created after every refusal the plan and the headers decide (after
+  `make_headers`, the resume check that the headers match the corpus's, and the share to the
+  other ranks), still before any manifest is written; the empty-root checks are unmoved and the
+  message is the same. No fingerprint, dataset id, or AST changes.
+- **Evidence:** the un-ignored test fails on the old code ("left behind: [\"h\"]") and passes;
+  on HEAD 455fa1d plus the change, `--test all -- layout datagen coord` 35 passed, and the
+  builder files that run datagen (test_formats, test_payload, test_object, test_trace,
+  test_coord, test_launch, test_options, test_usage, test_man) 176 passed. Fixed in an isolated
+  worktree and applied.

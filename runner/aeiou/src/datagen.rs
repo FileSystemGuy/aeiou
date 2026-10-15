@@ -1671,9 +1671,6 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
                 bail!("dataset `{name}`: {} is not empty ({n} entries); datasets are read-only, remove it first", root.display());
             }
         }
-        if object.is_none() {
-            std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
-        }
         let count = meta.count();
         // the count whose names may be on storage past this one's
         let reach = [from, settle.as_ref().and_then(|s| s["asked"].as_i64())].into_iter().flatten().fold(count, i64::max);
@@ -1793,6 +1790,13 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
         if let Some(server) = hosts.and_then(|h| h.server) {
             server.share(share);
+        }
+    }
+    // the roots, after every refusal the plan and the headers decide (a missing or failing
+    // aeiou-header among them): a refused datagen leaves nothing behind
+    for p in &plans {
+        if p.object.is_none() {
+            std::fs::create_dir_all(&p.root).with_context(|| format!("creating {}", p.root.display()))?;
         }
     }
 

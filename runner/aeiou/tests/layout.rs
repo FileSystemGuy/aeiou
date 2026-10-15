@@ -540,7 +540,6 @@ fn hdf5_without_its_header_tool_is_refused() {
 /// The same refusal leaves nothing at all, as a geometry refusal does (bug 44's standard).
 #[cfg(feature = "formats")]
 #[test]
-#[ignore = "RC1 bug: a missing aeiou-header is found after datagen creates the dataset's root, so the refusal leaves an empty directory"]
 fn hdf5_without_its_header_tool_refused_before_anything_is_written() {
     let Some((err, left)) = hdf5_without_header_tool() else { return };
     assert!(err.is_some());
