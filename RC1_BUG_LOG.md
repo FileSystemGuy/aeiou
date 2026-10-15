@@ -534,3 +534,46 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   (~0.65%) in a part of the load the abstract does not claim to model; its `params.json`
   node_cache (10,765, taken from `n`) is right. A recapture with `-v` would correct the record.
 
+## 25. Any stray connection to the coordinator's port aborted the run
+
+- **Where:** `runner/aeiou/src/coord.rs`: `accept_loop`, `serve`, new `read_hello`, new
+  `SState::said_hello`, the duplicate-rank check; runner REFERENCE §6.
+- **Found by:** review of the coordinator: rank 0 started with `--ranks 2`, a bare connect
+  and close (`exec 3<>/dev/tcp/127.0.0.1/7392; exec 3>&-`), then rank 1.
+- **Defect:** a connection counted toward the expected ranks before sending Hello; one that
+  closed before Hello failed the whole run ("start gate: …: connection closed"), and the
+  listener, closed after `ranks` accepts or on failure, left the real rank retrying "Connection
+  refused" for 120 s. A port probe or a launcher's readiness check killed a multi-host run. And
+  the duplicate-rank check looked at connections registered after Welcome, so two hosts
+  claiming one rank while Welcome was held could both pass.
+- **Fix:** a rank counts only once its Hello passes the checks (`said_hello`); `read_hello`
+  reads the first frame with a bound (`DEAD_AFTER`), and a close, garbage, an oversized or
+  non-Hello frame, or silence is one stderr line ("ignored a connection from PEER that sent no
+  Hello: …"), not a failure; the listener accepts until every rank has said Hello, the run fails,
+  or the window ends; duplicates are checked against `said_hello`. Wire protocol unchanged.
+- **Evidence:** the repro: before, rank 0 exit 1 and rank 1 still retrying at 20 s; after,
+  both exit 0 with the merged fingerprint. `tests/coord.rs::a_connection_that_sends_no_hello_is_no_host`
+  (four strays: silent, closing, HTTP, a valid non-Hello frame; then two hosts pass the gate)
+  times out on the old coord.rs and passes in 0.22 s. Fixed in an isolated worktree, applied.
+
+## 26. A refused host's Stop could be lost to the other hosts when rank 0 exited first
+
+- **Where:** `runner/aeiou/src/coord.rs`, new `impl Drop for Server`; runner REFERENCE §6
+  *Faults*.
+- **Found by:** a CI flake in `builder/tests/test_coord.py` (the deprecated Python datagen's
+  coordinator: a refused rank printed "connection closed" instead of "dedupe 2 differs from
+  rank 0's 1"); checking the Rust coordinator for the same race.
+- **Defect:** the refused host itself always reads its Stop (written under the state lock
+  before the FIN), but the broadcast to the *other* hosts went out after rank 0's in-process
+  client had its own Stop: rank 0's main thread could return its error and exit before the serve
+  thread wrote the rest, and those hosts read EOF ("connection closed") with the reason lost.
+- **Fix:** dropping the `Server` takes the state lock once (bounded at 2 s), so any turn in
+  progress, and with it the whole broadcast, reaches the kernel before rank 0 exits.
+- **Evidence:** `tests/coord.rs::a_refusal_reaches_every_host_before_rank_0_can_exit` (50
+  iterations, pinned to one CPU: 16 hosts must hold the Stop the moment rank 0's ready() errors,
+  and the refused host its reason before EOF; and rank 0 itself refused) fails at iteration 0
+  without the fix and passes with it; `--test all` 79 passed twice.
+- **Noted:** `coord::a_killed_datagen_or_grow_settles_at_whole_directories` failed once under
+  load at its "may still be writing" timing assertion and passed 3/3 after (queued as a timing
+  check).
+

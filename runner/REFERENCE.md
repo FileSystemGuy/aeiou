@@ -771,7 +771,11 @@ building it is `DESIGN_REVIEW.md` §3.25.
   receives (2026-10-14: timed from the last receive before, so a host that only heard
   `Release`s, one owning no GPU, or a server that only heard a datagen's `Progress`, never
   beat and was declared dead); `AEIOU_COORD_HEARTBEAT_MS` scales these times for the tests
-  and is no option.
+  and is no option. A connection is a host once its `Hello` is accepted: one that closes,
+  sends anything else, or sends nothing for 30 s first (a port probe, a launcher's readiness
+  check) is dropped with a line on rank 0's stderr, and the server accepts until every rank
+  has said `Hello` or the connect window ends (2026-10-14: every connection counted, so a
+  probe failed the run and closed the port on the real hosts).
 - **Configuration check.** `Hello` carries ~~a SHA-256 over~~ the run's identity document
   (the abstract's hash, seed, G, the resolved parameters, the dataset ids, the backend, the
   mmap mode, the rotation, the time scale, the write compression, `--drop-caches`), compared
@@ -805,7 +809,10 @@ building it is `DESIGN_REVIEW.md` §3.25.
   hosts" line is the fingerprint.
 - **Faults.** An actor failing on any host, a refused configuration, a dropped socket, or a
   missed heartbeat sends `Stop` to every host; actors see it at their next op or wait, and
-  the run fails on every host naming the originating rank and reason.
+  the run fails on every host naming the originating rank and reason. Every `Stop` is sent
+  under the server's lock, which the server takes once more as it goes out of scope, so
+  rank 0, exiting on its own client's `Stop`, cannot close the other hosts' sockets before
+  theirs is sent (2026-10-14: a host could read `connection closed` for the reason).
 - **`aeiou-launch`** (`runner/aeiou-launch`, POSIX sh): `aeiou-launch [-p PORT] [-f FILE]
   [HOST…] -- aeiou run|datagen|aeiou-datagen ARGS…` starts rank *i* on the *i*-th host over ssh with
   `--ranks`, `--rank`, and `--coordinator HOST0:PORT` (port 7311 by default) appended,

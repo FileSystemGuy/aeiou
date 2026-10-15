@@ -186,6 +186,120 @@ fn a_failing_host_stops_the_others() {
     assert!(format!("{:#}", server.merged().err().expect("failed")).contains("disk on fire"));
 }
 
+/// A connection that sends no `Hello` (a port probe, a launcher's readiness check, a client
+/// of something else) is no host: it is dropped and the run goes on, and the ranks that do
+/// say `Hello` are the ones counted. Here, before the two hosts connect: one that stays open
+/// and silent, one that closes at once, one that speaks HTTP, and one that sends a frame that
+/// is no `Hello`.
+#[test]
+fn a_connection_that_sends_no_hello_is_no_host() {
+    use std::io::Write;
+    let server = Server::start("127.0.0.1:0", 2).unwrap();
+    let silent = std::net::TcpStream::connect(server.addr).unwrap();
+    drop(std::net::TcpStream::connect(server.addr).unwrap());
+    std::net::TcpStream::connect(server.addr).unwrap().write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+    std::net::TcpStream::connect(server.addr).unwrap().write_all(&[&7u32.to_be_bytes()[..], b"\"Ready\""].concat()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let (tx, rx) = std::sync::mpsc::channel();
+    for rank in 0..2 {
+        let (tx, addr) = (tx.clone(), server.addr.to_string());
+        std::thread::spawn(move || {
+            let r = Tcp::connect(&addr, rank, 2, &format!("host{rank}"), &serde_json::json!({"cfg": "cfg"}), &serde_json::json!({}), &[], Arc::new(AtomicBool::new(false))).and_then(|t| t.ready().map(|_| t));
+            tx.send((rank, r.map(|_| ()).map_err(|e| format!("{e:#}")))).unwrap();
+        });
+    }
+    for _ in 0..2 {
+        let (rank, r) = rx.recv_timeout(std::time::Duration::from_secs(30)).expect("both hosts pass the start gate");
+        assert!(r.is_ok(), "rank {rank}: {r:?}");
+    }
+    drop(silent);
+}
+
+/// A raw host: its `Hello` (the wire's JSON, written by hand), then its `Welcome` read.
+fn raw_host(server: &Server, rank: i64, ranks: i64, cfg: &str, welcome: bool) -> std::net::TcpStream {
+    use std::io::Write;
+    let mut s = std::net::TcpStream::connect(server.addr).unwrap();
+    let hello = serde_json::json!({"Hello": {"rank": rank, "ranks": ranks, "host": format!("raw{rank}"), "identity": {"cfg": cfg}, "layers": {}, "participants": [], "facts": null}}).to_string();
+    s.write_all(&[&(hello.len() as u32).to_be_bytes()[..], hello.as_bytes()].concat()).unwrap();
+    if welcome {
+        read_welcome(&mut s);
+    }
+    s
+}
+
+fn read_welcome(s: &mut std::net::TcpStream) {
+    use std::io::Read;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    let mut hdr = [0u8; 4];
+    s.read_exact(&mut hdr).unwrap();
+    let mut body = vec![0u8; u32::from_be_bytes(hdr) as usize];
+    s.read_exact(&mut body).unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("Welcome"), "{}", String::from_utf8_lossy(&body));
+}
+
+/// What has already arrived on `s`, without waiting.
+fn arrived(s: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    s.set_nonblocking(true).unwrap();
+    let mut out = Vec::new();
+    let mut buf = [0u8; 4096];
+    while let Ok(n) = s.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n]);
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A refusal reaches every host before rank 0 may exit. Rank 0's process ends as soon as its
+/// own client hears the `Stop`, and once the server goes out of scope, every host's `Stop`
+/// must already be on its socket: the refused host's (with the reason) and every registered
+/// host's, rank 0's being the first of the broadcast. Repeated, since it is a race: rank 0 is
+/// refused (another host's `Hello` came first), or a third host is. This thread, and so every
+/// thread it starts (the server's, the client's reader), is held to one CPU, where the client
+/// waking on its `Stop` preempts the server's broadcast: without the server taking its lock as
+/// it goes out of scope, the first iteration fails.
+#[test]
+fn a_refusal_reaches_every_host_before_rank_0_can_exit() {
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_SET(libc::sched_getcpu().max(0) as usize, &mut set);
+        assert_eq!(libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set), 0);
+    }
+    const K: i64 = 16;
+    for i in 0..50 {
+        // a third host refused: rank 0 hears the broadcast first, then the K others
+        let server = Server::start("127.0.0.1:0", K + 2).unwrap();
+        let t0 = connect(&server, 0, K + 2, "cfg", &[]).unwrap();
+        // every Hello sent before any Welcome is read, so the accept loop takes them in one go
+        let mut raws: Vec<_> = (1..=K).map(|r| raw_host(&server, r, K + 2, "cfg", false)).collect();
+        raws.iter_mut().for_each(read_welcome);
+        let mut refused = raw_host(&server, K + 1, K + 2, "cfg-b", false);
+        assert!(format!("{:#}", t0.ready().unwrap_err()).contains("differs from rank 0"));
+        drop(server);
+        for (r, s) in raws.iter_mut().enumerate() {
+            let got = arrived(s);
+            assert!(got.contains("Stop") && got.contains("differs from rank 0"), "iteration {i}: rank {} had not been told when rank 0 could exit: {got:?}", r + 1);
+        }
+        drop(t0);
+        // the refused host hears its reason before the close
+        refused.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        let mut got = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut refused, &mut got);
+        assert!(String::from_utf8_lossy(&got).contains("cfg \\\"cfg-b\\\" differs from rank 0's \\\"cfg\\\""), "iteration {i}: {:?}", String::from_utf8_lossy(&got));
+
+        // rank 0 refused: another host's Hello came first
+        let server = Server::start("127.0.0.1:0", 2).unwrap();
+        let mut raw = raw_host(&server, 1, 2, "cfg", true);
+        let e = connect(&server, 0, 2, "cfg-b", &[]).err().expect("refused");
+        assert!(format!("{e:#}").contains("differs from rank 1's"), "{e:#}");
+        drop(server);
+        let got = arrived(&mut raw);
+        assert!(got.contains("Stop") && got.contains("differs from rank 1's"), "iteration {i}: rank 1 had not been told when rank 0 could exit: {got:?}");
+    }
+}
+
 #[test]
 fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let root = tmpdir("two");

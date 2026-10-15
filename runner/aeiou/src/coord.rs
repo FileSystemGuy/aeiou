@@ -709,6 +709,9 @@ struct SState {
     conns: BTreeMap<i64, Arc<Mutex<Wire>>>,
     /// The first host's identity (its rank, the canonical hash, the document).
     identity: Option<(i64, String, Value)>,
+    /// The ranks whose `Hello` was accepted: what the accept loop counts (a connection that
+    /// never sends one is no host).
+    said_hello: HashSet<i64>,
     hosts: BTreeMap<i64, String>,
     /// Each host's options block, from its `Hello`.
     layers: BTreeMap<i64, Value>,
@@ -958,13 +961,38 @@ impl Server {
     }
 }
 
+/// Rank 0's process may end as soon as its own client hears a `Stop` (its run refused because
+/// another host's `Hello` came first, or a third host refused): that frame went out from
+/// inside a connection thread's turn under the state lock, which may still owe the same
+/// `Stop` to the other hosts (a refused host's own, then the broadcast, in rank order).
+/// Taking the lock once here, as the server goes out of scope, lets that turn finish, so no
+/// host hears its socket close in place of the reason (2026-10-14). Bounded, should a peer
+/// that stopped reading hold a send.
+impl Drop for Server {
+    fn drop(&mut self) {
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until {
+            match self.st.m.try_lock() {
+                Ok(_) | Err(std::sync::TryLockError::Poisoned(_)) => return,
+                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
+            }
+        }
+    }
+}
+
 fn accept_loop(st: Arc<ServerState>, listener: TcpListener, ranks: i64) {
     let deadline = Instant::now() + CONNECT_WINDOW;
-    let mut accepted = 0;
-    while accepted < ranks {
+    loop {
+        {
+            // done once every rank's Hello is accepted: a connection that sends none (a port
+            // probe, a launcher's readiness check) is no host and does not count
+            let s = st.m.lock().unwrap();
+            if s.failed.is_some() || s.said_hello.len() as i64 >= ranks {
+                return;
+            }
+        }
         match listener.accept() {
             Ok((stream, peer)) => {
-                accepted += 1;
                 let st = st.clone();
                 std::thread::Builder::new()
                     .name(format!("coord-{peer}"))
@@ -974,10 +1002,8 @@ fn accept_loop(st: Arc<ServerState>, listener: TcpListener, ranks: i64) {
             Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {
                 if Instant::now() >= deadline {
                     let mut s = st.m.lock().unwrap();
-                    st.fail(&mut s, format!("coordinator: {accepted} of {ranks} hosts connected within {CONNECT_WINDOW:?}"));
-                    return;
-                }
-                if st.m.lock().unwrap().failed.is_some() {
+                    let n = s.said_hello.len();
+                    st.fail(&mut s, format!("coordinator: {n} of {ranks} hosts connected within {CONNECT_WINDOW:?}"));
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -991,13 +1017,30 @@ fn accept_loop(st: Arc<ServerState>, listener: TcpListener, ranks: i64) {
     }
 }
 
+/// A connection's first message, which must be a `Hello` within `DEAD_AFTER`; anything else
+/// (a close, bytes that are no frame, another message, silence) says it is no host.
+fn read_hello(stream: &mut TcpStream) -> Result<Msg> {
+    configure(stream)?;
+    let (start, dead_after) = (Instant::now(), timing().1);
+    let mut idle = || if start.elapsed() > dead_after { Err(anyhow!("no Hello within {dead_after:?}")) } else { Ok(()) };
+    let m = recv(stream, &mut idle)?;
+    if !matches!(m, Msg::Hello { .. }) {
+        bail!("expected Hello, got {m:?}");
+    }
+    Ok(m)
+}
+
 fn serve(st: Arc<ServerState>, stream: TcpStream, peer: SocketAddr) {
     let mut stream = stream;
-    if let Err(e) = configure(&stream) {
-        let mut s = st.m.lock().unwrap();
-        st.fail(&mut s, format!("coordinator: {peer}: {e}"));
-        return;
-    }
+    let hello = match read_hello(&mut stream) {
+        Ok(m) => m,
+        Err(e) => {
+            // no host (a port probe, a launcher's readiness check): dropped, and the run goes
+            // on; only a Hello counts toward the ranks (2026-10-14)
+            eprintln!("coordinator: ignored a connection from {peer} that sent no Hello: {e:#}");
+            return;
+        }
+    };
     let writer = match stream.try_clone() {
         Ok(w) => Arc::new(Mutex::new(Wire::new(w))),
         Err(e) => {
@@ -1009,7 +1052,7 @@ fn serve(st: Arc<ServerState>, stream: TcpStream, peer: SocketAddr) {
     let mut live = Liveness { last: Instant::now(), writer: writer.clone(), peer: peer.to_string() };
     let mut who = peer.to_string();
     let mut rank = None;
-    let r = serve_loop(&st, &mut stream, &writer, &mut live, &mut who, &mut rank);
+    let r = serve_loop(&st, hello, &mut stream, &writer, &mut live, &mut who, &mut rank);
     let mut s = st.m.lock().unwrap();
     if let Err(e) = r {
         // a stopping datagen's host may go away; its last note stands
@@ -1051,18 +1094,16 @@ fn identity_differences(mine: &Value, theirs: &Value, r0: i64) -> Vec<String> {
     out
 }
 
-fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<Wire>>, live: &mut Liveness, who: &mut String, rank_out: &mut Option<i64>) -> Result<()> {
+fn serve_loop(st: &ServerState, hello: Msg, stream: &mut TcpStream, writer: &Arc<Mutex<Wire>>, live: &mut Liveness, who: &mut String, rank_out: &mut Option<i64>) -> Result<()> {
     let rank = {
-        let mut idle = || live.idle();
-        let m = recv(stream, &mut idle)?;
         live.seen()?;
-        let Msg::Hello { rank, ranks, host, identity, layers, participants, facts } = m else { bail!("expected Hello, got {m:?}") };
+        let Msg::Hello { rank, ranks, host, identity, layers, participants, facts } = hello else { bail!("expected Hello") };
         *who = format!("rank {rank} ({host})");
         let hash = crate::canon::sha256_hex(&identity);
         let mut s = st.m.lock().unwrap();
         let refusal = if ranks != st.ranks {
             Some(format!("{who}: --ranks {ranks}, the coordinator was started for {}", st.ranks))
-        } else if rank < 0 || rank >= st.ranks || s.conns.contains_key(&rank) {
+        } else if rank < 0 || rank >= st.ranks || s.said_hello.contains(&rank) {
             Some(format!("{who}: rank {rank} is out of range or already connected"))
         } else {
             match &s.identity {
@@ -1079,6 +1120,8 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<Wire>
         if s.identity.is_none() {
             s.identity = Some((rank, hash, identity));
         }
+        s.said_hello.insert(rank);
+        st.cv.notify_all();
         // rank 0 may still be reading what Welcome carries; keep the host alive meanwhile (and
         // since nothing reads its socket here, its silence says nothing)
         while s.welcome.is_none() && s.failed.is_none() {
