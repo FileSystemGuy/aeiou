@@ -839,3 +839,53 @@ def test_a_dataset_size_is_never_below_zero():
         a.stat(ds.file(0))
     with pytest.raises(BuildError, match=r"datasets/d/size: a size below 0: it can be -90 \(V25\)"):
         w.build()
+
+
+def test_integers_outside_64_bits_are_refused_by_builder_checker_and_runner(tmp_path):
+    """The contract's integers are i64, a seed u64 (schema/README.md §1). A Python int is
+    unbounded; the runner's serde_json parses one past u64 as a float, so such an AST hashed
+    and ran differently in the two languages. All three refuse it, with the same words."""
+    import re
+    from aeiou.validate import _load
+    from aeiou import params as params_mod
+    _, chk = _load()
+    rng = "is outside the 64-bit signed range of the contract's integers (-2^63 to 2^63-1)"
+    # the builder, where the author wrote it
+    for big in (2 ** 63, 2 ** 64, -2 ** 63 - 1):
+        w = Workload("t")
+        with pytest.raises(BuildError, match=rf"parameter n: integer {big} {re.escape(rng)}"):
+            w.params(n=big)
+        with pytest.raises(BuildError, match=rf"const: integer {big} is outside"):
+            const(big)
+    w = Workload("t")
+    P = w.params(n=2 ** 63 - 1, m=-2 ** 63, f=1e30)            # the ends fit; an integral float past them stays a float
+    assert isinstance(w._param_specs["f"]["default"], float)
+    ds = w.dataset("d", pattern="d/{id}", layout="whole", access="map", count=10, size=const(1), seed=2 ** 64 - 1)
+    with w.actor("gpu") as a:
+        a.compute(P.n)
+    ast = w.build()
+    with pytest.raises(BuildError, match=r"seed must be an integer in \[0, 2\^64\)"):
+        w.dataset("e", pattern="e/{id}", layout="whole", access="map", count=10, size=const(1), seed=2 ** 64)
+    # the checker, on a document the builder did not write; the runner says the same
+    ast["params"]["n"]["default"] = 2 ** 64
+    ast["datasets"]["d"]["seed"] = 2 ** 64
+    ast["actors"]["gpu"]["body"][0]["compute"]["ns"] = {"add": [1, -2 ** 70]}
+    want = [f"t: params/n/default: integer {2 ** 64} {rng}",
+            f"t: datasets/d/seed: seed {2 ** 64} is outside 0 to 2^64-1",
+            f"t: actors/gpu/body/0/compute/ns/add/1: integer {-2 ** 70} {rng}"]
+    assert [e for e in chk.Check(ast, "t").run() if "outside" in e] == want
+    with pytest.raises(BuildError, match=re.escape(want[0])):
+        validate(ast, "t")
+    f = tmp_path / "t.ast.json"
+    f.write_text(json.dumps(ast, indent=2))
+    out = subprocess.run([sys.executable, str(ROOT / "schema" / "check.py"), str(f)], capture_output=True, text=True)
+    assert out.returncode == 1 and [l.strip() for l in out.stdout.splitlines()[1:]] == [w.replace("t:", "t.ast.json:", 1) for w in want]
+    # a parameter file
+    pset = {"params_version": 1, "abstract": "t", "params": {"n": [1, 2 ** 64]}}
+    assert params_mod.check(ast, pset, name="x") == [f"x: params/n/1: integer {2 ** 64} {rng}"]
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+    if not runner.exists():
+        pytest.skip("runner binary not built")
+    out = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
+    assert out.returncode != 0
+    assert [l.strip() for l in (out.stdout + out.stderr).splitlines() if "is outside" in l] == want

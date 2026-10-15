@@ -1322,3 +1322,33 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   without the fix ("113.46 ms over their sum") and passes 10/10 with it, and 3/3 under 40 `yes`
   loops; `--test all` 100 passed, `--test uring_knobs --test limits` passed (DEFER_TASKRUN,
   COOP, SQPOLL). Fixed in an isolated worktree and applied.
+
+## 58. Integers outside 64 bits hashed and ran differently in Python and Rust
+
+- **Where:** `runner/aeiou/src/canon.rs` (new `int_range_errors`), `runner/aeiou/src/lib.rs`
+  `load_str`, `runner/aeiou/src/eval.rs` (`ParamSet::parse`, `Params::new`), `schema/check.py`
+  (new `int_range`), `builder/aeiou/nodes.py` `lift`, `builder/aeiou/validate.py`,
+  `builder/aeiou/params.py` `check`; schema/README.md §1 "Integers are 64-bit".
+- **Found by:** review of the builder core: Python ints are unbounded and `lift` passed any
+  through; the runner's literal is `Int(i64) | Float(f64)` and serde_json reads an integer
+  past `u64` as a float.
+- **Defect:** with `file_per_sample`'s `step_time` default set out of range, both checkers said
+  ok every time, but at 2^63 the runner held `Float(9.223372036854776e18)` (it executes a
+  different number than the AST says), and at 2^64, -2^63-1, and 10^30 the AST hash differed
+  between Python and Rust (e.g. `c311bb87…` against `c07900cf…`), so a parameter file's
+  `ast_sha256` pin or a recorded hash disagreed by language. `lift` also turned an integral
+  float such as 1e30 into a 31-digit int. Parameter files and `--param` had the same gap.
+- **Fix:** the contract's integers are i64, except a dataset's or namespace's `seed`, u64 (as
+  the schema already said). A scanner over the raw JSON text (a parsed value has already made
+  the integer a float) refuses every integer token out of range with its path, in the runner's
+  every load, its parameter files and `--param`, and in `check.py`, the builder's validation,
+  and `aeiou-params check`, word for word alike; `lift` refuses one where the author writes it,
+  and an integral float out of range stays a float. A newly refused document; no hash,
+  fingerprint, or dataset id changes (all 14 committed ASTs hash as before in both languages).
+- **Evidence:** `golden::integers_outside_64_bits_are_refused_as_check_py_refuses_them` (both
+  ends of the range, 2^63, 2^64, -2^63-1, a 43-digit number, seeds of 2^64 and -1, values in an
+  array and an expression, a params file, `--param`) and
+  `test_builder.py::test_integers_outside_64_bits_are_refused_by_builder_checker_and_runner`
+  fail before the fix and pass after; golden 18 passed, `--lib` 44, test_builder, test_params,
+  test_man, test_usage 114 passed; both checkers ok over every committed AST. Fixed in an
+  isolated worktree and applied.

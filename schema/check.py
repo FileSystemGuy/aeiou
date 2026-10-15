@@ -48,6 +48,28 @@ def round_away(x: float) -> float:
     return float(int(abs(x) + 0.5)) * (1 if x >= 0 else -1)
 
 
+def int_range(doc, path=()) -> list:
+    """(path, message) for every integer outside the contract's range (§1): 64-bit signed,
+    a dataset's or namespace's `seed` 64-bit unsigned. JSON integers are unbounded and Python
+    keeps them exact; the runner's would parse as a float, so the AST would hash and run
+    differently there. The runner's `canon::int_range_errors` has the same rule and wording."""
+    out = []
+    if isinstance(doc, dict):
+        for k, v in doc.items():
+            out += int_range(v, path + (k,))
+    elif isinstance(doc, list):
+        for i, v in enumerate(doc):
+            out += int_range(v, path + (i,))
+    elif isinstance(doc, int) and not isinstance(doc, bool):
+        if len(path) == 3 and path[0] in ("datasets", "namespaces") and path[2] == "seed":
+            if not 0 <= doc <= 2 ** 64 - 1:
+                out.append((path, f"seed {doc} is outside 0 to 2^64-1"))
+        elif not -2 ** 63 <= doc <= 2 ** 63 - 1:
+            out.append((path, f"integer {doc} is outside the 64-bit signed range of the contract's integers "
+                              f"(-2^63 to 2^63-1)"))
+    return out
+
+
 def canonical(ast: dict) -> bytes:
     """Canonical form: sorted keys, no whitespace, ASCII escapes, provenance removed. Floats
     serialize with Python's repr (shortest round-trip), which is what the builder emits. The
@@ -119,6 +141,8 @@ class Check:
 
     # ---- entry ----
     def run(self):
+        for path, msg in int_range(self.ast):
+            self.err(list(path), msg)
         if "gpus" in self.params:
             self.err(["params"], "`gpus` is reserved and set by the runner")
         for pname, p in self.ast.get("params", {}).items():
@@ -763,8 +787,11 @@ def main(argv):
     failed = 0
     for f in files:
         ast = json.loads(f.read_text(encoding="utf-8"))
-        schema_errors = sorted(validator.iter_errors(ast), key=lambda e: list(e.absolute_path))
-        errors = [f"{f.name}: {'/'.join(map(str, e.absolute_path))}: {e.message[:200]}" for e in schema_errors]
+        # the integer range first, as the runner reads it: a seed past 2^64-1 has the same message in both
+        errors = [f"{f.name}: {'/'.join(map(str, p))}: {m}" for p, m in int_range(ast)]
+        if not errors:
+            schema_errors = sorted(validator.iter_errors(ast), key=lambda e: list(e.absolute_path))
+            errors = [f"{f.name}: {'/'.join(map(str, e.absolute_path))}: {e.message[:200]}" for e in schema_errors]
         if not errors:
             chk = Check(ast, f.name)
             errors = chk.run()

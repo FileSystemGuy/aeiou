@@ -61,6 +61,11 @@ impl ParamSet {
         use sha2::Digest;
         let sha256 = format!("{:x}", sha2::Sha256::digest(text.as_bytes()));
         let doc: serde_json::Value = serde_json::from_str(text).context("not JSON")?;
+        // a value past the contract's 64-bit integers would run as a float (`canon::int_range_errors`)
+        let ints = crate::canon::int_range_errors(text);
+        if !ints.is_empty() {
+            bail!("{}", ints.join("\n  "));
+        }
         let obj = doc.as_object().ok_or_else(|| anyhow!("not a JSON object"))?;
         for k in obj.keys() {
             if !matches!(k.as_str(), "params_version" | "abstract" | "ast_sha256" | "doc" | "params" | "provenance") {
@@ -166,7 +171,12 @@ impl Params {
                 bail!("--param {name}: not overridable (cli: false)");
             }
             let v: PValue = match serde_json::from_str(text) {
-                Ok(v) => v,
+                Ok(v) => {
+                    if let Some(e) = crate::canon::int_range_errors(text).first() {
+                        bail!("--param {name}: {}", e.trim_start_matches(": "));
+                    }
+                    v
+                }
                 Err(_) => PValue::Scalar(Literal::Str(text.clone())),
             };
             check_kind(name, &param.default, &v, "--param")?;

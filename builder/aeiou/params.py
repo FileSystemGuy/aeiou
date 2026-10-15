@@ -78,7 +78,12 @@ def load(path) -> dict:
 
 def check(ast: dict, pset: dict, *, ast_sha256: str | None = None, name: str = "params") -> list[str]:
     """The runner's rules, as a list of errors (empty when the set fits the abstract)."""
-    errors = []
+    from .validate import _load
+    _, chk = _load()
+    # the runner refuses a value past the contract's 64-bit integers before anything else
+    errors = [f"{name}: {'/'.join(map(str, p))}: {m}" for p, m in chk.int_range(pset)]
+    if errors:
+        return errors
     if pset.get("abstract") != ast["name"]:
         errors.append(f"{name}: for abstract `{pset.get('abstract')}`, not `{ast['name']}`")
     want = pset.get("ast_sha256")

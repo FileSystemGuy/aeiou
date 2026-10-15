@@ -150,6 +150,136 @@ pub fn python_float_repr(x: f64) -> String {
     }
 }
 
+/// `path: message` for every integer of a JSON text outside the contract's range
+/// (`schema/README.md` §1): 64-bit signed, a dataset's or namespace's `seed` 64-bit unsigned.
+/// It reads the text, not a parsed `Value`: serde_json parses an integer past `u64` as a
+/// float, so the document would hash and run differently here than in Python, which keeps
+/// it exact. `schema/check.py::int_range` has the same rule and wording. The text must be
+/// JSON (callers parse it first); a malformed one ends the scan early, never panics.
+pub fn int_range_errors(text: &str) -> Vec<String> {
+    let mut s = IntScan { b: text.as_bytes(), i: 0, path: Vec::new(), errors: Vec::new() };
+    s.value();
+    s.errors
+}
+
+struct IntScan<'a> {
+    b: &'a [u8],
+    i: usize,
+    path: Vec<String>,
+    errors: Vec<String>,
+}
+
+impl IntScan<'_> {
+    fn peek(&self) -> u8 {
+        self.b.get(self.i).copied().unwrap_or(0)
+    }
+
+    fn ws(&mut self) {
+        while matches!(self.peek(), b' ' | b'\t' | b'\n' | b'\r') {
+            self.i += 1;
+        }
+    }
+
+    /// A string at `"`, decoded (object keys are path segments).
+    fn string(&mut self) -> String {
+        let start = self.i;
+        self.i += 1;
+        while self.i < self.b.len() && self.b[self.i] != b'"' {
+            self.i += if self.b[self.i] == b'\\' { 2 } else { 1 };
+        }
+        self.i += 1;
+        self.b.get(start..self.i.min(self.b.len())).and_then(|s| serde_json::from_slice(s).ok()).unwrap_or_default()
+    }
+
+    fn value(&mut self) {
+        self.ws();
+        match self.peek() {
+            b'{' => {
+                self.i += 1;
+                loop {
+                    self.ws();
+                    if self.peek() != b'"' {
+                        self.i += 1; // `}` of an empty object, or the end of a malformed text
+                        return;
+                    }
+                    let key = self.string();
+                    self.ws();
+                    self.i += 1; // `:`
+                    self.path.push(key);
+                    self.value();
+                    self.path.pop();
+                    self.ws();
+                    let c = self.peek();
+                    self.i += 1;
+                    if c != b',' {
+                        return;
+                    }
+                }
+            }
+            b'[' => {
+                self.i += 1;
+                self.ws();
+                if self.peek() == b']' {
+                    self.i += 1;
+                    return;
+                }
+                let mut n = 0usize;
+                loop {
+                    self.path.push(n.to_string());
+                    self.value();
+                    self.path.pop();
+                    n += 1;
+                    self.ws();
+                    let c = self.peek();
+                    self.i += 1;
+                    if c != b',' {
+                        return;
+                    }
+                }
+            }
+            b'"' => {
+                self.string();
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = self.i;
+                while matches!(self.peek(), b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') {
+                    self.i += 1;
+                }
+                let tok = std::str::from_utf8(&self.b[start..self.i]).unwrap_or_default();
+                if !tok.contains(['.', 'e', 'E']) {
+                    self.integer(tok);
+                }
+            }
+            0 => {}
+            _ => {
+                // true, false, null
+                while self.peek().is_ascii_alphabetic() {
+                    self.i += 1;
+                }
+            }
+        }
+    }
+
+    fn integer(&mut self, tok: &str) {
+        let p = &self.path;
+        let seed = p.len() == 3 && (p[0] == "datasets" || p[0] == "namespaces") && p[2] == "seed";
+        // past i128 the token does not parse, and is out of range either way
+        let v = tok.parse::<i128>().ok();
+        let msg = if seed {
+            if v.is_some_and(|v| (0..=u64::MAX as i128).contains(&v)) {
+                return;
+            }
+            format!("seed {tok} is outside 0 to 2^64-1")
+        } else {
+            if v.is_some_and(|v| (i64::MIN as i128..=i64::MAX as i128).contains(&v)) {
+                return;
+            }
+            format!("integer {tok} is outside the 64-bit signed range of the contract's integers (-2^63 to 2^63-1)")
+        };
+        self.errors.push(format!("{}: {msg}", p.join("/")));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

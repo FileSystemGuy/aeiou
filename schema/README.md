@@ -27,6 +27,17 @@ python3 schema/check.py path/to/x.ast.json   # one file
 - **Canonical units.** Sizes are byte integers, durations are nanosecond integers. `1MiB` and
   `105ms` are builder spellings. Floats appear only as probabilities, exponents, and
   distribution parameters.
+- **Integers are 64-bit** (2026-10-14). Every integer in an AST or a parameter file is in
+  the signed 64-bit range, -2^63 to 2^63-1, except a dataset's or namespace's `seed`, which
+  is unsigned, 0 to 2^64-1. JSON integers are unbounded and Python keeps them exact, while
+  the runner's parser reads one past `u64` as a float (and the runner holds one past `i64`
+  as a float literal), so such a document would hash and run differently in the two
+  languages. The builder refuses one where the author writes it (`lift`, and an integral
+  float outside the range stays a float), and `check.py`, the builder's validation,
+  `aeiou-params check`, and the runner (`aeiou check`, every load, a parameter file,
+  `--param`) refuse one before anything else, with the same message:
+  `params/n/default: integer 18446744073709551616 is outside the 64-bit signed range of the
+  contract's integers (-2^63 to 2^63-1)`. No committed AST or parameter set had one.
 - **Identifiers** are `[a-z_][a-z0-9_]*`. `gpus` is a reserved parameter set by `--gpus`.
 - **One format: JSON.** The on-disk form is JSON, pretty-printed with two-space indentation
   and the builder's key order (`ast`, `name`, `doc`, `posix`, `cache`, `s3`, `params`, `datasets`, `namespaces`,

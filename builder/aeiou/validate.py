@@ -43,8 +43,10 @@ def validate(ast: dict, name: str | None = None) -> None:
     schema, check = _load()
     name = name or ast.get("name", "ast")
     validator = jsonschema.Draft202012Validator(schema)
-    errors = [f"{name}: {'/'.join(map(str, e.absolute_path))}: {e.message[:300]}"
-              for e in sorted(validator.iter_errors(ast), key=lambda e: list(e.absolute_path))]
+    # the integer range first, as check.py and the runner judge it
+    errors = [f"{name}: {'/'.join(map(str, p))}: {m}" for p, m in check.int_range(ast)]
+    errors = errors or [f"{name}: {'/'.join(map(str, e.absolute_path))}: {e.message[:300]}"
+                        for e in sorted(validator.iter_errors(ast), key=lambda e: list(e.absolute_path))]
     if not errors:
         errors = check.Check(ast, name).run()
     if errors:

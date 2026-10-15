@@ -78,6 +78,13 @@ pub fn load(path: &Path) -> anyhow::Result<Loaded> {
 
 pub fn load_str(text: &str) -> anyhow::Result<Loaded> {
     let doc: serde_json::Value = serde_json::from_str(text)?;
+    // before the hash and the typed parse: an integer outside the contract's range has
+    // become a float in `doc`, and would hash and run as one
+    let ints = canon::int_range_errors(text);
+    if !ints.is_empty() {
+        let name = doc.get("name").and_then(|v| v.as_str()).unwrap_or("ast");
+        anyhow::bail!("invalid abstract:\n  {}", ints.iter().map(|e| format!("{name}: {e}")).collect::<Vec<_>>().join("\n  "));
+    }
     let sha256 = canon::sha256_hex(&doc);
     let ast = ast::parse(text)?;
     sites::annotate(&ast);

@@ -808,3 +808,37 @@ fn a_dataset_size_is_never_below_zero() {
     }
     assert!(meta.file_size(sizes.iter().position(|s| s.is_err()).unwrap() as i64).is_err());
 }
+
+#[test]
+fn integers_outside_64_bits_are_refused_as_check_py_refuses_them() {
+    // The contract's integers are i64, a seed u64 (schema/README.md §1). serde_json parses an
+    // integer past u64 as a float, so such a document hashed and ran differently here than in
+    // Python, which keeps it exact; one between i64 and u64 became a float literal.
+    let doc = |n: &str, seed: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "t", "params": {{"n": {{"default": {n}}}, "a": {{"default": [1, 3]}}}},
+                "datasets": {{"d": {{"layout": "whole", "access": "map", "pattern": "d/{{id}}", "count": 10, "size": {{"const": 1}}, "seed": {seed}}}}},
+                "actors": {{"gpu": {{"body": [{{"compute": {{"ns": {{"add": [1, 1.5e30]}}}}}}]}}}}}}"#
+        )
+    };
+    let range = "is outside the 64-bit signed range of the contract's integers (-2^63 to 2^63-1)";
+    aeiou::load_str(&doc("9223372036854775807", "18446744073709551615")).unwrap();
+    aeiou::load_str(&doc("-9223372036854775808", "0")).unwrap();
+    rejects(&doc("9223372036854775808", "1"), &format!("t: params/n/default: integer 9223372036854775808 {range}"));
+    rejects(&doc("18446744073709551616", "1"), &format!("t: params/n/default: integer 18446744073709551616 {range}"));
+    rejects(&doc("-9223372036854775809", "1"), &format!("t: params/n/default: integer -9223372036854775809 {range}"));
+    rejects(&doc("1000000000000000000000000000000000000000000", "1"), "integer 1000000000000000000000000000000000000000000 is outside");
+    rejects(&doc("1", "18446744073709551616"), "t: datasets/d/seed: seed 18446744073709551616 is outside 0 to 2^64-1");
+    rejects(&doc("1", "-1"), "t: datasets/d/seed: seed -1 is outside 0 to 2^64-1");
+    // inside arrays and expressions, with the path to it
+    rejects(&doc("1", "1").replace("[1, 3]", "[1, 2, -99999999999999999999]"), "t: params/a/default/2: integer -99999999999999999999 is outside");
+    rejects(&doc("1", "1").replace("[1, 1.5e30]", "[1, 36893488147419103232]"), "t: actors/gpu/body/0/compute/ns/add/1: integer 36893488147419103232 is outside");
+    // a parameter file and --param: the same rule on the values a run is given
+    use aeiou::eval::ParamSet;
+    let e = ParamSet::parse(r#"{"params_version":1,"abstract":"t","params":{"n":18446744073709551616}}"#, "x").err().map(|e| format!("{e:#}")).unwrap();
+    assert!(e.contains(&format!("params/n: integer 18446744073709551616 {range}")), "{e}");
+    let loaded = aeiou::load_str(&doc("1", "1")).unwrap();
+    let e = Params::new(&loaded.ast, &config(1, 1, &[("n", "9223372036854775808")])).err().map(|e| format!("{e:#}")).expect("accepted");
+    assert_eq!(e, format!("--param n: integer 9223372036854775808 {range}"));
+    assert!(Params::new(&loaded.ast, &config(1, 1, &[("n", "9223372036854775807")])).is_ok());
+}

@@ -32,19 +32,27 @@ def check_ident(name: str, what: str = "identifier") -> str:
 
 Literal = int | float | bool | str | None
 
+# The contract's integers are 64-bit signed (schema/README.md §1); a Python int is unbounded,
+# and one outside this range would parse and hash differently in the runner.
+I64_MIN, I64_MAX = -2 ** 63, 2 ** 63 - 1
+
 
 def lift(x: Any, what: str = "value") -> Any:
-    """A JSON scalar stays a scalar (integral floats become ints); a node stays a node."""
+    """A JSON scalar stays a scalar (integral floats within the 64-bit range become ints); a
+    node stays a node. An int outside the 64-bit signed range is refused."""
     if isinstance(x, Node):
         return x
     if x is None or isinstance(x, (bool, str)):
         return x
     if isinstance(x, int):
+        if not I64_MIN <= x <= I64_MAX:
+            raise BuildError(f"{what}: integer {x} is outside the 64-bit signed range of the contract's "
+                             f"integers (-2^63 to 2^63-1)")
         return x
     if isinstance(x, float):
         if x != x or x in (float("inf"), float("-inf")):
             raise BuildError(f"{what}: non-finite float")
-        return int(x) if x.is_integer() else x
+        return int(x) if x.is_integer() and -2.0 ** 63 <= x < 2.0 ** 63 else x
     if callable(x):
         raise BuildError(f"{what}: nodes hold no callables; write the formula with node arithmetic")
     raise BuildError(f"{what}: cannot use {type(x).__name__} in an abstract; expected a number, "
