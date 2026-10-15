@@ -1771,7 +1771,11 @@ the case the layers exist for: a launcher sets `AEIOU_RANK` from its own rank va
 the same command line runs on every host. ("Replace" is the only merge rule: `--endpoint`, the one
 list, is replaced whole by a higher layer's, whitespace-separated in `AEIOU_ENDPOINT` and an
 array of strings in the file.) `--root` is required from some layer; what no layer supplies is
-listed with everything else the command lacks, in one message (§15).
+listed with everything else the command lacks, in one message (§15). `datagen --resume`,
+`--grow`, `--shrink`, and `--settle` take the place from the manifest (§5): `--root` or
+`--endpoint` on their command line is a usage error, but the environment's or the file's is
+passed over with a warning in the block (2026-10-14), so one `[datagen]` table serves a fresh
+datagen and the changes of the dataset it wrote.
 
 **Negation: `--[no-]x`.** Every boolean of every subcommand has a negation: `--x` turns it
 on, `--no-x` turns it off, the last one on the line wins, so the command line can turn off

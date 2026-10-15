@@ -373,7 +373,8 @@ turns it off, and the last one on the line wins.
   In place of *ABSTRACT*: finish the dataset whose root is ROOT (a directory, or
   `s3://BUCKET[/PREFIX]`) from its manifest; see **datagen** above. No abstract, `--root`,
   `--endpoint`, `--param`, `--params-file`, `--gpus`, `--dedupe`, `--compress`, or
-  `--dataset` with it (a usage error); `--writers`, `--object-threads`, `--progress-secs`, and
+  `--dataset` with it (a usage error; a `root` or `endpoint` from the environment or the config
+  file is passed over, with a warning in the options block); `--writers`, `--object-threads`, `--progress-secs`, and
   the several-hosts options as for any datagen. With several hosts, rank 0 alone reads the
   manifest and sends every host what to write; every host gives the same ROOT, written the
   same way (the coordinator refuses one that does not), and a refusal on rank 0 is reported

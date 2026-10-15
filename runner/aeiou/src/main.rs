@@ -643,8 +643,14 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let ignore_space = a.ignore_space;
     let r = usage::root("datagen");
     let root = match &op {
-        // the place is the manifest's root; an --root from the environment or the file is not used
-        Some(_) => None,
+        // the place is the manifest's root; an --root from the environment or the file (which
+        // may be shared with the fresh datagen that wrote it) is passed over with a warning
+        Some((flag, ..)) => {
+            for name in ["root", "endpoint"] {
+                l.unused(name, &format!("{flag} takes the dataset's place from the manifest at its root"));
+            }
+            None
+        }
         None => miss.want(l.layered::<PathBuf>("root", a.root, None)?, r.0, r.1, Some(&r.2)),
     };
     let endpoints = match &op {

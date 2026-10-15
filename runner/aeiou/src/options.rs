@@ -358,6 +358,26 @@ impl Layers {
         Ok(value)
     }
 
+    /// A layered option this invocation's mode does not take (`datagen --resume` and the other
+    /// changes of a dataset root take `--root` and `--endpoint` from the manifest): the caller
+    /// refuses it on the command line; a value from the environment or the file, which may
+    /// serve the subcommand's other modes, is passed over with a warning that says `why`, and
+    /// no entry is printed for it.
+    pub fn unused(&mut self, name: &str, why: &str) {
+        let env = env_name(name);
+        self.keys_used.insert(name.to_string());
+        let from = if self.env.contains_key(&env) {
+            Some(Source::Env(env))
+        } else if self.table_value(name).is_some() {
+            Some(Source::Config(self.config_path()))
+        } else {
+            None
+        };
+        if let Some(s) = from {
+            self.warnings.push(format!("--{name} from {} is not used: {why}", s.describe()));
+        }
+    }
+
     /// A layered boolean: `--name` on the command line is true, `--name=false` false, absent
     /// is the lower layers'. Returns the value in effect.
     pub fn flag(&mut self, name: &str, cli: Option<bool>, default: bool) -> Result<bool> {

@@ -96,7 +96,9 @@ Refused, with the message naming the key: a key at the top level; an unknown key
 that is a fixed option of the table's subcommand; a `no-x` key (a boolean is a value under
 its own name, `require-cold = false`, so the double negative cannot be written). A key that
 is another subcommand's option is left to that subcommand. The `[datagen]` table is read by
-both `aeiou datagen` and **aeiou-datagen**(1).
+both `aeiou datagen` and **aeiou-datagen**(1); its `root` and `endpoint` are passed over, with
+a warning, by `--resume`, `--grow`, `--shrink`, and `--settle`, which take the place from the
+dataset's manifest, so one file serves the datagen and the changes of what it wrote.
 
 ## ENVIRONMENT
 

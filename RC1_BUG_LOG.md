@@ -953,3 +953,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** `object::a_resumed_object_dataset_counts_the_objects_it_finds` (MinIO) fails
   without the fix (left 2 files, right 10) and passes with it; `--test all object` 6 passed.
   Fixed in an isolated worktree and applied.
+
+## 43. `datagen --resume` (and grow, shrink, settle) refused a config file that set `[datagen]` root
+
+- **Where:** `runner/aeiou/src/main.rs` `datagen_cmd` (the root match's `Some(op)` arm),
+  `runner/aeiou/src/options.rs` (new `Layers::unused`); runner/REFERENCE.md §14,
+  man/aeiou.1.md `--resume`, man/aeiou-config.5.md (the `[datagen]` table).
+- **Found by:** review of the coordinator/CLI: the modes that change a dataset root take its
+  place from the manifest, so they never asked the layers for `root` or `endpoint`.
+- **Defect:** keys a subcommand never reads are refused by `Layers::finish`, so a `[datagen]`
+  table with `root`/`endpoint` (the natural file for a fresh datagen) made `aeiou datagen
+  --resume root/train --config a.toml` exit 2 with "[datagen] endpoint: not an option of
+  `aeiou datagen` (or the command line's alone)", while `AEIOU_ROOT` in the same mode was
+  ignored with nothing said: the file and environment layers disagreed, and one config could
+  not serve a datagen and its resume (§14).
+- **Fix:** in `--resume`, `--grow`, `--shrink`, and `--settle`, `--root`/`--endpoint` on the
+  command line stays a usage error; a value from the environment or the file is passed over
+  with one WARNING line per option in the printed options block (and in the report's
+  `warnings`), naming the layer that would have won, and no row for it. No fingerprint,
+  dataset id, or AST changes.
+- **Evidence:** `options::a_change_of_a_dataset_root_passes_over_the_place_from_the_lower_layers`
+  (a fresh datagen from config root/endpoint, `--resume` with `--config`, `--grow` via
+  `AEIOU_CONFIG`, `--shrink` with `AEIOU_ROOT`, `--resume --root` still refused) fails without
+  the fix with the message above and passes with it; `--test all options man` 13 passed,
+  `coord` 20 passed. Fixed in an isolated worktree and applied.

@@ -303,3 +303,37 @@ fn every_boolean_reads_no_x_in_the_help_and_parses_both_ways() {
     assert!(!ok);
     assert!(err.contains("AEIOU_DROP_CACHES=true or false"), "{err}");
 }
+
+/// A config file shared between a fresh datagen and the changes of the dataset it wrote:
+/// `--resume`, `--grow`, `--shrink`, `--settle` take the place from the manifest, so the file's
+/// (or the environment's) `root` and `endpoint` are passed over with a warning in the block,
+/// never refused as an option the subcommand does not have; on the command line they are still
+/// a usage error.
+#[test]
+fn a_change_of_a_dataset_root_passes_over_the_place_from_the_lower_layers() {
+    let d = tmpdir("dg-root-layers");
+    let root = d.join("root");
+    let cfg = d.join("aeiou.toml");
+    std::fs::write(&cfg, format!("[datagen]\nroot = {:?}\nendpoint = []\nwriters = 2\n", root.display().to_string())).unwrap();
+    let (ok, _, err) = out(aeiou("datagen", "file_per_sample.ast.json", &["samples=30"]).arg("--config").arg(&cfg));
+    assert!(ok, "{err}");
+    let at = root.join("train");
+    let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(&at).arg("--config").arg(&cfg).env_remove("AEIOU_CONFIG"));
+    assert!(ok && text.contains("the manifest says `complete`"), "{text}\n{err}");
+    let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--grow", "40"]).arg(&at).env("AEIOU_CONFIG", &cfg));
+    assert!(ok, "{text}\n{err}");
+    let rows = block(&text);
+    assert_eq!(row(&rows, "writers").2, format!("config {}", cfg.display()));
+    assert!(!rows.iter().any(|r| r.0 == "root" || r.0 == "endpoint"), "{rows:?}");
+    for name in ["root", "endpoint"] {
+        assert!(text.contains(&format!("WARNING: --{name} from config {} is not used: --grow takes the dataset's place from the manifest at its root", cfg.display())), "{text}");
+    }
+    // the environment's, likewise
+    let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--shrink", "35"]).arg(&at).env_remove("AEIOU_CONFIG").env("AEIOU_ROOT", d.join("elsewhere")));
+    assert!(ok, "{text}\n{err}");
+    assert!(text.contains("WARNING: --root from env AEIOU_ROOT is not used: --shrink takes the dataset's place from the manifest at its root"), "{text}");
+    assert!(!text.contains("--endpoint from"), "{text}");
+    // the command line's is refused
+    let (ok, _, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(&at).arg("--root").arg(&root).env_remove("AEIOU_CONFIG").env_remove("AEIOU_ROOT"));
+    assert!(!ok && err.contains("--root given too"), "{err}");
+}
