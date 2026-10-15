@@ -441,3 +441,68 @@ def test_describe_measures_the_shape_with_the_runner(capsys):
     out = capsys.readouterr().out
     committed = json.loads((case / "shape.json").read_text())["runs"][0]
     assert "### Measured shape" in out and f"Ops in all (seed 1): {committed['ops']:,}:" in out
+
+
+def test_describe_refuses_a_bad_option_value_in_the_frame(tmp_path, capsys):
+    """`--gpus` below 1 is the command line's mistake, as the runner's `--gpus 0` is: the usage
+    frame and exit 2, before the abstract is read; an abstract that is not there is the frame
+    too (as every tool's `aeiou::load`); a JSON file that is no abstract, or a parameter file
+    that is not one or not the abstract's, is one line and exit 1, never a traceback."""
+    ast = WORKLOADS / CASE / ".." / ".." / "dcp_save.ast.json"
+    for gpus in ("0", "-3"):
+        assert catalog.main(["describe", "--gpus", gpus, str(tmp_path / "absent.ast.json"), "--no-shapes"]) == 2
+        err = capsys.readouterr().err
+        assert err.startswith(f"aeiou-catalog describe: --gpus {gpus}: must be at least 1\n\nUsage: aeiou-catalog describe "), err
+        assert err.endswith("For more information, try 'aeiou-catalog describe --help'.\n")
+    assert catalog.main(["describe", str(tmp_path / "absent.ast.json"), "--no-shapes"]) == 2
+    assert "absent.ast.json: No such file or directory" in capsys.readouterr().err
+    other = WORKLOADS / "checkpointing" / "dcp-load" / "cases" / "mixed-9-items" / "params.json"
+    for name, text, params, message in (("list.json", "[]", None, "AST rejected"), ("empty.json", "{}", None, "AST rejected"),
+                                        (None, None, "[]", "parameter file rejected"), (None, None, "{}", "parameter file rejected"),
+                                        (None, None, other.read_text(encoding="utf-8"), "for abstract `dcp_load`, not `dcp_save`")):
+        path = ast
+        if name:
+            path = tmp_path / name
+            path.write_text(text, encoding="utf-8")
+        argv = ["describe", str(path), "--no-shapes"]
+        if params:
+            (tmp_path / "p.json").write_text(params, encoding="utf-8")
+            argv += ["--params-file", str(tmp_path / "p.json")]
+        assert catalog.main(argv) == 1
+        err = capsys.readouterr().err
+        assert err.startswith("aeiou-catalog describe: ") and message in err and "Traceback" not in err, err
+
+
+def _ascii_env(locale: str, utf8_mode: str) -> dict:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("LC_") and k not in ("LANG", "PYTHONIOENCODING", "PYTHONUTF8")}
+    return {**env, "PYTHONPATH": str(BUILDER), "LC_ALL": locale, "PYTHONUTF8": utf8_mode}
+
+
+def _catalog(args, locale: str, utf8_mode: str):
+    import subprocess
+    return subprocess.run([sys.executable, "-m", "aeiou.catalog", *map(str, args)], capture_output=True, env=_ascii_env(locale, utf8_mode))
+
+
+def test_check_write_and_describe_under_an_ascii_locale(tree):
+    """The records, CATALOG.md, and the descriptions are UTF-8 (`×`, `—`, `§`) whatever the
+    locale: under `LC_ALL=C` without UTF-8 mode (ASCII) `check` reads the committed tree,
+    `write` writes the same bytes, and `describe` prints the same bytes, as under C.UTF-8."""
+    r = _catalog(["check", "--workloads", WORKLOADS, "--no-shapes"], "C", "0")
+    assert r.returncode == 0, (r.stdout + r.stderr).decode("utf-8", "replace")
+    out = {}
+    for locale, mode in (("C.UTF-8", "1"), ("C", "0")):
+        root = tree.parent / locale
+        shutil.copytree(tree, root)
+        r = _catalog(["write", "--workloads", root, "--no-shapes"], locale, mode)
+        assert r.returncode == 0, (r.stdout + r.stderr).decode("utf-8", "replace")
+        files = {p.relative_to(root): p.read_bytes() for p in sorted(root.rglob("*.md"))}
+        r = _catalog(["check", "--workloads", root, "--no-shapes"], locale, mode)
+        assert r.returncode == 0, (r.stdout + r.stderr).decode("utf-8", "replace")
+        case = root / CASE
+        r = _catalog(["describe", case.parent.parent / "dcp_save.ast.json", "--params-file", case / "params.json", "--gpus", "2", "--no-shapes"], locale, mode)
+        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+        out[locale] = (files, r.stdout)
+    files, described = out["C"]
+    assert "±".encode("utf-8") in files[pathlib.Path("CATALOG.md")]
+    files[pathlib.Path("CATALOG.md")].decode("utf-8")
+    assert out["C"] == out["C.UTF-8"]

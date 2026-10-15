@@ -427,3 +427,38 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `test_builder.py::test_a_sub_actor_positions_its_ops_on_an_inherited_handle` holds check.py's
   V24; `--test all` 78 passed, `--lib` 40, MinIO object tests 4, builder 314 passed.
 
+## 20. `aeiou-catalog describe` answered bad arguments with exit 1 and tracebacks
+
+- **Where:** `builder/aeiou/catalog.py`, `main` and `_describe`; aeiou-catalog(1) EXIT STATUS.
+- **Found by:** review of the Python tools against runner REFERENCE §15 (`aeiou dry-run --gpus
+  0` is the usage frame, exit 2); the fixer then swept every subcommand's arguments.
+- **Defect:** `describe --gpus 0` exited 1 outside the frame; a JSON file that is not an
+  abstract (`[]`, `{}`) or a `--params-file` that is not a parameter file raised tracebacks
+  (AttributeError, KeyError, TypeError) inside describe.py; another abstract's parameter file
+  was not checked at all.
+- **Fix:** `--gpus` below 1 is a UsageError before any read (frame, exit 2); the abstract loads
+  through `emit.load` (missing or not JSON: usage error, exit 2, as the runner and aeiou-params)
+  and is validated (`AST rejected: …`, exit 1); `--params-file` goes through `params.load` and
+  `params.check` against the abstract (`parameter file rejected: …`, exit 1). `check` and
+  `write` already behaved.
+- **Evidence:** `test_catalog.py::test_describe_refuses_a_bad_option_value_in_the_frame` fails
+  without the fix (exit 1 for 2) and passes with it; catalog, man, encoding suites: 71 passed.
+- **Queued from it:** `aeiou-params defaults` on a JSON file that is not an abstract tracebacks
+  the same way (`params._load_ast`).
+
+## 21. `aeiou-catalog` read and wrote files in the locale's encoding
+
+- **Where:** `builder/aeiou/catalog.py`: every text read and write, the dry-run subprocess,
+  `main`, `describe`'s output.
+- **Found by:** the encoding fixer of bug 11, listing what it left in catalog.py.
+- **Defect:** under `LC_ALL=C PYTHONUTF8=0` (ASCII), `aeiou-catalog check --no-shapes` crashed
+  at `load_dictionary` with `UnicodeDecodeError … 0xc2`, as did `describe`; `write` would have
+  written CATALOG.md and DESCRIPTION.md (which hold "±", "§", "—") in the locale's encoding.
+- **Fix:** `encoding="utf-8"` on every read and write; generated files compared as bytes (a
+  hand-edited non-UTF-8 file is drift, not a traceback); the dry run's pipe decoded as UTF-8
+  with `errors="replace"`; `usage.console()` first in `main`; `describe` writes its Markdown to
+  stdout as UTF-8 bytes, so its output is the same in every locale.
+- **Evidence:** `test_catalog.py::test_check_write_and_describe_under_an_ascii_locale` (check of
+  the real tree, and write/check/describe of a fixture tree under C.UTF-8 and ASCII,
+  byte-identical) fails without the fix and passes with it.
+

@@ -189,10 +189,12 @@ measures a case's (seeds 1, 2, and 3), no length halved.
 - **1**
 
   A record that breaks a rule, a generated file that drifted or a shape the dry run no longer
-  gives (`check`), a stale shape under `--no-shapes`, or a dry run that failed.
+  gives (`check`), a stale shape under `--no-shapes`, a dry run that failed, or (`describe`)
+  an abstract or parameter file the schema rejects.
 - **2**
 
-  A usage error, in the frame every tool of the suite shares.
+  A usage error, in the frame every tool of the suite shares: among them `--gpus` below 1,
+  or an abstract that is not there or not JSON.
 
 ## EXAMPLES
 

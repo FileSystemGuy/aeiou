@@ -56,9 +56,10 @@ import sys
 import tempfile
 import tomllib
 
-from . import __version__, usage
+from . import __version__, emit, params, usage
 from .describe import Describer
 from .nodes import BuildError
+from .validate import validate
 
 SHAPE_VERSION = 2               # 2 (2026-10-14): the op counts, bytes, and each dataset's projection, which the description quotes
 SEEDS = (1, 2, 3)
@@ -80,7 +81,7 @@ BEST = ("accepted", "not-accepted", "nothing-judged")       # status, best first
 def load_dictionary(root: pathlib.Path) -> dict:
     path = root / "attributes.toml"
     try:
-        d = tomllib.loads(path.read_text())
+        d = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise BuildError(f"{path}: {e}")
     attrs = d.get("attribute", {})
@@ -190,7 +191,7 @@ def _rel(path: pathlib.Path, root: pathlib.Path) -> str:
 
 def _toml(path: pathlib.Path, root: pathlib.Path, problems: Problems) -> dict | None:
     try:
-        return tomllib.loads(path.read_text())
+        return tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as e:
         problems.add(path, root, str(e))
         return None
@@ -298,7 +299,7 @@ def load(root: pathlib.Path, attrs: dict) -> tuple[list[dict], Problems]:
                          f" say workloads/{cat}/{cls + '/' if cls else ''}<mechanism>, not workloads/{m['rel']}")
         for a in sorted(d.glob("*.ast.json")):
             try:
-                doc = json.loads(a.read_text())
+                doc = json.loads(a.read_text(encoding="utf-8"))
             except (OSError, ValueError) as e:
                 problems.add(a, root, str(e))
                 continue
@@ -376,7 +377,7 @@ def _load_case(c: pathlib.Path, m: dict, attrs: dict, root, problems: Problems) 
             problems.add(path, root, f"[[run]] params {r.get('params')!r} is not a file of the case")
             continue
         try:
-            pset = json.loads(params.read_text())
+            pset = json.loads(params.read_text(encoding="utf-8"))
         except ValueError as e:
             problems.add(params, root, str(e))
             continue
@@ -474,10 +475,10 @@ def _dry_run(runner: str, run: dict, gpus: int, block: int, seed: int, length: t
         cmd += ["--params-file", str(run["params"])]
     if length:
         cmd += ["--param", f"{length[0]}={length[1]}"]
-    p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
     if p.returncode:
         raise BuildError(f"{' '.join(cmd)}: exit {p.returncode}\n{p.stderr.strip()}")
-    return json.loads(out.read_text())
+    return json.loads(out.read_text(encoding="utf-8"))
 
 
 def _median(xs: list):
@@ -506,7 +507,7 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
     smallest length (halving down to 1/64) whose numbers are still the case's, where `check`
     re-measures them. A shorter run is never taken for the case: a reuse share grows with the
     run on a fixed dataset, and a fixed load is amortized only over a long one."""
-    pset = json.loads(run["params"].read_text())["params"] if run["params"] else {}
+    pset = json.loads(run["params"].read_text(encoding="utf-8"))["params"] if run["params"] else {}
     full = pset.get(length_param, _params_of(run["abstract"]["doc"])[length_param]["default"]) if length_param else None
     with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
         tmp = pathlib.Path(tmp)
@@ -616,7 +617,7 @@ def stale_shapes(mechanisms: list[dict], root: pathlib.Path, attrs: dict, runner
         if not path.exists():
             problems.append(f"{_rel(path, root)}: missing (aeiou-catalog write)")
             continue
-        doc = json.loads(path.read_text())
+        doc = json.loads(path.read_text(encoding="utf-8"))
         if doc.get("shape_version") != SHAPE_VERSION:
             problems.append(f"{_rel(path, root)}: shape_version {doc.get('shape_version')}, this aeiou-catalog writes {SHAPE_VERSION} (aeiou-catalog write)")
             continue
@@ -652,7 +653,7 @@ def _description_path(m: dict, case: dict | None) -> pathlib.Path:
 
 
 def _values(run: dict) -> dict:
-    return json.loads(run["params"].read_text())["params"] if run["params"] else {}
+    return json.loads(run["params"].read_text(encoding="utf-8"))["params"] if run["params"] else {}
 
 
 def context(m: dict, case: dict | None, run: dict, gpus: int, attrs: dict) -> list[str]:
@@ -907,6 +908,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
 
 
 def main(argv=None) -> int:
+    usage.console()
     ap, subs = parser()
     sp = ap
     try:
@@ -919,6 +921,8 @@ def main(argv=None) -> int:
             missing = usage.Missing(sp)
             missing.want(a.ast, "<AST>", "the abstract to describe")
             missing.check()
+            if a.gpus < 1:
+                raise usage.UsageError(f"--gpus {a.gpus}: must be at least 1", sp)
             return _describe(a)
         return _main(a)
     except usage.UsageError as e:
@@ -930,14 +934,14 @@ def main(argv=None) -> int:
 def _describe(a) -> int:
     """`describe`: any AST, at its defaults or a parameter file, outside the catalog's records."""
     path = pathlib.Path(a.ast)
-    try:
-        doc = json.loads(path.read_text())
-    except (OSError, ValueError) as e:
-        raise BuildError(f"{path}: {e}")
-    if a.gpus < 1:
-        raise BuildError("--gpus must be at least 1")
-    if a.params_file and not a.params_file.is_file():
-        raise BuildError(f"{a.params_file}: no such parameter file")
+    doc = emit.load(path)           # not there, or not JSON: a usage error, as every tool's
+    validate(doc, path.name)        # JSON that is no abstract: one line, as the runner's
+    if a.params_file:
+        if not a.params_file.is_file():
+            raise BuildError(f"{a.params_file}: no such parameter file")
+        errors = params.check(doc, params.load(a.params_file), ast_sha256=emit.sha256(doc), name=a.params_file.name)
+        if errors:
+            raise BuildError("parameter file rejected:\n  " + "\n  ".join(errors))
     run = {"ast": doc.get("name"), "params": a.params_file, "abstract": {"path": path, "doc": doc, "sha256": _sha256(path)}}
     measured = None
     if not a.no_shapes:
@@ -949,7 +953,16 @@ def _describe(a) -> int:
             measured = shape(a.runner, run, a.gpus, BLOCK, None, load_dictionary(a.workloads), pool)
     para, account = describe_run(None, None, run, a.gpus, None, measured)
     sources = "the AST" + (f", `{a.params_file.name}`" if a.params_file else " at its defaults") + (", and its shape by dry run" if measured else "")
-    sys.stdout.write(render_description(f"`{doc.get('name')}`", sources, [(doc.get("name"), para, account)]))
+    text = render_description(f"`{doc.get('name')}`", sources, [(doc.get("name"), para, account)])
+    # a document, the bytes `write` puts in DESCRIPTION.md whatever the locale (`usage.console`
+    # is for messages); a stream with no bytes under it (a test's) takes the text
+    out = getattr(sys.stdout, "buffer", None)
+    if out is None:
+        sys.stdout.write(text)
+    else:
+        sys.stdout.flush()
+        out.write(text.encode("utf-8"))
+        out.flush()
     return 0
 
 
@@ -973,7 +986,7 @@ def _main(a) -> int:
         shapes, stale = measure_all(mechanisms, attrs, a.runner), []
     else:
         stale = stale_shapes(mechanisms, root, attrs, None if a.no_shapes else a.runner)
-        shapes = {_shape_path(m, c): _shape_path(m, c).read_text() for m, c, _ in _targets(mechanisms) if _shape_path(m, c).exists()}
+        shapes = {_shape_path(m, c): _shape_path(m, c).read_text(encoding="utf-8") for m, c, _ in _targets(mechanisms) if _shape_path(m, c).exists()}
     files = dict(shapes) if a.cmd == "write" else {}
     descriptions, briefs = render_descriptions(mechanisms, attrs, shapes)
     files.update(descriptions)
@@ -981,15 +994,15 @@ def _main(a) -> int:
     files.update(render_readmes(root, attrs, mechanisms))
     if a.cmd == "write":
         for path, text in files.items():
-            if not path.exists() or path.read_text() != text:
-                path.write_text(text)
+            if not path.exists() or path.read_bytes() != text.encode("utf-8"):
+                path.write_text(text, encoding="utf-8")
                 print(f"wrote {_rel(path, root)}")
         for p in stale:
             print(p)
         print(f"{len(mechanisms)} mechanisms, {cases} cases" + ("" if not stale else f"; {len(stale)} shape(s) stale"))
         return 1 if stale else 0
     drift = [f"{_rel(path, root)}: differs from what aeiou-catalog derives now (aeiou-catalog write)"
-             for path, text in files.items() if not path.exists() or path.read_text() != text]
+             for path, text in files.items() if not path.exists() or path.read_bytes() != text.encode("utf-8")]
     for p in stale + drift:
         print(p)
     print(f"{len(mechanisms)} mechanisms, {cases} cases: " + ("ok" if not stale + drift else f"{len(stale + drift)} problem(s)"))
