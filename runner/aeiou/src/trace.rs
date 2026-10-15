@@ -453,10 +453,11 @@ impl TraceFile {
             }
             LineOp::Write { fd, offset, len, ret } => {
                 let off = offset.unwrap_or_else(|| cur(*fd));
+                let bytes = ret.count().max(0);
                 if offset.is_none() {
-                    pos_after = Some(off + *len);
+                    pos_after = Some(off + bytes);
                 }
-                Op { kind: OpKind::Write, path: path(fd), path2: None, offset: off, len: *len, bytes: *len, aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
+                Op { kind: OpKind::Write, path: path(fd), path2: None, offset: off, len: *len, bytes, aux: 0, expect: ret.expect(), positioned: offset.is_some(), seed: 0, capped: false }
             }
             LineOp::Lseek { fd, offset, whence, ret } => {
                 pos_after = Some(ret.count().max(0));

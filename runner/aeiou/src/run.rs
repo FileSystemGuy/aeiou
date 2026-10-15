@@ -923,8 +923,10 @@ impl ActorState {
             Ok(n) => {
                 let transferred = match op.kind {
                     OpKind::Read | OpKind::Write => {
-                        if n != op.bytes {
-                            bail!("{}: off={} len={} expected {} bytes, got {}: the corpus does not match the dataset definition (or a short write)", where_(), op.offset, op.len, op.bytes, n);
+                        // a write is checked as its length, a trace's short one included
+                        let want = if op.kind == OpKind::Write { op.len } else { op.bytes };
+                        if n != want {
+                            bail!("{}: off={} len={} expected {} bytes, got {}: the corpus does not match the dataset definition (or a short write)", where_(), op.offset, op.len, want, n);
                         }
                         n as u64
                     }
@@ -1045,7 +1047,13 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
             let buf = wbuf.slice(op.len as usize);
             fill(a, op, buf);
             let off = if op.positioned || be.positional() { Some(op.offset) } else { None };
-            be.write(&fd, buf, off).map(|n| n as i64)
+            let n = be.write(&fd, buf, off)? as i64;
+            if off.is_none() && op.bytes != op.len && n == op.len {
+                // a trace's short or failed write: keep the file position where the
+                // application's call left it, as a positional backend does
+                be.lseek(&fd, op.offset + op.bytes, crate::ast::Whence::SET)?;
+            }
+            Ok(n)
         }
         OpKind::Lseek => {
             let fd = a.fd(op.path)?;

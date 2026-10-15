@@ -96,8 +96,10 @@ pub struct Op<'c> {
     pub offset: i64,
     /// Requested length (reads, writes, ftruncate, fallocate).
     pub len: i64,
-    /// Bytes the op is expected to transfer: the returned count of a read, `len` of a write;
-    /// for `readdir`, the entries expected (−1 when not computable).
+    /// Bytes the op is expected to transfer: the returned count of a read, `len` of a write
+    /// (a `trace` node's write: its traced count, 0 when it failed, which its metrics and the
+    /// position it leaves move by; it is still checked as `len` when it runs); for `readdir`,
+    /// the entries expected (−1 when not computable).
     pub bytes: i64,
     /// Open flags and mode, `lseek` whence, `ioctl` request, `mkdir` mode.
     pub aux: u64,

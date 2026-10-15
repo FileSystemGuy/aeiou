@@ -1191,3 +1191,68 @@ def test_the_runner_loads_an_export_that_mkdirs_its_root(tmp_path):
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+# a short write and the retry of its rest, between them a failed one (RC1 review): a
+# write contributes what the call returned, as a read does, to the bytes, the blocks touched,
+# the runs, and the position a sequential call leaves; a failed one contributes nothing. The
+# file the trace leaves is 8192 bytes, and the read of it ends at its end.
+SHORT_WRITE = """
+700 1700000007.000000 openat(AT_FDCWD</d>, "/d/out", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3</d/out> <0.000010>
+700 1700000007.000100 write(3</d/out>, "y"..., 8192) = 5000 <0.000010>
+700 1700000007.000200 write(3</d/out>, "y"..., 3192) = -1 ENOSPC (No space left on device) <0.000010>
+700 1700000007.000300 write(3</d/out>, "y"..., 3192) = 3192 <0.000010>
+700 1700000007.000400 close(3</d/out>) = 0 <0.000010>
+700 1700000007.000500 openat(AT_FDCWD</d>, "/d/out", O_RDONLY) = 3</d/out> <0.000010>
+700 1700000007.000600 read(3</d/out>, "y"..., 8192) = 8192 <0.000010>
+700 1700000007.000700 close(3</d/out>) = 0 <0.000010>
+"""
+
+
+def _short_write_export(tmp_path):
+    h, ev = _export(SHORT_WRITE)
+    out = tmp_path / "app.jsonl"
+    sha = trace.write_export(str(out), h, ev)
+    return h, ev, out, sha
+
+
+def test_a_short_or_failed_write_moves_what_it_returned(tmp_path):
+    h, ev, out, _ = _short_write_export(tmp_path)
+    writes = [(e.get("offset"), e["len"], e.get("ret")) for e in ev if e["op"] == "write"]
+    assert writes == [(None, 8192, 5000), (None, 3192, "ENOSPC"), (None, 3192, 3192)]
+    a = trace.metrics_of(SHORT_WRITE.strip().splitlines(), ["/d"])["total"]
+    assert a["bytes_written"] == 8192 and a["bytes_read"] == 8192
+    # one run of the two writes that moved bytes, 0..5000 and 5000..8192
+    assert a["run_length"]["write"]["bytes"]["max"] == 8192 and a["run_length"]["write"]["ops"]["max"] == 2
+    assert trace.metrics_of_export(out.read_text().splitlines())["total"] == a
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_the_trace_nodes_dry_run_moves_what_a_short_write_returned(tmp_path):
+    _, _, out, sha = _short_write_export(tmp_path)
+    node_ast = tmp_path / "node.ast.json"
+    node_ast.write_text(json.dumps({"ast": "0.10", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
+                                    "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
+    dry = tmp_path / "node.dry.json"
+    r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1", "--metrics-json", str(dry)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    nd = json.loads(dry.read_text())["total"]
+    assert nd == trace.metrics_of_export(out.read_text().splitlines())["total"]
+    assert nd["bytes_written"] == 8192
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_the_trace_nodes_run_leaves_the_file_a_short_write_left(tmp_path):
+    """The run issues each write at its length and checks it so, but a sequential one leaves
+    the position the traced call left: the file is the application's 8192 bytes under every
+    backend, the sync one's `write(2)` at the file position included."""
+    _, _, out, sha = _short_write_export(tmp_path)
+    node_ast = tmp_path / "node.ast.json"
+    node_ast.write_text(json.dumps({"ast": "0.10", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
+                                    "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
+    for backend in ("sync", "io_uring", "libaio"):
+        root = tmp_path / ("root-" + backend)
+        root.mkdir()
+        r = subprocess.run([str(RUNNER), "run", str(node_ast), "--gpus", "1", "--root", str(root), "--time-scale", "0", "--posix", backend], capture_output=True, text=True)
+        assert r.returncode == 0, backend + "\n" + r.stdout + r.stderr
+        assert (root / "out").stat().st_size == 8192, backend

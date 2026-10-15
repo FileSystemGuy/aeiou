@@ -1610,7 +1610,8 @@ Lines: a header, then one op per line in the order the calls returned.
   without `offset` is sequential from the open's position, as the application's call was;
   with one it is positioned. `submit` is an `io_submit`: positioned ops issued together and
   reaped before the lane's next line. `readdir` is one line per listing and its entries
-  are not checked. A write's count is checked as its length.
+  are not checked. A write moves its traced count (0 when it failed) in the metrics and
+  the position it leaves, and is checked as its length when it runs.
 - **The exporter resolves a shared position:** a sequential read or write on an open that
   more than one lane used is written positioned at the offset the trace shows it used,
   since the lanes' interleaving decided it; the header's notes count the rewrites

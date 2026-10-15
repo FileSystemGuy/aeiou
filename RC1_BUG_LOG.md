@@ -577,3 +577,34 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   load at its "may still be writing" timing assertion and passed 3/3 after (queued as a timing
   check).
 
+## 27. A trace node's short or failed write moved the runner by its length, not its count
+
+- **Where:** `runner/aeiou/src/trace.rs` (`build`, the Write arm), `metrics.rs` (bytes of a
+  write), `run.rs` (`settle`: a write checked against its length; `issue_blocking`: the file
+  position after a short traced write under a non-positional backend), `vm.rs` (`Op::bytes`
+  doc); runner REFERENCE §13.
+- **Found by:** review of aeiou-trace against the runner (the Python readers and the runner
+  must give the same metrics document, builder REFERENCE §7 / runner REFERENCE §13); a fixer
+  confirmed it with a hand-written trace (a write of 8192 returning 5000, a 3192 write failing
+  ENOSPC, the 3192 retry, a read of 8192) and found the Python side already right.
+- **Defect:** the runner advanced a sequential write's position and counted its bytes by the
+  requested `len`, ignoring the traced count: dry-run `bytes_written` 14,576 where `aeiou-trace
+  metrics` of the strace and of the export gave 8,192, the blocks and runs differed, and `aeiou
+  run` left a 14,576-byte file where the application wrote 8,192 (under `sync` even after the
+  position was fixed in the walk, since plain `write(2)` moves the kernel's position by what it
+  wrote).
+- **Fix:** a trace write's `bytes` is its traced count (0 when it failed) and a sequential one
+  leaves the position at `offset + bytes`; metrics count `op.bytes` for writes as for reads (VM
+  writes always have bytes == len, so abstracts are unchanged); `settle` still checks a write
+  against its length; under a non-positional backend a short traced write is followed by an
+  `lseek` to where the application's call left the position (a backend call, not an op, as the
+  O_DIRECT read path already does). **Fingerprint:** changes only for a trace file with a
+  sequential op after a short or failed write on the same open; none is committed; every
+  golden and committed fingerprint is unchanged.
+- **Evidence:** `test_trace.py::test_the_trace_nodes_dry_run_moves_what_a_short_write_returned`
+  (written earlier as a strict xfail) and `test_the_trace_nodes_run_leaves_the_file_a_short_write_left`
+  (sync, io_uring, libaio: an 8,192-byte file) fail on the old runner and pass on the new;
+  `test_a_short_or_failed_write_moves_what_it_returned` pins the Python side; all backends give
+  fingerprint 1ed9742a4a884314; `--lib` 40 passed, `--test all` passed (one unrelated timing
+  flake, queued). Fixed in an isolated worktree and applied.
+

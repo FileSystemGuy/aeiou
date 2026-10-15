@@ -491,7 +491,7 @@ impl<'m, 'a: 'm> Stream<'m, 'a> {
             _ => return Ok(()),
         };
         let path = xxh3_64(op.path.as_bytes());
-        let bytes = if kind == R { op.bytes } else { op.len };
+        let bytes = op.bytes;
         m.data(kind, path, op.offset, op.len, bytes)?;
         if bytes > 0 {
             let r = runs.entry((path, kind)).or_default();
