@@ -1651,3 +1651,42 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   passed; both checkers ok over every committed AST; all 22 committed parameter sets accepted by
   both tools. (The test resolves `AEIOU_RUNNER` before running in its temporary directory, since
   CI gives a path relative to builder/.) Fixed in an isolated worktree and applied.
+
+## 71. V25 rounded and printed sizes differently in the two checkers, and check.py crashed on a non-finite one
+
+- **Where:** `schema/check.py` (`round_away`, new `integral`, `size_not_negative`),
+  `runner/aeiou/src/validate.rs` (`size_not_negative`); schema/README.md §4 V25.
+- **Found by:** the regression review of the RC1 fixes (bug 48's V25).
+- **Defect:** check.py rounded with `int(abs(x) + 0.5)`, the pattern bug 14 removed from
+  `rng.rust_round`, and the runner printed `v.round() as i64`, saturating. A size of
+  `-0.49999999999999994`: Python refused "it can be -1", Rust ok (the runner rounds it to 0);
+  `-4503599627370497.0`: -…498 against -…497; `-1e20`: -100000000000000000000 against
+  -9223372036854775808; `mul(-1e308, 10)` and `inf − inf`: a Python traceback ("cannot
+  convert float infinity/NaN to integer", from the builder's `validate()` too) against Rust's
+  i64::MIN and ok.
+- **Fix:** check.py rounds with `rng.rust_round`'s algorithm (Rust's `f64::round`), and both
+  print the rounded value unsaturated (`{:.0}` in both); a size whose least value is not
+  finite is refused in both, "a size that is not a finite number (V25)". No committed AST is
+  affected; no fingerprint, dataset id, or AST changes.
+- **Evidence:** `golden::a_dataset_size_is_judged_and_printed_as_check_py_judges_and_prints_it`
+  and `test_builder.py::test_a_dataset_size_is_judged_and_printed_as_the_runner_judges_and_prints_it`
+  fail on the old code and pass; the five repros give identical lines in both checkers after.
+
+## 72. The normal/lognormal min > max rule compared and printed differently in the two checkers
+
+- **Where:** `schema/check.py` (`Check.dist`, `Check.at_least`), `runner/aeiou/src/validate.rs`
+  (`bounds`).
+- **Found by:** the regression review of the RC1 fixes (bug 39's rule).
+- **Defect:** Rust printed floats with `Debug` and compared in f64; check.py printed `f"{x}"` and
+  compared ints exactly: min 1e20 over max 1e19 read "1e20 … 1e19" in Rust and "1e+20 …
+  1e+19" in Python, 1e-5/1e-7 "1e-5"/"1e-05", and min 9007199254740993 over max
+  9007199254740992 was refused by Python and accepted by Rust.
+- **Fix:** Rust prints with `canon::python_float_repr`, and both compare in f64, as the runner's
+  clamp (`eval::clamp`) does at run time, where 2^53+1 and 2^53 are one value; the V3 belief
+  that a `min` bounds a draw only under a `max` not below it compares the same way. No
+  fingerprint, dataset id, or AST changes.
+- **Evidence:** `golden::min_above_max_is_judged_and_printed_as_check_py_judges_and_prints_it`
+  and `test_builder.py::test_min_above_max_is_judged_and_printed_as_the_runner_judges_and_prints_it`
+  (also in a V3 `at` chain) fail on the old code and pass; both bugs on HEAD 0bee688 plus the
+  change: golden 23 passed, test_builder, test_params, test_man, test_describe 119 passed, both
+  checkers ok over every committed AST. Fixed in an isolated worktree and applied.

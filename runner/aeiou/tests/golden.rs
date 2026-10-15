@@ -1001,3 +1001,48 @@ fn integer_arithmetic_past_64_bits_is_refused_not_wrapped() {
     refused(&doc("", &field(r#"{"ceil_div": [{"param": "min"}, 1]}"#)), "ceil_div: overflow");
     refused(&doc("", &field(r#"{"add": [1e19, 0]}"#)), "float 10000000000000000000 where an integer is needed is outside the 64-bit integers");
 }
+
+/// Rule V25 rounds a size as the runner rounds a draw (`f64::round`) and prints every digit of
+/// the rounded value, as check.py does: check.py's `int(abs(x) + 0.5)` refused -0.49999999999999994
+/// (it rounds to 0 here) and printed -(2^52 + 1) as -(2^52 + 2); this side saturated -1e20 at
+/// i64::MIN. A size that is no finite number (`mul` past f64, `inf - inf`) is refused in both
+/// with one message, where check.py raised a traceback and this side passed the NaN (RC1 review).
+#[test]
+fn a_dataset_size_is_judged_and_printed_as_check_py_judges_and_prints_it() {
+    let doc = |size: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "t",
+                "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}},
+                "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
+        )
+    };
+    let below = |n: &str| format!("t: datasets/d/size: a size below 0: it can be {n} (V25)");
+    let infinite = "t: datasets/d/size: a size that is not a finite number (V25)";
+    aeiou::load_str(&doc("-0.49999999999999994")).unwrap_or_else(|e| panic!("{e:#}"));
+    rejects(&doc("-0.5"), &below("-1"));
+    rejects(&doc("-4503599627370497.0"), &below("-4503599627370497"));
+    rejects(&doc("-1e20"), &below("-100000000000000000000"));
+    rejects(&doc(r#"{"mul": [-1e308, 10]}"#), infinite);
+    rejects(&doc(r#"{"mul": [1e308, 10]}"#), infinite);
+    rejects(&doc(r#"{"add": [{"mul": [1e308, 10]}, {"mul": [-1e308, 10]}]}"#), infinite);
+}
+
+/// `min` above `max` on a `normal` or `lognormal` is judged as the runner's clamp compares,
+/// in f64, and its values printed as check.py prints them: this side printed Rust's Debug
+/// (`1e20`, `1e-5`), check.py compared integers exactly and refused 2^53 + 1 over 2^53, which
+/// are one f64 to the clamp (RC1 review). The same comparison holds where rule V3 believes a
+/// `min` only under a `max` not below it.
+#[test]
+fn min_above_max_is_judged_and_printed_as_check_py_judges_and_prints_it() {
+    let doc = |size: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "t",
+                "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}},
+                "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
+        )
+    };
+    rejects(&doc(r#"{"normal": {"mean": 0, "sd": 1, "min": 1e20, "max": 1e19}}"#), "t: datasets/d/size: normal: min 1e+20 is above max 1e+19");
+    rejects(&doc(r#"{"lognormal": {"median": 1, "sigma": 1.0, "min": 1e-5, "max": 1e-7}}"#), "t: datasets/d/size: lognormal: min 1e-05 is above max 1e-07");
+    aeiou::load_str(&doc(r#"{"normal": {"mean": 0, "sd": 1, "min": 9007199254740993, "max": 9007199254740992}}"#)).unwrap_or_else(|e| panic!("{e:#}"));
+    aeiou::load_str(&v3_chain(r#"{"normal": {"mean": 5, "sd": 1, "min": 9007199254740993, "max": 9007199254740992}}"#, "{}")).unwrap_or_else(|e| panic!("{e:#}"));
+}

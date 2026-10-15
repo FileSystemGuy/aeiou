@@ -1271,10 +1271,12 @@ impl<'a> Checker<'a> {
 
     /// `min` above `max` on a `normal` or `lognormal`: the runner clamps to `min` and then to
     /// `max`, so every draw is `max` and the declared minimum is a lie rule V3 would believe.
+    /// Compared as the clamp compares, in f64 (2^53 + 1 is not above 2^53 there); the values
+    /// printed as check.py prints them (`1e+20`, `1e-05`).
     fn bounds(&mut self, kind: &str, min: Option<&Expr>, max: Option<&Expr>, path: &P) {
         let text = |l: &Literal| match l {
             Literal::Int(n) => n.to_string(),
-            Literal::Float(x) => format!("{x:?}"),
+            Literal::Float(x) => crate::canon::python_float_repr(*x),
             _ => String::new(),
         };
         let (Some(min), Some(max)) = (min, max) else {
@@ -1301,7 +1303,10 @@ impl<'a> Checker<'a> {
         };
         match least {
             Some(Least::Unbounded) => self.err(path, "a size below 0: the distribution is unbounded below; give it a `min` of 0 or more (V25)"),
-            Some(Least::Known(v)) if v.round() < 0.0 => self.err(path, format!("a size below 0: it can be {} (V25)", v.round() as i64)),
+            // an overflow (`mul` past f64) or an undefined value (`inf - inf`): no size at all
+            Some(Least::Known(v)) if !v.is_finite() => self.err(path, "a size that is not a finite number (V25)"),
+            // every digit of the rounded value, as check.py prints it: never saturated at i64
+            Some(Least::Known(v)) if v.round() < 0.0 => self.err(path, format!("a size below 0: it can be {:.0} (V25)", v.round())),
             _ => {}
         }
     }

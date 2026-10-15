@@ -10,6 +10,7 @@ reject everything this rejects. It needs only jsonschema.
 import hashlib
 import re
 import json
+import math
 import pathlib
 import sys
 from collections import Counter
@@ -44,8 +45,23 @@ def protocols(ast: dict, traces: bool) -> tuple:
 
 
 def round_away(x: float) -> float:
-    """Round to the nearest integer, halves away from zero, as the runner rounds a draw (V10)."""
-    return float(int(abs(x) + 0.5)) * (1 if x >= 0 else -1)
+    """Round to the nearest integer, halves away from zero, as the runner rounds a draw (V10):
+    Rust's `f64::round`, the algorithm of `aeiou.rng.rust_round` without its cast to i64 (a
+    float, unsaturated; NaN and the infinities as they are). No `x + 0.5`: that sum rounds
+    itself, -0.49999999999999994 to -1 and -(2^52 + 1) to -(2^52 + 2)."""
+    if not math.isfinite(x):
+        return x
+    a = abs(x)
+    r = math.floor(a)
+    if a - r >= 0.5:  # exact: `a - r` is a float's fraction part
+        r += 1
+    return math.copysign(float(r), x)
+
+
+def integral(x: float) -> str:
+    """A rounded value as the runner prints it in a message (`{:.0}` of the f64): every digit,
+    never saturated at 64 bits nor in exponent form."""
+    return f"{x:.0f}"
 
 
 def int_range(doc, path=()) -> list:
@@ -532,9 +548,10 @@ class Check:
                 if isinstance(vv, (dict, list)) or kk in ("lo", "hi", "mean", "sd", "median", "min", "max"):
                     self.expr(vv, p + [kk], scope)
             if k in ("normal", "lognormal"):
-                # clamped to `min` and then to `max`: every draw `max`, and a `min` rule V3 would believe
+                # clamped to `min` and then to `max`: every draw `max`, and a `min` rule V3 would believe.
+                # Compared as the runner clamps, in f64: 2^53 + 1 is not above 2^53 there.
                 lo, hi = self.number(a.get("min")), self.number(a.get("max"))
-                if lo is not None and hi is not None and lo > hi:
+                if lo is not None and hi is not None and float(lo) > float(hi):
                     self.err(p, f"{k}: min {lo} is above max {hi}")
         elif k == "const":
             self.expr(a, p, scope)
@@ -639,7 +656,7 @@ class Check:
             lo = self.number(a.get("min"))
             hi = self.number(a.get("max"))
             return (lo is not None and lo >= k and isinstance(a["min"], (int, float))
-                    and ("max" not in a or (hi is not None and hi >= lo)))
+                    and ("max" not in a or (hi is not None and float(hi) >= float(lo))))
         if kind == "empirical":
             return all(isinstance(v, (int, float)) and v >= k for v in a["values"])
         if kind == "mixture":
@@ -675,8 +692,10 @@ class Check:
         least = self.least(size)
         if least == self.UNBOUNDED:
             self.err(p, "a size below 0: the distribution is unbounded below; give it a `min` of 0 or more (V25)")
+        elif least is not None and not math.isfinite(least):
+            self.err(p, "a size that is not a finite number (V25)")
         elif least is not None and round_away(least) < 0:
-            self.err(p, f"a size below 0: it can be {int(round_away(least))} (V25)")
+            self.err(p, f"a size below 0: it can be {integral(round_away(least))} (V25)")
 
     def exact(self, e):
         """The value `e` is known to have: a number, or add/sub/mul/min/max/neg of known values."""

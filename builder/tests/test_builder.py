@@ -998,3 +998,46 @@ def test_a_consume_is_under_loops_of_fixed_count(tmp_path):
     # inside the `consume`'s, not around it: accepted
     for shape in ("when", "actor_draw", "inside"):
         _consume_under(shape).build()
+
+
+def _size_errs(size):
+    from aeiou.validate import _load
+    _, check = _load()
+    ast = {"ast": "0.10", "name": "t",
+           "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4,
+                              "size": size, "seed": 1}},
+           "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
+    return check.Check(ast, "t").run()
+
+
+def test_a_dataset_size_is_judged_and_printed_as_the_runner_judges_and_prints_it():
+    """Rule V25 rounds a size as the runner rounds a draw (`f64::round`, `rng.rust_round`'s
+    algorithm), not `int(abs(x) + 0.5)`, which refused -0.49999999999999994 and printed
+    -(2^52 + 1) as -(2^52 + 2); every digit printed, as the runner prints it. A size that is no
+    finite number is refused with the runner's message, not a traceback (RC1 review)."""
+    def below(n):
+        return [f"t: datasets/d/size: a size below 0: it can be {n} (V25)"]
+
+    infinite = ["t: datasets/d/size: a size that is not a finite number (V25)"]
+    assert _size_errs(-0.49999999999999994) == []
+    assert _size_errs(-0.5) == below(-1)
+    assert _size_errs(-4503599627370497.0) == below(-4503599627370497)
+    assert _size_errs(-1e20) == below(-100000000000000000000)
+    assert _size_errs({"mul": [-1e308, 10]}) == infinite
+    assert _size_errs({"mul": [1e308, 10]}) == infinite
+    assert _size_errs({"add": [{"mul": [1e308, 10]}, {"mul": [-1e308, 10]}]}) == infinite
+
+
+def test_min_above_max_is_judged_and_printed_as_the_runner_judges_and_prints_it():
+    """`min` above `max` is compared as the runner's clamp compares, in f64 (2^53 + 1 is not
+    above 2^53 there), and printed with Python's repr, which the runner's message now uses too
+    (RC1 review). The same comparison where rule V3 believes a `min` only under a `max` not below it."""
+    from aeiou.validate import _load
+    _, check = _load()
+    assert _size_errs({"normal": {"mean": 0, "sd": 1, "min": 1e20, "max": 1e19}}) == [
+        "t: datasets/d/size: normal: min 1e+20 is above max 1e+19"]
+    assert _size_errs({"lognormal": {"median": 1, "sigma": 1.0, "min": 1e-5, "max": 1e-7}}) == [
+        "t: datasets/d/size: lognormal: min 1e-05 is above max 1e-07"]
+    assert _size_errs({"normal": {"mean": 0, "sd": 1, "min": 9007199254740993, "max": 9007199254740992}}) == []
+    chain = _v3_chain({"normal": {"mean": 5, "sd": 1, "min": 9007199254740993, "max": 9007199254740992}})
+    assert check.Check(chain, "x").run() == []
