@@ -862,16 +862,18 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     for r in &results {
         // a container's class and writer, as aeiou-datagen prints them
         let class = r.format.as_deref().map(|f| format!("  ({f})")).unwrap_or_default();
+        // a resume's objects found already in the store, not sent again
+        let there = |n: u64| if n > 0 { format!(", {n} already there") } else { String::new() };
         if ranks == 1 {
-            writeln!(out, "dataset {}: {} file(s), {} in {:.2?} at {}  id {}{class}", r.name, r.files, dryrun::human_bytes(r.bytes), r.elapsed, r.root.display(), r.id)?;
+            writeln!(out, "dataset {}: {} file(s), {} in {:.2?}{} at {}  id {}{class}", r.name, r.files, dryrun::human_bytes(r.bytes), r.elapsed, there(r.found), r.root.display(), r.id)?;
             continue;
         }
         let mine = match r.owner {
             Some(o) => format!("written by rank {o}"),
-            None => format!("this rank {} file(s), {} in {:.2?}", r.files, dryrun::human_bytes(r.bytes), r.elapsed),
+            None => format!("this rank {} file(s), {} in {:.2?}{}", r.files, dryrun::human_bytes(r.bytes), r.elapsed, there(r.found)),
         };
         if r.wrote_manifest {
-            writeln!(out, "dataset {}: {mine}; all {ranks} hosts {} file(s), {} at {}  id {}  manifest written{class}", r.name, r.total_files, dryrun::human_bytes(r.total_bytes), r.root.display(), r.id)?;
+            writeln!(out, "dataset {}: {mine}; all {ranks} hosts {} file(s), {}{} at {}  id {}  manifest written{class}", r.name, r.total_files, dryrun::human_bytes(r.total_bytes), there(r.total_found), r.root.display(), r.id)?;
         } else {
             writeln!(out, "dataset {}: {mine} at {}  id {}  (manifest by rank 0)", r.name, r.root.display(), r.id)?;
         }

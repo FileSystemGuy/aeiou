@@ -181,6 +181,10 @@ pub struct DatasetResult {
     /// Written by every rank (this rank's alone on one host).
     pub total_files: u64,
     pub total_bytes: u64,
+    /// Of a resume's object keys, those found already in the store and not sent again: by
+    /// this rank, and by every rank.
+    pub found: u64,
+    pub total_found: u64,
     pub id: String,
     pub elapsed: Duration,
     /// This rank wrote the manifest (rank 0; the only rank on one host).
@@ -782,6 +786,10 @@ struct Track {
     files: AtomicU64,
     bytes: AtomicU64,
     claims: Mutex<Claims>,
+    /// Of `files` and `bytes`: the objects a resume found already in the store, which count
+    /// toward the dataset's totals and not toward what this datagen wrote.
+    found_files: AtomicU64,
+    found_bytes: AtomicU64,
     /// The array file is written.
     whole: AtomicBool,
     /// Names removed (a shrink, a settle).
@@ -887,21 +895,21 @@ impl Plan<'_, '_> {
 
     /// This rank's note on the dataset: the ids not yet done of the runs it holds (an array
     /// file is id 0), how many runs it has received (`seen`: rank 0 counts the ones it sent
-    /// after them as not done), and the files and bytes of the rest, read together: every
-    /// writer's lock is held while its cursor and the counts are read, and an array file
-    /// counts once whole.
+    /// after them as not done), and the files and bytes of the rest (and of those bytes, those
+    /// of the objects a resume found already in the store), read together: every writer's lock is
+    /// held while its cursor and the counts are read, and an array file counts once whole.
     fn note(&self, tcp: Option<&Tcp>) -> Value {
         let mut v = Vec::new();
         let mut seen = 0u64;
-        let counts = || (self.track.files.load(Ordering::Relaxed), self.track.bytes.load(Ordering::Relaxed));
-        let (files, bytes) = match self.share {
-            Share::Other { .. } => (0, 0),
+        let counts = || (self.track.files.load(Ordering::Relaxed), self.track.bytes.load(Ordering::Relaxed), self.track.found_bytes.load(Ordering::Relaxed));
+        let (files, bytes, found) = match self.share {
+            Share::Other { .. } => (0, 0, 0),
             Share::Array => {
                 if self.track.whole.load(Ordering::Acquire) {
                     counts()
                 } else {
                     v.push((0, 1));
-                    (0, 0)
+                    (0, 0, 0)
                 }
             }
             Share::Files => {
@@ -921,7 +929,7 @@ impl Plan<'_, '_> {
                 counts()
             }
         };
-        json!({"unfinished": ranges_json(&merge_ranges(v)), "seen": seen, "files": files, "bytes": bytes})
+        json!({"unfinished": ranges_json(&merge_ranges(v)), "seen": seen, "files": files, "bytes": bytes, "found_bytes": found})
     }
 }
 
@@ -987,8 +995,11 @@ fn prune(dir: &Path, root: &Path) {
 }
 
 struct Written {
+    /// Written (sent) by this datagen.
     files: u64,
     bytes: u64,
+    /// Found already in the store by a resume, and not sent again.
+    found: (u64, u64),
     started: u64,
     finished: u64,
     elapsed: Duration,
@@ -1017,6 +1028,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
         failed.store(true, Ordering::Relaxed);
     };
     let (files0, bytes0) = (track.files.load(Ordering::Relaxed), track.bytes.load(Ordering::Relaxed));
+    let found0 = (track.found_files.load(Ordering::Relaxed), track.found_bytes.load(Ordering::Relaxed));
     match (&plan.share, meta) {
         (Share::Other { .. }, _) => {}
         (Share::Files, DsMeta::Files { spf, chunk, count, .. }) => {
@@ -1048,6 +1060,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                 };
                                 let mut batch: Vec<String> = Vec::new();
                                 let mut held = (0u64, 0u64);
+                                let mut held_found = (0u64, 0u64);
                                 let mut last_dir: Option<PathBuf> = None;
                                 let mut whole = true;
                                 let ids: Box<dyn Iterator<Item = i64>> = if plan.desc { Box::new((a..b).rev()) } else { Box::new(a..b) };
@@ -1056,8 +1069,10 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         whole = false;
                                         break;
                                     }
-                                    // this file's objects and bytes, counted when it is whole
+                                    // this file's objects and bytes, counted when it is whole, and of
+                                    // them those found already in the store
                                     let mut got = (0u64, 0u64);
+                                    let mut found = (0u64, 0u64);
                                     let r: Result<()> = (|| {
                                         if let Some(rm) = &plan.remove {
                                             let keep = names(meta, file)?;
@@ -1090,10 +1105,12 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         let seed_of = |blk: u64| payload::file_block_seed(seed, file as u64, blk, dedupe);
                                         if let Some(c) = &plan.container {
                                             let path = meta.file_path(file, None)?.to_string();
-                                            // an object already there is counted as one written again
-                                            // (a directory resume writes it), so the totals hold every file once
+                                            // an object already there counts toward the totals (a
+                                            // directory resume writes it again), so they hold every file
+                                            // once, and not toward what this datagen wrote
                                             if plan.present(opts, &path) {
                                                 got = (1, size);
+                                                found = got;
                                                 return Ok(());
                                             }
                                             got = (1, write_container(c, meta, file, &seed_of, &mut filler, &mut buf, &path, opts, mode)?);
@@ -1109,6 +1126,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         for (path, logical, len) in objects {
                                             if plan.present(opts, &path) {
                                                 got = (got.0 + 1, got.1 + len);
+                                                found = (found.0 + 1, found.1 + len);
                                                 continue;
                                             }
                                             if let Some((store, rest)) = opts.endpoints.object(&path) {
@@ -1133,9 +1151,12 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                     }
                                     if hold {
                                         held = (held.0 + got.0, held.1 + got.1);
+                                        held_found = (held_found.0 + found.0, held_found.1 + found.1);
                                         continue;
                                     }
                                     let mut at = cursor.lock().unwrap();
+                                    track.found_files.fetch_add(found.0, Ordering::Relaxed);
+                                    track.found_bytes.fetch_add(found.1, Ordering::Relaxed);
                                     track.files.fetch_add(got.0, Ordering::Relaxed);
                                     track.bytes.fetch_add(got.1, Ordering::Relaxed);
                                     *at = if plan.desc { file } else { file + 1 };
@@ -1158,6 +1179,8 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         break;
                                     }
                                     let mut at = cursor.lock().unwrap();
+                                    track.found_files.fetch_add(held_found.0, Ordering::Relaxed);
+                                    track.found_bytes.fetch_add(held_found.1, Ordering::Relaxed);
                                     track.files.fetch_add(held.0, Ordering::Relaxed);
                                     track.bytes.fetch_add(held.1, Ordering::Relaxed);
                                     *at = if plan.desc { a } else { b };
@@ -1223,9 +1246,11 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
     if let Some(e) = errors.into_inner().unwrap().into_iter().next() {
         return Err(e.context(format!("dataset `{name}`")));
     }
+    let found = (track.found_files.load(Ordering::Relaxed) - found0.0, track.found_bytes.load(Ordering::Relaxed) - found0.1);
     Ok(Written {
-        files: track.files.load(Ordering::Relaxed) - files0,
-        bytes: track.bytes.load(Ordering::Relaxed) - bytes0,
+        files: track.files.load(Ordering::Relaxed) - files0 - found.0,
+        bytes: track.bytes.load(Ordering::Relaxed) - bytes0 - found.1,
+        found,
         started: start_secs,
         finished: now_secs(),
         elapsed: started.elapsed(),
@@ -1239,7 +1264,13 @@ fn payload_line(p: &PayloadSpec) -> String {
 
 /// One rank's part of one dataset, as sent to rank 0 (`Done`) and recorded in the manifest.
 fn part_json(rank: i64, host: &str, w: &Written) -> Value {
-    json!({"rank": rank, "host": host, "files_written": w.files, "bytes_written": w.bytes, "started": w.started, "finished": w.finished})
+    let mut v = json!({"rank": rank, "host": host, "files_written": w.files, "bytes_written": w.bytes, "started": w.started, "finished": w.finished});
+    // a resume's objects found already in the store, which only the totals count
+    if w.found.0 > 0 {
+        v["files_found"] = json!(w.found.0);
+        v["bytes_found"] = json!(w.found.1);
+    }
+    v
 }
 
 /// What the manifests say about the datasets, the same in every write: the normative part
@@ -1359,7 +1390,7 @@ impl Ticker<'_, '_, '_> {
         let (mut total, mut left, mut bytes) = (0i64, 0i64, 0u64);
         for (p, base) in self.plans.iter().zip(self.manifests) {
             let mut unfinished = Vec::new();
-            let (mut files, mut b) = (0u64, 0u64);
+            let (mut files, mut b, mut found_b) = (0u64, 0u64, 0u64);
             let doc = |r: i64| docs.get(&r).map(|d| &d["datasets"][p.name]);
             for r in 0..ranks {
                 match doc(r) {
@@ -1367,6 +1398,7 @@ impl Ticker<'_, '_, '_> {
                         unfinished.extend(ranges_of(&d["unfinished"]));
                         files += d["files"].as_u64().unwrap_or(0);
                         b += d["bytes"].as_u64().unwrap_or(0);
+                        found_b += d["found_bytes"].as_u64().unwrap_or(0);
                     }
                     None if p.queue.is_none() => unfinished.extend(share_of(p, r)),
                     None => {}
@@ -1391,7 +1423,8 @@ impl Ticker<'_, '_, '_> {
                 DsMeta::Array { .. } => 1,
             };
             left += unfinished.iter().map(|(a, b)| b - a).sum::<i64>();
-            bytes += b - p.before.1;
+            // the rate's bytes are this datagen's: not a resume's objects found in the store
+            bytes += (b - p.before.1).saturating_sub(found_b);
             let mut book = p.book.lock().unwrap();
             let mut m = base.clone();
             m.progress = progress_json(p, &unfinished, (files, b), claimed, book.mark, self.opts, last);
@@ -1977,6 +2010,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     let mut manifest_error = None;
     for ((p, w), base_m) in plans.iter().zip(&written).zip(&manifests) {
         let (mut total_files, mut total_bytes, mut started, mut finished) = (0u64, 0u64, u64::MAX, 0u64);
+        let (mut found_files, mut found_bytes) = (0u64, 0u64);
         let mut host_parts = Vec::new();
         let mut direct = true;
         for (_, doc) in &parts {
@@ -1987,6 +2021,8 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             }
             total_files += d["files_written"].as_u64().unwrap_or(0);
             total_bytes += d["bytes_written"].as_u64().unwrap_or(0);
+            found_files += d["files_found"].as_u64().unwrap_or(0);
+            found_bytes += d["bytes_found"].as_u64().unwrap_or(0);
             started = started.min(d["started"].as_u64().unwrap_or(u64::MAX));
             finished = finished.max(d["finished"].as_u64().unwrap_or(0));
             host_parts.push(d.clone());
@@ -2027,17 +2063,21 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             prov["files_written"] = json!(total_files + p.before.0);
             prov["bytes_written"] = json!(total_bytes + p.before.1);
         } else if resume.is_some() {
-            // the datagen resumed keeps its record; each resume adds its own, and the totals
-            // count every file written and flushed once (what the last window recorded, then
-            // this datagen's)
-            let this = json!({"started": started, "finished": finished, "ranks": ranks, "hosts": host_parts, "direct": direct, "files_written": total_files, "bytes_written": total_bytes});
+            // the datagen resumed keeps its record; each resume adds its own, what it wrote,
+            // and the totals count every file written and flushed once (what the last window
+            // recorded, then this datagen's, then the objects it found already in the store)
+            let mut this = json!({"started": started, "finished": finished, "ranks": ranks, "hosts": host_parts, "direct": direct, "files_written": total_files, "bytes_written": total_bytes});
+            if found_files > 0 {
+                this["files_found"] = json!(found_files);
+                this["bytes_found"] = json!(found_bytes);
+            }
             match prov["resumes"].as_array_mut() {
                 Some(a) => a.push(this),
                 None => prov["resumes"] = json!([this]),
             }
             prov["finished"] = json!(finished);
-            prov["files_written"] = json!(total_files + p.before.0);
-            prov["bytes_written"] = json!(total_bytes + p.before.1);
+            prov["files_written"] = json!(total_files + found_files + p.before.0);
+            prov["bytes_written"] = json!(total_bytes + found_bytes + p.before.1);
         } else {
             prov["host"] = json!(parts.get(&0).and_then(|d| d["host"].as_str()).unwrap_or(&host));
             prov["hosts"] = json!(host_parts);
@@ -2068,6 +2108,8 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
             bytes: w.bytes,
             total_files: if wrote_manifest { total_files } else { w.files },
             total_bytes: if wrote_manifest { total_bytes } else { w.bytes },
+            found: w.found.0,
+            total_found: if wrote_manifest { found_files } else { w.found.0 },
             id: manifest.id(),
             elapsed: w.elapsed,
             wrote_manifest,

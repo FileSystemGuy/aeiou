@@ -126,8 +126,10 @@ failure: every host prints the failing host's rank and error and exits 1.
 format are the manifest's, so it takes no abstract. Every id the manifest lists as
 unfinished is written again, whole (a file opened with truncation, so a partial or stale one
 loses its tail); in an object store, where an upload that did not complete leaves no object,
-only the unfinished ids whose keys are missing (one `LIST`), the keys found there counted
-as written, so the totals are the same. The unfinished ids are split
+only the unfinished ids whose keys are missing (one `LIST`); the keys found there count
+toward the dataset's totals, so they are the same, and not toward the resume's own record
+(`provenance.resumes`, where they are `files_found`) or its summary, which says how many
+were already there. The unfinished ids are split
 over the hosts of this datagen, whatever their count when the corpus was begun. It refuses a
 corpus whose payload or format writer is not this aeiou's, or whose HDF5 headers
 **aeiou-header**(1) would make differently, since the files would mix them. The manifest

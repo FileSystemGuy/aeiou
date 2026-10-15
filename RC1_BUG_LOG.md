@@ -1129,3 +1129,29 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `tar_header_is_cpythons` gains the 8 GiB − 1 and 8 GiB cases; a `test_formats.py` case for
   the Python refusal; `--test all layout` 7 passed, `--lib formats` 5 passed,
   `test_formats.py` 38 passed. Fixed in an isolated worktree and applied.
+
+## 50. Bug 42's fix put the objects a resume found into the resume's own record (regression)
+
+- **Where:** `runner/aeiou/src/datagen.rs` (`Track`, `Written`, `note`, `part_json`, the
+  multi-host merge, the provenance), `runner/aeiou/src/main.rs` (the datagen summary lines),
+  `runner/aeiou/tests/object.rs` (bug 42's test, amended); runner/REFERENCE.md §5 "Resume" and
+  man/aeiou.1.md `--resume` (bug 42's sentences, corrected).
+- **Found by:** CI after fa1787f (bug 42) and every later push:
+  `builder/tests/test_object.py::test_aeiou_datagen_resumes_into_the_bucket[tfrecord|plain]`
+  failed "the two missing, not the one there / assert 3 == 2". Bug 42 was verified with the
+  Rust object tests only, and its own test asserted the wrong record.
+- **Defect:** bug 42 counted a present object as written everywhere. Right for the dataset's
+  totals (progress and `provenance.files_written`/`bytes_written`, every file once), wrong for
+  the resume's own record: `provenance.resumes[i]`, its printed "N file(s)" summary, and its
+  rate claimed objects it never sent.
+- **Fix:** the found objects are their own count (`found_files`/`found_bytes` in `Track`,
+  `found` in `Written`, summed across hosts): totals = before + sent + found; `resumes[i]`
+  `files_written`/`bytes_written` = sent, with `files_found`/`bytes_found` when nonzero; the
+  rate counts sent bytes; the summary adds ", N already there". A directory dataset never finds
+  any, so its manifests and output are unchanged. No fingerprint, dataset id, or AST changes.
+- **Evidence:** the amended `object::a_resumed_object_dataset_counts_the_objects_it_finds`
+  (totals 10 files; `resumes[0]` 2 written, 8 found; "2 file(s), … 8 already there") fails on
+  fa1787f's code (resumes[0] 10) and passes; `test_object.py` 15 passed against MinIO (both
+  resume params, which fail on HEAD's binary); `--test all -- object coord datagen` 28 passed,
+  on HEAD eddce97 plus this change. The fixers now also run the builder tests that exercise a
+  runner change.

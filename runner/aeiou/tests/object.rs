@@ -451,8 +451,13 @@ fn a_resumed_object_dataset_counts_the_objects_it_finds() {
     let after = get();
     assert_eq!(after["state"], "complete", "{after}");
     assert_eq!((after["provenance"]["files_written"].as_u64(), after["provenance"]["bytes_written"].as_u64()), (Some(files), Some(bytes)), "{after}");
-    assert_eq!(after["provenance"]["resumes"][0]["files_written"].as_u64(), Some(10), "{after}");
-    assert!(out.contains("dataset train: 10 file(s)"), "{out}");
+    // the resume's own record is what it sent: the two deleted, every sample the same size;
+    // the eight found count toward the totals only
+    let r = &after["provenance"]["resumes"][0];
+    assert_eq!((r["files_written"].as_u64(), r["bytes_written"].as_u64()), (Some(2), Some(bytes / 5)), "{after}");
+    assert_eq!((r["files_found"].as_u64(), r["bytes_found"].as_u64()), (Some(8), Some(bytes / 5 * 4)), "{after}");
+    assert!(out.contains("dataset train: 2 file(s), "), "{out}");
+    assert!(out.contains(", 8 already there at "), "{out}");
     for id in [3, 7] {
         assert!(curl(&m, &format!("/bench/res/00000/sample_{id:09}.npz"), &[]).status.success(), "object {id} was not sent again");
     }

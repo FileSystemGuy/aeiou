@@ -522,15 +522,18 @@ as root). The same runs on the loopback NFS mount are §7.
   (`cut_runs`)~~ cut into runs and claimed from rank 0's queue (since 2026-10-12, below), so
   any host count resumes any corpus. Every unfinished id is written again,
   whole, opened `O_TRUNC`; an object dataset lists its prefix once and skips the keys there
-  (an upload that did not complete leaves no object), counting each as written, as a
-  directory's resume counts the file it writes again (2026-10-14, RC1 review: they went
-  uncounted, so the totals missed every object the last window had not recorded;
+  (an upload that did not complete leaves no object), counting each ~~as written~~ toward
+  the dataset's totals, as a directory's resume counts the file it writes again, and not
+  toward the resume's own record, which is what it sent (the keys found are its
+  `files_found`/`bytes_found`, and its summary's `N already there`) (2026-10-14, RC1
+  review: they went uncounted, so the totals missed every object the last window had not
+  recorded; then counted as written, so a resume's record and summary claimed them;
   `tests/object.rs`). The emptiness check is skipped, the
   manifest there is kept (and never removed when the gate does not open), the windows run as
   for a first datagen with the earlier counts added, and the last write is `complete`, with
   `provenance.resumes` gaining this datagen's ranks, hosts, counts, and times, and
   `files_written`/`bytes_written` the totals (what the last recorded window counted, then
-  this datagen's). On several hosts ~~the coordinator's identity is the dataset id and the
+  this datagen's, then the keys it found). On several hosts ~~the coordinator's identity is the dataset id and the
   unfinished ranges with their time, so every rank finishes the same record~~ rank 0 alone
   reads the manifest (2026-10-13, below: the identity is the operation, its count, and ROOT,
   and every rank runs the manifest rank 0 sends). A `complete`
