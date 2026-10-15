@@ -1554,7 +1554,7 @@ impl<E: Engine> Loop<E> {
                 self.finalize_main(id)
             }
             Role::Parallel { parent } => {
-                self.end_child(id, parent);
+                let r = self.end_child(id, parent);
                 let p = &mut self.tasks[parent];
                 if let Wait::JoinParallel { remaining } = p.wait {
                     if remaining <= 1 {
@@ -1564,16 +1564,16 @@ impl<E: Engine> Loop<E> {
                         p.wait = Wait::JoinParallel { remaining: remaining - 1 };
                     }
                 }
-                Ok(())
+                r
             }
             Role::Worker { parent, .. } => {
-                self.end_child(id, parent);
+                let r = self.end_child(id, parent);
                 let p = &mut self.tasks[parent];
                 p.workers_live -= 1;
                 if p.workers_live == 0 && matches!(p.wait, Wait::JoinLoaders) {
                     self.finalize_main(parent)?;
                 }
-                Ok(())
+                r
             }
         }
     }
@@ -1581,12 +1581,14 @@ impl<E: Engine> Loop<E> {
     /// A sub-actor has ended: its counts go to its parent, and what it holds is dropped now,
     /// as the blocking path's thread drops it when it returns: its VM and its view of the
     /// parent's files (the references that would otherwise keep a file the parent has closed
-    /// open until the run ends), and its slot goes to the next fork.
-    fn end_child(&mut self, id: usize, parent: usize) {
+    /// open until the run ends), and its slot goes to the next fork. An upload it never closed
+    /// is its error (`ActorState::unclosed`).
+    fn end_child(&mut self, id: usize, parent: usize) -> Result<()> {
         let t = &mut self.tasks[id];
         debug_assert!(!matches!(t.wait, Wait::Io | Wait::Timer), "a sub-actor ended with an op or a timer outstanding");
         t.done = true;
         self.live -= 1;
+        let r = t.io.a.unclosed();
         t.io.a.finish_shared(&self.sh);
         let st = std::mem::take(&mut t.io.a.st);
         t.prog = Prog::Ended;
@@ -1594,6 +1596,7 @@ impl<E: Engine> Loop<E> {
         t.io.fd = None;
         self.free.push(id);
         self.tasks[parent].io.a.st.merge(&st);
+        r
     }
 
     fn finalize_main(&mut self, id: usize) -> Result<()> {
@@ -1610,8 +1613,9 @@ impl<E: Engine> Loop<E> {
                 }
             }
         }
+        let r = t.io.a.unclosed();
         t.io.a.finish_shared(&self.sh);
-        Ok(())
+        r
     }
 }
 

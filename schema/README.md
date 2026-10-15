@@ -335,6 +335,13 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   `EXCL` (a conditional create the engine does not send), `ftruncate`, and `fallocate`. The
   validator sees the ops, not the offsets, which are positional expressions: a write the
   upload has not reached fails the run when it comes (`ESPIPE`), as a structural check does.
+  Revised 2026-10-15 (RC1 review), no AST changed: an upload is begun by `WRONLY` alone,
+  so `CREAT` or `TRUNC` without it is refused (a read-only handle would make or empty an
+  object it never writes); and since the `close` sends the upload, an `open` with `WRONLY`
+  is followed in the same body by a `close` of the same handle (the same expression), before
+  an `open` of it again or a `let` of a name it reads. A close in a nested body (a `cond`
+  arm, a loop, a sub-actor) does not count: it may not run, and the rule stays one a reader
+  checks by eye. An upload a run still finds unsent when its actor ends fails the run.
 - **V19 an API for each protocol with names, of one kind** (added 2026-10-09, contract 0.7).
   `posix` and `cache` are declared only when the abstract has a `posix` name (a dataset or
   namespace declaring it or none, or a `trace` node, whose files are under `--root`), `s3`

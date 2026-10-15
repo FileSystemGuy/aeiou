@@ -574,6 +574,59 @@ def test_v18_an_object_is_written_once_in_order():
     assert not check.Check(copy.deepcopy(ast), "x").run()
     ast["actors"]["x"]["body"][0]["open"]["flags"].append("APPEND")
     assert any("V18" in e for e in check.Check(ast, "x").run())
+    # an upload is begun by WRONLY alone: CREAT or TRUNC on a read-only handle would make or
+    # empty an object the handle never writes (RC1 review, bug R30)
+    for bad in ("RDONLY|CREAT", "RDONLY|TRUNC", "CREAT"):
+        with pytest.raises(BuildError, match="V18"):
+            build("s3", lambda x, f: x.open(f, bad))
+    build(None, lambda x, f: (x.open(f, "RDONLY|CREAT"), x.close(f)))
+    ast = build("s3", plain)
+    ast["actors"]["x"]["body"][0]["open"]["flags"] = ["RDONLY", "TRUNC"]
+    assert any("open with TRUNC without WRONLY" in e and "(V18)" in e for e in check.Check(ast, "x").run())
+
+    # the upload is sent by the close, so an s3 name opened for writing is closed later in the
+    # same body, on the same handle, no `let` rebinding a name it reads in between (bug R29)
+    def unclosed(x, f):
+        x.open(f, "WRONLY|CREAT|TRUNC")
+        x.write(f, 4096)
+    with pytest.raises(BuildError, match="no close of that handle later in the same body"):
+        build("s3", unclosed)
+    build(None, unclosed)
+
+    def nested(x, f):
+        x.open(f, "WRONLY|CREAT|TRUNC")
+        x.write(f, 4096)
+        with x.when(gpu_id == 0):
+            x.close(f)
+        with x.otherwise():
+            x.close(f)
+    with pytest.raises(BuildError, match="V18"):
+        build("s3", nested)
+
+    def across_loop(x, f):
+        x.open(f, "WRONLY|CREAT|TRUNC")
+        with x.loop("i", 3):
+            x.write(f, 4096)
+        x.close(f)
+    build("s3", across_loop)
+
+    def reopened(x, f):
+        x.open(f, "WRONLY|CREAT|TRUNC")
+        x.write(f, 4096)
+        x.open(f, "WRONLY|CREAT|TRUNC")
+        x.write(f, 4096)
+        x.close(f)
+    with pytest.raises(BuildError, match="before it is opened again"):
+        build("s3", reopened)
+    ast = build("s3", plain)
+    body = ast["actors"]["x"]["body"]
+    body.insert(2, {"let": {"name": "g", "value": 1}})
+    assert not check.Check(copy.deepcopy(ast), "x").run()
+    ast["actors"]["x"]["body"] = [{"let": {"name": "f", "value": body[0]["open"]["file"]}},
+                                  {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT"]}},
+                                  {"let": {"name": "f", "value": body[0]["open"]["file"]}},
+                                  {"close": {"file": {"ref": "f"}}}]
+    assert any("no close of that handle" in e for e in check.Check(ast, "x").run())
 
 
 def test_same_run_needs_input():

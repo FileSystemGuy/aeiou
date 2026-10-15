@@ -117,6 +117,14 @@ pub struct Handle {
     pub upload: Option<std::sync::Mutex<Option<Upload>>>,
 }
 
+impl Handle {
+    /// An upload begun and not yet sent: the object exists only once its `close` completes
+    /// it, so a handle dropped in this state would discard what was written (V18).
+    pub fn unfinished(&self) -> bool {
+        self.upload.as_ref().is_some_and(|c| c.lock().unwrap().is_some())
+    }
+}
+
 pub use imp::{block, set_threads, spawn, threads, Reader, Store, Upload};
 
 /// A future of the engine: what an op sends and receives, run by the runtime.
@@ -167,11 +175,12 @@ pub fn is_uri(uri: &str) -> bool {
     uri.contains("://")
 }
 
-/// The flags of an open that would change the store.
+/// The flags of an open that begins an upload: `WRONLY`, the only write mode an object has
+/// (`RDWR` and `APPEND` are refused); `CREAT` or `TRUNC` without it is refused by V18, and
+/// would otherwise replace the object with what a read-only handle never writes.
 fn writes(flags: u64) -> bool {
     use crate::ast::OpenFlag;
-    let bit = |f: OpenFlag| flags & (1 << (f as u8)) != 0;
-    bit(OpenFlag::WRONLY) || bit(OpenFlag::RDWR) || bit(OpenFlag::CREAT) || bit(OpenFlag::TRUNC) || bit(OpenFlag::APPEND)
+    flags & (1 << (OpenFlag::WRONLY as u8)) != 0
 }
 
 /// An op on an upload another op has on the runtime: two actors writing one object at once
@@ -214,6 +223,11 @@ pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Share
             let bit = |f: OpenFlag| flags & (1 << (f as u8)) != 0;
             if bit(OpenFlag::APPEND) || bit(OpenFlag::RDWR) || bit(OpenFlag::EXCL) {
                 return refused("O_APPEND, O_RDWR, or O_EXCL");
+            }
+            // a second open of a path whose upload is unsent would drop that upload, and the
+            // bytes written with it, without a word
+            if a.fds.own.get(op.path).and_then(|f| f.as_object().map(|h| h.unfinished())).unwrap_or(false) {
+                return Step::Done(Err(error(libc::EBUSY, format!("open {}: the handle already open on it has an upload its close never sent; an object is made by its close (V18)", op.path))));
             }
             let upload = match writes(flags).then(|| store.upload(&rest)).transpose() {
                 Ok(u) => u.map(|u| std::sync::Mutex::new(Some(u))),

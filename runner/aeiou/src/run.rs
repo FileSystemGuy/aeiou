@@ -1328,6 +1328,17 @@ impl ActorState {
         self.takes.push(TakeRec { stall_ns, compute_ns: 0 });
     }
 
+    /// When an actor ends: an object it opened for writing and never closed. Its upload is
+    /// sent by the `close`, so without one the bytes written, counted and created in the
+    /// manifest, would vanish; the run fails instead (V18).
+    pub(crate) fn unclosed(&self) -> Result<()> {
+        let open = self.fds.own.iter().filter(|(_, f)| f.as_object().is_some_and(|h| h.unfinished())).map(|(p, _)| p.as_ref()).min();
+        match open {
+            Some(path) => bail!("{path}: opened for writing and never closed, so its upload was never sent and the object was not made; an object of a namespace declared `protocol: s3` is made by its close (V18)"),
+            None => Ok(()),
+        }
+    }
+
     /// What every actor hands to the run when it ends: created and removed paths; for a main
     /// line also its barrier departures, its take record, and its statistics (a sub-actor's
     /// statistics go to its parent).
@@ -1587,7 +1598,7 @@ impl Pool {
                             };
                             drop(snap);
                             vm.start_sub(k);
-                            let r = drive(vm, &mut sink);
+                            let r = drive(vm, &mut sink).and_then(|_| sink.a.unclosed());
                             sink.a.finish_shared(&sh);
                             // the sub-actor's own files end here, before the parent's join
                             sink.a.fds = FdTable { own: HashMap::new(), inherited: None, closed: HashSet::new() };
@@ -1970,6 +1981,9 @@ impl Sink<'static, 'static> for Runner {
                     }
                 }
             }
+        }
+        if result.is_ok() {
+            result = self.a.unclosed();
         }
         self.a.finish_shared(&self.sh);
         if result.is_err() {

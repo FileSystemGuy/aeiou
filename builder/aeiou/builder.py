@@ -944,6 +944,10 @@ class Cursor:
         for f in flags:
             if f in ("APPEND", "RDWR", "EXCL"):
                 self._once_in_order(file, f"open with {f}")
+            # an upload is begun by WRONLY alone (a close missing from the body is the
+            # checker's, at build)
+            if f in ("CREAT", "TRUNC") and "WRONLY" not in flags:
+                self._once_in_order(file, f"open with {f} without WRONLY")
         self._op("open", {"file": _handle(file).ast(), "flags": flags, "mode": mode,
                           "expect": _expect(expect)})
 

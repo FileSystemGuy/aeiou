@@ -437,8 +437,27 @@ fn validator_rejects_what_check_py_rejects() {
     }
     rejects(&v18(obj, r#"{"ftruncate": {"file": {"ref": "f"}, "len": 0}}"#), "has no ftruncate (V18)");
     rejects(&v18(obj, r#"{"fallocate": {"file": {"ref": "f"}, "len": 4096}}"#), "has no fallocate (V18)");
-    aeiou::load_str(&v18(obj, r#"{"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}}"#)).unwrap();
+    let open = r#"{"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}}, {"write": {"file": {"ref": "f"}, "len": 4096}}"#;
+    let close = r#"{"close": {"file": {"ref": "f"}}}"#;
+    aeiou::load_str(&v18(obj, &format!("{open}, {close}"))).unwrap();
     aeiou::load_str(&v18("", r#"{"open": {"file": {"ref": "f"}, "flags": ["RDWR", "CREAT"]}}"#)).unwrap();
+    // an upload is begun by WRONLY alone: CREAT or TRUNC on a read-only handle would make or
+    // empty an object it never writes (RC1 review, bug R30)
+    for flags in [r#"["RDONLY", "CREAT"]"#, r#"["RDONLY", "TRUNC"]"#, r#"["CREAT"]"#] {
+        rejects(&v18(obj, &format!(r#"{{"open": {{"file": {{"ref": "f"}}, "flags": {flags}}}}}, {close}"#)), "without WRONLY on namespace `a`, declared `protocol: s3`: an object is made only by the upload an open with WRONLY begins, and a read-only handle writes none (V18)");
+    }
+    aeiou::load_str(&v18("", r#"{"open": {"file": {"ref": "f"}, "flags": ["RDONLY", "CREAT"]}}"#)).unwrap();
+    // the close sends the upload, so it comes later in the same body, on the same handle, with
+    // no `let` rebinding a name the handle reads in between (bug R29); a posix name need not
+    let unclosed = "with no close of that handle later in the same body (before it is opened again or a name it reads is bound again): an object is made by one upload that its close sends, so an upload never closed would be discarded (V18)";
+    rejects(&v18(obj, open), unclosed);
+    rejects(&v18(obj, &format!("{open}, {open}, {close}")), unclosed);
+    aeiou::load_str(&v18("", open)).unwrap();
+    rejects(&v18(obj, &format!(r#"{open}, {{"cond": {{"if": true, "then": [{close}], "else": [{close}]}}}}"#)), unclosed);
+    rejects(&v18(obj, &format!(r#"{open}, {{"let": {{"name": "f", "value": {{"object": {{"namespace": "a", "fields": {{"k": 7}}}}}}}}}}, {close}"#)), unclosed);
+    rejects(&v18(obj, &format!(r#"{open}, {{"close": {{"file": {{"object": {{"namespace": "a", "fields": {{"k": {{"index": "i"}}}}}}}}}}}}"#)), unclosed);
+    aeiou::load_str(&v18(obj, &format!(r#"{open}, {{"let": {{"name": "n", "value": 1}}}}, {close}"#))).unwrap();
+    aeiou::load_str(&v18(obj, &format!(r#"{open}, {{"loop": {{"index": "j", "to": 2, "body": [{{"write": {{"file": {{"ref": "f"}}, "len": 4096}}}}]}}}}, {close}"#))).unwrap();
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 1, "body": [{"stat": {"file": {"ref": "nope"}}}]}}"#), "not in scope");
     rejects(&base(ds, r#"{"compute": {"ns": {"param": "missing"}}}"#), "unknown param");
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 4, "body": [{"let": {"name": "x", "value": {"cond": {"if": true, "then": {"at": {"ref": "x", "index": {"index": "i"}}}, "else": 1}}}}]}}"#), "provably >= 1");

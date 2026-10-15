@@ -2053,9 +2053,9 @@ sample), and `aeiou datagen`.
 | Op | Request |
 |---|---|
 | `open` (read) | none: the handle (`OpenFile::object`) is the store and the key, no descriptor, not counted among the open files |
-| `open` for writing (`WRONLY`, `CREAT`, `TRUNC`) | none: the handle carries an `Upload`, empty; the object is new whatever was at its key (a POSIX `open` without `CREAT` of a missing file would fail; the engine does not ask) |
+| `open` for writing (`WRONLY`, with or without `CREAT`, `TRUNC`) | none: the handle carries an `Upload`, empty; the object is new whatever was at its key (a POSIX `open` without `CREAT` of a missing file would fail; the engine does not ask). `WRONLY` alone begins one (`CREAT` or `TRUNC` without it is refused by V18; 2026-10-15) |
 | `write` at the effective offset | the bytes, made from the payload (`run::fill`'s positional content), appended to the part being filled; a part of `--object-part-mib` that fills goes out before the write returns, the first starting a multipart upload (`CreateMultipartUpload`, `UploadPart`). An offset other than the bytes written so far is `ESPIPE` (V18) |
-| `close` of a handle opened for writing | one `PUT` of what was written when no part went out (an empty object for no writes), else the last part and `CompleteMultipartUpload`, so the close is a timed op that can carry most of an object's transfer; a sub-actor closing a handle it inherited sends nothing, as it closes no descriptor. An upload dropped unfinished (a failed run) is aborted |
+| `close` of a handle opened for writing | one `PUT` of what was written when no part went out (an empty object for no writes), else the last part and `CompleteMultipartUpload`, so the close is a timed op that can carry most of an object's transfer; a sub-actor closing a handle it inherited sends nothing, as it closes no descriptor. An upload dropped unfinished (a failed run) is aborted. V18 refuses an open for writing with no close after it in its body; should an actor still end with an upload unsent, or open its path again, the run fails (`ActorState::unclosed`, 2026-10-15) rather than count an object it never made |
 | `read` at the effective offset | one `GET` of `bytes=off-(off+len-1)` streamed into the actor's buffer ring (one copy, from the HTTP client's buffers); a range over the end is a short read, a start at or past it the server's 416, a read of 0 bytes |
 | `stat`, `fstat` | `HEAD`; a 404 is followed by a `LIST` below the key, size 0 when it finds one (a directory), `ENOENT` otherwise. `fstat` of a handle being written is its written size, sent nothing; `stat` of an object not yet closed is `ENOENT`, as the store has none |
 | `readdir` | `LIST` with the delimiter `/` (`list_with_delimiter`, every page): objects plus common prefixes, names beginning `.aeiou` not counted |
@@ -2065,7 +2065,7 @@ sample), and `aeiou datagen`.
 | `rename` | a copy on the server (`CopyObject`) and a `DELETE` of the source: two requests, not atomic, a reader between them sees both names; the target may be under another endpoint's prefix in the same bucket (on the same server); one in another bucket or outside the object store is `EXDEV` |
 | `mkdir`, `rmdir` | none: a prefix is no object (and is not recorded among the objects created) |
 | `read` of a handle opened for writing | `EBADF`, as for `O_WRONLY` |
-| `open` with `APPEND`, `RDWR`, `EXCL`; `ftruncate`; `fallocate` | refused by V18 at `aeiou check` (`schema/README.md` §4); `EOPNOTSUPP` here should one come |
+| `open` with `APPEND`, `RDWR`, `EXCL`, or `CREAT` or `TRUNC` without `WRONLY`; `ftruncate`; `fallocate` | refused by V18 at `aeiou check` (`schema/README.md` §4); `EOPNOTSUPP` here should one come (a read-only `CREAT` or `TRUNC` opens for reading) |
 
 The structural checks are the POSIX ones: a read returns the computed count, `readdir` the
 computed entries. Errors carry an errno for `expect` lists and the check (`object::errno_of`):

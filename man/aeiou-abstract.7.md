@@ -194,7 +194,10 @@ these, and the builder enforces most of them at construction:
 - **V16** (runner) A `trace` that creates files runs in one instance only.
 - **V17** Namespaces sharing a root declare one `protocol`.
 - **V18** An object of a namespace declared `protocol: s3` is written once, in order from
-  0: no `open` with `APPEND`, `RDWR`, or `EXCL`, no `ftruncate`, no `fallocate`. Offsets are
+  0: no `open` with `APPEND`, `RDWR`, or `EXCL`, or with `CREAT` or `TRUNC` without
+  `WRONLY`, no `ftruncate`, no `fallocate`; an `open` with `WRONLY` is closed by a later
+  `close` of the same handle in the same body, before an `open` of it again or a `let` of
+  a name it reads (a close in a nested body may not run, and the close sends the upload). Offsets are
   positional, so a write the upload has not reached fails the run when it comes.
 - **V19** `posix` and `cache` are declared only with a `posix` name (a `trace` counts, its
   files being under `--root`), `s3` only with an `s3` name; with both, the APIs are of one

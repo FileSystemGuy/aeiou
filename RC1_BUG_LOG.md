@@ -2417,3 +2417,48 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** `object::endpoints_in_one_bucket_share_its_keys` (cross-prefix rename succeeds,
   `x/fin/f0` present and `x/tmp/f0` gone; another bucket EXDEV with the new message) fails with
   the change reverse-applied and passes; same suite runs as bug 108.
+
+## 110. An s3 write handle never closed passed the checkers and the run, and the manifest listed objects the bucket did not hold
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (V18: a later close in the same
+  body); `builder/aeiou/builder.py`; `runner/aeiou/src/run.rs` (`ActorState::unclosed`, checked at
+  `Runner::finish`, pool sub-actors, `finalize_main`), `runner/aeiou/src/uring.rs` (`end_child`
+  returns `Result`), `runner/aeiou/src/object.rs` (`Handle::unfinished`, EBUSY on a reopen);
+  `schema/README.md` V18, `man/aeiou-abstract.7.md`, `man/aeiou.1.md` OBJECT STORES,
+  `runner/REFERENCE.md` §16 op table; tests.
+- **Found by:** RC1 third-round object-engine review (RV3a): an `Upload` dropped without `close` is
+  discarded (one part never sent, a multipart upload aborted), while `ActorState::opened` records
+  the creation at open. Repro: two `open WRONLY|CREAT|TRUNC` + `write 4096`, no close: `aeiou
+  check` ok, run exit 0, manifest `objects_created: 2, bytes_written: 8192, objects: [nc/f0,
+  nc/f1]`, the bucket held only `.aeiou-namespace.json` (POSIX leaves both files).
+- **Fix:** V18 refuses an `open` with `WRONLY` on an s3 name with no `close` of the same handle
+  expression later in the same body, before it is opened again or a name it reads is bound again
+  (a close in a nested body does not count: simple and sound, handles compared as V24 does), at
+  `…/open/file`, identical in both checkers and the builder. At run time an actor that ends with
+  an unsent upload fails ("opened for writing and never closed, so its upload was never sent …
+  (V18)"), and an open of a path whose own upload is unsent is EBUSY. Stricter V18 only: no
+  fingerprint, dataset id, or AST change; all committed ASTs pass.
+- **Evidence:** golden `validator_rejects_what_check_py_rejects` cases (unclosed, reopened, cond-arm
+  close, rebinding `let`, close of another object refused; unrelated `let` and writes in a loop
+  accepted) and `test_builder.py::test_v18_an_object_is_written_once_in_order` fail with HEAD's
+  checkers and builder and pass; the runtime check alone fails `nc` under `--s3 blocking` and
+  `async`; 12 edge ASTs give the same path and message in both checkers. Merged on HEAD b52eba3:
+  `--test all` with MinIO 148 passed, `--lib` 68, builder suite with MinIO 406, CI's checker diff
+  empty, `aeiou-build --hermetic --twice --check` rc 0, 22 parameter files ok. Fixed in an
+  isolated worktree and applied.
+
+## 111. `open` with `RDONLY|CREAT` (or `TRUNC` without `WRONLY`) on an s3 name began an upload: reads failed EBADF and the close replaced the object with 0 bytes
+
+- **Where:** `runner/aeiou/src/object.rs` (`writes`); `schema/check.py`, `runner/aeiou/src/validate.rs`,
+  `builder/aeiou/builder.py` (V18); the same docs as bug 110; tests.
+- **Found by:** RV3a: `writes()` counted CREAT or TRUNC alone as writing, and V18 refused only
+  APPEND/RDWR/EXCL. Repro: write 4096, close, `open ["RDONLY","CREAT"]`, read 4096: `aeiou check`
+  ok, the run failed `read rc/f0 …: Bad file descriptor (EBADF)` (POSIX passes); without the read
+  the run passed with POSIX's fingerprint and `HEAD` showed `Content-Length: 0` where POSIX has
+  4096: data silently destroyed.
+- **Fix:** only `WRONLY` begins an upload; both checkers and the builder refuse CREAT or TRUNC
+  without WRONLY on an s3 name at `…/open/flags` ("an object is made only by the upload an open
+  with WRONLY begins, and a read-only handle writes none (V18)").
+- **Evidence:** the golden R30 flag cases and the builder's V18 test fail on HEAD's code and pass;
+  with the runtime change alone `rc`/`rc2` exit 0 and `f0` keeps 4096 bytes; same suite runs as
+  bug 110.

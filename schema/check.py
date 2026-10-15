@@ -576,7 +576,28 @@ class Check:
             p = path + [i, kind]
             if kind not in CONTROL:
                 self.ops[kind] += 1
+            if kind == "open":
+                self.closed_later(args, nodes[i + 1:], p, scope)
             getattr(self, "n_" + kind, self.n_op)(args, p, scope)
+
+    # V18: an object is made by the `close` that sends its upload, so an s3 name opened for
+    # writing is closed by a later op of the same body, on the same handle, before an `open`
+    # of it again or a `let` of a name it reads: a close in a nested body may not run, and an
+    # upload never closed would be discarded
+    def closed_later(self, a, rest, p, scope):
+        if "WRONLY" not in a["flags"]:
+            return
+        ns = self.object_store_namespace(a["file"], scope)
+        if not ns:
+            return
+        h = json.dumps(a["file"], sort_keys=True)
+        for node in rest:
+            kind, b = next(iter(node.items()))
+            if kind == "close" and json.dumps(b["file"], sort_keys=True) == h:
+                return
+            if (kind == "open" and json.dumps(b["file"], sort_keys=True) == h) or (kind == "let" and json.dumps({"ref": b["name"]})[1:-1] in h):
+                break
+        self.err(p + ["file"], f"open for writing on namespace `{ns}`, declared `protocol: s3`, with no close of that handle later in the same body (before it is opened again or a name it reads is bound again): an object is made by one upload that its close sends, so an upload never closed would be discarded (V18)")
 
     def n_let(self, a, p, scope):
         self.exprlike(a["value"], p + ["value"], scope, dist_ok=False, binding=a["name"])
@@ -772,12 +793,19 @@ class Check:
             bad = [f for f in a["flags"] if f in ("APPEND", "RDWR", "EXCL")]
             if bad:
                 v18 = ("flags", f"open with {bad[0]}")
+            elif "WRONLY" not in a["flags"]:
+                # an upload is begun by WRONLY alone: CREAT or TRUNC on a read-only handle
+                # would make or empty an object the handle never writes
+                bad = [f for f in a["flags"] if f in ("CREAT", "TRUNC")]
+                if bad:
+                    v18 = ("flags", f"open with {bad[0]} without WRONLY")
         elif kind in ("ftruncate", "fallocate"):
             v18 = ("file", kind)
         if v18:
             ns = self.object_store_namespace(a["file"], scope)
             if ns:
-                self.err(p + [v18[0]], f"{v18[1]} on namespace `{ns}`, declared `protocol: s3`: an object is written once, in order from 0, and has no {v18[1]} (V18)")
+                why = "an object is made only by the upload an open with WRONLY begins, and a read-only handle writes none" if v18[1].endswith("without WRONLY") else f"an object is written once, in order from 0, and has no {v18[1]}"
+                self.err(p + [v18[0]], f"{v18[1]} on namespace `{ns}`, declared `protocol: s3`: {why} (V18)")
 
     def object_store_namespace(self, h, scope):
         """Namespace name if the handle is (a binding to) an object of a namespace declared `protocol: s3`."""

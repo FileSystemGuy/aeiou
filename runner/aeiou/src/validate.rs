@@ -859,8 +859,32 @@ impl<'a> Checker<'a> {
             if !node.is_control() {
                 *self.ops.entry(kind).or_insert(0) += 1;
             }
+            if let Node::Open { file, flags, .. } = node {
+                self.closed_later(file, flags, &nodes[i + 1..], &pp, &scope);
+            }
             self.node(node, &pp, &mut scope, st);
         }
+    }
+
+    // V18: an object is made by the `close` that sends its upload, so an s3 name opened for
+    // writing is closed by a later op of the same body, on the same handle, before an `open`
+    // of it again or a `let` of a name it reads: a close in a nested body may not run, and an
+    // upload never closed would be discarded
+    fn closed_later(&mut self, file: &'a Handle, flags: &[OpenFlag], rest: &[Node], pp: &P, scope: &Scope<'a>) {
+        if !flags.contains(&OpenFlag::WRONLY) {
+            return;
+        }
+        let Some(ns) = self.object_store_namespace(file, scope) else { return };
+        let h = format!("{file:?}");
+        for n in rest {
+            match n {
+                Node::Close(c) if format!("{:?}", c.file) == h => return,
+                Node::Open { file, .. } if format!("{file:?}") == h => break,
+                Node::Let { name, .. } if h.contains(&format!("Ref({name:?})")) || h.contains(&format!("At {{ name: {name:?}")) => break,
+                _ => {}
+            }
+        }
+        self.err(&p(pp, &["file"]), format!("open for writing on namespace `{ns}`, declared `protocol: s3`, with no close of that handle later in the same body (before it is opened again or a name it reads is bound again): an object is made by one upload that its close sends, so an upload never closed would be discarded (V18)"));
     }
 
     fn node(&mut self, node: &'a Node, pp: &P, scope: &mut Scope<'a>, st: &mut ActorState<'a>) {
@@ -1163,14 +1187,27 @@ impl<'a> Checker<'a> {
         // V18: an object of a namespace in an object store is written once, in order, by one
         // upload; the forms that would rewrite, extend, or read it in place have no object form
         let v18 = match node {
-            Node::Open { file, flags, .. } => flags.iter().find(|f| matches!(f, OpenFlag::APPEND | OpenFlag::RDWR | OpenFlag::EXCL)).map(|f| (file, format!("open with {f:?}"), "flags")),
+            Node::Open { file, flags, .. } => flags
+                .iter()
+                .find(|f| matches!(f, OpenFlag::APPEND | OpenFlag::RDWR | OpenFlag::EXCL))
+                .map(|f| (file, format!("open with {f:?}"), "flags"))
+                // an upload is begun by WRONLY alone: CREAT or TRUNC on a read-only handle
+                // would make or empty an object the handle never writes
+                .or_else(|| match flags.contains(&OpenFlag::WRONLY) {
+                    true => None,
+                    false => flags.iter().find(|f| matches!(f, OpenFlag::CREAT | OpenFlag::TRUNC)).map(|f| (file, format!("open with {f:?} without WRONLY"), "flags")),
+                }),
             Node::Ftruncate { file, .. } => Some((file, "ftruncate".to_string(), "file")),
             Node::Fallocate { file, .. } => Some((file, "fallocate".to_string(), "file")),
             _ => None,
         };
         if let Some((h, what, key)) = v18 {
             if let Some(ns) = self.object_store_namespace(h, scope) {
-                self.err(&p(pp, &[key]), format!("{what} on namespace `{ns}`, declared `protocol: s3`: an object is written once, in order from 0, and has no {what} (V18)"));
+                let why = match what.ends_with("without WRONLY") {
+                    true => "an object is made only by the upload an open with WRONLY begins, and a read-only handle writes none".to_string(),
+                    false => format!("an object is written once, in order from 0, and has no {what}"),
+                };
+                self.err(&p(pp, &[key]), format!("{what} on namespace `{ns}`, declared `protocol: s3`: {why} (V18)"));
             }
         }
     }
