@@ -204,6 +204,10 @@ pub struct MmapReport {
     pub touched_pages: u64,
     /// Bytes copied into the actors' buffers (`copy`).
     pub copied_bytes: u64,
+    /// The `fstat` calls the backend issued itself, not the abstract: one per open read before
+    /// the abstract asked its size (`MmapStats::sized`), timed in that read.
+    #[serde(default)]
+    pub fstat_calls: u64,
 }
 
 impl MmapReport {
@@ -213,18 +217,20 @@ impl MmapReport {
         self.advised += o.advised;
         self.touched_pages += o.touched_pages;
         self.copied_bytes += o.copied_bytes;
+        self.fstat_calls += o.fstat_calls;
     }
 
     pub fn describe(&self) -> String {
         format!(
-            "mode {}  consume {}  mappings {} ({})  madvise calls {}  pages touched {}  copied out {}",
+            "mode {}  consume {}  mappings {} ({})  madvise calls {}  pages touched {}  copied out {}  backend fstat {}",
             self.mode.name(),
             self.consume.name(),
             self.maps,
             human_bytes(self.mapped_bytes),
             self.advised,
             self.touched_pages,
-            human_bytes(self.copied_bytes)
+            human_bytes(self.copied_bytes),
+            self.fstat_calls
         )
     }
 }
@@ -2402,6 +2408,7 @@ fn assemble(sh: Arc<Shared>, counts: Vec<(&'static str, i64)>, rank_record: Rank
                 mapped_bytes: m.mapped_bytes.load(Ordering::Relaxed),
                 advised: m.advised.load(Ordering::Relaxed),
                 copied_bytes: m.copied_bytes.load(Ordering::Relaxed),
+                fstat_calls: m.sized.load(Ordering::Relaxed),
             }
         }),
         cold: Vec::new(),

@@ -290,3 +290,46 @@ fn busy_is_the_compute_slept_against_the_stall() {
         }
     }
 }
+
+/// The `fstat` calls the `mmap` backend issues itself, which the application does not make,
+/// are in the report (text and document): one per open read before the abstract asked its
+/// size, none where the abstract asks first (safetensors, which maps at the size its `fstat`
+/// gave).
+#[test]
+fn the_mmap_backend_s_own_fstat_calls_are_reported() {
+    let root = tmpdir("mmapfstat");
+    let json = root.join("report.json");
+    let mut ast: Value = serde_json::from_str(&std::fs::read_to_string(crate::common::workload_ast("file_per_sample.ast.json")).unwrap()).unwrap();
+    ast["actors"] = serde_json::json!({"gpu": {"body": [{"loop": {"index": "j", "to": 30, "body": [
+        {"let": {"name": "f", "value": {"consume": "train"}}},
+        {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+        {"read": {"file": {"ref": "f"}, "len": 4096, "offset": 0}},
+        {"read": {"file": {"ref": "f"}, "len": 4096, "offset": 0}},
+        {"close": {"file": {"ref": "f"}}}]}}]}});
+    let path = root.join("nofstat.ast.json");
+    std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
+    let cmd = |sub: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.arg(sub).arg(&path).args(["--param", "samples=60", "--param", "walk=false", "--gpus", "1"]).arg("--root").arg(&root);
+        c
+    };
+    let (ok, _, err) = out(&mut cmd("datagen"));
+    assert!(ok, "{err}");
+    let (ok, text, err) = out(cmd("run").args(["--posix", "mmap", "--time-scale", "0"]).arg("--report-json").arg(&json));
+    assert!(ok, "{text}\n{err}");
+    let d = read(&json);
+    assert_eq!(d["result"]["by_kind"]["read"], 60, "{text}");
+    assert_eq!(d["result"]["mmap"]["fstat_calls"], 30, "one per open, not per read: {text}");
+    assert!(text.contains("backend fstat 30"), "{text}");
+
+    let root = tmpdir("mmapfstat-st");
+    let small = ["shard_bytes=4194304", "hdr_len=[4096, 4096]", "off=[4104, 1052680, 4104, 1052680, 2101256]", "bytes=[1048576, 1048576, 1048576, 1048576, 16384]", "rows=[1, 64, 1, 64, 1]", "row_bytes=[1048576, 16384, 1048576, 16384, 16384]"];
+    let (ok, _, err) = out(aeiou("datagen", "safetensors_load.ast.json", &small).arg("--root").arg(&root).args(["--gpus", "2"]));
+    assert!(ok, "{err}");
+    let (ok, text, err) = out(aeiou("run", "safetensors_load.ast.json", &small).arg("--root").arg(&root).args(["--gpus", "2", "--time-scale", "0"]).arg("--report-json").arg(&json));
+    assert!(ok, "{text}\n{err}");
+    let d = read(&json);
+    assert!(d["result"]["mmap"]["maps"].as_u64().unwrap() > 0, "{text}");
+    assert_eq!(d["result"]["mmap"]["fstat_calls"], 0, "the abstract asks every size first: {text}");
+    assert!(text.contains("backend fstat 0"), "{text}");
+}

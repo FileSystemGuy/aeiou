@@ -1211,8 +1211,10 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
   `read(2)` only, so it stays at zero and `server read` is the figure.
 - **Report.** `libaio: loops … context depth … in-flight peak … io_submit N calls, M
   requests, T inside  io_getevents … context full …  teardown T (after the run's end)` and `mmap: mode … consume … mappings N
-  (bytes)  madvise calls …  pages touched …  copied out …` (`Report::aio`, `Report::mmap`, summed over hosts). The
-  host line gained `faults minor … major …` (`getrusage`) under every backend; under
+  (bytes)  madvise calls …  pages touched …  copied out …  backend fstat …` (`Report::aio`, `Report::mmap`, summed over hosts;
+  `backend fstat`, JSON `fstat_calls`, counts the `fstat` calls the backend issued itself, one
+  per open read before the abstract asked its size, so the calls the application did not make
+  are visible). The host line gained `faults minor … major …` (`getrusage`) under every backend; under
   `mmap` the major faults are the reads that reached storage.
 - **Refusals.** `--aio-depth` without a `libaio` backend and `--mmap-mode` or
   `--mmap-consume` without `mmap` are refused, like the ring knobs under `sync`. There is no `mmap-direct`.

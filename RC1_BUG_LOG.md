@@ -1584,3 +1584,22 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   that must still run) fails on the old code and passes; on HEAD plus the change `--test all`
   116 passed, `--lib` 61, the builder suite 358 passed, `aeiou-catalog check` ok. Fixed in an
   isolated worktree and applied.
+
+## 68. The mmap backend's own `fstat` calls were counted but never reported
+
+- **Where:** `runner/aeiou/src/run.rs` (`MmapReport::fstat_calls`, its merge, `describe`,
+  `assemble`); runner/REFERENCE.md §9, the **Report.** bullet; `runner/aeiou/tests/report.rs`.
+- **Found by:** the fixer of bug 54 (queued), and independently the regression review of the
+  RC1 fixes.
+- **Defect:** bug 54 counts in `MmapStats::sized` the `fstat` the backend issues itself (an
+  open read before the abstract asked its size), a syscall the application did not make, timed
+  inside a read; `Report::mmap` never read the counter, so no run could show it (the JSON had no
+  field, the `mmap:` line no figure).
+- **Fix:** the report carries it: `fstat_calls` in the JSON's `mmap` object
+  (`#[serde(default)]`, summed across hosts) and `backend fstat N` on the `mmap:` line,
+  documented in §9. No field removed; no fingerprint, dataset id, or AST changes.
+- **Evidence:** `report::the_mmap_backend_s_own_fstat_calls_are_reported` (a `file_per_sample`
+  variant opening and reading 30 files without `fstat` under `--posix mmap` reports 30, one per
+  open, in the JSON and the text; `safetensors_load` reports 0) fails before (`left: Null`) and
+  passes after; `--test all -- report run mmap` 41 passed on HEAD plus the change,
+  `test_formats.py` 38 passed. Fixed in an isolated worktree and applied.
