@@ -525,10 +525,64 @@ mod imp {
         error(errno, format!("{what}: {e}"))
     }
 
-    /// A ranged `GET` whose start is at or past the end of the object: the server's 416.
+    /// A ranged `GET` whose start is at or past the end of the object: the server's 416, as
+    /// `Ranged` reports it. Found by its type in the error's chain, never by the message, which
+    /// carries the key and the elapsed time and can hold "416" for any error.
     fn not_satisfiable(e: &object_store::Error) -> bool {
-        let s = e.to_string();
-        s.contains("416") || s.contains("Range Not Satisfiable") || s.contains("InvalidRange")
+        let mut at: Option<&(dyn std::error::Error + 'static)> = Some(e);
+        while let Some(x) = at {
+            if x.is::<RangeNotSatisfiable>() {
+                return true;
+            }
+            at = x.source();
+        }
+        false
+    }
+
+    /// The server's answer 416 to a ranged request, as the error `Ranged` returns for it.
+    #[derive(Debug)]
+    struct RangeNotSatisfiable;
+
+    impl std::fmt::Display for RangeNotSatisfiable {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("416 Range Not Satisfiable")
+        }
+    }
+
+    impl std::error::Error for RangeNotSatisfiable {}
+
+    /// object_store's own HTTP client, with a 416 answered as an error of a type of ours: the
+    /// crate keeps the status of its errors in a type it does not export, so this is the one
+    /// structural way to tell a 416 from a 404 or a 5xx. The body is read first, as the crate
+    /// does for an error status, so the connection goes back to the pool. Not retried (`Unknown`).
+    #[derive(Debug)]
+    struct Ranged;
+
+    #[derive(Debug)]
+    struct RangedService(object_store::client::HttpClient);
+
+    impl object_store::client::HttpConnector for Ranged {
+        fn connect(&self, options: &object_store::ClientOptions) -> object_store::Result<object_store::client::HttpClient> {
+            let inner = object_store::client::ReqwestConnector::default().connect(options)?;
+            Ok(object_store::client::HttpClient::new(RangedService(inner)))
+        }
+    }
+
+    impl object_store::client::HttpService for RangedService {
+        fn call<'a, 'b>(&'a self, req: object_store::client::HttpRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<object_store::client::HttpResponse, object_store::client::HttpError>> + Send + 'b>>
+        where
+            'a: 'b,
+            Self: 'b,
+        {
+            Box::pin(async move {
+                let r = self.0.execute(req).await?;
+                if r.status().as_u16() != 416 {
+                    return Ok(r);
+                }
+                let _ = r.into_body().bytes().await;
+                Err(object_store::client::HttpError::new(object_store::client::HttpErrorKind::Unknown, RangeNotSatisfiable))
+            })
+        }
     }
 
     /// Some object below `key` other than one whose last component starts with `except`.
@@ -555,7 +609,7 @@ mod imp {
             if bucket.is_empty() {
                 anyhow::bail!("{uri}: no bucket");
             }
-            let mut b = AmazonS3Builder::from_env().with_bucket_name(bucket);
+            let mut b = AmazonS3Builder::from_env().with_bucket_name(bucket).with_http_connector(Ranged);
             if std::env::var_os("AWS_VIRTUAL_HOSTED_STYLE_REQUEST").is_none() {
                 b = b.with_virtual_hosted_style_request(false);
             }

@@ -371,3 +371,52 @@ fn object_names_need_object_endpoints() {
     refused(&o, "dataset `index`: an `array` dataset is a sparse layout written at offsets and has no object form");
     assert!(!String::from_utf8_lossy(&o.stderr).contains("space:"), "{}", String::from_utf8_lossy(&o.stderr));
 }
+
+#[test]
+fn a_missing_object_is_enoent_whatever_its_key_and_a_read_past_the_end_is_eof() {
+    // the engine reads a ranged GET's 416 as EOF; a 404 on a key with "416" in it (here
+    // `img_000000416.jpg`), whose message carries the key, is ENOENT all the same
+    let m = minio("a_missing_object_is_enoent_whatever_its_key_and_a_read_past_the_end_is_eof");
+    let dir = tmpdir("416");
+    let ast = object_variant("file_per_sample", &["train"], &dir);
+    // without its `fstat`s (a HEAD, which would find the object missing first), so that the
+    // ranged GET is the first request for each sample
+    fn no_fstat(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Array(a) => {
+                a.retain(|n| n.get("fstat").is_none());
+                a.iter_mut().for_each(no_fstat);
+            }
+            serde_json::Value::Object(o) => o.values_mut().for_each(no_fstat),
+            _ => {}
+        }
+    }
+    let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&ast).unwrap()).unwrap();
+    no_fstat(&mut d);
+    std::fs::write(&ast, d.to_string()).unwrap();
+    let ast = ast.to_str().unwrap();
+    // one epoch of all 512 samples, every one read in 1 MiB requests past its end (a short
+    // read, then a read of nothing: the 416), no walk to count the files first
+    let params = ["--param", "samples=512", "--param", "steps=16", "--param", "batch=32", "--param", "workers=1", "--param", "step_time=0", "--param", "walk=false"];
+    let root = dir.join("root");
+    let mut a = vec!["datagen", ast, "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/t416"];
+    a.extend(params);
+    ok(&aeiou(Some(&m), &a));
+    let mut a = vec!["dry-run", ast, "--gpus", "1"];
+    a.extend(params);
+    let want = fingerprint(&ok(&aeiou(None, &a)));
+    let mut a = vec!["run", ast, "--gpus", "1", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/t416", "--expect-fingerprint", &want];
+    a.extend(params);
+    for s3 in ["blocking", "async"] {
+        assert!(ok(&aeiou(Some(&m), &[&a[..], &["--s3", s3]].concat())).contains("fingerprint matches"));
+    }
+    let gone = "/bench/t416/00000/img_000000416.jpg";
+    assert!(curl(&m, gone, &["-X", "DELETE"]).status.success());
+    assert!(!curl(&m, gone, &[]).status.success(), "{gone} is still there");
+    for s3 in ["blocking", "async"] {
+        let o = aeiou(Some(&m), &[&a[..], &["--s3", s3]].concat());
+        refused(&o, "s3://bench/t416/00000/img_000000416.jpg");
+        refused(&o, "not found");
+        refused(&o, "(ENOENT)");
+    }
+}

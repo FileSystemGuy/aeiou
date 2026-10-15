@@ -763,3 +763,29 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   no-op `Drop` ("… is left behind by a panicking test") and passes; `--test all` 86 (and 90 with
   `object`), `limits`, `uring_knobs` pass, and no new `aeiou-*` directory of the test runs remains.
 
+## 35. The object engine took any error mentioning "416" for end-of-file
+
+- **Where:** `runner/aeiou/src/object.rs`: `not_satisfiable`, `Store::open` (new `Ranged` HTTP
+  connector and `RangeNotSatisfiable` error type).
+- **Found by:** review of the object engine: a ranged GET past an object's end (HTTP 416) maps
+  to a 0-byte read, and it was recognised by `e.to_string().contains("416" | "Range Not
+  Satisfiable" | "InvalidRange")`, before the NotFound mapping; object_store's error text holds
+  the request URI and the elapsed time.
+- **Defect:** a NotFound, 5xx, or timeout on a key containing "416" (`img_000000416.jpg`,
+  `shard-00416`), or whose elapsed time did (`1.416ms`), became a 0-byte EOF instead of
+  ENOENT/EIO: reproduced against MinIO, a deleted `img_000000416.jpg` read as "expected 91003
+  bytes, got 0: the corpus does not match the dataset definition".
+- **Fix:** object_store 0.14.2 exposes no error status (its RetryError is crate-private), and a
+  HEAD per read would charge the backend more than its API, so the store is built with a
+  connector wrapping object_store's own reqwest connector that turns a 416 response (body read,
+  connection kept) into a non-retried error carrying a `RangeNotSatisfiable` type;
+  `not_satisfiable` looks for that type in the source chain, never at text. No new dependency;
+  no fingerprint change.
+- **Evidence:** `tests/object.rs::a_missing_object_is_enoent_whatever_its_key_and_a_read_past_the_end_is_eof`
+  (MinIO; both `--s3 blocking` and `async`: a full run matches the dry run with every read
+  passing an object's end, then the deleted `…416.jpg` fails "not found (ENOENT)") fails on the
+  old object.rs and passes on the new; object tests 5 passed. Fixed in an isolated worktree and
+  applied after bug 34.
+- **Noted:** with two loader workers failing, the reported error was once the secondary "run
+  aborted: another actor failed" rather than the cause (queued).
+
