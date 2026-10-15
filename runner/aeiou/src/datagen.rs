@@ -1994,7 +1994,16 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if rank == 0 {
             ticker.tick(&quiet, true)?;
             msg = if ranks > 1 { format!("all {ranks} ranks stopped") } else { "stopped".into() };
-            msg += "; the manifest records what is finished: `aeiou datagen --resume ROOT` finishes the corpus, `--settle ROOT` keeps what it reached";
+            // the dataset roots, as --resume and --settle take them
+            let roots: Vec<String> = plans.iter().map(|p| match &p.object {
+                Some((store, rest)) => store.show(rest),
+                None => p.root.display().to_string(),
+            }).collect();
+            let at = if roots.len() == 1 { roots[0].clone() } else { "ROOT".to_string() };
+            msg += &format!("; the manifest records what is finished: `aeiou datagen --resume {at}` finishes the corpus, `--settle {at}` keeps what it reached");
+            if roots.len() > 1 {
+                msg += &format!(" (ROOT each of {})", roots.join(", "));
+            }
             if let Some(server) = hosts.and_then(|h| h.server) {
                 server.finish(false, 0, Some("stopped".into()));
             }

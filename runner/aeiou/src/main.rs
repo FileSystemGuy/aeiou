@@ -1,7 +1,7 @@
 //! `aeiou`: the runner binary. Subcommands: `check` (validate ASTs and print their hashes,
 //! as `schema/check.py` does), `dry-run` (the op streams and the fingerprint, no I/O),
 //! `datagen` (write the corpus and its manifests), and `run` (execute against a directory
-//! with a blocking backend, on one host or on several through the TCP coordinator).
+//! through the abstract's I/O APIs, on one host or on several through the TCP coordinator).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ enum Cmd {
     /// Write the datasets an abstract declares under --root, with a manifest per dataset root.
     #[command(override_usage = "aeiou datagen [OPTIONS] --root <DIR> <ABSTRACT_PATH>\n       (--root may also come from $AEIOU_ROOT or `root` in the [datagen] table of the config file)")]
     Datagen(DatagenArgs),
-    /// Execute the abstract against --root with a blocking I/O backend (several hosts: --ranks R --rank r --coordinator HOST:PORT on each).
+    /// Execute the abstract against --root through the I/O APIs it declares, or --posix and --s3 (several hosts: --ranks R --rank r --coordinator HOST:PORT on each).
     #[command(after_help = NEGATION, override_usage = "aeiou run [OPTIONS] --gpus <GPUS> --root <DIR> <ABSTRACT_PATH>\n       (--root may also come from $AEIOU_ROOT or `root` in the [run] table of the config file)")]
     Run(RunCmd),
 }
@@ -66,6 +66,51 @@ fn neg(on: bool, off: bool) -> Option<bool> {
     }
 }
 
+/// Set when standard output's reader has gone (`| head`): the pipe refused a write (EPIPE).
+static STDOUT_GONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The exit status of a command whose reader went away and nothing else failed: 128 + SIGPIPE,
+/// the status the shell shows for a tool the signal stopped (runner/REFERENCE.md §15).
+const EXIT_PIPE: i32 = 141;
+
+/// Standard output that outlives its reader (runner/REFERENCE.md §15): once the pipe refuses a
+/// write (EPIPE), that write and every later one is dropped, so the work goes on to its end, a
+/// run's measurement and its `--report-json` intact, and the command exits quietly with
+/// [`EXIT_PIPE`]. Every line the subcommands print to stdout goes through it.
+struct Out(std::io::Stdout);
+
+fn stdout() -> Out {
+    Out(std::io::stdout())
+}
+
+impl Out {
+    fn gone<T>(r: std::io::Result<T>, dropped: T) -> std::io::Result<T> {
+        match r {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                STDOUT_GONE.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(dropped)
+            }
+            r => r,
+        }
+    }
+}
+
+impl Write for Out {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if STDOUT_GONE.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(buf.len());
+        }
+        Out::gone(self.0.write(buf), buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if STDOUT_GONE.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(());
+        }
+        Out::gone(self.0.flush(), ())
+    }
+}
+
 /// The shape and its parameters: what every subcommand that takes an abstract takes.
 #[derive(Args)]
 struct ShapeArgs {
@@ -77,6 +122,16 @@ struct ShapeArgs {
     /// A parameter file (`.params.json`, schema/README.md §8), applied over the defaults and under --param; repeatable, in order.
     #[arg(long = "params-file", value_name = "FILE", help_heading = "Workload")]
     param_files: Vec<PathBuf>,
+}
+
+/// A `--coordinator` that cannot be an address, a usage error before anything is done: a host
+/// (a name, an IPv4 address, or an IPv6 one in brackets), a colon, and a port number.
+fn check_coordinator(addr: Option<&str>, l: &Layers) -> Result<()> {
+    let Some(addr) = addr else { return Ok(()) };
+    match addr.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && port.parse::<u16>().is_ok() => Ok(()),
+        _ => aeiou::usage!("--coordinator {addr}: expected HOST:PORT, a port number 0 to 65535{}", l.from(&["coordinator"])),
+    }
 }
 
 /// The shape, its parameters, and the run's identity: `run` and `dry-run`.
@@ -130,7 +185,7 @@ struct DatagenArgs {
     datasets: Vec<String>,
     /// Seconds between progress notes: each rank flushes what it has written and reports it,
     /// and rank 0 rewrites each manifest with what is not yet written and prints a line. Default 30.
-    #[arg(long, value_name = "SECS", help_heading = "Writer")]
+    #[arg(long, allow_negative_numbers = true, value_name = "SECS", help_heading = "Writer")]
     progress_secs: Option<f64>,
     /// This host's index among --ranks hosts. Default 0.
     #[arg(long, value_name = "R", help_heading = "Several hosts")]
@@ -169,9 +224,9 @@ struct DatagenArgs {
     settle: Option<String>,
     /// Write even when the bytes to write exceed the free space statvfs reports at a directory
     /// root (for a system that stores less than it is sent, by deduplicating or compressing).
-    #[arg(long = "[no-]ignore-space", alias = "ignore-space", overrides_with = "no_ignore_space", help_heading = "Checks")]
+    #[arg(long = "[no-]ignore-space", alias = "ignore-space", overrides_with_all = ["ignore_space", "no_ignore_space"], help_heading = "Checks")]
     ignore_space: bool,
-    #[arg(long = "no-ignore-space", hide = true, overrides_with = "ignore_space")]
+    #[arg(long = "no-ignore-space", hide = true, overrides_with_all = ["no_ignore_space", "ignore_space"])]
     no_ignore_space: bool,
 }
 
@@ -217,8 +272,8 @@ struct RunCmd {
     /// (whitespace-separated), else `endpoint` in the config file (an array).
     #[arg(long = "endpoint", value_name = "NAME=DIR|URI", help_heading = "Backend")]
     endpoints: Vec<String>,
-    /// Event-loop threads for the io_uring and libaio backends (default: one per core, at most one
-    /// per actor instance). The other backends run one thread per actor and refuse it.
+    /// Event-loop threads for --posix io_uring and libaio and --s3 async (default: one per core,
+    /// at most one per actor instance). The other APIs run one thread per actor and refuse it.
     #[arg(long, help_heading = "Backend")]
     threads: Option<usize>,
     /// Per-thread read and write buffer ring, MiB. Default 8.
@@ -228,7 +283,7 @@ struct RunCmd {
     #[arg(long, value_name = "C", help_heading = "Backend")]
     write_compress: Option<u64>,
     /// Multiply every `compute` sleep (0 runs the I/O back to back). Default 1.
-    #[arg(long, value_name = "X", help_heading = "Backend")]
+    #[arg(long, allow_negative_numbers = true, value_name = "X", help_heading = "Backend")]
     time_scale: Option<f64>,
     /// Cap each loop's bounded io-wq workers (IORING_REGISTER_IOWQ_MAX_WORKERS); the
     /// report shows the kernel's default either way.
@@ -240,19 +295,19 @@ struct RunCmd {
     sqpoll: Option<u32>,
     /// One submission thread, and one io-wq, shared by every loop
     /// (IORING_SETUP_ATTACH_WQ) instead of one per loop; needs --sqpoll.
-    #[arg(long = "[no-]sqpoll-shared", alias = "sqpoll-shared", overrides_with = "no_sqpoll_shared", help_heading = "io_uring")]
+    #[arg(long = "[no-]sqpoll-shared", alias = "sqpoll-shared", overrides_with_all = ["sqpoll_shared", "no_sqpoll_shared"], help_heading = "io_uring")]
     sqpoll_shared: bool,
-    #[arg(long = "no-sqpoll-shared", hide = true, overrides_with = "sqpoll_shared")]
+    #[arg(long = "no-sqpoll-shared", hide = true, overrides_with_all = ["no_sqpoll_shared", "sqpoll_shared"])]
     no_sqpoll_shared: bool,
     /// IORING_SETUP_SINGLE_ISSUER with IORING_SETUP_DEFER_TASKRUN (not with --sqpoll).
-    #[arg(long = "[no-]defer-taskrun", alias = "defer-taskrun", overrides_with = "no_defer_taskrun", help_heading = "io_uring")]
+    #[arg(long = "[no-]defer-taskrun", alias = "defer-taskrun", overrides_with_all = ["defer_taskrun", "no_defer_taskrun"], help_heading = "io_uring")]
     defer_taskrun: bool,
-    #[arg(long = "no-defer-taskrun", hide = true, overrides_with = "defer_taskrun")]
+    #[arg(long = "no-defer-taskrun", hide = true, overrides_with_all = ["no_defer_taskrun", "defer_taskrun"])]
     no_defer_taskrun: bool,
     /// IORING_SETUP_COOP_TASKRUN.
-    #[arg(long = "[no-]coop-taskrun", alias = "coop-taskrun", overrides_with = "no_coop_taskrun", help_heading = "io_uring")]
+    #[arg(long = "[no-]coop-taskrun", alias = "coop-taskrun", overrides_with_all = ["coop_taskrun", "no_coop_taskrun"], help_heading = "io_uring")]
     coop_taskrun: bool,
-    #[arg(long = "no-coop-taskrun", hide = true, overrides_with = "coop_taskrun")]
+    #[arg(long = "no-coop-taskrun", hide = true, overrides_with_all = ["no_coop_taskrun", "coop_taskrun"])]
     no_coop_taskrun: bool,
     /// Requests each loop's AIO context holds (io_setup's nr_events; the host's total is
     /// bounded by fs.aio-max-nr). Default 256.
@@ -260,6 +315,7 @@ struct RunCmd {
     aio_depth: Option<u32>,
     /// The prefetch before a read's range is consumed: `fault` (none: the touch faults
     /// the pages in), `populate` (MADV_POPULATE_READ over the range), `willneed` (MADV_WILLNEED).
+    /// Default fault.
     #[arg(long, value_name = "MODE", help_heading = "mmap")]
     mmap_mode: Option<String>,
     /// How a read's range is consumed: `touch` (one byte of every page is read, so each
@@ -293,8 +349,10 @@ struct RunCmd {
     /// rounded up to whole directories (whole files when the dataset has none), which are a fresh
     /// corpus of that count, so the run is that corpus's workload and fingerprint. Only for a
     /// consumed dataset whose count is a parameter; the count comes from --param as always.
-    #[arg(long, help_heading = "Workload")]
+    #[arg(long = "[no-]subset", alias = "subset", overrides_with_all = ["subset", "no_subset"], help_heading = "Workload")]
     subset: bool,
+    #[arg(long = "no-subset", hide = true, overrides_with_all = ["no_subset", "subset"])]
+    no_subset: bool,
     /// Fail unless the run's fingerprint is this (hex, from `aeiou dry-run`).
     #[arg(long, value_name = "HEX", help_heading = "Checks")]
     expect_fingerprint: Option<String>,
@@ -302,31 +360,31 @@ struct RunCmd {
     #[arg(long = "expect-dataset-id", value_name = "SHA256", help_heading = "Checks")]
     expect_dataset_ids: Vec<String>,
     /// Fail if an input namespace was finished more than this many seconds ago.
-    #[arg(long, value_name = "SECS", help_heading = "Checks")]
+    #[arg(long, allow_negative_numbers = true, value_name = "SECS", help_heading = "Checks")]
     max_gap: Option<f64>,
     /// Fail if this host would read input objects it wrote itself, or if dataset pages are
     /// in its page cache at the start (mincore over 256 sampled files per dataset).
-    #[arg(long = "[no-]require-cold", alias = "require-cold", overrides_with = "no_require_cold", help_heading = "Checks")]
+    #[arg(long = "[no-]require-cold", alias = "require-cold", overrides_with_all = ["require_cold", "no_require_cold"], help_heading = "Checks")]
     require_cold: bool,
-    #[arg(long = "no-require-cold", hide = true, overrides_with = "require_cold")]
+    #[arg(long = "no-require-cold", hide = true, overrides_with_all = ["no_require_cold", "require_cold"])]
     no_require_cold: bool,
     /// On every host, before the start gate: sync, then drop the page cache, dentries, and
     /// inodes (3 into /proc/sys/vm/drop_caches), then sample the datasets' residency. Needs
     /// root; the run refuses when it fails.
-    #[arg(long = "[no-]drop-caches", alias = "drop-caches", overrides_with = "no_drop_caches", help_heading = "Checks")]
+    #[arg(long = "[no-]drop-caches", alias = "drop-caches", overrides_with_all = ["drop_caches", "no_drop_caches"], help_heading = "Checks")]
     drop_caches: bool,
-    #[arg(long = "no-drop-caches", hide = true, overrides_with = "drop_caches")]
+    #[arg(long = "no-drop-caches", hide = true, overrides_with_all = ["no_drop_caches", "drop_caches"])]
     no_drop_caches: bool,
     /// Empty the namespace roots before starting instead of refusing.
-    #[arg(long = "[no-]clean-namespaces", alias = "clean-namespaces", overrides_with = "no_clean_namespaces", help_heading = "Checks")]
+    #[arg(long = "[no-]clean-namespaces", alias = "clean-namespaces", overrides_with_all = ["clean_namespaces", "no_clean_namespaces"], help_heading = "Checks")]
     clean_namespaces: bool,
-    #[arg(long = "no-clean-namespaces", hide = true, overrides_with = "clean_namespaces")]
+    #[arg(long = "no-clean-namespaces", hide = true, overrides_with_all = ["no_clean_namespaces", "clean_namespaces"])]
     no_clean_namespaces: bool,
     /// Start even when the estimated open files, threads, or mappings exceed this host's
     /// limits (RLIMIT_NOFILE, RLIMIT_NPROC, kernel.threads-max, vm.max_map_count).
-    #[arg(long = "[no-]ignore-limits", alias = "ignore-limits", overrides_with = "no_ignore_limits", help_heading = "Checks")]
+    #[arg(long = "[no-]ignore-limits", alias = "ignore-limits", overrides_with_all = ["ignore_limits", "no_ignore_limits"], help_heading = "Checks")]
     ignore_limits: bool,
-    #[arg(long = "no-ignore-limits", hide = true, overrides_with = "ignore_limits")]
+    #[arg(long = "no-ignore-limits", hide = true, overrides_with_all = ["no_ignore_limits", "ignore_limits"])]
     no_ignore_limits: bool,
     /// Write the run's report to FILE as JSON (runner/REFERENCE.md §12): the configuration, the
     /// results the text report prints with the latency histograms in full, and the verdict.
@@ -335,9 +393,9 @@ struct RunCmd {
     #[arg(long, value_name = "FILE", help_heading = "Report")]
     report_json: Option<PathBuf>,
     /// With --report-json: every take of every instance (stall and compute), not only the sums.
-    #[arg(long = "[no-]report-takes", alias = "report-takes", overrides_with = "no_report_takes", help_heading = "Report")]
+    #[arg(long = "[no-]report-takes", alias = "report-takes", overrides_with_all = ["report_takes", "no_report_takes"], help_heading = "Report")]
     report_takes: bool,
-    #[arg(long = "no-report-takes", hide = true, overrides_with = "report_takes")]
+    #[arg(long = "no-report-takes", hide = true, overrides_with_all = ["no_report_takes", "report_takes"])]
     no_report_takes: bool,
 }
 
@@ -401,7 +459,7 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     l.fixed("posix", &a.posix.clone().unwrap_or_else(|| "the abstract's".into()), a.posix.is_some())?;
     l.fixed("cache", &a.cache.clone().unwrap_or_else(|| "the abstract's".into()), a.cache.is_some())?;
     l.fixed("s3", &a.s3.clone().unwrap_or_else(|| "the abstract's".into()), a.s3.is_some())?;
-    l.fixed("subset", &a.subset, a.subset)?;
+    l.fixed("subset", &a.subset, a.subset || a.no_subset)?;
     l.fixed("expect-fingerprint", &a.expect_fingerprint, a.expect_fingerprint.is_some())?;
     l.fixed("expect-dataset-id", &a.expect_dataset_ids, !a.expect_dataset_ids.is_empty())?;
     l.fixed("clean-namespaces", &a.clean_namespaces, a.clean_namespaces || a.no_clean_namespaces)?;
@@ -468,6 +526,7 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     if o.ranks < 1 || o.rank < 0 || o.rank >= o.ranks {
         aeiou::usage!("--rank {} of --ranks {}: rank must be in [0, ranks){}", o.rank, o.ranks, l.from(&["rank", "ranks"]));
     }
+    check_coordinator(o.coordinator.as_deref(), &l)?;
     // values that can only be meaningless, refused rather than clamped to something else
     if o.threads == Some(0) {
         aeiou::usage!("--threads 0: an event loop needs a thread (leave it out for one per core){}", l.from(&["threads"]));
@@ -511,9 +570,9 @@ struct DryRunArgs {
     limit: Option<usize>,
     /// Compute the locality metrics of the op stream (reuse distance, sequential runs,
     /// popularity, request sizes, fan-out and depth, read/write mix); runner/REFERENCE.md §10.
-    #[arg(long = "[no-]metrics", alias = "metrics", overrides_with = "no_metrics", help_heading = "Metrics")]
+    #[arg(long = "[no-]metrics", alias = "metrics", overrides_with_all = ["metrics", "no_metrics"], help_heading = "Metrics")]
     metrics: bool,
-    #[arg(long = "no-metrics", hide = true, overrides_with = "metrics")]
+    #[arg(long = "no-metrics", hide = true, overrides_with_all = ["no_metrics", "metrics"])]
     no_metrics: bool,
     /// With --metrics: the block size of the reuse-distance and popularity units [default: 4096].
     #[arg(long, value_name = "BYTES", help_heading = "Metrics")]
@@ -536,7 +595,23 @@ fn main() {
         Some(s) => format!("aeiou {s}"),
         None => "aeiou".to_string(),
     };
+    // a datagen at a dataset root (--resume, --grow, --shrink, --settle) takes no abstract and
+    // no --root: its usage line is its own form's (the man page's SYNOPSIS)
+    let at_root_form = match sub.as_deref() {
+        Some("datagen") => args.iter().skip(1).find_map(|a| {
+            let flag = a.split('=').next().unwrap_or(a);
+            match flag {
+                "--resume" | "--settle" => Some(format!("Usage: aeiou datagen [OPTIONS] {flag} <ROOT>\n")),
+                "--grow" | "--shrink" => Some(format!("Usage: aeiou datagen [OPTIONS] {flag} <N> <ROOT>\n")),
+                _ => None,
+            }
+        }),
+        _ => None,
+    };
     let usage_text = || {
+        if let Some(u) = &at_root_form {
+            return u.clone();
+        }
         let mut cmd = Cli::command();
         match &sub {
             Some(s) => cmd.find_subcommand_mut(s.as_str()).expect("a subcommand of the parser").render_usage().to_string(),
@@ -571,6 +646,10 @@ fn main() {
         }
         eprintln!("{prog}: {e:#}");
         std::process::exit(1);
+    }
+    // the work is done; only its reader went away (`| head`): quiet, as a tool SIGPIPE stops
+    if STDOUT_GONE.load(std::sync::atomic::Ordering::Relaxed) {
+        std::process::exit(EXIT_PIPE);
     }
 }
 
@@ -678,7 +757,8 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     if ranks < 1 || rank < 0 || rank >= ranks {
         aeiou::usage!("--rank {rank} of --ranks {ranks}: rank must be in [0, ranks){}", l.from(&["rank", "ranks"]));
     }
-    let progress = match std::time::Duration::try_from_secs_f64(progress_secs) {
+    check_coordinator(coordinator.as_deref(), &l)?;
+    let progress =match std::time::Duration::try_from_secs_f64(progress_secs) {
         Ok(d) if progress_secs > 0.0 => d,
         _ => aeiou::usage!("--progress-secs {progress_secs}: a positive number of seconds{}", l.from(&["progress-secs"])),
     };
@@ -699,7 +779,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut server = match &coordinator {
         Some(addr) if early && rank == 0 => {
             let s = Server::start_held(addr, ranks)?;
-            println!("coordinator listening on {}", s.addr);
+            writeln!(stdout(), "coordinator listening on {}", s.addr)?;
             Some(s)
         }
         _ => None,
@@ -722,7 +802,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
             // the same change of the same root on every host; the manifest is rank 0's
             let identity = serde_json::json!({"op": &flag[2..], "count": n, "root": at});
             let t = Tcp::connect(addr, rank, ranks, &aeiou::run::hostname(), &identity, &l.json(), &[], Arc::new(AtomicBool::new(false)))?;
-            println!("coordinator {}: connected as rank {} of {}  identity {}…", t.addr, rank, ranks, &aeiou::canon::sha256_hex(&identity)[..16]);
+            writeln!(stdout(), "coordinator {}: connected as rank {} of {}  identity {}…", t.addr, rank, ranks, &aeiou::canon::sha256_hex(&identity)[..16])?;
             Some(t)
         }
         _ => None,
@@ -740,7 +820,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
                 bail!("rank 0: {e}");
             }
             if let Some(line) = doc["complete"].as_str() {
-                println!("{line}");
+                writeln!(stdout(), "{line}")?;
                 return Ok(());
             }
             let manifest = |k: &str| -> Result<Option<aeiou::payload::Manifest>> { Ok(if doc[k].is_null() { None } else { Some(serde_json::from_value(doc[k].clone())?) }) };
@@ -777,7 +857,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
     let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress, resume, resize, settle, sigint: true, ignore_space };
-    let mut out = std::io::stdout();
+    let mut out = stdout();
     match &opts.resume {
         Some(m) if !m.progress["settle"].is_null() => {
             let (st, left) = (&m.progress["settle"], m.unfinished().iter().map(|(a, b)| b - a).sum::<i64>());
@@ -941,17 +1021,18 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
     let (a, mut layers) = resolve_run(a, config)?;
     let mut doc = aeiou::report::Doc { full_takes: a.report_takes, ..Default::default() };
     if let Some(path) = &a.report_json {
-        // never leave an earlier run's report where this run's is expected
-        match std::fs::remove_file(path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => bail!("--report-json {}: {e}", path.display()),
-            _ => {}
+        // never leave an earlier run's report where this run's is expected, and find a place
+        // the report cannot be written before the run, not after it: the file is made empty
+        // now and written when the run ends
+        if let Err(e) = std::fs::File::create(path) {
+            aeiou::usage!("--report-json {}: cannot write the report there: {e}{}", path.display(), layers.from(&["report-json"]));
         }
     }
     let r = run_checked(&a, &mut layers, &mut doc);
     if let Some(path) = &a.report_json {
         let error = r.as_ref().err().map(|e| format!("{e:#}"));
         match (doc.write(path, error.as_deref()), &r) {
-            (Ok(()), _) => println!("report {}", path.display()),
+            (Ok(()), _) => writeln!(stdout(), "report {}", path.display())?,
             (Err(e), Ok(())) => return Err(e),
             (Err(e), Err(_)) => eprintln!("aeiou run: {e:#}"),
         }
@@ -1068,9 +1149,24 @@ fn run_checked(a: &RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc
         None => None,
         Some(h) => Some(u64::from_str_radix(h.trim_start_matches("0x"), 16).map_err(|_| usage::err(format!("--expect-fingerprint {h}: not hex")))?),
     };
+    if let Some(x) = a.expect_dataset_ids.iter().find(|x| x.len() != 64 || !x.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
+        aeiou::usage!("--expect-dataset-id {x}: not a dataset id (64 lowercase hex digits, as the manifest and the run's dataset line print it)");
+    }
     let uring = UringOpts { iowq_max_workers: a.iowq_max_workers.unwrap_or(0), sqpoll_idle_ms: a.sqpoll, sqpoll_shared: a.sqpoll_shared, defer_taskrun: a.defer_taskrun, coop_taskrun: a.coop_taskrun };
     if uring.any() && !backend.uring() {
-        aeiou::usage!("--iowq-max-workers, --sqpoll, --defer-taskrun, --coop-taskrun are io_uring knobs; --posix {} has no ring{}", backend.api.name(), layers.from(&["iowq-max-workers", "sqpoll", "defer-taskrun", "coop-taskrun"]));
+        // the knobs set, by name, and where each came from
+        let given: Vec<&str> = [
+            ("iowq-max-workers", a.iowq_max_workers.is_some()),
+            ("sqpoll", a.sqpoll.is_some()),
+            ("sqpoll-shared", a.sqpoll_shared),
+            ("defer-taskrun", a.defer_taskrun),
+            ("coop-taskrun", a.coop_taskrun),
+        ]
+        .into_iter()
+        .filter_map(|(n, g)| g.then_some(n))
+        .collect();
+        let flags: Vec<String> = given.iter().map(|n| format!("--{n}")).collect();
+        aeiou::usage!("{} {} io_uring {}; --posix {} has no ring{}", flags.join(", "), if given.len() == 1 { "is an" } else { "are" }, if given.len() == 1 { "knob" } else { "knobs" }, backend.api.name(), layers.from(&given));
     }
     uring.check().map_err(|e| usage::err(format!("{e}{}", layers.from(&["sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "iowq-max-workers"]))))?;
     if a.aio_depth.is_some() && !backend.libaio() {
@@ -1144,8 +1240,7 @@ fn run_checked(a: &RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc
     doc.set("layers", layers.json());
     doc.expected_fingerprint = expect_fingerprint;
 
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+    let mut out = stdout();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     layers.print(&mut out)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
@@ -1532,20 +1627,21 @@ fn check(files: Vec<PathBuf>, config: Option<&Path>) -> Result<()> {
     let mut l = Layers::new("check", config)?;
     l.fixed("files", &files, true)?;
     l.finish()?;
-    l.print(&mut std::io::stdout())?;
+    let mut out = stdout();
+    l.print(&mut out)?;
     let mut failed = 0;
     for f in &files {
         let name = f.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         match aeiou::load(f) {
             Ok(loaded) => {
                 let ops: Vec<String> = loaded.ops.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                println!("ok   {name}  sha256={}…  ops: {}", &loaded.sha256[..16], ops.join(" "));
+                writeln!(out, "ok   {name}  sha256={}…  ops: {}", &loaded.sha256[..16], ops.join(" "))?;
             }
             Err(e) => {
                 failed += 1;
-                println!("FAIL {name}");
+                writeln!(out, "FAIL {name}")?;
                 for line in format!("{e:#}").lines() {
-                    println!("  {line}");
+                    writeln!(out, "  {line}")?;
                 }
             }
         }
@@ -1562,7 +1658,7 @@ fn parse_config(a: &ShapeArgs, gpus: i64, seed: u64) -> Result<Config> {
     }
     let mut overrides = Vec::new();
     for p in &a.params {
-        let Some((k, v)) = p.split_once('=') else { aeiou::usage!("--param {p}: expected NAME=VALUE") };
+        let Some((k, v)) = p.split_once('=').filter(|(k, _)| !k.is_empty()) else { aeiou::usage!("--param {p}: expected NAME=VALUE") };
         overrides.push((k.to_string(), v.to_string()));
     }
     let mut sets = Vec::new();
@@ -1692,8 +1788,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         std::fs::write(path, serde_json::to_string_pretty(&doc)? + "\n").with_context(|| format!("{}", path.display()))?;
     }
 
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
+    let mut out = std::io::BufWriter::new(stdout());
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     l.print(&mut out)?;
     if loaded.ast.posix.is_some() || loaded.ast.cache.is_some() {
@@ -1714,6 +1809,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         dryrun::write_projection(&mut out, p)?;
     }
     writeln!(out, "dry-run took {:.2?} on {} thread(s)", elapsed, threads)?;
+    out.flush()?;
     Ok(())
 }
 

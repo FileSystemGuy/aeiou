@@ -2462,3 +2462,90 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** the golden R30 flag cases and the builder's V18 test fail on HEAD's code and pass;
   with the runtime change alone `rc`/`rc2` exit 0 and `f0` keeps 4096 bytes; same suite runs as
   bug 110.
+
+## 112. `aeiou check`/`run` panicked under `| head`, and `dry-run` failed with "Broken pipe"
+
+- **Where:** `runner/aeiou/src/main.rs` (writer `Out`, `STDOUT_GONE`, exit 141; every former `println!`),
+  `datagen.rs`/`dryrun.rs` output through it; `man/aeiou.1.md` EXIT STATUS 141; `runner/REFERENCE.md`
+  §15 "A reader that goes away"; `runner/aeiou/tests/usage.rs`.
+- **Found by:** RC1 third-round UI review (RV3b): `aeiou check $(find workloads -name '*.ast.json') |
+  head -1` → "failed printing to stdout: Broken pipe" panic, exit 101; `run … | head -1` panicked at
+  its "report" line and the report recorded `"error": "Broken pipe"`; `dry-run | head -3` → "aeiou
+  dry-run: Broken pipe (os error 32)", exit 1.
+- **Fix:** all stdout goes through one fallible writer; the first EPIPE marks stdout gone and drops
+  later writes, the work runs to its end (a run measures and writes `--report-json` with its true
+  verdict), and the process exits 141 (128+SIGPIPE) quietly; a failing work's own exit 1 and
+  message still win.
+- **Evidence:** `usage::a_reader_that_goes_away_is_a_quiet_141` (check, dry-run, datagen, run, with a
+  closed stdout) fails on HEAD (`(Some(1), "aeiou check: Broken pipe (os error 32)")` vs `(Some(141),
+  "")`) and passes; on HEAD 3ca804d plus the change: `--tests --lib --bins` with MinIO all pass (all
+  151, lib 68), builder suite with MinIO 406, CI's checker diff empty, `aeiou-catalog check` ok.
+  Fixed in an isolated worktree and applied.
+
+## 113. An unwritable `--report-json` was found only after the whole run
+
+- **Where:** `runner/aeiou/src/main.rs` (`run_cmd` creates the report file first); `man/aeiou.1.md`
+  `--report-json`; tests.
+- **Found by:** RV3b: `--report-json /nonexist/r.json` ran to the end, printed its fingerprint, then
+  failed exit 1; an hours-long run lost its JSON.
+- **Fix:** the file is created (truncated) before anything else, replacing the old `remove_file`; a
+  failure is a usage error, exit 2 ("cannot write the report there: …").
+- **Evidence:** `usage::an_unwritable_report_is_refused_before_the_run` fails on HEAD and passes; same
+  suite runs as bug 112.
+
+## 114. The io_uring-knob refusal named knobs never given and blamed their defaults
+
+- **Where:** `runner/aeiou/src/main.rs` (`run_checked`, the refusal built from the knobs set); tests.
+- **Found by:** RV3b: `aeiou run --sqpoll 5` under sync → "--iowq-max-workers, --sqpoll,
+  --defer-taskrun, --coop-taskrun are io_uring knobs; … (--iowq-max-workers by default, …)".
+- **Fix:** the message names only the knobs set, with their layers ("--sqpoll is an io_uring knob;
+  --posix sync has no ring").
+- **Evidence:** `usage::messages_say_what_is_wrong` (R53 case) fails on HEAD and passes; same suite
+  runs as bug 112.
+
+## 115. `--subset` had no `--no-subset`, and repeating any `--[no-]x` boolean was refused
+
+- **Where:** `runner/aeiou/src/main.rs` (arg structs: `--[no-]subset`; `overrides_with_all = [self,
+  twin]` on every boolean pair); `man/aeiou.1.md`, `runner/REFERENCE.md` §2 synopsis; tests.
+- **Found by:** RV3b: §14 says every boolean has `--[no-]x` and the last wins, yet `--no-subset` was
+  "unexpected" and `--subset --subset` (and `--clean-namespaces --clean-namespaces`) "cannot be
+  used multiple times".
+- **Fix:** a hidden `--no-subset` twin as `--clean-namespaces` has; every boolean pair overrides
+  itself and its twin, so repeats parse and the last wins.
+- **Evidence:** `usage::messages_say_what_is_wrong` (all four forms) fails on HEAD and passes; same
+  suite runs as bug 112.
+
+## 116. Stale `aeiou --help` text: "a blocking I/O backend", `--threads` without `--s3 async`, no `--mmap-mode` default
+
+- **Where:** `runner/aeiou/src/main.rs` (about line, module doc, `--threads`, `--mmap-mode` help);
+  `man/aeiou.1.md`.
+- **Found by:** RV3b: io_uring, libaio, and `--s3 async` are not blocking; the `--threads` refusal names
+  `--s3 async` while its help did not; the `fault` default was stated nowhere.
+- **Fix:** the run line says "through the I/O APIs it declares, or --posix and --s3"; `--threads`
+  names `--s3 async`; `--mmap-mode` says "Default fault", in help and man alike.
+- **Evidence:** the man tests (`runner/aeiou/tests/man.rs`, `builder/tests/test_man.py`) hold help and
+  man together and pass; same suite runs as bug 112.
+
+## 117. An unparsable `--coordinator` exited 1 at bind time instead of a usage error
+
+- **Where:** `runner/aeiou/src/main.rs` (`check_coordinator` at resolve time, run and datagen); tests.
+- **Found by:** RV3b: `--coordinator localhost:notaport` → "coordinator address … invalid port value",
+  exit 1 (coord.rs), where §15 makes an unparsable value exit 2.
+- **Fix:** HOST:PORT is checked when options resolve: "--coordinator localhost:notaport: expected
+  HOST:PORT, a port number 0 to 65535", exit 2.
+- **Evidence:** `usage::messages_say_what_is_wrong` (R61 case) fails on HEAD and passes; same suite
+  runs as bug 112.
+
+## 118. Runner messages that misled: "limit estimate:" on workload errors, negative counts, `--param =4`, a literal ROOT, the wrong usage line, clap's "-1", a stray space, an unchecked dataset id
+
+- **Where:** `runner/aeiou/src/limits.rs` (prefix dropped), `eval.rs` (count and samples_per_file
+  messages), `main.rs` (`--param` NAME=VALUE, per-form usage lines for `--resume/--grow/--shrink/
+  --settle`, `allow_negative_numbers` plus range checks for `--time-scale`, `--max-gap`,
+  `--progress-secs`, `--expect-dataset-id` as 64 hex), `datagen.rs` (Ctrl-C line with the real root),
+  `dryrun.rs` (`(0.12×)`); tests.
+- **Found by:** RV3b item 25 (R65): each message checked by hand against what it should say.
+- **Fix:** the workload's own error without "limit estimate:"; "count -4: a count is 0 or more";
+  "--param =4: expected NAME=VALUE" exit 2; "`aeiou datagen --resume <root>`" with the root; each
+  datagen form's own usage line (the fresh form's bytes unchanged); "--time-scale -1: a factor of 0
+  or more" etc.; no stray space; "not a dataset id (64 lowercase hex digits, …)" exit 2.
+- **Evidence:** `usage::messages_say_what_is_wrong` fails on HEAD and passes; same suite runs as bug 112.

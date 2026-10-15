@@ -342,7 +342,7 @@ pub fn write_report(out: &mut impl Write, r: &Report, ranks: Option<i64>, gpus: 
         }
         write!(out, "per host: {} actors, up to {} read", per_host, human_bytes(worst))?;
         if let Some(dram) = host_dram() {
-            writeln!(out, "; this host has {} DRAM ({:.2}× )", human_bytes(dram), worst as f64 / dram as f64)?;
+            writeln!(out, "; this host has {} DRAM ({:.2}×)", human_bytes(dram), worst as f64 / dram as f64)?;
         } else {
             writeln!(out)?;
         }

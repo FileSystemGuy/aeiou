@@ -213,3 +213,85 @@ fn an_option_narrowing_an_absent_one_is_a_usage_error() {
     assert_eq!((doc["block"].as_u64(), doc["sample"].as_u64()), (Some(8192), Some(1)));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A reader that goes away (`| head`) is no failure of the work (RC1 review, runner/REFERENCE.md
+/// §15): `check` and `run` panicked on the closed pipe (status 101), `dry-run` said `Broken
+/// pipe` with status 1, and a run's --report-json recorded the pipe as the run's error. Now
+/// every subcommand drops what it cannot print, says nothing, finishes, and exits 141; the
+/// run's report is whole, with no error.
+#[test]
+fn a_reader_that_goes_away_is_a_quiet_141() {
+    use std::process::Stdio;
+    let ast = example("file_per_sample.ast.json");
+    // stdout a pipe whose read end is closed before the command prints its first line
+    let gone = |c: &mut Command| -> (Option<i32>, String) {
+        let mut child = c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        drop(child.stdout.take());
+        let o = child.wait_with_output().unwrap();
+        (o.status.code(), String::from_utf8_lossy(&o.stderr).into_owned())
+    };
+    let small = ["--param", "samples=40", "--param", "steps=4", "--param", "batch=4", "--param", "workers=1", "--param", "prefetch=1"];
+    assert_eq!(gone(&mut aeiou(&["check", &ast, &ast, &ast])), (Some(141), String::new()));
+    assert_eq!(gone(&mut aeiou(&[&["dry-run", &ast, "--gpus", "2"], &small[..]].concat())), (Some(141), String::new()));
+    let root = std::env::temp_dir().join(format!("aeiou-usage-pipe-{}", std::process::id()));
+    let r = root.to_str().unwrap();
+    assert_eq!(gone(&mut aeiou(&[&["datagen", &ast, "--root", r, "--gpus", "2"], &small[..]].concat())), (Some(141), String::new()));
+    let json = root.join("r.json");
+    let j = json.to_str().unwrap();
+    assert_eq!(gone(&mut aeiou(&[&["run", &ast, "--root", r, "--gpus", "2", "--time-scale", "0", "--report-json", j], &small[..]].concat())), (Some(141), String::new()));
+    let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+    let v = &doc["verdict"];
+    assert!(v["ok"] == true && v["error"].is_null() && v["fingerprint"].is_string(), "{v}");
+    // the work's own failure keeps its status and its message
+    let (code, err) = gone(&mut aeiou(&[&["run", &ast, "--root", r, "--gpus", "2", "--time-scale", "0", "--expect-fingerprint", "1"], &small[..]].concat()));
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.starts_with("aeiou run: "), "{err}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A --report-json that cannot be written is a usage error before the run, not a failure found
+/// after it (RC1 review: the run went to its end, then failed).
+#[test]
+fn an_unwritable_report_is_refused_before_the_run() {
+    let ast = example("file_per_sample.ast.json");
+    let mut c = aeiou(&["run", &ast, "--gpus", "1", "--root", "/nonexistent", "--report-json", "/nonexistent/r.json"]);
+    let o = c.output().unwrap();
+    assert!(o.stdout.is_empty(), "{}", String::from_utf8_lossy(&o.stdout));
+    let (message, _) = frame(&mut c, "aeiou run");
+    assert!(message.starts_with("--report-json /nonexistent/r.json: cannot write the report there: "), "{message}");
+}
+
+/// RC1 review, runner messages: the io_uring refusal names the knobs given and blames no
+/// default; a coordinator address that cannot be one, an empty --param name, a negative
+/// --time-scale or --max-gap, and a --expect-dataset-id that is no id are usage errors; every
+/// boolean takes --no-x and may be repeated, the last winning (§14), --subset among them; a
+/// datagen at a dataset root shows its own usage line.
+#[test]
+fn messages_say_what_is_wrong() {
+    let ast = example("file_per_sample.ast.json");
+    let run = |extra: &[&str]| frame(&mut aeiou(&[&["run", &ast, "--gpus", "1", "--root", "/nonexistent"], extra].concat()), "aeiou run").0;
+    assert_eq!(run(&["--posix", "sync", "--sqpoll", "5"]), "--sqpoll is an io_uring knob; --posix sync has no ring");
+    assert_eq!(run(&["--posix", "sync", "--coop-taskrun", "--iowq-max-workers", "2"]), "--iowq-max-workers, --coop-taskrun are io_uring knobs; --posix sync has no ring");
+    assert_eq!(run(&["--ranks", "2", "--coordinator", "localhost:notaport"]), "--coordinator localhost:notaport: expected HOST:PORT, a port number 0 to 65535");
+    assert_eq!(run(&["--ranks", "2", "--coordinator", "localhost"]), "--coordinator localhost: expected HOST:PORT, a port number 0 to 65535");
+    assert_eq!(run(&["--time-scale", "-1"]), "--time-scale -1: a factor of 0 or more");
+    assert_eq!(run(&["--max-gap", "-1"]), "--max-gap -1: a number of seconds, 0 or more");
+    assert_eq!(run(&["--expect-dataset-id", "nothex"]), "--expect-dataset-id nothex: not a dataset id (64 lowercase hex digits, as the manifest and the run's dataset line print it)");
+    assert_eq!(run(&["--param", "=4"]), "--param =4: expected NAME=VALUE");
+    let gen = |extra: &[&str]| frame(&mut aeiou(&[&["datagen"], extra].concat()), "aeiou datagen");
+    assert_eq!(gen(&[&ast, "--root", "/nonexistent", "--ranks", "2", "--coordinator", "h:99999"]).0, "--coordinator h:99999: expected HOST:PORT, a port number 0 to 65535");
+    assert_eq!(gen(&[&ast, "--root", "/nonexistent", "--progress-secs", "-1"]).0, "--progress-secs -1: a positive number of seconds");
+    let (message, usage) = gen(&["--resume", "/nonexistent", "--gpus", "3"]);
+    assert!(message.starts_with("--resume takes"), "{message}");
+    assert_eq!(usage, "Usage: aeiou datagen [OPTIONS] --resume <ROOT>");
+    assert_eq!(gen(&["--grow", "0", "/nonexistent"]).1, "Usage: aeiou datagen [OPTIONS] --grow <N> <ROOT>");
+    // the booleans: --no-subset and a repeated --subset parse, and get as far as the abstract
+    for extra in [&["--no-subset"][..], &["--subset", "--subset"], &["--subset", "--no-subset"], &["--clean-namespaces", "--clean-namespaces"]] {
+        let o = aeiou(&[&["run", "/nonexistent/x.ast.json", "--gpus", "1", "--root", "/nonexistent"], extra].concat()).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.starts_with("aeiou run: /nonexistent/x.ast.json: "), "{extra:?}: {err}");
+    }
+    // a negative count says what is wrong with it
+    let o = aeiou(&["dry-run", &ast, "--gpus", "1", "--param", "samples=-4"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "aeiou dry-run: dataset `train`: count -4: a count is 0 or more\n");
+}

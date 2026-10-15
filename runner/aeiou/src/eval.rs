@@ -1245,8 +1245,11 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                     Some(e) => vm.eval_int(e).with_context(ctx)?,
                     None => 1,
                 };
-                if count < 0 || spf < 1 {
-                    bail!("dataset `{name}`: count {count}, samples_per_file {spf}");
+                if count < 0 {
+                    bail!("dataset `{name}`: count {count}: a count is 0 or more");
+                }
+                if spf < 1 {
+                    bail!("dataset `{name}`: samples_per_file {spf}: a file holds at least 1 sample");
                 }
                 let chunk = match &f.chunk {
                     Some(e) => Some(vm.eval_int(e).with_context(ctx)?),

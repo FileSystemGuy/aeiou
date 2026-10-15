@@ -157,7 +157,7 @@ pub fn estimate(model: &Model<'_>, opts: &RunOpts) -> Result<Need> {
         let mut w = Walk { left: BUDGET, truncated: false };
         let mut vm = Vm::new(model, name, lo, count);
         vm.start(&model.ast.actors[name].body);
-        let p = w.context(&mut vm).with_context(|| format!("limit estimate: actor `{name}` instance {lo}"))?;
+        let p = w.context(&mut vm).with_context(|| format!("actor `{name}` instance {lo}"))?;
         let n = (hi - lo) as u64;
         need.open_files += p.files * n;
         need.contexts += p.threads * n;

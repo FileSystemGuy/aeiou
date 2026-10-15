@@ -424,7 +424,7 @@ turns it off, and the last one on the line wins.
 - **--seed** *SEED*
 
   As for `dry-run`.
-- **--subset**
+- **--[no-]subset**
 
   Run a dataset whose count (from `--param`, as always) is below its corpus's as the
   corpus's first ids. The count is rounded up to whole directories of a `{id div D}`
@@ -480,8 +480,8 @@ turns it off, and the last one on the line wins.
   `$AEIOU_ENDPOINT`, else `endpoint` in the `[run]` table of the config file. *Layered.*
 - **--threads** *THREADS*
 
-  Event-loop threads for the `io_uring` and `libaio` backends; default one per core, at
-  most one per actor instance. The other backends run one thread per actor and refuse
+  Event-loop threads for `--posix io_uring` and `libaio` and `--s3 async`; default one per
+  core, at most one per actor instance. The other APIs run one thread per actor and refuse
   the flag. *Layered.*
 - **--buffer-mib** *MIB*
 
@@ -529,7 +529,7 @@ turns it off, and the last one on the line wins.
 
   The prefetch before a read's range is consumed: `fault` (none; the touch faults the
   pages in), `populate` (`MADV_POPULATE_READ` over the range), or `willneed`
-  (`MADV_WILLNEED`). *Layered.*
+  (`MADV_WILLNEED`). Default `fault`. *Layered.*
 - **--mmap-consume** *HOW*
 
   How a read's range is consumed: `touch` (one byte of every page is read, so each page is
@@ -607,8 +607,10 @@ turns it off, and the last one on the line wins.
 
   Write the run's report to *FILE* as JSON (format `aeiou_report: 1`): the configuration,
   the results the text report prints with the latency histograms in full, and the verdict.
-  Written when the run fails too, with the error. Rank 0 of several hosts writes the merged
-  report, every other rank its own. *Layered.*
+  Written when the run fails too, with the error. The file is created (empty) before the
+  run starts, so a place it cannot be written is a usage error, not a finding after the
+  run. Rank 0 of several hosts writes the merged report, every other rank its own.
+  *Layered.*
 - **--[no-]report-takes**
 
   With `--report-json`: every take of every instance (stall and compute), not only the
@@ -790,6 +792,12 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
 
   `datagen` stopped by Ctrl-C (on this host or another); the manifest records what is
   finished.
+- **141**
+
+  Standard output's reader went away (`| head`) and nothing else failed: the rest of the
+  output is dropped, silently, and the work goes on to its end (a run measures and writes
+  its `--report-json` as it would have), as 128 + `SIGPIPE`, the status the shell shows for
+  a tool that signal stopped.
 
 ## EXAMPLES
 
