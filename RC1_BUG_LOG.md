@@ -2101,3 +2101,26 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   For bugs 88–90 on HEAD c7764af plus the change: `--test all` 136 passed twice, `--lib` 66, builder
   suite with MinIO 382 passed, CI's checker diff empty, `aeiou-build --hermetic --twice
   --check` rc 0. Fixed in an isolated worktree and applied.
+
+## 91. A file past the geometry cache's bound paid O(samples per file) for every sample offset
+
+- **Where:** `runner/aeiou/src/eval.rs` (`FileGeom {file, size, every, anchors}`,
+  `DsMeta::file_geom`, new `DsMeta::offset_from_geom`); `runner/aeiou/src/vm.rs`
+  (`geom_held`, `sample_offset_within`).
+- **Found by:** bug 86's trade-off: a file with more than 2^20 samples was held by its size
+  alone, so each offset drew every earlier sample's size, and a pass over it was O(n²) again.
+- **Defect:** dry-runs of a one-file dataset of 8,000,000 samples: 64 reads took 10.1 s packed,
+  32.1 s TFRecord-framed, 13.3 s in units of 1000 (about 0.15–0.48 s per op).
+- **Fix:** sparse anchors: a file of n samples holds the offset of every k-th sample, k the
+  least with at most 2^20 anchors (k = 1 is the dense table), at the sample (packed), at the
+  unit start (a unit of at most k samples), or at the row within a unit; an offset is its
+  anchor plus at most k−1 size draws with `sample_offset`'s checked arithmetic, `None` (so
+  `DsMeta`) for multi-column files or any failure. The cache still holds at most 2^20 entries
+  in all. The same runs: 0.6–1.1 s whatever the reads, maxrss +7 MB (the bounded table);
+  fingerprints identical. No fingerprint, dataset id, AST, or datagen byte changes.
+- **Evidence:** `vm::tests::the_geometry_cache_never_holds_more_offsets_than_its_bound`
+  (extended: cap 30, files of 100/100/20, packed, TFRecord, units of 1, 3, 7, 40; every offset
+  equals `DsMeta`'s within k−1 draws; held anchors within the bound) failed "anchors None"
+  with bug 86's gate and passes; on HEAD b721c06 plus the change `--lib` 66 passed, `--test
+  all` 136, test_formats and test_builder 106, hdf5_map, tfrecord_stream, parquet_stream
+  fingerprints at 1 and 4 GPUs unchanged. Fixed in an isolated worktree and applied.

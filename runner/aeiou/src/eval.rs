@@ -559,12 +559,31 @@ pub struct InvMeta {
     pub cap: bool,
 }
 
-/// One container file's size and the offset of each of its samples (`DsMeta::file_geom`).
+/// One container file's size and sparse anchors of its samples' offsets (`DsMeta::file_geom`):
+/// with `every` = k, an offset is its anchor's plus at most k-1 sizes drawn
+/// (`DsMeta::offset_from_geom`), so a file of any count is held in a bounded table.
 #[derive(Debug, PartialEq)]
 pub struct FileGeom {
+    pub file: i64,
     pub size: i64,
-    /// By sample index within the file; `None` where `sample_offset` refuses.
-    pub offsets: Option<Vec<i64>>,
+    /// Samples per anchor, k >= 1 (1: every sample's offset is held).
+    pub every: i64,
+    /// `None` where `sample_offset` refuses. Packed: the offset of every k-th sample of the
+    /// file. Under a framing whose unit is at most k samples: the start of every (k / unit)-th
+    /// unit. Under a larger unit: in each unit, where every k-th sample's row starts (before
+    /// its row header).
+    pub anchors: Option<Vec<i64>>,
+}
+
+/// The anchors `DsMeta::file_geom` holds for a file of `n` samples, `every` = k.
+fn anchor_count(l: &Framing, n: i64, k: i64) -> i64 {
+    if l.is_packed() {
+        ceil_div(n, k)
+    } else if l.unit <= k {
+        ceil_div(ceil_div(n, l.unit), k / l.unit)
+    } else {
+        n / l.unit * ceil_div(l.unit, k) + ceil_div(n % l.unit, k)
+    }
 }
 
 #[derive(Clone)]
@@ -916,51 +935,109 @@ impl<'a> DsMeta<'a> {
         }
     }
 
-    /// `file_size(file)` and `sample_offset` of every sample of a files dataset's `file`, from
+    /// `file_size(file)` and the anchors of `sample_offset` over a files dataset's `file`, from
     /// one pass over its samples' sizes (two under a format's framing): what `file_size` and
     /// `sample_offset` each draw again per call, O(samples in the file), held by the VM for the
-    /// files it is reading (`Vm::file_geom`). The values are those functions' to the bit;
-    /// `offsets` is `None` where `sample_offset` would refuse (several columns, an offset past
-    /// 2^63-1) or the file has more than `max_offsets` samples (a per-sample table is never
-    /// held past that bound), and an `Err` is `file_size`'s refusal, so a caller falls back to
-    /// them for the error message.
+    /// files it is reading (`Vm::file_geom`). At most `max_offsets` anchors, one per k samples,
+    /// k the least from ceil(n / max_offsets) whose anchors fit: a per-sample table is never
+    /// held past that bound, and a larger file's offsets cost at most k-1 draws each, not O(n)
+    /// (RC1 review). `offset_from_geom` gives `sample_offset`'s values to the bit; `anchors` is
+    /// `None` where `sample_offset` would refuse (several columns, an offset past 2^63-1) or
+    /// `max_offsets` is 0, and an `Err` is `file_size`'s refusal, so a caller falls back to them
+    /// for the error message.
     pub fn file_geom(&self, file: i64, max_offsets: usize) -> Result<FileGeom> {
         let DsMeta::Files { spf, framing: layout, .. } = self else { bail!("`{}` is an array dataset", self.name()) };
         let n = self.samples_in_file(file)?;
         let first = file * spf;
-        let keep = usize::try_from(n).is_ok_and(|n| n <= max_offsets);
+        let cap = i64::try_from(max_offsets).unwrap_or(i64::MAX);
+        let keep = cap > 0;
+        let mut k = if keep { ceil_div(n, cap).max(1) } else { 1 };
+        while keep && anchor_count(layout, n, k) > cap {
+            k += 1;
+        }
         if layout.is_packed() {
-            let mut offsets = Vec::with_capacity(if keep { n as usize } else { 0 });
+            let mut anchors = Vec::with_capacity(if keep { anchor_count(layout, n, k) as usize } else { 0 });
             let mut total = 0i64;
             for i in 0..n {
-                if keep {
-                    offsets.push(total);
+                if keep && i % k == 0 {
+                    anchors.push(total);
                 }
                 total = total.checked_add(self.sample_size(first + i)?).ok_or_else(|| self.overflow(format!("the size of file {file}")))?;
             }
-            return Ok(FileGeom { size: total, offsets: keep.then_some(offsets) });
+            return Ok(FileGeom { file, size: total, every: k, anchors: keep.then_some(anchors) });
         }
         let lens = self.unit_lens(file)?;
         let size = self.file_size_from_units(file, &lens)?;
         if layout.columns.len() != 1 || !keep {
-            return Ok(FileGeom { size, offsets: None });
+            return Ok(FileGeom { file, size, every: k, anchors: None });
         }
         let col = &layout.columns[0];
-        let offsets = (|| {
-            let mut offsets = Vec::with_capacity(n as usize);
+        let anchors = (|| {
+            let mut anchors = Vec::with_capacity(anchor_count(layout, n, k) as usize);
             let mut unit_at = self.data_start(file).ok()?;
             for (u, len) in lens.iter().enumerate() {
-                let m = (n - u as i64 * layout.unit).min(layout.unit);
-                let mut off = checked_sum([unit_at, layout.unit_header, layout.unit_header_per_sample.checked_mul(m)?, col.header])?;
-                for i in 0..m {
-                    offsets.push(off.checked_add(col.row_header)?);
-                    off = off.checked_add(layout.row_bytes(0, self.sample_size(first + u as i64 * layout.unit + i).ok()?)?)?;
+                if layout.unit <= k {
+                    // the unit's start: an offset walks its rows from there
+                    if u as i64 % (k / layout.unit) == 0 {
+                        anchors.push(unit_at);
+                    }
+                } else {
+                    let m = (n - u as i64 * layout.unit).min(layout.unit);
+                    let mut off = checked_sum([unit_at, layout.unit_header, layout.unit_header_per_sample.checked_mul(m)?, col.header])?;
+                    // up to the unit's last anchor; the unit's length has the rows past it
+                    for i in 0..=(m - 1) / k * k {
+                        if i % k == 0 {
+                            anchors.push(off);
+                        }
+                        off = off.checked_add(layout.row_bytes(0, self.sample_size(first + u as i64 * layout.unit + i).ok()?)?)?;
+                    }
                 }
                 unit_at = unit_at.checked_add(*len)?;
             }
-            Some(offsets)
+            Some(anchors)
         })();
-        Ok(FileGeom { size, offsets })
+        Ok(FileGeom { file, size, every: k, anchors })
+    }
+
+    /// `sample_offset(id)` from the anchors `file_geom` computed for `id`'s file: the anchor's
+    /// offset plus at most k-1 sizes drawn, with `sample_offset`'s checked arithmetic. `None`
+    /// where the geometry holds no anchors, `id` is outside its file, or a draw or a sum
+    /// fails: the caller asks `sample_offset`, for its value or its error.
+    pub fn offset_from_geom(&self, g: &FileGeom, id: i64) -> Option<i64> {
+        let DsMeta::Files { spf, framing: l, .. } = self else { return None };
+        let anchors = g.anchors.as_ref()?;
+        let k = g.every;
+        let file = id.checked_div(*spf)?;
+        let first = file.checked_mul(*spf)?;
+        let p = id - first;
+        if file != g.file || p < 0 || p >= self.samples_in_file(file).ok()? {
+            return None;
+        }
+        if l.is_packed() {
+            let mut off = *anchors.get(usize::try_from(p / k).ok()?)?;
+            for s in first + p / k * k..id {
+                off = off.checked_add(self.sample_size(s).ok()?)?;
+            }
+            return Some(off);
+        }
+        let col = l.columns.first()?;
+        let (u, i) = (p / l.unit, p % l.unit);
+        let unit_first = first + u * l.unit;
+        let (mut off, from) = if l.unit <= k {
+            let q = k / l.unit;
+            let mut unit_at = *anchors.get(usize::try_from(u / q).ok()?)?;
+            for v in u / q * q..u {
+                unit_at = unit_at.checked_add(self.unit_len(file, v).ok()?)?;
+            }
+            let m = self.samples_in_unit(file, u).ok()?;
+            (checked_sum([unit_at, l.unit_header, l.unit_header_per_sample.checked_mul(m)?, col.header])?, unit_first)
+        } else {
+            (*anchors.get(usize::try_from(u * ceil_div(l.unit, k) + i / k).ok()?)?, unit_first + i / k * k)
+        };
+        for s in from..id {
+            off = l.row_bytes(0, self.sample_size(s).ok()?).and_then(|r| off.checked_add(r))?;
+        }
+        off.checked_add(col.row_header)
     }
 
     pub fn chunk_size(&self, file: i64, k: i64) -> Result<i64> {
@@ -1411,12 +1488,13 @@ pub(crate) mod tests {
                     let g = meta.file_geom(file, usize::MAX).unwrap();
                     assert_eq!(g.size, meta.file_size(file).unwrap(), "format `{format}` file {file}");
                     let n = meta.samples_in_file(file).unwrap();
-                    match &g.offsets {
+                    match &g.anchors {
                         Some(o) => {
-                            assert_eq!(o.len() as i64, n);
-                            for (i, off) in o.iter().enumerate() {
-                                assert_eq!(*off, meta.sample_offset(file * 50 + i as i64).unwrap(), "format `{format}` file {file} sample {i}");
+                            assert_eq!((o.len() as i64, g.every), (n, 1));
+                            for id in file * 50..file * 50 + n {
+                                assert_eq!(meta.offset_from_geom(&g, id), Some(meta.sample_offset(id).unwrap()), "format `{format}` sample {id}");
                             }
+                            assert_eq!(meta.offset_from_geom(&g, file * 50 + n), None, "past the file");
                         }
                         None => {
                             assert_eq!(format, PARQUET);

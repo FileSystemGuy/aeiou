@@ -468,8 +468,8 @@ pub struct Vm<'m, 'a> {
     unit_lens: HashMap<(usize, i64), Arc<Vec<i64>>>,
     /// Sizes and sample offsets of the container files this actor addressed last, most recent
     /// last (`DsMeta::file_geom`): a file's samples' sizes are drawn once while it is read, not
-    /// once per op. Bounded by `GEOM_FILES` files and `GEOM_OFFSETS` offsets, never a table
-    /// over the dataset; never shared.
+    /// once per op. Bounded by `GEOM_FILES` files and `GEOM_OFFSETS` offset anchors, never a
+    /// table over the dataset; never shared.
     geom: Vec<((usize, i64), Arc<FileGeom>)>,
     stack: Vec<Cont<'a>>,
     pending: Pending<'a>,
@@ -478,13 +478,14 @@ pub struct Vm<'m, 'a> {
 
 /// The bounds of a VM's file geometry cache (`Vm::geom`): the files an actor interleaves
 /// (a `cycle` of shards, the files of a batch), and 8 MiB of sample offsets. A file of more
-/// samples than `GEOM_OFFSETS` is held by its size alone, its offsets asked of `DsMeta`.
+/// samples than `GEOM_OFFSETS` holds an anchor every k = ceil(n / `GEOM_OFFSETS`) samples or
+/// so, and an offset draws at most k-1 sizes from its anchor (`DsMeta::offset_from_geom`).
 const GEOM_FILES: usize = 16;
 const GEOM_OFFSETS: usize = 1 << 20;
 
-/// The sample offsets `geom` holds.
+/// The offset anchors `geom` holds.
 fn geom_held(geom: &[((usize, i64), Arc<FileGeom>)]) -> usize {
-    geom.iter().map(|(_, g)| g.offsets.as_ref().map_or(0, |o| o.len())).sum()
+    geom.iter().map(|(_, g)| g.anchors.as_ref().map_or(0, |o| o.len())).sum()
 }
 
 impl<'m, 'a: 'm> Vm<'m, 'a> {
@@ -1349,15 +1350,21 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
 
     /// `DsMeta::sample_offset`, through `geom`.
     fn sample_offset(&mut self, ds: usize, id: i64) -> ER<i64> {
-        if let DsMeta::Files { spf, .. } = &self.model.datasets[ds] {
-            let (file, i) = (id / spf, id % spf);
-            if let Some(g) = self.file_geom(ds, file) {
-                if let Some(off) = g.offsets.as_ref().and_then(|o| o.get(usize::try_from(i).ok()?)) {
-                    return Ok(*off);
+        self.sample_offset_within(ds, id, GEOM_OFFSETS)
+    }
+
+    /// `sample_offset` through a cache of at most `max_offsets` anchors.
+    fn sample_offset_within(&mut self, ds: usize, id: i64, max_offsets: usize) -> ER<i64> {
+        let model = self.model;
+        let meta = &model.datasets[ds];
+        if let DsMeta::Files { spf, .. } = meta {
+            if let Some(g) = self.file_geom_within(ds, id / spf, max_offsets) {
+                if let Some(off) = meta.offset_from_geom(&g, id) {
+                    return Ok(off);
                 }
             }
         }
-        Ok(self.model.datasets[ds].sample_offset(id)?)
+        Ok(meta.sample_offset(id)?)
     }
 
     fn size_of(&mut self, h: &HVal) -> ER<i64> {
@@ -2019,13 +2026,24 @@ mod tests {
 
     /// RC1 review: the geometry cache always kept the file it had just computed, so one file of
     /// n samples (a dataset of one big shard) held a table of n offsets in every VM. A file of
-    /// more samples than the bound is held by its size alone, and what the cache answers is
-    /// `DsMeta`'s to the bit.
+    /// more samples than the bound held its size alone, and its offsets cost O(n) draws each
+    /// again (RC1 review); it now holds an anchor every k samples, an offset draws at most k-1
+    /// sizes from its anchor, and what the cache answers is `DsMeta`'s to the bit.
     #[test]
     fn the_geometry_cache_never_holds_more_offsets_than_its_bound() {
+        use crate::eval::tests::SIZE_DRAWS;
+        let draws = || SIZE_DRAWS.with(|c| c.replace(0));
         let tfrecord = r#", "format": {"class": "tfrecord", "reader": "tf.data", "framing": {"columns": [{"row_header": 12, "row_footer": 4, "weight": 1}]}}"#;
+        // one column in units smaller and larger than k, with every header, footer, and alignment
+        let units = |unit: i64| {
+            format!(
+                r#", "format": {{"class": "tfrecord", "reader": "tf.data", "framing": {{"unit": {unit}, "file_header": 4, "file_header_per_unit": 3, "unit_header": 9,
+                  "unit_header_per_sample": 2, "unit_footer": 5, "unit_footer_per_sample": 1, "unit_align": 16, "file_footer": 7, "file_align": 64,
+                  "columns": [{{"header": 3, "row_header": 4, "row_footer": 1, "row_align": 8, "align": 32, "weight": 1}}]}}}}"#
+            )
+        };
         let cap = 30;
-        for format in ["", tfrecord] {
+        for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
                 r#"{{"ast": "0.10", "name": "t",
@@ -2044,21 +2062,31 @@ mod tests {
                 assert!(geom_held(&vm.geom) <= cap, "format `{format}`: {} offsets held after file {file}", geom_held(&vm.geom));
                 assert_eq!(g.size, meta.file_size(file).unwrap(), "format `{format}` file {file}");
                 let n = meta.samples_in_file(file).unwrap();
-                match &g.offsets {
-                    Some(o) => {
-                        assert!(n as usize <= cap);
-                        for (i, off) in o.iter().enumerate() {
-                            assert_eq!(*off, meta.sample_offset(file * 100 + i as i64).unwrap(), "format `{format}` file {file} sample {i}");
-                        }
-                    }
-                    None => assert!(n as usize > cap, "format `{format}` file {file}: {n} samples, no offsets"),
+                let k = g.every;
+                assert!(g.anchors.as_ref().is_some_and(|a| a.len() <= cap), "format `{format}` file {file}: anchors {:?}", g.anchors.as_ref().map(|a| a.len()));
+                assert!(k >= 1 && (n as usize > cap || k == 1), "format `{format}` file {file}: {n} samples, every {k}");
+                for id in file * 100..file * 100 + n {
+                    draws();
+                    let got = meta.offset_from_geom(&g, id);
+                    let d = draws();
+                    assert_eq!(got, Some(meta.sample_offset(id).unwrap()), "format `{format}` sample {id}");
+                    assert!(d < k as u64, "format `{format}` sample {id}: {d} size draws from an anchor every {k}");
                 }
             }
-            // and through the production bound, the offsets the VM reads are DsMeta's
-            let mut vm = Vm::new(&model, "gpu", 0, 1);
-            for id in (0..220).rev() {
-                let want = meta.sample_offset(id).unwrap();
-                assert_eq!(vm.sample_offset(0, id).ok(), Some(want), "format `{format}` sample {id}");
+            // through the VM: what it reads is DsMeta's, at most k-1 draws once its file is held
+            for (max, what) in [(cap, "the test bound"), (GEOM_OFFSETS, "the production bound")] {
+                let mut vm = Vm::new(&model, "gpu", 0, 1);
+                let mut held = None;
+                for id in (0..220).rev() {
+                    let want = meta.sample_offset(id).unwrap();
+                    draws();
+                    assert_eq!(vm.sample_offset_within(0, id, max).ok(), Some(want), "format `{format}` sample {id} at {what}");
+                    let d = draws();
+                    assert!(geom_held(&vm.geom) <= max, "format `{format}` at {what}: {} anchors held", geom_held(&vm.geom));
+                    let k = vm.geom.last().unwrap().1.every;
+                    assert!(held != Some(id / 100) || d < k as u64, "format `{format}` sample {id} at {what}: {d} size draws, every {k}");
+                    held = Some(id / 100);
+                }
             }
         }
     }
