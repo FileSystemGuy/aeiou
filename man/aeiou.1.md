@@ -118,7 +118,8 @@ writing, notes what it finished, flushes, and reports to rank 0, which rewrites 
 once more, marked `stopped` (no datagen is writing the corpus), prints that every rank
 stopped, and every host exits 130. The state is unchanged, so `--resume ROOT` finishes the
 corpus and `--settle ROOT` keeps what it reached. A second Ctrl-C exits at once; the manifest
-of the last window is still true. A host that fails stops the others the same way.
+of the last window is still true. A host that fails stops the others the same way, as a
+failure: every host prints the failing host's rank and error and exits 1.
 
 `datagen --resume ROOT` finishes a dataset a datagen left `writing`, `growing`, or
 `shrinking` (killed, crashed, or failed), from the manifest at ROOT alone: the dataset, its place, the payload, and the

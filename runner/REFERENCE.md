@@ -620,14 +620,17 @@ as root). The same runs on the loopback NFS mount are §7.
   and `Done`; rank 0 gathers every rank (one whose connection drops counts as stopped),
   writes the manifests once more with `progress.stopped`, prints that every rank stopped, and
   every rank exits 130 (`datagen::Stopped`). The second `SIGINT` calls `_exit(130)`. The
-  manifest written on a failure's way out holds `stopped` too. Tests: `tests/coord.rs` kills
+  manifest written on a failure's way out holds `stopped` too. Writers stopped by another
+  host's failure (the coordinator's `Stop`) are a failure, not a Ctrl-C: the rank reports
+  the failing rank and its error and exits 1 (2026-10-14). Tests: `tests/coord.rs` kills
   a datagen on two hosts and a grow on one and settles each at a directory boundary, to the
   names, sizes, bytes, and totals of that count (`run` accepts it), the live check refusing
   first; kills a shrink and settles it without removing past the run in hand; Ctrl-C on rank
   1 of two and on a lone rank 0, each host exiting 130 and the manifest true, settled with no
-  wait; the killed datagen's manifest keeps the band below the boundary and nothing past the
-  mark. The builder's tests settle an interrupted grow of every container format to a fresh
-  datagen's bytes (HDF5 headers included) and an interrupted shrink of a bucket.
+  wait; rank 2 of three failing mid-write, every rank exiting 1 with its reason; the killed
+  datagen's manifest keeps the band below the boundary and nothing past the mark. The
+  builder's tests settle an interrupted grow of every container format to a fresh datagen's
+  bytes (HDF5 headers included) and an interrupted shrink of a bucket.
 - **Rank 0 alone reads the manifest at ROOT (2026-10-13, `DESIGN_REVIEW.md` §3.70).** For
   `--resume`, `--grow`, `--shrink`, and `--settle` on several hosts, rank 0 starts the
   coordinator with every `Welcome` held (`Server::start_held`), reads the manifest, and

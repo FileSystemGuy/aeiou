@@ -46,6 +46,7 @@
 //! **Stopping.** Ctrl-C (`SIGINT`) on any host stops every host: each stops claiming, leaves
 //! the file it is writing, notes what it finished, flushes, and reports; rank 0 writes the
 //! manifests once more (`stopped`), and every host exits 130. A second Ctrl-C exits at once.
+//! A host that fails stops the others the same way, but each reports its error and exits 1.
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::collections::BTreeMap;
@@ -1941,6 +1942,11 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         return Err(e);
     }
     let log = log_m.into_inner().unwrap();
+    if let Some(reason) = hosts.and_then(|h| h.tcp.abort_reason()).filter(|_| mode.halted()) {
+        // stopped because another host failed (or the coordinator went away): a failure, so
+        // its reason and exit 1, not a Ctrl-C's 130; rank 0's own gathering fails the same way
+        return Err(anyhow::anyhow!("{reason}"));
+    }
     if mode.halted() {
         // stopped: every rank has noted what it finished; rank 0 records it once more
         let mut msg = "stopped".to_string();

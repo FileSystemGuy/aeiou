@@ -1058,3 +1058,26 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   ("left behind: p, p/.aeiou-dataset.json, p/0000.parquet, p/0001.parquet") and passes with it;
   `--test all layout datagen` 11 passed, `--lib formats` 5 passed, `test_formats.py` 38 passed
   (Rust and Python writers still byte for byte). Fixed in an isolated worktree and applied.
+
+## 47. A datagen host stopped by another host's failure said "stopped" and exited 130
+
+- **Where:** `runner/aeiou/src/datagen.rs` (the end of a rank's datagen, before the
+  `mode.halted()` branch); man/aeiou.1.md DATAGEN (the Ctrl-C paragraph), runner/REFERENCE.md
+  the datagen *Ctrl-C* paragraph.
+- **Found by:** review of the coordinator/CLI: the watch thread sets `mode.halt` both on a
+  coordinator `Halt` (Ctrl-C) and on an abort (`tcp.abort_reason()`), and a rank other than 0
+  then took the halted branch, `datagen::Stopped`, which `main.rs` exits with 130.
+- **Defect:** with three ranks and rank 2's `train/` read-only, rank 0 exited 1 naming rank 2's
+  error, rank 2 exited 1 with it, and rank 1 printed only "stopped" and exited 130, the Ctrl-C
+  exit: a failure was reported as a user's interrupt and its reason was lost, against aeiou(1)
+  (exit 1 is "a failure during the work") and REFERENCE §6 (a failure fails on every host
+  naming the originating rank and reason). A lost coordinator was reported as "stopped" too.
+- **Fix:** when the writers were halted and the coordinator holds an abort reason, the rank
+  returns that reason as its error: "aeiou datagen: rank 2 (HOST): dataset `train`: creating
+  …: Permission denied", exit 1. Ctrl-C keeps "stopped" and 130; the manifest's
+  `progress.stopped` is written as before. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `coord::a_failing_datagen_host_fails_the_others_with_its_reason` (three
+  processes; every rank exits 1 with the path and "Permission denied", ranks 0 and 1 name
+  "rank 2 (", no "stopped" line, the manifest `writing` with `progress.stopped`) fails without
+  the fix (rank 1 exit 130) and passes with it; `--test all coord` 21 passed, `man` 9 passed.
+  Fixed in an isolated worktree and applied.

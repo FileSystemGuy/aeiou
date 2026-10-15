@@ -1265,3 +1265,43 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && e.contains("`indexed` (looked up by id, never consumed)"), "{e}");
 }
+
+/// A host that fails stops the others, and each of them reports that host's error and exits
+/// 1: an abort from the coordinator is a failure, not a Ctrl-C (130, "stopped"). Rank 2 of
+/// three writes under a dataset directory it cannot create in; rank 1 only hears of it.
+#[test]
+fn a_failing_datagen_host_fails_the_others_with_its_reason() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, elsewhere) = (tmpdir("dg-fail"), tmpdir("dg-fail-ro"));
+    let ro = elsewhere.join("train");
+    std::fs::create_dir(&ro).unwrap();
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let port = free_port();
+    let mut children = Vec::new();
+    for rank in 0..3i64 {
+        let at = if rank == 2 { &*elsewhere } else { &*root };
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(at);
+        c.args(["--param", "samples=4000", "--param", "files_per_directory=50", "--writers", "2"]);
+        c.args(["--ranks", "3", "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
+        children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap());
+        if rank == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    let outs: Vec<_> = children.into_iter().map(|c| c.wait_with_output().unwrap()).collect();
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for (rank, o) in outs.iter().enumerate() {
+        let (stdout, stderr) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+        assert_eq!(o.status.code(), Some(1), "rank {rank}:\n{stdout}\n{stderr}");
+        assert!(stderr.contains("dg-fail-ro/train/0") && stderr.contains("Permission denied"), "rank {rank}: {stderr}");
+        assert!(!stdout.lines().any(|l| l.starts_with("stopped") || l.starts_with("all 3 ranks stopped")), "rank {rank}: {stdout}");
+        if rank != 2 {
+            // the failing host is named
+            assert!(stderr.contains("rank 2 ("), "rank {rank}: {stderr}");
+        }
+    }
+    // what was finished is recorded, and that no datagen is writing
+    let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
+    assert!(m.state == "writing" && !m.progress["stopped"].is_null(), "{}", m.progress);
+}
