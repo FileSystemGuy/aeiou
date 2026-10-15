@@ -1917,3 +1917,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   test pinned one order (a timing dependence in a test, against the invariant it checks).
 - **Fix:** the test accepts either first repeat.
 - **Evidence:** the CI log of run 38763410446; the test passed 8 runs in a row locally after.
+
+## 83. An event-loop instance stuck on its channels hung while another of its loop waited at a barrier
+
+- **Where:** `runner/aeiou/src/uring.rs` (`Loop::serve`, new `Loop::stuck_instance`, `next_scan`);
+  `runner/REFERENCE.md` §8.
+- **Found by:** the RC1 timing review of the channel machinery (after bugs 79/80): the thread
+  runner reports a channel deadlock per instance (`Watch`); the event loop's "nothing will
+  complete" check looked at the loop as a whole and was skipped whenever the eventfd was
+  posted, which any barrier waiter or object request in flight does.
+- **Defect:** `channel c cap 1; cond(actor id == 1){ take c }; barrier global` at `--gpus 2
+  --threads 1` (or `--gpus 40` with loops shared) hung under io_uring and libaio, gpu#0 at the
+  barrier gpu#1 had to reach, gpu#1 on its channel; sync reported "every thread of gpu#1 waits
+  on a channel that nothing will change".
+- **Fix:** at most every `IDLE` (50 ms) after the runnable queue drains, an instance every task
+  of which is unqueued and parked on its channels, sub-actors, loaders, or trace order fails
+  with the existing wording listing its own tasks, whatever the loop's other instances do
+  (channels and trace tables are per instance); a task in I/O, a timer, or a barrier keeps its
+  instance live, so no run that could finish is failed. It takes the existing failure path, so
+  the root cause is reported. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `run::an_instance_stuck_on_its_channels_is_an_error_while_a_sibling_waits_at_a_barrier`
+  (2 GPUs, Sync, Uring and LibAio at 1 and 2 loops, hang-safe) hung 30 s with the call undone
+  and passes in 0.26 s; the reviewer's shapes s1–s11 10/10 ok under io_uring and libaio at time
+  scales 0 and 0.0001, 1 and 4 GPUs, no false report; on b108d7d plus the change `--test all`
+  130 passed, `--lib` 65. Fixed in an isolated worktree and applied.

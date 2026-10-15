@@ -1341,3 +1341,30 @@ fn a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs() {
         }
     }
 }
+
+/// One instance of an event loop stuck on its channels while another of the same loop waits
+/// at a barrier the stuck one must reach (the RC1 review's R14: gpu 1 takes from a channel no
+/// one puts on, gpu 0 goes on to a global barrier) hung under io_uring and libaio with both
+/// instances on one loop: the loop judged only as a whole, and the barrier's waiter kept it
+/// from looking. The stuck instance is an error now whatever its loop's other instances do,
+/// as it was under the thread runner (2026-10-15).
+#[test]
+fn an_instance_stuck_on_its_channels_is_an_error_while_a_sibling_waits_at_a_barrier() {
+    let doc = r#"{"ast":"0.10","name":"r14","actors":{"gpu":{"body":[{"channel":{"name":"c","capacity":1}},
+        {"cond":{"if":{"eq":[{"actor":"id"},1]},"then":[{"take":{"channel":"c"}}]}},{"barrier":{"scope":"global"}}]}}}"#;
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(doc).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(2, 0, &[])));
+    let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
+    let root = tmpdir("stuck-sibling");
+    for (backend, threads) in [(BackendKind::Sync, 0), (BackendKind::Uring, 1), (BackendKind::Uring, 2), (BackendKind::LibAio, 1), (BackendKind::LibAio, 2)] {
+        let mut o = opts(&root, backend);
+        o.threads = threads;
+        let e = run_within(model, o).err().expect("refused");
+        let says = match backend {
+            BackendKind::Sync => "every thread of gpu#1 waits on a channel that nothing will change",
+            _ => "1 actor(s) wait on channels or trace order nothing will complete: gpu#1 []",
+        };
+        assert!(e.contains(says), "{backend:?}, {threads} loop(s): {e}");
+    }
+}

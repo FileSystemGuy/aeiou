@@ -990,6 +990,8 @@ pub(crate) struct Loop<E: Engine> {
     /// The object engine's ops in flight from this loop.
     objects: Objects,
     live: usize,
+    /// When `serve` next looks for an instance no task of which can go on (`stuck_instance`).
+    next_scan: Instant,
 }
 
 impl Loop<LoopIo> {
@@ -1057,6 +1059,7 @@ impl<E: Engine> Loop<E> {
             efd_posted: false,
             objects,
             live: 0,
+            next_scan: Instant::now(),
         })
     }
 
@@ -1184,6 +1187,10 @@ impl<E: Engine> Loop<E> {
                 bail!("event loop {}: {} actor(s) wait on channels or trace order nothing will complete: {}", self.index, parked.len(), parked.join(", "));
             }
             let now = Instant::now();
+            if now >= self.next_scan {
+                self.next_scan = now + IDLE;
+                self.stuck_instance()?;
+            }
             let timeout = match self.timers.peek() {
                 Some(Reverse((t, _))) => t.saturating_duration_since(now).min(IDLE),
                 None => IDLE,
@@ -1228,6 +1235,26 @@ impl<E: Engine> Loop<E> {
                 }
             }
         }
+    }
+
+    /// An instance every task of which waits on its own channels, sub-actors, or trace order
+    /// is an error, whatever the loop's other instances do: channels and trace tables are per
+    /// instance, so only a task of the instance could end such a wait. The loop's check above
+    /// sees only the loop as a whole, and a barrier waiter or an object request keeps it from
+    /// looking, so a sibling at a barrier the stuck one must reach waited with it forever
+    /// (2026-10-15, RC1 review; the thread runner's `Watch` judges per instance alike). A task
+    /// with an op in flight, a timer, a barrier, or a step pending counts as able to go on.
+    /// Called once `runnable` is drained, every IDLE.
+    fn stuck_instance(&self) -> Result<()> {
+        // per instance (its main task's slot): 1 a task parked, 2 a task able to go on
+        let mut seen = vec![0u8; self.tasks.len()];
+        for t in self.tasks.iter().filter(|t| !t.done) {
+            let parked = !t.queued && matches!(t.wait, Wait::Chan { .. } | Wait::JoinParallel { .. } | Wait::JoinLoaders | Wait::Trace);
+            seen[t.inst] = seen[t.inst].max(if parked { 1 } else { 2 });
+        }
+        let Some(inst) = seen.iter().position(|&s| s == 1) else { return Ok(()) };
+        let parked: Vec<String> = (0..self.tasks.len()).filter(|&i| !self.tasks[i].done && self.tasks[i].inst == inst).map(|i| self.label(i)).collect();
+        bail!("event loop {}: {} actor(s) wait on channels or trace order nothing will complete: {}", self.index, parked.len(), parked.join(", "));
     }
 
     /// A completion for task `id`.

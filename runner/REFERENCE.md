@@ -1033,7 +1033,10 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   (`arrive`, `released`): the loop keeps a read posted on an eventfd that every release
   writes, local or from the TCP coordinator, so a release arrives as a completion
   (`NAPKIN_MATH.md` §8.A as designed). A loop with nothing in flight, no timer, and no
-  barrier is a deadlock and is reported with the parked actors.
+  barrier is a deadlock and is reported with the parked actors; so is an instance every task
+  of which is parked on its channels, sub-actors, or trace order, whatever the loop's other
+  instances do (2026-10-15, RC1 review: an instance stuck so while another of its loop
+  waited at a barrier it had to reach hung both, since the waiter kept the loop from looking).
 - **Stall and latency** are measured as under `sync`: an op from SQE push to CQE (queueing
   in the SQ included, as the application sees it), a `take` from park to wake.
 - ~~**Not done**, deliberately, as the A/B knobs of `NAPKIN_MATH.md` §8.5: fixed files and
