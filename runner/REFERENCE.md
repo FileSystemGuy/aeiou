@@ -1806,7 +1806,7 @@ given, and the usage lines of `run` and `datagen` show it as required. The check
 the run (`--max-gap` exceeded, `--require-cold` refusing a warm host, the limits that
 `--ignore-limits` would start over) name the flag only; its source is in the block printed
 above them. An `AEIOU_*` that is no option of any subcommand warns (`AEIOU_CONFIG`, `AEIOU_SCHEMA_DIR`,
-`AEIOU_RUNNER`, `AEIOU_RSH`, and the coordinator's test hook `AEIOU_COORD_HEARTBEAT_MS` (§6) are the family's own and do not); one that is another
+`AEIOU_RUNNER`, `AEIOU_RSH`, the coordinator's test hook `AEIOU_COORD_HEARTBEAT_MS` (§6), and the Rust tests' `AEIOU_KEEP_TEST_DIRS` (keep each test's scratch directory, which is otherwise removed when the test ends or panics) are the family's own and do not); one that is another
 subcommand's option is left alone. `aeiou check` prints the block too (its files and the
 config file), so CI's diff of its output against `schema/check.py` skips past the first
 empty line. `aeiou-datagen` resolves `--root`, `--endpoint`, `--writers`, `--rank`, `--ranks`, and `--coordinator` through the same layers

@@ -8,17 +8,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
 
-static N: AtomicUsize = AtomicUsize::new(0);
-
-fn tmpdir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("aeiou-options-{}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed), tag));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmpdir(tag: &str) -> crate::common::TempDir {
+    crate::common::tmpdir("options", tag)
 }
 
 fn aeiou(sub: &str, ast: &str, params: &[&str]) -> Command {
@@ -137,7 +131,6 @@ fn every_subcommand_prints_the_block_with_sources() {
     assert!(!ok);
     assert_eq!(row(&block(&text), "require-cold").2, format!("config {}", cfg.display()));
     assert!(err.contains("--require-cold"), "{err}");
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -181,7 +174,6 @@ fn fixed_options_are_refused_from_the_environment_and_the_file() {
     let (ok, _, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).env("AEIOU_THREADS", "many"));
     assert!(!ok);
     assert!(err.contains("AEIOU_THREADS"), "{err}");
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -240,7 +232,6 @@ fn two_ranks_record_every_host_and_print_the_differences_and_a_mismatch_names_th
     let outs = collect(vec![c0, c1]);
     assert!(outs.iter().all(|(ok, _, _)| !ok));
     assert!(outs.iter().any(|(_, _, e)| e.contains("not the same run: seed 2 differs from rank 0's 1")), "{outs:?}");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -311,5 +302,4 @@ fn every_boolean_reads_no_x_in_the_help_and_parses_both_ways() {
     let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).env("AEIOU_NO_DROP_CACHES", "1"));
     assert!(!ok);
     assert!(err.contains("AEIOU_DROP_CACHES=true or false"), "{err}");
-    std::fs::remove_dir_all(&d).unwrap();
 }

@@ -5,7 +5,6 @@
 
 mod common;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aeiou::backend::BackendKind;
 use aeiou::datagen::{datagen, DatagenOpts};
@@ -13,13 +12,8 @@ use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, Model, Params};
 use aeiou::run::{self, RunOpts, UringOpts};
 
-static N: AtomicUsize = AtomicUsize::new(0);
-
-fn tmpdir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("aeiou-test-{}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed), tag));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmpdir(tag: &str) -> crate::common::TempDir {
+    crate::common::tmpdir("test", tag)
 }
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
@@ -163,5 +157,4 @@ fn io_uring_knobs_keep_the_fingerprint() {
     o.uring = UringOpts { sqpoll_shared: true, ..Default::default() };
     let e = format!("{:#}", run::run(model, o, std::collections::HashMap::new()).unwrap_err());
     assert!(e.contains("needs sqpoll"), "{e}");
-    std::fs::remove_dir_all(&root).unwrap();
 }

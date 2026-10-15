@@ -7,7 +7,6 @@
 //! `posix-aio`, `libaio`, and `mmap`.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aeiou::backend::{BackendKind, MmapConsume, MmapMode};
 use aeiou::datagen::{datagen, DatagenOpts};
@@ -15,13 +14,8 @@ use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, Model, Params};
 use aeiou::run::{self, RunOpts};
 
-static N: AtomicUsize = AtomicUsize::new(0);
-
-fn tmpdir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("aeiou-test-{}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed), tag));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmpdir(tag: &str) -> crate::common::TempDir {
+    crate::common::tmpdir("test", tag)
 }
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
@@ -119,7 +113,6 @@ fn small_files_training_round_trip() {
         assert!(r.actors.iter().all(|a| a.takes.len() == 12));
         assert!(r.departure_releases.is_empty());
     }
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -140,7 +133,6 @@ fn manifest_mismatch_and_missing_are_refused() {
     let o = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
     let mut log = Vec::new();
     assert!(datagen(loaded3, cfg3, &params, model3, &o, None, &mut log).is_err());
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -166,7 +158,6 @@ fn namespaces_must_be_empty_and_writes_are_read_back() {
     let cleaned = run::prepare_namespaces(&loaded.ast, &root, true).unwrap();
     assert_eq!(cleaned, vec!["ckpt".to_string()]);
     assert!(!shard.exists());
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// The KV-cache abstracts in a few requests: a slot with two conversations open (the default's forty would start
@@ -193,7 +184,6 @@ fn kv_cache_chunked_dataset_parallel_slots_and_namespace() {
     assert_eq!(r.stats.bytes_read, bytes);
     assert!(r.stats.threads >= 1 + 2, "the actor's thread runs slot 0 itself: two pool threads for three slots, and one more under any slot that loads two chunks at once: {}", r.stats.threads);
     assert!(r.stats.expected_errors > 0, "the ENOTTY of the terminal probe in every open (ENOENT lookups and EEXIST mkdirs until the 2026-10-02 trace)");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -224,7 +214,6 @@ fn endpoints_place_a_dataset_and_a_namespace_apart_from_the_root() {
     let chunks = std::fs::read_dir(&kv).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".pt")).count();
     assert!(chunks > 0, "the namespace's chunks are written at its endpoint");
     assert!(!root.join("kv").exists());
-    std::fs::remove_dir_all(&base).unwrap();
 }
 
 #[test]
@@ -281,7 +270,6 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
     let (_, _, late) = leaked_model("lmcache_shared_fs_reader", config(2, 6, &params));
     let (_, inputs) = run::check_input_namespaces(rl, rcfg, &root, &opts(&root, BackendKind::Sync)).unwrap();
     assert!(run::run(late, opts(&root, BackendKind::Sync), inputs).is_err());
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -303,7 +291,6 @@ fn array_dataset_nested_parallel_and_direct_reads() {
     let beam: u64 = 4;
     assert!(ops > 2 * 6 * 2 * beam, "several hops per query: {ops} ops");
     assert_eq!(r.stats.threads, 1 + (2 - 1) + 2 * (beam - 1));
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -323,7 +310,6 @@ fn loader_delivers_in_order_and_bounds_prefetch() {
     assert_eq!(takes.len(), 30);
     assert!(takes.iter().all(|t| t.compute_ns == 2_000_000));
     assert_eq!(r.stats.threads, 1 + 3);
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -393,7 +379,6 @@ fn write_then_restore_through_the_namespace_manifest() {
     // a run without the manifest is refused
     std::fs::remove_file(root.join("ckpt/.aeiou-namespace.json")).unwrap();
     assert!(run::check_input_namespaces(rl, rcfg, &root, &ro).unwrap_err().to_string().contains("no run has written"));
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -446,7 +431,6 @@ fn io_uring_reproduces_the_sync_runs() {
         assert!(c.tasks_peak as usize >= threads.min(2), "{c:?}");
         assert!(c.cpu_user_ns + c.cpu_sys_ns > 0, "{c:?}");
         assert!(c.mount.as_ref().map(|m| !m.fstype.is_empty()).unwrap_or(false), "{c:?}");
-        std::fs::remove_dir_all(&root).unwrap();
     }
     {
         let root = tmpdir("uring-diskann");
@@ -460,7 +444,6 @@ fn io_uring_reproduces_the_sync_runs() {
             assert_eq!(r.stats.ops, ops);
             assert_eq!(r.stats.bytes_read, bytes);
         }
-        std::fs::remove_dir_all(&root).unwrap();
     }
     {
         let root = tmpdir("uring-ckpt");
@@ -477,7 +460,6 @@ fn io_uring_reproduces_the_sync_runs() {
             assert_eq!(r.stats.bytes_read, r.stats.bytes_written - 2 * 65536);
             assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * (4096 + 4096));
         }
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }
 
@@ -528,7 +510,6 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
         let r = go(model, o);
         assert_eq!(r.stats.fingerprint, fp);
         assert_eq!(r.aio.as_ref().unwrap().depth, 1);
-        std::fs::remove_dir_all(&root).unwrap();
     }
     {
         let root = tmpdir("more-diskann");
@@ -573,7 +554,6 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
                 assert!(r.counters.minor_faults + r.counters.major_faults > 0, "{:?}", r.counters);
             }
         }
-        std::fs::remove_dir_all(&root).unwrap();
     }
     {
         let root = tmpdir("more-ckpt");
@@ -590,7 +570,6 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
             assert_eq!(r.stats.bytes_read, r.stats.bytes_written - 2 * 65536, "{backend:?}: written, then read back (through a mapping made after the write)");
             assert_eq!(std::fs::metadata(root.join("ckpt/step_000002/__1_0.distcp")).unwrap().len(), 1048576 + 2097152 + 1048576 + 65536 + 4 * (4096 + 4096));
         }
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }
 
@@ -611,7 +590,6 @@ fn io_uring_loader_delivers_in_order_and_bounds_prefetch() {
     assert_eq!(r.stats.compute_ns, 30 * 2_000_000);
     assert_eq!(r.stats.threads, 1, "one loop for one instance");
     assert!(r.elapsed >= std::time::Duration::from_millis(60), "the timers slept: {:?}", r.elapsed);
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// `fsync` and `POSIX_FADV_DONTNEED` every file under `dir`: what a test can do about the
@@ -699,7 +677,6 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     // the mount's options are in the counters on any filesystem
     let m = aeiou::counters::MountSnapshot::for_path(&root).unwrap();
     assert!(m.opts.as_deref().map(|o| o.starts_with("rw") || o.starts_with("ro")).unwrap_or(false), "{m:?}");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -712,7 +689,7 @@ fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
     let (l4, c4, m4) = leaked_model("file_per_sample", config(1, 1, &[("samples", "4")]));
     for (l, c, m, root) in [(l6, c6, m6, &six), (l4, c4, m4, &four)] {
         let params = Params::new(&l.ast, c).unwrap();
-        let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
+        let opts = DatagenOpts { root: root.to_path_buf(), endpoints: Default::default(), writers: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
         datagen(l, c, &params, m, &opts, None, &mut Vec::new()).unwrap();
     }
     let file = |root: &PathBuf, id: i64| std::fs::read(root.join(m6.datasets[0].file_path(id, None).unwrap().as_ref())).unwrap();
@@ -730,8 +707,6 @@ fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
     let m = aeiou::payload::Manifest::read(&six.join("train")).unwrap();
     assert_eq!(m.payload.wrapper, "aeiou-positional/3");
     assert_eq!(m.payload.dedupe, 2);
-    std::fs::remove_dir_all(&six).unwrap();
-    std::fs::remove_dir_all(&four).unwrap();
 }
 
 /// A corpus larger than the free space at its root is refused before anything is written
@@ -825,7 +800,6 @@ fn a_fork_leaves_the_parents_file_positions_as_run_does() {
         assert_eq!(r.stats.fingerprint, fp, "{backend:?}: the dry run is the stream run issues");
         assert_eq!((r.stats.ops, r.stats.bytes_read), (ops, bytes), "{backend:?}");
     }
-    std::fs::remove_dir_all(&root).unwrap();
     // without the sub-actor's own open, its read would be at the inherited descriptor's position
     let shared = AST.replacen(r#"{"open":{"file":{"file":{"dataset":"d","id":0}},"flags":["RDONLY"]}},
           {"read""#, r#"{"read""#, 1);
@@ -854,7 +828,6 @@ fn an_op_whose_buffer_cannot_be_allocated_ends_the_run_with_its_error() {
         let e = r.expect_err("the run fails");
         assert!(e.contains(" read ") && e.contains("len=70368744177664: buffer allocation of 70368744177664 bytes failed"), "{backend:?}: {e}");
     }
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// An `array` file is sparse (`DESIGN_REVIEW.md` §3.72): datagen writes each slot's content and
@@ -908,5 +881,29 @@ fn array_datagen_writes_only_the_slots_contents() {
     let (fp, ops, bytes) = dry_fingerprint(model);
     let r = go(model, opts(&root, BackendKind::Mmap));
     assert_eq!((r.stats.fingerprint, r.stats.ops, r.stats.bytes_read), (fp, ops, bytes));
-    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A test's scratch directory goes when its guard drops, on a panic's unwind as well as at the
+/// end of the test: a failing test leaves nothing behind (a failed coordinator test used to
+/// leave gigabytes in the temp directory, until the disk filled and every later test failed).
+#[test]
+fn a_test_directory_is_removed_when_its_test_panics() {
+    if std::env::var_os(crate::common::KEEP_TEST_DIRS).is_some_and(|v| !v.is_empty() && v != "0") {
+        return;
+    }
+    let mut seen = None;
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let d = tmpdir("guard-panic");
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("sub/f"), b"bytes").unwrap();
+        seen = Some(d.to_path_buf());
+        panic!("the test fails with its directory full");
+    }));
+    assert!(r.is_err());
+    let d = seen.unwrap();
+    assert!(!d.exists(), "{} is left behind by a panicking test", d.display());
+    let d = tmpdir("guard-pass");
+    let p = d.to_path_buf();
+    drop(d);
+    assert!(!p.exists(), "{} is left behind by a passing test", p.display());
 }

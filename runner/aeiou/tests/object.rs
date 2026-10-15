@@ -15,19 +15,13 @@
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-
-static N: AtomicUsize = AtomicUsize::new(0);
 
 const USER: &str = "aeiou";
 const SECRET: &str = "aeiou-secret";
 
-fn tmpdir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("aeiou-object-{}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed), tag));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmpdir(tag: &str) -> crate::common::TempDir {
+    crate::common::tmpdir("object", tag)
 }
 
 /// A committed example with its datasets and namespaces `names` declared `protocol: s3`, as a
@@ -57,14 +51,13 @@ fn object_variant(example: &str, names: &[&str], dir: &Path) -> PathBuf {
 struct Minio {
     child: Child,
     url: String,
-    _dir: PathBuf,
+    _dir: crate::common::TempDir,
 }
 
 impl Drop for Minio {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self._dir);
     }
 }
 
@@ -177,7 +170,6 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
     let out = ok(&aeiou(Some(&m), &a));
     assert!(out.contains("fingerprint matches") && out.contains("s3 async  root"), "{out}");
     assert!(out.contains("s3 async is not the abstract's (s3 blocking)"), "{out}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -211,7 +203,6 @@ fn listings_and_stats_of_prefixes_read_like_directories() {
     let mut a = vec!["run", ast, "--gpus", "2", "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/elsewhere"];
     a.extend(params);
     refused(&aeiou(Some(&m), &a), "no manifest at s3://bench/elsewhere/.aeiou-dataset.json");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -325,7 +316,6 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     .unwrap();
     let o = aeiou(Some(&m), &["run", skip.to_str().unwrap(), "--gpus", "1", "--root", root, "--endpoint", "o=s3://bench/skip"]);
     refused(&o, "write o/0 at 8192: the object has 4096 bytes written; an upload is written in order from 0 (V18)");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -380,5 +370,4 @@ fn object_names_need_object_endpoints() {
     let o = aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb", "--param", "pq_code=1000000000"]);
     refused(&o, "dataset `index`: an `array` dataset is a sparse layout written at offsets and has no object form");
     assert!(!String::from_utf8_lossy(&o.stderr).contains("space:"), "{}", String::from_utf8_lossy(&o.stderr));
-    std::fs::remove_dir_all(&dir).unwrap();
 }

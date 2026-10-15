@@ -3,7 +3,6 @@
 //! geometry is computed by hand here.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 use aeiou::backend::BackendKind;
 use aeiou::datagen::{datagen, DatagenOpts};
@@ -219,9 +218,7 @@ const FADVISE: &str = r#"{
 
 #[test]
 fn fadvise_runs_and_is_fingerprinted() {
-    let root: PathBuf = std::env::temp_dir().join(format!("aeiou-layout-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = crate::common::tmpdir("layout", "fadvise");
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(FADVISE).unwrap()));
     let cfg: &'static Config = Box::leak(Box::new(config(1)));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
@@ -265,7 +262,6 @@ fn fadvise_runs_and_is_fingerprinted() {
     let p2 = Params::new(&other.ast, cfg).unwrap();
     let m2 = build_model(&other.ast, cfg, &p2).unwrap();
     assert_ne!(dryrun::run(&m2, 1, None).unwrap().total.fingerprint, dry.total.fingerprint);
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

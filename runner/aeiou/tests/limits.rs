@@ -4,7 +4,6 @@
 
 mod common;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aeiou::backend::BackendKind;
 use aeiou::datagen::{datagen, DatagenOpts};
@@ -12,13 +11,8 @@ use aeiou::eval::{build_model, Config, Model, Params};
 use aeiou::limits::{self, Limits, Need};
 use aeiou::run::{self, RunOpts};
 
-static N: AtomicUsize = AtomicUsize::new(0);
-
-fn tmpdir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("aeiou-test-{}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed), tag));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmpdir(tag: &str) -> crate::common::TempDir {
+    crate::common::tmpdir("test", tag)
 }
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
@@ -92,7 +86,6 @@ fn the_estimate_matches_the_counted_peak() {
     assert_eq!(run::loop_count(model, &o).unwrap(), 2);
     let r = run::run(model, o, Default::default()).unwrap();
     assert!(r.counters.open_files_peak >= 1 && r.counters.open_files_peak <= need.open_files, "io_uring peak {}", r.counters.open_files_peak);
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// DiskANN search at its default size: the budget ends inside the first search thread, the

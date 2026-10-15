@@ -103,8 +103,7 @@ fn a_wrong_file_for_the_abstract_says_what_an_abstract_is() {
     assert_eq!(message, format!("{script}: a builder script, not an abstract; `aeiou-build {script}` writes the abstracts it authors (`<name>.ast.json`) next to it, and those are what the runner takes"));
     let (message, _) = frame(&mut aeiou(&["datagen", "--root", "/tmp", "file_per_sample"]), "aeiou datagen");
     assert_eq!(message, "file_per_sample: No such file or directory (os error 2); an abstract is the `.ast.json` file aeiou-build writes from a builder script");
-    let dir = std::env::temp_dir().join(format!("aeiou-usage-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::common::tmpdir("usage", "not-an-abstract");
     let bad = dir.join("x.ast.json");
     std::fs::write(&bad, "import aeiou\n").unwrap();
     let (message, _) = frame(&mut aeiou(&["dry-run", "--gpus", "1", bad.to_str().unwrap()]), "aeiou dry-run");
@@ -115,7 +114,6 @@ fn a_wrong_file_for_the_abstract_says_what_an_abstract_is() {
     assert_eq!(o.status.code(), Some(1));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.starts_with(&format!("aeiou dry-run: {}: ", bad.display())) && !err.contains("Usage:"), "{err}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A number that can only be meaningless is a usage error in the frame, never a panic, a bare

@@ -3,19 +3,13 @@
 //! never started, and of two ranks (rank 0 holds the merged report and its own, rank 1 its
 //! own with the run's fingerprint).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
 
-static N: AtomicUsize = AtomicUsize::new(0);
-
-fn tmpdir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("aeiou-report-{}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed), tag));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmpdir(tag: &str) -> crate::common::TempDir {
+    crate::common::tmpdir("report", tag)
 }
 
 fn aeiou(sub: &str, ast: &str, params: &[&str]) -> Command {
@@ -152,7 +146,6 @@ fn one_host_report_matches_the_text_and_failures_are_written() {
     assert!(d["verdict"]["error"].as_str().unwrap().contains("aeiou datagen"));
     assert_eq!(d["abstract"]["name"], "file_per_sample");
     assert!(d["result"].is_null() && d["scope"].is_null() && d["verdict"]["fingerprint"].is_null());
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -196,7 +189,6 @@ fn two_ranks_merged_on_rank_0_and_own_on_rank_1() {
         assert_eq!(d["verdict"]["fingerprint_scope"], "run");
         assert_eq!(d["verdict"]["fingerprint"], run["fingerprint"]);
     }
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// Contract 0.3: an abstract may declare the API its application uses; a run takes it as the
@@ -233,7 +225,6 @@ fn the_declared_backend_is_the_default_and_another_is_named() {
     // an abstract that declares none is `sync`, and buffered against direct is a difference too
     let (_, text, _) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2", "--cache", "direct"]));
     assert!(text.contains("posix sync  cache direct is not the abstract's (posix sync  cache per-open)"), "{text}");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// An event loop drops a sub-actor's state when it ends, as the blocking path's thread does:
@@ -269,5 +260,4 @@ fn a_parallel_s_file_closes_when_the_abstract_closes_it_under_every_engine() {
         let f = d["fingerprint"].clone();
         assert_eq!(fp.get_or_insert(f.clone()), &f, "{posix}");
     }
-    std::fs::remove_dir_all(&root).unwrap();
 }

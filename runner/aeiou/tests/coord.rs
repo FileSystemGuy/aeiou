@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use aeiou::backend::BackendKind;
@@ -17,13 +17,8 @@ use aeiou::dryrun;
 use aeiou::eval::{build_model, Config, Model, Params};
 use aeiou::run::{self, RunOpts};
 
-static N: AtomicUsize = AtomicUsize::new(0);
-
-fn tmpdir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("aeiou-coord-{}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed), tag));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmpdir(tag: &str) -> crate::common::TempDir {
+    crate::common::tmpdir("coord", tag)
 }
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
@@ -344,7 +339,6 @@ fn two_hosts_reproduce_the_dry_run_fingerprint() {
     for (t, _) in &parts {
         assert_eq!(t.result().unwrap().1, dry.total.fingerprint);
     }
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 fn free_port() -> u16 {
@@ -416,7 +410,6 @@ fn a_host_that_only_receives_still_heartbeats() {
     }
     assert!(String::from_utf8_lossy(&outs[2].stdout).contains("gpu ids [4, 4)"), "{}", String::from_utf8_lossy(&outs[2].stdout));
     assert!(took > std::time::Duration::from_millis(1800), "the run must outlast the 600 ms dead time several times over: {took:?}");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -458,7 +451,6 @@ fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
     let outs = run_ranks_mixed(&root);
     assert!(outs.iter().all(|(ok, _, _)| !ok));
     assert!(outs.iter().any(|(_, _, e)| e.contains("seed 2 differs from rank 0's 1") || e.contains("seed 1 differs from rank 1's 2")), "{outs:?}");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// Two ranks of `dcp_load` with different seeds.
@@ -565,8 +557,6 @@ fn datagen_on_two_ranks_writes_the_one_host_corpus() {
         assert_eq!(tree(&one), tree(&two), "{ast}: byte for byte the same corpus");
         // a run accepts the corpus two hosts wrote
         run::check_datasets(loaded, cfg, &two).unwrap();
-        std::fs::remove_dir_all(&one).unwrap();
-        std::fs::remove_dir_all(&two).unwrap();
     }
 }
 
@@ -619,8 +609,6 @@ fn datagen_on_two_processes_end_to_end() {
     assert!(outs.iter().any(|(_, _, e)| e.contains("dedupe 2 differs from rank 0's 1") || e.contains("dedupe 1 differs from rank 1's 2")), "{outs:?}");
     assert!(aeiou::payload::Manifest::read(&root2.join("train")).is_err(), "no manifest");
     assert!(tree(&root2).is_empty(), "nothing written: {:?}", tree(&root2).keys().collect::<Vec<_>>());
-    std::fs::remove_dir_all(&root).unwrap();
-    std::fs::remove_dir_all(&root2).unwrap();
 }
 
 /// A datagen killed in the middle, on one host or two, leaves its manifest `writing`, and
@@ -722,7 +710,6 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
                 assert!(got == want, "{}: not the payload", path.display());
             }
         }
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }
 
@@ -757,7 +744,6 @@ fn a_resume_takes_nothing_the_manifest_fixes() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(root.join("train")).output().unwrap();
     assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).contains("the manifest says `complete`; nothing to write"), "{o:?}");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// `aeiou datagen --grow N ROOT` or `--shrink N ROOT` (`op`) on `ranks` processes, with `extra`.
@@ -820,10 +806,7 @@ fn grow_and_shrink_make_the_corpus_of_the_new_count() {
         assert_eq!(m.provenance["resizes"][1]["op"], "shrink");
         let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "2100")]));
         run::check_datasets(loaded, cfg, &root).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
     }
-    std::fs::remove_dir_all(&fresh5).unwrap();
-    std::fs::remove_dir_all(&fresh21).unwrap();
 }
 
 /// A grow killed in the middle leaves the manifest `growing`, naming the new count and the
@@ -877,7 +860,6 @@ fn a_killed_grow_is_finished_by_resume() {
         aeiou::payload::Filler::new(1).fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk, 1), 0, &mut want);
         assert!(files[&meta.file_path(id, None).unwrap().to_string()] == want, "id {id}: not the payload");
     }
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// What a grow or shrink refuses: a count that does not grow or shrink, one of zero, anything
@@ -899,7 +881,6 @@ fn grow_and_shrink_refuse_what_they_cannot_do() {
     refuse(&["--grow", "40", a, "--param", "samples=40"], "--grow takes the dataset, its place, the payload, and the format from the manifest at its root: --param given too");
     refuse(&["--grow", "40", a, "--resume", a], "--resume, --grow: one at a time");
     assert_eq!(tree(&root).len(), 31, "nothing changed (30 files and the inventory)");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// At a dataset root on several hosts, rank 0 alone reads the manifest, and what it decides
@@ -932,7 +913,6 @@ fn only_rank_0_reads_the_manifest_at_the_root() {
         assert!(!o.status.success() && e.contains("not the same run") && e.contains("root"), "rank {rank}: {e}");
     }
     assert_eq!(tree(&root).len(), 31, "nothing changed (30 files and the inventory)");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 // ---------------------------------------------------------------- settle and Ctrl-C
@@ -1098,7 +1078,6 @@ fn a_killed_datagen_or_grow_settles_at_whole_directories() {
         // a complete corpus has nothing to settle
         let o = settle(&root.join("train"));
         assert!(o.0 && o.1.contains("nothing to settle"), "{o:?}");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }
 
@@ -1126,7 +1105,6 @@ fn a_killed_shrink_settles_without_removing_more() {
     assert!(there - s <= 1300, "the settle removed {} files past the run in hand", there - s);
     let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert_eq!((after.provenance["resizes"][0]["op"].as_str(), after.provenance["resizes"][0]["settled"].as_i64()), (Some("shrink"), Some(s)));
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// Ctrl-C on any host stops every host (DESIGN_REVIEW.md §3.70): each exits 130, the
@@ -1168,7 +1146,6 @@ fn ctrl_c_stops_every_host_and_leaves_a_true_manifest() {
         assert!(o.0, "{o:?}");
         let s = check_settled(&root, &m, files);
         assert_eq!(s, m.progress["claimed"].as_i64().unwrap());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }
 
@@ -1264,6 +1241,4 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
     let o = cli(&v);
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && e.contains("`indexed` (looked up by id, never consumed)"), "{e}");
-    std::fs::remove_dir_all(&root).unwrap();
-    std::fs::remove_dir_all(&flat).unwrap();
 }

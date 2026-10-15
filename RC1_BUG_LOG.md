@@ -744,3 +744,22 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Noted:** failing coordinator datagen tests leave 2–4 GB each in `/tmp` and filled the disk
   during the review (cleaned; queued as a test-hygiene bug).
 
+## 34. A failing runner test left its scratch directory (GBs for datagen tests) in /tmp
+
+- **Where:** `runner/aeiou/tests/common/mod.rs` (new `TempDir` guard and `tmpdir`), every
+  test file's `tmpdir` and its trailing `remove_dir_all`, `tests/object.rs` (MinIO's dir),
+  `runner/aeiou/src/options.rs` (`RESERVED_ENV`), runner REFERENCE §14.
+- **Found by:** the disk of the review's host filled to 100% ("No space left on device") with
+  `/tmp/aeiou-coord-*` directories of 0.4–2.4 GB, making later tests fail in a cascade.
+- **Defect:** test directories were removed only by a last-line `remove_dir_all`, so a panicking
+  test (e.g. a timing flake in `a_killed_datagen_or_grow_settles_at_whole_directories`, which
+  left 468 MB) leaked its corpus; `run::a_corpus_larger_than_the_free_space_is_refused_before_anything_is_written`
+  leaked even when it passed (no cleanup line).
+- **Fix:** `tmpdir` returns a `TempDir` that removes the directory in `Drop`, so also on a
+  panic's unwind (it derefs to the path, so call sites are unchanged); every trailing removal is
+  gone; `AEIOU_KEEP_TEST_DIRS` keeps them for debugging (reserved, so spawned runners do not warn).
+  No assertion changed. The Python tests use pytest's `tmp_path` and needed nothing.
+- **Evidence:** `tests/run.rs::a_test_directory_is_removed_when_its_test_panics` fails with a
+  no-op `Drop` ("… is left behind by a panicking test") and passes; `--test all` 86 (and 90 with
+  `object`), `limits`, `uring_knobs` pass, and no new `aeiou-*` directory of the test runs remains.
+

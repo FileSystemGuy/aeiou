@@ -5,7 +5,6 @@
 //! `--clean-namespaces`, and refused where the design says (V16). The fixtures are written
 //! here, as `aeiou-trace export` writes them.
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aeiou::backend::BackendKind;
 use aeiou::dryrun;
@@ -13,13 +12,8 @@ use aeiou::eval::{build_model, Config, Model, Params};
 use aeiou::run::{self, RunOpts};
 use sha2::{Digest, Sha256};
 
-static N: AtomicUsize = AtomicUsize::new(0);
-
-fn tmpdir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("aeiou-trace-test-{}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed), tag));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmpdir(tag: &str) -> crate::common::TempDir {
+    crate::common::tmpdir("trace-test", tag)
 }
 
 fn sha(bytes: &[u8]) -> String {
@@ -138,7 +132,6 @@ fn loads_against_its_sha256_and_indexes_lanes_opens_and_dependencies() {
         Err(e) => e.to_string(),
     };
     assert!(e.contains("sha256"), "{e}");
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -167,7 +160,6 @@ fn dry_run_walks_in_line_order_with_lane_and_ordinal_as_indices() {
     let mm = m.total.metrics.as_ref().unwrap();
     assert_eq!(mm.fan_out.get(&3), Some(&1));
     assert!(mm.depth.is_empty());
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -197,7 +189,6 @@ fn runs_with_the_dry_runs_fingerprint_under_every_backend() {
             assert_eq!(rep.stats.threads, 1, "{}", be.describe());
         }
     }
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -228,7 +219,6 @@ fn path_order_makes_a_reader_wait_for_the_writer_whatever_the_lanes_timing() {
             assert_eq!(rep.stats.bytes_read, 8192, "{}", be.describe());
         }
     }
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -260,7 +250,6 @@ fn root_checks_before_the_gate_and_clean_namespaces() {
     assert_eq!(aeiou::trace::clean(tf, &root).unwrap(), 1);
     assert!(root.join("keep").exists() && !root.join("out/final").exists());
     aeiou::trace::check_root(tf, &root, true).unwrap();
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -274,7 +263,6 @@ fn v16_a_writing_trace_needs_one_instance() {
     let (loaded, model) = leaked(&p, 1);
     let counts = aeiou::vm::actor_counts(model).unwrap();
     aeiou::trace::check_counts(&loaded.ast, &loaded.traces, &counts).unwrap();
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]
@@ -332,7 +320,6 @@ fn a_path_outside_root_is_refused_at_load_and_nothing_outside_is_touched() {
     assert!(!out.status.success() && err.contains("`..` component"), "{err}");
     assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
     assert_eq!(std::fs::read(d.join("outside/victimdir/keep")).unwrap(), b"precious");
-    std::fs::remove_dir_all(&d).unwrap();
 }
 
 /// Several hosts with `--clean-namespaces` and a path the trace creates left by an earlier
@@ -368,5 +355,4 @@ fn only_rank_0_checks_what_a_trace_creates_after_its_clean() {
     // rank 0 cleaned and ran on its root; rank 1 touched nothing on its own
     assert_eq!(std::fs::read(root0.join("out/final")).unwrap().len(), 1000);
     assert_eq!(std::fs::read(root1.join("out/final")).unwrap(), b"old");
-    std::fs::remove_dir_all(&d).unwrap();
 }
