@@ -142,6 +142,64 @@ def test_the_help_has_the_runners_look():
     assert "  -o, --out <FILE>" in out and "<ABSTRACT_PATH>" in out
 
 
+HELPS = [("cli",), ("params",), ("params", "defaults"), ("params", "check"), ("params", "safetensors"), ("params", "npz"),
+         ("datagen",), ("trace",), ("trace", "metrics"), ("trace", "export"), ("trace", "compare"),
+         ("catalog",), ("catalog", "check"), ("catalog", "write"), ("catalog", "describe"), ("header",)]
+
+
+@pytest.mark.parametrize("columns", ["80", "120"])
+def test_the_help_wraps_at_spaces_only(columns):
+    """(RC1 review, R50) the help wrapped a long word mid-word (`-e trac` / `e=%file,...`) and
+    at its hyphens (`aeiou dry-` / `run`): clap wraps at spaces, and so does `usage.Formatter`."""
+    for args in HELPS:
+        r = tool(*args, "--help", env={"COLUMNS": columns})
+        assert r.returncode == 0 and r.stdout.startswith(r.stdout.splitlines()[0]), (args, r.stderr)
+        for line in r.stdout.splitlines():
+            assert not (line.endswith("-") and line[-2:-1].isalnum()), f"{args}: a word broken at a hyphen: {line!r}"
+    out = tool("trace", "--help", env={"COLUMNS": columns}).stdout
+    assert " trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy" in out, out
+    assert "aeiou dry-run --metrics-json" in " ".join(out.split()), out
+
+
+def test_aeiou_header_refuses_what_is_no_format_entry_or_row_count():
+    """(RC1 review, R49) a `--format` that is not an object with `class`, and a `--rows` below
+    one, are usage errors (status 2), not a format class `None` with status 1."""
+    for fmt in ("{}", "null", "[]", '{"reader": "h5py"}', '"hdf5"'):
+        message, usage = frame(tool("header", "--format", fmt, "--rows", "1"), "aeiou-header")
+        assert message == "--format: not a format entry (an object with `class`)", fmt
+        assert usage == "Usage: aeiou-header --format <JSON> --rows <N> [--rows <N>]..."
+    for rows in ("0", "-1"):
+        message, _ = frame(tool("header", "--format", '{"class": "hdf5"}', "--rows", "4", "--rows", rows), "aeiou-header")
+        assert message == f"--rows {rows}: a file holds at least one row"
+    # an entry of a class with no header is still a failure during the work
+    r = tool("header", "--format", '{"class": "tfrecord"}', "--rows", "1")
+    assert (r.returncode, r.stderr) == (1, "aeiou-header: no header for format class `tfrecord`: only hdf5 has one\n")
+
+
+def test_aeiou_build_says_a_script_does_not_exist(tmp_path):
+    """(RC1 review, R60) a missing script was `FileNotFoundError at line 1013`, a line of runpy,
+    not of any script; an exception is placed at a line of the script only when it has one."""
+    r = tool("cli", tmp_path / "nonexist.py", "-o", tmp_path)
+    assert (r.returncode, r.stderr) == (1, f"FAIL nonexist.py: no such file ({tmp_path / 'nonexist.py'}); aeiou-build takes builder scripts (`.py`)\n")
+    r = tool("cli", tmp_path, "-o", tmp_path)
+    assert r.returncode == 1 and r.stderr.startswith(f"FAIL {tmp_path.name}: not a file ({tmp_path});"), r.stderr
+    raises = tmp_path / "raises.py"
+    raises.write_text("import json\njson.loads('{')\n")
+    r = tool("cli", raises, "-o", tmp_path)
+    assert r.returncode == 1 and r.stderr.startswith("FAIL raises.py: JSONDecodeError at line 2: "), r.stderr
+
+
+def test_aeiou_params_check_words_a_missing_file_as_the_runner_does(tmp_path):
+    """(RC1 review, R65) `[Errno 2] No such file or directory: 'nonexist.json'` was Python's
+    text; the suite's is `aeiou check`'s, `<path>: No such file or directory (os error 2)`."""
+    missing = tmp_path / "nonexist.json"
+    r = tool("params", "check", ast_path("file_per_sample"), missing)
+    assert (r.returncode, r.stdout) == (1, f"FAIL nonexist.json\n  {missing}: No such file or directory (os error 2)\n"), r.stdout + r.stderr
+    if RUNNER.exists():
+        rs = subprocess.run([str(RUNNER), "check", str(missing)], capture_output=True, text=True)
+        assert f"  {missing}: No such file or directory (os error 2)\n" in rs.stdout + rs.stderr, rs.stdout + rs.stderr
+
+
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_the_runner_prints_the_same_list_for_the_same_mistake(tmp_path):
     """`aeiou datagen` and `aeiou-datagen` differ only in the command's name: the message and

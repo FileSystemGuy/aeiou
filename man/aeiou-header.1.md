@@ -59,12 +59,14 @@ built: another library could lay the header out otherwise.
   whose length is not the layout's `file_header`; the reason on standard error.
 - **2**
 
-  A usage error, in the frame every tool of the suite shares.
+  A usage error, in the frame every tool of the suite shares: an argument missing, a
+  `--format` that is not JSON or not a format entry (an object with `class`), a `--rows`
+  below one.
 
 ## EXAMPLES
 
 ```
-aeiou-header --format "$(jq -c .datasets.train.files.format train.ast.json)" --rows 16 | xxd | head
+aeiou-header --format "$(jq -c .datasets.train.format train.ast.json)" --rows 16 | xxd | head
 ```
 
 ## SEE ALSO

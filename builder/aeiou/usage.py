@@ -23,8 +23,10 @@ spelling, usage prefix, and help wording as the Rust binary, and its own errors 
 from __future__ import annotations
 
 import argparse
+import math
 import shutil
 import sys
+import textwrap
 
 from .nodes import BuildError
 
@@ -78,6 +80,19 @@ def failed(prog: str, e: BaseException) -> int:
     return 1
 
 
+def non_negative(text: str) -> float:
+    """An argument type: a finite number at least 0. A `nan` would pass every comparison and an
+    `inf` or a negative bound none, so they are refused in the parser's wording (`argument
+    --max-distance: invalid non-negative number value: 'nan'`)."""
+    x = float(text)
+    if not math.isfinite(x) or x < 0:
+        raise ValueError(text)
+    return x
+
+
+non_negative.__name__ = "non-negative number"
+
+
 class Formatter(argparse.RawDescriptionHelpFormatter):
     """At most 120 columns (clap's `max_term_width`), the description kept as written, an
     option's names before its one value (`-o, --out <FILE>`, as clap prints them)."""
@@ -86,6 +101,12 @@ class Formatter(argparse.RawDescriptionHelpFormatter):
         if width is None:
             width = min(120, shutil.get_terminal_size().columns - 2)
         super().__init__(prog, indent_increment, max_help_position, width)
+
+    def _split_lines(self, text, width):
+        """A help text wrapped at spaces only, as clap wraps it: a word longer than the column
+        (a command line, `trace=%file,...`) runs past it whole, and `dry-run` stays one word."""
+        text = self._whitespace_matcher.sub(" ", text).strip()
+        return textwrap.wrap(text, width, break_long_words=False, break_on_hyphens=False)
 
     def _format_action_invocation(self, action):
         if not action.option_strings or action.nargs == 0:

@@ -118,6 +118,11 @@ def main(argv=None) -> int:
             print(f"FAIL {script.name}: an abstract, not a builder script; aeiou-build takes the `.py` that authors it (`aeiou check` validates an abstract)", file=sys.stderr)
             status = 1
             continue
+        if not script.is_file():   # said here: the error runpy raises would blame a frame of its own
+            print(f"FAIL {script.name}: {'not a file' if script.exists() else 'no such file'} ({script}); "
+                  "aeiou-build takes builder scripts (`.py`)", file=sys.stderr)
+            status = 1
+            continue
         try:
             asts = _build_one(script, a, emit)
         except BuildError as e:
@@ -127,8 +132,9 @@ def main(argv=None) -> int:
         except Exception as e:  # the author's script raised: show where, keep going
             import traceback
             tb = traceback.extract_tb(e.__traceback__)
-            where = next((f for f in reversed(tb) if f.filename == str(script)), tb[-1])
-            print(f"FAIL {script.name}: {type(e).__name__} at line {where.lineno}: {e}", file=sys.stderr)
+            where = next((f for f in reversed(tb) if f.filename == str(script)), None)   # never a line of another file
+            at = f" at line {where.lineno}" if where else ""
+            print(f"FAIL {script.name}: {type(e).__name__}{at}: {e}", file=sys.stderr)
             status = 1
             continue
         out_dir = a.out or script.parent

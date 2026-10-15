@@ -60,6 +60,11 @@ def main(argv=None) -> int:
             fmt = emit.loads(a.format)
         except ValueError as e:
             raise usage.UsageError(f"--format: not JSON: {e}") from None
+        if not isinstance(fmt, dict) or "class" not in fmt:
+            raise usage.UsageError("--format: not a format entry (an object with `class`)")
+        for n in a.rows:
+            if n < 1:
+                raise usage.UsageError(f"--rows {n}: a file holds at least one row")
         got = b"".join(header(fmt, n) for n in a.rows)
     except usage.UsageError as e:
         return usage.fail(e, ap)

@@ -10,7 +10,7 @@ aeiou-trace - locality metrics of a real application from an strace of it, their
 aeiou-trace metrics [OPTIONS] [--root DIR]... [-o FILE] TRACE
 aeiou-trace export [OPTIONS] --root DIR -o FILE TRACE
 aeiou-trace compare [OPTIONS] A B
-aeiou-trace --help
+aeiou-trace --help | --version
 ```
 
 ## DESCRIPTION
@@ -188,6 +188,9 @@ class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
 - **-h**, **--help**
 
   Print the help of the command or subcommand.
+- **-V**, **--version**
+
+  Print the version.
 
 ## FILES
 
@@ -221,10 +224,12 @@ class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
 - **1**
 
   A row outside its bound, a document the tool cannot read, a `--self` document for
-  another abstract or shape, a trace with no counted call.
+  another abstract or shape, a trace with no counted call (a `--root` that none of its
+  paths is under, or an input that is not an strace; `export` then writes no file).
 - **2**
 
-  A usage error, in the frame every tool of the suite shares.
+  A usage error, in the frame every tool of the suite shares; a `--max-distance` or
+  `--chain-gap-us` that is negative or not a finite number is one.
 
 ## EXAMPLES
 

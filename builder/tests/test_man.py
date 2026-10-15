@@ -121,6 +121,19 @@ def test_every_flag_named_in_any_page_exists():
         assert not unknown, f"man/{name} names options no tool has: {sorted(unknown)}"
 
 
+def test_aeiou_header_example_selects_the_format_entry():
+    """(RC1 review, R49) the EXAMPLE's `jq` path is the abstract's: it selected
+    `.datasets.train.files.format`, a key no abstract has, and jq gave `null`."""
+    import json
+    example = read("aeiou-header.1.md").split("\n## EXAMPLES\n", 1)[1]
+    path = re.search(r"jq -c (\.[\w.]+) (\S+)\)", example).group(1)
+    ast = json.loads(next((ROOT / "workloads").rglob("hdf5_map.ast.json")).read_text())
+    got = ast
+    for key in path.strip(".").split("."):
+        got = got.get(key) if isinstance(got, dict) else None
+    assert isinstance(got, dict) and got.get("class") == "hdf5", f"`jq -c {path}` of hdf5_map.ast.json is {got!r}"
+
+
 @pytest.mark.parametrize("name", PAGES)
 def test_page_has_the_sections_of_a_man_page(name):
     page = read(name)

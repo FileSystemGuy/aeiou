@@ -1274,3 +1274,67 @@ def test_an_exported_trace_is_read_as_the_runner_reads_it(tmp_path):
         f.write_text(head + line + "\n", encoding="utf-8")
         r = _trace_tool("metrics", f)
         assert (r.returncode, r.stderr.decode()) == (1, f"aeiou-trace metrics: {f}: {said}\n"), r.stderr
+
+
+def test_a_trace_with_no_counted_call_fails_and_exports_nothing(tmp_path, capsys):
+    """aeiou-trace(1) EXIT STATUS (RC1 review, R51): a trace with no counted call is status 1,
+    with what was read and what parsed (a `--root` that matches none of its paths, or an input
+    that is no strace); `export` then writes no file, a `trace` node of which would run nothing."""
+    st, junk = tmp_path / "t.st", tmp_path / "junk.txt"
+    st.write_text(SEQUENTIAL.strip() + "\n")
+    junk.write_text("hello\nworld\n")
+    assert trace.main(["metrics", str(st), "--root", "/elsewhere"]) == 1
+    err = capsys.readouterr().err
+    assert err == (f"aeiou-trace metrics: {st}: no call under --root /elsewhere (15 line(s) read, 13 parsed as strace calls): "
+                   "check --root against the paths the trace shows\n"), err
+    assert trace.main(["metrics", str(junk), "--root", "/d"]) == 1
+    err = capsys.readouterr().err
+    assert f"{junk}: no call under --root /d (2 line(s) read, 0 parsed as strace calls): not an strace" in err, err
+    out = tmp_path / "x.jsonl"
+    assert trace.main(["export", str(st), "--root", "/elsewhere", "-o", str(out)]) == 1
+    assert f"{out} not written" in capsys.readouterr().err and not out.exists()
+    # a trace file with no call in it (an export made before this rule) is refused as well
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text(json.dumps({"aeiou_trace": 1, "source": "strace", "root": "/d", "lanes": 0, "lines": 0, "opens": 0, "creates": [], "notes": {}}) + "\n")
+    assert trace.main(["metrics", str(empty)]) == 1
+    assert capsys.readouterr().err == f"aeiou-trace metrics: {empty}: a trace file with no call in it\n"
+    # and a root that matches is still status 0
+    assert trace.main(["metrics", str(st), "--root", "/d", "-o", str(tmp_path / "m.json")]) == 0
+
+
+def test_compare_describes_the_metrics_of_an_exported_trace(tmp_path, capsys):
+    """(RC1 review, R52) the metrics of a trace file were described as a dry-run's, `trace of
+    None seed None gpus None`."""
+    st, exported, m = tmp_path / "t.st", tmp_path / "t.jsonl", tmp_path / "m.json"
+    st.write_text(SEQUENTIAL.strip() + "\n")
+    assert trace.main(["export", str(st), "--root", "/d", "-o", str(exported)]) == 0
+    assert trace.main(["metrics", str(exported), "-o", str(m)]) == 0
+    capsys.readouterr()
+    assert trace.main(["compare", str(m), str(m)]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"A: {m}: trace file {exported} of /d (order: completion; 1 instance(s), 1 lane(s))\n"), out
+    assert "None" not in out
+
+
+@pytest.mark.parametrize("flag,value", [("--max-distance", "nan"), ("--max-distance", "inf"), ("--max-distance", "-1"),
+                                        ("--chain-gap-us", "-1"), ("--chain-gap-us", "nan")])
+def test_a_bound_that_is_not_a_finite_non_negative_number_is_a_usage_error(tmp_path, capsys, flag, value):
+    """(RC1 review, R62) `--max-distance nan` passed every row, and a negative bound was taken."""
+    st = tmp_path / "t.st"
+    st.write_text(SEQUENTIAL.strip() + "\n")
+    cmd = "compare" if flag == "--max-distance" else "metrics"
+    args = [str(st), str(st)] if cmd == "compare" else [str(st), "--root", "/d"]
+    assert trace.main([cmd, *args, f"{flag}={value}"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(f"aeiou-trace {cmd}: argument {flag}: invalid non-negative number value: '{value}'\n\nUsage: aeiou-trace {cmd} "), err
+    assert trace.main(["compare", str(st), str(st), "--max-distance=0"]) == 1   # 0 is a bound (the strace is no metrics document)
+    assert capsys.readouterr().err.startswith(f"aeiou-trace compare: {st}: ")
+
+
+def test_aeiou_trace_has_a_version_as_every_tool_does():
+    """(RC1 review, R63) `-V, --version`, the last row of the help, as in every tool of the suite."""
+    r = _trace_tool("--version")
+    assert (r.returncode, r.stdout.decode()) == (0, f"aeiou-trace {trace.__version__}\n"), r.stderr
+    assert _trace_tool("-V").stdout == r.stdout
+    lines = _trace_tool("--help").stdout.decode().rstrip().splitlines()
+    assert lines[-2].startswith("  -h, --help") and lines[-1].startswith("  -V, --version") and lines[-1].endswith("Print version")

@@ -2246,3 +2246,100 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   pass; on HEAD 0dd3c25 plus the change: `--test all` with MinIO 146 passed (after freeing disk
   that had pushed MinIO into 507 storage-full), builder `test_object.py` + `test_formats.py` 53
   passed, `cargo check --release` without features builds. Fixed in an isolated worktree and applied.
+
+## 97. `aeiou-header` took a non-entry `--format` and a row count below 1 as runtime failures, and its man EXAMPLE selected nothing
+
+- **Where:** `builder/aeiou/header.py` (`main`); `man/aeiou-header.1.md` EXAMPLES and EXIT STATUS; tests.
+- **Found by:** RC1 third-round UI review (RV3b): the man EXAMPLE's `jq -c .datasets.train.files.format`
+  yields null (the AST has no `files` key), and `--format null`/`{}` then said "no header for
+  format class `None`", `--format []` "class `[]`", exit 1; `--rows 0`/`-1` exited 1 though a
+  meaningless value is a usage error (exit 2, runner/REFERENCE.md §15).
+- **Fix:** a `--format` that is not an object with `class` is a usage error "--format: not a format
+  entry (an object with `class`)", and `--rows` below 1 is a usage error, both through the
+  shared usage frame; the EXAMPLE uses `.datasets.train.format`.
+- **Evidence:** `test_usage.py::test_aeiou_header_refuses_what_is_no_format_entry_or_row_count` and
+  `test_man.py::test_aeiou_header_example_selects_the_format_entry` fail on the old code and pass;
+  on HEAD 2db51a3 plus the change the builder suite with MinIO gives 403 passed, `aeiou-build
+  --hermetic --twice --check` rc 0, `aeiou-catalog check` 13 mechanisms, 16 cases ok.
+
+## 98. The Python tools' `--help` broke long words and hyphenated words, so `aeiou-trace --help` printed a broken strace command
+
+- **Where:** `builder/aeiou/usage.py` (`Formatter._split_lines`); tests.
+- **Found by:** RV3b: at 78 columns `aeiou-trace --help` printed `-e trac` / `e=%file,…` and `aeiou dry-`
+  / `run --metrics-json`, so a copied command fails.
+- **Fix:** the shared formatter wraps with `break_long_words=False, break_on_hyphens=False`, as clap does.
+- **Evidence:** `test_usage.py::test_the_help_wraps_at_spaces_only[80]` (all 16 Python tools and
+  subcommands, no hyphen-broken line) fails on the old formatter and passes; `test_man.py` passes;
+  same suite runs as bug 97.
+
+## 99. `aeiou-trace metrics`/`export` exited 0 with nothing counted, and `export` wrote an empty trace file
+
+- **Where:** `builder/aeiou/trace.py` (`Tracer.lines_read`/`calls_parsed`, `metrics_of`/`export_of`
+  `seen`, the CLI); `man/aeiou-trace.1.md` EXIT STATUS; tests.
+- **Found by:** RV3b: `metrics t.st --root /nonexist` printed `0 ops` and exited 0, a non-strace input
+  gave a zero-filled document with exit 0, and `export --root /nonexist` wrote a 0-lane trace and
+  its sha256, against aeiou-trace(1) "1 … a trace with no counted call".
+- **Fix:** the CLI exits 1 when nothing was counted, saying how many lines were read and parsed
+  ("no call under --root DIR (N line(s) read, M parsed as strace calls)", or "not an strace" when
+  none parsed); `export` writes no file; an exported trace with no call fails too. The library
+  functions keep returning zero counts.
+- **Evidence:** `test_trace.py::test_a_trace_with_no_counted_call_fails_and_exports_nothing` fails on
+  the old code and passes; same suite runs as bug 97.
+
+## 100. `aeiou-trace compare` described an exported trace's metrics as "trace of None seed None gpus None"
+
+- **Where:** `builder/aeiou/trace.py` (`_describe`); tests.
+- **Found by:** RV3b: `_describe` knew only the strace and dry-run sources.
+- **Fix:** a `source == "trace"` branch: "trace file X of ROOT (order: completion; N instance(s), M lane(s))".
+- **Evidence:** `test_trace.py::test_compare_describes_the_metrics_of_an_exported_trace` fails on the
+  old code and passes; same suite runs as bug 97.
+
+## 101. `aeiou-build` of a missing script blamed its own source line, and its man promised a traceback it never prints
+
+- **Where:** `builder/aeiou/cli.py` (script check, frame lookup); `man/aeiou-build.1.md` EXIT STATUS; tests.
+- **Found by:** RV3b: `aeiou-build nonexist.py` → `FAIL nonexist.py: FileNotFoundError at line 1013`
+  (runpy's line); a directory gave `IsADirectoryError at line 1013`.
+- **Fix:** the script is checked first ("no such file (PATH); aeiou-build takes builder scripts
+  (`.py`)", "not a file"); "at line N" only from a frame of the script itself; the man describes
+  the one-line `FAIL <script>: <reason>`.
+- **Evidence:** `test_usage.py::test_aeiou_build_says_a_script_does_not_exist` fails on the old code
+  and passes; same suite runs as bug 97.
+
+## 102. `aeiou-trace` accepted `--max-distance nan` (a gate that never fails) and negative bounds
+
+- **Where:** `builder/aeiou/usage.py` (`non_negative`), `builder/aeiou/trace.py` (`--max-distance`,
+  `--chain-gap-us`); `man/aeiou-trace.1.md`; tests.
+- **Found by:** RV3b: `--max-distance nan`/`inf` exited 0 (every comparison with NaN is false),
+  `-1` failed every row, `--chain-gap-us -1`/`nan` were taken.
+- **Fix:** a finite, non-negative argument type, refused with argparse wording, exit 2.
+- **Evidence:** `test_trace.py::test_a_bound_that_is_not_a_finite_non_negative_number_is_a_usage_error`
+  (5 cases) fails on the old code and passes; same suite runs as bug 97.
+
+## 103. `aeiou-trace` had no `-V/--version`, which every other tool has
+
+- **Where:** `builder/aeiou/trace.py`; `man/aeiou-trace.1.md` SYNOPSIS and options; tests.
+- **Found by:** RV3b: `aeiou-trace --version` → "unrecognized arguments", exit 2, against §15.
+- **Fix:** `ap.version(f"aeiou-trace {__version__}")` as the other tools.
+- **Evidence:** `test_trace.py::test_aeiou_trace_has_a_version_as_every_tool_does` fails on the old
+  code and passes; `test_man.py` passes; same suite runs as bug 97.
+
+## 104. QUICKSTART sent first-time users to the deprecated `aeiou-datagen` for Parquet and listed four of ten man pages
+
+- **Where:** `QUICKSTART.md` "Other workloads".
+- **Found by:** RV3b: it said Parquet is written "by the Python side" with `aeiou-datagen`, while
+  `aeiou datagen parquet_stream.ast.json --param samples=2048` writes it (checked: two shards,
+  "parquet, aeiou datagen parquet writer").
+- **Fix:** the section uses `aeiou datagen` for all three container formats, keeps the wheel for
+  authoring and trace comparison, and lists all ten man pages (aeiou-datagen(1) marked deprecated).
+- **Evidence:** the command run as written by the fixer; no test reads QUICKSTART; same suite runs
+  as bug 97.
+
+## 105. `aeiou-params check` of a missing file printed Python's errno text instead of the suite's wording
+
+- **Where:** `builder/aeiou/params.py` (`load`); tests.
+- **Found by:** RV3b: `[Errno 2] No such file or directory: 'nonexist.json'`, where the runner says
+  `nonexist.json: No such file or directory (os error 2)`.
+- **Fix:** `load` words an OSError as the runner does.
+- **Evidence:** `test_usage.py::test_aeiou_params_check_words_a_missing_file_as_the_runner_does`
+  (compared byte for byte with the runner's line) fails on the old code and passes; same suite
+  runs as bug 97.

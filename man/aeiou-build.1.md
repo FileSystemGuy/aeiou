@@ -96,10 +96,12 @@ three or more identical statements in a row (a hand-unrolled iteration);
   Every script built and every file was written, or, with `--check`, every hash matched.
 - **1**
 
-  A script failed to build (the Python traceback names the construction error, or the
-  validator names the rule and the JSON pointer), a hermetic violation, two builds whose
-  hashes differ under `--twice`, or a hash that differs from the committed file under
-  `--check`.
+  A script failed to build, a hermetic violation, two builds whose hashes differ under
+  `--twice`, or a hash that differs from the committed file under `--check`. Each failure
+  is one line on standard error, `FAIL <script>: <reason>`, and the other scripts are still
+  built: the reason is the builder's error, the validator's rule and JSON pointer, or, for
+  an exception the script raised, its type, the script's line it came from, and its
+  message (no traceback); a script that does not exist is `no such file`.
 - **2**
 
   A usage error, in the frame every tool of the suite shares.

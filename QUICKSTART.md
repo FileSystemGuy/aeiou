@@ -53,18 +53,28 @@ and the command line of a run never disagree.
 Every `workloads/**/*.ast.json` runs the same way. `aeiou dry-run ABSTRACT --gpus 1` with no
 parameter file uses the abstract's defaults, which for the training and checkpoint
 workloads are the sizes of a real job (thousands of files, hundreds of steps); scale them
-down with `--param k=v` or a parameter file. The `tfrecord_stream` and `hdf5_map` workloads
-read container files (TFRecord, HDF5) that `aeiou datagen` writes as it writes any other.
-`parquet_stream` reads Parquet files, which the Python side writes:
+down with `--param k=v` or a parameter file. The `tfrecord_stream`, `parquet_stream`, and
+`hdf5_map` workloads read container files (TFRecord, Parquet, HDF5) that `aeiou datagen`
+writes as it writes any other:
+
+```
+aeiou datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut/aeiou \
+    --param samples=2048
+```
+
+The Python builder in `wheel/` is needed only to author or change workloads or to compare a
+trace with an abstract:
 
 ```
 python3 -m venv .venv && .venv/bin/pip install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
 # or: uv tool install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
-.venv/bin/aeiou-datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut/aeiou
 ```
 
-`aeiou-build`, `aeiou-params`, `aeiou-datagen`, and `aeiou-trace` each have a manual page
-in `share/man/man1/`.
+The manual pages, in `share/man/` and as Markdown in `man/`: **aeiou**(1), the runner;
+**aeiou-launch**(1); **aeiou-build**(1), **aeiou-params**(1), **aeiou-trace**(1),
+**aeiou-catalog**(1), **aeiou-datagen**(1) (deprecated: `aeiou datagen` writes every
+format), and **aeiou-header**(1), which `aeiou datagen` runs; **aeiou-config**(5), the
+configuration file; **aeiou-abstract**(7), the abstract language.
 
 ## Reporting a problem
 

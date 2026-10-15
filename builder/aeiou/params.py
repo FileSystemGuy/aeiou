@@ -52,7 +52,9 @@ def load(path) -> dict:
     path = pathlib.Path(path)
     try:
         doc = loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
+    except OSError as e:   # worded as the runner words a file it cannot read
+        raise BuildError(f"{path}: {e.strerror} (os error {e.errno})") from None
+    except ValueError as e:
         raise BuildError(f"{path}: {e}") from None
     d = schema_dir()
     registry = None

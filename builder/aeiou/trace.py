@@ -61,7 +61,7 @@ import re
 import sys
 from collections import Counter
 
-from . import usage
+from . import __version__, usage
 from .nodes import BuildError
 
 FORMAT = 1
@@ -514,6 +514,10 @@ class Tracer:
         self.extent: dict[str, int] = {}
         # `aeiou-trace export`: an `Exporter` that gets every counted call
         self.export: Exporter | None = None
+        # the lines read, and those of them that parsed as a finished call strace printed
+        # (what the tool says when nothing was counted: the wrong root, or not an strace)
+        self.lines_read = 0
+        self.calls_parsed = 0
 
     # ---- paths
 
@@ -636,6 +640,7 @@ class Tracer:
 
     def feed(self, lines):
         for line in lines:
+            self.lines_read += 1
             self.line(line.rstrip("\n"))
 
     def line(self, line: str):
@@ -699,6 +704,7 @@ class Tracer:
         d = _DUR.search(ret_s)
         done = ts if r else (issued + float(d.group(1)) if issued is not None and d else issued)
         self.tids.add(tid)
+        self.calls_parsed += 1
         self.call(tid, name, split_args(body[i + 1 : k]), ret, ret_path, issued, done, err)
 
     def _count(self, tid: int, kind: str):
@@ -1229,13 +1235,16 @@ class Exporter:
         return header, self.events
 
 
-def export_of(lines, root: str, **kw) -> tuple[dict, list[dict]]:
-    """Header and op lines of the runner's trace file for an strace given as lines."""
+def export_of(lines, root: str, seen: dict | None = None, **kw) -> tuple[dict, list[dict]]:
+    """Header and op lines of the runner's trace file for an strace given as lines; `seen`,
+    when given, gets the lines read and those parsed as calls (`nothing_counted`)."""
     m = Metrics()
     t = Tracer(m, [root], **kw)
     t.export = Exporter(t.roots[0])
     t.feed(lines)
     t.finish()
+    if seen is not None:
+        seen.update(lines=t.lines_read, calls=t.calls_parsed)
     return t.export.finish(t.roots[0], dict(sorted(t.notes.items())))
 
 
@@ -1349,12 +1358,15 @@ def metrics_of_export(lines, block=4096, sample=1) -> dict:
     }
 
 
-def metrics_of(lines, roots, block=4096, sample=1, **kw) -> dict:
-    """The `aeiou_metrics: 1` document of a trace given as an iterable of lines."""
+def metrics_of(lines, roots, block=4096, sample=1, seen: dict | None = None, **kw) -> dict:
+    """The `aeiou_metrics: 1` document of a trace given as an iterable of lines; `seen`, when
+    given, gets the lines read and those parsed as calls (`nothing_counted`)."""
     m = Metrics(block, sample)
     t = Tracer(m, roots, **kw)
     t.feed(lines)
     t.finish()
+    if seen is not None:
+        seen.update(lines=t.lines_read, calls=t.calls_parsed)
     notes = dict(sorted(t.notes.items()))
     if t.chain_gap is None and m.fan_out:
         notes["depth_not_computed"] = "give --chain-gap-us: the think time that ends a chain of io_submit rounds"
@@ -1606,10 +1618,19 @@ def judge(rows, a: dict, b: dict, docs=(), selfs=(), spec: dict | None = None):
 # ---------------------------------------------------------------- CLI
 
 
+def nothing_counted(roots: list[str], seen: dict) -> str:
+    """Why a trace gave no call to count: the roots matched none of its calls, or it is no strace."""
+    why = ("check --root against the paths the trace shows" if seen["calls"] else
+           "not an strace (strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,... -o FILE)")
+    return f"no call under --root {', '.join(roots)} ({seen['lines']} line(s) read, {seen['calls']} parsed as strace calls): {why}"
+
+
 def _describe(doc: dict) -> str:
     src = doc.get("source", "dry-run")
     if src == "strace":
         return f"strace of {', '.join(doc.get('roots', []))} (order: completion; {doc.get('instances')} instance(s), {doc.get('contexts')} thread(s))"
+    if src == "trace":
+        return f"trace file {doc.get('trace')} of {', '.join(doc.get('roots', []))} (order: completion; {doc.get('instances')} instance(s), {doc.get('contexts')} lane(s))"
     return f"{src} of {doc.get('abstract')} seed {doc.get('seed')} gpus {doc.get('gpus')} (order: {doc.get('order')})"
 
 
@@ -1626,7 +1647,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     mp.add_argument("--metrics-block", type=int, default=4096, metavar="BYTES", help="The block size of the reuse-distance and popularity units [default: 4096]")
     mp.add_argument("--metrics-sample", type=int, default=1, metavar="N", help="Keep one block and one object in N, chosen by hash, and scale [default: 1, exact]")
     mp.add_argument("--instance-root", action="append", type=int, default=[], metavar="PID", help="The process tree under PID is one instance (repeatable; needs clone in the trace); default: the whole trace is one instance")
-    mp.add_argument("--chain-gap-us", type=float, metavar="US", help="Report depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit")
+    mp.add_argument("--chain-gap-us", type=usage.non_negative, metavar="US", help="Report depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit")
     mp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_metrics: 1) to FILE instead of stdout")
     ep = sub.add_parser("export", help="Write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root", usage="aeiou-trace export [OPTIONS] --root <DIR> -o <FILE> <TRACE>")
     ep.add_argument("trace", nargs="?", help="The strace output file, or - for stdin")
@@ -1639,11 +1660,12 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     cp.add_argument("b", nargs="?", help="The metrics document A is compared with, the abstract's")
     cp.add_argument("--template-a", metavar="NAME", help="Use this actor template's metrics of A instead of its total")
     cp.add_argument("--template-b", metavar="NAME", help="Use this actor template's metrics of B instead of its total")
-    cp.add_argument("--max-distance", type=float, metavar="X", help="Exit 1 if any distance exceeds X (one number for every row; --judge is the rule by class)")
+    cp.add_argument("--max-distance", type=usage.non_negative, metavar="X", help="Exit 1 if any distance exceeds X (one number for every row; --judge is the rule by class)")
     cp.add_argument("--judge", action="store_true", help="Judge each row against the tolerance of its class (A the trace, B the abstract) and exit 1 if any is outside")
     cp.add_argument("--tolerances", metavar="FILE", help="A tolerance file (aeiou_tolerances: 1): class tolerances that replace the defaults, the rows the trace cannot show, the rows recorded as outside; implies --judge")
     cp.add_argument("--self", dest="selfs", action="append", default=[], metavar="FILE", help="A metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge")
     cp.add_argument("--only", action="append", default=[], metavar="PREFIX", help="Only the rows whose metric starts with PREFIX (repeatable)")
+    ap.version(f"aeiou-trace {__version__}")
     return ap, {"metrics": mp, "export": ep, "compare": cp}
 
 
@@ -1691,12 +1713,18 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
                     doc = metrics_of_export(lines, args.metrics_block, args.metrics_sample)
                 except BuildError as e:
                     raise BuildError(f"{args.trace}: {e}") from None
+                if not doc["total"]["ops"]:
+                    raise BuildError(f"{args.trace}: a trace file with no call in it")
             elif not args.root:
                 missing = usage.Missing(mp)
                 missing.need(False, "--root <DIR>", "count only calls on paths under DIR (repeatable)", "needed for an strace; an exported trace file carries its root")
                 missing.check()
             else:
-                doc = metrics_of(lines, [os.path.abspath(r) for r in args.root], args.metrics_block, args.metrics_sample, exclude=args.exclude, cwd=args.cwd, instance_roots=args.instance_root, chain_gap_us=args.chain_gap_us)
+                seen = {}
+                doc = metrics_of(lines, [os.path.abspath(r) for r in args.root], args.metrics_block, args.metrics_sample, seen=seen,
+                                 exclude=args.exclude, cwd=args.cwd, instance_roots=args.instance_root, chain_gap_us=args.chain_gap_us)
+                if not doc["total"]["ops"]:
+                    raise BuildError(f"{args.trace}: {nothing_counted(doc['roots'], seen)}")
         doc["trace"] = args.trace
         text = json.dumps(doc, indent=2) + "\n"
         if args.out:
@@ -1715,8 +1743,11 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
 
     if args.cmd == "export":
         f = _open_trace(args.trace)
+        seen = {}
         with f:
-            header, events = export_of(f, os.path.abspath(args.root), exclude=args.exclude, cwd=args.cwd)
+            header, events = export_of(f, os.path.abspath(args.root), seen=seen, exclude=args.exclude, cwd=args.cwd)
+        if not events:   # never an empty trace file: a `trace` node of it would run nothing
+            raise BuildError(f"{args.trace}: {nothing_counted([header['root']], seen)}; {args.out} not written")
         try:
             sha = write_export(args.out, header, events)
         except OSError as e:
