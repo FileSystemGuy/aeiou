@@ -375,13 +375,20 @@ def fd_arg(tok: str):
     if not m:
         return None, None
     fd = None if m.group(1) == "AT_FDCWD" else int(m.group(1))
-    path = m.group(2)
-    if path is not None:
-        if path.endswith(">") and "<" in path:  # `/dev/null<char 1:3>`
-            path = path[: path.rindex("<")]
-        if path.endswith(" (deleted)"):
-            path = path[: -len(" (deleted)")]
-    return fd, path
+    return fd, fd_path(m.group(2))
+
+
+def fd_path(raw: str | None):
+    """The path of a descriptor's `<...>` annotation, unescaped as a quoted string is: strace
+    prints it as one without the quotes, with `<` and `>` as octal (`\\74`, `\\76`) so that no
+    raw angle bracket is ever part of the path, and a `<char 1:3>` it appends to a device's is."""
+    if raw is None:
+        return None
+    if raw.endswith(">") and "<" in raw:  # `/dev/null<char 1:3>`
+        raw = raw[: raw.rindex("<")]
+    if raw.endswith(" (deleted)"):
+        raw = raw[: -len(" (deleted)")]
+    return unescape(raw)
 
 
 def c_string(tok: str):
@@ -391,7 +398,11 @@ def c_string(tok: str):
     end = tok.rfind('"')
     if end <= 0:
         return None
-    raw = tok[1:end]
+    return unescape(tok[1:end])
+
+
+def unescape(raw: str) -> str:
+    """strace's escapes (`\\303\\251`, `\\n`, `\\\\`, `\\"`) undone, the bytes read as UTF-8."""
     if "\\" not in raw:
         return raw
     try:
@@ -795,6 +806,7 @@ class Tracer:
                 self.aio_unused.pop(a[0], None)
             got = []
             for data, op, fd, path, nbytes, off in _IOCB.findall(a[2] if len(a) > 2 else ""):
+                path = fd_path(path)
                 f = self.file(tid, int(fd), path or None)
                 p = self.under(path or (f.path if f else None))
                 if not p:
@@ -820,6 +832,7 @@ class Tracer:
             if ex is not None:
                 mem = []
                 for data, op, fd, path, nbytes, off in _IOCB.findall(a[2] if len(a) > 2 else ""):
+                    path = fd_path(path)
                     f = self.file(tid, int(fd), path or None)
                     if op in ("PREAD", "PWRITE") and f is not None and f.oid is not None and self.under(path or f.path):
                         mem.append(("read" if op == "PREAD" else "write", f.oid, int(off), int(nbytes)))

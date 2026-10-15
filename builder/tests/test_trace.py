@@ -885,3 +885,53 @@ def test_exported_file_measures_as_the_strace(tmp_path, text):
     m = tmp_path / "m.json"
     assert trace.main(["metrics", str(out), "-o", str(m)]) == 0
     assert json.loads(m.read_text())["total"] == a["total"]
+
+
+# strace prints a descriptor's `-yy` path as it prints a quoted string, without the quotes:
+# non-ASCII bytes and `<`, `>` (so that the annotation's end is found) in octal, a backslash
+# doubled; the names of one file in a path argument and in an annotation are one name
+ESCAPED = r'''
+500 1700000005.000000 newfstatat(AT_FDCWD</r/\303\251t\303\251>, "caf\303\251", {st_mode=S_IFREG|0644, st_size=8192, ...}, 0) = 0 <0.000010>
+500 1700000005.000100 openat(AT_FDCWD</r/\303\251t\303\251>, "caf\303\251", O_RDONLY) = 3</r/\303\251t\303\251/caf\303\251> <0.000010>
+500 1700000005.000200 read(3</r/\303\251t\303\251/caf\303\251>, "x"..., 4096) = 4096 <0.000010>
+500 1700000005.000300 close(3</r/\303\251t\303\251/caf\303\251>) = 0 <0.000010>
+500 1700000005.000400 openat(AT_FDCWD</r/\303\251t\303\251>, "c<d>e", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3</r/\303\251t\303\251/c\74d\76e> <0.000010>
+500 1700000005.000500 write(3</r/\303\251t\303\251/c\74d\76e>, "x"..., 4096) = 4096 <0.000010>
+500 1700000005.000600 close(3</r/\303\251t\303\251/c\74d\76e>) = 0 <0.000010>
+500 1700000005.000700 openat(AT_FDCWD</r/\303\251t\303\251>, "x\\y", O_RDONLY|O_DIRECT) = 3</r/\303\251t\303\251/x\\y> <0.000010>
+500 1700000005.000800 io_submit(0x7f00, 1, [{aio_data=0x1, aio_lio_opcode=IOCB_CMD_PREAD, aio_fildes=3</r/\303\251t\303\251/x\\y>, aio_buf=0x7f, aio_nbytes=4096, aio_offset=4096}]) = 1 <0.000010>
+500 1700000005.000900 io_getevents(0x7f00, 1, 1, [{data=0x1, obj=0x7f10, res=4096, res2=0}], NULL) = 1 <0.000050>
+500 1700000005.001000 close(3</r/\303\251t\303\251/x\\y>) = 0 <0.000010>
+500 1700000005.001100 openat(AT_FDCWD</r/\303\251t\303\251>, "a b", O_RDONLY) = 3</r/\303\251t\303\251/a b> <0.000010>
+500 1700000005.001200 read(3</r/\303\251t\303\251/a b>, "x"..., 4096) = 4096 <0.000010>
+500 1700000005.001300 close(3</r/\303\251t\303\251/a b>) = 0 <0.000010>
+500 1700000005.001400 openat(AT_FDCWD</r/\303\251t\303\251>, "n,m", O_RDONLY) = 3</r/\303\251t\303\251/n,m> <0.000010>
+500 1700000005.001500 read(3</r/\303\251t\303\251/n,m>, "x"..., 4096) = 4096 <0.000010>
+500 1700000005.001600 close(3</r/\303\251t\303\251/n,m>) = 0 <0.000010>
+500 1700000005.001700 openat(AT_FDCWD</r/\303\251t\303\251>, "caf\303\251", O_RDONLY) = 3</r/\303\251t\303\251/caf\303\251> <0.000010>
+500 1700000005.001800 read(3</r/\303\251t\303\251/caf\303\251>, "x"..., 4096) = 4096 <0.000010>
+500 1700000005.001900 close(3</r/\303\251t\303\251/caf\303\251>) = 0 <0.000010>
+'''
+
+
+def test_a_descriptors_escaped_path_is_unescaped():
+    assert trace.fd_arg(r"3</r/caf\303\251>") == (3, "/r/café")
+    assert trace.fd_arg(r"3</r/c\74d\76e>") == (3, "/r/c<d>e")
+    assert trace.fd_arg(r"3</r/x\\y>") == (3, "/r/x\\y")
+    assert trace.fd_arg(r"AT_FDCWD</r/a b>") == (None, "/r/a b")
+    assert trace.fd_arg(r"4</r/caf\303\251 (deleted)>") == (4, "/r/café")
+    assert trace.fd_arg(r"1</dev/n\74ll\76<char 1:3>>") == (1, "/dev/n<ll>")
+    assert split_args(r'3</r/c\74d,e\76>, "x"..., 4096') == [r"3</r/c\74d,e\76>", '"x"...', "4096"]
+
+
+def test_metrics_and_export_give_an_escaped_file_one_name():
+    lines = ESCAPED.strip().splitlines()
+    # the root itself has escaped characters: it matches only once the annotations are unescaped
+    d = metrics_of(lines, ["/r/été"])
+    assert d["total"]["counts"] == {"open": 6, "close": 6, "read": 5, "write": 1, "stat": 1}
+    pop = d["total"]["popularity_objects"]
+    assert pop["distinct"] == 5 and pop["counts"] == [[2, 1], [1, 4]]   # café twice, the rest once
+    header, events = trace.export_of(lines, "/r/été")
+    assert header["creates"] == ["c<d>e"] and header["opens"] == 6 and header["notes"] == {}
+    paths = [e["path"] for e in events if "path" in e]
+    assert paths == ["café", "café", "c<d>e", "x\\y", "a b", "n,m", "café"]

@@ -115,3 +115,23 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   0, 7 as divisors; the reuse arm) fails without the `given_rules` call and passes with it;
   test_params.py + test_usage.py: 34 passed.
 
+## 6. aeiou-trace kept strace's escapes in `-yy` descriptor paths
+
+- **Where:** `builder/aeiou/trace.py`, `fd_arg` (every descriptor argument, the `ret_path` of an
+  open, a dirfd base, `fchdir`) and the `aio_fildes` annotations of `io_submit`.
+- **Found by:** review of aeiou-trace, tracing a stat then an open of `café` and creates of
+  names holding `<`, `>`, `\`, a space, and a comma.
+- **Defect:** strace prints a `-yy` path as a quoted string without its quotes (octal for
+  non-ASCII bytes, `\74`/`\76` for `<`/`>`, a doubled backslash); path *arguments* were
+  unescaped (`c_string`) but descriptor annotations were not, so one file had two names (`stat
+  café`, `open caf\303\251`): popularity, creates, and path order split, an exported trace named
+  files the runner would not find, and a `--root` needing escapes matched nothing.
+- **Fix:** the decoder inside `c_string` becomes `unescape`; a new `fd_path` strips the
+  `<char 1:3>` device suffix and ` (deleted)` from the raw annotation and then unescapes it;
+  `fd_arg` and both `io_submit` loops use it. The annotation's end detection was already right:
+  strace escapes every `<`/`>` inside a path. No fingerprint or contract change.
+- **Evidence:** `test_trace.py::test_a_descriptors_escaped_path_is_unescaped` and
+  `test_metrics_and_export_give_an_escaped_file_one_name` (root `/r/été`; café, `c<d>e`, `x\y`,
+  `a b`, `n,m`) fail on the old trace.py (`'/r/caf\\303\\251'`; counts `{}`) and pass on the
+  new; test_trace.py: 61 passed.
+
