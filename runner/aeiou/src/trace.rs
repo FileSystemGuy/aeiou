@@ -134,6 +134,9 @@ pub struct Line {
     /// The ordinal of this line's first op among all ops of the file (members counted).
     #[serde(skip)]
     pub g0: usize,
+    /// The line's number in the file (1 is the header), for messages.
+    #[serde(skip)]
+    pub no: usize,
 }
 
 /// Path order for one op (`deps`, by op ordinal): `path` is the id of a path the trace
@@ -231,11 +234,20 @@ impl TraceFile {
         for p in &header.creates {
             check_path(name, h + 1, p, false)?;
         }
-        let mut lines = Vec::with_capacity(header.lines);
+        // the header's count is a hint, never trusted for an allocation
+        let mut lines = Vec::with_capacity(header.lines.min(text.len() / 32));
         for (i, l) in it {
-            let line: Line = serde_json::from_str(l).map_err(|e| anyhow!("trace `{name}`: line {}: {e}", i + 1))?;
+            let mut line: Line = serde_json::from_str(l).map_err(|e| anyhow!("trace `{name}`: line {}: {e}", i + 1))?;
+            line.no = i + 1;
             check_paths(name, i + 1, &line.op)?;
+            check_shape(name, i + 1, &line)?;
             lines.push(line);
+        }
+        // a lane is numbered in order of first op, so there are at most as many as lines
+        // (the header's count, when it gives one, is checked against the file's in `index`)
+        let most = if header.lanes != 0 { header.lanes } else { lines.len() };
+        if let Some(l) = lines.iter().find(|l| l.lane >= most) {
+            bail!("trace `{name}`: line {}: lane {} out of range ({} lane(s){})", l.no, l.lane, most, if header.lanes != 0 { " in the header" } else { ", one per line at most" });
         }
         let mut tf = TraceFile { name: name.to_string(), path: path.to_path_buf(), sha256: got, header, lines, lanes: Vec::new(), opens: Vec::new(), read_extent: HashMap::new(), inputs: Vec::new(), peak_open: 0, ops: 0, deps: Vec::new(), deps2: HashMap::new(), changed: Vec::new() };
         tf.index()?;
@@ -265,6 +277,8 @@ impl TraceFile {
             }
             lanes[line.lane].push(i);
             line.g0 = ops as usize;
+            let no = line.no;
+            let past = |what: &str| anyhow!("trace `{name}`: line {no}: the {what} passes the largest file offset (2^63 - 1)");
             let members: Vec<&LineOp> = match &line.op {
                 LineOp::Submit { ops } => ops.iter().collect(),
                 op => vec![op],
@@ -273,7 +287,7 @@ impl TraceFile {
                 ops += 1;
                 if let LineOp::Open { fd, path, flags, ret, .. } = op {
                     if *fd != opens.len() {
-                        bail!("trace `{name}`: line {}: open id {fd} out of order (expected {})", i + 2, opens.len());
+                        bail!("trace `{name}`: line {}: open id {fd} out of order (expected {})", no, opens.len());
                     }
                     let failed = matches!(ret, Ret::Err(_));
                     opens.push(OpenInfo { path: path.clone(), uses: 0, closes: 0, failed });
@@ -290,7 +304,10 @@ impl TraceFile {
                     continue;
                 }
                 if let Some(fd) = op.fd() {
-                    let info = opens.get_mut(fd).ok_or_else(|| anyhow!("trace `{name}`: line {}: open id {fd} before its open", i + 2))?;
+                    let info = opens.get_mut(fd).ok_or_else(|| anyhow!("trace `{name}`: line {no}: open id {fd} before its open"))?;
+                    if info.failed {
+                        bail!("trace `{name}`: line {no}: open id {fd} is used, and its open failed in the trace");
+                    }
                     match op {
                         LineOp::Close { .. } => {
                             info.closes += 1;
@@ -303,18 +320,19 @@ impl TraceFile {
                         LineOp::Read { offset, len, ret, .. } => {
                             let off = offset.unwrap_or(pos[fd]);
                             let n = ret.count().max(0);
+                            let end = off.checked_add(n).ok_or_else(|| past("read's end"))?;
                             if offset.is_none() {
-                                pos[fd] = off + n;
+                                pos[fd] = end;
                             }
                             if !created.contains(&path) {
                                 let e = extent.entry(path).or_insert(0);
-                                *e = (*e).max(off + n);
+                                *e = (*e).max(end);
                             }
                             let _ = len;
                         }
                         LineOp::Write { offset, len, .. } => {
                             if offset.is_none() {
-                                pos[fd] += *len;
+                                pos[fd] = pos[fd].checked_add(*len).ok_or_else(|| past("write's end"))?;
                             }
                         }
                         LineOp::Lseek { ret, .. } => pos[fd] = ret.count().max(0),
@@ -640,6 +658,42 @@ fn check_paths(name: &str, line: usize, op: &LineOp) -> Result<()> {
         }
         LineOp::Submit { ops } => ops.iter().try_for_each(|o| check_paths(name, line, o)),
         _ => Ok(()),
+    }
+}
+
+/// What one line may hold beyond its fields' types: a `submit` holds one or more positioned
+/// reads and writes (an `io_submit` of `IOCB_CMD_PREAD`/`PWRITE`, all the exporter writes;
+/// the members run together and leave the lane's positions alone, so nothing else has a
+/// meaning there, and `build` never sees a group); a read or write has a length that is a
+/// `size_t` (never negative); and `t` and `dur` are nanoseconds from the first call, never
+/// negative, whose sum (the line's end, what the next gap is taken from) fits.
+fn check_shape(name: &str, line: usize, l: &Line) -> Result<()> {
+    if l.t < 0 || l.dur < 0 || l.t.checked_add(l.dur).is_none() {
+        bail!("trace `{name}`: line {line}: `t` {} and `dur` {} must be nanoseconds, not negative, with a sum below 2^63", l.t, l.dur);
+    }
+    let len_ok = |op: &LineOp| match op {
+        LineOp::Read { len, .. } | LineOp::Write { len, .. } if *len < 0 => bail!("trace `{name}`: line {line}: a {} of length {len}: a length is not negative", if matches!(op, LineOp::Read { .. }) { "read" } else { "write" }),
+        _ => Ok(()),
+    };
+    match &l.op {
+        LineOp::Submit { ops } if ops.is_empty() => bail!("trace `{name}`: line {line}: an empty `submit`: a group holds one or more positioned reads and writes"),
+        LineOp::Submit { ops } => {
+            for (j, op) in ops.iter().enumerate() {
+                let kind = match op {
+                    LineOp::Read { offset: Some(_), .. } | LineOp::Write { offset: Some(_), .. } => None,
+                    LineOp::Read { .. } => Some("a sequential read (no `offset`)"),
+                    LineOp::Write { .. } => Some("a sequential write (no `offset`)"),
+                    LineOp::Submit { .. } => Some("a nested `submit`"),
+                    _ => Some("an op other than a read or a write"),
+                };
+                if let Some(kind) = kind {
+                    bail!("trace `{name}`: line {line}: `submit` member {j} is {kind}: a group holds positioned reads and writes only");
+                }
+                len_ok(op)?;
+            }
+            Ok(())
+        }
+        op => len_ok(op),
     }
 }
 

@@ -826,3 +826,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   (sync and io_uring: fingerprint, ops, bytes, takes) fails without the fix and passes; all
   non-coord tests pass (the coord timing flakes are queued separately).
 
+## 38. A malformed trace file could panic, hang, or wrap the runner instead of being refused
+
+- **Where:** `runner/aeiou/src/trace.rs`: `TraceFile::load` (new `check_shape`, lane range,
+  header `lines` as a capped hint), `index` (checked position arithmetic, a use of a failed
+  open, true line numbers via `Line::no`); runner REFERENCE §13 *Loading*.
+- **Found by:** review of the trace node: a nested `submit` passed `check` and panicked `dry-run`
+  (`unreachable!` in `build`, exit 101); the fixer's sweep of the loader found more.
+- **Defect:** any op was accepted as a `submit` member: a nested submit panicked, an `open`
+  member hung `run`, a `stat` member failed with EINVAL, a `close` or unpositioned member ran
+  with no meaning; `"lane": 4000000000000` hung all three commands allocating lanes; a header
+  `"lines": 4e18` panicked ("capacity overflow"); a negative length gave "Bad address"; `t`/`dur`
+  near i64::MAX and overflowing positions wrapped silently; a use of an open that failed in the
+  trace was reported as "failed in this run"; line numbers were off after blank lines.
+- **Fix:** each line's shape is checked at load (so `check`, `dry-run`, and `run` refuse before
+  the gate) with its line number: a submit holds one or more positioned reads/writes only (the
+  exporter never writes an empty one); lengths, `t`, `dur` non-negative and summing in range;
+  lanes below the header's count; positions by checked arithmetic; a failed open's use refused;
+  `header.lines` only a capped capacity hint. A huge but well-formed length still fails cleanly
+  at run time (bug 31). No fingerprint change.
+- **Evidence:** `tests/trace.rs::a_malformed_line_is_refused_at_load_with_its_line_number` (11
+  malformed files, each refused by load, check, dry-run, and run with exit 1, "line N", no
+  "panicked") fails on the old trace.rs ("a malformed trace loaded") and passes; trace tests 9
+  passed. Fixed in an isolated worktree and applied.
+

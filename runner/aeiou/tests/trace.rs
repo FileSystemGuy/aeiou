@@ -356,3 +356,52 @@ fn only_rank_0_checks_what_a_trace_creates_after_its_clean() {
     assert_eq!(std::fs::read(root0.join("out/final")).unwrap().len(), 1000);
     assert_eq!(std::fs::read(root1.join("out/final")).unwrap(), b"old");
 }
+
+/// A line the runner cannot execute is refused when the file loads, with its line number,
+/// by `check`, `dry-run`, and `run` alike: a `submit` holds one or more positioned reads and
+/// writes and nothing else (a nested one panicked the dry run, an `open` in one hung the
+/// run), a lane is in range (a huge one allocated without end), the header's line count is
+/// never an allocation (a huge one overflowed it), lengths, times, and offsets stay in range,
+/// and an open that failed in the trace has no uses.
+#[test]
+fn a_malformed_line_is_refused_at_load_with_its_line_number() {
+    let d = tmpdir("malformed");
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("f"), vec![0u8; 9000]).unwrap();
+    let h = r#"{"aeiou_trace":1,"lanes":1,"creates":[]}"#;
+    let open = r#"{"lane":0,"op":"open","fd":0,"path":"f","flags":["RDONLY"]}"#;
+    let cases: Vec<(String, &str)> = vec![
+        (format!("{h}\n\n{}", r#"{"lane":0,"op":"submit","ops":[{"op":"submit","ops":[]}]}"#), "line 3: `submit` member 0 is a nested `submit`"),
+        (format!("{h}\n{}", r#"{"lane":0,"op":"submit","ops":[]}"#), "line 2: an empty `submit`"),
+        (format!("{h}\n{}", r#"{"lane":0,"op":"submit","ops":[{"op":"open","fd":0,"path":"f","flags":["RDONLY"]}]}"#), "line 2: `submit` member 0 is an op other than a read or a write"),
+        (format!("{h}\n{open}\n{}", r#"{"lane":0,"op":"submit","ops":[{"op":"read","fd":0,"offset":0,"len":10},{"op":"close","fd":0}]}"#), "line 3: `submit` member 1 is an op other than"),
+        (format!("{h}\n{open}\n{}", r#"{"lane":0,"op":"submit","ops":[{"op":"read","fd":0,"len":10}]}"#), "line 3: `submit` member 0 is a sequential read"),
+        (format!("{h}\n{open}\n{}", r#"{"lane":0,"op":"read","fd":0,"offset":0,"len":-5}"#), "line 3: a read of length -5"),
+        (format!("{h}\n{}", r#"{"lane":4000000000000,"op":"stat","path":"f"}"#), "line 2: lane 4000000000000 out of range"),
+        (format!("{}\n{}", r#"{"aeiou_trace":1,"lines":4000000000000000000,"creates":[]}"#, r#"{"lane":1,"op":"stat","path":"f"}"#), "line 2: lane 1 out of range"),
+        (format!("{h}\n{}", r#"{"lane":0,"t":9223372036854775807,"dur":1,"op":"stat","path":"f"}"#), "line 2: `t` 9223372036854775807 and `dur` 1"),
+        (format!("{h}\n{open}\n{}", r#"{"lane":0,"op":"read","fd":0,"offset":9223372036854775000,"len":4096,"ret":4096}"#), "line 3: the read's end passes"),
+        (format!("{h}\n{}\n{}", r#"{"lane":0,"op":"open","fd":0,"path":"nope","flags":["RDONLY"],"ret":"ENOENT"}"#, r#"{"lane":0,"op":"read","fd":0,"len":10}"#), "line 3: open id 0 is used, and its open failed"),
+    ];
+    let bin = env!("CARGO_BIN_EXE_aeiou");
+    for (lines, want) in &cases {
+        let p = abstract_with(&d, lines, Some(1));
+        let e = match aeiou::load(&p) {
+            Ok(_) => panic!("a malformed trace loaded: {lines}"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(e.contains(want), "{e}");
+        let (p, root) = (p.to_str().unwrap(), root.to_str().unwrap());
+        for args in [vec!["check", p], vec!["dry-run", p, "--gpus", "1"], vec!["run", p, "--gpus", "1", "--root", root, "--time-scale", "0"]] {
+            let out = std::process::Command::new(bin).args(&args).output().unwrap();
+            let all = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            assert_eq!(out.status.code(), Some(1), "{} on {lines}: {all}", args[0]);
+            assert!(all.contains(want) && !all.contains("panicked"), "{} on {lines}: {all}", args[0]);
+        }
+    }
+    // the header's line count is a hint: a huge one over a well-formed file loads
+    let p = abstract_with(&d, r#"{"aeiou_trace":1,"lanes":1,"lines":4000000000000000000,"creates":[]}
+{"lane":0,"op":"stat","path":"f"}"#, Some(1));
+    aeiou::load(&p).unwrap();
+}

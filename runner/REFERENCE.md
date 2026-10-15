@@ -1642,7 +1642,11 @@ use before its open is refused. Every path, in an op or in `creates`, must stay 
 root: an absolute path, a `..` component, or an empty path is refused with its line number
 (2026-10-14, RC1 review), so nothing the trace opens, changes, or `--clean-namespaces`
 removes is outside `--root`. The root itself (`.`) may be read (opened without `CREAT` or
-`TRUNC`, listed, stat'ed), never changed.
+`TRUNC`, listed, stat'ed), never changed. The file's shape is checked too, each refusal with
+its line number (2026-10-14, RC1 review): a `submit` holds one or more positioned reads and
+writes and nothing else (no nested `submit`); a length is not negative; `t` and `dur` are not
+negative and their sum fits; a lane is below the header's `lanes`; a position or extent that
+would pass the largest file offset, and a use of an open the trace saw fail, are refused.
 
 **The run** (`run.rs`; `uring.rs` under the event-loop backends, since 2026-10-03): one
 thread per lane under a blocking backend, one task per lane on the event loop that reached
