@@ -1506,3 +1506,20 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   builder files that run datagen (test_formats, test_payload, test_object, test_trace,
   test_coord, test_launch, test_options, test_usage, test_man) 176 passed. Fixed in an isolated
   worktree and applied.
+
+## 65. An S3-only event loop busy-spun to every timer under 1 ms
+
+- **Where:** `runner/aeiou/src/uring.rs` `WaitIo::wait` (the engine of a loop with only S3
+  names under `--s3 async`).
+- **Found by:** the fixers of bugs 41 and 57, noted and queued.
+- **Defect:** the wait passed `timeout.as_millis()` to `poll`, so a timer under 1 ms (a
+  `compute` of < 1 ms, a trace gap) became `poll(0)` and the loop spun to its deadline, and
+  1.9 ms was cut to 1 ms: 300 waits of 200 µs used 60.19 ms of CPU in 60.21 ms, a whole CPU
+  taken from the host under test and from the runtime's threads carrying the S3 requests.
+- **Fix:** `ppoll` with a nanosecond `timespec` from the `Duration`; a zero timeout (a timer
+  already due) still returns without sleeping, and with the 1 ns timer slack of bug 41 the
+  wait wakes on time. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `uring::tests::an_s3_loop_sleeps_to_a_sub_millisecond_timer_never_spins_to_it`
+  (500 µs and 1.9 ms waits last that long, 300 × 200 µs use under half their wall time in
+  thread CPU, an eventfd write still wakes it) fails before ("woke after 4.641µs" on a 500 µs
+  wait) and passes after, 5 of 5; `--lib` 63 passed, MinIO object tests 6 passed.

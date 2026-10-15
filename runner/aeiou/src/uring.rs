@@ -864,7 +864,7 @@ impl Objects {
 
 /// The engine of a loop with no POSIX API: a run of S3 names alone under `--s3 async`.
 /// Every op goes to the object engine, so this carries none; it only waits for the loop's
-/// eventfd (`poll(2)`), which the runtime's workers write, or for the next timer.
+/// eventfd (`ppoll(2)`), which the runtime's workers write, or for the next timer.
 pub(crate) struct WaitIo {
     efd: Option<RawFd>,
 }
@@ -893,12 +893,15 @@ impl Engine for WaitIo {
             return Ok(());
         };
         let mut p = libc::pollfd { fd: efd, events: libc::POLLIN, revents: 0 };
-        let ms = timeout.as_millis().clamp(0, i32::MAX as u128) as i32;
-        // SAFETY: one live pollfd
-        let n = unsafe { libc::poll(&mut p, 1, ms) };
+        // `ppoll`, to the ns: `poll`'s whole ms made a timer under 1 ms `poll(0)`, and the loop
+        // spun a CPU to it (taken from the host under test and the runtime's workers); 0 is a
+        // timer due already, a poll that does not sleep
+        let ts = libc::timespec { tv_sec: timeout.as_secs().min(i32::MAX as u64) as libc::time_t, tv_nsec: timeout.subsec_nanos() as libc::c_long };
+        // SAFETY: one live pollfd and timespec; no signal mask
+        let n = unsafe { libc::ppoll(&mut p, 1, &ts, std::ptr::null()) };
         if n < 0 {
             let e = std::io::Error::last_os_error();
-            return if e.raw_os_error() == Some(libc::EINTR) { Ok(()) } else { Err(e).context("poll") };
+            return if e.raw_os_error() == Some(libc::EINTR) { Ok(()) } else { Err(e).context("ppoll") };
         }
         if n > 0 {
             // take the count, so the next poll waits for the next write
@@ -1969,7 +1972,8 @@ impl<E: Engine> Loop<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::rw_len;
+    use super::{rw_len, Engine, WaitIo};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn a_read_or_write_over_max_rw_count_is_issued_at_it_never_at_its_low_32_bits() {
@@ -1981,5 +1985,58 @@ mod tests {
         assert_eq!(rw_len((1 << 32) + 4096), max, "not 4096");
         assert_eq!(rw_len(1 << 32), max, "not 0");
         assert!(rw_len(i64::MAX) <= u32::MAX as i64);
+    }
+
+    fn thread_cpu() -> Duration {
+        let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+        // SAFETY: one live rusage
+        unsafe { libc::getrusage(libc::RUSAGE_THREAD, &mut u) };
+        let t = |v: libc::timeval| Duration::new(v.tv_sec as u64, v.tv_usec as u32 * 1000);
+        t(u.ru_utime) + t(u.ru_stime)
+    }
+
+    #[test]
+    fn an_s3_loop_sleeps_to_a_sub_millisecond_timer_never_spins_to_it() {
+        // SAFETY: a plain eventfd, closed below
+        let efd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+        assert!(efd >= 0);
+        let mut w = WaitIo { efd: None };
+        let mut buf = 0u64;
+        let mut out = Vec::new();
+        w.post_wake(efd, &mut buf).unwrap();
+        // one wait of a timer under 1 ms sleeps to it (it was `poll(0)`: back at once)
+        let t = Instant::now();
+        w.wait(Duration::from_micros(500), &mut out).unwrap();
+        assert!(t.elapsed() >= Duration::from_micros(500), "woke after {:?}", t.elapsed());
+        // and one of 1.9 ms is not cut to 1 ms
+        let t = Instant::now();
+        w.wait(Duration::from_micros(1900), &mut out).unwrap();
+        assert!(t.elapsed() >= Duration::from_micros(1900), "woke after {:?}", t.elapsed());
+        // a timer due already is a poll that does not sleep
+        let t = Instant::now();
+        w.wait(Duration::ZERO, &mut out).unwrap();
+        assert!(t.elapsed() < Duration::from_millis(50), "slept {:?}", t.elapsed());
+        assert!(out.is_empty());
+        // as the loop does: 300 computes of 200 µs, each waited out to its deadline; the
+        // thread sleeps through them, it does not burn a CPU to them
+        let (wall, cpu) = (Instant::now(), thread_cpu());
+        for _ in 0..300 {
+            let due = Instant::now() + Duration::from_micros(200);
+            loop {
+                let left = due.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                w.wait(left, &mut out).unwrap();
+            }
+        }
+        let (wall, cpu) = (wall.elapsed(), thread_cpu() - cpu);
+        assert!(cpu * 2 < wall, "{cpu:?} of CPU over {wall:?}");
+        // the eventfd still wakes it
+        let one = 1u64;
+        unsafe { libc::write(efd, &one as *const u64 as *const libc::c_void, 8) };
+        w.wait(Duration::from_secs(5), &mut out).unwrap();
+        assert_eq!(out, vec![(super::EFD, 0)]);
+        unsafe { libc::close(efd) };
     }
 }
