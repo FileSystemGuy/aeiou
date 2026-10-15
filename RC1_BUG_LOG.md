@@ -1628,3 +1628,26 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   fingerprint) fails with the old `trace.rs` (the read after the failed lseek at off=0); the CLI
   repro "reads to 1100" before, the dry run's fingerprint after; `--test all -- trace` 11
   passed, `--lib` 61, test_trace.py 82.
+
+## 70. `aeiou-params check` judged some rules on the defaults, passing files the runner refuses
+
+- **Where:** `schema/check.py` (new `Check.param_value`, used by `run`'s per-parameter check,
+  `at_least`, `number`, and `least`), `builder/aeiou/params.py` (`Given` overrides
+  `param_value` only); `builder/tests/test_params.py`.
+- **Found by:** the regression review of the RC1 fixes (bugs 5 and 39): `Given` overrode only
+  `at_least`, while `number()`, `least()`, and `exact()` read `ast.params[...].default`, and the
+  runner's `check_given` reads the given value.
+- **Defect:** a given scalar was never judged in Python by the normal/lognormal min > max rule,
+  the V3 proof that rule feeds, or V25: with `max = param hi` given 0, `aeiou-params check`
+  said ok while `aeiou dry-run --params-file` refused "normal: min 1 is above max 0" and the
+  `x @` proof; with a dataset size `param sz` given -5, ok against the runner's V25 refusal. The
+  tool's documented promise is to refuse every file `run --params-file` refuses.
+- **Fix:** one hook for a parameter's value in effect (the default in `Check`, the given value
+  in `Given`), read by every rule the runner's `check_given` applies; V23's divisor check keeps
+  the default on purpose, as the runner does. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `test_params.py::test_given_scalars_are_judged_by_every_rule_that_reads_them`
+  (hi 0, 9, 1; sz -5, 8192, 0: `params.check`, `aeiou-params check`'s exit, and the runner's
+  words alike) fails 2 of 6 before and passes 6 after; test_params, test_builder, test_man 116
+  passed; both checkers ok over every committed AST; all 22 committed parameter sets accepted by
+  both tools. (The test resolves `AEIOU_RUNNER` before running in its temporary directory, since
+  CI gives a path relative to builder/.) Fixed in an isolated worktree and applied.

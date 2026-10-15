@@ -275,3 +275,66 @@ def test_bad_inputs_and_options_are_one_line_errors(tmp_path):
         _one_line_failure(r, 2)
         assert f"argument {opt[0]}:" in r.stderr and "Usage: aeiou-params safetensors" in r.stderr, r.stderr
     assert not out.exists()
+
+
+def _given_abstracts():
+    """Two abstracts whose rules read a scalar parameter: a `normal` whose `max` is `hi`, drawn as
+    the reuse distance of `x @ i - d` (V3 and min-above-max), and a dataset whose size is `sz` (V25)."""
+    from aeiou import Workload, const, normal, when
+    w = Workload("t")
+    P = w.params(hi=10)
+    ds = w.dataset("d", pattern="d/f{id:04}", layout="whole", access="indexed", count=4, size=const(4096), seed=1)
+    with w.actor("gpu") as a:
+        with a.loop("i", 4) as i:
+            d = a.draw("d", normal(5, 1, min=1, max=P.hi))
+            a.let("x", when(i > 0, a.ref("x").at(i - d), 0))
+            a.stat(ds.file(a.ref("x")))
+    v3 = w.build()
+    w = Workload("t")
+    P = w.params(sz=4096)
+    ds = w.dataset("d", pattern="d/f{id:04}", layout="whole", access="indexed", count=4, size=P.sz, seed=1)
+    with w.actor("gpu") as a:
+        a.stat(ds.file(0))
+    return v3, w.build()
+
+
+GIVEN = [  # (abstract, given, the runner's `check_given` errors)
+    ("v3", {"hi": 0}, ["t: actors/gpu/body/0/loop/body/0/let/value: normal: min 1 is above max 0",
+                       "t: actors/gpu/body/0/loop/body/1/let/value/then: `x @` names a binding of this loop body, "
+                       "so its index must be {sub: [{index: i}, e]} with e provably >= 1"]),
+    ("v3", {"hi": 9}, []),
+    ("v3", {"hi": 1}, []),
+    ("v25", {"sz": -5}, ["t: datasets/d/size: a size below 0: it can be -5 (V25)"]),
+    ("v25", {"sz": 8192}, []),
+    ("v25", {"sz": 0}, []),
+]
+
+
+@pytest.mark.parametrize("which,given,want", GIVEN, ids=[f"{w}-{g}" for w, g, _ in GIVEN])
+def test_given_scalars_are_judged_by_every_rule_that_reads_them(tmp_path, which, given, want):
+    """A given scalar is the value in effect for every rule the runner's `check_given` applies,
+    not only V3's distribution minimums: a `max` below its `min` (and with it the V3 proof the
+    `min` gave) and a dataset size below 0 (V25) were judged on the default, so `check` passed a
+    file `run --params-file` refuses (RC1 review). Same verdict and words as the runner's."""
+    v3, v25 = _given_abstracts()
+    ast = {"v3": v3, "v25": v25}[which]
+    pset = {"params_version": 1, "abstract": "t", "params": given}
+    errs = params.check(ast, pset)
+    assert sorted(errs) == sorted(f"params: invalid with the parameters given: {e}" for e in want), errs
+    a, f = tmp_path / "t.ast.json", tmp_path / "t.params.json"
+    a.write_text(json.dumps(ast))
+    f.write_text(json.dumps(pset))
+    r = _run(["check", a, f])
+    assert r.returncode == (1 if want else 0), r.stdout + r.stderr
+    # resolved here: CI gives a path relative to builder/, and the run below is in tmp_path
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
+    if not runner.exists():
+        pytest.skip("runner binary not built")
+    r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)],
+                       capture_output=True, text=True, cwd=str(tmp_path))
+    if want:
+        assert r.returncode == 1 and "invalid with the parameters given:" in r.stderr, r.stderr
+        got = [ln.strip() for ln in r.stderr.split("invalid with the parameters given:", 1)[1].splitlines() if ln.strip()]
+        assert sorted(got) == sorted(want), r.stderr
+    else:
+        assert r.returncode == 0, r.stderr

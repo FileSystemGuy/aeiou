@@ -112,19 +112,19 @@ def check(ast: dict, pset: dict, *, ast_sha256: str | None = None, name: str = "
 
 def given_rules(ast: dict, given: dict, *, name: str = "params") -> list[str]:
     """The rules the runner judges again on the values a run is given, past their kinds:
-    V3 on the parameters' distributions (`validate::check_given`: a value whose minimum is
-    below the default's can turn an `at` offset into zero, `DESIGN_REVIEW.md` §3.57) and
+    the document's rules with each parameter's value in effect (`validate::check_given`: V3,
+    where a value whose minimum is below the default's can turn an `at` offset into zero,
+    `DESIGN_REVIEW.md` §3.57; a normal/lognormal `min` above its `max`; V25) and
     V23 on the pattern divisors they bind (`eval::bind_pattern`: a positive integer)."""
     from .pattern import Pattern
     from .validate import _load
     _, chk = _load()
 
     class Given(chk.Check):
-        def at_least(self, e, k, scope):
-            if isinstance(e, dict) and len(e) == 1 and e.get("param") in given:
-                v = given[e["param"]]
-                return isinstance(v, dict) and self.at_least(v, k, scope)
-            return super().at_least(e, k, scope)
+        # every rule the runner's `check_given` judges on the value in effect (V3's minimums,
+        # the normal/lognormal min-above-max rule, V25) reads a parameter through this hook
+        def param_value(self, pname):
+            return given[pname] if pname in given else super().param_value(pname)
 
     errors = [f"{name}: invalid with the parameters given: {e}" for e in Given(ast, ast["name"]).run()]
     values = {k: p["default"] for k, p in ast.get("params", {}).items()} | given

@@ -94,6 +94,12 @@ class Check:
         # V6: a `consume` under a loop whose count varies, by path: the innermost such loop's path
         self.consume_varying = {}
 
+    def param_value(self, name):
+        """The value in effect of parameter `name` (None when it is not declared): its default
+        when the document is judged; `aeiou-params check` overrides this with the value a
+        parameter file gives, as the runner's `check_given` judges a run (`DESIGN_REVIEW.md` §3.57)."""
+        return self.ast.get("params", {}).get(name, {}).get("default")
+
     def err(self, path, msg):
         self.errors.append(f"{self.name}: {'/'.join(map(str, path))}: {msg}")
 
@@ -147,8 +153,8 @@ class Check:
             self.err(list(path), msg)
         if "gpus" in self.params:
             self.err(["params"], "`gpus` is reserved and set by the runner")
-        for pname, p in self.ast.get("params", {}).items():
-            self.value(p["default"], ["params", pname])
+        for pname in self.ast.get("params", {}):
+            self.value(self.param_value(pname), ["params", pname])
         roots = {}
         for dname, d in self.datasets.items():
             body = d
@@ -621,7 +627,7 @@ class Check:
             v = scope.lookup(a)
             return v is not None and self.at_least(v, k, scope)
         if kind == "param":
-            d = self.ast["params"].get(a, {}).get("default")
+            d = self.param_value(a)
             return isinstance(d, dict) and self.at_least(d, k, scope)
         if kind == "draw":
             return self.at_least(a, k, scope)
@@ -654,9 +660,9 @@ class Check:
         return False
 
     def number(self, e):
-        """The number `e` is known to be: a literal, or a `param` whose default is a number."""
+        """The number `e` is known to be: a literal, or a `param` whose value in effect is a number."""
         if isinstance(e, dict) and set(e) == {"param"}:
-            e = self.ast.get("params", {}).get(e["param"], {}).get("default")
+            e = self.param_value(e["param"])
         return e if isinstance(e, (int, float)) and not isinstance(e, bool) else None
 
     # rule V25: the least a dataset's size can be; UNBOUNDED when nothing bounds it below
@@ -695,7 +701,7 @@ class Check:
             return self.exact(d)
         kind, a = next(iter(d.items()))
         if kind == "param":
-            v = self.ast.get("params", {}).get(a, {}).get("default")
+            v = self.param_value(a)
             return self.least(v) if isinstance(v, dict) else self.exact(d)
         if kind == "const":
             return self.least(a)
