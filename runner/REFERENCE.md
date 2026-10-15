@@ -998,7 +998,11 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   (op size), what any `io_uring` loader needs. An SQE's length is 32 bits, so a read or write
   is issued at no more than `MAX_RW_COUNT` (`INT_MAX` rounded down to a page), the most the
   kernel moves in one `pread`, `pwrite`, or AIO request: an op over it moves what it moves
-  under `sync`, never its length modulo 4 GiB (2026-10-14).
+  under `sync`, never its length modulo 4 GiB (2026-10-14). A loop that ends with requests
+  still in the kernel (an actor failed, the run was aborted) cancels them
+  (`IORING_OP_ASYNC_CANCEL`) and reaps their completions before it frees their buffers:
+  closing a ring only begins the kernel's teardown, and a request still running would write
+  into freed memory (2026-10-15).
 - **Control.** `compute` is a timer (a heap of deadlines; the enter timeout is the nearest,
   and a deadline already past is met by an enter that reaps without waiting, since a 0 ns
   wait still sleeps on a timer interrupt, about 100 µs on a VM, which a run of computes

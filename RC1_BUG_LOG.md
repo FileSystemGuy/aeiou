@@ -1458,3 +1458,31 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   under 2.5× the mean; 3.10× before) fail on the old code and pass on the new; `--test all --
   run trace uring aio` 39 passed in 4 of 4 runs, `--lib` 45, builder test_object and test_trace
   97 passed, MinIO object tests 6.
+
+## 63. An io_uring loop could end with requests in the kernel that write into freed memory
+
+- **Where:** `runner/aeiou/src/uring.rs` (new `Engine::drain`, `LoopIo::drain`,
+  `LoopIo::efd_pending`, the `CANCEL` user_data, `Loop::run`, the `undrained` test hook);
+  runner/REFERENCE.md §8, the **Buffers** bullet; `runner/aeiou/tests/run.rs`.
+- **Found by:** review of the execution engines (suspected), then verified: `Loop::run` returned
+  `serve()`'s result at once, and the `Loop`'s fields drop the ring first, then the tasks, then
+  the eventfd's buffer; closing a ring fd only begins the kernel's teardown, which cancels and
+  reaps its requests later, on a worker.
+- **Defect:** a loop that ended with requests in the kernel (another actor failed, the run was
+  aborted, or a success with the eventfd read still posted) freed what they name while the
+  kernel could still write into it: each task's `statx` box (an `IORING_OP_STATX` in the
+  io-wq), the loop's `efd_buf` (the read posted while a task waits at a barrier or an object op
+  is in flight), and `cpath` under SQPOLL. A use-after-free by the kernel: silent heap
+  corruption. (Read and write chunks were leaked, not freed; libaio is safe, its `io_destroy`
+  waiting out every request before the tasks go.)
+- **Fix:** before it lets go of anything, a loop drains its ring: it asks
+  `IORING_OP_ASYNC_CANCEL` for every task in `Wait::Io` and for the eventfd read, and waits
+  until nothing is in the kernel (a request that cannot be cancelled is waited out), on the
+  error and the success paths alike; should the drain itself fail (no async cancel before Linux
+  5.5), the tasks and the eventfd buffer are leaked rather than freed. No fingerprint, dataset
+  id, or AST changes.
+- **Evidence:** `run::a_failed_io_uring_loop_drains_its_ring_before_it_ends` (two GPUs on one
+  loop: one waits at a barrier with the eventfd read posted, the other fails on an allocation;
+  `undrained()` counts rings closed with requests in the kernel) fails with the drain disabled
+  ("a ring was closed with a request still in the kernel, left: 1") and passes with it;
+  `--test all` 113 passed, 1 ignored; `--lib` 60; builder test_trace 82 passed.

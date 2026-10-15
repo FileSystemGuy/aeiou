@@ -1089,3 +1089,40 @@ fn the_first_large_read_is_not_charged_the_rings_growth() {
     let best = ratios.iter().cloned().fold(f64::INFINITY, f64::min);
     assert!(best < 2.5, "the slowest 16 MiB read took {best:.2}× the mean of the others (runs: {ratios:.2?})");
 }
+
+/// An `io_uring` loop that ends with an error while a request of its own is still in the
+/// kernel cancels that request and reaps its completion before it lets go of the ring: the loop
+/// returned at once, and closing a ring only begins the kernel's teardown, so a request still
+/// there could write into memory the loop had freed (the eventfd's count here, a `statx`
+/// result or a read's buffer elsewhere; RC1 review). Actor 0 reads and waits at a barrier, on
+/// the read posted on the loop's eventfd; actor 1, on the same loop, fails 100 ms later on a
+/// read whose buffer cannot be allocated, and never arrives.
+#[test]
+fn a_failed_io_uring_loop_drains_its_ring_before_it_ends() {
+    let ast = r#"{"ast":"0.10","name":"drain",
+      "datasets":{"d":{"pattern":"d/f{id:04}","layout":"whole","access":"indexed","count":2,"size":{"const":8192},"seed":7}},
+      "actors":{"gpu":{"body":[
+        {"compute":{"ns":{"mul":[{"actor":"id"},100000000]}}},
+        {"open":{"file":{"file":{"dataset":"d","id":{"actor":"id"}}},"flags":["RDONLY"]}},
+        {"read":{"file":{"file":{"dataset":"d","id":{"actor":"id"}}},"len":{"add":[8,{"mul":[{"actor":"id"},70368744177656]}]}}},
+        {"barrier":{"scope":"global"}},
+        {"close":{"file":{"file":{"dataset":"d","id":{"actor":"id"}}}}}
+      ]}}}"#;
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(ast).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(2, 0, &[])));
+    let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
+    let root = tmpdir("drain");
+    gen(loaded, cfg, model, &root);
+    let mut o = opts(&root, BackendKind::Uring);
+    o.threads = 1;
+    o.time_scale = 1.0;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run::run(model, o, std::collections::HashMap::new()).map(|_| ()).map_err(|e| format!("{e:#}")));
+    });
+    let r = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the run ends within 20 s");
+    let e = r.expect_err("the run fails");
+    assert!(e.contains("gpu#1") && e.contains("buffer allocation of 70368744177664 bytes failed"), "{e}");
+    assert_eq!(aeiou::uring::undrained(), 0, "a ring was closed with a request still in the kernel");
+}

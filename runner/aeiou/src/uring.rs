@@ -49,7 +49,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, VecDeque};
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -64,6 +64,17 @@ use crate::vm::{Control, Event, ForkKind, Op, OpKind, Vm};
 
 /// `user_data` of the read posted on the loop's eventfd.
 pub(crate) const EFD: u64 = u64::MAX;
+/// `user_data` of a cancellation a loop asks for as it ends (`LoopIo::drain`).
+const CANCEL: u64 = u64::MAX - 1;
+/// Rings closed with a request of theirs still in the kernel: none, since every loop drains
+/// its ring before it lets go of the buffers its requests name (`LoopIo::drain`).
+static UNDRAINED: AtomicU64 = AtomicU64::new(0);
+
+/// How many rings were closed with requests in the kernel (for the tests: always 0).
+pub fn undrained() -> u64 {
+    UNDRAINED.load(Ordering::Relaxed)
+}
+
 /// How long a loop sleeps with nothing to wake it, so the abort flag is seen.
 const IDLE: Duration = Duration::from_millis(50);
 
@@ -428,6 +439,13 @@ pub(crate) trait Engine {
     /// Submit what is queued, wait up to `timeout` for a completion, and append every
     /// completion that is ready as `(user_data, result)`.
     fn wait(&mut self, timeout: Duration, out: &mut Vec<(u64, i32)>) -> Result<()>;
+    /// As the loop ends, before it frees what its requests name (a read's buffer, a `statx`
+    /// result, the eventfd's count): cancel the requests of tasks `ids` and the eventfd's
+    /// read, and reap every completion still due. An AIO context needs nothing here: its
+    /// `io_destroy` waits out every request, and the context goes before the tasks do.
+    fn drain(&mut self, _ids: &[u64]) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// The ring and what issuing needs; disjoint from the tasks so a parked task's op can be
@@ -441,6 +459,16 @@ struct LoopIo {
     supported: Vec<bool>,
     in_flight: usize,
     in_flight_peak: usize,
+    /// The read on the loop's eventfd is in the kernel.
+    efd_pending: bool,
+}
+
+impl Drop for LoopIo {
+    fn drop(&mut self) {
+        if self.in_flight > 0 || self.efd_pending {
+            UNDRAINED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 impl LoopIo {
@@ -472,8 +500,35 @@ impl Engine for LoopIo {
         self.in_flight
     }
 
+    /// Closing a ring only begins the kernel's teardown, which cancels and reaps its requests
+    /// later, on a worker: a request still running then (a read in the io-wq, a `statx`, the
+    /// eventfd's read when a release comes) writes into memory the loop has freed by then. So
+    /// a loop that ends with requests in the kernel (another actor failed, the run was aborted)
+    /// cancels them (`IORING_OP_ASYNC_CANCEL`, Linux 5.5) and waits for their completions; one
+    /// that cannot be cancelled (a read the device is carrying out) is waited out.
+    fn drain(&mut self, ids: &[u64]) -> Result<()> {
+        if self.in_flight == 0 && !self.efd_pending {
+            return Ok(());
+        }
+        if !self.supported(opcode::AsyncCancel::CODE) {
+            bail!("io_uring: the kernel cannot cancel the loop's requests (IORING_OP_ASYNC_CANCEL needs Linux 5.5)");
+        }
+        let efd = self.efd_pending.then_some(EFD);
+        for &ud in ids.iter().chain(efd.iter()) {
+            self.push(opcode::AsyncCancel::new(ud).build().user_data(CANCEL))?;
+        }
+        let mut out = Vec::new();
+        while self.in_flight > 0 || self.efd_pending {
+            self.wait(IDLE, &mut out)?;
+            out.clear();
+        }
+        Ok(())
+    }
+
     fn post_wake(&mut self, efd: RawFd, buf: *mut u64) -> Result<()> {
-        self.push(opcode::Read::new(types::Fd(efd), buf as *mut u8, 8).build().user_data(EFD))
+        self.push(opcode::Read::new(types::Fd(efd), buf as *mut u8, 8).build().user_data(EFD))?;
+        self.efd_pending = true;
+        Ok(())
     }
 
     fn wait(&mut self, timeout: Duration, out: &mut Vec<(u64, i32)>) -> Result<()> {
@@ -503,8 +558,10 @@ impl Engine for LoopIo {
             Err(e) => return Err(e).context("io_uring_enter"),
         }
         for c in self.ring.completion() {
-            if c.user_data() != EFD {
-                self.in_flight -= 1;
+            match c.user_data() {
+                CANCEL => continue,
+                EFD => self.efd_pending = false,
+                _ => self.in_flight -= 1,
             }
             out.push((c.user_data(), c.result()));
         }
@@ -961,7 +1018,7 @@ impl Loop<LoopIo> {
         ring.submitter().register_probe(&mut probe).context("io_uring probe")?;
         let supported: Vec<bool> = (0..=255u8).map(|c| probe.is_supported(c)).collect();
         let buf = sh.opts.buffer_bytes;
-        let io = LoopIo { ring, inline: sh.backend(), rbuf: Ring::new(buf), wbuf: Ring::new(buf), pool: Pool::new(buf), supported, in_flight: 0, in_flight_peak: 0 };
+        let io = LoopIo { ring, inline: sh.backend(), rbuf: Ring::new(buf), wbuf: Ring::new(buf), pool: Pool::new(buf), supported, in_flight: 0, in_flight_peak: 0, efd_pending: false };
         Ok((Loop::with(sh, index, io)?, defaults))
     }
 }
@@ -1085,6 +1142,15 @@ impl<E: Engine> Loop<E> {
         }
         let r = self.serve();
         self.sh.coord.unsubscribe(self.efd.as_raw_fd());
+        // a loop that failed returns with its other tasks' requests still in the kernel
+        let ids: Vec<u64> = (0..self.tasks.len()).filter(|&i| matches!(self.tasks[i].wait, Wait::Io)).map(|i| i as u64).collect();
+        if let Err(e) = self.io.drain(&ids) {
+            // the kernel may still write into what the requests name: keep it all
+            std::mem::forget(std::mem::take(&mut self.tasks));
+            std::mem::forget(std::mem::replace(&mut self.efd_buf, Box::new(0)));
+            return r.and(Err(e.context("draining the event loop")));
+        }
+        self.efd_posted = false;
         r
     }
 
