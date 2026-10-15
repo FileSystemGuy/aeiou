@@ -679,7 +679,10 @@ as root). The same runs on the loopback NFS mount are §7.
   rank, the `i`-th array dataset by rank `i mod R`, because several NFS clients writing one
   file serialize on the server's inode, so the split buys nothing, and an array is
   bounded by one host's stream. *Space (2026-10-13, `DESIGN_REVIEW.md` §3.74 item 4):*
-  first, rank 0 sums the bytes still to write (`datagen::check_space`: each dataset's
+  ~~first~~ (since 2026-10-14) after the refusals the abstract, parameters, and endpoints
+  decide alone (a format writer other than a resumed corpus's, an `array` in an object
+  store), so a datagen refused anyway is never told to free space first, rank 0 sums the
+  bytes still to write (`datagen::check_space`: each dataset's
   projection, `project.rs`, exact and unrounded, less the `bytes_written` a resumed manifest's
   progress or a resized one's provenance records) per file system of the directory roots
   (by `st_dev` of the root or its nearest existing ancestor) and refuses when a sum exceeds

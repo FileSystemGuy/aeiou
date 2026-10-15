@@ -375,5 +375,10 @@ fn object_names_need_object_endpoints() {
     d["s3"] = "async".into();
     std::fs::write(&vdb, d.to_string()).unwrap();
     refused(&aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb"]), "dataset `index`: an `array` dataset is a sparse layout written at offsets and has no object form");
+    // and before the space, which a refused datagen never asks to be freed: its posix `pq`,
+    // grown to 888 PiB, fits on no host
+    let o = aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb", "--param", "pq_code=1000000000"]);
+    refused(&o, "dataset `index`: an `array` dataset is a sparse layout written at offsets and has no object form");
+    assert!(!String::from_utf8_lossy(&o.stderr).contains("space:"), "{}", String::from_utf8_lossy(&o.stderr));
     std::fs::remove_dir_all(&dir).unwrap();
 }

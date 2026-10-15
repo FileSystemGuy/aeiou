@@ -1494,19 +1494,11 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         }
     }
 
-    // the plan: what each dataset is, where it goes, this rank's share; every rank checks
-    // the roots are empty before the gate, so no rank sees another's files (rank 0's
-    // manifest, written before the gate, aside); a resume checks instead that the format
-    // writer is the one that wrote the corpus
-    // the space, on rank 0 (the roots are the shared storage under test): a refusal there
-    // reaches every rank as the empty-root checks below do
-    if rank == 0 {
-        for line in check_space(loaded, model, opts, opts.ignore_space)? {
-            writeln!(log, "{line}")?;
-        }
-    }
-    let mut plans = Vec::new();
-    let mut array_index = 0usize;
+    // what each dataset is and where it goes, and the refusals those alone decide (a format
+    // writer other than the one that wrote a resumed corpus, an `array` in an object store),
+    // before the space, which asks the file system: a datagen refused anyway is never told
+    // to free space first
+    let mut checked = Vec::new();
     for meta in model.datasets.iter() {
         let name = meta.name();
         if !opts.datasets.is_empty() && !opts.datasets.iter().any(|d| d == name) {
@@ -1529,6 +1521,21 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if object.is_some() && matches!(meta, DsMeta::Array { .. }) {
             bail!("dataset `{name}`: an `array` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
         }
+        checked.push((meta, name, container, root, object));
+    }
+    // the space, on rank 0 (the roots are the shared storage under test): a refusal there
+    // reaches every rank as the empty-root checks below do
+    if rank == 0 {
+        for line in check_space(loaded, model, opts, opts.ignore_space)? {
+            writeln!(log, "{line}")?;
+        }
+    }
+    // the plan: this rank's share of each; every rank checks the roots are empty before the
+    // gate, so no rank sees another's files (rank 0's manifest, written before the gate,
+    // aside); a resume, whose format writer was checked above, does not
+    let mut plans = Vec::new();
+    let mut array_index = 0usize;
+    for (meta, name, container, root, object) in checked {
         let mut present = std::collections::HashSet::new();
         if let (Some((store, rest)), true) = (&object, resume.is_some() && opts.resize.is_none()) {
             present = store.keys_below(rest)?.into_iter().collect();

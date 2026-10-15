@@ -26,3 +26,25 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   fails on the old describe.py and passes on the new; test_catalog.py + test_describe.py: 49
   passed.
 
+## 2. `aeiou datagen` asked for free space before refusing a corpus it would refuse anyway
+
+- **Where:** `runner/aeiou/src/datagen.rs`, `datagen()`: the order of the space check
+  (`check_space`, DESIGN_REVIEW §3.74 item 4) and the structural refusals.
+- **Found by:** the baseline coverage run (`cargo llvm-cov --features formats,object`): the
+  test `object::object_names_need_object_endpoints` failed on this host ("space: dataset(s)
+  `pq`: 29.80 GiB to write, 20.68 GiB free: the corpus does not fit") where it expected the
+  `array`-in-an-object-store refusal. The test passes or fails with the host's free disk.
+- **Defect:** the space check, which asks the file system, ran before the refusals the
+  abstract, parameters, and endpoints decide alone (a resumed corpus's format writer, an
+  `array` dataset in an object store, V18), so a datagen that would be refused anyway told the
+  user to free tens of GiB first.
+- **Fix:** the per-dataset loop is split: a first pass resolves each dataset's writer, root, and
+  endpoint and makes the structural refusals; then rank 0's space check; then the plan (empty
+  roots, directories, this rank's share). Nothing is created before either check, as before.
+  `aeiou run` was checked for the same ordering defect: its storage-dependent checks already
+  come after the decidable ones. runner/REFERENCE.md §5 *Space* updated.
+- **Evidence:** the test now also runs the refused datagen with the posix dataset grown to 888
+  PiB (`--param pq_code=1000000000`), which fits on no host: without the fix "space: … 888.18
+  PiB to write … does not fit", with it the `array` refusal and no `space:` line. `cargo test
+  --features formats --test all`: 75 passed; `--features formats,object` with MinIO: 79 passed.
+
