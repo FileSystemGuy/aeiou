@@ -29,9 +29,9 @@ pub const ENV_PREFIX: &str = "AEIOU_";
 /// The environment variable that names the config file (under `--config`).
 pub const ENV_CONFIG: &str = "AEIOU_CONFIG";
 /// `AEIOU_*` names that are not options: the config file itself, and the names the other tools
-/// of the family and the launcher use. Any other unrecognized `AEIOU_*` is reported as a
-/// warning in the options block.
-pub const RESERVED_ENV: &[&str] = &[ENV_CONFIG, "AEIOU_SCHEMA_DIR", "AEIOU_RUNNER", "AEIOU_RSH"];
+/// of the family and the launcher use, and the coordinator's test hook (`coord::timing`). Any
+/// other unrecognized `AEIOU_*` is reported as a warning in the options block.
+pub const RESERVED_ENV: &[&str] = &[ENV_CONFIG, "AEIOU_SCHEMA_DIR", "AEIOU_RUNNER", "AEIOU_RSH", "AEIOU_COORD_HEARTBEAT_MS"];
 /// The subcommands a config file may have a table for.
 pub const SUBCOMMANDS: &[&str] = &["check", "dry-run", "datagen", "run"];
 /// Every option name of every subcommand (the long flag, or the positional's name), so an

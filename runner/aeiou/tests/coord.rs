@@ -272,6 +272,39 @@ fn run_ranks(ast: &str, root: &PathBuf, gpus: &str, params: &[&str], ranks: i64,
     }).collect()
 }
 
+/// A host that owns no GPU (4 GPUs over 3 ranks: rank 2's range is [4, 4)) only hears
+/// `Release`s, a step at a time, and sends nothing; it must still heartbeat (a beat is due
+/// whenever its side has sent nothing for the heartbeat time, not only when it hears nothing),
+/// or the server declares it dead and the run fails on every host. The coordinator's times
+/// are scaled by `AEIOU_COORD_HEARTBEAT_MS` (heartbeat 100 ms, dead after 600 ms), and the
+/// run lasts several of those.
+#[test]
+fn a_host_that_only_receives_still_heartbeats() {
+    let root = tmpdir("oneway");
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root).args(["--param", "samples=500"]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let port = free_port();
+    let t = std::time::Instant::now();
+    let children: Vec<_> = (0..3)
+        .map(|rank| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+            c.arg("run").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--gpus").arg("4").arg("--root").arg(&root);
+            c.args(["--param", "samples=500", "--param", "batch=4", "--param", "steps=30", "--param", "step_time=100000000"]);
+            c.arg("--ranks").arg("3").arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}"));
+            c.env("AEIOU_COORD_HEARTBEAT_MS", "100");
+            c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap()
+        })
+        .collect();
+    let outs: Vec<_> = children.into_iter().map(|c| c.wait_with_output().unwrap()).collect();
+    let took = t.elapsed();
+    for (rank, o) in outs.iter().enumerate() {
+        assert!(o.status.success(), "rank {rank}:\nstdout:\n{}\nstderr:\n{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    }
+    assert!(String::from_utf8_lossy(&outs[2].stdout).contains("gpu ids [4, 4)"), "{}", String::from_utf8_lossy(&outs[2].stdout));
+    assert!(took > std::time::Duration::from_millis(1800), "the run must outlast the 600 ms dead time several times over: {took:?}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
     let root = tmpdir("e2e");

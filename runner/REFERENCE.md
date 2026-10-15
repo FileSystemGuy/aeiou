@@ -760,8 +760,12 @@ building it is `DESIGN_REVIEW.md` §3.25.
 - **Topology and wire.** Rank 0 runs the coordinator in-process (`coord::Server`) and
   connects to it like every other host (`coord::Tcp`). Blocking `std::net`, one reader
   thread per socket, frames of a big-endian `u32` length and a JSON body. Hosts may take up
-  to 120 s to connect; a peer silent for 30 s is dead (heartbeats every 5 s while idle) and
-  the run aborts on every host.
+  to 120 s to connect; a peer silent for 30 s is dead and the run aborts on every host. Each
+  side sends a heartbeat on a connection once it has sent nothing on it for 5 s, whatever it
+  receives (2026-10-14: timed from the last receive before, so a host that only heard
+  `Release`s, one owning no GPU, or a server that only heard a datagen's `Progress`, never
+  beat and was declared dead); `AEIOU_COORD_HEARTBEAT_MS` scales these times for the tests
+  and is no option.
 - **Configuration check.** `Hello` carries ~~a SHA-256 over~~ the run's identity document
   (the abstract's hash, seed, G, the resolved parameters, the dataset ids, the backend, the
   mmap mode, the rotation, the time scale, the write compression, `--drop-caches`), compared
@@ -1777,7 +1781,7 @@ given, and the usage lines of `run` and `datagen` show it as required. The check
 the run (`--max-gap` exceeded, `--require-cold` refusing a warm host, the limits that
 `--ignore-limits` would start over) name the flag only; its source is in the block printed
 above them. An `AEIOU_*` that is no option of any subcommand warns (`AEIOU_CONFIG`, `AEIOU_SCHEMA_DIR`,
-`AEIOU_RUNNER`, and `AEIOU_RSH` are the family's own and do not); one that is another
+`AEIOU_RUNNER`, `AEIOU_RSH`, and the coordinator's test hook `AEIOU_COORD_HEARTBEAT_MS` (§6) are the family's own and do not); one that is another
 subcommand's option is left alone. `aeiou check` prints the block too (its files and the
 config file), so CI's diff of its output against `schema/check.py` skips past the first
 empty line. `aeiou-datagen` resolves `--root`, `--endpoint`, `--writers`, `--rank`, `--ranks`, and `--coordinator` through the same layers

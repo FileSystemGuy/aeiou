@@ -330,3 +330,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   sift1m-cache capture shows fan-out `"32": 1`, probably that cut bulk load (a recapture needs
   the application).
 
+## 16. The coordinator declared a live host dead after 30 s when traffic flowed one way
+
+- **Where:** `runner/aeiou/src/coord.rs` (`Liveness`, `read_full`, `client_loop`,
+  `serve_loop`, every writer), `runner/aeiou/src/options.rs` (`RESERVED_ENV`); runner
+  REFERENCE §6 and §14.
+- **Found by:** review of the coordinator, then a 3-rank run of 4 GPUs (rank 2 owns `[4, 4)`:
+  it receives a Release every step and sends nothing): every rank exited 1 after ~30 s with
+  "rank 2 …: no message for 30s".
+- **Defect:** a heartbeat was sent only when a side's *read* timed out (nothing received for
+  5 s), so a side that kept receiving never sent one and its peer killed it at `DEAD_AFTER`.
+  It hit any run where G < R or G is not a multiple of R, a host waiting for its Result while
+  others release barriers for over 30 s, and datagen clients sending Progress more often than
+  every 5 s; the 5 s heartbeat and 5 s read timeout also raced.
+- **Fix:** each connection's writer records its last send (`Wire { s, sent }`, updated by
+  every frame sent); both reader loops beat whenever `HEARTBEAT` has passed since the last
+  send, after every message received and on every read timeout; the read tick is 1 s, under the
+  heartbeat. Still blocking `std::net` on dedicated threads. A test-only hook,
+  `AEIOU_COORD_HEARTBEAT_MS` (heartbeat N ms, dead after 6N), reserved in options.rs and named
+  in REFERENCE §6 and §14. No fingerprint or contract change.
+- **Evidence:** the original repro now runs its full 42 s and every rank prints the same
+  fingerprint; `tests/coord.rs::a_host_that_only_receives_still_heartbeats` (3 ranks, an empty
+  host, a 100 ms heartbeat over a 3 s run) fails in 1.5 s with "no message for 600ms" without
+  the fix and passes with it; `--test all`: 77 passed. Fixed in an isolated worktree and applied.
+

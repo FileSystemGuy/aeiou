@@ -168,11 +168,26 @@ impl Coordinator for Local {
 
 /// How long hosts may take to connect after the server (or the first client) is up.
 pub const CONNECT_WINDOW: Duration = Duration::from_secs(120);
-/// A heartbeat goes out after this long without anything to send; a peer silent for
-/// `DEAD_AFTER` is gone and the run aborts on every host.
+/// A heartbeat goes out on a connection once this side has sent nothing on it for this long,
+/// whatever it receives (a host that only hears `Release`s, or a server that only hears a
+/// datagen's `Progress`, still says it is there); a peer silent for `DEAD_AFTER` is gone and
+/// the run aborts on every host. The reader wakes every `READ_TICK`, well inside `HEARTBEAT`,
+/// so a beat is never late by more than that.
 const HEARTBEAT: Duration = Duration::from_secs(5);
 const DEAD_AFTER: Duration = Duration::from_secs(30);
+const READ_TICK: Duration = Duration::from_secs(1);
 const MAX_FRAME: usize = 256 << 20;
+
+/// The test hook: `AEIOU_COORD_HEARTBEAT_MS`, read once, scales the three times above
+/// together (heartbeat N ms, dead after 6N, read tick N/5), so a test of a silent or a
+/// one-way peer runs in a second instead of half a minute. Not an option; never set in a run.
+fn timing() -> (Duration, Duration, Duration) {
+    static T: std::sync::OnceLock<(Duration, Duration, Duration)> = std::sync::OnceLock::new();
+    *T.get_or_init(|| match std::env::var("AEIOU_COORD_HEARTBEAT_MS").ok().and_then(|v| v.parse::<u64>().ok()).filter(|&n| n >= 5) {
+        Some(n) => (Duration::from_millis(n), Duration::from_millis(6 * n), Duration::from_millis(n / 5)),
+        None => (HEARTBEAT, DEAD_AFTER, READ_TICK),
+    })
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Msg {
@@ -227,7 +242,20 @@ enum Msg {
     Heartbeat,
 }
 
-fn send(w: &Mutex<TcpStream>, m: &Msg) -> Result<()> {
+/// A connection's sending half: the socket, and when this side last sent on it (what the
+/// heartbeat is timed from).
+struct Wire {
+    s: TcpStream,
+    sent: Instant,
+}
+
+impl Wire {
+    fn new(s: TcpStream) -> Wire {
+        Wire { s, sent: Instant::now() }
+    }
+}
+
+fn send(w: &Mutex<Wire>, m: &Msg) -> Result<()> {
     send_frame(w, &frame(m)?)
 }
 
@@ -241,13 +269,15 @@ fn frame(m: &Msg) -> Result<Vec<u8>> {
     Ok(f)
 }
 
-fn send_frame(w: &Mutex<TcpStream>, f: &[u8]) -> Result<()> {
-    w.lock().unwrap().write_all(f)?;
+fn send_frame(w: &Mutex<Wire>, f: &[u8]) -> Result<()> {
+    let mut w = w.lock().unwrap();
+    w.s.write_all(f)?;
+    w.sent = Instant::now();
     Ok(())
 }
 
-/// Fill `buf` from the socket, calling `idle` on every read timeout (it sends a heartbeat or
-/// declares the peer dead).
+/// Fill `buf` from the socket, calling `idle` on every read timeout (it sends a heartbeat when
+/// one is due or declares the peer dead).
 fn read_full(s: &mut TcpStream, buf: &mut [u8], idle: &mut dyn FnMut() -> Result<()>) -> Result<()> {
     let mut filled = 0;
     while filled < buf.len() {
@@ -273,28 +303,45 @@ fn recv(s: &mut TcpStream, idle: &mut dyn FnMut() -> Result<()>) -> Result<Msg> 
     Ok(serde_json::from_slice(&body)?)
 }
 
-/// The idle handler of a reader thread: heartbeat the peer, give up on it after `DEAD_AFTER`.
+/// The liveness of a reader thread's connection: heartbeat the peer whenever this side has
+/// sent nothing for `HEARTBEAT` (checked on every read timeout and after every message read,
+/// so a side that only receives still beats), give up on it after `DEAD_AFTER` of hearing
+/// nothing.
 struct Liveness {
     last: Instant,
-    writer: Arc<Mutex<TcpStream>>,
+    writer: Arc<Mutex<Wire>>,
     peer: String,
 }
 
 impl Liveness {
     fn idle(&mut self) -> Result<()> {
-        if self.last.elapsed() > DEAD_AFTER {
-            bail!("{}: no message for {:?}", self.peer, DEAD_AFTER);
+        let dead_after = timing().1;
+        if self.last.elapsed() > dead_after {
+            bail!("{}: no message for {:?}", self.peer, dead_after);
         }
-        send(&self.writer, &Msg::Heartbeat).with_context(|| format!("{}: heartbeat", self.peer))
+        self.beat()
     }
-    fn seen(&mut self) {
+    /// A message arrived.
+    fn seen(&mut self) -> Result<()> {
         self.last = Instant::now();
+        self.beat()
+    }
+    /// Send a heartbeat if this side has been quiet for `HEARTBEAT`.
+    fn beat(&self) -> Result<()> {
+        let mut w = self.writer.lock().unwrap();
+        if w.sent.elapsed() < timing().0 {
+            return Ok(());
+        }
+        let f = frame(&Msg::Heartbeat)?;
+        w.s.write_all(&f).with_context(|| format!("{}: heartbeat", self.peer))?;
+        w.sent = Instant::now();
+        Ok(())
     }
 }
 
 fn configure(s: &TcpStream) -> Result<()> {
     s.set_nodelay(true)?;
-    s.set_read_timeout(Some(HEARTBEAT))?;
+    s.set_read_timeout(Some(timing().2))?;
     Ok(())
 }
 
@@ -331,7 +378,7 @@ struct ClientState {
     cv: Condvar,
     events: Mutex<Events>,
     ecv: Condvar,
-    writer: Arc<Mutex<TcpStream>>,
+    writer: Arc<Mutex<Wire>>,
     aborted: Arc<AtomicBool>,
     reason: Mutex<Option<String>>,
     efds: Eventfds,
@@ -413,7 +460,7 @@ impl Tcp {
             }
         };
         configure(&stream)?;
-        let writer = Arc::new(Mutex::new(stream.try_clone()?));
+        let writer = Arc::new(Mutex::new(Wire::new(stream.try_clone()?)));
         let bars = participants
             .iter()
             .map(|(s, n)| (s.clone(), TBar { expected: *n, arrived: 0, generation: 0, departure_releases: 0, left: false }))
@@ -525,7 +572,7 @@ fn client_loop(st: &ClientState, stream: &mut TcpStream, live: &mut Liveness) ->
             let mut idle = || live.idle();
             recv(stream, &mut idle)?
         };
-        live.seen();
+        live.seen()?;
         match m {
             Msg::Welcome { doc } => {
                 st.events.lock().unwrap().welcome = Some(doc);
@@ -659,7 +706,7 @@ struct SBar {
 
 #[derive(Default)]
 struct SState {
-    conns: BTreeMap<i64, Arc<Mutex<TcpStream>>>,
+    conns: BTreeMap<i64, Arc<Mutex<Wire>>>,
     /// The first host's identity (its rank, the canonical hash, the document).
     identity: Option<(i64, String, Value)>,
     hosts: BTreeMap<i64, String>,
@@ -952,7 +999,7 @@ fn serve(st: Arc<ServerState>, stream: TcpStream, peer: SocketAddr) {
         return;
     }
     let writer = match stream.try_clone() {
-        Ok(w) => Arc::new(Mutex::new(w)),
+        Ok(w) => Arc::new(Mutex::new(Wire::new(w))),
         Err(e) => {
             let mut s = st.m.lock().unwrap();
             st.fail(&mut s, format!("coordinator: {peer}: {e}"));
@@ -1004,11 +1051,11 @@ fn identity_differences(mine: &Value, theirs: &Value, r0: i64) -> Vec<String> {
     out
 }
 
-fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpStream>>, live: &mut Liveness, who: &mut String, rank_out: &mut Option<i64>) -> Result<()> {
+fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<Wire>>, live: &mut Liveness, who: &mut String, rank_out: &mut Option<i64>) -> Result<()> {
     let rank = {
         let mut idle = || live.idle();
         let m = recv(stream, &mut idle)?;
-        live.seen();
+        live.seen()?;
         let Msg::Hello { rank, ranks, host, identity, layers, participants, facts } = m else { bail!("expected Hello, got {m:?}") };
         *who = format!("rank {rank} ({host})");
         let hash = crate::canon::sha256_hex(&identity);
@@ -1032,15 +1079,12 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
         if s.identity.is_none() {
             s.identity = Some((rank, hash, identity));
         }
-        // rank 0 may still be reading what Welcome carries; keep the host alive meanwhile
-        let mut beat = Instant::now();
+        // rank 0 may still be reading what Welcome carries; keep the host alive meanwhile (and
+        // since nothing reads its socket here, its silence says nothing)
         while s.welcome.is_none() && s.failed.is_none() {
             s = st.cv.wait_timeout(s, Duration::from_millis(100)).unwrap().0;
-            if beat.elapsed() >= HEARTBEAT {
-                send(writer, &Msg::Heartbeat)?;
-                live.seen();
-                beat = Instant::now();
-            }
+            live.last = Instant::now();
+            live.beat()?;
         }
         if let Some(e) = s.failed.clone() {
             // not registered, so not in the broadcast that carried the failure
@@ -1066,7 +1110,7 @@ fn serve_loop(st: &ServerState, stream: &mut TcpStream, writer: &Arc<Mutex<TcpSt
             let mut idle = || live.idle();
             recv(stream, &mut idle)?
         };
-        live.seen();
+        live.seen()?;
         let mut s = st.m.lock().unwrap();
         if s.failed.is_some() {
             return Ok(());
