@@ -479,7 +479,25 @@ impl Engine for LoopIo {
     fn wait(&mut self, timeout: Duration, out: &mut Vec<(u64, i32)>) -> Result<()> {
         let ts = types::Timespec::new().sec(timeout.as_secs()).nsec(timeout.subsec_nanos());
         let args = types::SubmitArgs::new().timespec(&ts);
-        match self.ring.submitter().submit_with_args(1, &args) {
+        let r = if timeout.is_zero() {
+            // a timer is due already (a `compute` behind its deadline, `ActorState::pace`):
+            // submit and reap without sleeping. An enter that waits, even for 0 ns, arms an
+            // hrtimer and sleeps until its interrupt, tens of µs on a VM, so a run of short
+            // computes behind schedule paid that per compute and never caught up; the blocking
+            // path does not sleep at all past a deadline (`run::sleep_until`). GETEVENTS with
+            // `min_complete` 0 runs deferred task work (`DEFER_TASKRUN`) and returns at once.
+            const GETEVENTS: u32 = 1; // IORING_ENTER_GETEVENTS
+            const SQ_WAKEUP: u32 = 2; // IORING_ENTER_SQ_WAKEUP
+            let sq = self.ring.submission();
+            let (len, wake) = (sq.len() as u32, sq.need_wakeup());
+            drop(sq);
+            let flags = if wake { GETEVENTS | SQ_WAKEUP } else { GETEVENTS };
+            // SAFETY: no argument is passed; the entries counted are on the ring
+            unsafe { self.ring.submitter().enter::<libc::sigset_t>(len, 0, flags, None) }
+        } else {
+            self.ring.submitter().submit_with_args(1, &args)
+        };
+        match r {
             Ok(_) => {}
             Err(e) if matches!(e.raw_os_error(), Some(libc::ETIME) | Some(libc::EINTR) | Some(libc::EBUSY) | Some(libc::EAGAIN)) => {}
             Err(e) => return Err(e).context("io_uring_enter"),

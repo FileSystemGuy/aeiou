@@ -996,7 +996,10 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   is issued at no more than `MAX_RW_COUNT` (`INT_MAX` rounded down to a page), the most the
   kernel moves in one `pread`, `pwrite`, or AIO request: an op over it moves what it moves
   under `sync`, never its length modulo 4 GiB (2026-10-14).
-- **Control.** `compute` is a timer (a heap of deadlines; the enter timeout is the nearest);
+- **Control.** `compute` is a timer (a heap of deadlines; the enter timeout is the nearest,
+  and a deadline already past is met by an enter that reaps without waiting, since a 0 ns
+  wait still sleeps on a timer interrupt, about 100 µs on a VM, which a run of computes
+  behind its deadlines would pay once each, 2026-10-15, RC1 review);
   `take`, `put`, and a loader's slot park the task on the loop-local channel, and every
   change to the channel wakes its waiters to retry; a `parallel` parent parks until its
   sub-actors end; a main line that has ended parks until its loader workers end, then

@@ -1295,3 +1295,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   JSON and the text) fails when `busy` ignores the scale ("scale 0: busy 0.992…, slept 0 ns
   against stall 3317507 ns gives 0") and passes with the fix; `--test all -- run report coord`
   54 passed, `--lib` 44.
+
+## 57. Under io_uring a run of computes behind its deadlines never caught up (bug 41's test failed on CI)
+
+- **Where:** `runner/aeiou/src/uring.rs` `LoopIo::wait`; runner/REFERENCE.md §8, the
+  **Control** bullet; `runner/aeiou/tests/run.rs`
+  `consecutive_computes_take_their_sum_on_every_backend`.
+- **Found by:** CI after dd94d62 (bug 41): the test failed on GitHub's runner under io_uring
+  ("5000 computes of 20000 ns took 584.59 ms, 484.59 ms over their sum"), Sync passing in the
+  same run; it passed locally.
+- **Defect:** the pacing was right (absolute deadlines, nothing clearing `pace` between
+  computes), but the event loop always waited with `submit_with_args(1, timespec)`, even for a
+  timer already due: an enter that waits 0 ns still arms an hrtimer and sleeps until its
+  interrupt (about 5.7 µs here, about 100 µs on the CI VM, inferred from its log). The blocking
+  path does not sleep at all past a deadline, so it catches up after a late wake; the loop paid
+  a timer round trip per compute and never caught up, so emulated time again depended on the
+  backend and the host.
+- **Fix:** when the timeout is zero the loop calls `enter(queued, min_complete 0,
+  GETEVENTS [| SQ_WAKEUP])` with no argument: it submits, runs deferred task work
+  (`DEFER_TASKRUN` completions are still reaped), and returns without sleeping. Nonzero
+  timeouts are unchanged; the aio and `WaitIo` engines already return at once on 0. No
+  fingerprint, dataset id, or AST changes.
+- **Evidence:** with every sleeping wait forced to at least 100 µs (a scratch simulation),
+  Uring failed before ("405.69 ms over their sum") and passed after at 100 µs, 300 µs, and 1 ms.
+  The test now also runs 40,000 computes of 2 µs, with a fixed 50 ms bound: it fails on this host
+  without the fix ("113.46 ms over their sum") and passes 10/10 with it, and 3/3 under 40 `yes`
+  loops; `--test all` 100 passed, `--test uring_knobs --test limits` passed (DEFER_TASKRUN,
+  COOP, SQPOLL). Fixed in an isolated worktree and applied.
