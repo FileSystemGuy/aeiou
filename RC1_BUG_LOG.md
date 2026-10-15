@@ -1352,3 +1352,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   fail before the fix and pass after; golden 18 passed, `--lib` 44, test_builder, test_params,
   test_man, test_usage 114 passed; both checkers ok over every committed AST. Fixed in an
   isolated worktree and applied.
+
+## 59. A libaio run counted the teardown of its AIO contexts as run time
+
+- **Where:** `runner/aeiou/src/aio.rs` `run` (each loop thread), `runner/aeiou/src/run.rs`
+  (`run_with`'s `elapsed`, `AioReport::teardown_ns`, `merge`, `describe`); runner/REFERENCE.md
+  §9, the `libaio` and **Report.** bullets; `runner/aeiou/tests/run.rs`.
+- **Found by:** the fixer of bug 41: libaio runs were 45–59 ms longer than every other backend,
+  a fixed amount whatever the computes; `strace` showed `io_destroy` taking about 49 ms.
+- **Defect:** `elapsed` was taken after `aio::run` returned, after every loop thread had dropped
+  its `AioIo` (whose `Drop` calls `io_destroy`, 35–60 ms per context). A one-compute abstract of
+  400 ms gave `elapsed 0.454 s` under libaio against 0.400 under `sync` and 0.403 under
+  io_uring, so every libaio figure computed from elapsed was charged a cost that is not the
+  workload's. (Per-actor end times are set inside the loop and were right; io_uring's ring
+  close costs under 1 ms.)
+- **Fix:** each loop thread takes its end instant after its loop runs and before it drops the
+  loop, and times the drop as `teardown_ns`; `aio::run` returns the latest end, which
+  `run_with` uses for `elapsed`; the teardown is reported on its own (`libaio: … teardown T
+  (after the run's end)`, `teardown_ns` in the JSON, `#[serde(default)]`, summed across hosts).
+  No fingerprint, dataset id, or AST changes.
+- **Evidence:** `run::libaio_teardown_is_not_in_the_elapsed_time` (one 100 ms compute under
+  LibAio and LibAioDirect, elapsed under compute + 20 ms) fails without the fix ("took 148.20
+  ms, 48.20 ms over it") and passes with it; afterwards libaio and libaio-direct give elapsed
+  0.400 s with teardown 0.040 and 0.036 s shown; `--test all -- run aio uring report` 36
+  passed, `--lib` 44.

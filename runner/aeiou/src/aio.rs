@@ -72,11 +72,15 @@ struct IoEvent {
     res2: i64,
 }
 
-/// Run this host's instances over the event loops; returns what the contexts did.
-pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<AioReport> {
+/// Run this host's instances over the event loops; returns what the contexts did and the
+/// instant the last loop's work ended. A loop takes that instant before it destroys its
+/// context: `io_destroy` waits out an RCU grace period (tens of ms) after the last op, which
+/// is the backend's housekeeping and not the workload's time, so the run's elapsed time ends
+/// at the work's end and the teardown is reported on its own (`AioReport::teardown_ns`).
+pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&'static str, i64)], ranges: &[(i64, i64)]) -> Result<(AioReport, Option<Instant>)> {
     let per = spread(sh, counts, ranges);
     if per.is_empty() {
-        return Ok(AioReport::default());
+        return Ok((AioReport::default(), None));
     }
     std::thread::scope(|s| {
         let handles: Vec<_> = per
@@ -87,7 +91,14 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
                 std::thread::Builder::new()
                     .name(format!("libaio loop {i}"))
                     .spawn_scoped(s, move || {
-                        let r = AioIo::new(&sh).and_then(|io| Loop::with(sh.clone(), i, io)).and_then(|mut l| l.run(model, insts).map(|_| l.io.report.clone()));
+                        let r = AioIo::new(&sh).and_then(|io| Loop::with(sh.clone(), i, io)).and_then(|mut l| {
+                            l.run(model, insts)?;
+                            let end = Instant::now();
+                            let mut report = l.io.report.clone();
+                            drop(l);
+                            report.teardown_ns = end.elapsed().as_nanos() as u64;
+                            Ok((report, end))
+                        });
                         if r.is_err() {
                             sh.aborted.store(true, Ordering::Relaxed);
                         }
@@ -98,9 +109,13 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
             .collect();
         let mut first: Option<anyhow::Error> = None;
         let mut total = AioReport::default();
+        let mut last: Option<Instant> = None;
         for h in handles {
             match h.join() {
-                Ok(Ok(r)) => total.merge(&r),
+                Ok(Ok((r, end))) => {
+                    total.merge(&r);
+                    last = last.max(Some(end));
+                }
                 Ok(Err(e)) => {
                     crate::run::keep_cause(&mut first, e);
                 }
@@ -111,7 +126,7 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
         }
         match first {
             Some(e) => Err(e),
-            None => Ok(total),
+            None => Ok((total, last)),
         }
     })
 }

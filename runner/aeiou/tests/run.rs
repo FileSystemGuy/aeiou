@@ -1023,3 +1023,30 @@ fn consecutive_computes_take_their_sum_on_every_backend() {
         }
     }
 }
+
+/// A run ends when its work does: the `libaio` loops' `io_destroy` (about 50 ms here, an RCU
+/// grace period the kernel waits out at a context's teardown) comes after the last compute
+/// and is not the workload's time (RC1 review: one compute of 400 ms took 0.453 s under
+/// `libaio`, 0.400 s under `sync`, whatever the number of computes).
+#[test]
+fn libaio_teardown_is_not_in_the_elapsed_time() {
+    let root = tmpdir("aio-teardown");
+    let ns = 100_000_000u64;
+    let ast = serde_json::json!({"ast": "0.10", "name": "teardown", "params": {}, "datasets": {},
+        "actors": {"gpu": {"body": [{"compute": {"ns": ns}}]}}});
+    let path = root.join("teardown.ast.json");
+    std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&path).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(1, 0, &[])));
+    let p: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, p).unwrap()));
+    let ideal = std::time::Duration::from_nanos(ns);
+    for backend in [BackendKind::LibAio, BackendKind::LibAioDirect] {
+        let mut o = opts(&root.join("data"), backend);
+        o.time_scale = 1.0;
+        let r = go(model, o);
+        assert!(r.elapsed >= ideal, "{backend:?}: {:?} is shorter than the compute's {ideal:?}", r.elapsed);
+        let over = r.elapsed - ideal;
+        assert!(over < std::time::Duration::from_millis(20), "{backend:?}: a compute of {ideal:?} took {:?}, {over:?} over it", r.elapsed);
+    }
+}

@@ -153,6 +153,10 @@ pub struct AioReport {
     pub getevents: u64,
     /// `io_submit` returned `EAGAIN` (the context was full): completions were reaped first.
     pub full: u64,
+    /// Time the loops spent tearing their contexts down (`io_destroy`, which waits out an RCU
+    /// grace period) after their work ended: outside the run's elapsed time, shown here.
+    #[serde(default)]
+    pub teardown_ns: u64,
 }
 
 impl AioReport {
@@ -165,11 +169,12 @@ impl AioReport {
         self.submit_ns += o.submit_ns;
         self.getevents += o.getevents;
         self.full += o.full;
+        self.teardown_ns += o.teardown_ns;
     }
 
     pub fn describe(&self) -> String {
         format!(
-            "loops {}  context depth {}  in-flight peak {}  io_submit {} calls, {} requests, {} inside  io_getevents {} calls  context full {}",
+            "loops {}  context depth {}  in-flight peak {}  io_submit {} calls, {} requests, {} inside  io_getevents {} calls  context full {}  teardown {} (after the run's end)",
             self.loops,
             self.depth,
             self.in_flight_peak,
@@ -177,7 +182,8 @@ impl AioReport {
             self.submitted,
             human_ns(self.submit_ns as i128),
             self.getevents,
-            self.full
+            self.full,
+            human_ns(self.teardown_ns as i128)
         )
     }
 }
@@ -2254,15 +2260,21 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
     let sampler = Sampler::start(&sh.opts.root);
     let t0 = Instant::now();
     if sh.opts.event_loop() {
+        // the run ends when its work does: a loop that says when its work ended (before a
+        // teardown that is the backend's, not the workload's) sets the end
+        let mut end: Option<Instant> = None;
         let loops = if sh.opts.backend.uring() {
             crate::uring::run(model, &sh, &counts, &ranges).map(|(u, sqpoll)| (u.loops, Some(u), None, sqpoll))
         } else if sh.opts.backend.libaio() {
-            crate::aio::run(model, &sh, &counts, &ranges).map(|a| (a.loops, None, Some(a), 0))
+            crate::aio::run(model, &sh, &counts, &ranges).map(|(a, last)| {
+                end = last;
+                (a.loops, None, Some(a), 0)
+            })
         } else {
             // S3 names alone under `--s3 async`: loops that wait on their eventfd, no ring
             crate::uring::run_s3(model, &sh, &counts, &ranges).map(|n| (n as _, None, None, 0))
         };
-        let elapsed = t0.elapsed();
+        let elapsed = end.map_or_else(|| t0.elapsed(), |e| e.saturating_duration_since(t0));
         let mut counters = sampler.finish();
         return match loops {
             Ok((n, uring, aio, sqpoll)) => {

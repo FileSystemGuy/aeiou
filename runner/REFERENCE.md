@@ -1146,6 +1146,10 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
   full context returns `EAGAIN`, and the loop then reaps a completion and submits again.
   The interface is asynchronous only with `O_DIRECT`: a buffered read is carried out
   inside `io_submit`. The report's `libaio:` line says how long the loops spent there.
+  A loop takes its end instant before it destroys its context, and the run's `elapsed`
+  ends at the latest of them: `io_destroy` waits out an RCU grace period (about 50 ms
+  per context, whatever the run did) after the last op, which is housekeeping and not the
+  workload's time; the `libaio:` line shows it as `teardown` (RC1 review, 2026-10-15).
 - **`mmap`** (`backend.rs`). The first read of ~~a descriptor~~ an open file maps the whole file
   (`PROT_READ`, `MAP_SHARED`, ~~the size from an `fstat` the backend issues itself~~ at the
   size the open knows), a read
@@ -1199,7 +1203,7 @@ the event loop of §8. The choices and what they leave open are `DESIGN_REVIEW.m
   workers, which are processes; and the NFS client's `buffered read` byte counter counts
   `read(2)` only, so it stays at zero and `server read` is the figure.
 - **Report.** `libaio: loops … context depth … in-flight peak … io_submit N calls, M
-  requests, T inside  io_getevents … context full …` and `mmap: mode … consume … mappings N
+  requests, T inside  io_getevents … context full …  teardown T (after the run's end)` and `mmap: mode … consume … mappings N
   (bytes)  madvise calls …  pages touched …  copied out …` (`Report::aio`, `Report::mmap`, summed over hosts). The
   host line gained `faults minor … major …` (`getrusage`) under every backend; under
   `mmap` the major faults are the reads that reached storage.
