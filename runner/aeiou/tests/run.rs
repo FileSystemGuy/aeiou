@@ -1312,8 +1312,9 @@ fn a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs() {
                 o.time_scale = scale;
                 o
             };
+            // which of the second epoch's seqs 0 and 1 is put first is the workers' timing
             let e = run_within(repeated, o()).err().expect("refused");
-            assert!(e.contains("put 0 on `c`: seq 0 was put on this channel before"), "{backend:?}, time scale {scale}: {e}");
+            assert!(["put 0 on `c`: seq 0", "put 1 on `c`: seq 1"].iter().any(|s| e.contains(&format!("{s} was put on this channel before"))), "{backend:?}, time scale {scale}: {e}");
             let e = run_within(below, o()).err().expect("refused");
             assert!(e.contains("put -1 on `c`: seq -1 is below 0"), "{backend:?}, time scale {scale}: {e}");
         }

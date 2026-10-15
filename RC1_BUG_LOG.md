@@ -1906,3 +1906,14 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   72 committed (AST, params, gpus) dry-runs identical before and after (7 over 120 s in both);
   on HEAD fdf31c8 plus the change: `--lib` 65 passed, `--test all` 129, the 11 committed ASTs
   under 120 s keep their 4-GPU fingerprints. Fixed in an isolated worktree and applied.
+
+## 82. Bug 80's test expected the first repeated `seq` the workers' timing chose
+
+- **Where:** `runner/aeiou/tests/run.rs` `a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs`.
+- **Found by:** CI on fdf31c8 (bugs 79 and 80): under sync at time scale 0.0001 the run was
+  refused "put 1 on `c`: seq 1 was put on this channel before", and the test asserted seq 0.
+- **Defect:** in the second epoch two loader workers put seqs 0 and 1; which reaches the
+  channel first is timing, so either is the first repeat. The runner's error is right; the
+  test pinned one order (a timing dependence in a test, against the invariant it checks).
+- **Fix:** the test accepts either first repeat.
+- **Evidence:** the CI log of run 38763410446; the test passed 8 runs in a row locally after.
