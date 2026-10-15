@@ -212,7 +212,10 @@ pub fn check_not_live(m: &Manifest, what: &str) -> Result<()> {
     let age = now_f64() - p["updated"].as_f64().unwrap_or(0.0);
     if age < 2.0 * secs {
         let show = |x: f64| if x >= 10.0 { format!("{x:.0}") } else { format!("{:.3}", x).trim_end_matches('0').trim_end_matches('.').to_string() };
-        bail!("{what}: the manifest was updated {} s ago and its datagen notes progress every {} s, so it may still be writing; stop it, or wait until {} s have passed since the update", show(age.max(0.0)), show(secs), show(2.0 * secs));
+        // a time ahead of this clock: this host's clock was stepped back (a virtual machine's
+        // under load), or the writing host's runs ahead
+        let when = if age < 0.0 { format!("{} s ahead of this host's clock", show(-age)) } else { format!("{} s ago", show(age)) };
+        bail!("{what}: the manifest was updated {when} and its datagen notes progress every {} s, so it may still be writing; stop it, or wait until {} s have passed since the update", show(secs), show(2.0 * secs));
     }
     Ok(())
 }
@@ -2072,6 +2075,28 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The live check against a manifest noted `ago` seconds back (negative: ahead of this
+    /// clock) by a datagen with 30 s windows, or by one that stopped.
+    #[test]
+    fn a_manifest_younger_than_two_windows_is_live() {
+        let check = |ago: f64, stopped: bool| {
+            let payload = crate::payload::PayloadSpec::new(1, 1);
+            let mut m = Manifest { manifest_version: 1, state: "writing".into(), dataset: json!({}), payload, format: None, provenance: Value::Null, progress: json!({"updated": now_f64() - ago, "progress_secs": 30.0}) };
+            if stopped {
+                m.progress["stopped"] = json!(now_f64());
+            }
+            check_not_live(&m, "--settle X").map_err(|e| e.to_string())
+        };
+        let e = check(5.0, false).unwrap_err();
+        assert!(e.starts_with("--settle X: the manifest was updated 5") && e.contains(" s ago and its datagen notes progress every 30 s, so it may still be writing; stop it, or wait until 60 s have passed"), "{e}");
+        assert!(check(40.0, false).is_err());
+        let e = check(-2.5, false).unwrap_err();
+        assert!(e.contains("the manifest was updated 2.5 s ahead of this host's clock and its datagen"), "{e}");
+        check(90.0, false).unwrap();
+        check(0.0, true).unwrap();
+        check(-2.5, true).unwrap();
+    }
 
     #[test]
     fn ranges_merge_in_order() {

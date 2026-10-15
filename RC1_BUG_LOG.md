@@ -878,3 +878,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   fail on the old code and pass on the new; golden 15 passed, builder 88 passed. Fixed in an
   isolated worktree and applied.
 
+
+## 40. Three coordinator tests failed under load: a shared report path and a stepped wall clock
+
+- **Where:** `runner/aeiou/tests/coord.rs` (`run_ranks`, `just_updated` → `noted`, and the tests
+  `a_subset_runs_whole_directories_of_the_corpus`, `a_killed_datagen_leaves_a_manifest_that_is_true`,
+  `a_killed_datagen_or_grow_settles_at_whole_directories`, `a_killed_grow_is_finished_by_resume`,
+  `a_killed_shrink_settles_without_removing_more`); `runner/aeiou/src/datagen.rs` `check_not_live`.
+- **Found by:** intermittent failures of these tests while the suite ran beside other work;
+  reproduced with 16 `yes` loops raising the load to 26–39 on 20 CPUs, and a clock monitor.
+- **Defect:** (1) `run_ranks` gave every rank one `--report-json` path, and a rank other than 0
+  writes its own host report there (aeiou(1)), so whichever rank finished last won: every
+  failure read exactly rank 1's 7 ops and 62400 bytes; the merge itself is right. (2) The killed
+  datagen tests set `updated = now`, slept 60 ms, and expected the live check (two 20 ms
+  windows) to accept; this WSL2 host's wall clock steps back about 2.4 s every 32 s against the
+  monotonic clock, so a step in that gap made the age negative and the run was refused, and the
+  refusal printed "updated 0 s ago" (`age.max(0)`), which hid the cause; the refused half also
+  depended on the next process starting within 40 ms.
+- **Fix:** a rank r > 0 gets `FILE.rank<r>`, and the test checks rank 0's report is `scope: run`
+  and rank 1's `scope: host` with its own counts; `noted(dir, ago)` records a 30 s window at a
+  chosen age, and the tests check refused at 0 s and 40 s (naming "every 30 s … wait until
+  60 s") and accepted at 90 s, margins of tens of seconds; `check_not_live` now says "updated
+  X s ahead of this host's clock" for a time in the future (the refusal is unchanged).
+- **Evidence:** under that load the subset test failed 4/40 before and 0/60 after; the killed
+  tests 0 failures in 100 runs after; the new unit test
+  `datagen::tests::a_manifest_younger_than_two_windows_is_live` fails without the message fix
+  ("updated 0 s ago") and passes with it; the five coord tests pass. Fixed in an isolated
+  worktree and applied.

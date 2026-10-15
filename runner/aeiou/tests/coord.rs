@@ -63,12 +63,17 @@ fn connect(server: &Server, rank: i64, ranks: i64, config: &str, participants: &
     Ok(Arc::new(Tcp::connect(&server.addr.to_string(), rank, ranks, &format!("host{rank}"), &serde_json::json!({"cfg": config}), &serde_json::json!({}), participants, Arc::new(AtomicBool::new(false)))?))
 }
 
-/// The manifest at `dir` as a datagen leaves it when it has just noted progress: the live
-/// check's refusal then does not depend on how long killing the ranks took (on a slow host,
-/// longer than two 20 ms windows).
-fn just_updated(dir: &Path) {
+/// The manifest at `dir` as a datagen that notes progress every 30 s leaves it `ago` seconds
+/// after its last note. The live check (refused under two windows, 60 s) then decides the
+/// same however long killing the ranks or starting the next process takes, and however the
+/// wall clock it compares is stepped meanwhile: a killed datagen's own windows of a few ms
+/// are shorter than a loaded host's process start, and than the steps of a few seconds a
+/// virtual machine's clock takes under load (WSL2 stepped back 2.4 s every 32 s, 2026-10-14),
+/// back past a short sleep.
+fn noted(dir: &Path, ago: f64) {
     let mut m = aeiou::payload::Manifest::read(dir).unwrap();
-    m.progress["updated"] = serde_json::json!(aeiou::datagen::now_f64());
+    m.progress["progress_secs"] = serde_json::json!(30.0);
+    m.progress["updated"] = serde_json::json!(aeiou::datagen::now_f64() - ago);
     m.write(dir).unwrap();
 }
 
@@ -357,6 +362,9 @@ fn dry_fingerprint_cli(ast: &str, gpus: &str, params: &[&str]) -> String {
     text.lines().find_map(|l| l.strip_prefix("fingerprint ")).unwrap().split_whitespace().next().unwrap().to_string()
 }
 
+/// `aeiou run` on `ranks` processes. Every rank writes a `--report-json` (rank 0 the merged
+/// report, every other rank its own), so a rank other than 0 is given `FILE.rank<r>`: one
+/// path for all would leave whichever rank finished last.
 fn run_ranks(ast: &str, root: &PathBuf, gpus: &str, params: &[&str], ranks: i64, extra: &[&str]) -> Vec<(bool, String, String)> {
     let port = free_port();
     let mut children = Vec::new();
@@ -367,7 +375,8 @@ fn run_ranks(ast: &str, root: &PathBuf, gpus: &str, params: &[&str], ranks: i64,
         for p in params {
             c.arg("--param").arg(p);
         }
-        c.args(extra);
+        let report = extra.iter().position(|a| *a == "--report-json").map(|i| i + 1);
+        c.args(extra.iter().enumerate().map(|(i, a)| if Some(i) == report && rank > 0 { format!("{a}.rank{rank}") } else { a.to_string() }));
         children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap());
         if rank == 0 {
             // give the listener a moment; the clients retry anyway
@@ -685,11 +694,15 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&first).unwrap();
         std::io::Write::write_all(&mut f, &vec![7u8; 300_000]).unwrap();
         drop(f);
-        // a manifest younger than two windows may still have a datagen writing it
-        just_updated(&root.join("train"));
-        let outs = resume_ranks(&root.join("train"), 1);
-        assert!(!outs[0].0 && outs[0].2.contains("so it may still be writing"), "{outs:?}");
-        std::thread::sleep(std::time::Duration::from_millis(60));
+        // a manifest younger than two of the windows its datagen recorded may still have a
+        // datagen writing it
+        assert_eq!(m.progress["progress_secs"].as_f64(), Some(0.02), "{}", m.progress);
+        for ago in [0.0, 40.0] {
+            noted(&root.join("train"), ago);
+            let outs = resume_ranks(&root.join("train"), 1);
+            assert!(!outs[0].0 && outs[0].2.contains("progress every 30 s, so it may still be writing; stop it, or wait until 60 s"), "{ago} s: {outs:?}");
+        }
+        noted(&root.join("train"), 90.0);
         let outs = resume_ranks(&root.join("train"), 3 - ranks);
         assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s) killed: {outs:?}");
         assert!(outs[0].1.contains(&format!("{left} file(s) unfinished")), "{}", outs[0].1);
@@ -842,7 +855,7 @@ fn a_killed_grow_is_finished_by_resume() {
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--grow", "30000"]).arg(root.join("train")).output().unwrap();
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("finish it first with `aeiou datagen --resume"), "{o:?}");
 
-    std::thread::sleep(std::time::Duration::from_millis(60));
+    noted(&root.join("train"), 90.0);
     let outs = resume_ranks(&root.join("train"), 2);
     assert!(outs.iter().all(|(ok, _, _)| *ok), "{outs:?}");
     assert!(outs[0].1.contains(&format!("(growing from count {from})")), "{}", outs[0].1);
@@ -1059,10 +1072,13 @@ fn a_killed_datagen_or_grow_settles_at_whole_directories() {
         let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
         assert_ne!(m.state, "complete");
         let claimed = m.progress["claimed"].as_i64().unwrap();
-        just_updated(&root.join("train"));
-        let o = settle(&root.join("train"));
-        assert!(!o.0 && o.2.contains("so it may still be writing"), "{o:?}");
-        std::thread::sleep(std::time::Duration::from_millis(60));
+        assert_eq!(m.progress["progress_secs"].as_f64(), Some(0.02), "{}", m.progress);
+        for ago in [0.0, 40.0] {
+            noted(&root.join("train"), ago);
+            let o = settle(&root.join("train"));
+            assert!(!o.0 && o.2.contains("progress every 30 s, so it may still be writing; stop it, or wait until 60 s"), "{ago} s: {o:?}");
+        }
+        noted(&root.join("train"), 90.0);
         let o = settle(&root.join("train"));
         assert!(o.0, "{op}: {o:?}");
         assert!(o.1.contains(&format!("of the {files} asked")), "{}", o.1);
@@ -1096,7 +1112,7 @@ fn a_killed_shrink_settles_without_removing_more() {
     let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert_eq!(m.state, "shrinking", "the shrink ended before it was killed");
     let there = listing(&root.join("train")).len() as i64;
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    noted(&root.join("train"), 90.0);
     let o = settle(&root.join("train"));
     assert!(o.0, "{o:?}");
     let s = check_settled(&root, &m, to);
@@ -1189,9 +1205,16 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
         let outs = run_ranks("file_per_sample.ast.json", &root, "2", &[&inv[..], &["samples=2000"]].concat(), ranks, &["--subset", "--posix", posix, "--expect-fingerprint", &fp, "--report-json", json.to_str().unwrap()]);
         assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s), {posix}: {outs:?}");
         let d: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+        assert_eq!(d["scope"].as_str(), Some("run"), "{ranks} rank(s), {posix}: the whole run's report");
         let ph = &d["result"]["phases"]["inventory"];
         // 2 GPUs: open, fstat, ioctl, lseek, close, and 2600 × 24 bytes in 1 MiB reads, the end read
         assert_eq!((ph["ops"].as_i64(), ph["bytes_read"].as_i64()), (Some(2 * (5 + 2)), Some(2 * 2600 * 24)), "{ranks} rank(s), {posix}: {ph}");
+        if ranks > 1 {
+            // rank 1's own report: its one GPU's read
+            let d: serde_json::Value = serde_json::from_slice(&std::fs::read(json.with_extension("json.rank1")).unwrap()).unwrap();
+            let ph = &d["result"]["phases"]["inventory"];
+            assert_eq!((d["scope"].as_str(), ph["ops"].as_i64(), ph["bytes_read"].as_i64()), (Some("host"), Some(5 + 2), Some(2600 * 24)), "rank 1, {posix}: {ph}");
+        }
     }
 
     let refused = |params: &[&str], extra: &[&str]| {
