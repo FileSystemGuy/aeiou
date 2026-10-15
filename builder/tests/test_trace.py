@@ -983,3 +983,43 @@ def test_shares_files_reads_the_flags_argument_only():
     assert not trace.shares_files("clone", "child_stack=NULL, flags=CLONE_CHILD_CLEARTID|SIGCHLD, child_tidptr=0x7f")
     assert not trace.shares_files("clone", "child_stack=NULL, flags=CLONE_FILESYSTEM_X")   # whole flag names only
     assert not trace.shares_files("fork", "flags=CLONE_FILES")
+
+
+# four opens of one log with O_APPEND, the first truncating it, 4 KiB written through each:
+# the file the trace made is 16 KiB, so each write starts where the last one ended
+APPENDS = "\n".join(
+    f'300 1700000007.{4 * i:04d}00 openat(AT_FDCWD</d>, "/d/log", O_WRONLY|O_CREAT|O_APPEND{"|O_TRUNC" if i == 0 else ""}|O_CLOEXEC, 0644) = 3</d/log> <0.000010>\n'
+    f'300 1700000007.{4 * i + 1:04d}00 write(3</d/log>, "x"..., 4096) = 4096 <0.000010>\n'
+    f'300 1700000007.{4 * i + 2:04d}00 close(3</d/log>) = 0 <0.000010>'
+    for i in range(4))
+
+
+def test_an_append_to_a_file_the_trace_made_starts_at_its_end():
+    lines = APPENDS.strip().splitlines()
+    d = metrics_of(lines, ["/d"])
+    t = d["total"]
+    assert d["notes"] == {}
+    assert t["reuse_distance_bytes"]["first_touch"] == {"read": 0, "write": 4}
+    assert t["popularity_blocks"]["counts"] == [[1, 4]]
+    header, events = trace.export_of(lines, "/d")
+    assert [e["offset"] for e in events if e["op"] == "write"] == [0, 4096, 8192, 12288]
+    assert header["notes"] == {"append_positions_resolved": 4}
+    # the exported file measures as the strace does
+    assert trace.metrics_of_export([json.dumps(header)] + [json.dumps(e) for e in events])["total"] == t
+
+
+def test_an_append_whose_base_the_trace_cannot_know_is_noted():
+    # no truncation, no creation the trace saw; then a rename and an unlink end what is known
+    known = APPENDS.replace("|O_TRUNC", "")
+    d = metrics_of(known.strip().splitlines(), ["/d"])
+    assert d["notes"] == {"append_to_unknown_size": 4}
+    lines = (APPENDS + '\n300 1700000008.000000 truncate("/d/log", 100) = 0 <0.000010>'
+             '\n300 1700000008.000100 rename("/d/log", "/d/old") = 0 <0.000010>'
+             '\n300 1700000008.000200 openat(AT_FDCWD</d>, "/d/old", O_WRONLY|O_APPEND) = 4</d/old> <0.000010>'
+             '\n300 1700000008.000300 write(4</d/old>, "x"..., 10) = 10 <0.000010>'
+             '\n300 1700000008.000400 unlink("/d/old") = 0 <0.000010>'
+             '\n300 1700000008.000500 openat(AT_FDCWD</d>, "/d/old", O_WRONLY|O_CREAT|O_APPEND, 0644) = 5</d/old> <0.000010>'
+             '\n300 1700000008.000600 write(5</d/old>, "x"..., 10) = 10 <0.000010>').strip().splitlines()
+    header, events = trace.export_of(lines, "/d")
+    assert [e.get("offset") for e in events if e["op"] == "write"] == [0, 4096, 8192, 12288, 100, None]
+    assert metrics_of(lines, ["/d"])["notes"] == {"append_to_unknown_size": 1}

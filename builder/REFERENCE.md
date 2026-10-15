@@ -382,8 +382,12 @@ application never used it, or the trace left `io_submit` out (fixed 2026-10-14).
   by name. A failed call counts as its op, as an op the abstract expects to fail does.
 - **Offsets.** `pread`/`pwrite` carry theirs. `read`/`write` use the position of the open
   file description, tracked from `open`, `lseek`, and the bytes each call moved, shared by
-  `dup`ed descriptors, by threads, and across `fork`. An `O_APPEND` write to a file not
-  created in the trace has an unknown base (noted; counted from 0).
+  `dup`ed descriptors, by threads, and across `fork`. An `O_APPEND` write goes to the end
+  of the file wherever the trace knows the file's size: from an open that truncated or
+  exclusively created it, or a `creat`, kept through `ftruncate`, `truncate`, `fallocate`,
+  every write that extends it, and a `rename`, and lost at an `unlink` (2026-10-14, RC1
+  review). An `O_APPEND` write to a file whose size the trace cannot know has an unknown
+  base (`append_to_unknown_size`, per open; counted from 0).
 - **Order.** The order in which calls returned (the order of the trace's lines). A trace
   has a real order; the dry run has the round-robin of §10. Only reuse distance depends on it.
 - **Instance.** The whole trace is one instance; `--instance-root PID` (repeatable) makes
@@ -564,7 +568,10 @@ names; the runner refuses the file when it differs. What differs from `metrics` 
 strace, each counted in the header's `notes`: a sequential read or write on an open that
 more than one lane used is written **positioned** at the offset the trace shows it used
 (`shared_positions_resolved`; the lanes' interleaving decided it, and the runner's lanes
-are not that interleaving), an `mmap` of a file range is one positioned `read` of the range
+are not that interleaving), as is every read and write on an open whose `O_APPEND` write
+went to a known end of the file (`append_positions_resolved`, the writes; that offset is
+the file's size, not the open's position),
+an `mmap` of a file range is one positioned `read` of the range
 (`mmap_as_read`; `metrics` does not count a mapping), and a call the schema has no op for
 (`truncate` by path, `sendfile`, an `ioctl` or `fadvise` the schema does not name) is
 dropped by name. `metrics` reads an exported file as it reads an strace (the header is

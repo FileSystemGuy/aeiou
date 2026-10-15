@@ -492,6 +492,9 @@ class Tracer:
         self.other: Counter = Counter()
         self.tids: set[int] = set()
         self._under: dict[str, str | None] = {}
+        # the size of each file under the roots that the trace made known (created, truncated,
+        # or renamed into place since), kept as its writes extend it: an `O_APPEND` write's base
+        self.extent: dict[str, int] = {}
         # `aeiou-trace export`: an `Exporter` that gets every counted call
         self.export: Exporter | None = None
 
@@ -714,12 +717,13 @@ class Tracer:
             path = ret_path if ret >= 0 and ret_path else self.resolve(tid, a[0] if pi else None, c_string(a[pi]))
             flags = a[pi + 1] if len(a) > pi + 1 else ""
             f = None
+            p = self.under(path)
             if ret >= 0:
-                known_empty = "O_TRUNC" in flags or "O_EXCL" in flags or name == "creat"
-                if "O_APPEND" in flags and not known_empty:
+                if p and ("O_TRUNC" in flags or ("O_CREAT" in flags and "O_EXCL" in flags) or name == "creat"):
+                    self.extent[p] = 0
+                if "O_APPEND" in flags and p and p not in self.extent:
                     self.notes["append_to_unknown_size"] += 1
                 f = self.table(tid)[ret] = File(path, 0, "O_APPEND" in flags)
-            p = self.under(path)
             if inst is not None and p:
                 self._count(tid, "open")
                 if ex is not None:
@@ -777,19 +781,31 @@ class Tracer:
                 length = int(a[2], 0) if len(a) > 2 and a[2].lstrip("-").isdigit() else 0
                 off_tok = a[3] if name.startswith("p") and len(a) > 3 else None
             positioned = off_tok is not None and off_tok.lstrip("-").isdigit() and int(off_tok) >= 0
-            if positioned:
+            p = self.under(path)
+            base = self.extent.get(p) if kind == W and f is not None and f.append and p else None
+            if base is not None:
+                # `O_APPEND`: at the end of the file, a `pwrite`'s offset ignored, the
+                # position left at the end
+                offset, positioned = base, True
+                if ret > 0:
+                    f.pos = base + ret
+            elif positioned:
                 offset = int(off_tok)
             else:
                 offset = f.pos if f is not None else -1
                 if f is not None and ret > 0:
                     f.pos += ret
-            p = self.under(path)
+            if kind == W and ret > 0 and offset >= 0 and p in self.extent:
+                self.extent[p] = max(self.extent[p], offset + ret)
             if inst is not None and p:
                 self._end_chain(tid)
                 if offset < 0:
                     self.notes["data_ops_without_offset"] += 1
                 m.data(kind, inst, tid, p, offset, length, max(ret, 0))
                 if ex is not None and f is not None and f.oid is not None and offset >= 0:
+                    if base is not None:
+                        ex.opens[f.oid]["pinned"] = True
+                        ex.notes["append_positions_resolved"] += 1
                     ex.data(when, KINDS[kind], f.oid, offset, length, positioned, ret, err)
             return
         if name == "mmap":
@@ -863,6 +879,8 @@ class Tracer:
                     if not waiting:
                         del self.aio[(ctx, data)]
                     m.data(kind, i, t, p, off, nbytes, max(int(res), 0))
+                    if kind == W and p in self.extent and int(res) > 0:
+                        self.extent[p] = max(self.extent[p], off + int(res))
                     if member is not None:
                         member["ret"] = int(res) if int(res) >= 0 else _errno_name(-int(res))
             return
@@ -871,13 +889,22 @@ class Tracer:
             f = self.file(tid, fd, path)
             if path is None:
                 path = f.path if f else None
+            p = self.under(path)
+            if ret == 0 and p in self.extent:
+                try:
+                    if name == "ftruncate":
+                        self.extent[p] = int(a[1], 0)
+                    elif name == "fallocate" and a[1] == "0":
+                        self.extent[p] = max(self.extent[p], int(a[2], 0) + int(a[3], 0))
+                except (IndexError, ValueError):
+                    del self.extent[p]
             if FD_OPS[name] == "readdir" and f is not None:
                 # the abstract's `readdir` is one listing of a directory: the calls that
                 # continue it, and the empty one that ends it, are the same op
                 if f.listed:
                     return
                 f.listed = True
-            if inst is not None and self.under(path):
+            if inst is not None and p:
                 self._count(tid, FD_OPS[name])
                 if ex is not None and f is not None and f.oid is not None:
                     ex.fd_op(when, FD_OPS[name], name, f.oid, a, ret, err)
@@ -904,6 +931,8 @@ class Tracer:
             if name == "unlinkat" and "AT_REMOVEDIR" in a[-1]:
                 kind = "rmdir"
             p = self.under(path)
+            if ret == 0 and p:
+                self._known_size(tid, name, kind, p, a, di, pi)
             if inst is not None and p:
                 self._count(tid, kind)
                 if ex is not None:
@@ -913,6 +942,26 @@ class Tracer:
                         to = self.under(self.resolve(tid, a[j - 1] if di is not None else None, c_string(a[j]))) if len(a) > j else None
                     ex.path_op(when, kind, name, p, a, pi, to, err)
             return
+
+    def _known_size(self, tid: int, name: str, kind: str, p: str, a: list[str], di, pi: int):
+        """What a successful path call does to the sizes the trace knows (`extent`)."""
+        ext = self.extent
+        if kind == "unlink":
+            ext.pop(p, None)
+        elif name == "truncate":
+            try:
+                ext[p] = int(a[pi + 1], 0)
+            except (IndexError, ValueError):
+                ext.pop(p, None)
+        elif kind == "rename":
+            j = pi + 1 if di is None else pi + 2
+            to = self.under(self.resolve(tid, a[j - 1] if di is not None else None, c_string(a[j]))) if len(a) > j else None
+            size = ext.pop(p, None)
+            if to:
+                if size is None:
+                    ext.pop(to, None)
+                else:
+                    ext[to] = size
 
     def finish(self):
         for tid in list(self.chain):
@@ -1099,9 +1148,12 @@ class Exporter:
         for e in self.events:
             if e["op"] in KINDS and "_off" in e:
                 off = e.pop("_off")
-                if "offset" not in e and len(self.opens[e["fd"]]["lanes"]) > 1:
+                o = self.opens[e["fd"]]
+                if "offset" not in e and (len(o["lanes"]) > 1 or o.get("pinned")):
+                    # an open some `O_APPEND` write of was written positioned: the runner's
+                    # position for it is not the application's after that write
                     e["offset"] = off
-                    shared += 1
+                    shared += len(o["lanes"]) > 1
         if shared:
             self.notes["shared_positions_resolved"] = shared
         seen, creates = set(), []

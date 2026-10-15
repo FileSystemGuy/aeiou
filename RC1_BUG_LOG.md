@@ -243,3 +243,25 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Queued from it:** the same gaps in `catalog.py` (CATALOG.md and DESCRIPTION.md writes) and
   in `trace.py` (stdin, console).
 
+## 12. aeiou-trace counted an O_APPEND write from 0 on a file the trace itself made
+
+- **Where:** `builder/aeiou/trace.py`, `Tracer` (open/write/truncate/rename/unlink, new
+  `extent` and `_known_size`) and `Exporter.finish`; builder REFERENCE §7 (*Offsets*, `export`).
+- **Found by:** review of aeiou-trace: four `O_CREAT|O_APPEND` opens of one file (`O_TRUNC` on
+  the first), 4 KiB written each, a 16 KiB file.
+- **Defect:** an append's base was "known" only when that same open truncated or exclusively
+  created the file, so every later append to a file the trace had made started at 0: metrics
+  noted `append_to_unknown_size: 3`, one first touch, three writes-after-write, one block (4
+  and 4 in truth), and the export left the writes sequential at the runner's own position.
+  REFERENCE §7 promised the unknown base only for a file *not* created in the trace.
+- **Fix:** the tracer keeps each file's size while the trace knows it (from a truncating or
+  exclusive create; `ftruncate`, `truncate`, `fallocate`, extending writes; moved by `rename`,
+  dropped by `unlink`); an append on such a file is at its size (a `pwrite` offset ignored, as
+  Linux does). The export writes it positioned at the same offset (header note
+  `append_positions_resolved`), so the runner walks the same offsets `metrics` counts. The
+  note now counts only appends under the roots whose base is unknown.
+- **Evidence:** `test_trace.py::test_an_append_to_a_file_the_trace_made_starts_at_its_end`
+  (no note, 4 first touches, 4 blocks, export offsets 0/4096/8192/12288, export metrics =
+  strace metrics) and `test_an_append_whose_base_the_trace_cannot_know_is_noted` fail on the
+  old trace.py and pass on the new; test_trace.py: 66 passed.
+
