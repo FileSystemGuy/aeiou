@@ -32,6 +32,12 @@ def _run_script(script: pathlib.Path) -> list:
     made = Workload._registry[before:]
     if not made:
         raise BuildError(f"{script}: no Workload was constructed")
+    seen = set()
+    for wl in made:   # an AST is named for its file: two of one name would write one file, one lost
+        if wl.name in seen:
+            raise BuildError(f"two Workloads named {wl.name!r}; each writes "
+                             f"{wl.name}.ast.json, so every Workload a script constructs needs its own name")
+        seen.add(wl.name)
     return made
 
 
@@ -49,7 +55,12 @@ def _child_main(argv=None):
         from . import hermetic
         hermetic.install(script, extra_read_roots=[a.schema_dir] if a.schema_dir else ())
     out = {}
-    for wl in _run_script(script):
+    try:
+        made = _run_script(script)
+    except BuildError as e:   # the parent shows the last lines of stderr: make the last one the reason
+        print(f"BuildError: {e}", file=sys.stderr)
+        sys.exit(1)
+    for wl in made:
         out[wl.name] = wl.build()
     sys.stdout.write(json.dumps(out))   # insertion order kept for the on-disk rendering
     sys.stdout.flush()
@@ -98,6 +109,7 @@ def main(argv=None) -> int:
 
     from . import emit
     status = 0
+    written = {}   # output path -> the script that authors it: two scripts of one name would overwrite each other
     for script in a.scripts:
         script = script.resolve()
         if script.suffix == ".json":
@@ -118,6 +130,16 @@ def main(argv=None) -> int:
             status = 1
             continue
         out_dir = a.out or script.parent
+        clash = [(n, written[p]) for n in asts
+                 if written.get(p := (out_dir / f"{n}.ast.json").resolve(), script) != script]
+        if clash:
+            for name, other in clash:
+                print(f"FAIL {script.name}: Workload {name!r} is also authored by {other}; both would "
+                      f"write {out_dir / f'{name}.ast.json'}, and an abstract's name is its file's", file=sys.stderr)
+            status = 1
+            continue
+        for name in asts:
+            written[(out_dir / f"{name}.ast.json").resolve()] = script
         for name, (ast, prov) in asts.items():
             path = out_dir / f"{name}.ast.json"
             digest = emit.sha256(ast)

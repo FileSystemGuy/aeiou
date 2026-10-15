@@ -48,3 +48,25 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   PiB to write … does not fit", with it the `array` refusal and no `space:` line. `cargo test
   --features formats --test all`: 75 passed; `--features formats,object` with MinIO: 79 passed.
 
+## 3. `aeiou-build` silently dropped one of two Workloads of the same name
+
+- **Where:** `builder/aeiou/cli.py`, `_run_script` and `main` (the writer loop), and
+  `_child_main` (the `--hermetic` child).
+- **Found by:** review of the builder core: a script constructing two `Workload("dup")` of
+  different contents (sizes 4096 and 8192).
+- **Defect:** `aeiou-build dup.py` wrote one `dup.ast.json`, exit 0, holding only the second
+  workload; the first was lost without a word. Two scripts of one workload name built into one
+  `-o` directory overwrote each other the same way. An AST is named for its file (CLAUDE.md), so
+  one name can only be one abstract.
+- **Fix:** `_run_script` refuses a second Workload of a name already constructed by the script
+  (a BuildError naming it; the hermetic child now prints a BuildError as its last stderr line
+  instead of a traceback, so the parent's "child build failed" ends with the reason); `main`
+  refuses a script whose output path another script of the same run already wrote (the same
+  script named twice is allowed). Exit 1, as other build errors. No AST or fingerprint changed;
+  the CI build-twice of every committed script still passes (14 ok).
+- **Evidence:** `test_builder.py::test_build_refuses_two_workloads_of_one_name` (one script,
+  plain and `--hermetic`; two scripts into one `-o`; scripts in their own directories) fails
+  without the cli.py change and passes with it; test_builder.py: 45 passed.
+- **Noted, not changed:** the hermetic failure message names the script twice ("FAIL dup.py:
+  dup.py: child build failed"), a pre-existing cosmetic issue (queued separately).
+

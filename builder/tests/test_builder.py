@@ -548,3 +548,35 @@ def test_same_run_needs_input():
         w.namespace("out", pattern="o/{k:04}", fields={"k": int}, size=4096, seed=1, same_run=True)
     ns = w.namespace("inp", pattern="i/{k:04}", fields={"k": int}, size=4096, seed=1, input=True, same_run=True)
     assert ns.spec["input"] is True and ns.spec["same_run"] is True
+
+
+def test_build_refuses_two_workloads_of_one_name(tmp_path):
+    """An abstract's name is its file's: two Workloads of one name, in one script or in two
+    scripts written to one directory, are refused, never one silently written over the other."""
+    body = ("w = Workload('dup')\n"
+            "ds = w.dataset('d', pattern='d/f{{id}}', layout='whole', access='indexed', count=4, size=const({n}), seed=1)\n"
+            "with w.actor('gpu', count=1) as c:\n"
+            "    f = c.let('f', ds.file(0))\n"
+            "    c.open(f, 'RDONLY')\n"
+            "    c.close(f)\n")
+    one = tmp_path / "one.py"
+    one.write_text("from aeiou import *\nfor n in (4096, 8192):\n"
+                   + "".join("    " + line + "\n" for line in body.format(n="n").splitlines()))
+    for flags in ([], ["--hermetic"]):
+        r = _run_cli([*flags, "-o", tmp_path / "out", one])
+        assert r.returncode == 1, (flags, r.stdout, r.stderr)
+        assert "two Workloads named 'dup'" in r.stderr, (flags, r.stderr)
+        assert not (tmp_path / "out" / "dup.ast.json").exists(), flags
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "s.py").write_text("from aeiou import *\n" + body.format(n=4096))
+    (tmp_path / "b" / "s.py").write_text("from aeiou import *\n" + body.format(n=8192))
+    r = _run_cli(["-o", tmp_path / "two", tmp_path / "a" / "s.py", tmp_path / "b" / "s.py"])
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "also authored by" in r.stderr and str(tmp_path / "a" / "s.py") in r.stderr, r.stderr
+    written = (tmp_path / "two" / "dup.ast.json").read_text()   # the first script's, not overwritten
+    assert "4096" in written and "8192" not in written
+    # each beside its own script: two directories, two files, no clash; one script named twice is one author
+    r = _run_cli([tmp_path / "a" / "s.py", tmp_path / "b" / "s.py", tmp_path / "a" / "s.py"])
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "a" / "dup.ast.json").exists() and (tmp_path / "b" / "dup.ast.json").exists()
