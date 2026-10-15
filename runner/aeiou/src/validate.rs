@@ -37,14 +37,14 @@ pub fn protocols(ast: &Ast, traces: bool) -> Protocols {
 }
 
 pub fn check(ast: &Ast) -> Vec<String> {
-    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new() };
     c.run();
     c.errors
 }
 
 /// Validate and return the op-kind counts (as `check.py` prints them) when there are no errors.
 pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<String>> {
-    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false };
+    let mut c = Checker { ast, given: None, errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new() };
     c.run();
     if c.errors.is_empty() {
         Ok(c.ops)
@@ -58,7 +58,7 @@ pub fn check_with_ops(ast: &Ast) -> Result<BTreeMap<&'static str, usize>, Vec<St
 /// replace that distribution with one whose minimum is lower. Without this an `at` offset
 /// of zero is a loop in the VM. Called from `Params::new`, so every subcommand gets it.
 pub fn check_given(ast: &Ast, given: &BTreeMap<String, PValue>) -> Vec<String> {
-    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new(), traces: false };
+    let mut c = Checker { ast, given: Some(given), errors: Vec::new(), ops: BTreeMap::new(), traces: false, consumes: BTreeMap::new() };
     c.run();
     c.errors
 }
@@ -71,6 +71,8 @@ struct Checker<'a> {
     ops: BTreeMap<&'static str, usize>,
     /// A `trace` node was seen: its files are under `--root`, POSIX names (V19).
     traces: bool,
+    /// The `consume`s inside a loop, by dataset, in actor-name then document order (V6).
+    consumes: BTreeMap<&'a str, Vec<P>>,
 }
 
 #[derive(Clone)]
@@ -437,7 +439,21 @@ impl<'a> Checker<'a> {
             }
             self.body(&a.body, &p(&path, &["body"]), &scope, &mut st);
         }
+        self.v6_one_consume();
         self.v19();
+    }
+
+    /// V6: a dataset is consumed in one place. A `consume` has no site: its sample is a
+    /// function of the actor's number and the ordinals of its enclosing frames alone
+    /// (`runner/REFERENCE.md` §2), so two `consume`s of one dataset (in one body, in sibling
+    /// loops, or in two actors) meet at the same positions and return the same samples.
+    fn v6_one_consume(&mut self) {
+        let consumes = std::mem::take(&mut self.consumes);
+        for (ds, paths) in &consumes {
+            for path in paths.iter().skip(1) {
+                self.err(path, format!("a second `consume` of `{ds}` (the first is at {}): `consume` has no site, so its sample depends only on the actor and the enclosing loop indices, and two of them draw the same samples, a reuse the job does not have; consume once and use the handle in each place, or put the one `consume` in an inner loop so each draw has its own position (V6)", paths[0].join("/")));
+            }
+        }
     }
 
     /// V19: the abstract declares an API only for a protocol it has names on, and an abstract
@@ -1234,6 +1250,11 @@ impl<'a> Checker<'a> {
                 }
                 if scope.indices.is_empty() {
                     self.err(path, "`consume` outside any loop: its position needs an index");
+                } else {
+                    let seen = self.consumes.entry(ds.as_str()).or_default();
+                    if !seen.contains(path) {
+                        seen.push(path.clone());
+                    }
                 }
             }
             Handle::Pick(pk) => {

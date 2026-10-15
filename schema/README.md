@@ -234,7 +234,13 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   and no counter to read. The op multiset is therefore fixed before the run.
 - **V6 `consume` needs a position.** It must sit inside at least one loop (normally the
   loader's batch loop and an item loop); its position is `actor + count × (b × B + j)` over
-  the enclosing loader/loop indices, epochs are `drop_last`.
+  the enclosing loader/loop indices, epochs are `drop_last`. A dataset is consumed in one
+  place (added 2026-10-14, contract 0.10, no committed AST affected): a `consume` has no site,
+  so its position is a function of the actor's number and its enclosing frames' ordinals
+  alone, and a second `consume` of the dataset (in the same body, in a sibling loop such as
+  an eval phase after a train phase, or in another actor) reaches the same positions and
+  returns the same samples, a reuse the job does not have. The second is refused; consume once
+  and use the handle (a `let`) in each place, or put the one `consume` in an inner loop.
 - **V7 Object fields match** the namespace's declared fields exactly.
 - **V8 `empirical`** has as many weights as values.
 - **V9 Access mode.** `map` over a container the format class cannot address randomly is

@@ -977,3 +977,31 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `AEIOU_CONFIG`, `--shrink` with `AEIOU_ROOT`, `--resume --root` still refused) fails without
   the fix with the message above and passes with it; `--test all options man` 13 passed,
   `coord` 20 passed. Fixed in an isolated worktree and applied.
+
+## 44. Two `consume`s of one dataset drew the same samples
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (new `v6_one_consume`, the
+  record in `handle()`); schema/README.md §4 V6, man/aeiou-abstract.7.md V6, the refusal table
+  of builder/REFERENCE.md; `vm.rs` `consume` (unchanged).
+- **Found by:** review of the runner's semantics: the consume position is
+  `g + G·((b mod epoch_len)·B + j)` from the actor's number and its enclosing frames' ordinals
+  (runner/REFERENCE.md §2), with no site and no node identity in the key.
+- **Defect:** any two `consume` nodes of one dataset reach the same positions. In a loop
+  `j < 4` with `let a = consume d; let b = consume d; stat a; stat b`, both checkers said ok and
+  `dry-run --gpu 0` statted `d/f0006`, `d/f0000`, `d/f0002`, `d/f0004` each twice; sibling
+  loops (a train phase then an eval phase) and two actor templates re-read the same ids alike.
+  A "next sample without replacement" stream silently became one with reuse, inflating cache
+  hits, against the positional-randomness rules.
+- **Fix:** V6 now also says a dataset is consumed in one place: both checkers refuse the second
+  `consume` (revisits of one node are de-duplicated by path), naming the first's path and the
+  remedy (consume once and use the handle in each place, or put the one `consume` in an inner
+  loop), with the same message and path in both. The builder refuses it at build time through
+  `validate()`. No committed AST does this (all 14 checked by both checkers, the most any
+  dataset has is one `consume`; `aeiou-build --hermetic --twice --check` exits 0). No
+  fingerprint, dataset id, or AST shape changes.
+- **Evidence:** `golden::a_dataset_is_consumed_in_one_place` and
+  `test_builder.py::test_a_dataset_is_consumed_in_one_place` (same body, sibling loops, two
+  actors; one `consume` used twice accepted) fail with the rule disabled and pass with it;
+  golden 16 passed, test_builder + test_man 69 passed. Fixed in an isolated worktree and
+  applied. Left open: one `consume` under an inner loop whose count depends on an outer index
+  can still repeat a position (queued separately).

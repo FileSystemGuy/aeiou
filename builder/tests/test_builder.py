@@ -746,3 +746,46 @@ def test_at_rule_believes_no_minimum_a_maximum_undercuts():
             e3 = a.draw("e3", mixture((1, none)))
             with pytest.raises(BuildError, match="provably >= 1"):
                 a.let("z", when(True, a.ref("z").at(r - e3), 0))
+
+
+def _consume_twice(shape):
+    """A workload whose dataset `d` is consumed by two `consume` nodes: in one loop body, in two
+    sibling loops (a train phase, then an eval phase), or in two actors."""
+    w = Workload("t")
+    d = w.dataset("d", pattern="d/f{id:04}", layout="whole", access="map", count=16, size=const(1), seed=1)
+    with w.actor("gpu") as a:
+        with a.loop("j", 4):
+            x = a.let("x", d.consume())
+            a.stat(x)
+            if shape == "body":
+                y = a.let("y", d.consume())
+                a.stat(y)
+            elif shape == "one":
+                a.stat(x)
+        if shape == "siblings":
+            with a.loop("k", 2):
+                a.stat(d.consume())
+    if shape == "actors":
+        with w.actor("eval") as e:
+            with e.loop("k", 2):
+                e.stat(d.consume())
+    return w
+
+
+def test_a_dataset_is_consumed_in_one_place():
+    """`consume` has no site: its sample is a function of the actor and the enclosing loop
+    indices, so two `consume`s of one dataset return the same samples, a reuse the job does not
+    have. Both checkers and the builder refuse the second (V6, RC1 review)."""
+    for shape, first, second in [
+        ("body", "actors/gpu/body/0/loop/body/0/let/value", "actors/gpu/body/0/loop/body/2/let/value"),
+        ("siblings", "actors/gpu/body/0/loop/body/0/let/value", "actors/gpu/body/1/loop/body/0/stat/file"),
+        ("actors", "actors/eval/body/0/loop/body/0/stat/file", "actors/gpu/body/0/loop/body/0/let/value"),
+    ]:
+        with pytest.raises(BuildError) as e:
+            _consume_twice(shape).build()
+        msg = str(e.value)
+        assert f"t: {second}: a second `consume` of `d` (the first is at {first})" in msg, msg
+        assert "consume once and use the handle in each place" in msg and "(V6)" in msg, msg
+        assert msg.count("a second `consume`") == 1, msg
+    # one `consume`, its handle used twice: one sample per position, accepted
+    _consume_twice("one").build()

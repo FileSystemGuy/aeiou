@@ -62,6 +62,8 @@ class Check:
         self.traces = False
         # inside a `parallel` or `loader` body: the handles opened so far in the innermost one (V24)
         self.fork_opens = None
+        # the `consume`s inside a loop, by dataset, in document order (V6)
+        self.consumes = {}
 
     def err(self, path, msg):
         self.errors.append(f"{self.name}: {'/'.join(map(str, path))}: {msg}")
@@ -179,8 +181,24 @@ class Check:
             if "count" in a:
                 self.expr(a["count"], ["actors", aname, "count"], scope)
             self.body(a["body"], ["actors", aname, "body"], scope)
+        self.v6_one_consume()
         self.v19()
         return self.errors
+
+    def v6_one_consume(self):
+        """V6: a dataset is consumed in one place. A `consume` has no site: its sample is a
+        function of the actor's number and the ordinals of its enclosing frames alone
+        (runner/REFERENCE.md §2), so two `consume`s of one dataset (in one body, in sibling
+        loops, or in two actors) meet at the same positions and return the same samples.
+        Reported in the runner's order: datasets by name, actors by name, then document order."""
+        for ds in sorted(self.consumes):
+            paths = sorted(self.consumes[ds], key=lambda q: q[1])  # stable: document order within an actor
+            first = "/".join(map(str, paths[0]))
+            for q in paths[1:]:
+                self.err(q, f"a second `consume` of `{ds}` (the first is at {first}): `consume` has no site, so its sample "
+                            "depends only on the actor and the enclosing loop indices, and two of them draw the same samples, "
+                            "a reuse the job does not have; consume once and use the handle in each place, or put the one "
+                            "`consume` in an inner loop so each draw has its own position (V6)")
 
     def v19(self):
         """V19: an API is declared only for a protocol the abstract has names on, and an
@@ -595,6 +613,8 @@ class Check:
                 self.err(p, f"`consume` from `{a}`, which is `indexed`: its items are looked up by id (`file`, `pick`), never drawn from the shuffle (V21)")
             if not scope.indices:
                 self.err(p, "`consume` outside any loop: its position needs an index")
+            elif p not in self.consumes.setdefault(a, []):
+                self.consumes[a].append(p)
         elif k == "pick":
             if a["dataset"] not in self.datasets:
                 self.err(p, f"unknown dataset `{a['dataset']}`")

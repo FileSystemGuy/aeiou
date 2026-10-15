@@ -715,3 +715,30 @@ fn an_at_that_does_not_decrease_is_an_error_not_a_stack_overflow() {
     let e = run_actor(&model, "gpu", 0, 1, Collect::default()).err().map(|e| format!("{e:#}")).expect("a non-decreasing `at` ran");
     assert!(e.contains("`x @ 1`: index not below 1") && e.contains("rule V3"), "{e}");
 }
+
+#[test]
+fn a_dataset_is_consumed_in_one_place() {
+    // `consume` has no site: its sample is a function of the actor and the enclosing loop
+    // indices alone, so two `consume`s of one dataset return the same samples (a reuse the job
+    // does not have). The second is refused with check.py's message and path (V6, RC1 review).
+    let doc = |actors: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "t",
+                "datasets": {{"d": {{"layout": "whole", "access": "map", "pattern": "d/f{{id:04}}", "count": 16, "size": {{"const": 1}}, "seed": 1}}}},
+                "actors": {{{actors}}}}}"#
+        )
+    };
+    let x = r#"{"let": {"name": "x", "value": {"consume": "d"}}}, {"stat": {"file": {"ref": "x"}}}"#;
+    let loop_j = |more: &str| format!(r#"{{"loop": {{"index": "j", "to": 4, "body": [{x}{more}]}}}}"#);
+    let loop_k = r#"{"loop": {"index": "k", "to": 2, "body": [{"stat": {"file": {"consume": "d"}}}]}}"#;
+    let want = |second: &str, first: &str| format!("t: {second}: a second `consume` of `d` (the first is at {first}): `consume` has no site, so its sample depends only on the actor and the enclosing loop indices, and two of them draw the same samples, a reuse the job does not have; consume once and use the handle in each place, or put the one `consume` in an inner loop so each draw has its own position (V6)");
+    // two in one loop body: dry-run gave `stat d/f0006` twice at j = 0, `d/f0000` twice at j = 1, …
+    let body = loop_j(r#", {"let": {"name": "y", "value": {"consume": "d"}}}, {"stat": {"file": {"ref": "y"}}}"#);
+    rejects(&doc(&format!(r#""gpu": {{"body": [{body}]}}"#)), &want("actors/gpu/body/0/loop/body/2/let/value", "actors/gpu/body/0/loop/body/0/let/value"));
+    // two sibling loops, a train phase then an eval phase: both start at position 0
+    rejects(&doc(&format!(r#""gpu": {{"body": [{}, {loop_k}]}}"#, loop_j(""))), &want("actors/gpu/body/1/loop/body/0/stat/file", "actors/gpu/body/0/loop/body/0/let/value"));
+    // two actors: actor 0 of each draws position 0
+    rejects(&doc(&format!(r#""gpu": {{"body": [{}]}}, "eval": {{"body": [{loop_k}]}}"#, loop_j(""))), &want("actors/gpu/body/0/loop/body/0/let/value", "actors/eval/body/0/loop/body/0/stat/file"));
+    // one `consume`, its handle used twice: accepted
+    aeiou::load_str(&doc(&format!(r#""gpu": {{"body": [{}]}}"#, loop_j(r#", {"stat": {"file": {"ref": "x"}}}"#)))).unwrap();
+}
