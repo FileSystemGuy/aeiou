@@ -38,6 +38,13 @@ python3 schema/check.py path/to/x.ast.json   # one file
   `--param`) refuse one before anything else, with the same message:
   `params/n/default: integer 18446744073709551616 is outside the 64-bit signed range of the
   contract's integers (-2^63 to 2^63-1)`. No committed AST or parameter set had one.
+  What the runner computes from them stays in that range or is refused (2026-10-15): an
+  expression's `add`, `mul`, `div`, a float rounded to an integer, a loop's trip count, a
+  file's size and a sample's offset summed from the framing, an `array`'s length (`count` ×
+  `slot`), an inventory's size, and the end of a read, a write, or an `lseek` are checked,
+  and past 2^63-1 the run stops with the dataset or op named (``dataset `d`: the size of
+  file 0 overflows the 64-bit integers of the contract (2^63-1)``), where until then the
+  release build wrapped them silently into a wrong op stream.
 - **Identifiers** are `[a-z_][a-z0-9_]*`. `gpus` is a reserved parameter set by `--gpus`.
 - **One format: JSON.** The on-disk form is JSON, pretty-printed with two-space indentation
   and the builder's key order (`ast`, `name`, `doc`, `posix`, `cache`, `s3`, `params`, `datasets`, `namespaces`,

@@ -1552,3 +1552,35 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   the old ASTs ("take after the last of 3 items") and passes; on HEAD: `aeiou-build --hermetic
   --twice --check` over every workload exits 0, `aeiou-catalog check` "13 mechanisms, 16
   cases: ok", golden 21 passed. Fixed in an isolated worktree and applied.
+
+## 67. Integer arithmetic past 64 bits wrapped silently in the geometry, loops, and offsets
+
+- **Where:** `runner/aeiou/src/eval.rs` (new `ceil_div`; `align_up`, `Framing::row_bytes`,
+  `file_size`, `sample_offset`, `col_lens`, `col_offset_in_unit`, `unit_len`, `data_start`,
+  `unit_offset`, `file_size_from_units`, the array slot offset, `build_model`,
+  `Value::as_int`), `runner/aeiou/src/vm.rs` (loop trip counts, `frame_ordinal` and the
+  `consume` position, `div`/`mod`/`ceil_div`, read/write offset bounds `past_end`,
+  `add_written`, `lseek`, unit and column offsets, float namespace fields),
+  `runner/aeiou/src/project.rs` (the projection's sums); schema/README.md §1 "Integers are
+  64-bit".
+- **Found by:** review of the runner's semantics (the expression arithmetic was found already
+  checked; the wraps were in the geometry and the loops).
+- **Defect:** release builds wrap: a compound file of 4 samples of 2^62 bytes came out 0 bytes
+  (`read d/f0 … -> 0`, "total 0 B"); a loop from -(2^63-1) to 2^63-1 step 2^62 ran 0 times
+  (fingerprint 0000000000000000) instead of 4; an lseek to 2^63-8 and two writes of 100 put
+  the second at `off=-9223372036854775716`; an array of 4 slots of 2^62 had a negative size;
+  `div`/`mod`/`ceil_div` of -2^63 by -1 panicked; a float past i64 saturated to 2^63-1.
+- **Fix:** every computed sum, product, count, and offset is checked, refusing the run with the
+  dataset or op named ("the size of file 0 overflows the 64-bit integers of the contract");
+  trip counts are computed in i128 (the index steps exactly); `div`/`mod`/`ceil_div` use
+  `checked_*_euclid`; a read or write at a negative offset or past 2^63-1 is refused, the
+  kernel's `rw_verify_area` rule; an array or inventory whose size overflows is refused at
+  model build; a float outside i64 where an integer is needed is refused. Nothing changes for
+  values that do not overflow: 29 dry-run fingerprints over every committed AST and parameter
+  set identical before and after; no measurable slowdown (hdf5_map 2.29 s / 2.28 s,
+  lmcache_local_disk 68.81 s / 68.01 s).
+- **Evidence:** `golden::integer_arithmetic_past_64_bits_is_refused_not_wrapped` (file size,
+  array, inventory, loop, write, write repeat, lseek, div/mod/ceil_div, float, and an edge case
+  that must still run) fails on the old code and passes; on HEAD plus the change `--test all`
+  116 passed, `--lib` 61, the builder suite 358 passed, `aeiou-catalog check` ok. Fixed in an
+  isolated worktree and applied.

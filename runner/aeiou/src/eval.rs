@@ -254,7 +254,12 @@ impl<'a> Value<'a> {
                 if !x.is_finite() {
                     bail!("non-finite float where an integer is needed");
                 }
-                Ok(x.round() as i64)
+                // `as` saturates: a float past the 64-bit integers would become 2^63-1 silently
+                let r = x.round();
+                if !(r >= -9223372036854775808.0 && r < 9223372036854775808.0) {
+                    bail!("float {x} where an integer is needed is outside the 64-bit integers of the contract");
+                }
+                Ok(r as i64)
             }
             other => bail!("expected an integer, got {}", other.kind()),
         }
@@ -475,12 +480,23 @@ pub struct Column {
     pub last_weighted: bool,
 }
 
-pub fn align_up(x: i64, a: i64) -> i64 {
+/// `x` rounded up to a multiple of `a`, `None` past 2^63-1.
+pub fn align_up(x: i64, a: i64) -> Option<i64> {
     if a <= 1 {
-        x
+        Some(x)
     } else {
-        (x + a - 1) / a * a
+        ceil_div(x, a).checked_mul(a)
     }
+}
+
+/// `ceil(x / d)` for `x >= 0` and `d >= 1`, without the `x + d - 1` that wraps near 2^63.
+pub fn ceil_div(x: i64, d: i64) -> i64 {
+    x / d + (x % d > 0) as i64
+}
+
+/// `Σ xs`, `None` past 2^63-1: the geometry's sums are checked, never wrapped (RC1 review).
+fn checked_sum(xs: impl IntoIterator<Item = i64>) -> Option<i64> {
+    xs.into_iter().try_fold(0i64, |s, x| s.checked_add(x))
 }
 
 impl Framing {
@@ -526,10 +542,10 @@ impl Framing {
         (size as f64 * col.weight).floor() as i64
     }
 
-    /// Bytes of column `c`'s row for a `size`-byte sample.
-    pub fn row_bytes(&self, c: usize, size: i64) -> i64 {
+    /// Bytes of column `c`'s row for a `size`-byte sample, `None` past 2^63-1.
+    pub fn row_bytes(&self, c: usize, size: i64) -> Option<i64> {
         let col = &self.columns[c];
-        align_up(col.row_header + col.fixed + self.part(c, size) + col.row_footer, col.row_align)
+        align_up(checked_sum([col.row_header, col.fixed, self.part(c, size), col.row_footer])?, col.row_align)
     }
 }
 
@@ -582,6 +598,12 @@ impl<'a> DsMeta<'a> {
         }
     }
 
+    /// The error of geometry arithmetic past 2^63-1: an offset, a size, or a count no file
+    /// system holds, refused rather than wrapped into a wrong op stream (RC1 review).
+    fn overflow(&self, what: String) -> anyhow::Error {
+        anyhow!("dataset `{}`: {what} overflows the 64-bit integers of the contract (2^63-1)", self.name())
+    }
+
     pub fn count(&self) -> i64 {
         match self {
             DsMeta::Files { count, .. } | DsMeta::Array { count, .. } => *count,
@@ -603,7 +625,7 @@ impl<'a> DsMeta<'a> {
         match &mut m {
             DsMeta::Files { count: c, spf, pattern, dirs, ndirs, .. } => {
                 *c = count;
-                let files = (count + *spf - 1) / *spf;
+                let files = ceil_div(count, *spf);
                 (*dirs, *ndirs) = Model::dir_scheme(pattern, files);
             }
             DsMeta::Array { count: c, .. } => *c = count,
@@ -622,14 +644,15 @@ impl<'a> DsMeta<'a> {
     /// The inventory's path, its size at this count, and whether reads of it are capped.
     pub fn inventory(&self) -> Option<(Arc<str>, i64, bool)> {
         match self {
-            DsMeta::Files { inventory: Some(i), count, .. } => Some((i.path.clone(), count * i.entry, i.cap)),
+            // `build_model` refuses a count whose inventory overflows; smaller counts fit
+            DsMeta::Files { inventory: Some(i), count, .. } => Some((i.path.clone(), count.saturating_mul(i.entry), i.cap)),
             _ => None,
         }
     }
 
     pub fn files(&self) -> i64 {
         match self {
-            DsMeta::Files { count, spf, .. } => (count + spf - 1) / spf,
+            DsMeta::Files { count, spf, .. } => ceil_div(*count, *spf),
             DsMeta::Array { .. } => 1,
         }
     }
@@ -669,7 +692,7 @@ impl<'a> DsMeta<'a> {
     pub fn units_in_file(&self, file: i64) -> Result<i64> {
         let n = self.samples_in_file(file)?;
         let l = self.framing()?;
-        Ok((n + l.unit - 1) / l.unit)
+        Ok(ceil_div(n, l.unit))
     }
 
     /// The unit of sample `id`, within its file.
@@ -686,8 +709,8 @@ impl<'a> DsMeta<'a> {
     pub fn samples_in_unit(&self, file: i64, u: i64) -> Result<i64> {
         let n = self.samples_in_file(file)?;
         let l = self.framing()?;
-        if u < 0 || u * l.unit >= n {
-            bail!("unit {u} outside file {file} of `{}` ({} units)", self.name(), (n + l.unit - 1) / l.unit);
+        if u < 0 || u >= ceil_div(n, l.unit) {
+            bail!("unit {u} outside file {file} of `{}` ({} units)", self.name(), ceil_div(n, l.unit));
         }
         Ok((n - u * l.unit).min(l.unit))
     }
@@ -705,11 +728,11 @@ impl<'a> DsMeta<'a> {
         for i in 0..n {
             let size = self.sample_size(first + i)?;
             for (c, len) in lens.iter_mut().enumerate() {
-                *len += l.row_bytes(c, size);
+                *len = l.row_bytes(c, size).and_then(|r| len.checked_add(r)).ok_or_else(|| self.overflow(format!("column {c} of unit {u} of file {file}")))?;
             }
         }
         for (c, len) in lens.iter_mut().enumerate() {
-            *len = align_up(*len, l.columns[c].align);
+            *len = align_up(*len, l.columns[c].align).ok_or_else(|| self.overflow(format!("column {c} of unit {u} of file {file}")))?;
         }
         Ok(lens)
     }
@@ -730,15 +753,17 @@ impl<'a> DsMeta<'a> {
             bail!("column {c} outside the {} columns of `{}`", lens.len(), self.name());
         }
         let n = self.samples_in_unit(file, u)?;
-        Ok(l.unit_header + l.unit_header_per_sample * n + lens[..c as usize].iter().sum::<i64>())
+        (|| checked_sum([l.unit_header, l.unit_header_per_sample.checked_mul(n)?, checked_sum(lens[..c as usize].iter().copied())?]))()
+            .ok_or_else(|| self.overflow(format!("the offset of column {c} in unit {u} of file {file}")))
     }
 
     /// Bytes of unit `u` of `file`, framing and alignment included.
     pub fn unit_len(&self, file: i64, u: i64) -> Result<i64> {
         let l = self.framing()?;
         let n = self.samples_in_unit(file, u)?;
-        let cols: i64 = self.col_lens(file, u)?.iter().sum();
-        Ok(align_up(l.unit_header + l.unit_header_per_sample * n + cols + l.unit_footer + l.unit_footer_per_sample * n, l.unit_align))
+        let cols = checked_sum(self.col_lens(file, u)?);
+        (|| align_up(checked_sum([l.unit_header, l.unit_header_per_sample.checked_mul(n)?, cols?, l.unit_footer, l.unit_footer_per_sample.checked_mul(n)?])?, l.unit_align))()
+            .ok_or_else(|| self.overflow(format!("the length of unit {u} of file {file}")))
     }
 
     /// The lengths of every unit of `file`: O(samples in the file). The VM caches this per
@@ -752,7 +777,8 @@ impl<'a> DsMeta<'a> {
         let l = self.framing()?;
         let n = self.samples_in_file(file)?;
         let units = self.units_in_file(file)?;
-        Ok(l.file_header + l.file_header_per_sample * n + l.file_header_per_unit * units)
+        (|| checked_sum([l.file_header, l.file_header_per_sample.checked_mul(n)?, l.file_header_per_unit.checked_mul(units)?]))()
+            .ok_or_else(|| self.overflow(format!("the header of file {file}")))
     }
 
     /// Offset of unit `u` in `file` (O(u × unit) sample draws; the VM uses `unit_lens`).
@@ -762,7 +788,7 @@ impl<'a> DsMeta<'a> {
         }
         let mut off = self.data_start(file)?;
         for v in 0..u {
-            off += self.unit_len(file, v)?;
+            off = off.checked_add(self.unit_len(file, v)?).ok_or_else(|| self.overflow(format!("the offset of unit {u} of file {file}")))?;
         }
         Ok(off)
     }
@@ -772,8 +798,9 @@ impl<'a> DsMeta<'a> {
         let l = self.framing()?;
         let n = self.samples_in_file(file)?;
         let units = unit_lens.len() as i64;
-        let data: i64 = unit_lens.iter().sum();
-        Ok(align_up(self.data_start(file)? + data + l.file_footer + l.file_footer_per_sample * n + l.file_footer_per_unit * units, l.file_align))
+        let start = self.data_start(file)?;
+        (|| align_up(checked_sum([start, checked_sum(unit_lens.iter().copied())?, l.file_footer, l.file_footer_per_sample.checked_mul(n)?, l.file_footer_per_unit.checked_mul(units)?])?, l.file_align))()
+            .ok_or_else(|| self.overflow(format!("the size of file {file}")))
     }
 
     /// Bytes of sample `id` (files) or slot `c` (array, capped at the slot).
@@ -831,7 +858,7 @@ impl<'a> DsMeta<'a> {
                 }
                 let mut total = 0i64;
                 for i in 0..n {
-                    total += self.sample_size(file * spf + i)?;
+                    total = total.checked_add(self.sample_size(file * spf + i)?).ok_or_else(|| self.overflow(format!("the size of file {file}")))?;
                 }
                 Ok(total)
             }
@@ -842,6 +869,7 @@ impl<'a> DsMeta<'a> {
                 if *count == 0 {
                     return Ok(0);
                 }
+                // `build_model` refuses a count × slot past 2^63-1, and a size is capped at the slot
                 Ok((count - 1) * slot + self.sample_size(count - 1)?)
             }
         }
@@ -858,7 +886,7 @@ impl<'a> DsMeta<'a> {
                 if layout.is_packed() {
                     let mut off = 0i64;
                     for i in 0..(id - file * spf) {
-                        off += self.sample_size(file * spf + i)?;
+                        off = off.checked_add(self.sample_size(file * spf + i)?).ok_or_else(|| self.overflow(format!("the offset of sample {id}")))?;
                     }
                     return Ok(off);
                 }
@@ -867,13 +895,14 @@ impl<'a> DsMeta<'a> {
                 }
                 let u = self.unit_of_sample(id)?;
                 let first = file * spf + u * layout.unit;
-                let mut off = self.unit_offset(file, u)? + self.col_offset_in_unit(file, u, 0)? + layout.columns[0].header;
+                let ovf = || self.overflow(format!("the offset of sample {id}"));
+                let mut off = checked_sum([self.unit_offset(file, u)?, self.col_offset_in_unit(file, u, 0)?, layout.columns[0].header]).ok_or_else(ovf)?;
                 for s in first..id {
-                    off += layout.row_bytes(0, self.sample_size(s)?);
+                    off = layout.row_bytes(0, self.sample_size(s)?).and_then(|r| off.checked_add(r)).ok_or_else(ovf)?;
                 }
-                Ok(off + layout.columns[0].row_header)
+                off.checked_add(layout.columns[0].row_header).ok_or_else(ovf)
             }
-            DsMeta::Array { slot, .. } => Ok(id * slot),
+            DsMeta::Array { slot, .. } => id.checked_mul(*slot).ok_or_else(|| self.overflow(format!("the offset of slot {id}"))),
         }
     }
 
@@ -881,7 +910,7 @@ impl<'a> DsMeta<'a> {
         match self {
             DsMeta::Files { chunk: Some(c), .. } => {
                 let size = self.file_size(file)?;
-                if k < 0 || k * c >= size {
+                if k < 0 || k >= ceil_div(size, *c) {
                     bail!("chunk {k} outside file {file} of `{}` ({size} bytes)", self.name());
                 }
                 Ok((size - k * c).min(*c))
@@ -894,7 +923,7 @@ impl<'a> DsMeta<'a> {
         match self {
             DsMeta::Files { chunk: Some(c), .. } => {
                 let size = self.file_size(file)?;
-                Ok((size + c - 1) / c)
+                Ok(ceil_div(size, *c))
             }
             _ => bail!("dataset `{}` has no `chunk`", self.name()),
         }
@@ -947,10 +976,11 @@ impl<'a> DsMeta<'a> {
     pub fn dir_entries(&self, d: i64) -> Option<i64> {
         match self {
             DsMeta::Files { count, spf, chunk, dirs, .. } if *spf == 1 && chunk.is_none() => match dirs {
-                DirScheme::Div(n) => Some((count - d * n).clamp(0, *n)),
+                // saturating: the clamp's result is the exact one's
+                DirScheme::Div(n) => Some(count.saturating_sub(d.saturating_mul(*n)).clamp(0, *n)),
                 DirScheme::Plain => Some(1),
                 DirScheme::Constant => Some(*count),
-                DirScheme::Mod(m) => Some(if d < *count { (count - d + m - 1) / m } else { 0 }),
+                DirScheme::Mod(m) => Some(if (0..*count).contains(&d) { ceil_div(count - d, *m) } else { 0 }),
                 DirScheme::NoDir | DirScheme::Unsupported => None,
             },
             _ => None,
@@ -1026,7 +1056,7 @@ impl<'a> Model<'a> {
             [] => (DirScheme::Constant, 1),
             [f] => match f.op {
                 None => (DirScheme::Plain, files),
-                Some((crate::pattern::FieldOp::Div, n)) => (DirScheme::Div(n), (files + n - 1) / n),
+                Some((crate::pattern::FieldOp::Div, n)) => (DirScheme::Div(n), ceil_div(files, n)),
                 Some((crate::pattern::FieldOp::Mod, n)) => (DirScheme::Mod(n), files.min(n)),
             },
             _ => (DirScheme::Unsupported, 0),
@@ -1150,12 +1180,15 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                         }
                     }
                 };
-                let (dirs, ndirs) = Model::dir_scheme(&pattern, (count + spf - 1) / spf);
+                let (dirs, ndirs) = Model::dir_scheme(&pattern, ceil_div(count, spf));
                 let inventory = match &f.inventory {
                     Some(i) => {
                         let entry = vm.eval_int(&i.entry).with_context(|| format!("dataset `{name}`: inventory entry"))?;
                         if entry < 1 {
                             bail!("dataset `{name}`: inventory entry {entry} must be positive");
+                        }
+                        if count.checked_mul(entry).is_none() {
+                            bail!("dataset `{name}`: its inventory, count {count} × entry {entry} bytes, overflows the 64-bit integers of the contract (2^63-1)");
                         }
                         let path = crate::payload::join_key(pattern.root(), &i.name);
                         Some(InvMeta { path: Arc::from(path), entry, cap: false })
@@ -1189,6 +1222,9 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
                 };
                 if count < 0 || slot <= 0 {
                     bail!("dataset `{name}`: count {count}, slot {slot}");
+                }
+                if count.checked_mul(slot).is_none() {
+                    bail!("dataset `{name}`: its file, count {count} × slot {slot} bytes, overflows the 64-bit integers of the contract (2^63-1)");
                 }
                 let size = vm.resolve_distref(&r.size).with_context(ctx)?;
                 DsMeta::Array {

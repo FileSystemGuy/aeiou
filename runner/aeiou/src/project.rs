@@ -49,9 +49,9 @@ impl Projection {
 pub fn project(meta: &DsMeta<'_>, threads: usize) -> Result<Projection> {
     let (files, bytes) = match meta {
         // the written slots, not the sparse length
-        DsMeta::Array { count, .. } => (1, sum_over(*count, threads, |c| Ok((0, meta.sample_size(c)? as u64)))?.1),
+        DsMeta::Array { count, .. } => (1, sum_over(meta.name(), *count, threads, |c| Ok((0, meta.sample_size(c)? as u64)))?.1),
         // a chunked file is `ceil(size / chunk)` objects (`chunks`)
-        DsMeta::Files { chunk, .. } => sum_over(meta.files(), threads, |id| {
+        DsMeta::Files { chunk, .. } => sum_over(meta.name(), meta.files(), threads, |id| {
             let size = meta.file_size(id)? as u64;
             Ok((chunk.map_or(1, |c| size.div_ceil(c as u64)), size))
         })?,
@@ -66,24 +66,23 @@ pub fn project(meta: &DsMeta<'_>, threads: usize) -> Result<Projection> {
         samples: meta.count(),
         files,
         directories,
-        bytes: bytes + inventory_bytes,
+        bytes: add(meta.name(), (0, bytes), (0, inventory_bytes))?.1,
         inventory_bytes,
     })
 }
 
 /// The sums of `f(i)` for `i` in `0..n`, over `threads` threads in contiguous ranges.
-fn sum_over(n: i64, threads: usize, f: impl Fn(i64) -> Result<(u64, u64)> + Sync) -> Result<(u64, u64)> {
+fn sum_over(name: &str, n: i64, threads: usize, f: impl Fn(i64) -> Result<(u64, u64)> + Sync) -> Result<(u64, u64)> {
     let threads = threads.clamp(1, n.max(1) as usize) as i64;
-    let per = (n + threads - 1) / threads;
+    let per = crate::eval::ceil_div(n, threads);
     let f = &f;
     let parts: Vec<Result<(u64, u64)>> = std::thread::scope(|s| {
         let hs: Vec<_> = (0..threads)
             .map(|t| {
                 s.spawn(move || {
                     let mut sum = (0u64, 0u64);
-                    for i in (t * per)..((t + 1) * per).min(n) {
-                        let (a, b) = f(i)?;
-                        sum = (sum.0 + a, sum.1 + b);
+                    for i in (t * per)..((t + 1).saturating_mul(per)).min(n) {
+                        sum = add(name, sum, f(i)?)?;
                     }
                     Ok(sum)
                 })
@@ -91,7 +90,15 @@ fn sum_over(n: i64, threads: usize, f: impl Fn(i64) -> Result<(u64, u64)> + Sync
             .collect();
         hs.into_iter().map(|h| h.join().expect("a projection thread panicked")).collect()
     });
-    parts.into_iter().try_fold((0, 0), |s, p| p.map(|(a, b)| (s.0 + a, s.1 + b)))
+    parts.into_iter().try_fold((0, 0), |s, p| add(name, s, p?))
+}
+
+/// Two partial sums, checked: a projection past 2^64-1 is refused, never wrapped.
+fn add(name: &str, s: (u64, u64), p: (u64, u64)) -> Result<(u64, u64)> {
+    match (s.0.checked_add(p.0), s.1.checked_add(p.1)) {
+        (Some(a), Some(b)) => Ok((a, b)),
+        _ => Err(anyhow::anyhow!("dataset `{name}`: its projected files or bytes pass 2^64-1")),
+    }
 }
 
 /// Every dataset of the model, unrounded.

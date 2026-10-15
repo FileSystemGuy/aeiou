@@ -543,7 +543,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     pub fn start_sub(&mut self, k: i64) {
         let body = self.sub_body.expect("start_sub on a VM that was not resumed from a snapshot");
         let f = self.frames.last_mut().expect("a resumed VM has the fork frame");
-        f.idx = f.from + k * f.step;
+        // wrapping is exact: the index fits (it is below the loop's `to`), only k·step may not
+        f.idx = f.from.wrapping_add(k.wrapping_mul(f.step));
         self.push_body(body);
     }
 
@@ -641,9 +642,14 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         self.frames[f].idx
     }
 
-    fn frame_ordinal(&self, f: usize) -> i64 {
+    /// `None` past 2^63-1 (a loop spanning more than 2^63 at an index `x @ i` names).
+    fn frame_ordinal(&self, f: usize) -> Option<i64> {
         let fr = &self.frames[f];
-        (self.frame_index(f) - fr.from).div_euclid(fr.step)
+        let i = self.frame_index(f);
+        match i.checked_sub(fr.from) {
+            Some(d) => Some(d.div_euclid(fr.step)),
+            None => i64::try_from((i as i128 - fr.from as i128).div_euclid(fr.step as i128)).ok(),
+        }
     }
 
     fn indices(&self, depth: usize) -> Vec<i64> {
@@ -769,9 +775,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             ExprNode::Add(a) => self.arith(a, |x, y| x.checked_add(y), |x, y| x + y, "add")?,
             ExprNode::Sub(a) => self.arith(a, |x, y| x.checked_sub(y), |x, y| x - y, "sub")?,
             ExprNode::Mul(a) => self.arith(a, |x, y| x.checked_mul(y), |x, y| x * y, "mul")?,
-            ExprNode::Div(a) => self.arith(a, |x, y| if y == 0 { None } else { Some(x.div_euclid(y)) }, |x, y| (x / y).floor(), "div")?,
-            ExprNode::Mod(a) => self.arith(a, |x, y| if y == 0 { None } else { Some(x.rem_euclid(y)) }, |x, y| x.rem_euclid(y), "mod")?,
-            ExprNode::CeilDiv(a) => self.arith(a, |x, y| if y == 0 { None } else { Some(-((-x).div_euclid(y))) }, |x, y| (x / y).ceil(), "ceil_div")?,
+            ExprNode::Div(a) => self.arith(a, |x, y| if y == 0 { None } else { x.checked_div_euclid(y) }, |x, y| (x / y).floor(), "div")?,
+            ExprNode::Mod(a) => self.arith(a, |x, y| if y == 0 { None } else { x.checked_rem_euclid(y) }, |x, y| x.rem_euclid(y), "mod")?,
+            ExprNode::CeilDiv(a) => self.arith(a, |x, y| if y == 0 { None } else { x.checked_neg().and_then(|n| n.checked_div_euclid(y)).and_then(i64::checked_neg) }, |x, y| (x / y).ceil(), "ceil_div")?,
             ExprNode::Min(a) => self.arith(a, |x, y| Some(x.min(y)), f64::min, "min")?,
             ExprNode::Max(a) => self.arith(a, |x, y| Some(x.max(y)), f64::max, "max")?,
             ExprNode::Neg(x) => match self.expr(x)? {
@@ -1127,7 +1133,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     let v = self.expr(e)?;
                     match (meta.fields.get(name), &v) {
                         (Some(FieldType::Int), Value::Int(_)) | (Some(FieldType::Str), Value::Str(_)) => {}
-                        (Some(FieldType::Int), Value::Float(_)) => {}
+                        // rounded as `as_int` rounds it, and refused where it does
+                        (Some(FieldType::Int), Value::Float(_)) => {
+                            v.as_int()?;
+                        }
                         (Some(t), _) => return other(format!("object field `{name}` of `{namespace}` is {:?}, got {}", t, v.kind())),
                         (None, _) => return other(format!("object field `{name}` is not a field of `{namespace}`")),
                     }
@@ -1214,12 +1223,12 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         let split = (0..depth).rev().find(|f| self.frames[*f].loader).unwrap_or(depth - 1);
         let mut b: i64 = 0;
         for f in 0..=split {
-            b = b.checked_mul(self.frames[f].iters).and_then(|x| x.checked_add(self.frame_ordinal(f))).ok_or_else(|| anyhow!("position overflow"))?;
+            b = b.checked_mul(self.frames[f].iters).and_then(|x| x.checked_add(self.frame_ordinal(f)?)).ok_or_else(|| anyhow!("position overflow"))?;
         }
         let mut j: i64 = 0;
         let mut batch: i64 = 1;
         for f in split + 1..depth {
-            j = j.checked_mul(self.frames[f].iters).and_then(|x| x.checked_add(self.frame_ordinal(f))).ok_or_else(|| anyhow!("position overflow"))?;
+            j = j.checked_mul(self.frames[f].iters).and_then(|x| x.checked_add(self.frame_ordinal(f)?)).ok_or_else(|| anyhow!("position overflow"))?;
             batch = batch.checked_mul(self.frames[f].iters).ok_or_else(|| anyhow!("batch size overflow"))?;
         }
         let meta = &self.model.datasets[ds];
@@ -1231,7 +1240,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             return other(format!("dataset `{}` has {n} samples, fewer than one batch across {g} actors ({batch} per batch)", meta.name()));
         }
         let epoch = b / epoch_len;
-        let pos = self.actor + g * ((b % epoch_len) * batch + j);
+        let pos = (b % epoch_len).checked_mul(batch).and_then(|x| x.checked_add(j)).and_then(|x| x.checked_mul(g)).and_then(|x| x.checked_add(self.actor)).ok_or_else(|| anyhow!("position overflow"))?;
         let perm = meta.consume_perm(epoch)?;
         let id = perm.apply(pos as u64) as i64;
         Ok(if meta.access() == Access::Stream { HVal::File { ds, file: id } } else { HVal::Sample { ds, id } })
@@ -1285,7 +1294,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             HVal::Slot { ds, c } => self.model.datasets[*ds].sample_offset(*c)?,
             HVal::Chunk { .. } | HVal::File { .. } | HVal::ArrayFile { .. } | HVal::Inventory { .. } => 0,
             HVal::Unit { ds, file, u } => self.unit_offset(*ds, *file, *u)?,
-            HVal::Column { ds, file, u, c } => self.unit_offset(*ds, *file, *u)? + self.model.datasets[*ds].col_offset_in_unit(*file, *u, *c)?,
+            HVal::Column { ds, file, u, c } => match self.unit_offset(*ds, *file, *u)?.checked_add(self.model.datasets[*ds].col_offset_in_unit(*file, *u, *c)?) {
+                Some(off) => off,
+                None => return other(format!("dataset `{}`: the offset of column {c} of unit {u} of file {file} overflows the 64-bit integers of the contract (2^63-1)", self.model.datasets[*ds].name())),
+            },
             _ => return other(format!("offset of {h:?}")),
         })
     }
@@ -1295,7 +1307,11 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         if u < 0 || u as usize >= lens.len() {
             return other(format!("unit {u} outside file {file} ({} units)", lens.len()));
         }
-        Ok(self.model.datasets[ds].data_start(file)? + lens[..u as usize].iter().sum::<i64>())
+        let start = self.model.datasets[ds].data_start(file)?;
+        match lens[..u as usize].iter().try_fold(start, |s, n| s.checked_add(*n)) {
+            Some(off) => Ok(off),
+            None => other(format!("dataset `{}`: the offset of unit {u} of file {file} overflows the 64-bit integers of the contract (2^63-1)", self.model.datasets[ds].name())),
+        }
     }
 
     fn target(&mut self, h: &'a Handle) -> ER<Target> {
@@ -1345,7 +1361,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 }
                 Cont::Loop { body, from, step, iters, k } => {
                     if *k < *iters {
-                        let (body, idx) = (*body, *from + *k * *step);
+                        // wrapping is exact: the index fits (it is below `to`), only k·step may not
+                        let (body, idx) = (*body, from.wrapping_add(k.wrapping_mul(*step)));
                         *k += 1;
                         self.frames.last_mut().unwrap().idx = idx;
                         self.push_body(body);
@@ -1407,7 +1424,15 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 if step <= 0 {
                     return other(format!("loop `{index}`: step {step} must be positive"));
                 }
-                let iters = if to > from { (to - from + step - 1) / step } else { 0 };
+                // in 128 bits: `to - from` passes 2^63 when the bounds have opposite signs
+                let iters = if to > from {
+                    match i64::try_from((to as i128 - from as i128 + step as i128 - 1) / step as i128) {
+                        Ok(n) => n,
+                        Err(_) => return other(format!("loop `{index}`: from {from} to {to} by {step} is more than 2^63-1 iterations")),
+                    }
+                } else {
+                    0
+                };
                 self.push_loop(index, from, step, iters, false, body);
                 Ok(None)
             }
@@ -1500,7 +1525,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 *n -= 1;
                 let bytes = if kind == OpKind::Read { expected(io.size, io.off, len) } else { len };
                 let off = io.off;
-                io.off += bytes;
+                past_end(kind, off, len)?;
+                io.off = off + bytes;
                 Some((off, bytes))
             }
             Left::Count(_) => None,
@@ -1528,7 +1554,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         let (seed, expect, positioned, as_written, capped) = (io.seed, io.expect, io.positioned, io.as_written, io.capped);
         if kind == OpKind::Write && as_written {
             let path = io.path.clone();
-            *self.written.entry(path).or_insert(0) += len;
+            self.add_written(path, len)?;
         }
         self.set_pending(Pending { kind, path: None, path2: None, offset: off, len, bytes, aux: 0, expect, positioned, seed, capped });
         Ok(Some(Next::Op))
@@ -1554,6 +1580,16 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         let capped = t.capped && kind == OpKind::Read;
         self.set_pending(Pending { kind, path: Some(t.path), path2, offset, len, bytes, aux, expect: expect.as_deref().unwrap_or(&[]), positioned, seed: t.seed, capped });
         Ok(Some(Next::Op))
+    }
+
+    /// Bytes written to an `as_written` object, its size; checked, never wrapped (RC1 review).
+    fn add_written(&mut self, path: Arc<str>, len: i64) -> ER<()> {
+        let n = self.written.entry(path).or_insert(0);
+        match n.checked_add(len) {
+            Some(v) => *n = v,
+            None => return other(format!("write: the size written, {n} + {len} bytes, passes 2^63-1")),
+        }
+        Ok(())
     }
 
     fn opened(&self, path: &Arc<str>, what: &str) -> ER<FileState> {
@@ -1597,6 +1633,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     None => None,
                 };
                 let off = positioned.unwrap_or(st.pos);
+                past_end(OpKind::Read, off, len)?;
                 if repeat.is_none() {
                     // the common case, without the sequence machinery
                     let bytes = expected(size, off, len);
@@ -1638,9 +1675,10 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                     None => 1,
                 };
                 let off = positioned.unwrap_or(st.pos);
+                past_end(OpKind::Write, off, len)?;
                 if n == 1 {
                     if st.as_written {
-                        *self.written.entry(t.path.clone()).or_insert(0) += len;
+                        self.add_written(t.path.clone(), len)?;
                     }
                     if positioned.is_none() {
                         self.open.get_mut(&t.path).unwrap().pos = off + len;
@@ -1656,12 +1694,15 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 let st = self.opened(&t.path, "lseek")?;
                 let size = if st.as_written { self.written.get(&t.path).copied() } else { st.size };
                 let pos = match whence {
-                    Whence::SET => off,
-                    Whence::CUR => st.pos + off,
+                    Whence::SET => Some(off),
+                    Whence::CUR => st.pos.checked_add(off),
                     Whence::END => match size {
-                        Some(s) => s + off,
+                        Some(s) => s.checked_add(off),
                         None => return other(format!("lseek END on `{}`: size unknown", t.path)),
                     },
+                };
+                let Some(pos) = pos else {
+                    return other(format!("lseek by {off} on `{}`: the position passes 2^63-1", t.path));
                 };
                 if pos < 0 {
                     return other(format!("lseek to {pos} on `{}`", t.path));
@@ -1755,6 +1796,15 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
 impl Pending<'_> {
     fn empty() -> Self {
         Pending { kind: OpKind::Open, path: None, path2: None, offset: 0, len: 0, bytes: 0, aux: 0, expect: &[], positioned: false, seed: 0, capped: false }
+    }
+}
+
+/// The end of a read or write of `len` at `off`: an op wholly inside 0 to 2^63-1, as the
+/// kernel's `rw_verify_area` requires, or the error, never a wrapped offset (RC1 review).
+fn past_end(kind: OpKind, off: i64, len: i64) -> ER<i64> {
+    match off.checked_add(len) {
+        Some(end) if off >= 0 => Ok(end),
+        _ => other(format!("{}: offset {off} and length {len} reach outside 0 to 2^63-1", kind.name())),
     }
 }
 

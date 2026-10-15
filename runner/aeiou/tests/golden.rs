@@ -942,3 +942,62 @@ fn a_consume_is_under_loops_of_fixed_count() {
         aeiou::load_str(&doc(&ok)).unwrap_or_else(|e| panic!("{ok}: {e:#}"));
     }
 }
+
+/// Integer arithmetic on what an abstract and its parameters give (loop trip counts, a file's
+/// size summed from its samples, offsets, an array's length, an inventory's size) is checked:
+/// past 2^63-1 the run is refused with the dataset or op named. Until 2026-10-15 the release
+/// build wrapped it silently: a 16 EiB file was 0 bytes, a loop across the signs ran no
+/// iteration, a write past 2^63 landed at a negative offset (RC1 review).
+#[test]
+fn integer_arithmetic_past_64_bits_is_refused_not_wrapped() {
+    // the error of building the model, else of walking the actor; the ops when there is none
+    let walk = |text: &str| -> Result<Vec<(i64, Vec<i64>, OpKind, String, i64, i64, i64)>, String> {
+        let loaded = aeiou::load_str(text).expect("valid abstract");
+        let cfg = config(1, 0, &[]);
+        let params = Params::new(&loaded.ast, &cfg).map_err(|e| format!("{e:#}"))?;
+        let model = build_model(&loaded.ast, &cfg, &params).map_err(|e| format!("{e:#}"))?;
+        run_actor(&model, "gpu", 0, 1, Collect::default()).map(|s| s.ops).map_err(|e| format!("{e:#}"))
+    };
+    let refused = |text: &str, needle: &str| match walk(text) {
+        Ok(ops) => panic!("ran where `{needle}` was wanted: {ops:?}"),
+        Err(e) => assert!(e.contains(needle), "wanted `{needle}` in:\n{e}"),
+    };
+    let doc = |datasets: &str, body: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "t", "params": {{"min": {{"default": -9223372036854775808}}}}, "datasets": {{{datasets}}},
+                "namespaces": {{"o": {{"pattern": "o/{{v}}", "fields": {{"v": "int"}}, "size": "as_written", "seed": 3}}}},
+                "actors": {{"gpu": {{"count": 1, "body": [{body}]}}}}}}"#
+        )
+    };
+    let big = 1i64 << 62;
+    // four samples of 2^62 bytes are a file of 2^64: refused, not 0 bytes
+    let file = r#"{"let": {"name": "h", "value": {"file": {"dataset": "d", "id": 0}}}}, {"open": {"file": {"ref": "h"}, "flags": ["RDONLY"]}}, {"read": {"file": {"ref": "h"}, "len": {"size": {"ref": "h"}}}}"#;
+    let compound = format!(r#""d": {{"layout": "compound", "access": "stream", "pattern": "d/f{{id}}", "count": 4, "samples_per_file": 4, "size": {{"const": {big}}}, "seed": 1}}"#);
+    refused(&doc(&compound, file), "dataset `d`: the size of file 0 overflows the 64-bit integers of the contract");
+    // one such sample fits: that file is read whole
+    let fits = compound.replace(r#""count": 4, "samples_per_file": 4"#, r#""count": 1, "samples_per_file": 1"#);
+    assert_eq!(walk(&doc(&fits, file)).unwrap()[1].6, big);
+    // an array of 4 slots of 2^62 bytes, an inventory of 2^62 entries of 4 bytes
+    refused(&doc(&format!(r#""d": {{"layout": "array", "access": "indexed", "pattern": "d/all", "count": 4, "slot": {big}, "size": {{"const": 4096}}, "seed": 1}}"#), ""), "dataset `d`: its file, count 4 × slot 4611686018427387904 bytes, overflows");
+    refused(
+        &doc(&format!(r#""d": {{"layout": "whole", "access": "map", "pattern": "d/{{id}}", "count": {big}, "size": {{"const": 1}}, "seed": 1, "inventory": {{"name": "inv", "entry": 4}}}}"#), ""),
+        "dataset `d`: its inventory, count 4611686018427387904 × entry 4 bytes, overflows",
+    );
+    // a loop from -(2^63-1) to 2^63-1 by 2^62 is four iterations, not none
+    let stat = r#"{"stat": {"file": {"object": {"namespace": "o", "fields": {"v": {"index": "i"}}}}}}"#;
+    let ops = walk(&doc("", &format!(r#"{{"loop": {{"index": "i", "from": -9223372036854775807, "to": 9223372036854775807, "step": {big}, "body": [{stat}]}}}}"#))).unwrap();
+    let idx: Vec<i64> = ops.iter().map(|o| o.1[0]).collect();
+    assert_eq!(idx, vec![-i64::MAX, -i64::MAX + big, 1, 1 + big]);
+    // a write that reaches past 2^63-1, and an lseek past it
+    let obj = r#"{"let": {"name": "h", "value": {"object": {"namespace": "o", "fields": {"v": 0}}}}}, {"open": {"file": {"ref": "h"}, "flags": ["WRONLY", "CREAT"]}}"#;
+    refused(&doc("", &format!(r#"{obj}, {{"lseek": {{"file": {{"ref": "h"}}, "offset": 9223372036854775800, "whence": "SET"}}}}, {{"write": {{"file": {{"ref": "h"}}, "len": 100}}}}"#)), "write: offset 9223372036854775800 and length 100 reach outside 0 to 2^63-1");
+    refused(&doc("", &format!(r#"{obj}, {{"write": {{"file": {{"ref": "h"}}, "len": 100, "offset": 9223372036854775800}}}}"#)), "write: offset 9223372036854775800 and length 100 reach outside");
+    refused(&doc("", &format!(r#"{obj}, {{"write": {{"file": {{"ref": "h"}}, "len": 10}}}}, {{"lseek": {{"file": {{"ref": "h"}}, "offset": 9223372036854775800, "whence": "CUR"}}}}"#)), "lseek by 9223372036854775800 on `o/0`: the position passes 2^63-1");
+    refused(&doc("", &format!(r#"{obj}, {{"write": {{"file": {{"ref": "h"}}, "len": {big}, "repeat": 3}}}}"#)), "write: offset 4611686018427387904 and length 4611686018427387904 reach outside");
+    // -2^63 div -1 and its kin: an error, not a panic; a float past 2^63 is not 2^63-1
+    let field = |e: &str| format!(r#"{{"stat": {{"file": {{"object": {{"namespace": "o", "fields": {{"v": {e}}}}}}}}}}}"#);
+    refused(&doc("", &field(r#"{"div": [{"param": "min"}, -1]}"#)), "div: overflow");
+    refused(&doc("", &field(r#"{"mod": [{"param": "min"}, -1]}"#)), "mod: overflow");
+    refused(&doc("", &field(r#"{"ceil_div": [{"param": "min"}, 1]}"#)), "ceil_div: overflow");
+    refused(&doc("", &field(r#"{"add": [1e19, 0]}"#)), "float 10000000000000000000 where an integer is needed is outside the 64-bit integers");
+}
