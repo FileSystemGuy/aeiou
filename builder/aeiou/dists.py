@@ -1,9 +1,31 @@
 """Distribution constructors. Each returns a `Dist` node; nothing is drawn here."""
 from __future__ import annotations
 
+import math
+
 from .nodes import BuildError, Dist, Draw, Cond, lift, distref
 
 none = None   # the `none` outcome of a mixture arm
+
+
+def _literal(x):
+    """The value of a literal number, or None for a node (a parameter or formula, which the
+    runner checks when it resolves the draw)."""
+    return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+
+
+def _weight(w, what: str) -> float:
+    """A literal weight: a finite, non-negative number."""
+    if not isinstance(w, (int, float)) or isinstance(w, bool) or not math.isfinite(w) or w < 0:
+        raise BuildError(f"{what} must be a finite non-negative number, got {w!r}")
+    return w
+
+
+def _bounds(kind: str, a: dict) -> None:
+    """Literal `min` above literal `max` clamps every draw to a contradiction."""
+    lo, hi = _literal(a.get("min")), _literal(a.get("max"))
+    if lo is not None and hi is not None and lo > hi:
+        raise BuildError(f"{kind}: min {lo} is above max {hi}")
 
 
 def const(v) -> Dist:
@@ -12,7 +34,10 @@ def const(v) -> Dist:
 
 def uniform(lo, hi) -> Dist:
     """Integer in [lo, hi)."""
-    return Dist("uniform", {"lo": lift(lo, "uniform lo"), "hi": lift(hi, "uniform hi")})
+    lo, hi = lift(lo, "uniform lo"), lift(hi, "uniform hi")
+    if _literal(lo) is not None and _literal(hi) is not None and lo >= hi:
+        raise BuildError(f"uniform: empty range [{lo}, {hi}): hi must be above lo")
+    return Dist("uniform", {"lo": lo, "hi": hi})
 
 
 def uniform64() -> Dist:
@@ -26,17 +51,23 @@ def normal(mean, sd, *, min=None, max=None) -> Dist:
         a["min"] = lift(min, "normal min")
     if max is not None:
         a["max"] = lift(max, "normal max")
+    if _literal(a["sd"]) is not None and a["sd"] < 0:
+        raise BuildError(f"normal: sd {a['sd']} is negative")
+    _bounds("normal", a)
     return Dist("normal", a)
 
 
 def lognormal(median, sigma, *, min=None, max=None) -> Dist:
-    if not isinstance(sigma, (int, float)) or sigma <= 0:
-        raise BuildError("lognormal sigma must be a positive number")
+    if _literal(sigma) is None or not math.isfinite(sigma) or sigma <= 0:
+        raise BuildError(f"lognormal sigma must be a finite positive number, got {sigma!r}")
     a = {"median": lift(median, "lognormal median"), "sigma": float(sigma)}
+    if _literal(a["median"]) is not None and a["median"] <= 0:
+        raise BuildError(f"lognormal: median {a['median']} is not positive")
     if min is not None:
         a["min"] = lift(min, "lognormal min")
     if max is not None:
         a["max"] = lift(max, "lognormal max")
+    _bounds("lognormal", a)
     return Dist("lognormal", a)
 
 
@@ -51,12 +82,14 @@ def empirical(values, weights=None) -> Dist:
     weights = [1] * len(values) if weights is None else [lift(w, "empirical weight") for w in weights]
     if len(weights) != len(values):
         raise BuildError("empirical: values and weights differ in length")
+    if sum(_weight(w, "empirical weight") for w in weights) <= 0:
+        raise BuildError("empirical: total weight is zero")
     return Dist("empirical", {"values": values, "weights": weights})
 
 
 def zipf(s) -> Dist:
-    if not isinstance(s, (int, float)) or s <= 0:
-        raise BuildError("zipf s must be a positive number")
+    if _literal(s) is None or not math.isfinite(s) or s <= 0:
+        raise BuildError(f"zipf s must be a finite positive number, got {s!r}")
     return Dist("zipf", {"s": float(s)})
 
 
@@ -75,11 +108,12 @@ def mixture(*arms) -> Dist:
         if not (isinstance(arm, (tuple, list)) and len(arm) == 2):
             raise BuildError("each mixture arm is (weight, dist-or-none)")
         w, d = arm
-        if not isinstance(w, (int, float)) or w < 0:
-            raise BuildError("mixture weight must be a non-negative number")
+        _weight(w, "mixture weight")
         out.append({"weight": w, "dist": None if d is None else distref(d)})
     if not out:
         raise BuildError("mixture needs at least one arm")
+    if sum(a["weight"] for a in out) <= 0:
+        raise BuildError("mixture: total weight is zero")
     return Dist("mixture", out)
 
 

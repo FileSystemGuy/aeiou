@@ -580,3 +580,60 @@ def test_build_refuses_two_workloads_of_one_name(tmp_path):
     r = _run_cli([tmp_path / "a" / "s.py", tmp_path / "b" / "s.py", tmp_path / "a" / "s.py"])
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "a" / "dup.ast.json").exists() and (tmp_path / "b" / "dup.ast.json").exists()
+
+
+def test_literal_distribution_arguments_the_runner_cannot_draw_from_are_refused():
+    """A literal argument that can only fail or mean nothing at run time is a BuildError naming
+    the distribution, never an abstract that passes `aeiou check` and fails in `dry-run`
+    (RC1 review): the runner's uniform is [lo, hi), its weights must total above zero."""
+    nan, inf = float("nan"), float("inf")
+    refused = [
+        (lambda: uniform(4096, 4096), "uniform: empty range"),
+        (lambda: uniform(8192, 4096), "uniform: empty range"),
+        (lambda: empirical([4096, 8192], [0, 0]), "empirical: total weight is zero"),
+        (lambda: empirical([4096, 8192], [1, -1]), "empirical weight"),
+        (lambda: mixture((0, none), (0, const(4096))), "mixture: total weight is zero"),
+        (lambda: mixture((nan, none), (1, const(4096))), "mixture weight"),
+        (lambda: mixture((inf, none), (1, const(4096))), "mixture weight"),
+        (lambda: lognormal(-5, 1.0), "lognormal: median -5"),
+        (lambda: lognormal(0, 1.0), "lognormal: median 0"),
+        (lambda: lognormal(4096, inf), "lognormal sigma"),
+        (lambda: lognormal(4096, 1.0, min=8192, max=4096), "lognormal: min 8192 is above max 4096"),
+        (lambda: normal(4096, -3), "normal: sd -3"),
+        (lambda: normal(4096, 10, min=8192, max=4096), "normal: min 8192 is above max 4096"),
+        (lambda: zipf(inf), "zipf s"),
+        (lambda: zipf(nan), "zipf s"),
+    ]
+    for mk, msg in refused:
+        with pytest.raises(BuildError, match=msg):
+            mk()
+    # the edges the runner draws from, and parameter references, which the runner checks
+    w, P, ds = _wl()
+    uniform(4095, 4096), normal(4096, 0), normal(4096, 1, min=4096, max=4096)
+    empirical([1, 2], [0, 1]), mixture((0, none), (1, const(1)))
+    uniform(P.n, P.n), normal(4096, P.n, min=P.n, max=0), lognormal(P.n, 1.0)
+
+
+def test_choose_weights_and_divisor_defaults_the_runner_cannot_use_are_refused():
+    """`choose` arms of zero total weight or non-finite weight, and a `{id div D}` divisor
+    whose default is not positive, are BuildErrors, not a dry-run failure or a bare
+    ValueError from json (RC1 review)."""
+    for weights, msg in (([0, 0], "choose: total weight is zero"),
+                         ([float("nan"), 1], "arm weight"), ([float("inf"), 1], "arm weight")):
+        w, P, ds = _wl()
+        with w.actor("gpu", count=1) as c:
+            with pytest.raises(BuildError, match=msg):
+                with c.choose() as ch:
+                    for a in weights:
+                        with ch.arm(a):
+                            c.compute(1)
+    for d in (0, -2):
+        w = Workload("t")
+        w.param("dd", d)
+        with pytest.raises(BuildError, match=f"divisor `dd` is a parameter whose default {d} is not positive"):
+            w.dataset("d", pattern="d{id div dd}/f{id}", layout="whole", access="indexed", count=4,
+                      size=const(4096), seed=1)
+    w = Workload("t")
+    w.param("dd", 2)
+    w.dataset("d", pattern="d{id div dd}/f{id}", layout="whole", access="indexed", count=4,
+              size=const(4096), seed=1)

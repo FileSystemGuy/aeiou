@@ -8,6 +8,7 @@ Python control flow runs at build time and generates structure; cursor control f
 from __future__ import annotations
 
 import contextlib
+import math
 import re
 import sys
 from typing import Any
@@ -296,6 +297,8 @@ class Workload:
             d = spec["default"]
             if not isinstance(d, int) or isinstance(d, bool):
                 raise BuildError(f"{what}: divisor `{n}` is a parameter whose default is not an integer (V23)")
+            if d <= 0:
+                raise BuildError(f"{what}: divisor `{n}` is a parameter whose default {d} is not positive (V23)")
 
     # ---- datasets ----
     def dataset(self, name: str, *, pattern: str, layout: str, access: str, count, size, seed: int,
@@ -848,6 +851,8 @@ class Cursor:
         yield Chooser(self, arms)
         if not arms:
             raise BuildError("choose() needs at least one arm")
+        if sum(a["weight"] for a in arms) <= 0:
+            raise BuildError("choose: total weight is zero")
 
     @contextlib.contextmanager
     def phase(self, name):
@@ -1062,8 +1067,9 @@ class Chooser:
 
     @contextlib.contextmanager
     def arm(self, weight):
-        if not isinstance(weight, (int, float)) or weight < 0:
-            raise BuildError("arm weight must be a non-negative number")
+        if (not isinstance(weight, (int, float)) or isinstance(weight, bool)
+                or not math.isfinite(weight) or weight < 0):
+            raise BuildError(f"arm weight must be a finite non-negative number, got {weight!r}")
         body: list = []
         self._arms.append({"weight": weight, "body": body})
         with self._cursor._push(body, "arm"):

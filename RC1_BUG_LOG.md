@@ -265,3 +265,25 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   strace metrics) and `test_an_append_whose_base_the_trace_cannot_know_is_noted` fail on the
   old trace.py and pass on the new; test_trace.py: 66 passed.
 
+## 13. The builder accepted literal distribution arguments the runner can never draw from
+
+- **Where:** `builder/aeiou/dists.py` (`uniform`, `normal`, `lognormal`, `empirical`, `zipf`,
+  `mixture`; helpers `_literal`, `_weight`, `_bounds`) and `builder/aeiou/builder.py`
+  (`choose`, `Chooser.arm`, `_divisors`).
+- **Found by:** review of the builder core: generated abstracts with each argument that only
+  `aeiou dry-run` refused (rules read from runner `eval.rs` `sample()` and `vm.rs`).
+- **Defect:** `uniform(4096,4096)` and `uniform(8192,4096)` ("empty range"), all-zero weights
+  in `empirical`/`mixture`/`choose` ("total weight is zero"), `lognormal(-5, 1)` ("negative
+  length"), `normal(4096, -3)` (ran silently), `min` above `max`, and a divisor parameter
+  defaulting to 0 all built and passed `aeiou check`, failing only when run; a NaN or inf weight
+  failed late with a bare ValueError from json.dumps.
+- **Fix:** each literal argument is refused at build with a BuildError naming the distribution
+  and argument: uniform `lo >= hi` (draws are `[lo, hi)`), negative `sd`, non-positive lognormal
+  median or sigma, literal `min > max`, negative or non-finite weights and zero totals (empirical,
+  mixture, choose), non-finite zipf `s`, a divisor default `<= 0` (V23). Parameter references
+  stay the runner's to judge. Every committed abstract builds to the same hash (14 ok).
+- **Evidence:** `test_builder.py::test_literal_distribution_arguments_the_runner_cannot_draw_from_are_refused`
+  and `test_choose_weights_and_divisor_defaults_the_runner_cannot_use_are_refused` ("DID NOT
+  RAISE" without the fix, pass with it; edges that must still build included); builder suite
+  304 passed.
+
