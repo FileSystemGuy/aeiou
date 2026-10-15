@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import pathlib
 import platform
 import subprocess
@@ -92,6 +93,25 @@ def render(ast: dict, prov: dict | None = None) -> str:
     return json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
 
 
+def _no_constant(name):
+    raise ValueError(f"`{name}` is not JSON")
+
+
+def _finite(text):
+    x = float(text)
+    if math.isinf(x):
+        raise ValueError(f"number {text} is out of range")
+    return x
+
+
+def loads(text):
+    """JSON as the runner's serde_json reads it (schema/check.py's `loads`): Python's `json`
+    also takes `NaN`, `Infinity`, and `-Infinity`, and turns a number past the 64-bit float
+    range (`1e400`) into an infinity; serde_json refuses all four, and so does this. Every
+    reader of an abstract or a parameter file in the builder's tools reads with it."""
+    return json.loads(text, parse_constant=_no_constant, parse_float=_finite)
+
+
 def load(path) -> dict:
     """An abstract from its `.ast.json`. A path that is no abstract is a usage error
     (`usage.py`, as the runner's `aeiou::load`): a builder script, a file that does not
@@ -107,7 +127,7 @@ def load(path) -> dict:
         hint = "" if path.suffix == ".json" else f"; {WHAT_AN_ABSTRACT}"
         raise UsageError(f"{path}: {e.strerror} (os error {e.errno}){hint}") from None
     try:
-        return json.loads(text)
+        return loads(text)
     except ValueError as e:
         raise UsageError(f"{path}: not an abstract ({e}); {WHAT_AN_ABSTRACT}") from None
 

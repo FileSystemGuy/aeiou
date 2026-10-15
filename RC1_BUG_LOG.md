@@ -1751,3 +1751,34 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   and pass; on HEAD 3f2c3cc plus the change: `--test all -- run golden loader parallel man` 68
   passed, `--lib` 61, test_builder, test_catalog, test_man, test_params 172 passed, both
   checkers ok over every committed AST. Fixed in an isolated worktree and applied.
+
+## 76. The Python tools read `NaN`, `Infinity`, and `1e400` in JSON that the runner refuses
+
+- **Where:** `schema/check.py` (`loads`, `main`, `int_range`); `builder/aeiou/emit.py`
+  (`loads`, `load`); `builder/aeiou/params.py` `load`; `builder/aeiou/catalog.py` (four
+  readers); `builder/aeiou/header.py` `--format`; `builder/aeiou/cli.py` (hermetic child).
+- **Found by:** the RC1 fix of bug 74 (its out-of-scope note): Python's `json` takes the
+  non-standard `NaN`, `Infinity`, `-Infinity` and turns `1e400` into an infinity, where the
+  runner's serde_json refuses all four at parse time.
+- **Defect:** `aeiou-params check` accepted `{"params": {"step_time": Infinity}}` (ok, exit 0)
+  while `aeiou dry-run --params-file` refused it "not JSON"; `check.py` died with a traceback on
+  such an AST (and on any invalid JSON) where `aeiou check` said "not an abstract". A
+  non-finite float authored where `lift()` does not look (a framing column's `weight`) failed
+  `aeiou-build` with a ValueError traceback in process, and the hermetic child wrote it with
+  `allow_nan=True` and built outside its `BuildError` handler.
+- **Fix:** a `loads` (parse hooks refusing the constants and an overflow to infinity) in
+  check.py and in `emit`, used by every reader of an abstract or a parameter file in the
+  builder's tools, each giving its existing invalid-JSON error; check.py reports unreadable
+  JSON as `not an abstract (…)`, exit 1, as `aeiou check`; `int_range` refuses a non-finite
+  float with its path in an AST the builder made; the hermetic child builds inside its handler
+  and writes with `allow_nan=False`. No fingerprint, AST hash, or contract change: check.py's
+  output over every committed AST is unchanged and `emit.loads` equals `json.loads` on them.
+- **Evidence:** `test_builder.py::test_non_json_numbers_are_refused_as_the_runner_refuses_them`
+  (5 literals, scalar/array/object, through check.py, `emit.load`, `aeiou check`),
+  `test_builder.py::test_non_finite_floats_authored_are_refused_with_their_path` (in process and
+  `--hermetic`), `test_params.py::test_non_json_numbers_in_a_parameter_file_are_refused` (4
+  literals, `params.load`, `aeiou-params check`, `aeiou dry-run --params-file`): 10 failed on
+  the old code, pass after; on HEAD 1d91efe plus the change: test_builder, test_params,
+  test_man, test_catalog, test_trace, test_usage, test_formats 308 passed, CI's
+  `aeiou-build --hermetic --twice --check` over every workload script rc 0, check.py ok over
+  every committed AST.

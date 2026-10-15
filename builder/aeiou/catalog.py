@@ -299,7 +299,7 @@ def load(root: pathlib.Path, attrs: dict) -> tuple[list[dict], Problems]:
                          f" say workloads/{cat}/{cls + '/' if cls else ''}<mechanism>, not workloads/{m['rel']}")
         for a in sorted(d.glob("*.ast.json")):
             try:
-                doc = json.loads(a.read_text(encoding="utf-8"))
+                doc = emit.loads(a.read_text(encoding="utf-8"))
             except (OSError, ValueError) as e:
                 problems.add(a, root, str(e))
                 continue
@@ -377,7 +377,7 @@ def _load_case(c: pathlib.Path, m: dict, attrs: dict, root, problems: Problems) 
             problems.add(path, root, f"[[run]] params {r.get('params')!r} is not a file of the case")
             continue
         try:
-            pset = json.loads(params.read_text(encoding="utf-8"))
+            pset = emit.loads(params.read_text(encoding="utf-8"))
         except ValueError as e:
             problems.add(params, root, str(e))
             continue
@@ -507,7 +507,7 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
     smallest length (halving down to 1/64) whose numbers are still the case's, where `check`
     re-measures them. A shorter run is never taken for the case: a reuse share grows with the
     run on a fixed dataset, and a fixed load is amortized only over a long one."""
-    pset = json.loads(run["params"].read_text(encoding="utf-8"))["params"] if run["params"] else {}
+    pset = emit.loads(run["params"].read_text(encoding="utf-8"))["params"] if run["params"] else {}
     full = pset.get(length_param, _params_of(run["abstract"]["doc"])[length_param]["default"]) if length_param else None
     with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
         tmp = pathlib.Path(tmp)
@@ -653,7 +653,7 @@ def _description_path(m: dict, case: dict | None) -> pathlib.Path:
 
 
 def _values(run: dict) -> dict:
-    return json.loads(run["params"].read_text(encoding="utf-8"))["params"] if run["params"] else {}
+    return emit.loads(run["params"].read_text(encoding="utf-8"))["params"] if run["params"] else {}
 
 
 def context(m: dict, case: dict | None, run: dict, gpus: int, attrs: dict) -> list[str]:

@@ -48,9 +48,10 @@ def load(path) -> dict:
     """Read and structurally validate a parameter file (the published JSON Schema)."""
     import jsonschema
     from .validate import schema_dir
+    from .emit import loads
     path = pathlib.Path(path)
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc = loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise BuildError(f"{path}: {e}") from None
     d = schema_dir()

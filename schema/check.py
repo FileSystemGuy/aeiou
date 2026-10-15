@@ -76,11 +76,31 @@ def integral(x: float) -> str:
     return f"{x:.0f}"
 
 
+def _no_constant(name):
+    raise ValueError(f"`{name}` is not JSON")
+
+
+def _finite(text):
+    x = float(text)
+    if math.isinf(x):
+        raise ValueError(f"number {text} is out of range")
+    return x
+
+
+def loads(text):
+    """JSON as the runner's serde_json reads it: Python's `json` also takes `NaN`, `Infinity`,
+    and `-Infinity`, and turns a number past the 64-bit float range (`1e400`) into an
+    infinity; serde_json refuses all four, and so does this."""
+    return json.loads(text, parse_constant=_no_constant, parse_float=_finite)
+
+
 def int_range(doc, path=()) -> list:
     """(path, message) for every integer outside the contract's range (§1): 64-bit signed,
     a dataset's or namespace's `seed` 64-bit unsigned. JSON integers are unbounded and Python
     keeps them exact; the runner's would parse as a float, so the AST would hash and run
-    differently there. The runner's `canon::int_range_errors` has the same rule and wording."""
+    differently there. The runner's `canon::int_range_errors` has the same rule and wording.
+    A non-finite float, which JSON cannot hold (`loads` refuses it in a file), is refused in an
+    AST the builder made."""
     out = []
     if isinstance(doc, dict):
         for k, v in doc.items():
@@ -95,6 +115,8 @@ def int_range(doc, path=()) -> list:
         elif not -2 ** 63 <= doc <= 2 ** 63 - 1:
             out.append((path, f"integer {doc} is outside the 64-bit signed range of the contract's integers "
                               f"(-2^63 to 2^63-1)"))
+    elif isinstance(doc, float) and not math.isfinite(doc):
+        out.append((path, f"{doc} is not a JSON number (NaN and the infinities have no JSON form)"))
     return out
 
 
@@ -909,9 +931,13 @@ def main(argv):
     validator = jsonschema.Draft202012Validator(SCHEMA)
     failed = 0
     for f in files:
-        ast = json.loads(f.read_text(encoding="utf-8"))
-        # the integer range first, as the runner reads it: a seed past 2^64-1 has the same message in both
-        errors = [f"{f.name}: {'/'.join(map(str, p))}: {m}" for p, m in int_range(ast)]
+        try:
+            ast = loads(f.read_text(encoding="utf-8"))
+        except ValueError as e:     # not JSON as the runner reads it: `aeiou check` says the same
+            ast, errors = None, [f"{f.name}: not an abstract ({e})"]
+        else:
+            # the integer range first, as the runner reads it: a seed past 2^64-1 has the same message in both
+            errors = [f"{f.name}: {'/'.join(map(str, p))}: {m}" for p, m in int_range(ast)]
         if not errors:
             schema_errors = sorted(validator.iter_errors(ast), key=lambda e: list(e.absolute_path))
             errors = [f"{f.name}: {'/'.join(map(str, e.absolute_path))}: {e.message[:200]}" for e in schema_errors]

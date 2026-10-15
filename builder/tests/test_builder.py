@@ -1104,3 +1104,57 @@ def test_a_channel_or_loader_inside_a_fork_is_refused():
         assert len(e) == 1, e
         assert e[0].startswith(f"v26: actors/gpu/body/0/{path}: a `{kind}` inside a `parallel` or `loader` body")
         assert e[0].endswith("(V26)")
+
+
+NON_JSON = ["NaN", "Infinity", "-Infinity", "1e400", "-1e400"]
+
+
+@pytest.mark.parametrize("lit", NON_JSON)
+def test_non_json_numbers_are_refused_as_the_runner_refuses_them(tmp_path, lit):
+    """Python's `json` takes `NaN`, `Infinity`, and `-Infinity`, and reads `1e400` as an
+    infinity; the runner's serde_json refuses all of them at parse time. check.py crashed on
+    such an AST and the builder's tools (emit.load, so aeiou-params, aeiou-catalog, aeiou-build
+    --check) took it (RC1 review): every reader refuses it, as `aeiou check` does, wherever the
+    literal sits (a scalar, inside an array, inside an object)."""
+    from aeiou.usage import UsageError
+    text = ast_path("file_per_sample").read_text(encoding="utf-8")
+    assert '"default": 105000000' in text and '"default": 32' in text
+    for i, sub in enumerate([lit, f"[1, {lit}]", f'{{"x": [{lit}]}}']):
+        f = tmp_path / f"t{i}.ast.json"
+        f.write_text(text.replace('"default": 105000000', f'"default": {sub}', 1), encoding="utf-8")
+        out = subprocess.run([sys.executable, str(ROOT / "schema" / "check.py"), str(f)], capture_output=True, text=True)
+        assert out.returncode == 1 and out.stdout.splitlines()[0] == f"FAIL {f.name}", out.stdout + out.stderr
+        assert f"{f.name}: not an abstract (" in out.stdout and "Traceback" not in out.stderr, out.stdout + out.stderr
+        with pytest.raises(UsageError, match="not an abstract"):
+            emit.load(f)
+        runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+        if runner.exists():
+            out = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
+            assert out.returncode == 1 and "not an abstract (" in out.stdout + out.stderr, out.stdout + out.stderr
+    # a valid document reads the same, and hashes the same, as plain json reads it
+    for p in sorted(WORKLOADS.rglob("*.ast.json")):
+        t = p.read_text(encoding="utf-8")
+        assert emit.loads(t) == json.loads(t)
+
+
+def test_non_finite_floats_authored_are_refused_with_their_path(tmp_path):
+    """A NaN or infinity a script slips past the builder's scalar checks (a framing column's
+    weight, a format writer's option) has no JSON form: the build refused it only when the
+    writer's `allow_nan=False` raised, as "ValueError at line 258", and a hermetic child printed
+    a traceback (RC1 review). validate() names it, in process and in the hermetic child."""
+    script = tmp_path / "nanw.py"
+    script.write_text("from aeiou import *\n"
+                      "w = Workload('nanw')\n"
+                      "ds = w.dataset('d', pattern='d/{id}.tfr', layout='compound', access='stream', count=4,\n"
+                      "               samples_per_file=2, size=uniform(100, 200), seed=1,\n"
+                      "               format={'class': 'tfrecord', 'framing': {'unit': 1, 'columns': [{'weight': float('nan')}],\n"
+                      "                       'writer': {'x': float('inf')}}})\n"
+                      "with w.actor('gpu') as g:\n"
+                      "    g.compute(1)\n")
+    want = ["nanw: datasets/d/format/framing/columns/0/weight: nan is not a JSON number",
+            "nanw: datasets/d/format/framing/writer/x: inf is not a JSON number"]
+    for flags in ([], ["--hermetic"]):
+        r = _run_cli([*flags, "-o", tmp_path, script])
+        assert r.returncode == 1, r.stderr
+        assert all(w in r.stderr for w in want) and "Traceback" not in r.stderr and "ValueError" not in r.stderr, r.stderr
+        assert not (tmp_path / "nanw.ast.json").exists()

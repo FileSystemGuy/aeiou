@@ -14,10 +14,9 @@ stdout.
 """
 from __future__ import annotations
 
-import json
 import sys
 
-from . import __version__, usage
+from . import __version__, emit, usage
 from .formats import FormatClass
 from .nodes import BuildError
 
@@ -58,7 +57,7 @@ def main(argv=None) -> int:
         missing.want(a.rows, "--rows <N>", "the rows the file holds")
         missing.check()
         try:
-            fmt = json.loads(a.format)
+            fmt = emit.loads(a.format)
         except ValueError as e:
             raise usage.UsageError(f"--format: not JSON: {e}") from None
         got = b"".join(header(fmt, n) for n in a.rows)

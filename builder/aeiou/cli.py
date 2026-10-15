@@ -57,12 +57,12 @@ def _child_main(argv=None):
     out = {}
     try:
         made = _run_script(script)
+        for wl in made:
+            out[wl.name] = wl.build()
     except BuildError as e:   # the parent shows the last lines of stderr: make the last one the reason
         print(f"BuildError: {e}", file=sys.stderr)
         sys.exit(1)
-    for wl in made:
-        out[wl.name] = wl.build()
-    sys.stdout.write(json.dumps(out))   # insertion order kept for the on-disk rendering
+    sys.stdout.write(json.dumps(out, allow_nan=False))   # insertion order kept for the on-disk rendering
     sys.stdout.flush()
 
 
@@ -81,7 +81,8 @@ def _spawn_child(script: pathlib.Path, hermetic: bool, hashseed: int) -> dict:
         tail = r.stderr.strip().splitlines()[-12:]
         raise BuildError(f"child build failed (PYTHONHASHSEED={hashseed}):\n  "
                          + "\n  ".join(tail))
-    return json.loads(r.stdout)
+    from .emit import loads
+    return loads(r.stdout)
 
 
 def parser() -> usage.Parser:

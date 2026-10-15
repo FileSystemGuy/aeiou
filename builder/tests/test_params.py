@@ -338,3 +338,24 @@ def test_given_scalars_are_judged_by_every_rule_that_reads_them(tmp_path, which,
         assert sorted(got) == sorted(want), r.stderr
     else:
         assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("lit", ["NaN", "Infinity", "-Infinity", "1e400"])
+def test_non_json_numbers_in_a_parameter_file_are_refused(tmp_path, lit):
+    """A parameter given as `Infinity` (or `NaN`, `-Infinity`, `1e400`), alone or nested, is not
+    JSON to the runner's serde_json, which refuses the file; Python's `json` took it, so
+    `aeiou-params check` judged a file `run --params-file` cannot read (RC1 review)."""
+    ast = ast_path("file_per_sample")
+    for i, value in enumerate([lit, f"[1, {lit}]", f'{{"x": {lit}}}']):
+        f = tmp_path / f"t{i}.params.json"
+        f.write_text(f'{{"params_version": 1, "abstract": "file_per_sample", "params": {{"step_time": {value}}}}}\n')
+        with pytest.raises(BuildError, match=f"{f.name}: .*(is not JSON|is out of range)"):
+            params.load(f)
+        r = _run(["check", ast, f])
+        assert r.returncode == 1 and f"FAIL {f.name}" in r.stdout, r.stdout + r.stderr
+        assert "is not JSON" in r.stdout or "is out of range" in r.stdout, r.stdout + r.stderr
+        runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
+        if runner.exists():
+            r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(ast), "--params-file", str(f)],
+                               capture_output=True, text=True, cwd=str(tmp_path))
+            assert r.returncode == 1 and "not JSON" in r.stderr, r.stderr
