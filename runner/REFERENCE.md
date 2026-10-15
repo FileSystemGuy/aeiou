@@ -271,7 +271,14 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   0.8 ms on 32, the same under `sync` and `io_uring`; a network adds its round trip
   (`DESIGN_REVIEW.md` §3.71 point 4).
 - **`compute`** sleeps for `ns × --time-scale` and is recorded unscaled. `--time-scale 0`
-  runs the I/O back to back.
+  runs the I/O back to back. The sleep is the same under every backend (2026-10-14, RC1
+  review): the run sets a timer slack of 1 ns before it spawns a thread (the default 50 µs
+  made a `compute` overshoot by however much the backend's wait was slackened, so emulated
+  time depended on the backend; a trace's gaps sleep alike), and a compute right after
+  another is timed from where the previous one ends, not from when its sleep returned, so a
+  run of consecutive computes takes their sum plus one wake-up's lateness. Any other step
+  (an op's completion, a take, a barrier) restarts the clock: the application computes once
+  it has what it waited for.
 - **Buffers.** Each thread has a 4 KiB-aligned read ring and a write ring of `--buffer-mib`
   (default 8), allocated on first use and grown to the largest op, so successive copies land
   in successive slices and the aggregate across threads exceeds L3 (`NAPKIN_MATH.md` §2.2).

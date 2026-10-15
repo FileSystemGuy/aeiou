@@ -905,3 +905,29 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `datagen::tests::a_manifest_younger_than_two_windows_is_live` fails without the message fix
   ("updated 0 s ago") and passes with it; the five coord tests pass. Fixed in an isolated
   worktree and applied.
+
+## 41. A `compute` overslept by the timer slack, by an amount that depended on the backend
+
+- **Where:** `runner/aeiou/src/run.rs` (`run_with`, `Runner::control`, `ActorState`),
+  `runner/aeiou/src/uring.rs` (`Loop::step`, the compute and trace-gap timers);
+  runner/REFERENCE.md, the `compute` bullet of the run semantics.
+- **Found by:** review of the execution engines: the blocking path slept
+  `std::thread::sleep(scaled)` per compute and the event loop armed `now + scaled`, both under
+  Linux's default 50 µs timer slack, and every compute restarted from when its sleep returned.
+- **Defect:** emulated GPU time grew with every compute's overshoot and differed by backend.
+  20,000 × `compute 20000` (ideal 0.400 s) took 3.08–3.14 s under `sync`, 2.57–3.26 s under
+  `mmap` and `posix-aio`, 2.79–3.52 s under `libaio`, and 1.47–2.00 s under `io_uring`, so the
+  same abstract's pacing, and the I/O pressure it produces, depended on the backend, against
+  the rule that backends never change what the workload is.
+- **Fix:** `tight_timers()` sets `PR_SET_TIMERSLACK` to 1 ns at the start of `run_with`, before
+  any thread is spawned (threads inherit it). Consecutive computes are paced from absolute
+  deadlines: `ActorState::pace` takes the previous compute's deadline plus `scaled`, and any
+  other step (an op's completion, a take, a barrier, a fork, a trace) clears it, so a compute
+  after an op still counts from that op's completion. Both the blocking path (`sleep_until`)
+  and the event loop's timers use it. No AST, fingerprint, or dataset id changes.
+- **Evidence:** after the fix the same runs take 0.400–0.402 s under `sync`, `posix-aio`,
+  `mmap` and `io_uring`, and 0.446–0.451 s under `libaio` (a fixed ~45 ms from `io_destroy`
+  at teardown, queued separately). The new test
+  `run::consecutive_computes_take_their_sum_on_every_backend` (5,000 × 20 µs under `sync` and
+  `io_uring`, within 50 ms of the sum) fails without the fix ("took 460.75 ms, 360.75 ms over
+  their sum") and passes with it; `--test all` 92 passed in four consecutive runs.

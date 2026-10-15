@@ -1227,7 +1227,12 @@ impl<E: Engine> Loop<E> {
             let sh = self.sh.clone();
             let t = &mut self.tasks[id];
             let Prog::Vm(vm) = &mut t.prog else { unreachable!("a lane stepped as a VM") };
-            match vm.next()? {
+            let ev = vm.next()?;
+            if !matches!(ev, Some(Event::Control(Control::Compute { .. }, _))) {
+                // only consecutive computes are paced from one another (`ActorState::pace`)
+                t.io.a.pace = None;
+            }
+            match ev {
                 None => {
                     t.active = false;
                     if let Role::Worker { chan, ref mut b, workers, .. } = t.role {
@@ -1262,7 +1267,8 @@ impl<E: Engine> Loop<E> {
                             let scaled = (ns as f64 * sh.opts.time_scale) as u64;
                             if scaled > 0 {
                                 t.wait = Wait::Timer;
-                                self.timers.push(Reverse((Instant::now() + Duration::from_nanos(scaled), id)));
+                                let d = t.io.a.pace(scaled);
+                                self.timers.push(Reverse((d, id)));
                                 return Ok(());
                             }
                         }
@@ -1688,7 +1694,8 @@ impl<E: Engine> Loop<E> {
                         let scaled = (ns as f64 * sh.opts.time_scale) as u64;
                         if scaled > 0 {
                             t.wait = Wait::Timer;
-                            self.timers.push(Reverse((Instant::now() + Duration::from_nanos(scaled), id)));
+                            let d = t.io.a.pace(scaled);
+                            self.timers.push(Reverse((d, id)));
                             return Ok(Advance::Parked);
                         }
                         Ok(Advance::Go)

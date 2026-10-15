@@ -740,6 +740,24 @@ impl FdTable {
     }
 }
 
+/// Sleep until `d`, a `compute`'s deadline (`ActorState::pace`).
+pub(crate) fn sleep_until(d: Instant) {
+    let now = Instant::now();
+    if d > now {
+        std::thread::sleep(d - now);
+    }
+}
+
+/// Timer slack of 1 ns for this thread and every thread it creates from here on (slack is
+/// per thread and inherited at creation): the default 50 µs would let every `compute` sleep
+/// and timed wait overshoot by up to that much, and by how much depends on the backend's
+/// wait (`io_uring`'s timeouts are not slackened alike), so emulated GPU time would differ
+/// between backends. Called before the run spawns any thread.
+pub(crate) fn tight_timers() {
+    // SAFETY: PR_SET_TIMERSLACK takes a plain integer and touches only this thread
+    unsafe { libc::prctl(libc::PR_SET_TIMERSLACK, 1 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong) };
+}
+
 /// A thread's panic as its error, with the panic's message.
 pub(crate) fn panicked(p: Box<dyn std::any::Any + Send>) -> anyhow::Error {
     let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
@@ -831,6 +849,10 @@ pub(crate) struct ActorState {
     pub(crate) template: &'static str,
     pub(crate) actor: i64,
     pub(crate) started: Instant,
+    /// Where the last `compute` (or trace gap) ends when nothing else has happened since: the
+    /// next one is paced from it, not from when the sleep returned, so oversleeping does not
+    /// add up over a run of consecutive computes (`pace`). Cleared by every other step.
+    pub(crate) pace: Option<Instant>,
 }
 
 impl ActorState {
@@ -847,6 +869,7 @@ impl ActorState {
             template,
             actor,
             started: Instant::now(),
+            pace: None,
         }
     }
 
@@ -904,6 +927,7 @@ impl ActorState {
     }
 
     fn record(&mut self, op: &Op, ctx: &OpCtx, ns: u64, transferred: u64) {
+        self.pace = None;
         self.st.ops += 1;
         *self.st.counts.entry(op.kind).or_insert(0) += 1;
         self.st.lat.entry(op.kind).or_default().add(ns);
@@ -979,6 +1003,17 @@ impl ActorState {
                 }
             }
         }
+    }
+
+    /// When a `compute` of `scaled` ns (already time-scaled) ends: `scaled` after the end of
+    /// the previous one when the actor did nothing in between, else after now (an op's
+    /// completion, a take, a barrier: the application computes once it has what it waited
+    /// for). Sleeping until this absolute deadline keeps the emulated time of a run of
+    /// computes its sum whatever the timer's overshoot, on every backend alike.
+    pub(crate) fn pace(&mut self, scaled: u64) -> Instant {
+        let d = self.pace.unwrap_or_else(Instant::now) + Duration::from_nanos(scaled);
+        self.pace = Some(d);
+        d
     }
 
     /// `compute`: recorded unscaled, and against the last take.
@@ -1402,12 +1437,15 @@ impl Sink<'static, 'static> for Runner {
     }
 
     fn control(&mut self, c: Control<'static>, ctx: &OpCtx) -> Result<()> {
+        if !matches!(c, Control::Compute { .. }) {
+            self.a.pace = None;
+        }
         match c {
             Control::Compute { ns } => {
                 let ns = ns.max(0) as u64;
                 let scaled = (ns as f64 * self.sh.opts.time_scale) as u64;
                 if scaled > 0 {
-                    std::thread::sleep(Duration::from_nanos(scaled));
+                    sleep_until(self.a.pace(scaled));
                 }
                 self.a.computed(ns);
             }
@@ -1455,10 +1493,12 @@ impl Sink<'static, 'static> for Runner {
     }
 
     fn trace(&mut self, t: &Arc<crate::trace::TraceFile>, ctx: &OpCtx) -> Result<()> {
+        self.a.pace = None;
         self.trace_node(t, ctx)
     }
 
     fn fork(&mut self, kind: &ForkKind<'static>, snapshot: &dyn Fn() -> Snapshot<'static, 'static>) -> Result<bool> {
+        self.a.pace = None;
         let snap = snapshot();
         match *kind {
             ForkKind::Parallel { index, width } => {
@@ -2155,6 +2195,7 @@ pub fn run(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap
 /// abort flag (which the coordinator sets when another host fails). On failure here the
 /// coordinator is told to stop the other hosts.
 pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: HashMap<String, Option<String>>, coord: Arc<dyn Coordinator>, aborted: Arc<AtomicBool>) -> Result<Report> {
+    tight_timers();
     let counts: Vec<(&'static str, i64)> = actor_counts(model)?;
     let ranges: Vec<(i64, i64)> = counts.iter().map(|(_, c)| gpu_range(*c, opts.ranks, opts.rank, opts.rank_rotate)).collect();
     let scopes = barrier_scopes(model.ast)?;

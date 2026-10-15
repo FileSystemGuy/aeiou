@@ -937,3 +937,35 @@ fn a_loader_in_a_loop_runs_once_per_iteration() {
         assert_eq!(r.stats.takes, 2 * 2 * 12, "two epochs of twelve batches on each of two instances");
     }
 }
+
+/// A run of consecutive `compute`s takes their sum, on the blocking path and the event loop
+/// alike: each is paced from where the previous one ends, not from when its sleep returned,
+/// and the timer slack is 1 ns, so the total overshoot is one sleep's, never one per compute
+/// (RC1 review: with relative sleeps under the default 50 µs slack, 20,000 computes of 20 µs
+/// took 1.9-2.4 s under `sync` and 0.7-0.9 s under `io_uring` for an ideal 0.4 s, so
+/// emulated GPU time depended on the backend).
+#[test]
+fn consecutive_computes_take_their_sum_on_every_backend() {
+    let root = tmpdir("computes");
+    let (n, ns) = (5000u64, 20_000u64);
+    let ast = serde_json::json!({"ast": "0.10", "name": "computes", "params": {}, "datasets": {},
+        "actors": {"gpu": {"body": [{"loop": {"index": "s", "to": n, "body": [{"compute": {"ns": ns}}]}}]}}});
+    let path = root.join("computes.ast.json");
+    std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&path).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(1, 0, &[])));
+    let p: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, p).unwrap()));
+    let ideal = std::time::Duration::from_nanos(n * ns);
+    for backend in [BackendKind::Sync, BackendKind::Uring] {
+        let mut o = opts(&root.join("data"), backend);
+        o.time_scale = 1.0;
+        let r = go(model, o);
+        assert_eq!(r.stats.compute_ns, n * ns, "{backend:?}");
+        assert!(r.elapsed >= ideal, "{backend:?}: {:?} is shorter than the computes' {ideal:?}", r.elapsed);
+        // the run's setup and one late wake-up on a loaded host, never one per compute (5000 ×
+        // the 50 µs slack is 250 ms)
+        let over = r.elapsed - ideal;
+        assert!(over < std::time::Duration::from_millis(50), "{backend:?}: {n} computes of {ns} ns took {:?}, {over:?} over their sum", r.elapsed);
+    }
+}
