@@ -856,3 +856,57 @@ fn an_op_whose_buffer_cannot_be_allocated_ends_the_run_with_its_error() {
     }
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// An `array` file is sparse (`DESIGN_REVIEW.md` §3.72): datagen writes each slot's content and
+/// leaves its tail a hole, so what it writes and counts is the projection's bytes (`gen`), the
+/// manifest's `bytes_written` is the same exactly, the file's length is still every slot's, its
+/// allocation is about the contents where the file system has holes, each content is the bytes a
+/// dense file holds at its offsets (the dataset id is unchanged), each tail reads as zeros, and a
+/// run reads only contents. The lists span two 64 MiB pieces.
+#[test]
+fn array_datagen_writes_only_the_slots_contents() {
+    use std::os::unix::fs::MetadataExt;
+    let root = tmpdir("faiss-sparse");
+    let params = [("lists", "300"), ("index_bytes", "4096"), ("calls", "20"), ("threads", "1")];
+    let (loaded, cfg, model) = leaked_model("faiss_ivf_ondisk", config(1, 9, &params));
+    let meta = model.datasets.iter().find(|m| m.name() == "lists").unwrap();
+    let p = aeiou::project::project(meta, 2).unwrap();
+    let (slot, count) = (256u64 << 10, 300u64);
+    let size = meta.file_size(0).unwrap() as u64;
+    assert!(p.bytes * 3 < size, "short lists in long slots: {} of {size}", p.bytes);
+    gen(loaded, cfg, model, &root);
+    let m = aeiou::payload::Manifest::read(&root.join("ivf")).unwrap();
+    assert_eq!(m.provenance["bytes_written"].as_u64(), Some(p.bytes), "the manifest counts the contents, as the projection does");
+    let path = root.join("ivf/merged_index.ivfdata");
+    let md = std::fs::metadata(&path).unwrap();
+    assert_eq!(md.len(), size);
+    // a file system with holes allocates the contents and at most two partial 4 KiB blocks each
+    let probe = root.join("probe");
+    std::fs::File::create(&probe).unwrap().set_len(1 << 20).unwrap();
+    if std::fs::metadata(&probe).unwrap().blocks() == 0 {
+        let allocated = md.blocks() * 512;
+        assert!(allocated >= p.bytes && allocated <= p.bytes + count * 8192, "allocated {allocated}, contents {}", p.bytes);
+    }
+    std::fs::remove_file(&probe).unwrap();
+    // the dense writer's stream: the payload of each file offset, a block at a time
+    let seed = meta.dataset_seed();
+    let seed_of = |blk: u64| aeiou::payload::array_block_seed(seed, blk, 1);
+    let mut filler = aeiou::payload::Filler::new(1);
+    let mut dense = vec![0u8; size as usize];
+    for (i, b) in dense.chunks_mut(aeiou::payload::BLOCK as usize).enumerate() {
+        filler.fill_range(&seed_of, i as u64 * aeiou::payload::BLOCK, b);
+    }
+    let file = std::fs::read(&path).unwrap();
+    for c in 0..count {
+        let (at, n) = ((c * slot) as usize, meta.sample_size(c as i64).unwrap() as usize);
+        assert!(file[at..at + n] == dense[at..at + n], "slot {c}: its content is the dense file's");
+        let end = ((c + 1) * slot).min(size) as usize;
+        assert!(file[at + n..end].iter().all(|&b| b == 0), "slot {c}: its tail is a hole");
+    }
+    run::check_datasets(loaded, cfg, &root).unwrap();
+    run::prepare_namespaces(&loaded.ast, &root, false).unwrap();
+    let (fp, ops, bytes) = dry_fingerprint(model);
+    let r = go(model, opts(&root, BackendKind::Mmap));
+    assert_eq!((r.stats.fingerprint, r.stats.ops, r.stats.bytes_read), (fp, ops, bytes));
+    std::fs::remove_dir_all(&root).unwrap();
+}

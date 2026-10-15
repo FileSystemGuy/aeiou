@@ -700,3 +700,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Noted:** io_uring SQEs pass a read's or write's length as `len as u32`, truncating any op
   over 4 GiB (queued).
 
+## 32. `aeiou datagen` wrote an `array` dataset dense where the layout is sparse
+
+- **Where:** `runner/aeiou/src/datagen.rs` (the array arm of `write_share`, new `write_slots`,
+  `write_at`); runner REFERENCE §5 (*`O_DIRECT`, always*).
+- **Found by:** review of datagen against DESIGN_REVIEW §3.72 (an array is "a sparse file, the
+  slot's tail unwritten") and `project.rs`, which counts only slot contents: faiss_ivf_ondisk
+  (sift1m-ivf1024-pq32, 256 KiB slots, lists ~36 KB) printed "38.33 MiB to write" and wrote
+  255.84 MiB, all allocated.
+- **Defect:** datagen filled every slot's tail with payload, so the space check (§3.74)
+  undercounted by the slot/content ratio, `provenance.bytes_written` disagreed with the
+  projection, and storage saw a dense file instead of the sparse layout the workload claims.
+- **Fix:** the file is created and `set_len` to its full length (holes), and only each slot's
+  content `[c·slot, c·slot + size(c))` is written, in the 4 KiB blocks it touches (aligned for
+  `O_DIRECT`), payload still keyed by file offset, so each content's bytes and the dataset id are
+  unchanged (full-slot arrays such as diskann's are byte-identical); bytes counted are the
+  contents. Same 64 MiB pieces and writers, so it still streams. No abstract reads into a tail;
+  grow/shrink refuse arrays; resume rewrites the array whole the same way.
+- **Evidence:** faiss now writes 38.33 MiB (82,536 blocks allocated against 523,968),
+  `bytes_written` 40,195,291 = the projection, same id. `tests/run.rs::array_datagen_writes_only_the_slots_contents`
+  (projection = reported = manifest bytes, file length, allocation where holes exist, every
+  content equal to the dense writer's bytes, every tail zeros, an mmap run = the dry run) fails
+  on the old datagen.rs ((1, 13021678) vs (1, 78409175)) and passes; `--test all` 81 passed,
+  builder tests touching arrays 184 passed. faiss lists=8192 datagen 1.7 s vs 1.9 s; diskann
+  unchanged. Fixed in an isolated worktree and applied.
+

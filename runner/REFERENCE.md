@@ -468,7 +468,12 @@ as root). The same runs on the loopback NFS mount are §7.
   ~~what a `--resume` (planned, `DESIGN_REVIEW.md` §3.62) will test, size alone; allocated
   block counts are not evidence on storage that dedupes or compresses.~~ (decided otherwise
   2026-10-11, §3.70: a resume rewrites whole everything after the last recorded point and
-  tests no sizes; below). Every rank `syncfs`es its root before reporting.
+  tests no sizes; below). Every rank `syncfs`es its root before reporting. An `array` file
+  (2026-10-14, RC1) is sized to its length at creation and only each slot's content
+  `[c·slot, c·slot + size(c))` is written, the 4 KiB blocks it touches (zeros where not
+  content), so each slot's tail is a hole (`DESIGN_REVIEW.md` §3.72) and the bytes written
+  and recorded are the contents the projection counts (§3.74); each content is the bytes of
+  its file offset, as before, so the dataset id is unchanged.
 - **The manifest from the start, and progress (2026-10-12, `DESIGN_REVIEW.md` §3.70).**
   Rank 0 writes each manifest before the start gate (after its root's emptiness check and
   the containers' headers): `state: writing`, the normative part, the provenance known so

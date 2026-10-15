@@ -39,7 +39,8 @@
 //! creating in one directory serialize. A shrink claims its runs from the top down and
 //! removes each from its highest id down. Rank 0 records a claim mark in the manifest before
 //! handing out a run past it, so a settle knows how far strays can reach. An array file is
-//! cut into 64 MiB pieces for the owner's writers (`pwrite` at disjoint offsets).
+//! cut into 64 MiB pieces for the owner's writers (`pwrite` at disjoint offsets), and in
+//! them only the slots' contents are written: each slot's tail is a hole.
 //!
 //! **Stopping.** Ctrl-C (`SIGINT`) on any host stops every host: each stops claiming, leaves
 //! the file it is writing, notes what it finished, flushes, and reports; rank 0 writes the
@@ -456,8 +457,9 @@ fn write_range(f: &File, direct: bool, mode: &Mode, seed_of: &dyn Fn(u64) -> u64
     Ok(())
 }
 
-/// Write the first `n` bytes of `buf` at `off`; only the file's last write may be unaligned.
-fn write_at(f: &File, direct: bool, mode: &Mode, buf: &mut Aligned, n: usize, off: u64, what: &Path) -> Result<()> {
+/// Write the first `n` bytes of `buf` (aligned, with room to pad `n` to `ALIGN`) at `off`;
+/// only the file's last write may be unaligned.
+fn write_at(f: &File, direct: bool, mode: &Mode, buf: &mut [u8], n: usize, off: u64, what: &Path) -> Result<()> {
     if direct && n % ALIGN != 0 {
         if !mode.pad_tails.load(Ordering::Relaxed) {
             match f.write_all_at(&buf[..n], off) {
@@ -477,6 +479,66 @@ fn write_at(f: &File, direct: bool, mode: &Mode, buf: &mut Aligned, n: usize, of
         f.write_all_at(&buf[..n], off).with_context(|| format!("writing {}", what.display()))?;
     }
     Ok(())
+}
+
+/// Write the slots' contents that fall in `[at, end)` of an array file whose `count` slots are
+/// `slot` bytes apart (`DESIGN_REVIEW.md` §3.72: a sparse file, each slot's tail unwritten),
+/// `at` aligned to `BLOCK` and `end` too unless it is the file's end. Each content
+/// `[c·slot, c·slot + size(c))` is the bytes of its file offset (`seed_of`), as a dense file
+/// would hold them; the `ALIGN` blocks holding any content are written, `BLOCK` at a time,
+/// zeros where they are not content (what a hole reads as), and the rest are left holes.
+/// Returns the content bytes written.
+#[allow(clippy::too_many_arguments)]
+fn write_slots(f: &File, direct: bool, mode: &Mode, meta: &DsMeta<'_>, slot: u64, count: u64, seed_of: &dyn Fn(u64) -> u64, at: u64, end: u64, filler: &mut Filler, buf: &mut Aligned, what: &Path) -> Result<u64> {
+    let mut content = 0u64;
+    if slot == 0 || count == 0 {
+        return Ok(0);
+    }
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut cs = at;
+    while cs < end {
+        if mode.halted() {
+            return Err(Halted.into());
+        }
+        let ce = (cs + BLOCK).min(end);
+        // the contents in this block, adjoining ones (full slots) merged
+        runs.clear();
+        for c in cs / slot..=((ce - 1) / slot).min(count - 1) {
+            let (s, e) = (c * slot, c * slot + meta.sample_size(c as i64)? as u64);
+            let (s, e) = (s.max(cs), e.min(ce));
+            if s >= e {
+                continue;
+            }
+            let (s, e) = ((s - cs) as usize, (e - cs) as usize);
+            match runs.last_mut() {
+                Some(r) if r.1 == s => r.1 = e,
+                _ => runs.push((s, e)),
+            }
+        }
+        let n = (ce - cs) as usize;
+        if !(runs.len() == 1 && runs[0] == (0, n)) {
+            buf[..n].fill(0);
+        }
+        for &(s, e) in &runs {
+            filler.fill_range(seed_of, cs + s as u64, &mut buf[s..e]);
+            content += (e - s) as u64;
+        }
+        // the ALIGN blocks the contents touch, adjoining ones written together
+        let mut i = 0;
+        while i < runs.len() {
+            let a = runs[i].0 / ALIGN * ALIGN;
+            let mut b = (runs[i].1 + ALIGN - 1) / ALIGN * ALIGN;
+            i += 1;
+            while i < runs.len() && runs[i].0 / ALIGN * ALIGN <= b {
+                b = (runs[i].1 + ALIGN - 1) / ALIGN * ALIGN;
+                i += 1;
+            }
+            let b = b.min(n);
+            write_at(f, direct, mode, &mut buf[a..], b - a, cs + a as u64, what)?;
+        }
+        cs = ce;
+    }
+    Ok(content)
 }
 
 // ---------------------------------------------------------------- containers
@@ -1096,11 +1158,14 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                 });
             }
         }
-        (Share::Array, DsMeta::Array { .. }) => {
+        (Share::Array, DsMeta::Array { count, slot, .. }) => {
             let path = meta.file_path(0, None)?.to_string();
             let full = opts.endpoints.path(&opts.root, &path);
             let size = meta.file_size(0)? as u64;
+            let (count, slot) = (*count as u64, *slot as u64);
             let (f, direct) = create(&full, mode)?;
+            // the slots' tails, and a last slot's that is empty, are holes
+            f.set_len(size).with_context(|| format!("sizing {}", full.display()))?;
             let pieces = (size + REGIONS_PIECE - 1) / REGIONS_PIECE;
             let next = AtomicU64::new(0);
             let nthreads = writers.min(pieces.max(1) as usize);
@@ -1121,15 +1186,19 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                             }
                             let at = p * REGIONS_PIECE;
                             let len = (size - at).min(REGIONS_PIECE);
-                            if let Err(e) = write_range(&f, direct, mode, &seed_of, at, at, len, &mut filler, &mut buf, &full) {
-                                if e.is::<Halted>() {
-                                    left.store(true, Ordering::Relaxed);
-                                } else {
-                                    fail(e);
+                            match write_slots(&f, direct, mode, meta, slot, count, &seed_of, at, at + len, &mut filler, &mut buf, &full) {
+                                Ok(n) => {
+                                    track.bytes.fetch_add(n, Ordering::Relaxed);
                                 }
-                                break;
+                                Err(e) => {
+                                    if e.is::<Halted>() {
+                                        left.store(true, Ordering::Relaxed);
+                                    } else {
+                                        fail(e);
+                                    }
+                                    break;
+                                }
                             }
-                            track.bytes.fetch_add(len, Ordering::Relaxed);
                         }
                     });
                 }
