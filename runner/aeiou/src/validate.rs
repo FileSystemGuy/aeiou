@@ -119,6 +119,11 @@ struct ActorState<'a> {
     /// Inside a `parallel` or `loader` body: the handles opened so far in the innermost one
     /// (by their `Debug` form, as `check.py` compares them by their JSON), for V24.
     fork_opens: Option<Vec<String>>,
+    /// V26: inside a `loader` body, the loader's name and the path of the body it is in.
+    loader: Option<(&'a str, P)>,
+    /// V26: the actor's channel declarations (`channel` and `loader`), by name: the path of the
+    /// body each is in, and whether a loop encloses it.
+    sites: HashMap<&'a str, Vec<(P, bool)>>,
 }
 
 impl<'a> Scope<'a> {
@@ -230,6 +235,35 @@ fn p(base: &P, more: &[&str]) -> P {
     v
 }
 
+/// V26: an actor's channel declarations (`channel` and `loader`), by name: the path of the body
+/// each is in, and whether a loop encloses it.
+fn channel_sites<'a>(nodes: &'a [Node], path: &P, in_loop: bool, out: &mut HashMap<&'a str, Vec<(P, bool)>>) {
+    for (i, node) in nodes.iter().enumerate() {
+        let pp = p(path, &[&i.to_string(), node.kind()]);
+        match node {
+            Node::Channel { name, .. } => out.entry(name.as_str()).or_default().push((path.clone(), in_loop)),
+            Node::Loader { name, body, .. } => {
+                out.entry(name.as_str()).or_default().push((path.clone(), in_loop));
+                channel_sites(body, &p(&pp, &["body"]), in_loop, out);
+            }
+            Node::Loop { body, .. } => channel_sites(body, &p(&pp, &["body"]), true, out),
+            Node::Parallel { body, .. } | Node::Phase { body, .. } => channel_sites(body, &p(&pp, &["body"]), in_loop, out),
+            Node::Cond { then, otherwise, .. } => {
+                channel_sites(then, &p(&pp, &["then"]), in_loop, out);
+                if let Some(b) = otherwise {
+                    channel_sites(b, &p(&pp, &["else"]), in_loop, out);
+                }
+            }
+            Node::Choose { arms, .. } => {
+                for (j, arm) in arms.iter().enumerate() {
+                    channel_sites(&arm.body, &p(&pp, &["arms", &j.to_string(), "body"]), in_loop, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 impl<'a> Checker<'a> {
     /// V20 (the fields each layout takes) and V21 (access) on one dataset (contract 0.8,
     /// `DESIGN_REVIEW.md` §3.72).
@@ -297,6 +331,17 @@ impl<'a> Checker<'a> {
         if st.fork_opens.is_some() {
             self.err(pp, format!("a `{kind}` inside a `parallel` or `loader` body: its channel is the actor's, shared by every sub-actor, so each sub-actor would declare it again over the others' and what it holds would depend on timing; declare it before the fork (V26)"));
         }
+    }
+
+    /// V26: a loader's workers run beside the actor, so a channel they put or take on that the
+    /// actor declares again while they run (in a loop the loader is not declared again in, or
+    /// at a second site) would be the old one or the new one as timing had it.
+    fn used_by_workers(&mut self, kind: &str, channel: &str, pp: &P, st: &ActorState<'a>) {
+        let (Some((lname, lbody)), Some(sites)) = (&st.loader, st.sites.get(channel)) else { return };
+        if sites.len() == 1 && (!sites[0].1 || (&sites[0].0 == lbody && st.sites.get(lname).map_or(0, |s| s.len()) == 1)) {
+            return;
+        }
+        self.err(pp, format!("a `{kind}` on channel `{channel}` inside a `loader` body: the loader's workers run beside the actor, so the channel is declared at one site, outside every loop or next to a loader declared at one site; declared again while they run, which declaration a worker reached would depend on timing (V26)"));
     }
 
     fn run(&mut self) {
@@ -489,6 +534,7 @@ impl<'a> Checker<'a> {
             if let Some(c) = &a.count {
                 self.expr(c, &p(&path, &["count"]), &scope, &mut st, None);
             }
+            channel_sites(&a.body, &p(&path, &["body"]), false, &mut st.sites);
             self.body(&a.body, &p(&path, &["body"]), &scope, &mut st);
         }
         self.v6_one_consume();
@@ -700,8 +746,10 @@ impl<'a> Checker<'a> {
                 st.channels.insert(name);
                 let inner = scope.with_index(index, true, self.varies(batches, scope).then(|| pp.clone()));
                 let outer = st.fork_opens.replace(Vec::new());
+                let outer_loader = st.loader.replace((name.as_str(), pp[..pp.len() - 2].to_vec()));
                 self.body(body, &p(pp, &["body"]), &inner, st);
                 st.fork_opens = outer;
+                st.loader = outer_loader;
             }
             Node::Channel { name, capacity, .. } => {
                 if !is_ident(name) {
@@ -715,12 +763,14 @@ impl<'a> Checker<'a> {
                 if !st.channels.contains(channel.as_str()) {
                     self.err(pp, format!("channel `{channel}` not declared"));
                 }
+                self.used_by_workers("put", channel, pp, st);
                 self.expr(seq, &p(pp, &["seq"]), scope, st, None);
             }
             Node::Take { channel } => {
                 if !st.channels.contains(channel.as_str()) {
                     self.err(pp, format!("channel `{channel}` not declared"));
                 }
+                self.used_by_workers("take", channel, pp, st);
             }
             Node::Barrier { scope: s } => {
                 if s != "global" && s != "host" && !is_ident(s) {

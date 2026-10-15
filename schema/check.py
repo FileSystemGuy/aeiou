@@ -139,6 +139,11 @@ class Check:
         self.traces = False
         # inside a `parallel` or `loader` body: the handles opened so far in the innermost one (V24)
         self.fork_opens = None
+        # V26: inside a `loader` body, the loader's name and the path of the body it is in
+        self.loader = None
+        # V26: an actor's channel declarations (`channel` and `loader`), by name: the path of
+        # the body each is in, and whether a loop encloses it
+        self.sites = {}
         # the `consume`s inside a loop, by dataset, in document order (V6)
         self.consumes = {}
         # V6: a `consume` under a loop whose count varies, by path: the innermost such loop's path
@@ -269,6 +274,8 @@ class Check:
             scope = Scope(self)
             if "count" in a:
                 self.expr(a["count"], ["actors", aname, "count"], scope)
+            self.sites = {}
+            self.channel_sites(a["body"], ["actors", aname, "body"], False)
             self.body(a["body"], ["actors", aname, "body"], scope)
         self.v6_one_consume()
         self.v19()
@@ -374,13 +381,42 @@ class Check:
         if self.fork_opens is not None:
             self.err(p, f"a `{kind}` inside a `parallel` or `loader` body: its channel is the actor's, shared by every sub-actor, so each sub-actor would declare it again over the others' and what it holds would depend on timing; declare it before the fork (V26)")
 
+    def channel_sites(self, nodes, path, in_loop):
+        for i, node in enumerate(nodes):
+            kind, a = next(iter(node.items()))
+            p = path + [i, kind]
+            if kind in ("channel", "loader"):
+                self.sites.setdefault(a["name"], []).append((path, in_loop))
+            if kind == "cond":
+                self.channel_sites(a["then"], p + ["then"], in_loop)
+                self.channel_sites(a.get("else", []), p + ["else"], in_loop)
+            elif kind == "choose":
+                for j, arm in enumerate(a["arms"]):
+                    self.channel_sites(arm["body"], p + ["arms", j, "body"], in_loop)
+            elif kind in ("loop", "parallel", "loader", "phase"):
+                self.channel_sites(a["body"], p + ["body"], in_loop or kind == "loop")
+
+    # V26: a loader's workers run beside the actor, so a channel they put or take on that the
+    # actor declares again while they run (in a loop the loader is not declared again in, or
+    # at a second site) would be the old one or the new one as timing had it
+    def used_by_workers(self, kind, channel, p):
+        sites = self.sites.get(channel)
+        if self.loader is None or not sites:
+            return
+        lname, lbody = self.loader
+        if len(sites) == 1 and (not sites[0][1] or (sites[0][0] == lbody and len(self.sites[lname]) == 1)):
+            return
+        self.err(p, f"a `{kind}` on channel `{channel}` inside a `loader` body: the loader's workers run beside the actor, so the channel is declared at one site, outside every loop or next to a loader declared at one site; declared again while they run, which declaration a worker reached would depend on timing (V26)")
+
     def n_loader(self, a, p, scope):
         for k in ("workers", "prefetch", "batches"):
             self.expr(a[k], p + [k], scope)
         self.declared_outside_forks("loader", p)
         scope.channels.add(a["name"])
         varies = self.varies(a["batches"], scope)
+        outer, self.loader = self.loader, (a["name"], p[:-2])
         self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"], True, p if varies else None))
+        self.loader = outer
 
     # V6: the kinds that draw (keyed on the enclosing indices), and those fixed for an actor
     DRAWS = {"draw", "consume", "pick", "uniform", "uniform64", "normal", "lognormal", "empirical",
@@ -426,11 +462,13 @@ class Check:
     def n_put(self, a, p, scope):
         if a["channel"] not in scope.channels:
             self.err(p, f"channel `{a['channel']}` not declared")
+        self.used_by_workers("put", a["channel"], p)
         self.expr(a["seq"], p + ["seq"], scope)
 
     def n_take(self, a, p, scope):
         if a["channel"] not in scope.channels:
             self.err(p, f"channel `{a['channel']}` not declared")
+        self.used_by_workers("take", a["channel"], p)
 
     def n_barrier(self, a, p, scope):
         pass

@@ -1782,3 +1782,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   test_man, test_catalog, test_trace, test_usage, test_formats 308 passed, CI's
   `aeiou-build --hermetic --twice --check` over every workload script rc 0, check.py ok over
   every committed AST.
+
+## 77. A channel a loader's workers use, declared again under them, failed by timing
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (V26's second clause:
+  `channel_sites`, `used_by_workers`, called from `put`/`take`); `schema/README.md` §4 V26;
+  `runner/REFERENCE.md` §4; `man/aeiou-abstract.7.md`.
+- **Found by:** the RC1 fix of bug 75 (its adjacent note): bug 37 lets the actor declare a
+  channel again in each iteration of a loop, and a loader's workers run beside the actor.
+- **Defect:** `channel c; loader q {compute; put c}; loop e<4 {channel c; take q; take c}`
+  passed both checkers and dry-run, then `aeiou run` failed "channel c declared again with 2
+  item(s) put and not taken" in 4/4 runs at `--time-scale 0` under sync and io_uring and passed
+  4/4 at time scale 1: which declaration a worker reached depended on timing. (`parallel` joins
+  before the actor goes on and is not affected; a loader's workers touch channels only while
+  its batches are untaken.)
+- **Fix:** a `put` or `take` in a loader body (any depth) names a channel declared at one site
+  (counting `channel` and `loader` nodes), that site outside every loop or in the body the
+  loader is in with the loader declared at one site too; both checkers give one path and
+  message. No committed AST puts or takes in a loader body. No fingerprint, dataset id, or AST
+  changes.
+- **Evidence:** `golden::a_channel_a_loaders_workers_use_is_declared_once_or_beside_it` (3
+  accepted, 7 refused shapes), `run::a_channel_a_loaders_workers_use_is_not_declared_again_under_them`
+  (the repro refused; both good shapes run with 12 puts and 24 takes under sync and io_uring at
+  time scales 0 and 0.2), and `test_builder.py::test_a_channel_a_loaders_workers_use_is_declared_once_or_beside_it`
+  fail with the rule disabled and pass; on HEAD ff4bd2b plus the change: `--test all` 126
+  passed, `--lib` 61, test_builder, test_man, test_params 131 passed, `aeiou-build --hermetic
+  --twice --check` rc 0, both checkers ok over every committed AST. Fixed in an isolated
+  worktree and applied.

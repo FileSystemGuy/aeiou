@@ -1105,3 +1105,34 @@ fn a_channel_or_loader_inside_a_fork_is_refused() {
         rejects(&doc(&body), "(V26)");
     }
 }
+
+/// V26 (RC1 regression review), as `check.py` has it: a channel a loader's workers put or take
+/// on is declared at one site, outside every loop or in the body the loader is in, the loader
+/// declared at one site; the workers run beside the actor, so one declared again under them
+/// was the old channel or the new one as timing had it.
+#[test]
+fn a_channel_a_loaders_workers_use_is_declared_once_or_beside_it() {
+    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let chan = r#"{"channel":{"name":"c","capacity":2}}"#;
+    let loader = |name: &str, body: &str| format!(r#"{{"loader":{{"name":"{name}","index":"b","workers":2,"prefetch":1,"batches":2,"body":[{body}]}}}}"#);
+    let lput = loader("q", r#"{"put":{"channel":"c","seq":{"index":"b"}}}"#);
+    let ltake = loader("q", r#"{"take":{"channel":"c"}}"#);
+    let lp = |body: &str| format!(r#"{{"loop":{{"index":"e","to":2,"body":[{body}]}}}}"#);
+    let compute = r#"{"compute":{"ns":1}}"#;
+    // accepted: declared once, outside every loop; declared beside the loader in its loop
+    aeiou::load_str(&doc(&format!("{chan}, {}", lp(&lput)))).unwrap();
+    aeiou::load_str(&doc(&lp(&format!("{chan}, {lput}")))).unwrap();
+    aeiou::load_str(&doc(&format!(r#"{{"cond":{{"if":1,"then":[{chan}]}}}}, {}"#, lp(&ltake)))).unwrap();
+    for (body, path, kind, ch) in [
+        (format!("{chan}, {lput}, {}", lp(chan)), "1/loader/body/0", "put", "c"),
+        (format!("{}, {lput}", lp(chan)), "1/loader/body/0", "put", "c"),
+        (format!("{chan}, {lput}, {chan}"), "1/loader/body/0", "put", "c"),
+        (format!("{}, {ltake}", lp(chan)), "1/loader/body/0", "take", "c"),
+        (lp(&format!(r#"{chan}, {{"cond":{{"if":1,"then":[{lput}]}}}}"#)), "0/loop/body/1/cond/then/0/loader/body/0", "put", "c"),
+        (format!("{}, {}", loader("q", compute), lp(&format!("{chan}, {lput}"))), "1/loop/body/1/loader/body/0", "put", "c"),
+        (format!("{}, {}", lp(&loader("r", compute)), loader("q", r#"{"take":{"channel":"r"}}"#)), "1/loader/body/0", "take", "r"),
+    ] {
+        rejects(&doc(&body), &format!("actors/gpu/body/{path}/{kind}: a `{kind}` on channel `{ch}` inside a `loader` body"));
+        rejects(&doc(&body), "depend on timing (V26)");
+    }
+}

@@ -1158,3 +1158,47 @@ def test_non_finite_floats_authored_are_refused_with_their_path(tmp_path):
         assert r.returncode == 1, r.stderr
         assert all(w in r.stderr for w in want) and "Traceback" not in r.stderr and "ValueError" not in r.stderr, r.stderr
         assert not (tmp_path / "nanw.ast.json").exists()
+
+
+def test_a_channel_a_loaders_workers_use_is_declared_once_or_beside_it():
+    """V26 (RC1 regression review), as the runner has it: a channel a loader's workers put or
+    take on is declared at one site, outside every loop or in the body the loader is in, the
+    loader declared at one site; the workers run beside the actor, so one declared again under
+    them was the old channel or the new one as timing had it."""
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def errs(*body):
+        return check.Check({"ast": "0.10", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+
+    chan = {"channel": {"name": "c", "capacity": 2}}
+
+    def loader(name, *body):
+        return {"loader": {"name": name, "index": "b", "workers": 2, "prefetch": 1, "batches": 2, "body": list(body)}}
+
+    def lp(*body):
+        return {"loop": {"index": "e", "to": 2, "body": list(body)}}
+
+    def cond(*body):
+        return {"cond": {"if": 1, "then": list(body)}}
+
+    lput = loader("q", {"put": {"channel": "c", "seq": {"index": "b"}}})
+    ltake = loader("q", {"take": {"channel": "c"}})
+    compute = {"compute": {"ns": 1}}
+    # accepted: declared once, outside every loop; declared beside the loader in its loop
+    assert errs(chan, lp(lput)) == []
+    assert errs(lp(chan, lput)) == []
+    assert errs(cond(chan), lp(ltake)) == []
+    for body, path, kind, ch in [
+        ([chan, lput, lp(chan)], "1/loader/body/0", "put", "c"),
+        ([lp(chan), lput], "1/loader/body/0", "put", "c"),
+        ([chan, lput, chan], "1/loader/body/0", "put", "c"),
+        ([lp(chan), ltake], "1/loader/body/0", "take", "c"),
+        ([lp(chan, cond(lput))], "0/loop/body/1/cond/then/0/loader/body/0", "put", "c"),
+        ([loader("q", compute), lp(chan, lput)], "1/loop/body/1/loader/body/0", "put", "c"),
+        ([lp(loader("r", compute)), loader("q", {"take": {"channel": "r"}})], "1/loader/body/0", "take", "r"),
+    ]:
+        e = errs(*body)
+        assert len(e) == 1, e
+        assert e[0].startswith(f"v26: actors/gpu/body/{path}/{kind}: a `{kind}` on channel `{ch}` inside a `loader` body")
+        assert e[0].endswith("depend on timing (V26)")

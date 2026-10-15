@@ -390,6 +390,11 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   (`runner/REFERENCE.md` §4); declared by sub-actors it was declared once by each, over the
   others' when theirs happened to be empty, so the run failed, hung, or passed as timing had
   it. Declare it before the fork; the sub-actors put and take on it.
+  A loader's workers run beside the actor, so a channel they `put` or `take` on (in the
+  loader's body, at any depth) is declared at one site, and that site is outside every loop or
+  in the body the loader is in, the loader then declared at one site too (2026-10-15): the
+  actor declaring it again while the workers ran (in a loop the loader was declared outside
+  of, or at a second site), a worker reached the old channel or the new one as timing had it.
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)

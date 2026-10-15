@@ -208,7 +208,9 @@ these, and the builder enforces most of them at construction:
 - **V24** In a `parallel` or `loader` body, a `read` or `write` without an `offset`, and any
   `lseek`, names a handle that body opened. **V25** A dataset's size is never below 0.
 - **V26** No `channel` or `loader` inside a `parallel` or `loader` body: a channel is the
-  actor's, shared by its sub-actors, so it is declared before the fork.
+  actor's, shared by its sub-actors, so it is declared before the fork. A channel a
+  loader's body puts or takes on is declared at one site, outside every loop or in the body
+  the loader is in, the loader declared at one site.
 
 ## PARAMETER FILES
 
