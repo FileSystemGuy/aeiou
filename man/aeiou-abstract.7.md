@@ -203,6 +203,8 @@ these, and the builder enforces most of them at construction:
 - **V22** An `inventory` is a consumed dataset's, its name a constant file name in the root
   that the pattern cannot produce there; the `inventory` handle names a dataset that has one.
 - **V23** A divisor named in a pattern is a declared parameter whose default is an integer.
+- **V24** In a `parallel` or `loader` body, a `read` or `write` without an `offset`, and any
+  `lseek`, names a handle that body opened. **V25** A dataset's size is never below 0.
 
 ## PARAMETER FILES
 

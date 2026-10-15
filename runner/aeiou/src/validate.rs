@@ -63,6 +63,13 @@ pub fn check_given(ast: &Ast, given: &BTreeMap<String, PValue>) -> Vec<String> {
     c.errors
 }
 
+/// The least a dataset's size can be (rule V25): a number, or no bound at all.
+#[derive(Clone, Copy)]
+enum Least {
+    Known(f64),
+    Unbounded,
+}
+
 struct Checker<'a> {
     ast: &'a Ast,
     /// the parameter values in effect, when the check is on a run and not on the document
@@ -304,6 +311,9 @@ impl<'a> Checker<'a> {
             self.inventory(d, &path);
             let f = d;
             self.distref(&f.size, &p(&path, &["size"]), &scope, &mut st);
+            if f.layout != Layout::Array {
+                self.size_not_negative(&f.size, &p(&path, &["size"]));
+            }
             self.expr(&f.count, &p(&path, &["count"]), &scope, &mut st, None);
             if let Some(e) = &f.samples_per_file {
                 self.expr(e, &p(&path, &["samples_per_file"]), &scope, &mut st, None);
@@ -1194,6 +1204,123 @@ impl<'a> Checker<'a> {
         if self.number(min) > self.number(max) {
             self.err(path, format!("{kind}: min {a} is above max {b}"));
         }
+    }
+
+    /// Rule V25: a dataset's `size` (not an `array`'s, which the runner clamps to `[0, slot]`)
+    /// that can be below 0 where the document shows it: a number known below 0 (rounded as
+    /// the runner rounds), or a distribution unbounded below (a `normal` without `min`).
+    /// Judged on the parameter values in effect; what cannot be known is left to the
+    /// runner, which refuses a negative size when it draws one.
+    fn size_not_negative(&mut self, size: &DistRef, path: &P) {
+        let least = match size {
+            DistRef::Dist(d) => self.least_dist(d),
+            DistRef::Expr(e) => self.least_expr(e),
+        };
+        match least {
+            Some(Least::Unbounded) => self.err(path, "a size below 0: the distribution is unbounded below; give it a `min` of 0 or more (V25)"),
+            Some(Least::Known(v)) if v.round() < 0.0 => self.err(path, format!("a size below 0: it can be {} (V25)", v.round() as i64)),
+            _ => {}
+        }
+    }
+
+    /// The value an expression is known to have: a number (`number`), or `add`, `sub`, `mul`,
+    /// `min`, `max`, `neg` of known values.
+    fn exact(&self, e: &Expr) -> Option<f64> {
+        let Expr::Node(n) = e else {
+            return self.number(e);
+        };
+        Some(match n.as_ref() {
+            ExprNode::Param(_) => return self.number(e),
+            ExprNode::Add([a, b]) => self.exact(a)? + self.exact(b)?,
+            ExprNode::Sub([a, b]) => self.exact(a)? - self.exact(b)?,
+            ExprNode::Mul([a, b]) => self.exact(a)? * self.exact(b)?,
+            ExprNode::Min([a, b]) => self.exact(a)?.min(self.exact(b)?),
+            ExprNode::Max([a, b]) => self.exact(a)?.max(self.exact(b)?),
+            ExprNode::Neg(x) => -self.exact(x)?,
+            _ => return None,
+        })
+    }
+
+    /// The least an expression can be: its known value, or a parameter's distribution's least.
+    fn least_expr(&self, e: &Expr) -> Option<Least> {
+        if let Expr::Node(n) = e {
+            if let ExprNode::Param(name) = n.as_ref() {
+                if let Some(PValue::Dist(d)) = self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).map(|p| &p.default)) {
+                    return self.least_dist(d);
+                }
+            }
+        }
+        self.exact(e).map(Least::Known)
+    }
+
+    /// The least a distribution draws, when the document shows it (`None` when it does not).
+    fn least_dist(&self, d: &Dist) -> Option<Least> {
+        match d {
+            Dist::Const(e) => self.least_expr(e),
+            Dist::Uniform { lo, .. } => Some(Least::Known(self.exact(lo)?)),
+            Dist::Uniform64 {} => Some(Least::Unbounded),
+            Dist::Normal { mean, sd, min, max } => {
+                let raw = if self.exact(sd)? == 0.0 { Least::Known(self.exact(mean)?) } else { Least::Unbounded };
+                self.clamped(raw, min.as_deref(), max.as_deref())
+            }
+            Dist::Lognormal { median, min, max, .. } => {
+                let m = self.exact(median)?;
+                let raw = if m < 0.0 { Least::Unbounded } else { Least::Known(0.0) };
+                self.clamped(raw, min.as_deref(), max.as_deref())
+            }
+            Dist::Empirical { values, .. } => {
+                let mut least: Option<f64> = None;
+                for v in values {
+                    let x = match v {
+                        Literal::Int(n) => *n as f64,
+                        Literal::Float(x) => *x,
+                        _ => return None,
+                    };
+                    least = Some(least.map_or(x, |l| l.min(x)));
+                }
+                least.map(Least::Known)
+            }
+            // the arms that can be drawn: any one unbounded or below 0 is; else every one known
+            Dist::Mixture(arms) => {
+                let (mut least, mut unknown) = (None::<f64>, false);
+                for d in arms.iter().filter(|a| a.weight > 0.0).filter_map(|a| a.dist.as_ref()) {
+                    let l = match d {
+                        DistRef::Dist(d) => self.least_dist(d),
+                        DistRef::Expr(e) => self.least_expr(e),
+                    };
+                    match l {
+                        Some(Least::Unbounded) => return Some(Least::Unbounded),
+                        Some(Least::Known(x)) => least = Some(least.map_or(x, |l| l.min(x))),
+                        None => unknown = true,
+                    }
+                }
+                match least {
+                    Some(x) if x.round() < 0.0 || !unknown => Some(Least::Known(x)),
+                    _ => None,
+                }
+            }
+            Dist::Zipf { .. } | Dist::Hotset { .. } => None,
+        }
+    }
+
+    /// A draw's least after the runner's clamp to `min` and then to `max`.
+    fn clamped(&self, raw: Least, min: Option<&Expr>, max: Option<&Expr>) -> Option<Least> {
+        let mut least = raw;
+        if let Some(m) = min {
+            let m = self.exact(m)?;
+            least = Least::Known(match least {
+                Least::Unbounded => m,
+                Least::Known(v) => v.max(m),
+            });
+        }
+        if let Some(m) = max {
+            least = match (least, self.exact(m)) {
+                (Least::Unbounded, _) => Least::Unbounded,
+                (Least::Known(v), Some(m)) => Least::Known(v.min(m)),
+                (Least::Known(_), None) => return None,
+            };
+        }
+        Some(least)
     }
 
     fn handle(&mut self, h: &'a Handle, path: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) {

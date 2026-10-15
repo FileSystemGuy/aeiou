@@ -742,3 +742,69 @@ fn a_dataset_is_consumed_in_one_place() {
     // one `consume`, its handle used twice: accepted
     aeiou::load_str(&doc(&format!(r#""gpu": {{"body": [{}]}}"#, loop_j(r#", {"stat": {"file": {"ref": "x"}}}"#)))).unwrap();
 }
+
+/// A dataset's size below 0 used to pass both checkers and reach `aeiou datagen` cast to
+/// `u64`: `{sub: [small, 100]}` at `small` 10 projected 16384 PiB (RC1 review). Rule V25
+/// refuses it where the document shows it, with check.py's message and path, on the
+/// parameters in effect; the runner refuses a negative draw it could not see, naming the
+/// dataset and the sample, instead of a wrap.
+#[test]
+fn a_dataset_size_is_never_below_zero() {
+    let doc = |size: &str, params: &str, layout: &str| {
+        let (pattern, extra) = if layout == "array" { ("d/all", r#", "slot": 64"#) } else { ("d/f{id:04}", "") };
+        format!(
+            r#"{{"ast": "0.10", "name": "t", "params": {params},
+                "datasets": {{"d": {{"layout": "{layout}", "access": "indexed", "pattern": "{pattern}", "count": 4, "size": {size}, "seed": 1{extra}}}}},
+                "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
+        )
+    };
+    let below = |n: i64| format!("t: datasets/d/size: a size below 0: it can be {n} (V25)");
+    let unbounded = "t: datasets/d/size: a size below 0: the distribution is unbounded below; give it a `min` of 0 or more (V25)";
+    let small = r#"{"small": {"default": 10}}"#;
+    rejects(&doc(r#"{"const": {"sub": [{"param": "small"}, 100]}}"#, small, "whole"), &below(-90));
+    rejects(&doc(r#"{"sub": [{"param": "small"}, 100]}"#, small, "whole"), &below(-90));
+    rejects(&doc(r#"{"const": -1}"#, "{}", "whole"), &below(-1));
+    rejects(&doc(r#"{"uniform": {"lo": -5, "hi": 10}}"#, "{}", "whole"), &below(-5));
+    rejects(&doc(r#"{"normal": {"mean": 4096, "sd": 100}}"#, "{}", "whole"), unbounded);
+    rejects(&doc(r#"{"normal": {"mean": 4096, "sd": 100, "min": -3}}"#, "{}", "whole"), &below(-3));
+    rejects(&doc(r#"{"normal": {"mean": 4096, "sd": 100, "min": 1, "max": {"neg": 7}}}"#, "{}", "whole"), &below(-7));
+    rejects(&doc(r#"{"lognormal": {"median": -4096, "sigma": 0.5}}"#, "{}", "whole"), unbounded);
+    rejects(&doc(r#"{"empirical": {"values": [4096, -2], "weights": [1, 1]}}"#, "{}", "whole"), &below(-2));
+    rejects(&doc(r#"{"mixture": [{"weight": 1, "dist": {"const": 4096}}, {"weight": 1, "dist": {"normal": {"mean": 1, "sd": 1}}}]}"#, "{}", "whole"), unbounded);
+    rejects(&doc(r#"{"param": "sz"}"#, r#"{"sz": {"default": {"normal": {"mean": 4096, "sd": 9}}}}"#, "whole"), unbounded);
+    // bounded at 0 or above, or not shown by the document: accepted
+    for ok in [
+        r#"{"normal": {"mean": 4096, "sd": 100, "min": 0}}"#,
+        r#"{"normal": {"mean": 4096, "sd": 0}}"#,
+        r#"{"lognormal": {"median": 4096, "sigma": 0.5}}"#,
+        r#"{"const": {"sub": [{"param": "small"}, 10]}}"#,
+        r#"{"const": -0.4}"#,
+        r#"{"mixture": [{"weight": 0, "dist": {"const": -1}}, {"weight": 1, "dist": {"const": 4096}}]}"#,
+        r#"{"normal": {"mean": 10, "sd": 100, "min": {"div": [-100, 1]}}}"#,
+    ] {
+        aeiou::load_str(&doc(ok, small, "whole")).unwrap_or_else(|e| panic!("{ok}: {e:#}"));
+    }
+    // an array's sizes are clamped to [0, slot] by the runner, so the rule leaves them alone
+    aeiou::load_str(&doc(r#"{"normal": {"mean": 32, "sd": 100}}"#, "{}", "array")).unwrap();
+    // a parameter given at run time is judged again
+    let text = doc(r#"{"const": {"sub": [{"param": "small"}, 100]}}"#, r#"{"small": {"default": 200}}"#, "whole");
+    let loaded = aeiou::load_str(&text).unwrap();
+    let e = Params::new(&loaded.ast, &config(1, 1, &[("small", "10")])).err().map(|e| format!("{e:#}")).expect("size -90 accepted");
+    assert!(e.contains("with the parameters given") && e.contains(&below(-90)), "{e}");
+    // what the document does not show: the draw is refused, not cast to some 16 EiB
+    let text = doc(r#"{"normal": {"mean": 10, "sd": 100, "min": {"div": [-100, 1]}}}"#, "{}", "whole");
+    let loaded = aeiou::load_str(&text).unwrap();
+    let cfg = config(1, 1, &[]);
+    let params = Params::new(&loaded.ast, &cfg).unwrap();
+    let model = build_model(&loaded.ast, &cfg, &params).unwrap();
+    let meta = &model.datasets[model.ds_index["d"]];
+    let sizes: Vec<Result<i64, String>> = (0..4).map(|id| meta.sample_size(id).map_err(|e| format!("{e:#}"))).collect();
+    assert!(sizes.iter().any(|s| s.is_err()), "no sample of 4 drew below 0: {sizes:?}");
+    for (id, s) in sizes.iter().enumerate() {
+        match s {
+            Ok(n) => assert!(*n >= 0, "sample {id}: {n}"),
+            Err(e) => assert!(e.contains(&format!("sample {id} of dataset `d` has size -")) && e.contains("below 0"), "{e}"),
+        }
+    }
+    assert!(meta.file_size(sizes.iter().position(|s| s.is_err()).unwrap() as i64).is_err());
+}

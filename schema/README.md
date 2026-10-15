@@ -332,6 +332,19 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   parent opened is a descriptor the sub-actors share, with one kernel file position, so
   where such an op lands would depend on which sub-actor ran first; the runner's model gives
   each sub-actor the parent's position at the fork (`runner/REFERENCE.md` §4, *Threads*).
+- **V25 a dataset's size is never below 0** (added 2026-10-14, contract 0.10, no committed
+  AST affected). A size is a byte count; one below 0 used to pass and reach `aeiou datagen`
+  cast to an unsigned count (16384 PiB for `small − 100` at `small` 10). The validator
+  refuses a `size` the document shows can be below 0: a number known below 0 after rounding
+  (V10; a literal, a parameter whose value is a number, or `add`, `sub`, `mul`, `min`, `max`,
+  `neg` of such), a `const` of one, a parameter whose value is a distribution that qualifies,
+  a `uniform` whose `lo` is, an `empirical` with such a value, a `normal` or `lognormal` whose
+  least draw is after the runner's clamp to `min` and then to `max` (a `normal` with no `min`
+  and an `sd` not 0, a `lognormal` with a `median` below 0, and `uniform64`, are unbounded
+  below), or a `mixture` with such an arm of positive weight. An `array`'s sizes are clamped
+  to `[0, slot]` and are exempt. Judged on the parameter defaults, and by the runner again on
+  the values in effect (as V3); what the document does not show (a bound through `div`, say)
+  the runner refuses when it draws it, naming the dataset and the sample.
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)

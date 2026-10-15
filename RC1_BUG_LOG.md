@@ -1081,3 +1081,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   "rank 2 (", no "stopped" line, the manifest `writing` with `progress.stopped`) fails without
   the fix (rank 1 exit 130) and passes with it; `--test all coord` 21 passed, `man` 9 passed.
   Fixed in an isolated worktree and applied.
+
+## 48. A negative dataset size was accepted and datagen wrapped it to 16384 PiB
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (new rule V25, also applied
+  by the runner's `check_given`), `runner/aeiou/src/eval.rs` `DsMeta::sample_size`;
+  schema/README.md §4 V25, man/aeiou-abstract.7.md (V24 and V25 added to its rule list).
+- **Found by:** review of the runner's semantics: every size of a non-`array` dataset goes
+  through `sample_size`, which returned the draw unchecked, and its users (`file_size`,
+  `sample_offset`, `unit_lens`, `chunk_size`, datagen's `as u64`, the space projection,
+  `formats.rs`, `vm.rs`) took it as a byte count.
+- **Defect:** `size: const(small − 100)` with `small` 10, or `normal(10, 100)` with no `min`:
+  both checkers said ok, and `aeiou datagen` printed "16384.00 PiB to write" (with
+  `--ignore-space` it would have tried).
+- **Fix:** V25: both checkers refuse, with the same message and path, a non-`array` size the
+  document shows can be below 0 (a known number after rounding, a `const` or parameter of one,
+  a `uniform` lo, an `empirical` value, a `normal`/`lognormal` after the runner's clamp, one
+  unbounded below, a `mixture` arm of positive weight); the runner applies it again to the
+  values given with `--param`; and `sample_size` errors on a negative draw the document could
+  not show, naming the dataset and sample. The builder refuses through `validate()`. No
+  committed AST is affected; no AST, fingerprint, or dataset id changes.
+- **Evidence:** `golden::a_dataset_size_is_never_below_zero` (fails without the checker change,
+  and without the `eval.rs` change alone with "no sample of 4 drew below 0: [221, -69, -93,
+  -100]") and `test_builder.py::test_a_dataset_size_is_never_below_zero` fail before and pass
+  after; golden 17 passed, `--test all` 95 passed, test_builder + test_man 70 passed, both
+  checkers over every committed AST unchanged. Fixed in an isolated worktree and applied.

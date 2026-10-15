@@ -789,3 +789,53 @@ def test_a_dataset_is_consumed_in_one_place():
         assert msg.count("a second `consume`") == 1, msg
     # one `consume`, its handle used twice: one sample per position, accepted
     _consume_twice("one").build()
+
+
+def test_a_dataset_size_is_never_below_zero():
+    """A dataset's size below 0 passed check.py and reached `aeiou datagen` cast to u64 (a
+    16384 PiB projection for `small - 100` at `small` 10). Rule V25 refuses it where the
+    document shows it, with the runner's message and path, in check.py and so at build (RC1
+    review); an `array`'s sizes are clamped to [0, slot] by the runner and are left alone."""
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def errs(size, params=None, layout="whole"):
+        d = {"layout": layout, "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": size, "seed": 1}
+        if layout == "array":
+            d.update(pattern="d/all", slot=64)
+        ast = {"ast": "0.10", "name": "t", "params": params or {}, "datasets": {"d": d},
+               "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
+        return check.Check(ast, "t").run()
+
+    def below(n):
+        return [f"t: datasets/d/size: a size below 0: it can be {n} (V25)"]
+
+    unbounded = ["t: datasets/d/size: a size below 0: the distribution is unbounded below; give it a `min` of 0 or more (V25)"]
+    small = {"small": {"default": 10}}
+    assert errs({"const": {"sub": [{"param": "small"}, 100]}}, small) == below(-90)
+    assert errs({"sub": [{"param": "small"}, 100]}, small) == below(-90)
+    assert errs({"const": -1}) == below(-1)
+    assert errs({"uniform": {"lo": -5, "hi": 10}}) == below(-5)
+    assert errs({"normal": {"mean": 4096, "sd": 100}}) == unbounded
+    assert errs({"normal": {"mean": 4096, "sd": 100, "min": -3}}) == below(-3)
+    assert errs({"normal": {"mean": 4096, "sd": 100, "min": 1, "max": {"neg": 7}}}) == below(-7)
+    assert errs({"lognormal": {"median": -4096, "sigma": 0.5}}) == unbounded
+    assert errs({"empirical": {"values": [4096, -2], "weights": [1, 1]}}) == below(-2)
+    assert errs({"mixture": [{"weight": 1, "dist": {"const": 4096}},
+                             {"weight": 1, "dist": {"normal": {"mean": 1, "sd": 1}}}]}) == unbounded
+    assert errs({"param": "sz"}, {"sz": {"default": {"normal": {"mean": 4096, "sd": 9}}}}) == unbounded
+    for ok in [{"normal": {"mean": 4096, "sd": 100, "min": 0}}, {"normal": {"mean": 4096, "sd": 0}},
+               {"lognormal": {"median": 4096, "sigma": 0.5}}, {"const": {"sub": [{"param": "small"}, 10]}},
+               {"const": -0.4},
+               {"mixture": [{"weight": 0, "dist": {"const": -1}}, {"weight": 1, "dist": {"const": 4096}}]},
+               {"normal": {"mean": 10, "sd": 100, "min": {"div": [-100, 1]}}}]:
+        assert not errs(ok, small), ok
+    assert not errs({"normal": {"mean": 32, "sd": 100}}, layout="array")
+    # the builder: refused at build, through the same checker
+    w = Workload("t")
+    P = w.params(small=10)
+    ds = w.dataset("d", pattern="d/{id:06}", layout="whole", access="indexed", count=4, size=const(P.small - 100), seed=1)
+    with w.actor("gpu") as a:
+        a.stat(ds.file(0))
+    with pytest.raises(BuildError, match=r"datasets/d/size: a size below 0: it can be -90 \(V25\)"):
+        w.build()

@@ -774,7 +774,13 @@ impl<'a> DsMeta<'a> {
                     bail!("sample {id} outside dataset `{}` of {count}", self.name());
                 }
                 let mut w = Words::new(dataset_key(*seed, id));
-                sample(size, &mut w, None)?.as_int()
+                let n = sample(size, &mut w, None)?.as_int()?;
+                // rule V25 refuses what the document shows; a size it cannot see is caught
+                // here, before a cast to `u64` makes it some 16 EiB
+                if n < 0 {
+                    bail!("sample {id} of dataset `{}` has size {n}, below 0: a size is a byte count (rule V25)", self.name());
+                }
+                Ok(n)
             }
             DsMeta::Array { size, seed, count, slot, .. } => {
                 if id < 0 || id >= *count {

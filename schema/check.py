@@ -43,6 +43,11 @@ def protocols(ast: dict, traces: bool) -> tuple:
     return ("posix" in declared or traces or not s3), s3
 
 
+def round_away(x: float) -> float:
+    """Round to the nearest integer, halves away from zero, as the runner rounds a draw (V10)."""
+    return float(int(abs(x) + 0.5)) * (1 if x >= 0 else -1)
+
+
 def canonical(ast: dict) -> bytes:
     """Canonical form: sorted keys, no whitespace, ASCII escapes, provenance removed. Floats
     serialize with Python's repr (shortest round-trip), which is what the builder emits. The
@@ -124,6 +129,8 @@ class Check:
             self.layout_fields(body, ["datasets", dname])
             self.inventory(body, ["datasets", dname])
             self.exprlike(body["size"], ["datasets", dname, "size"], Scope(self), dist_ok=True)
+            if body.get("layout") != "array":
+                self.size_not_negative(body["size"], ["datasets", dname, "size"])
             self.expr(body["count"], ["datasets", dname, "count"], Scope(self))
             for k in ("samples_per_file", "chunk", "slot"):
                 if k in body:
@@ -574,6 +581,96 @@ class Check:
         if isinstance(e, dict) and set(e) == {"param"}:
             e = self.ast.get("params", {}).get(e["param"], {}).get("default")
         return e if isinstance(e, (int, float)) and not isinstance(e, bool) else None
+
+    # rule V25: the least a dataset's size can be; UNBOUNDED when nothing bounds it below
+    UNBOUNDED = "unbounded"
+
+    def size_not_negative(self, size, p):
+        """Rule V25: a dataset's `size` (not an `array`'s, which the runner clamps to [0, slot])
+        that can be below 0 where the document shows it: a number known below 0 (rounded as the
+        runner rounds), or a distribution unbounded below (a `normal` without `min`)."""
+        least = self.least(size)
+        if least == self.UNBOUNDED:
+            self.err(p, "a size below 0: the distribution is unbounded below; give it a `min` of 0 or more (V25)")
+        elif least is not None and round_away(least) < 0:
+            self.err(p, f"a size below 0: it can be {int(round_away(least))} (V25)")
+
+    def exact(self, e):
+        """The value `e` is known to have: a number, or add/sub/mul/min/max/neg of known values."""
+        if not isinstance(e, dict) or set(e) == {"param"}:
+            n = self.number(e)
+            return None if n is None else float(n)
+        kind, a = next(iter(e.items()))
+        ops = {"add": lambda x, y: x + y, "sub": lambda x, y: x - y, "mul": lambda x, y: x * y,
+               "min": min, "max": max}
+        if kind in ops:
+            x, y = self.exact(a[0]), self.exact(a[1])
+            return None if x is None or y is None else ops[kind](x, y)
+        if kind == "neg":
+            x = self.exact(a)
+            return None if x is None else -x
+        return None
+
+    def least(self, d):
+        """The least a size (an expression or a distribution) can be, when the document shows
+        it: a float, UNBOUNDED, or None when it does not."""
+        if not isinstance(d, dict):
+            return self.exact(d)
+        kind, a = next(iter(d.items()))
+        if kind == "param":
+            v = self.ast.get("params", {}).get(a, {}).get("default")
+            return self.least(v) if isinstance(v, dict) else self.exact(d)
+        if kind == "const":
+            return self.least(a)
+        if kind == "uniform":
+            return self.exact(a["lo"])
+        if kind == "uniform64":
+            return self.UNBOUNDED
+        if kind in ("normal", "lognormal"):
+            if kind == "normal":
+                sd = self.exact(a["sd"])
+                if sd is None:
+                    return None
+                raw = self.UNBOUNDED if sd != 0 else self.exact(a["mean"])
+            else:
+                m = self.exact(a["median"])
+                raw = None if m is None else self.UNBOUNDED if m < 0 else 0.0
+            if raw is None:
+                return None
+            # the runner clamps to `min` and then to `max`
+            if "min" in a:
+                m = self.exact(a["min"])
+                if m is None:
+                    return None
+                raw = m if raw == self.UNBOUNDED else max(raw, m)
+            if "max" in a and raw != self.UNBOUNDED:
+                m = self.exact(a["max"])
+                if m is None:
+                    return None
+                raw = min(raw, m)
+            return raw
+        if kind == "empirical":
+            vals = a["values"]
+            if not vals or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals):
+                return None
+            return float(min(vals))
+        if kind == "mixture":
+            # the arms that can be drawn: any one unbounded or below 0 is; else every one known
+            least, unknown = None, False
+            for arm in a:
+                if not arm["weight"] > 0 or arm["dist"] is None:
+                    continue
+                x = self.least(arm["dist"])
+                if x == self.UNBOUNDED:
+                    return self.UNBOUNDED
+                if x is None:
+                    unknown = True
+                else:
+                    least = x if least is None else min(least, x)
+            return least if least is not None and (round_away(least) < 0 or not unknown) else None
+        if kind in ("zipf", "hotset"):
+            return None
+        return self.exact(d)
 
     def handle(self, h, p, scope):
         k, a = next(iter(h.items()))
