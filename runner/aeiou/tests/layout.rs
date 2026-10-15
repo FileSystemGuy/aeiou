@@ -282,3 +282,67 @@ fn layout_rules_are_enforced() {
     assert_eq!(m.datasets[0].file_size(1).unwrap(), 20000);
     assert_eq!(m.datasets[0].units_in_file(1).unwrap(), 1);
 }
+
+/// A Parquet dataset the writer can frame: 64-row groups of 100000-byte samples, 26-byte page
+/// headers (the varint band of a 6.4 MB page), the footer of `parquet_stream`.
+#[cfg(feature = "formats")]
+const PARQUET_WRITE: &str = r#"{
+  "ast": "0.10", "name": "parquet_write",
+  "datasets": {"t": {"layout": "compound", "pattern": "p/{id:04}.parquet", "count": 384, "samples_per_file": 192,
+     "size": {"const": 100000}, "seed": 7, "access": "stream",
+     "format": {"class": "parquet", "reader": "pyarrow", "version": "25.0.1", "framing": {
+       "unit": 64, "file_header": 4, "file_footer": 200, "file_footer_per_unit": 160,
+       "columns": [{"header": 26, "fixed": 4, "weight": 1.0}, {"header": 22, "fixed": 8, "weight": 0}],
+       "writer": {"rows_per_group": 64, "columns": [["image", "binary"], ["label", "int64"]]}}}}},
+  "actors": {"gpu": {"body": [
+    {"let": {"name": "f", "value": {"file": {"dataset": "t", "id": 0}}}},
+    {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+    {"close": {"file": {"ref": "f"}}}
+  ]}}
+}"#;
+
+/// Datagen of `text` into a fresh root: the error, if any, and every path left under the root.
+#[cfg(feature = "formats")]
+fn datagen_left(text: &str, tag: &str) -> (Option<String>, Vec<String>) {
+    let root = crate::common::tmpdir("layout", tag);
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(text).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(1)));
+    let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
+    let opts = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: true };
+    let err = datagen(loaded, cfg, params, model, &opts, None, &mut Vec::new()).err().map(|e| format!("{e:#}"));
+    let mut left: Vec<String> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            left.push(p.strip_prefix(&*root).unwrap().display().to_string());
+            if p.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    left.sort();
+    (err, left)
+}
+
+/// A geometry the Parquet writer cannot frame is refused before datagen writes anything: no
+/// manifest, no file, not even the first files the writer could make (RC1 review, bug 44).
+#[cfg(feature = "formats")]
+#[test]
+fn parquet_geometry_refused_before_anything_is_written() {
+    let (err, left) = datagen_left(PARQUET_WRITE, "pq-ok");
+    assert_eq!(err, None);
+    assert_eq!(left, ["p", "p/.aeiou-dataset.json", "p/0000.parquet", "p/0001.parquet"]);
+    // a short last file: its one row group of 10 rows has a 23-byte page header, not the band's 26
+    let (err, left) = datagen_left(&PARQUET_WRITE.replace("\"count\": 384", "\"count\": 202"), "pq-band");
+    assert!(left.is_empty(), "left behind: {left:?}");
+    let err = err.expect("refused");
+    assert!(err.contains("dataset `t`: file p/0001.parquet: row group 0 column 0: a 23-byte page header, the layout predicts 26"), "{err}");
+    // a 64-row page of 40 MB samples: past the 2 GiB a page header can say
+    let big = PARQUET_WRITE.replace("\"count\": 384, \"samples_per_file\": 192", "\"count\": 64, \"samples_per_file\": 64").replace("\"const\": 100000", "\"const\": 40000000");
+    let (err, left) = datagen_left(&big, "pq-big");
+    assert!(left.is_empty(), "left behind: {left:?}");
+    let err = err.expect("refused");
+    assert!(err.contains("dataset `t`: file p/0000.parquet: a Parquet page of 2560000256 bytes: more than a page holds (2 GiB)"), "{err}");
+}

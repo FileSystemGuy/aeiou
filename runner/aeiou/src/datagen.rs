@@ -1599,6 +1599,13 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if object.is_some() && matches!(meta, DsMeta::Array { .. }) {
             bail!("dataset `{name}`: an `array` dataset is a sparse layout written at offsets and has no object form; place it in a directory");
         }
+        // a geometry the format writer cannot frame (a Parquet page past 2 GiB, a page header
+        // outside the layout's band): refused here, not at the file that shows it
+        #[cfg(feature = "formats")]
+        if let Some(c) = &container {
+            let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            c.writer.check(meta, threads).with_context(|| format!("dataset `{name}`"))?;
+        }
         checked.push((meta, name, container, root, object));
     }
     // the space, on rank 0 (the roots are the shared storage under test): a refusal there

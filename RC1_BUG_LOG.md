@@ -1032,3 +1032,29 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `object::imp::tests::a_run_upload_refuses_part_10001_and_the_5_tib_object_before_sending`
   fail on the old behaviour and pass on the new; `--lib` 44 passed, MinIO `--test all object` 6
   passed. Fixed in an isolated worktree and applied.
+
+## 46. A Parquet geometry the writer cannot frame was refused only after the manifest and files were written
+
+- **Where:** `runner/aeiou/src/formats.rs` (new `Stream::skim`, `Writer::check`),
+  `runner/aeiou/src/datagen.rs` `datagen` (the pre-flight `checked` loop).
+- **Found by:** review of datagen: `parquet_page_header` (a page past i32) and
+  `Stream::advance_parquet` (a page header outside the layout's varint band), and the
+  footer/file-size drift checks, fire only when the writer reaches the file.
+- **Defect:** a geometry that could never be written left a half-made dataset: `aeiou datagen`
+  of a Parquet dataset whose second file's page header is 23 bytes where the layout predicts 26
+  printed the space line, wrote `p/0000.parquet` (19 MB), an empty `p/0001.parquet`, and the
+  manifest, then exited 1; one 2.56 GB page left an empty file and the manifest. A structural
+  refusal must come before anything is written (bug 2), and on an object store the objects
+  would have been uploaded.
+- **Fix:** `Writer::check` drives the real writer's `advance()` over every file, skipping the
+  payload instead of making it, and compares each file with `meta.file_size(file)`; it runs on
+  threads over contiguous file ranges and returns the lowest failing file's error (an atomic
+  minimum), with the writer's own message prefixed by the file. `datagen` calls it in the
+  pre-flight, before the space check, the emptiness checks, the manifest, and any upload. O(samples), as
+  the space projection (20 M samples in 104,167 files: 0.26 s); nothing per file is kept. HDF5
+  is skipped (its header comes from `aeiou-header`). No fingerprint, dataset id, or AST changes.
+- **Evidence:** `layout::parquet_geometry_refused_before_anything_is_written` (a valid control
+  written; the band and over-2-GiB cases leave the root empty) fails without the pre-flight
+  ("left behind: p, p/.aeiou-dataset.json, p/0000.parquet, p/0001.parquet") and passes with it;
+  `--test all layout datagen` 11 passed, `--lib formats` 5 passed, `test_formats.py` 38 passed
+  (Rust and Python writers still byte for byte). Fixed in an isolated worktree and applied.

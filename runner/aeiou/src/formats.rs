@@ -194,6 +194,60 @@ impl Writer {
             *headers = given;
         }
     }
+
+    /// Every file of `meta` framed as this writer frames it, the payload skipped (`skim`): the
+    /// refusals the dataset's geometry alone decides (a Parquet page or sample larger than its
+    /// header can say, a page header outside the layout's varint band, a footer larger than
+    /// the layout's, a file of other than the layout's size), made before a datagen writes
+    /// anything, with the writer's own messages. HDF5 frames nothing but the header
+    /// `aeiou-header` makes later. O(samples), the work the space check's projection does, over
+    /// `threads` threads; the refusal of the lowest file is the one returned.
+    pub fn check(&self, meta: &DsMeta<'_>, threads: usize) -> Result<()> {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        if matches!(self, Writer::Hdf5 { .. }) || !matches!(meta, DsMeta::Files { .. }) {
+            return Ok(());
+        }
+        let files = meta.files();
+        let threads = threads.clamp(1, files.max(1) as usize) as i64;
+        let per = (files + threads - 1) / threads;
+        // the lowest file refused so far: a thread past it stops
+        let lowest = AtomicI64::new(i64::MAX);
+        let one = |file: i64, filler: &mut Filler| -> Result<()> {
+            let seed_of = |_: u64| 0u64;
+            let mut s = Stream::new(self, meta, file, &seed_of, filler)?;
+            let (at, size) = (s.skim()?, meta.file_size(file)? as u64);
+            if at != size {
+                bail!("the writer made {at} bytes, the layout predicts {size}: the format class's layout does not match its writer");
+            }
+            Ok(())
+        };
+        let (one, lowest) = (&one, &lowest);
+        let found: Vec<Option<anyhow::Error>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = (0..threads)
+                .map(|t| {
+                    sc.spawn(move || {
+                        let mut filler = Filler::new(1);
+                        for file in (t * per)..((t + 1) * per).min(files) {
+                            if file > lowest.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            if let Err(e) = one(file, &mut filler) {
+                                lowest.fetch_min(file, Ordering::Relaxed);
+                                let path = meta.file_path(file, None).map(|p| p.to_string()).unwrap_or_else(|_| format!("{file}"));
+                                return Some(e.context(format!("file {path}")));
+                            }
+                        }
+                        None
+                    })
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().expect("a format check thread panicked")).collect()
+        });
+        match found.into_iter().flatten().next() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
 }
 
 /// Where `aeiou-header` is: beside this binary, the real file (symlinks resolved), never on
@@ -757,6 +811,25 @@ impl<'s, 'a> Stream<'s, 'a> {
         pq.ended = true;
         self.set_small(&tail);
         Ok(())
+    }
+
+    /// The file's bytes counted, not sent: every framing item built and checked as `read`
+    /// builds it, the payload skipped (a TFRecord data CRC is then not the data's). Returns
+    /// the file's size.
+    fn skim(&mut self) -> Result<u64> {
+        while !self.done {
+            if self.small_at < self.small.len() {
+                self.pos += (self.small.len() - self.small_at) as u64;
+                self.small_at = self.small.len();
+            } else if self.pay_left > 0 {
+                self.pos += self.pay_left;
+                self.pay_at += self.pay_left;
+                self.pay_left = 0;
+            } else {
+                self.advance()?;
+            }
+        }
+        Ok(self.pos)
     }
 
     /// Fill as much of `out` as the file has left; 0 at its end.
