@@ -162,12 +162,14 @@ dict. The Rust validator must reject everything they reject.
 - **`--hermetic`.** The script runs in a child `python -s -B` with a scrubbed environment
   (`PATH`, `PYTHONHASHSEED`, `LANG` only) and PEP 578 audit hooks that deny sockets,
   subprocesses, every write, and reads outside the interpreter, its packages, the schema, and
-  the script's directory. Clocks (`time.*`, `datetime.now`), entropy (`os.urandom`, `uuid`),
+  the script's directory. Clocks (every `time.*` clock, `clock_gettime` included, `os.times`,
+  `resource.getrusage`, `datetime.now`), entropy (`os.urandom`, `uuid`),
   and the unseeded `random` / `numpy.random` entry points are replaced with functions that
   raise `HermeticViolation`. The child returns the AST on stdout; the parent validates it again
   and writes the file.
 - **`--twice`.** Two children with different `PYTHONHASHSEED` values; the hashes must agree.
-  This catches set-iteration order and `id()`-based ordering without anticipating them
+  This catches set-iteration order, `id()`-based ordering, and the pid (which `--hermetic`
+  leaves readable) without anticipating them
   (`tests/test_builder.py::test_build_twice_detects_hash_order_dependence`).
 - **`--check`.** Rebuild and compare with the committed file's hash; CI runs it on every push
   so no committed `*.ast.json` under `workloads/` can drift from the script beside it.

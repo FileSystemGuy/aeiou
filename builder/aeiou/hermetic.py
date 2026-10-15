@@ -4,8 +4,11 @@ it runs the author's script (GRAMMAR_OPTIONS.md Option D, technique 6).
 - PEP 578 audit hooks deny sockets, subprocesses, and file opens outside the interpreter, the
   installed packages, the schema, and the script's own directory. Writes are denied
   altogether: the child returns the AST on stdout and the parent writes the file.
-- Audit hooks do not see clock reads, so the clocks, `os.urandom`, `uuid`, and the unseeded
-  `random` / `numpy.random` entry points are replaced with functions that raise.
+- Audit hooks do not see clock reads, so the clocks (every `time` clock, `clock_gettime`
+  included, `os.times`, `resource.getrusage`, and `datetime`'s now/today), `os.urandom`, `uuid`,
+  and the unseeded `random` / `numpy.random` entry points are replaced with functions that raise.
+- The pid is not denied (a format class names a probe file with it); a default derived from
+  it differs between two children, so `--twice` refuses it.
 
 The build-twice check (`--twice`) is what proves this worked; the hooks only make the failure
 immediate and named.
@@ -51,6 +54,22 @@ def _under(path: pathlib.Path, roots) -> bool:
 
 def install(script: os.PathLike | str, extra_read_roots=()):
     """Install the hooks. Call once, in the child, before running the script."""
+    hook = _audit_hook(script, extra_read_roots)
+    # The format classes' libraries do things at import that an abstract may not do (numpy
+    # seeds its global RandomState from /dev/urandom, h5py asks `uname` through `platform`,
+    # pyarrow loads shared objects); none of it can reach an AST, and their module-level
+    # draws are denied below, so they are imported before the hooks go in.
+    for mod in _PREIMPORT:
+        try:
+            __import__(mod)
+        except ImportError:
+            pass
+    sys.addaudithook(hook)
+    _stub_entropy_and_clocks()
+
+
+def _audit_hook(script, extra_read_roots=()):
+    """The audit hook `install` adds, for a script at `script`."""
     script = pathlib.Path(script).resolve()
     roots = {pathlib.Path(p).resolve() for p in (sys.prefix, sys.base_prefix, sys.exec_prefix,
                                                  *[p for p in sys.path if p])}
@@ -93,23 +112,13 @@ def install(script: os.PathLike | str, extra_read_roots=()):
             if not _under(path, roots):
                 raise HermeticViolation(f"read of {path} is denied under --hermetic (not the "
                                         f"interpreter, its packages, or the script's directory)")
-
-    # The format classes' libraries do things at import that an abstract may not do (numpy
-    # seeds its global RandomState from /dev/urandom, h5py asks `uname` through `platform`,
-    # pyarrow loads shared objects); none of it can reach an AST, and their module-level
-    # draws are denied below, so they are imported before the hooks go in.
-    for mod in _PREIMPORT:
-        try:
-            __import__(mod)
-        except ImportError:
-            pass
-    sys.addaudithook(hook)
-    _stub_entropy_and_clocks()
+    return hook
 
 
 def _stub_entropy_and_clocks():
     import datetime
     import random
+    import resource
     import time
     import uuid
 
@@ -118,10 +127,14 @@ def _stub_entropy_and_clocks():
     except ImportError:
         npr = None
 
+    # every clock `time` reads: `clock_gettime(CLOCK_REALTIME)` is `time.time()` by another name
     for name in ("time", "time_ns", "monotonic", "monotonic_ns", "perf_counter", "perf_counter_ns",
-                 "process_time", "process_time_ns", "thread_time", "thread_time_ns", "localtime",
-                 "gmtime", "ctime", "asctime", "strftime"):
-        setattr(time, name, _deny(f"time.{name}"))
+                 "process_time", "process_time_ns", "thread_time", "thread_time_ns", "clock_gettime",
+                 "clock_gettime_ns", "localtime", "gmtime", "ctime", "asctime", "strftime"):
+        if hasattr(time, name):
+            setattr(time, name, _deny(f"time.{name}"))
+    os.times = _deny("os.times")                       # its `elapsed` is a clock
+    resource.getrusage = _deny("resource.getrusage")   # CPU time
     os.urandom = _deny("os.urandom")
     os.getrandom = _deny("os.getrandom")
     uuid.uuid1 = _deny("uuid.uuid1")

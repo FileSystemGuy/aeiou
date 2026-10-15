@@ -54,8 +54,8 @@ three or more identical statements in a row (a hand-unrolled iteration);
 - **--twice**
 
   Build in two children with different `PYTHONHASHSEED` values and refuse to write unless the
-  canonical hashes agree. This catches set-iteration order and `id()`-based ordering without
-  anticipating them.
+  canonical hashes agree. This catches set-iteration order, `id()`-based ordering, and the pid
+  without anticipating them.
 - **--check**
 
   Do not write. Rebuild, compare the canonical hash with the existing file's, print `ok` or

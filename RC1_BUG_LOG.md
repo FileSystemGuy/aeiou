@@ -160,3 +160,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Queued from it:** the Python exporter's `rel()` fallback returns a path not under the root
   unchanged (the runner now refuses such a file at load).
 
+## 8. The hermetic build let `clock_gettime` through, and `--twice` blamed the hash seed
+
+- **Where:** `builder/aeiou/hermetic.py` (the clock stubs; the audit hook split out as
+  `_audit_hook`), `builder/aeiou/cli.py` (`--twice` message, `_spawn_child`).
+- **Found by:** review of the builder core: an authoring script whose default came from
+  `time.clock_gettime_ns(CLOCK_REALTIME)` built under `--hermetic`; `hermetic.py` had 0% test
+  coverage (the build-twice runs only as a CI step).
+- **Defect:** `time.clock_gettime`/`clock_gettime_ns`, `os.times`, and `resource.getrusage`
+  were not denied, so a clock could be baked into an AST under `--hermetic`; `--twice` then
+  reported "not reproducible … under different PYTHONHASHSEED values (set iteration order…)",
+  pointing the author at the wrong cause (the same for a pid-derived default); and a failed
+  hermetic child's message named the script twice ("FAIL dup.py: dup.py: child build failed").
+- **Fix:** the four clocks are denied like the others (`os.getpid` stays readable: the HDF5
+  probe names a file with it; `--twice` catches a pid default); the `--twice` message names the
+  real candidates (the pid, a clock or entropy read, set order, id() order, an unseeded draw);
+  `_spawn_child` no longer prefixes the script name `main` already gives. builder REFERENCE
+  (hermetic harness) and aeiou-build(1) `--twice` updated. Every committed abstract rebuilds
+  byte-identical (14 ok).
+- **Evidence:** new `builder/tests/test_hermetic.py` (32 tests: every clock denied, entropy and
+  unseeded draws denied, seeded ones allowed, the audit hook's allow/deny lists, env scrub, the
+  clock default refused by name, the pid default caught by `--twice` with the pid named, the
+  script named once): 10 fail without the fix, 32 pass with it; hermetic.py coverage 0% → 89%.
+- **Left open (noted):** an unseeded `_random.Random()` through the C type, and a default from
+  a file's `st_mtime` (stable across both builds), are not caught.
+

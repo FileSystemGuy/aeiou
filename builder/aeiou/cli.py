@@ -79,7 +79,7 @@ def _spawn_child(script: pathlib.Path, hermetic: bool, hashseed: int) -> dict:
     r = subprocess.run(cmd, env=env, capture_output=True, text=True, cwd=str(script.parent))
     if r.returncode:
         tail = r.stderr.strip().splitlines()[-12:]
-        raise BuildError(f"{script.name}: child build failed (PYTHONHASHSEED={hashseed}):\n  "
+        raise BuildError(f"child build failed (PYTHONHASHSEED={hashseed}):\n  "
                          + "\n  ".join(tail))
     return json.loads(r.stdout)
 
@@ -177,9 +177,11 @@ def _build_one(script, a, emit) -> dict:
             for name, ast in first.items():
                 h1, h2 = emit.sha256(ast), emit.sha256(second.get(name, {}))
                 if h1 != h2:
-                    raise BuildError(f"{name}: not reproducible: {h1[:16]}… vs {h2[:16]}… under "
-                                     f"different PYTHONHASHSEED values (set iteration order, "
-                                     f"id()-based ordering, or an unseeded draw in the script?)")
+                    raise BuildError(f"{name}: not reproducible: {h1[:16]}… vs {h2[:16]}… from two "
+                                     f"builds (two processes, PYTHONHASHSEED 1 and 4242): something in "
+                                     f"the script differs between runs: the pid, a clock or entropy read "
+                                     f"(--hermetic refuses most), set iteration order, id()-based "
+                                     f"ordering, or an unseeded draw")
             built_twice = True
         from .validate import validate
         asts = {}
