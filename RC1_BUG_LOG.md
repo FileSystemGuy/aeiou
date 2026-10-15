@@ -1690,3 +1690,18 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   (also in a V3 `at` chain) fail on the old code and pass; both bugs on HEAD 0bee688 plus the
   change: golden 23 passed, test_builder, test_params, test_man, test_describe 119 passed, both
   checkers ok over every committed AST. Fixed in an isolated worktree and applied.
+
+## 73. `aeiou datagen --root NAME` refused a bare relative root that did not exist yet
+
+- **Where:** `runner/aeiou/src/datagen.rs` `free_space`; `runner/aeiou/tests/options.rs`.
+- **Found by:** the regression review of the RC1 fixes (pre-existing at the tag).
+- **Defect:** the space check walks up the root's parents to find a directory to `statvfs`;
+  the parent of a bare relative name is the empty path, which does not exist, and the next is
+  `None`, so `aeiou datagen --root dg1 …` failed "dg1/train: no existing directory above it",
+  while `--root ./dg1` and an absolute path worked.
+- **Fix:** an empty parent is the current directory. The other parent walks (the abstract's
+  directory, `open_for_write`, `prune`) were checked and are right. No fingerprint, dataset
+  id, or AST changes.
+- **Evidence:** `options::datagen_takes_a_bare_relative_root_that_does_not_exist_yet` (the binary
+  run in a temporary directory with `--root dg1`) fails before with the message above and passes
+  after; `--test all -- usage options datagen` 20 passed, `--lib` 61.

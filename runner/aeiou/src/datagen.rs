@@ -1569,6 +1569,10 @@ fn free_space(path: &Path) -> Result<(u64, u64)> {
     let mut p = path;
     while !p.exists() {
         p = p.parent().ok_or_else(|| anyhow::anyhow!("{}: no existing directory above it", path.display()))?;
+        // the parent of a bare relative name (`dg1`) is the empty path: the current directory
+        if p.as_os_str().is_empty() {
+            p = Path::new(".");
+        }
     }
     let dev = std::fs::metadata(p)?.dev();
     let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes())?;

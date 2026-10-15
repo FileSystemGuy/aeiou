@@ -337,3 +337,14 @@ fn a_change_of_a_dataset_root_passes_over_the_place_from_the_lower_layers() {
     let (ok, _, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(&at).arg("--root").arg(&root).env_remove("AEIOU_CONFIG").env_remove("AEIOU_ROOT"));
     assert!(!ok && err.contains("--root given too"), "{err}");
 }
+
+/// A `--root` given as a bare relative name that does not exist yet (`dg1`, not `./dg1`): the
+/// space check finds the free space of the current directory, the parent of an empty path, and
+/// datagen writes the dataset there (RC1 review).
+#[test]
+fn datagen_takes_a_bare_relative_root_that_does_not_exist_yet() {
+    let d = tmpdir("dg-bare-root");
+    let (ok, text, err) = out(aeiou("datagen", "file_per_sample.ast.json", &["samples=30"]).args(["--root", "dg1"]).current_dir(&d).env_remove("AEIOU_ROOT"));
+    assert!(ok, "{text}\n{err}");
+    assert!(d.join("dg1/train/.aeiou-dataset.json").exists(), "{text}\n{err}");
+}
