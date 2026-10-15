@@ -4,7 +4,7 @@
 //! are checked here too. Messages carry the `/`-joined path of the offending node, as
 //! `check.py` prints it.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::*;
 
@@ -222,6 +222,105 @@ impl<'a> Scope<'a> {
 
     fn lookup(&self, name: &str) -> Option<&'a ExprLike> {
         self.bindings.iter().rev().find_map(|m| m.get(name).copied())
+    }
+}
+
+/// V1: the parameters a value names with `param`, anywhere in it (a distribution's arguments,
+/// a mixture's arms, an expression's operands, a handle's expressions; not a namespace
+/// object's field names, which are names, not nodes). As `check.py`'s `param_refs`.
+fn pvalue_refs<'a>(v: &'a PValue, out: &mut BTreeSet<&'a str>) {
+    match v {
+        PValue::Dist(d) => dist_refs(d, out),
+        PValue::Array(a) => a.iter().for_each(|x| pvalue_refs(x, out)),
+        PValue::Scalar(_) => {}
+    }
+}
+
+fn dist_refs<'a>(d: &'a Dist, out: &mut BTreeSet<&'a str>) {
+    match d {
+        Dist::Const(e) => expr_refs(e, out),
+        Dist::Uniform { lo, hi } => {
+            expr_refs(lo, out);
+            expr_refs(hi, out);
+        }
+        Dist::Normal { mean, sd, min, max } => {
+            expr_refs(mean, out);
+            expr_refs(sd, out);
+            min.iter().chain(max.iter()).for_each(|e| expr_refs(e, out));
+        }
+        Dist::Lognormal { median, min, max, .. } => {
+            expr_refs(median, out);
+            min.iter().chain(max.iter()).for_each(|e| expr_refs(e, out));
+        }
+        Dist::Mixture(arms) => arms.iter().filter_map(|a| a.dist.as_ref()).for_each(|d| distref_refs(d, out)),
+        Dist::Uniform64 {} | Dist::Empirical { .. } | Dist::Zipf { .. } | Dist::Hotset { .. } => {}
+    }
+}
+
+fn distref_refs<'a>(d: &'a DistRef, out: &mut BTreeSet<&'a str>) {
+    match d {
+        DistRef::Dist(d) => dist_refs(d, out),
+        DistRef::Expr(e) => expr_refs(e, out),
+    }
+}
+
+fn expr_refs<'a>(e: &'a Expr, out: &mut BTreeSet<&'a str>) {
+    let Expr::Node(n) = e else {
+        return;
+    };
+    match n.as_ref() {
+        ExprNode::Param(name) => {
+            out.insert(name.as_str());
+        }
+        ExprNode::Index(_) | ExprNode::Ref(_) | ExprNode::Actor(_) | ExprNode::Len(_) | ExprNode::Sum(_) | ExprNode::Count(_) | ExprNode::Dirs(_) => {}
+        ExprNode::At { index, .. } | ExprNode::Elem { index, .. } => expr_refs(index, out),
+        ExprNode::Draw(d) => distref_refs(&d.dist, out),
+        ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => handle_refs(h, out),
+        ExprNode::Add(a) | ExprNode::Sub(a) | ExprNode::Mul(a) | ExprNode::Div(a) | ExprNode::Mod(a) | ExprNode::CeilDiv(a) | ExprNode::Min(a)
+        | ExprNode::Max(a) | ExprNode::Eq(a) | ExprNode::Ne(a) | ExprNode::Lt(a) | ExprNode::Le(a) | ExprNode::Gt(a) | ExprNode::Ge(a) => {
+            a.iter().for_each(|e| expr_refs(e, out))
+        }
+        ExprNode::And(a) | ExprNode::Or(a) => a.iter().for_each(|e| expr_refs(e, out)),
+        ExprNode::Neg(e) | ExprNode::Not(e) => expr_refs(e, out),
+        ExprNode::Cond(c) => {
+            expr_refs(&c.test, out);
+            for v in [&c.then, &c.otherwise] {
+                match v {
+                    ExprLike::Expr(e) => expr_refs(e, out),
+                    ExprLike::Dist(d) => dist_refs(d, out),
+                    ExprLike::Handle(h) => handle_refs(h, out),
+                }
+            }
+        }
+    }
+}
+
+fn handle_refs<'a>(h: &'a Handle, out: &mut BTreeSet<&'a str>) {
+    match h {
+        Handle::Ref(_) | Handle::Consume(_) | Handle::Inventory(_) => {}
+        Handle::File(f) => {
+            f.id.iter().chain(f.chunk.iter()).for_each(|e| expr_refs(e, out));
+            if let Some(of) = &f.of {
+                handle_refs(of, out);
+            }
+        }
+        Handle::Dir { id, .. } => expr_refs(id, out),
+        Handle::Object { fields, .. } => fields.values().for_each(|e| expr_refs(e, out)),
+        Handle::Pick(pick) => {
+            if let Some(d) = &pick.dist {
+                distref_refs(d, out);
+            }
+        }
+        Handle::Unit(u) => {
+            handle_refs(&u.of, out);
+            if let Some(e) = &u.index {
+                expr_refs(e, out);
+            }
+        }
+        Handle::Column(c) => {
+            handle_refs(&c.of, out);
+            expr_refs(&c.index, out);
+        }
     }
 }
 
@@ -443,6 +542,11 @@ impl<'a> Checker<'a> {
             }
             // on a run, the value in effect: a given distribution is checked as the default is
             self.pvalue(self.given.and_then(|g| g.get(pname.as_str())).unwrap_or(&param.default), &path);
+        }
+        // every rule after this one follows a `param` to its value; through a cycle it would
+        // never return, so a document with one is judged no further
+        if self.param_cycles() {
+            return;
         }
         let mut roots: BTreeMap<String, &str> = BTreeMap::new();
         for (dname, d) in &ast.datasets {
@@ -1139,6 +1243,55 @@ impl<'a> Checker<'a> {
     /// The value in effect of parameter `name`: given, else the default.
     fn param_value(&self, name: &str) -> Option<&PValue> {
         self.given.and_then(|g| g.get(name)).or_else(|| self.ast.params.get(name).map(|p| &p.default))
+    }
+
+    /// V1: a parameter whose value in effect names, through `param`s, the parameter itself is
+    /// defined by nothing (and the rules that follow a `param` to its value, V3, V25, would
+    /// never return). Each parameter on a cycle is refused with the shortest one, its names
+    /// in sorted order at each step. True when there is one. As `check.py`'s `param_cycles`.
+    fn param_cycles(&mut self) -> bool {
+        let ast = self.ast;
+        let refs = |name: &str| -> BTreeSet<&str> {
+            let mut out = BTreeSet::new();
+            if let Some(v) = self.param_value(name) {
+                pvalue_refs(v, &mut out);
+            }
+            out.retain(|n| ast.params.contains_key(*n));
+            out
+        };
+        let mut found = Vec::new();
+        for start in ast.params.keys() {
+            let mut prev: HashMap<&str, &str> = HashMap::new();
+            let mut queue: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
+            for n in refs(start) {
+                prev.entry(n).or_insert(start.as_str());
+                queue.push_back(n);
+            }
+            while let Some(n) = queue.pop_front() {
+                if n == start {
+                    let mut chain = vec![start.as_str()];
+                    let mut cur = prev[start.as_str()];
+                    while cur != start {
+                        chain.push(cur);
+                        cur = prev[cur];
+                    }
+                    chain.push(start);
+                    chain.reverse();
+                    found.push((start.clone(), chain.join(" -> ")));
+                    break;
+                }
+                for m in refs(n) {
+                    if !prev.contains_key(m) {
+                        prev.insert(m, n);
+                        queue.push_back(m);
+                    }
+                }
+            }
+        }
+        for (name, chain) in &found {
+            self.err(&vec!["params".into(), name.clone()], format!("parameter `{name}` is defined through itself ({chain}) (V1)"));
+        }
+        !found.is_empty()
     }
 
     /// V27: the kind a value is known to have where the document shows it: a literal, a

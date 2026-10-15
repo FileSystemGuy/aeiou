@@ -1256,3 +1256,21 @@ def test_the_trace_nodes_run_leaves_the_file_a_short_write_left(tmp_path):
         r = subprocess.run([str(RUNNER), "run", str(node_ast), "--gpus", "1", "--root", str(root), "--time-scale", "0", "--posix", backend], capture_output=True, text=True)
         assert r.returncode == 0, backend + "\n" + r.stdout + r.stderr
         assert (root / "out").stat().st_size == 8192, backend
+
+
+def test_an_exported_trace_is_read_as_the_runner_reads_it(tmp_path):
+    """`aeiou-trace metrics` read an exported trace file, which the runner's `trace` node reads
+    too, with plain `json.loads` (RC1 review, R21): a line with a lone surrogate (`\\ud800`)
+    or a repeated key passed, and a line that is not JSON ended in a traceback. It reads with
+    `emit.loads` and names the file and the line, as the runner names them."""
+    head = '{"aeiou_trace": 1, "root": "/x", "lanes": 1, "lines": 1}\n'
+    for i, (line, said) in enumerate([
+        ('{"lane": 0, "op": "stat", "path": "a\\ud800"}', "line 2: lone surrogate in hex escape (\\ud800)"),
+        ('{"lane": 0, "op": "stat", "path": "a", "path": "b"}', "line 2: duplicate field `path`"),
+        ('{"lane": 0, "op"', "line 2: Expecting ':' delimiter: line 1 column 17 (char 16)"),
+        ('[1]', "line 2: not a JSON object"),
+    ]):
+        f = tmp_path / f"t{i}.jsonl"
+        f.write_text(head + line + "\n", encoding="utf-8")
+        r = _trace_tool("metrics", f)
+        assert (r.returncode, r.stderr.decode()) == (1, f"aeiou-trace metrics: {f}: {said}\n"), r.stderr

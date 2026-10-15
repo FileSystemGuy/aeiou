@@ -378,3 +378,49 @@ def test_a_file_pinned_to_the_builders_hash_is_taken_by_the_runner(tmp_path):
     r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)],
                        capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr
+
+
+def test_duplicate_keys_and_lone_surrogates_in_a_parameter_file_are_refused(tmp_path):
+    """A parameter file with a `\\u` escape of half a UTF-16 pair (`"doc": "a\\ud800"`) is not
+    JSON to the runner's serde_json, which refuses it; Python's `json` took it, so
+    `aeiou-params check` passed a file `run --params-file` cannot read (RC1 review, R21). A
+    repeated key, which the runner reads as its last value, is refused too: no writer repeats
+    one, and which of two values a file meant is not for a reader to guess."""
+    import re
+    ast = ast_path("file_per_sample")
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
+    for i, (body, said) in enumerate([
+        ('"doc": "a\\ud800", "params": {}', "lone surrogate in hex escape (\\ud800)"),
+        ('"params": {"step_time\\udfff": 1}', "lone surrogate in hex escape (\\udfff)"),
+        ('"params": {"step_time": 1, "step_time": 2}', "duplicate field `step_time`"),
+        ('"params": {}, "params": {"step_time": 1}', "duplicate field `params`"),
+    ]):
+        f = tmp_path / f"t{i}.params.json"
+        f.write_text(f'{{"params_version": 1, "abstract": "file_per_sample", {body}}}\n')
+        with pytest.raises(BuildError, match=re.escape(f"{f.name}: {said}")):
+            params.load(f)
+        r = _run(["check", ast, f])
+        assert r.returncode == 1 and f"FAIL {f.name}" in r.stdout and said in r.stdout, r.stdout + r.stderr
+        if runner.exists() and "surrogate" in said:
+            r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(ast), "--params-file", str(f)],
+                               capture_output=True, text=True, cwd=str(tmp_path))
+            assert r.returncode == 1 and "not JSON" in r.stderr, r.stderr
+
+
+def test_a_parameter_file_closing_a_cycle_is_refused_as_the_runner_refuses_it(tmp_path):
+    """A value given to a parameter that names, through `param`s, the parameter itself (RC1
+    review, R22): the runner's `check_given` and `aeiou-params check` refuse it with the cycle,
+    rather than recursing without end in the rules that follow a `param` to its value."""
+    a, f = tmp_path / "g.ast.json", tmp_path / "g.params.json"
+    a.write_text(json.dumps({"ast": "0.10", "name": "g", "params": {"pa": {"default": {"const": {"param": "pb"}}}, "pb": {"default": {"const": 3}}},
+                             "actors": {"gpu": {"body": [{"compute": {"ns": {"draw": {"param": "pa"}}}}]}}}))
+    f.write_text(json.dumps({"params_version": 1, "abstract": "g", "params": {"pb": {"const": {"param": "pa"}}}}))
+    want = ["g: params/pa: parameter `pa` is defined through itself (pa -> pb -> pa) (V1)",
+            "g: params/pb: parameter `pb` is defined through itself (pb -> pa -> pb) (V1)"]
+    r = _run(["check", a, f])
+    assert r.returncode == 1 and "Traceback" not in r.stderr, r.stdout + r.stderr
+    assert [ln.split("invalid with the parameters given: ", 1)[1] for ln in r.stdout.splitlines() if "(V1)" in ln] == want, r.stdout
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
+    if runner.exists():
+        r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)], capture_output=True, text=True, cwd=str(tmp_path))
+        assert r.returncode == 1 and [ln.strip() for ln in r.stderr.splitlines() if "(V1)" in ln] == want, r.stderr

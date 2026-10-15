@@ -87,11 +87,46 @@ def _finite(text):
     return x
 
 
+def _no_duplicates(pairs):
+    """An object whose key appears twice: serde_json refuses a repeated field of a struct
+    ("duplicate field") and keeps the last of a repeated key of a map (`datasets`,
+    `params`, a parameter file's top level); Python's `json` keeps the last of both. No
+    writer of these files repeats a key, so every repeat is refused, the map's too."""
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise ValueError(f"duplicate field `{k}`")
+        seen[k] = v
+    return seen
+
+
+def _no_lone_surrogate(doc):
+    """serde_json refuses a `\\u` escape of half a UTF-16 pair; Python's `json` keeps it as a
+    lone surrogate in the string (a whole pair it joins into one character, so a surrogate
+    left in a key or a value is a lone one)."""
+    stack = [doc]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            stack.extend(x.keys())
+            stack.extend(x.values())
+        elif isinstance(x, list):
+            stack.extend(x)
+        elif isinstance(x, str) and (m := _SURROGATE.search(x)):
+            raise ValueError(f"lone surrogate in hex escape (\\u{ord(m.group()):04x})")
+    return doc
+
+
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
 def loads(text):
     """JSON as the runner's serde_json reads it: Python's `json` also takes `NaN`, `Infinity`,
     and `-Infinity`, and turns a number past the 64-bit float range (`1e400`) into an
-    infinity; serde_json refuses all four, and so does this."""
-    return json.loads(text, parse_constant=_no_constant, parse_float=_finite)
+    infinity; serde_json refuses all four, and so does this, and a repeated key or a
+    lone surrogate in a string as well."""
+    return _no_lone_surrogate(json.loads(text, parse_constant=_no_constant, parse_float=_finite,
+                                         object_pairs_hook=_no_duplicates))
 
 
 def int_range(doc, path=()) -> list:
@@ -129,6 +164,25 @@ def canonical(ast: dict) -> bytes:
                       allow_nan=False).encode()
 
 
+def param_refs(x, out: set):
+    """V1: the parameters a value names with `param`, anywhere in it (a distribution's
+    arguments, a mixture's arms, an expression's operands, a handle's expressions; not a
+    namespace object's field names, which are names, not nodes). As the runner's `pvalue_refs`."""
+    if isinstance(x, dict):
+        if len(x) == 1 and isinstance(x.get("param"), str):
+            out.add(x["param"])
+            return
+        for k, v in x.items():
+            if k == "fields" and isinstance(v, dict):
+                for f in v.values():
+                    param_refs(f, out)
+            else:
+                param_refs(v, out)
+    elif isinstance(x, list):
+        for v in x:
+            param_refs(v, out)
+
+
 class Check:
     def __init__(self, ast: dict, name: str):
         self.ast, self.name, self.errors = ast, name, []
@@ -154,6 +208,40 @@ class Check:
         when the document is judged; `aeiou-params check` overrides this with the value a
         parameter file gives, as the runner's `check_given` judges a run (`DESIGN_REVIEW.md` §3.57)."""
         return self.ast.get("params", {}).get(name, {}).get("default")
+
+    def param_cycles(self) -> bool:
+        """V1: a parameter whose value in effect names, through `param`s, the parameter itself
+        is defined by nothing (and the rules that follow a `param` to its value, V3, V25, would
+        never return). Each parameter on a cycle is refused with the shortest one, its names in
+        sorted order at each step. True when there is one. As the runner's `param_cycles`."""
+        declared = self.ast.get("params", {})
+
+        def refs(name):
+            out = set()
+            param_refs(self.param_value(name), out)
+            return sorted(n for n in out if n in declared)
+        found = False
+        for start in sorted(declared):
+            prev, queue = {}, []
+            for n in refs(start):
+                prev.setdefault(n, start)
+                queue.append(n)
+            while queue:
+                n = queue.pop(0)
+                if n == start:
+                    chain, cur = [start], prev[start]
+                    while cur != start:
+                        chain.append(cur)
+                        cur = prev[cur]
+                    chain.append(start)
+                    self.err(["params", start], f"parameter `{start}` is defined through itself ({' -> '.join(reversed(chain))}) (V1)")
+                    found = True
+                    break
+                for m in refs(n):
+                    if m not in prev:
+                        prev[m] = n
+                        queue.append(m)
+        return found
 
     def err(self, path, msg):
         self.errors.append(f"{self.name}: {'/'.join(map(str, path))}: {msg}")
@@ -210,6 +298,10 @@ class Check:
             self.err(["params"], "`gpus` is reserved and set by the runner")
         for pname in self.ast.get("params", {}):
             self.value(self.param_value(pname), ["params", pname])
+        # every rule after this one follows a `param` to its value; through a cycle it would
+        # never return, so a document with one is judged no further
+        if self.param_cycles():
+            return self.errors
         roots = {}
         for dname, d in self.datasets.items():
             body = d

@@ -214,7 +214,10 @@ offered: namespaces are declared explicitly (2026-09-30, `builder/REFERENCE.md` 
 The schema cannot express these; `check.py` does, and the Rust validator must.
 
 - **V1 Names resolve.** Every `param`, dataset, namespace, channel, index, and `ref` is
-  declared in scope. `at` may name a binding defined later in the same loop body.
+  declared in scope. `at` may name a binding defined later in the same loop body. A
+  parameter's value may name another parameter, never itself through others (2026-10-15):
+  every parameter on such a cycle is refused with it (`pa -> pb -> pa`), on the defaults and
+  by the runner again on the values given, and the document is judged no further.
 - **V2 `gpus` is reserved.** It may not appear in `params`.
 - **V3 `at` decreases.** An `at` on a binding of the same loop body (the binding being
   defined, one defined later, or one defined earlier in that body; ~~a self-reference or a

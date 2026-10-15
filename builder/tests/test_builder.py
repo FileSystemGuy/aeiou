@@ -1291,3 +1291,73 @@ def test_a_take_inside_a_loader_body_is_refused():
         ([loader("r", {"compute": {"ns": 1}}), loader("q", {"take": {"channel": "r"}}), {"loop": {"index": "j", "to": 8, "body": [take_q]}}], "1/loader/body/0", "r"),
     ]:
         assert errs(*body) == [f"v26: actors/gpu/body/{path}/take: a `take` on channel `{ch}` inside a `loader` body: the loader's workers run beside each other and the actor, so which of them took which item, and whether the run finished, would depend on timing; take in the actor, a loader's body only puts (V26)"]
+
+
+def test_duplicate_keys_and_lone_surrogates_are_refused_as_the_runner_refuses_them(tmp_path):
+    """Bug 76's `loads` still took JSON the runner's serde_json refuses (RC1 review, R21): a
+    repeated field (`"name": "x", "name": "y"`, serde: "duplicate field `name`") and a `\\u`
+    escape of half a UTF-16 pair (serde: "unexpected end of hex escape"); check.py said `ok`
+    and `aeiou check` FAIL. Every reader refuses both now, a surrogate in a key too. A
+    repeated key of a map (`params`) the runner reads as its last value; no writer repeats a
+    key, so the Python readers refuse that as well."""
+    from aeiou.usage import UsageError
+    text = ast_path("file_per_sample").read_text(encoding="utf-8")
+    name = '"name": "file_per_sample"'
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+    for i, (old, new, said, runner_refuses) in enumerate([
+        (name, f'{name}, {name}', "duplicate field `name`", True),
+        (name, '"name": "file_per\\ud800sample"', "lone surrogate in hex escape (\\ud800)", True),
+        (name, '"name": "file_per_sample\\udc00"', "lone surrogate in hex escape (\\udc00)", True),
+        ('"params": {', '"params": {"a\\ud800": {"default": 1}, ', "lone surrogate in hex escape (\\ud800)", True),
+        ('"params": {', '"params": {"step_time": {"default": 1}, ', "duplicate field `step_time`", False),
+    ]):
+        f = tmp_path / f"t{i}.ast.json"
+        assert old in text
+        f.write_text(text.replace(old, new, 1), encoding="utf-8")
+        out = subprocess.run([sys.executable, str(ROOT / "schema" / "check.py"), str(f)], capture_output=True, text=True)
+        assert out.returncode == 1 and out.stdout.splitlines()[:2] == [f"FAIL {f.name}", f"  {f.name}: not an abstract ({said})"], out.stdout + out.stderr
+        with pytest.raises(UsageError, match="not an abstract"):
+            emit.load(f)
+        if runner.exists() and runner_refuses:
+            out = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
+            assert out.returncode == 1 and f"FAIL {f.name}" in out.stdout, out.stdout + out.stderr
+    # a whole pair is one character, not a lone surrogate
+    assert emit.loads('{"a": "\\ud83d\\ude00"}') == {"a": "\U0001F600"}
+    # a valid document (every committed abstract and parameter file) reads as plain json reads it
+    for p in sorted(WORKLOADS.rglob("*.json")):
+        t = p.read_text(encoding="utf-8")
+        assert emit.loads(t) == json.loads(t), p
+
+
+def test_a_parameter_defined_through_itself_is_refused_with_its_cycle(tmp_path):
+    """A parameter whose default names itself (`{"const": {"param": "pa"}}`), read as a dataset's
+    size, overflowed the stack of `aeiou check` (exit 134) and raised RecursionError in
+    check.py (RC1 review, R22): the rules that follow a `param` to its value (V3, V25) never
+    returned. Both checkers refuse every parameter on a cycle, with the cycle, the same path
+    and message, and judge the document no further; a parameter naming another is accepted."""
+    def doc(params):
+        return json.dumps({"ast": "0.10", "name": "cyc", "params": params,
+                           "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4,
+                                              "size": {"param": "pa"}, "seed": 1}},
+                           "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"draw": {"param": "pa"}}}}}}]}}})
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
+    for i, (params, want) in enumerate([
+        ({"pa": {"default": {"const": {"param": "pa"}}}}, ["params/pa: parameter `pa` is defined through itself (pa -> pa) (V1)"]),
+        ({"pa": {"default": {"mixture": [{"weight": 1, "dist": {"param": "pb"}}]}},
+          "pb": {"default": {"normal": {"mean": {"add": [{"param": "pc"}, 1]}, "sd": 1, "min": 1}}},
+          "pc": {"default": {"const": {"param": "pa"}}}, "pd": {"default": {"const": {"param": "pa"}}}},
+         ["params/pa: parameter `pa` is defined through itself (pa -> pb -> pc -> pa) (V1)",
+          "params/pb: parameter `pb` is defined through itself (pb -> pc -> pa -> pb) (V1)",
+          "params/pc: parameter `pc` is defined through itself (pc -> pa -> pb -> pc) (V1)"]),
+        ({"pa": {"default": {"const": {"param": "pb"}}}, "pb": {"default": {"const": 3}}}, []),
+    ]):
+        f = tmp_path / f"c{i}.ast.json"
+        f.write_text(doc(params), encoding="utf-8")
+        out = subprocess.run([sys.executable, str(ROOT / "schema" / "check.py"), str(f)], capture_output=True, text=True)
+        assert "Traceback" not in out.stderr, out.stderr
+        got = sorted(ln.split(": ", 1)[1] for ln in out.stdout.splitlines() if "(V1)" in ln)
+        assert got == want and out.returncode == (1 if want else 0), out.stdout + out.stderr
+        if runner.exists():
+            r = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
+            got = sorted(ln.strip().split(": ", 1)[1] for ln in r.stdout.splitlines() if "(V1)" in ln)
+            assert got == want and r.returncode == (1 if want else 0), r.stdout + r.stderr

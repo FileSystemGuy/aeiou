@@ -10,6 +10,7 @@ import json
 import math
 import pathlib
 import platform
+import re
 import subprocess
 import sys
 
@@ -104,12 +105,47 @@ def _finite(text):
     return x
 
 
+def _no_duplicates(pairs):
+    """An object whose key appears twice: serde_json refuses a repeated field of a struct
+    ("duplicate field") and keeps the last of a repeated key of a map (`datasets`,
+    `params`, a parameter file's top level); Python's `json` keeps the last of both. No
+    writer of these files repeats a key, so every repeat is refused, the map's too."""
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise ValueError(f"duplicate field `{k}`")
+        seen[k] = v
+    return seen
+
+
+def _no_lone_surrogate(doc):
+    """serde_json refuses a `\\u` escape of half a UTF-16 pair; Python's `json` keeps it as a
+    lone surrogate in the string (a whole pair it joins into one character, so a surrogate
+    left in a key or a value is a lone one)."""
+    stack = [doc]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            stack.extend(x.keys())
+            stack.extend(x.values())
+        elif isinstance(x, list):
+            stack.extend(x)
+        elif isinstance(x, str) and (m := _SURROGATE.search(x)):
+            raise ValueError(f"lone surrogate in hex escape (\\u{ord(m.group()):04x})")
+    return doc
+
+
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
 def loads(text):
     """JSON as the runner's serde_json reads it (schema/check.py's `loads`): Python's `json`
     also takes `NaN`, `Infinity`, and `-Infinity`, and turns a number past the 64-bit float
-    range (`1e400`) into an infinity; serde_json refuses all four, and so does this. Every
-    reader of an abstract or a parameter file in the builder's tools reads with it."""
-    return json.loads(text, parse_constant=_no_constant, parse_float=_finite)
+    range (`1e400`) into an infinity; serde_json refuses all four, and so does this, and a
+    repeated key or a lone surrogate in a string as well. Every reader of an abstract or a
+    parameter file in the builder's tools reads with it."""
+    return _no_lone_surrogate(json.loads(text, parse_constant=_no_constant, parse_float=_finite,
+                                         object_pairs_hook=_no_duplicates))
 
 
 def load(path) -> dict:

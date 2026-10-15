@@ -1280,3 +1280,36 @@ fn a_value_of_a_kind_the_runner_refuses_is_refused_at_check() {
     let e = Params::new(&loaded.ast, &config(1, 1, &[("n", "abc")])).err().map(|e| format!("{e:#}")).expect("accepted n=abc");
     assert!(e.contains("with the parameters given") && e.contains("v27: actors/gpu/count: expected an integer, got a string (V27)"), "{e}");
 }
+
+/// V1 (RC1 review, R22), as `check.py` has it: a parameter whose value names, through `param`s,
+/// the parameter itself is refused with the cycle, and the rules that follow a `param` to its
+/// value (V3's `at_least`, V25's least size) are not run on it: `{"const": {"param": "pa"}}` as
+/// `pa`'s default, read as a dataset's size, overflowed the stack of `aeiou check` (and
+/// check.py's recursion). A parameter naming another one is no cycle and stays accepted, and a
+/// cycle a run is given (`--param`, a parameter file) is refused by `check_given`.
+#[test]
+fn a_parameter_defined_through_itself_is_refused_with_its_cycle() {
+    let doc = |params: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "cyc", "params": {{{params}}},
+                "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {{"param": "pa"}}, "seed": 1}}}},
+                "actors": {{"gpu": {{"body": [{{"loop": {{"index": "i", "to": 2, "body": [
+                    {{"let": {{"name": "x", "value": {{"draw": {{"param": "pa"}}}}}}}},
+                    {{"stat": {{"file": {{"file": {{"dataset": "d", "id": {{"at": {{"ref": "x", "index": {{"sub": [{{"index": "i"}}, {{"draw": {{"param": "pa"}}}}]}}}}}}}}}}}}}}]}}}}]}}}}}}"#
+        )
+    };
+    rejects(&doc(r#""pa": {"default": {"const": {"param": "pa"}}}"#), "cyc: params/pa: parameter `pa` is defined through itself (pa -> pa) (V1)");
+    // through a mixture's arm and a uniform's bound; a parameter that only leads to the cycle
+    // (`pc`) is not on it
+    let two = r#""pa": {"default": {"mixture": [{"weight": 1, "dist": {"param": "pb"}}]}}, "pb": {"default": {"uniform": {"lo": 1, "hi": {"add": [{"param": "pa"}, 1]}}}}, "pc": {"default": {"const": {"param": "pa"}}}"#;
+    let e = aeiou::load_str(&doc(two)).err().map(|e| format!("{e:#}")).expect("accepted a cycle");
+    assert!(e.contains("cyc: params/pa: parameter `pa` is defined through itself (pa -> pb -> pa) (V1)"), "{e}");
+    assert!(e.contains("cyc: params/pb: parameter `pb` is defined through itself (pb -> pa -> pb) (V1)"), "{e}");
+    assert!(!e.contains("params/pc: parameter"), "{e}");
+    // a parameter naming another is no cycle
+    let chain = r#""pa": {"default": {"const": {"param": "pb"}}}, "pb": {"default": {"const": 3}}"#;
+    let loaded = aeiou::load_str(&doc(chain)).unwrap_or_else(|e| panic!("{e:#}"));
+    // and a value given to `pb` that names `pa` closes one: refused before the run
+    let e = Params::new(&loaded.ast, &config(1, 1, &[("pb", r#"{"const": {"param": "pa"}}"#)])).err().map(|e| format!("{e:#}")).expect("accepted a given cycle");
+    assert!(e.contains("with the parameters given") && e.contains("cyc: params/pb: parameter `pb` is defined through itself (pb -> pa -> pb) (V1)"), "{e}");
+}

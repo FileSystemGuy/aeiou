@@ -2124,3 +2124,47 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   with bug 86's gate and passes; on HEAD b721c06 plus the change `--lib` 66 passed, `--test
   all` 136, test_formats and test_builder 106, hdf5_map, tfrecord_stream, parquet_stream
   fingerprints at 1 and 4 GPUs unchanged. Fixed in an isolated worktree and applied.
+
+## 92. The Python tools read duplicate keys and lone surrogates the runner refuses
+
+- **Where:** `schema/check.py` and `builder/aeiou/emit.py` (`loads`); `builder/aeiou/trace.py`
+  (`TraceReader.feed`); `builder/tests/test_builder.py`, `test_params.py`, `test_trace.py`.
+- **Found by:** the second regression review (bug 76's fix was incomplete).
+- **Defect:** `{"ast":"0.10","name":"x","name":"y",…}` was `ok` in check.py where `aeiou check`
+  said "duplicate field `name`"; a phase name `"a\ud800b"` (a lone surrogate) was `ok` where
+  the runner said "not an abstract (unexpected end of hex escape …)"; `aeiou-params check`
+  took a parameter file with one; `aeiou-trace metrics` read a trace file the runner refuses
+  and ended in a traceback on a line that was not JSON.
+- **Fix:** `loads` refuses every repeated key (serde refuses repeated struct fields; map keys
+  it takes last-wins, so Python is stricter there, and no committed file or writer repeats
+  one) and any lone surrogate in a key or string after the parse (a valid pair is one
+  character and kept); each tool keeps its invalid-JSON frame. The trace reader uses
+  `emit.loads` and refuses a bad line as `<file>: line N: …`, rc 1. `emit.loads` equals
+  `json.loads` on all 85 committed JSON files. No fingerprint, AST hash, or contract change.
+- **Evidence:** `test_builder.py::test_duplicate_keys_and_lone_surrogates_are_refused_as_the_runner_refuses_them`,
+  `test_params.py::test_duplicate_keys_and_lone_surrogates_in_a_parameter_file_are_refused`,
+  `test_trace.py::test_an_exported_trace_is_read_as_the_runner_reads_it` fail on the old code
+  and pass; suites as bug 93.
+
+## 93. A parameter defined through itself overflowed both checkers' stacks
+
+- **Where:** `runner/aeiou/src/validate.rs` and `schema/check.py` (new `param_cycles`, V1);
+  `schema/README.md` §4 V1; `runner/aeiou/tests/golden.rs`; `builder/tests`.
+- **Found by:** the second regression review (pre-existing at the tag).
+- **Defect:** `params.pa.default = {"const": {"param": "pa"}}` with a dataset `size {"param":
+  "pa"}`: `aeiou check` aborted "thread 'main' has overflowed its stack" (rc 134), check.py
+  raised RecursionError (V25's least and V3's at_least follow a parameter to its value).
+- **Fix:** before any walk that follows a `param`, each parameter whose value in effect (given,
+  else default) reaches itself through `param` references is refused with its shortest cycle,
+  `params/pa: parameter `pa` is defined through itself (pa -> pb -> pa) (V1)`, alike in both
+  checkers and on given values (`check_given`, aeiou-params, `--param`, `--params-file`).
+  References between parameters stay allowed; a cycle can only be distributions, which the run
+  refuses anyway, so no runnable abstract is refused. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `golden::a_parameter_defined_through_itself_is_refused_with_its_cycle` aborted
+  with a stack overflow on the old code and passes;
+  `test_builder.py::test_a_parameter_defined_through_itself_is_refused_with_its_cycle` and
+  `test_params.py::test_a_parameter_file_closing_a_cycle_is_refused_as_the_runner_refuses_it`
+  fail before and pass. For bugs 92 and 93 on HEAD 3a5c36b plus the change: `--test all` 137
+  passed, `--lib` 66, builder suite with MinIO 387 passed, CI's checker diff empty, every
+  committed parameter file ok, `aeiou-build --hermetic --twice --check` rc 0. Fixed in an
+  isolated worktree and applied.

@@ -1266,11 +1266,19 @@ class TraceReader:
         self.notes: Counter = Counter()
 
     def feed(self, lines):
-        for line in lines:
+        # read as the runner reads the file (`emit.loads`, serde_json's JSON), a line that is
+        # not JSON refused with its number as `trace::TraceFile::load` refuses it
+        from .emit import loads
+        for no, line in enumerate(lines, 1):
             line = line.strip()
             if not line:
                 continue
-            doc = json.loads(line)
+            try:
+                doc = loads(line)
+            except ValueError as e:
+                raise BuildError(f"line {no}: {e}") from None
+            if not isinstance(doc, dict):
+                raise BuildError(f"line {no}: not a JSON object")
             if self.header is None:
                 if doc.get("aeiou_trace") != TRACE_FORMAT:
                     raise BuildError(f"not an aeiou_trace: {TRACE_FORMAT} file")
@@ -1679,7 +1687,10 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
             first = f.readline()
             lines = itertools.chain([first], f)
             if first.startswith('{"aeiou_trace"'):
-                doc = metrics_of_export(lines, args.metrics_block, args.metrics_sample)
+                try:
+                    doc = metrics_of_export(lines, args.metrics_block, args.metrics_sample)
+                except BuildError as e:
+                    raise BuildError(f"{args.trace}: {e}") from None
             elif not args.root:
                 missing = usage.Missing(mp)
                 missing.need(False, "--root <DIR>", "count only calls on paths under DIR (repeatable)", "needed for an strace; an exported trace file carries its root")
