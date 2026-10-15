@@ -428,10 +428,20 @@ pub struct Vm<'m, 'a> {
     /// Unit lengths of recently addressed container files (`GRAMMAR_OPTIONS.md` §6.3: the
     /// layout is computed once per open file and held). Bounded; never shared.
     unit_lens: HashMap<(usize, i64), Arc<Vec<i64>>>,
+    /// Sizes and sample offsets of the container files this actor addressed last, most recent
+    /// last (`DsMeta::file_geom`): a file's samples' sizes are drawn once while it is read, not
+    /// once per op. Bounded by `GEOM_FILES` files and `GEOM_OFFSETS` offsets, never a table
+    /// over the dataset; never shared.
+    geom: Vec<((usize, i64), Arc<FileGeom>)>,
     stack: Vec<Cont<'a>>,
     pending: Pending<'a>,
     pending_fork: Option<PendingFork<'a>>,
 }
+
+/// The bounds of a VM's file geometry cache (`Vm::geom`): the files an actor interleaves
+/// (a `cycle` of shards, the files of a batch), and 8 MiB of sample offsets.
+const GEOM_FILES: usize = 16;
+const GEOM_OFFSETS: usize = 1 << 20;
 
 impl<'m, 'a: 'm> Vm<'m, 'a> {
     pub fn new(model: &'m Model<'a>, template: &'a str, actor: i64, actor_count: i64) -> Self {
@@ -451,6 +461,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             phases: Vec::new(),
             indices_buf: Vec::new(),
             unit_lens: HashMap::new(),
+            geom: Vec::new(),
             sub_body: None,
             stack: Vec::new(),
             pending: Pending::empty(),
@@ -477,6 +488,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             phases: snap.phases,
             indices_buf: Vec::new(),
             unit_lens: HashMap::new(),
+            geom: Vec::new(),
             sub_body: Some(snap.body),
             stack: Vec::new(),
             pending: Pending::empty(),
@@ -511,6 +523,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         self.phases.clone_from(&snap.phases);
         self.indices_buf.clear();
         self.unit_lens.clear();
+        self.geom.clear();
         self.sub_body = Some(snap.body);
         self.stack.clear();
         self.pending = Pending::empty();
@@ -1259,11 +1272,57 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         Ok(v)
     }
 
+    /// A files dataset's file geometry, from `geom` or computed and held there; `None` when
+    /// one sample fills the file (`file_size` is one draw) or `file_geom` refuses (the caller
+    /// asks `DsMeta` again, for its error).
+    fn file_geom(&mut self, ds: usize, file: i64) -> Option<Arc<FileGeom>> {
+        let model = self.model;
+        let meta = &model.datasets[ds];
+        if !matches!(meta, DsMeta::Files { spf, .. } if *spf > 1) {
+            return None;
+        }
+        if let Some(i) = self.geom.iter().rposition(|(k, _)| *k == (ds, file)) {
+            let e = self.geom.remove(i);
+            let g = e.1.clone();
+            self.geom.push(e);
+            return Some(g);
+        }
+        let g = Arc::new(meta.file_geom(file).ok()?);
+        self.geom.push(((ds, file), g.clone()));
+        let held = |v: &Vec<((usize, i64), Arc<FileGeom>)>| v.iter().map(|(_, g)| g.offsets.as_ref().map_or(0, |o| o.len())).sum::<usize>();
+        while self.geom.len() > 1 && (self.geom.len() > GEOM_FILES || held(&self.geom) > GEOM_OFFSETS) {
+            self.geom.remove(0);
+        }
+        Some(g)
+    }
+
+    /// `DsMeta::file_size`, through `geom`.
+    fn file_size(&mut self, ds: usize, file: i64) -> ER<i64> {
+        match self.file_geom(ds, file) {
+            Some(g) => Ok(g.size),
+            None => Ok(self.model.datasets[ds].file_size(file)?),
+        }
+    }
+
+    /// `DsMeta::sample_offset`, through `geom`.
+    fn sample_offset(&mut self, ds: usize, id: i64) -> ER<i64> {
+        if let DsMeta::Files { spf, .. } = &self.model.datasets[ds] {
+            let (file, i) = (id / spf, id % spf);
+            if let Some(g) = self.file_geom(ds, file) {
+                if let Some(off) = g.offsets.as_ref().and_then(|o| o.get(usize::try_from(i).ok()?)) {
+                    return Ok(*off);
+                }
+            }
+        }
+        Ok(self.model.datasets[ds].sample_offset(id)?)
+    }
+
     fn size_of(&mut self, h: &HVal) -> ER<i64> {
-        let ds = &self.model.datasets;
+        let model = self.model;
+        let ds = &model.datasets;
         Ok(match h {
             HVal::Sample { ds: d, id } => ds[*d].sample_size(*id)?,
-            HVal::File { ds: d, file } => ds[*d].file_size(*file)?,
+            HVal::File { ds: d, file } => self.file_size(*d, *file)?,
             HVal::Chunk { ds: d, file, k } => ds[*d].chunk_size(*file, *k)?,
             HVal::Slot { ds: d, c } => ds[*d].sample_size(*c)?,
             HVal::ArrayFile { ds: d } => ds[*d].file_size(0)?,
@@ -1290,7 +1349,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
 
     fn offset_of(&mut self, h: &HVal) -> ER<i64> {
         Ok(match h {
-            HVal::Sample { ds, id } => self.model.datasets[*ds].sample_offset(*id)?,
+            HVal::Sample { ds, id } => self.sample_offset(*ds, *id)?,
             HVal::Slot { ds, c } => self.model.datasets[*ds].sample_offset(*c)?,
             HVal::Chunk { .. } | HVal::File { .. } | HVal::ArrayFile { .. } | HVal::Inventory { .. } => 0,
             HVal::Unit { ds, file, u } => self.unit_offset(*ds, *file, *u)?,
@@ -1316,14 +1375,15 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
 
     fn target(&mut self, h: &'a Handle) -> ER<Target> {
         let hv = self.handle(h)?;
-        let ds = &self.model.datasets;
+        let model = self.model;
+        let ds = &model.datasets;
         Ok(match &hv {
             HVal::Sample { ds: d, id } => {
                 let file = self.container_of(*d, *id);
-                Target { path: ds[*d].file_path(file, None)?, size: Some(ds[*d].file_size(file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false }
+                Target { path: ds[*d].file_path(file, None)?, size: Some(self.file_size(*d, file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false }
             }
             HVal::File { ds: d, file } | HVal::Unit { ds: d, file, .. } | HVal::Column { ds: d, file, .. } => {
-                Target { path: ds[*d].file_path(*file, None)?, size: Some(ds[*d].file_size(*file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false }
+                Target { path: ds[*d].file_path(*file, None)?, size: Some(self.file_size(*d, *file)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false }
             }
             HVal::Chunk { ds: d, file, k } => Target { path: ds[*d].file_path(*file, Some(*k))?, size: Some(ds[*d].chunk_size(*file, *k)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false },
             HVal::Slot { ds: d, .. } | HVal::ArrayFile { ds: d } => Target { path: ds[*d].file_path(0, None)?, size: Some(ds[*d].file_size(0)?), as_written: false, seed: ds[*d].dataset_seed(), entries: None, capped: false },

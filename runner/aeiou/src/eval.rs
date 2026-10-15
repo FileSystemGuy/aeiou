@@ -559,6 +559,14 @@ pub struct InvMeta {
     pub cap: bool,
 }
 
+/// One container file's size and the offset of each of its samples (`DsMeta::file_geom`).
+#[derive(Debug, PartialEq)]
+pub struct FileGeom {
+    pub size: i64,
+    /// By sample index within the file; `None` where `sample_offset` refuses.
+    pub offsets: Option<Vec<i64>>,
+}
+
 #[derive(Clone)]
 pub enum DsMeta<'a> {
     Files {
@@ -810,6 +818,8 @@ impl<'a> DsMeta<'a> {
                 if id < 0 || id >= *count {
                     bail!("sample {id} outside dataset `{}` of {count}", self.name());
                 }
+                #[cfg(test)]
+                tests::SIZE_DRAWS.with(|c| c.set(c.get() + 1));
                 let mut w = Words::new(dataset_key(*seed, id));
                 let n = sample(size, &mut w, None)?.as_int()?;
                 // rule V25 refuses what the document shows; a size it cannot see is caught
@@ -904,6 +914,49 @@ impl<'a> DsMeta<'a> {
             }
             DsMeta::Array { slot, .. } => id.checked_mul(*slot).ok_or_else(|| self.overflow(format!("the offset of slot {id}"))),
         }
+    }
+
+    /// `file_size(file)` and `sample_offset` of every sample of a files dataset's `file`, from
+    /// one pass over its samples' sizes (two under a format's framing): what `file_size` and
+    /// `sample_offset` each draw again per call, O(samples in the file), held by the VM for the
+    /// files it is reading (`Vm::file_geom`). The values are those functions' to the bit;
+    /// `offsets` is `None` where `sample_offset` would refuse (several columns, an offset past
+    /// 2^63-1), and an `Err` is `file_size`'s refusal, so a caller falls back to them for the
+    /// error message.
+    pub fn file_geom(&self, file: i64) -> Result<FileGeom> {
+        let DsMeta::Files { spf, framing: layout, .. } = self else { bail!("`{}` is an array dataset", self.name()) };
+        let n = self.samples_in_file(file)?;
+        let first = file * spf;
+        if layout.is_packed() {
+            let mut offsets = Vec::with_capacity(n as usize);
+            let mut total = 0i64;
+            for i in 0..n {
+                offsets.push(total);
+                total = total.checked_add(self.sample_size(first + i)?).ok_or_else(|| self.overflow(format!("the size of file {file}")))?;
+            }
+            return Ok(FileGeom { size: total, offsets: Some(offsets) });
+        }
+        let lens = self.unit_lens(file)?;
+        let size = self.file_size_from_units(file, &lens)?;
+        if layout.columns.len() != 1 {
+            return Ok(FileGeom { size, offsets: None });
+        }
+        let col = &layout.columns[0];
+        let offsets = (|| {
+            let mut offsets = Vec::with_capacity(n as usize);
+            let mut unit_at = self.data_start(file).ok()?;
+            for (u, len) in lens.iter().enumerate() {
+                let m = (n - u as i64 * layout.unit).min(layout.unit);
+                let mut off = checked_sum([unit_at, layout.unit_header, layout.unit_header_per_sample.checked_mul(m)?, col.header])?;
+                for i in 0..m {
+                    offsets.push(off.checked_add(col.row_header)?);
+                    off = off.checked_add(layout.row_bytes(0, self.sample_size(first + u as i64 * layout.unit + i).ok()?)?)?;
+                }
+                unit_at = unit_at.checked_add(*len)?;
+            }
+            Some(offsets)
+        })();
+        Ok(FileGeom { size, offsets })
     }
 
     pub fn chunk_size(&self, file: i64, k: i64) -> Result<i64> {
@@ -1261,4 +1314,114 @@ pub fn build_model<'a>(ast: &'a Ast, cfg: &'a Config, params: &'a Params) -> Res
     drop(vm);
 
     Ok(Model { ast, cfg, params, datasets, ds_index, namespaces, ns_index, param_dists, traces: HashMap::new() })
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::vm::{run_actor, Op, OpCtx, OpKind, Sink};
+
+    thread_local! {
+        /// Sample sizes drawn on this thread (`DsMeta::sample_size` of a files dataset).
+        pub(crate) static SIZE_DRAWS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// One file of `n` lognormal samples (or files of `spf`), every sample opened, read at its
+    /// offset, and closed once, through its container's file handle (an HDF5 or TFRecord reader).
+    fn dataset(n: i64, spf: i64, format: &str) -> String {
+        format!(
+            r#"{{
+  "ast": "0.10", "name": "geom_test",
+  "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": {n}, "samples_per_file": {spf},
+     "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
+  "actors": {{"gpu": {{"body": [
+    {{"loop": {{"index": "j", "to": {n}, "body": [
+      {{"let": {{"name": "s", "value": {{"consume": "d"}}}}}},
+      {{"let": {{"name": "f", "value": {{"file": {{"of": {{"ref": "s"}}}}}}}}}},
+      {{"open": {{"file": {{"ref": "f"}}, "flags": ["RDONLY"]}}}},
+      {{"fstat": {{"file": {{"ref": "f"}}}}}},
+      {{"read": {{"file": {{"ref": "f"}}, "len": 8, "offset": 0}}}},
+      {{"read": {{"file": {{"ref": "f"}}, "len": {{"size": {{"ref": "s"}}}}, "offset": {{"offset": {{"ref": "s"}}}}}}}},
+      {{"close": {{"file": {{"ref": "f"}}}}}}
+    ]}}}}
+  ]}}}}
+}}"#
+        )
+    }
+
+    const TFRECORD: &str = r#", "format": {"class": "tfrecord", "reader": "tf.data", "framing": {"columns": [{"row_header": 12, "row_footer": 4, "weight": 1}]}}"#;
+    const PARQUET: &str = r#", "format": {"class": "parquet", "reader": "pyarrow", "framing": {"unit": 7, "file_header": 4, "file_footer": 200, "file_footer_per_unit": 120,
+        "columns": [{"header": 26, "row_header": 4, "weight": 1}, {"header": 22, "fixed": 8, "weight": 0}]}}"#;
+
+    fn with_model(text: &str, f: impl FnOnce(&Model)) {
+        let loaded = crate::load_str(text).expect("valid abstract");
+        let cfg = Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![] };
+        let params = Params::new(&loaded.ast, &cfg).unwrap();
+        f(&build_model(&loaded.ast, &cfg, &params).unwrap())
+    }
+
+    #[derive(Default)]
+    struct Reads(Vec<(i64, i64)>);
+
+    impl<'m, 'a> Sink<'m, 'a> for Reads {
+        fn op(&mut self, op: &Op, _: &OpCtx) -> anyhow::Result<()> {
+            if op.kind == OpKind::Read && op.len != 8 {
+                self.0.push((op.offset, op.len));
+            }
+            Ok(())
+        }
+    }
+
+    /// RC1 review: every op on a sample of a container file drew the sizes of all the file's
+    /// samples again (`file_size` for its target, `sample_offset` for its offset), O(samples
+    /// per file) per op and O(n²) per file. The VM now holds the file's geometry while it reads
+    /// it: a pass over a file's n samples draws O(n) sizes, and the offsets are the same.
+    #[test]
+    fn a_pass_over_a_files_samples_draws_their_sizes_a_bounded_number_of_times() {
+        let n = 400i64;
+        // one file; then 20 files visited in shuffled order, past the 16 the VM holds
+        for (spf, format) in [(n, ""), (n, TFRECORD), (20, ""), (20, TFRECORD)] {
+            with_model(&dataset(n, spf, format), |model| {
+                SIZE_DRAWS.with(|c| c.set(0));
+                let mut got = run_actor(model, "gpu", 0, 1, Reads::default()).unwrap().0;
+                let draws = SIZE_DRAWS.with(|c| c.get());
+                assert!(spf < n || draws <= 4 * n as u64, "format `{format}`: {draws} size draws for one pass over {n} samples (n² is {})", n * n);
+                let meta = &model.datasets[0];
+                let mut want: Vec<(i64, i64)> = (0..n).map(|id| (meta.sample_offset(id).unwrap(), meta.sample_size(id).unwrap())).collect();
+                want.sort();
+                got.sort();
+                assert_eq!(got, want, "format `{format}`, {spf} samples per file");
+            });
+        }
+    }
+
+    #[test]
+    fn file_geom_is_file_size_and_sample_offset() {
+        // 3 files of 50, 50, and 23 samples: packed, one framed column, two columns (no offsets)
+        for format in ["", TFRECORD, PARQUET] {
+            with_model(&dataset(123, 50, format), |model| {
+                let meta = &model.datasets[0];
+                for file in 0..3 {
+                    let g = meta.file_geom(file).unwrap();
+                    assert_eq!(g.size, meta.file_size(file).unwrap(), "format `{format}` file {file}");
+                    let n = meta.samples_in_file(file).unwrap();
+                    match &g.offsets {
+                        Some(o) => {
+                            assert_eq!(o.len() as i64, n);
+                            for (i, off) in o.iter().enumerate() {
+                                assert_eq!(*off, meta.sample_offset(file * 50 + i as i64).unwrap(), "format `{format}` file {file} sample {i}");
+                            }
+                        }
+                        None => {
+                            assert_eq!(format, PARQUET);
+                            assert!(meta.sample_offset(file * 50).is_err());
+                        }
+                    }
+                }
+                assert!(meta.file_geom(3).is_err());
+            });
+        }
+    }
 }

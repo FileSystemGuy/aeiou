@@ -1809,3 +1809,31 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   passed, `--lib` 61, test_builder, test_man, test_params 131 passed, `aeiou-build --hermetic
   --twice --check` rc 0, both checkers ok over every committed AST. Fixed in an isolated
   worktree and applied.
+
+## 78. Every op on a container sample redrew the size of every sample in its file
+
+- **Where:** `runner/aeiou/src/eval.rs` (`DsMeta::file_geom`, `FileGeom`); `runner/aeiou/src/vm.rs`
+  (`Vm::geom`, `file_geom`, `file_size`, `sample_offset`; `target`, `size_of`, `offset_of`).
+- **Found by:** the runner semantics review (S5, performance): `Vm::target` called
+  `DsMeta::file_size(file)` and an `offset` called `DsMeta::sample_offset(id)` on every op, and
+  both draw the size of every sample of the file.
+- **Defect:** each op cost O(samples_per_file), so reading a file's samples one by one cost
+  O(spf²): hdf5_map (open, fstat, nine reads, close per sample) dry-ran 20 steps in 10.0 s at
+  spf 100000 against 0.05 s after; a one-file pass over 16000 TFRecord-framed samples took
+  67.5 s, and 64000 more than 300 s (×16 per ×4 samples).
+- **Fix:** `DsMeta::file_geom` computes a file's size and every sample's offset in one pass
+  (two under a framing) with the same checked arithmetic; each VM holds the geometry of the
+  files it addressed last, bounded at 16 files and 2^20 offsets, never a table over the
+  dataset, never shared, cleared on `resume_from` (as `unit_lens`). One sample per file and
+  array datasets bypass it; a refusal falls back to `DsMeta` for the same error. A shuffled
+  `map` over more than 16 files still pays one O(spf) pass per visit, which the per-file-table
+  invariant requires. No fingerprint, dataset id, AST, or datagen byte changes.
+- **Evidence:** `eval::tests::a_pass_over_a_files_samples_draws_their_sizes_a_bounded_number_of_times`
+  (at most 4n size draws per pass over n=400 samples, packed and framed, every read's offset and
+  length equal to `DsMeta`'s, a 20-file shuffled variant past the cap) failed on the old vm.rs
+  with 880200 draws and passes; `file_geom_is_file_size_and_sample_offset`; 67 of 76 committed
+  (AST, params, gpus) fingerprints compared identical before and after (9 over 120 s with both
+  binaries), datagen trees identical; on HEAD e06816e plus the change: `--lib` 63 passed,
+  `--test all` 126, test_formats and test_builder 104, hdf5_map, parquet_stream,
+  tfrecord_stream fingerprints at 1 and 4 GPUs unchanged. Fixed in an isolated worktree and
+  applied.
