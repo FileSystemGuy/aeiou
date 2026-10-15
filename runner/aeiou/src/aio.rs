@@ -282,14 +282,20 @@ impl Engine for AioIo {
                 } else {
                     (op.offset, n, false)
                 };
-                let chunk = self.pool.get(len as usize);
+                let chunk = match self.pool.get(len as usize) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(Issued::Done(Err(e), 0)),
+                };
                 let ptr = chunk.ptr;
                 t.round = rounded.then_some(lo);
                 t.buf = Some(chunk);
                 (IOCB_CMD_PREAD, ptr as u64, len as u64, lo)
             }
             OpKind::Write => {
-                let chunk = self.pool.get(op.len as usize);
+                let chunk = match self.pool.get(op.len as usize) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(Issued::Done(Err(e), 0)),
+                };
                 let ptr = chunk.ptr;
                 fill(&mut t.a, op, unsafe { std::slice::from_raw_parts_mut(ptr, op.len as usize) });
                 t.buf = Some(chunk);

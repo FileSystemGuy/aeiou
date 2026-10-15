@@ -222,18 +222,20 @@ impl Pool {
         Pool { free: HashMap::new(), total: 0, target }
     }
 
-    pub(crate) fn get(&mut self, len: usize) -> Chunk {
+    pub(crate) fn get(&mut self, len: usize) -> std::io::Result<Chunk> {
         let size = (len.max(1) + ALIGN - 1) / ALIGN * ALIGN;
         if self.total >= self.target {
             if let Some(c) = self.free.get_mut(&size).and_then(|q| q.pop_front()) {
-                return c;
+                return Ok(c);
             }
         }
-        let layout = std::alloc::Layout::from_size_align(size, ALIGN).unwrap();
+        let layout = std::alloc::Layout::from_size_align(size, ALIGN).map_err(|_| crate::run::alloc_failed(size))?;
         let ptr = unsafe { std::alloc::alloc(layout) };
-        assert!(!ptr.is_null(), "buffer allocation of {size} bytes failed");
+        if ptr.is_null() {
+            return Err(crate::run::alloc_failed(size));
+        }
         self.total += size;
-        Chunk { ptr, size }
+        Ok(Chunk { ptr, size })
     }
 
     pub(crate) fn put(&mut self, c: Chunk) {
@@ -533,8 +535,11 @@ impl Engine for LoopIo {
                 } else {
                     (op.offset, n, false)
                 };
+                let chunk = match self.pool.get(len as usize) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(Issued::Done(Err(e), 0)),
+                };
                 t.round = rounded.then_some(lo);
-                let chunk = self.pool.get(len as usize);
                 let e = opcode::Read::new(f, chunk.ptr, len as u32).offset(lo as u64).build();
                 t.buf = Some(chunk);
                 e
@@ -544,7 +549,10 @@ impl Engine for LoopIo {
                     return Ok(self.inline_op(sh, t, op));
                 }
                 let f = try_fd!(t);
-                let chunk = self.pool.get(op.len as usize);
+                let chunk = match self.pool.get(op.len as usize) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(Issued::Done(Err(e), 0)),
+                };
                 let buf = unsafe { std::slice::from_raw_parts_mut(chunk.ptr, op.len as usize) };
                 fill(&mut t.a, op, buf);
                 let e = opcode::Write::new(f, chunk.ptr, op.len as u32).offset(op.offset as u64).build();

@@ -674,3 +674,29 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   a valid `--gpu 1 --steps 0..1 --limit 3` printing exactly 3 lines) fails on the old main.rs
   (exit 101 for 2) and passes on the new; `--test all` 82 passed, man pages included.
 
+## 31. A panic on a `sync` loader worker or actor thread hung the run forever
+
+- **Where:** `runner/aeiou/src/run.rs` (`Ring::ensure`/`slice`, `spawn_sub`, the loader worker,
+  the actor threads of `run_with`, `settle`, new `alloc_failed`, `panicked`),
+  `runner/aeiou/src/uring.rs` (`Pool::get` and its callers), `aio.rs` and `object.rs` (callers).
+- **Found by:** review of the execution engines: no `catch_unwind` on loader workers or actor
+  threads (only the `parallel` pool caught panics), so a panic unwound past
+  `aborted.store(true)` and the channel's `fail`, which the consumer and barrier peers poll.
+  Reproduced with `--param hdr_read=70368744177664 --param workers=2`.
+- **Defect:** under `sync` both workers panicked ("buffer allocation of 70368744177664 bytes
+  failed") and the run then waited forever (killed by `timeout` at 20 s, exit 124): no exit, no
+  report. Under io_uring the same input ended with a bare "an event loop panicked".
+- **Fix:** a buffer that cannot be allocated is an ordinary op error (`OutOfMemory`, no errno, so
+  no `expect` can admit it) naming the op and size, in the ring and the event loops' pool; and
+  loader workers, sub-actors, and actor threads run under `catch_unwind`, failing the channel or
+  setting `aborted` and returning the panic's message, so no panic can hang a run. No fingerprint
+  change.
+- **Evidence:** the repro now exits 1 at once under sync ("… take `batches`: producer failed: …
+  read … len=70368744177664: buffer allocation of 70368744177664 bytes failed") and io_uring;
+  with only the allocation reverted to a panic, the run still exits 1 ("producer failed:
+  panicked: …"). `tests/run.rs::an_op_whose_buffer_cannot_be_allocated_ends_the_run_with_its_error`
+  (sync, io_uring, libaio, each under a 20 s watchdog) fails on the old code ("did not end within
+  20 s") and passes in 0.26 s. Fixed in an isolated worktree and applied over bug 28.
+- **Noted:** io_uring SQEs pass a read's or write's length as `len as u32`, truncating any op
+  over 4 GiB (queued).
+

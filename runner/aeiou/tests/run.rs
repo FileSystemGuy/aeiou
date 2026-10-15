@@ -833,3 +833,26 @@ fn a_fork_leaves_the_parents_file_positions_as_run_does() {
     let e = format!("{:#}", aeiou::load_str(&shared).err().expect("refused"));
     assert!(e.contains("parallel/body/0/read/file") && e.contains("(V24)"), "{e}");
 }
+
+/// A loader worker whose op cannot get its buffer ends the run with the op and the size
+/// named: the allocation panicked on the worker's thread, the panic skipped setting
+/// `aborted` and failing the channel, and the consumer waited on its take forever (RC1
+/// review). The run is driven on a thread and given a wall-clock limit, so a hang fails.
+#[test]
+fn an_op_whose_buffer_cannot_be_allocated_ends_the_run_with_its_error() {
+    let root = tmpdir("alloc");
+    let params = [("samples", "40"), ("batch", "2"), ("workers", "2"), ("steps", "4"), ("hdr_read", "70368744177664")];
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 5, &params));
+    gen(loaded, cfg, model, &root);
+    for backend in [BackendKind::Sync, BackendKind::Uring, BackendKind::LibAio] {
+        let o = opts(&root, backend);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(run::run(model, o, std::collections::HashMap::new()).map(|_| ()).map_err(|e| format!("{e:#}")));
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap_or_else(|_| panic!("{backend:?}: the run did not end within 20 s"));
+        let e = r.expect_err("the run fails");
+        assert!(e.contains(" read ") && e.contains("len=70368744177664: buffer allocation of 70368744177664 bytes failed"), "{backend:?}: {e}");
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}

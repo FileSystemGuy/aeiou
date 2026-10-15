@@ -740,6 +740,18 @@ impl FdTable {
     }
 }
 
+/// A thread's panic as its error, with the panic's message.
+pub(crate) fn panicked(p: Box<dyn std::any::Any + Send>) -> anyhow::Error {
+    let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
+    anyhow!("panicked: {}", msg.as_deref().unwrap_or("(no message)"))
+}
+
+/// A buffer the runner could not allocate for an op: the op's error, so the run ends with
+/// the op and its size named, never a panic. No errno, so no `expect` can make it pass.
+pub(crate) fn alloc_failed(size: usize) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("buffer allocation of {size} bytes failed"))
+}
+
 /// A page-aligned buffer ring: successive I/Os land in successive slices so copies are not
 /// cache-hot (`NAPKIN_MATH.md` §2.2). Allocated on first use, grown to fit the largest op.
 pub(crate) struct Ring {
@@ -756,29 +768,32 @@ impl Ring {
         Ring { ptr: std::ptr::null_mut(), cap: 0, pos: 0, target: target.max(ALIGN) }
     }
 
-    fn ensure(&mut self, len: usize) {
+    fn ensure(&mut self, len: usize) -> std::io::Result<()> {
         let want = if self.cap == 0 { self.target.max(len) } else { len };
         if want > self.cap {
             let cap = ((want + ALIGN - 1) / ALIGN) * ALIGN;
-            let layout = std::alloc::Layout::from_size_align(cap, ALIGN).unwrap();
+            let layout = std::alloc::Layout::from_size_align(cap, ALIGN).map_err(|_| alloc_failed(cap))?;
             let ptr = unsafe { std::alloc::alloc(layout) };
-            assert!(!ptr.is_null(), "buffer allocation of {cap} bytes failed");
+            if ptr.is_null() {
+                return Err(alloc_failed(cap));
+            }
             self.free();
             self.ptr = ptr;
             self.cap = cap;
             self.pos = 0;
         }
+        Ok(())
     }
 
-    pub(crate) fn slice(&mut self, len: usize) -> &mut [u8] {
-        self.ensure(len);
+    pub(crate) fn slice(&mut self, len: usize) -> std::io::Result<&mut [u8]> {
+        self.ensure(len)?;
         let aligned = ((len + ALIGN - 1) / ALIGN) * ALIGN;
         if self.pos + aligned > self.cap {
             self.pos = 0;
         }
         let s = unsafe { std::slice::from_raw_parts_mut(self.ptr.add(self.pos), len) };
         self.pos += aligned;
-        s
+        Ok(s)
     }
 
     fn free(&mut self) {
@@ -956,6 +971,10 @@ impl ActorState {
                     if code == libc::EMFILE {
                         extra.push_str(" [RLIMIT_NOFILE reached: the `limits:` lines at startup have the estimate and the limit]");
                     }
+                    if code == 0 {
+                        // not the system's errno (a buffer the runner could not allocate)
+                        return Err(anyhow!("{}{}: {}", where_(), extra, e));
+                    }
                     Err(anyhow!("{}{}: {} ({})", where_(), extra, e, name))
                 }
             }
@@ -1029,7 +1048,7 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
             if sh.opts.backend.direct() && (op.offset % al != 0 || len % al != 0) {
                 // round out; O_DIRECT needs the offset, length, and buffer aligned
                 let (lo, hi) = round_out(op.offset, len);
-                let buf = rbuf.slice((hi - lo) as usize);
+                let buf = rbuf.slice((hi - lo) as usize)?;
                 let n = be.read(&fd, buf, Some(lo))? as i64;
                 let got = (n - (op.offset - lo)).clamp(0, len);
                 if !op.positioned && !be.positional() {
@@ -1038,13 +1057,13 @@ pub(crate) fn issue_blocking(be: &mut dyn Backend, sh: &Shared, a: &mut ActorSta
                 }
                 return Ok(got);
             }
-            let buf = rbuf.slice(len as usize);
+            let buf = rbuf.slice(len as usize)?;
             let off = if op.positioned || be.positional() { Some(op.offset) } else { None };
             be.read(&fd, buf, off).map(|n| n as i64)
         }
         OpKind::Write => {
             let fd = a.fd(op.path)?;
-            let buf = wbuf.slice(op.len as usize);
+            let buf = wbuf.slice(op.len as usize)?;
             fill(a, op, buf);
             let off = if op.positioned || be.positional() { Some(op.offset) } else { None };
             let n = be.write(&fd, buf, off)? as i64;
@@ -1318,9 +1337,14 @@ impl Runner {
         std::thread::Builder::new()
             .name(label)
             .spawn(move || {
-                let mut vm = Vm::resume(snap);
-                let r = work(&mut vm, &mut sink);
-                let r = r.and_then(|_| sink.finish());
+                // a panic is this thread's error, so `aborted` is set and the consumer and
+                // barrier peers polling it stop, rather than wait forever
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut vm = Vm::resume(snap);
+                    let r = work(&mut vm, &mut sink);
+                    r.and_then(|_| sink.finish())
+                }))
+                .unwrap_or_else(|p| Err(panicked(p)));
                 if r.is_err() {
                     sink.sh.aborted.store(true, Ordering::Relaxed);
                 }
@@ -1452,7 +1476,8 @@ impl Sink<'static, 'static> for Runner {
                                 return Ok(());
                             }
                             vm.start_sub(b);
-                            if let Err(e) = drive(vm, sink) {
+                            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drive(&mut *vm, &mut *sink)));
+                            if let Err(e) = r.unwrap_or_else(|p| Err(panicked(p))) {
                                 chan.fail(format!("{e:#}"));
                                 return Err(e);
                             }
@@ -2143,11 +2168,15 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
             let h = std::thread::Builder::new()
                 .name(format!("{template}#{actor}"))
                 .spawn(move || {
-                    let mut sink = Runner::new(sh.clone(), inst, template, actor, true, None);
-                    let body = &model.ast.actors[template].body;
-                    let mut vm = Vm::new(model, template, actor, count);
-                    vm.start(body);
-                    let r = drive(&mut vm, &mut sink).and_then(|_| sink.finish());
+                    // a panic is this actor's error: `aborted` set, so no peer waits forever
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut sink = Runner::new(sh.clone(), inst, template, actor, true, None);
+                        let body = &model.ast.actors[template].body;
+                        let mut vm = Vm::new(model, template, actor, count);
+                        vm.start(body);
+                        drive(&mut vm, &mut sink).and_then(|_| sink.finish())
+                    }))
+                    .unwrap_or_else(|p| Err(panicked(p)));
                     if r.is_err() {
                         sh.aborted.store(true, Ordering::Relaxed);
                     }
