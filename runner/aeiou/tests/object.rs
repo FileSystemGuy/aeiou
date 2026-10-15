@@ -420,3 +420,40 @@ fn a_missing_object_is_enoent_whatever_its_key_and_a_read_past_the_end_is_eof() 
         refused(&o, "(ENOENT)");
     }
 }
+
+/// A resume of an object dataset sends only the unfinished ids whose keys are missing, and
+/// counts the ones it finds there as a directory resume counts the ids it writes again
+/// (`runner/REFERENCE.md` §5, Resume): the corpus's totals are every file once (RC1 review).
+#[test]
+fn a_resumed_object_dataset_counts_the_objects_it_finds() {
+    let m = minio("a_resumed_object_dataset_counts_the_objects_it_finds");
+    let dir = tmpdir("resume");
+    let ast = object_variant("npy_per_sample", &["train"], &dir);
+    let root = dir.join("root");
+    let mut a = vec!["datagen", ast.to_str().unwrap(), "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/res"];
+    a.extend(["--param", "samples=10", "--param", "sample_mean=1000", "--param", "sample_sd=0"]);
+    ok(&aeiou(Some(&m), &a));
+    let get = || -> serde_json::Value { serde_json::from_slice(&curl(&m, "/bench/res/.aeiou-dataset.json", &[]).stdout).unwrap() };
+    let full = get();
+    let (files, bytes) = (full["provenance"]["files_written"].as_u64().unwrap(), full["provenance"]["bytes_written"].as_u64().unwrap());
+    assert_eq!(files, 10, "{full}");
+    // a datagen killed before its first window: every id unfinished, every object but two sent
+    let mut w = full.clone();
+    w["state"] = "writing".into();
+    w["progress"] = serde_json::json!({"unfinished": [[0, 10]], "files_written": 0, "bytes_written": 0, "updated": 1.0, "progress_secs": 30.0});
+    let wfile = dir.join("writing.json");
+    std::fs::write(&wfile, serde_json::to_vec(&w).unwrap()).unwrap();
+    assert!(curl(&m, "/bench/res/.aeiou-dataset.json", &["-X", "PUT", "--data-binary", &format!("@{}", wfile.display())]).status.success());
+    for id in [3, 7] {
+        assert!(curl(&m, &format!("/bench/res/00000/sample_{id:09}.npz"), &["-X", "DELETE"]).status.success());
+    }
+    let out = ok(&aeiou(Some(&m), &["datagen", "--resume", "s3://bench/res"]));
+    let after = get();
+    assert_eq!(after["state"], "complete", "{after}");
+    assert_eq!((after["provenance"]["files_written"].as_u64(), after["provenance"]["bytes_written"].as_u64()), (Some(files), Some(bytes)), "{after}");
+    assert_eq!(after["provenance"]["resumes"][0]["files_written"].as_u64(), Some(10), "{after}");
+    assert!(out.contains("dataset train: 10 file(s)"), "{out}");
+    for id in [3, 7] {
+        assert!(curl(&m, &format!("/bench/res/00000/sample_{id:09}.npz"), &[]).status.success(), "object {id} was not sent again");
+    }
+}

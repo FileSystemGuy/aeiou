@@ -125,7 +125,8 @@ of the last window is still true. A host that fails stops the others the same wa
 format are the manifest's, so it takes no abstract. Every id the manifest lists as
 unfinished is written again, whole (a file opened with truncation, so a partial or stale one
 loses its tail); in an object store, where an upload that did not complete leaves no object,
-only the unfinished ids whose keys are missing (one `LIST`). The unfinished ids are split
+only the unfinished ids whose keys are missing (one `LIST`), the keys found there counted
+as written, so the totals are the same. The unfinished ids are split
 over the hosts of this datagen, whatever their count when the corpus was begun. It refuses a
 corpus whose payload or format writer is not this aeiou's, or whose HDF5 headers
 **aeiou-header**(1) would make differently, since the files would mix them. The manifest

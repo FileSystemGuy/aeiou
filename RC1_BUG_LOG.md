@@ -931,3 +931,25 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `run::consecutive_computes_take_their_sum_on_every_backend` (5,000 × 20 µs under `sync` and
   `io_uring`, within 50 ms of the sum) fails without the fix ("took 460.75 ms, 360.75 ms over
   their sum") and passes with it; `--test all` 92 passed in four consecutive runs.
+
+## 42. A resumed object-store datagen left out of its totals the objects it found
+
+- **Where:** `runner/aeiou/src/datagen.rs` `write_share` (the container and plain/chunk
+  branches' `plan.present` skips); runner/REFERENCE.md §5 "Resume"; man/aeiou.1.md
+  `datagen --resume`.
+- **Found by:** review of datagen: on an object store, `--resume` lists the prefix once and
+  skips the unfinished ids whose keys are already there, but the skip left `got` at 0.
+- **Defect:** an object uploaded after the last progress window was in the store but in none
+  of the counts: the windows' `files_written`/`bytes_written`, the final
+  `provenance.files_written`/`bytes_written`, `provenance.resumes[i]`, and the printed
+  summary. schema/README §6 and REFERENCE §5 say the totals after a resume count every file
+  once, as a directory's resume does by writing the id again. Repro: 10 objects written, the
+  manifest set back to `writing` with every id unfinished, 2 objects deleted, then
+  `aeiou datagen --resume s3://bench/res` printed "2 file(s), 2.00 MiB" and the manifest said 2
+  files and 2 MiB of a corpus of 10 files and 10 MiB.
+- **Fix:** a present object counts as written: `(1, size)` for a container, `+ (1, len)` per
+  plain or chunk object, the same numbers a directory resume reports for the same ids. The docs
+  say so. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `object::a_resumed_object_dataset_counts_the_objects_it_finds` (MinIO) fails
+  without the fix (left 2 files, right 10) and passes with it; `--test all object` 6 passed.
+  Fixed in an isolated worktree and applied.

@@ -522,7 +522,10 @@ as root). The same runs on the loopback NFS mount are §7.
   (`cut_runs`)~~ cut into runs and claimed from rank 0's queue (since 2026-10-12, below), so
   any host count resumes any corpus. Every unfinished id is written again,
   whole, opened `O_TRUNC`; an object dataset lists its prefix once and skips the keys there
-  (an upload that did not complete leaves no object). The emptiness check is skipped, the
+  (an upload that did not complete leaves no object), counting each as written, as a
+  directory's resume counts the file it writes again (2026-10-14, RC1 review: they went
+  uncounted, so the totals missed every object the last window had not recorded;
+  `tests/object.rs`). The emptiness check is skipped, the
   manifest there is kept (and never removed when the gate does not open), the windows run as
   for a first datagen with the earlier counts added, and the last write is `complete`, with
   `provenance.resumes` gaining this datagen's ranks, hosts, counts, and times, and

@@ -800,7 +800,8 @@ struct Claims {
 const DELETE_BATCH: usize = 1000;
 
 impl Plan<'_, '_> {
-    /// An object already in the store, which a resume does not send again.
+    /// An object already in the store, which a resume does not send again but counts, as a
+    /// directory resume counts the file it writes again.
     fn present(&self, opts: &DatagenOpts, path: &str) -> bool {
         !self.present.is_empty() && opts.endpoints.object(path).is_some_and(|(_, rest)| self.present.contains(&rest))
     }
@@ -1087,7 +1088,10 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         let seed_of = |blk: u64| payload::file_block_seed(seed, file as u64, blk, dedupe);
                                         if let Some(c) = &plan.container {
                                             let path = meta.file_path(file, None)?.to_string();
+                                            // an object already there is counted as one written again
+                                            // (a directory resume writes it), so the totals hold every file once
                                             if plan.present(opts, &path) {
+                                                got = (1, size);
                                                 return Ok(());
                                             }
                                             got = (1, write_container(c, meta, file, &seed_of, &mut filler, &mut buf, &path, opts, mode)?);
@@ -1102,6 +1106,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                         };
                                         for (path, logical, len) in objects {
                                             if plan.present(opts, &path) {
+                                                got = (got.0 + 1, got.1 + len);
                                                 continue;
                                             }
                                             if let Some((store, rest)) = opts.endpoints.object(&path) {
