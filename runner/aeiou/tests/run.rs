@@ -907,3 +907,33 @@ fn a_test_directory_is_removed_when_its_test_panics() {
     drop(d);
     assert!(!p.exists(), "{} is left behind by a passing test", p.display());
 }
+
+/// A `loader` inside a loop (one per epoch) declares its channel again in every iteration: the
+/// last iteration's is retired once all its batches are taken, so the abstract `check` and the
+/// dry run accept also runs, under the blocking path and the event loop, with the dry run's
+/// fingerprint (RC1 review: the second declaration was refused, "a channel of that name exists").
+#[test]
+fn a_loader_in_a_loop_runs_once_per_iteration() {
+    let root = tmpdir("loader-epochs");
+    let mut ast: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(crate::common::workload_ast("file_per_sample")).unwrap()).unwrap();
+    let body = ast["actors"]["gpu"]["body"].as_array_mut().unwrap();
+    let at = body.iter().position(|n| n.get("loader").is_some()).unwrap();
+    let epoch: Vec<serde_json::Value> = body.drain(at..).collect();
+    body.push(serde_json::json!({"loop": {"index": "epoch", "to": 2, "body": epoch}}));
+    let path = root.join("epochs.ast.json");
+    std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
+    let params = [("samples", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("walk", "false")];
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&path).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(2, 7, &params)));
+    let p: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, p).unwrap()));
+    let data = root.join("data");
+    gen(loaded, cfg, model, &data);
+    run::check_datasets(loaded, cfg, &data).unwrap();
+    let (fp, ops, bytes) = dry_fingerprint(model);
+    for backend in [BackendKind::Sync, BackendKind::Uring] {
+        let r = go(model, opts(&data, backend));
+        assert_eq!((r.stats.fingerprint, r.stats.ops, r.stats.bytes_read), (fp, ops, bytes), "{backend:?}");
+        assert_eq!(r.stats.takes, 2 * 2 * 12, "two epochs of twelve batches on each of two instances");
+    }
+}

@@ -804,3 +804,25 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   unknown among a known one, the endpoint case, no root created) fails without the fix and
   passes; `--test all` 86 passed. Fixed in an isolated worktree and applied.
 
+## 37. A `loader` inside a loop passed `check` and `dry-run`, then `run` refused its second iteration
+
+- **Where:** `runner/aeiou/src/run.rs` (new `retire_loader`, `join_loaders`, channel
+  re-declaration), `runner/aeiou/src/uring.rs` (new `Loop::declare`); runner REFERENCE §7
+  (*Loader*, *channel / put / take*).
+- **Found by:** review of the execution engines: file_per_sample with its loader and training
+  phase wrapped in `loop epoch<2` (a loader per epoch).
+- **Defect:** channels were never removed per instance, so the second declaration of the
+  loader's channel failed ("loader `batches`: a channel of that name exists") under every
+  backend, while both checkers accepted the shape and the dry run gave a fingerprint: a valid
+  abstract with a fingerprint that could not be run.
+- **Fix:** declaring a loader again retires the earlier one when all its batches have been taken
+  (its workers joined there, their stats merged; the event loops reset the channel in place);
+  declaring it again with batches untaken is refused, saying how many were taken. A plain
+  `channel` follows the same rule (re-declared when nothing put is left untaken; a take parked
+  on the old one fails rather than hangs). The batch ordinal already counts the epoch loop, so
+  epoch 2 draws `b = 12..23` in both dry run and run. No fingerprint change.
+- **Evidence:** the epochs AST now gives the dry run's fingerprint (8bdc5d7547fbccd8, 48 takes)
+  under sync, io_uring, libaio, posix-aio, and mmap; `tests/run.rs::a_loader_in_a_loop_runs_once_per_iteration`
+  (sync and io_uring: fingerprint, ops, bytes, takes) fails without the fix and passes; all
+  non-coord tests pass (the coord timing flakes are queued separately).
+

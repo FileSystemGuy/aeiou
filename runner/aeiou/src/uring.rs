@@ -1003,6 +1003,24 @@ impl<E: Engine> Loop<E> {
         }
     }
 
+    /// Declare channel `name` of instance `inst`. One declared before under that name (the
+    /// last iteration's, which the caller has found finished) is reset in place, unless a task
+    /// is still parked on it: then it is closed, its waiters woken to fail, and a new one taken.
+    fn declare(&mut self, inst: usize, name: &str, ch: Chan) -> usize {
+        if let Some(&old) = self.chan_names.get(&(inst, name.to_string())) {
+            if self.chans[old].waiters.is_empty() {
+                self.chans[old] = ch;
+                return old;
+            }
+            self.chans[old].closed = true;
+            self.wake(old);
+        }
+        self.chans.push(ch);
+        let c = self.chans.len() - 1;
+        self.chan_names.insert((inst, name.to_string()), c);
+        c
+    }
+
     fn wake(&mut self, chan: usize) {
         let waiters = std::mem::take(&mut self.chans[chan].waiters);
         for id in waiters {
@@ -1263,11 +1281,17 @@ impl<E: Engine> Loop<E> {
                             }
                         }
                         Control::Channel { name, capacity, ordered } => {
-                            if self.chan_names.contains_key(&(inst, name.to_string())) {
-                                bail!("channel `{name}` declared twice");
+                            // a channel in a loop is declared again each iteration: the last one is
+                            // retired when nothing it delivered is left untaken (`run.rs`)
+                            if let Some(&old) = self.chan_names.get(&(inst, name.to_string())) {
+                                let left = self.chans[old].done.len();
+                                if self.chans[old].total.is_some() {
+                                    bail!("channel `{name}` declared twice");
+                                } else if left > 0 {
+                                    bail!("channel `{name}` declared again with {left} item(s) put and not taken");
+                                }
                             }
-                            self.chans.push(Chan::new(capacity, ordered, None));
-                            self.chan_names.insert((inst, name.to_string()), self.chans.len() - 1);
+                            self.declare(inst, name, Chan::new(capacity, ordered, None));
                         }
                         Control::Put { channel, seq } => {
                             let chan = *self.chan_names.get(&(inst, channel.to_string())).ok_or_else(|| anyhow!("put on undeclared channel `{channel}`"))?;
@@ -1304,12 +1328,17 @@ impl<E: Engine> Loop<E> {
                             }
                         }
                         ForkKind::Loader { name, workers, prefetch, batches, ordered, .. } => {
-                            if self.chan_names.contains_key(&(inst, name.to_string())) {
-                                bail!("loader `{name}`: a channel of that name exists");
+                            // a loader in a loop declares its channel again each iteration: the last
+                            // one is retired once every batch is taken (its workers have ended)
+                            if let Some(&old) = self.chan_names.get(&(inst, name.to_string())) {
+                                let ch = &self.chans[old];
+                                match ch.total {
+                                    Some(total) if ch.next_take == total => {}
+                                    Some(total) => bail!("loader `{name}`: a channel of that name exists, {} of its {total} batches taken", ch.next_take),
+                                    None => bail!("loader `{name}`: a channel of that name exists"),
+                                }
                             }
-                            self.chans.push(Chan::new(workers * prefetch, ordered, Some(batches)));
-                            let chan = self.chans.len() - 1;
-                            self.chan_names.insert((inst, name.to_string()), chan);
+                            let chan = self.declare(inst, name, Chan::new(workers * prefetch, ordered, Some(batches)));
                             let children: Vec<ActorState> = (0..workers).map(|_| self.tasks[id].io.a.child(&sh, 0)).collect();
                             for (w, a) in children.into_iter().enumerate() {
                                 let w = w as i64;
@@ -1317,7 +1346,9 @@ impl<E: Engine> Loop<E> {
                                 self.add_task(Prog::Vm(vm), a, Some(inst), Role::Worker { parent: id, chan, workers, batches, b: w }, false);
                             }
                             let t = &mut self.tasks[id];
-                            t.loaders.push(chan);
+                            if !t.loaders.contains(&chan) {
+                                t.loaders.push(chan);
+                            }
                             t.workers_live += workers as usize;
                         }
                     }

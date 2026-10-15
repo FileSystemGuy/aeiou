@@ -1328,6 +1328,41 @@ impl Runner {
         r
     }
 
+    /// Join loader workers; what they counted is this actor's, and the first error is the result.
+    fn join_loaders(&mut self, loaders: Vec<(String, JoinHandle<(Result<()>, Stats)>)>) -> Result<()> {
+        let mut result = Ok(());
+        for (name, h) in loaders {
+            match h.join() {
+                Ok((r, st)) => {
+                    self.a.st.merge(&st);
+                    if let Err(e) = r {
+                        if result.is_ok() {
+                            result = Err(e.context(format!("loader `{name}` worker")));
+                        }
+                    }
+                }
+                Err(_) => {
+                    if result.is_ok() {
+                        result = Err(anyhow!("loader `{name}`: a worker panicked"));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// A loader declared again (in the next iteration of a loop) once every batch of the last
+    /// one under that name is taken: that one's workers have ended or are ending, joined here.
+    fn retire_loader(&mut self, name: &str) -> Result<()> {
+        let done: Vec<_> = {
+            let mut l = self.inst.loaders.lock().unwrap();
+            let (done, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut *l).into_iter().partition(|(n, _)| n == name);
+            *l = keep;
+            done
+        };
+        self.join_loaders(done)
+    }
+
     fn child(&self) -> Runner {
         Runner::new(self.sh.clone(), self.inst.clone(), self.a.template, self.a.actor, false, Some(self.a.fds.freeze()))
     }
@@ -1386,8 +1421,18 @@ impl Sink<'static, 'static> for Runner {
             }
             Control::Channel { name, capacity, ordered } => {
                 let mut ch = self.inst.channels.lock().unwrap();
-                if ch.contains_key(name) {
-                    bail!("channel `{name}` declared twice");
+                if let Some(old) = ch.get(name) {
+                    // a channel in a loop is declared again each iteration: the last one is
+                    // retired when nothing it delivered is left untaken (closed, so a take still
+                    // parked on it fails instead of waiting forever)
+                    if old.total.is_some() {
+                        bail!("channel `{name}` declared twice");
+                    }
+                    let left = old.m.lock().unwrap().done.len();
+                    if left > 0 {
+                        bail!("channel `{name}` declared again with {left} item(s) put and not taken");
+                    }
+                    old.close();
                 }
                 ch.insert(name.to_string(), Arc::new(Channel::new(capacity, ordered, None)));
             }
@@ -1453,12 +1498,23 @@ impl Sink<'static, 'static> for Runner {
             }
             ForkKind::Loader { name, index, workers, prefetch, batches, ordered } => {
                 let chan = Arc::new(Channel::new(workers * prefetch, ordered, Some(batches)));
-                {
+                let retired = {
                     let mut ch = self.inst.channels.lock().unwrap();
-                    if ch.contains_key(name) {
-                        bail!("loader `{name}`: a channel of that name exists");
+                    let old = ch.get(name).cloned();
+                    if let Some(old) = &old {
+                        // a loader in a loop declares its channel again each iteration: the last
+                        // one is retired once every batch is taken (its workers have ended)
+                        match old.total {
+                            Some(total) if old.taken() == total => {}
+                            Some(total) => bail!("loader `{name}`: a channel of that name exists, {} of its {total} batches taken", old.taken()),
+                            None => bail!("loader `{name}`: a channel of that name exists"),
+                        }
                     }
                     ch.insert(name.to_string(), chan.clone());
+                    old.is_some()
+                };
+                if retired {
+                    self.retire_loader(name)?;
                 }
                 let mut handles = Vec::with_capacity(workers as usize);
                 for w in 0..workers {
@@ -1505,23 +1561,7 @@ impl Sink<'static, 'static> for Runner {
                 ch.close();
             }
             let loaders: Vec<_> = std::mem::take(&mut *self.inst.loaders.lock().unwrap());
-            for (name, h) in loaders {
-                match h.join() {
-                    Ok((r, st)) => {
-                        self.a.st.merge(&st);
-                        if let Err(e) = r {
-                            if result.is_ok() {
-                                result = Err(e.context(format!("loader `{name}` worker")));
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        if result.is_ok() {
-                            result = Err(anyhow!("loader `{name}`: a worker panicked"));
-                        }
-                    }
-                }
-            }
+            result = self.join_loaders(loaders);
             for (name, ch) in &channels {
                 if let Some(total) = ch.total {
                     let taken = ch.taken();

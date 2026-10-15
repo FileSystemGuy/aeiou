@@ -251,9 +251,15 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   only once fewer than `workers × prefetch` batches are started-but-untaken, which is
   PyTorch's index dispatch. `take` blocks until the next batch in order is complete. A `take`
   after the last batch, or an actor that ends with batches untaken, is an error: producers
-  are finite and the multiset is fixed (`NAPKIN_MATH.md` §4.1).
+  are finite and the multiset is fixed (`NAPKIN_MATH.md` §4.1). A loader inside a loop (one
+  per epoch) declares its channel again in each iteration; the last iteration's is retired,
+  its workers joined, when every one of its batches is taken, and declaring it again before
+  then is an error (2026-10-14; `run` had refused the second declaration that `check` and the
+  dry run accept).
 - **`channel` / `put` / `take`** are the general form: `put` blocks while `capacity` items are
-  delivered and untaken; `take` returns the next in `seq` order, or any item if unordered.
+  delivered and untaken; `take` returns the next in `seq` order, or any item if unordered. A
+  `channel` declared again (in a loop) replaces the last one when nothing put on it is left
+  untaken, and is an error otherwise.
 - **Barrier.** The participants of `barrier {scope}` are the instances of every template
   whose body contains it outside any `parallel` or `loader` (a barrier inside a sub-actor is
   refused). An instance that finishes leaves its barriers; a generation completed by
