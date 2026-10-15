@@ -428,8 +428,8 @@ class Describer:
                 head = f"lognormal, median {fmt(a['median'])}, σ {s:g}"
                 lo, hi = (m * math.exp(-_Z95 * s), m * math.exp(_Z95 * s)) if isinstance(m, (int, float)) else (None, None)
             if lo is not None:
-                lo, hi = self._clamp(lo, a, "min"), self._clamp(hi, a, "max")
-                head += f" (5th–95th percentile {amount(round(lo, 1), unit)} to {amount(round(hi, 1), unit)})"
+                lo, hi = (amount(round(self._clamp(v, a), 1), unit) for v in (lo, hi))
+                head += f" (5th and 95th percentiles both {lo})" if lo == hi else f" (5th–95th percentile {lo} to {hi})"
             return head + bounds
         if k == "empirical":
             vals, ws = a["values"], a["weights"]
@@ -452,11 +452,14 @@ class Describer:
                                              for arm in a)
         return str(lit)
 
-    def _clamp(self, v, a, key):
-        b = self.const(a[key]) if key in a else None
-        if b is None:
-            return v
-        return max(v, b) if key == "min" else min(v, b)
+    def _clamp(self, v, a):
+        """A value as the runner clamps a draw: raised to `min`, then lowered to `max` (eval.rs
+        `clamp`), so a clamp past both percentiles moves both."""
+        for key, f in (("min", max), ("max", min)):
+            b = self.const(a[key]) if key in a else None
+            if isinstance(b, (int, float)):
+                v = f(v, b)
+        return v
 
     def _bounds(self, a, unit) -> str:
         have = [k for k in ("min", "max") if k in a]
