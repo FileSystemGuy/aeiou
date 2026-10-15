@@ -1376,3 +1376,31 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   ms, 48.20 ms over it") and passes with it; afterwards libaio and libaio-direct give elapsed
   0.400 s with teardown 0.040 and 0.036 s shown; `--test all -- run aio uring report` 36
   passed, `--lib` 44.
+
+## 60. `x @ i` read a different binding than the checkers proved when a name was shadowed
+
+- **Where:** `runner/aeiou/src/vm.rs` (`at`, the shift's scope `level` and definition `pos`,
+  `Binding::def`, `ref` inside a shift), `runner/aeiou/src/validate.rs` and `schema/check.py`
+  (a body that binds the `at`'s name twice is refused); schema/README.md V3 ("Which binding").
+- **Found by:** review of the runner's semantics: the VM looked `x` up by name through the
+  frames, while both checkers resolve it lexically (a `let` of the body the `at` is written
+  in, before or after it, else the binding in scope from an enclosing body).
+- **Defect:** with an outer loop binding `x = 1000·i` and an inner loop binding
+  `let x = cond(j == 0, 0, x @ (j - 1) + 1)`, both checkers said ok, proving V3 against the
+  inner `x`, but `aeiou dry-run` evaluated the outer one at the inner index: `o/1001/1000`,
+  `o/2001/2000` where the inner chain gives `o/2/1`, `o/3/2` (the soundness gap of bug 39 by
+  another road). A re-evaluated definition also read the wrong names: a `let` written before an
+  inner `x` read that later `x`, and an outer `let` re-evaluated by `k @ (i - 1)` read an inner
+  `c = 500` instead of its own `c = 7`.
+- **Fix:** the VM resolves an `at`'s name from the body it is written in (a shift's body under
+  a shift), else only from scopes enclosing it, taking the exact `let` that bound it; inside a
+  shift a `ref` reads the nearest earlier sibling `let` re-evaluated at the shifted index
+  (memoized by position), each sibling's names resolving where it is written. A body that binds
+  the name twice is refused by both checkers alike ("`x @` names a binding this body defines
+  more than once"). No committed AST has a shadowed or duplicated `let` (458 checked); every
+  dry-run fingerprint of every committed AST and parameter set is unchanged.
+- **Evidence:** `golden::at_names_the_binding_its_body_shadows` fails with the original
+  `vm.rs` (`o/1001/1000` where `o/2/1` is expected) and passes with the fix;
+  `test_builder.py::test_at_names_the_binding_its_body_shadows` fails with the original
+  `check.py` and passes; on HEAD f018912 plus the change, `--test all` 106 passed, `--lib` 44,
+  test_builder and test_params 91 passed. Fixed in an isolated worktree and applied.

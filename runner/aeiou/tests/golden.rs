@@ -842,3 +842,63 @@ fn integers_outside_64_bits_are_refused_as_check_py_refuses_them() {
     assert_eq!(e, format!("--param n: integer 9223372036854775808 {range}"));
     assert!(Params::new(&loaded.ast, &config(1, 1, &[("n", "9223372036854775807")])).is_ok());
 }
+
+/// `x @ i` names the binding the checkers resolve (rule V3, "which binding"): a `let` of the
+/// body the `at` is written in, before or after it, shadows an outer `let` of the same name;
+/// the definition re-evaluated reads its own names where it is written. Until 2026-10-14 the
+/// runner took the outer binding, at the outer loop's index, while both checkers proved V3
+/// on the inner one; and a re-evaluated definition read a later sibling, or a binding of the
+/// body the `at` was evaluated from, in place of the one in its scope (RC1 review).
+#[test]
+fn at_names_the_binding_its_body_shadows() {
+    let paths = |text: &str| -> Vec<String> { collect(text, &config(1, 1, &[]), "gpu", 1).into_iter().map(|o| o.3).collect() };
+    // the inner `x` counts j; `y` is the inner `x` one index back. The outer `x` is 1000·i.
+    let shadow = r#"{"ast": "0.10", "name": "shadow",
+ "namespaces": {"o": {"pattern": "o/{v}/{w}", "fields": {"v": "int", "w": "int"}, "size": 1, "seed": 3}},
+ "actors": {"gpu": {"count": 1, "body": [
+  {"loop": {"index": "i", "to": 3, "body": [
+    {"let": {"name": "x", "value": {"mul": [{"index": "i"}, 1000]}}},
+    {"loop": {"index": "j", "to": 4, "body": [
+      {"let": {"name": "y", "value": {"cond": {"if": {"eq": [{"index": "j"}, 0]}, "then": -1, "else": {"at": {"ref": "x", "index": {"sub": [{"index": "j"}, 1]}}}}}}},
+      {"let": {"name": "x", "value": {"cond": {"if": {"eq": [{"index": "j"}, 0]}, "then": 0, "else": {"add": [{"at": {"ref": "x", "index": {"sub": [{"index": "j"}, 1]}}}, 1]}}}}},
+      {"stat": {"file": {"object": {"namespace": "o", "fields": {"v": {"ref": "x"}, "w": {"ref": "y"}}}}}}
+    ]}}
+  ]}}
+ ]}}}"#;
+    let want: Vec<String> = (0..3).flat_map(|_| (0..4).map(|j| format!("o/{j}/{}", if j == 0 { -1 } else { j - 1 }))).collect();
+    assert_eq!(paths(shadow), want);
+    // `z` reads the outer `x` (the inner one comes after it), so `z @ (j-1)` is 1000·i + j-1;
+    // `k` reads the outer `c` = 7, so `k @ (i-1)` is i-1 + 7, whatever `c` the inner body binds.
+    let scope = r#"{"ast": "0.10", "name": "shadow2",
+ "namespaces": {"o": {"pattern": "o/{v}/{w}", "fields": {"v": "int", "w": "int"}, "size": 1, "seed": 3}},
+ "actors": {"gpu": {"count": 1, "body": [
+  {"let": {"name": "c", "value": 7}},
+  {"loop": {"index": "i", "to": 2, "body": [
+    {"let": {"name": "x", "value": {"mul": [{"index": "i"}, 1000]}}},
+    {"let": {"name": "k", "value": {"add": [{"index": "i"}, {"ref": "c"}]}}},
+    {"loop": {"index": "j", "to": 3, "body": [
+      {"let": {"name": "z", "value": {"add": [{"ref": "x"}, {"index": "j"}]}}},
+      {"let": {"name": "x", "value": {"mul": [{"index": "j"}, 10]}}},
+      {"let": {"name": "c", "value": 500}},
+      {"let": {"name": "w", "value": {"cond": {"if": {"eq": [{"index": "i"}, 0]}, "then": -1, "else": {"at": {"ref": "k", "index": {"sub": [{"index": "i"}, 1]}}}}}}},
+      {"let": {"name": "v", "value": {"cond": {"if": {"eq": [{"index": "j"}, 0]}, "then": -1, "else": {"at": {"ref": "z", "index": {"sub": [{"index": "j"}, 1]}}}}}}},
+      {"stat": {"file": {"object": {"namespace": "o", "fields": {"v": {"ref": "v"}, "w": {"ref": "w"}}}}}}
+    ]}}
+  ]}}
+ ]}}}"#;
+    let want: Vec<String> = (0..2i64)
+        .flat_map(|i| (0..3i64).map(move |j| format!("o/{}/{}", if j == 0 { -1 } else { 1000 * i + j - 1 }, if i == 0 { -1 } else { i - 1 + 7 })))
+        .collect();
+    assert_eq!(paths(scope), want);
+    // a body that binds `x` twice: which one `x @` reads is not defined, so it is refused
+    let twice = r#"{"ast": "0.10", "name": "t",
+ "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
+ "actors": {"gpu": {"count": 1, "body": [
+  {"loop": {"index": "i", "to": 3, "body": [
+    {"let": {"name": "x", "value": {"index": "i"}}},
+    {"let": {"name": "x", "value": {"cond": {"if": {"eq": [{"index": "i"}, 0]}, "then": 0, "else": {"at": {"ref": "x", "index": {"sub": [{"index": "i"}, 1]}}}}}}},
+    {"stat": {"file": {"object": {"namespace": "o", "fields": {"v": {"ref": "x"}}}}}}
+  ]}}
+ ]}}}"#;
+    rejects(twice, "`x @` names a binding this body defines more than once");
+}

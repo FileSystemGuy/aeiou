@@ -272,7 +272,9 @@ class Check:
     def body(self, nodes, path, scope):
         scope = scope.child()
         # `at` may forward-reference a binding defined later in the same loop body
-        scope.forward = {n["let"]["name"] for n in nodes if "let" in n}
+        lets = [n["let"]["name"] for n in nodes if "let" in n]
+        scope.forward = set(lets)
+        scope.twice = {x for x in lets if lets.count(x) > 1}
         for i, node in enumerate(nodes):
             kind, args = next(iter(node.items()))
             p = path + [i, kind]
@@ -551,6 +553,10 @@ class Check:
             if not ok:
                 self.err(p, f"`{name} @` names a binding of this loop body, so its index must be "
                             f"{{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1")
+        # of two `let`s of one name in this body, which one an `at` reads is not defined
+        if name in scope.twice:
+            self.err(p, f"`{name} @` names a binding this body defines more than once, "
+                        f"so which one it reads is not defined")
         self.expr(idx, p + ["index"], scope)
 
     def at_least(self, e, k, scope):
@@ -755,6 +761,7 @@ class Scope:
         self.channels = parent.channels if parent else set()
         self.written = parent.written if parent else set()
         self.forward = set()
+        self.twice = set()
         self.fields = set(fields) | (parent.fields if parent else set())
 
     def child(self):

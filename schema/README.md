@@ -233,7 +233,15 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   that is known (a literal, or a parameter whose value is a number) and not below it, and a
   `min` above a known `max` is an error in its own right (2026-10-14). Under a proof that
   is wrong anyway, the runner refuses an `at` that would evaluate a loop body at an index not
-  below one it is already evaluating, rather than recursing without end.
+  below one it is already evaluating, rather than recursing without end. **Which binding**
+  (2026-10-14, contract 0.10, no committed AST affected): `x` is a `let` of the body the
+  `at` is written in, before or after it, when that body has one, else the binding of `x`
+  in scope from an enclosing body; a body's `x` shadows an outer `x`, as both checkers have
+  always assumed (the runner took the outer one until then). The definition re-evaluated
+  resolves its own names where it is written: a `ref` reads the nearest earlier `let` of its
+  body, at the shifted index, else a binding of an enclosing body, never one of a body
+  nested inside it. An `at` naming a binding its body defines more than once is refused:
+  which of the two it reads is not defined.
 - **V4 Sizes are computed, never observed.** For a namespace with `size: as_written`, an
   object's size is the sum of the write lengths in the sequence that created it. `until_eof`
   on such an object is allowed only through the handle binding those writes used, which pins

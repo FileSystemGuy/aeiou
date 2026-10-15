@@ -214,9 +214,9 @@ struct Frame<'a> {
 #[derive(Clone)]
 struct Binding<'a> {
     value: Value<'a>,
-    /// Frames enclosing the definition.
-    depth: usize,
     body: &'a [Node],
+    /// The `let` that bound it: of two `let`s of one name in a body, the one in scope.
+    def: &'a ExprLike,
 }
 
 #[derive(Clone)]
@@ -233,13 +233,18 @@ struct ScopeLevel<'a> {
 const AT_CACHE_MAX: usize = 1 << 16;
 
 /// An active `x @ i` evaluation: frame `frame` reads as `idx`, sibling lets of `body` are
-/// re-evaluated at that index and memoized.
+/// re-evaluated at that index and memoized. Names resolve as they do where the definition
+/// is written: a `ref` to the nearest `let` of `body` before `pos` (the definition being
+/// evaluated), else to a binding of the scopes below `level` (the scope of `body`), never to
+/// one of a body nested inside it that the `at` happened to be evaluated from.
 struct Shift<'a> {
     frame: usize,
     idx: i64,
     body: &'a [Node],
-    depth: usize,
-    memo: HashMap<&'a str, Value<'a>>,
+    level: usize,
+    pos: usize,
+    /// By position in `body`.
+    memo: HashMap<usize, Value<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -873,9 +878,19 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         other(format!("index `{name}` not in scope"))
     }
 
-    fn find_let(body: &'a [Node], name: &str) -> Option<&'a ExprLike> {
-        body.iter().find_map(|n| match n {
-            Node::Let { name: n, value } if n == name => Some(value),
+    /// The position and definition of the first `let` of `name` in `body`.
+    fn find_let(body: &'a [Node], name: &str) -> Option<(usize, &'a ExprLike)> {
+        body.iter().enumerate().find_map(|(p, n)| match n {
+            Node::Let { name: n, value } if n == name => Some((p, value)),
+            _ => None,
+        })
+    }
+
+    /// The position and definition of the last `let` of `name` in `body` before position `pos`:
+    /// the one a `ref` written at `pos` reads.
+    fn let_before(body: &'a [Node], pos: usize, name: &str) -> Option<(usize, &'a ExprLike)> {
+        body[..pos.min(body.len())].iter().enumerate().rev().find_map(|(p, n)| match n {
+            Node::Let { name: n, value } if n == name => Some((p, value)),
             _ => None,
         })
     }
@@ -886,20 +901,30 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                 return Ok(v.clone());
             }
         }
-        // inside `x @ i`: sibling lets of x's body take their value at the shifted index
-        if let Some(top) = self.shifts.last() {
-            if let Some(v) = top.memo.get(name) {
-                return Ok(v.clone());
+        // inside `x @ i`: the name resolves where x's definition is written. A sibling let
+        // before it takes its value at the shifted index; else a binding of a scope enclosing
+        // x's body, which the shift does not move.
+        let below = match self.shifts.last() {
+            None => self.scopes.len(),
+            Some(top) => {
+                let (body, pos) = (top.body, top.pos);
+                if let Some((q, def)) = Self::let_before(body, pos, name) {
+                    if let Some(v) = top.memo.get(&q) {
+                        return Ok(v.clone());
+                    }
+                    // the sibling's own names resolve where it is written
+                    self.shifts.last_mut().unwrap().pos = q;
+                    let v = self.exprlike(def);
+                    let top = self.shifts.last_mut().unwrap();
+                    top.pos = pos;
+                    let v = v?;
+                    top.memo.insert(q, v.clone());
+                    return Ok(v);
+                }
+                top.level
             }
-            let body = top.body;
-            if let Some(def) = Self::find_let(body, name) {
-                let v = self.exprlike(def)?;
-                let key: &'a str = Self::let_name(body, name).expect("found above");
-                self.shifts.last_mut().unwrap().memo.insert(key, v.clone());
-                return Ok(v);
-            }
-        }
-        for level in self.scopes.iter().rev() {
+        };
+        for level in self.scopes[..below].iter().rev() {
             if let Some(b) = level.bindings.get(name) {
                 return Ok(b.value.clone());
             }
@@ -907,35 +932,37 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         other(format!("binding `{name}` not in scope (a forward reference needs `at`)"))
     }
 
-    fn let_name(body: &'a [Node], name: &str) -> Option<&'a str> {
-        body.iter().find_map(|n| match n {
-            Node::Let { name: n, .. } if n == name => Some(n.as_str()),
-            _ => None,
-        })
-    }
-
-    /// `x @ i`: the value `x` takes at index `i` of its loop.
+    /// `x @ i`: the value `x` takes at index `i` of its loop. `x` is the binding the checkers
+    /// resolve (rule V1, V3): a `let` of the body the `at` is written in, before or after it,
+    /// else the binding in scope from an enclosing body; never an outer binding of the same
+    /// name that the body shadows.
     fn at(&mut self, name: &str, i: i64) -> ER<Value<'a>> {
-        // where is x defined: the current shift's body, an enclosing scope, or the current body (forward)?
-        let (frame, body, depth) = if let Some(top) = self.shifts.last().filter(|s| Self::find_let(s.body, name).is_some()) {
-            (top.frame, top.body, top.depth)
-        } else if let Some(b) = self.scopes.iter().rev().find_map(|l| l.bindings.get(name)) {
-            if b.depth == 0 {
-                return other(format!("`{name} @`: binding is outside any loop"));
-            }
-            (b.depth - 1, b.body, b.depth)
-        } else if let Some(level) = self.scopes.iter().rev().find(|l| Self::find_let(l.body, name).is_some()) {
-            if level.depth == 0 {
-                return other(format!("`{name} @`: binding is outside any loop"));
-            }
-            (level.depth - 1, level.body, level.depth)
+        // the body the `at` is written in: the definition being evaluated under a shift, else the running body
+        let here = match self.shifts.last() {
+            Some(top) => top.level,
+            None => self.scopes.len() - 1,
+        };
+        let here_body = match self.shifts.last() {
+            Some(top) => top.body,
+            None => self.scopes[here].body,
+        };
+        let (level, pos, def) = if let Some((p, def)) = Self::find_let(here_body, name) {
+            (here, p, def)
+        } else if let Some((l, b)) = self.scopes[..here].iter().enumerate().rev().find_map(|(l, s)| s.bindings.get(name).map(|b| (l, b))) {
+            let p = b.body.iter().position(|n| matches!(n, Node::Let { value, .. } if std::ptr::eq(value, b.def))).expect("a binding's let is in its body");
+            (l, p, b.def)
         } else {
             return other(format!("`at` names unknown binding `{name}`"));
         };
+        let depth = self.scopes[level].depth;
+        let body = self.scopes[level].body;
+        if depth == 0 {
+            return other(format!("`{name} @`: binding is outside any loop"));
+        }
+        let frame = depth - 1;
         if i < self.frames[frame].from {
             return Err(EvalError::BelowFrom);
         }
-        let def = Self::find_let(body, name).expect("checked above");
         // a namespace's field values are not part of the key, so nothing is kept under them
         let key = if self.fields.is_none() { Some((def as *const ExprLike as usize, i, (0..frame).map(|f| self.frame_index(f)).collect::<Vec<i64>>())) } else { None };
         if let Some(v) = key.as_ref().and_then(|k| self.at_cache.get(k)) {
@@ -951,7 +978,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             }
         }
         let saved_depth = self.depth;
-        self.shifts.push(Shift { frame, idx: i, body, depth, memo: HashMap::new() });
+        self.shifts.push(Shift { frame, idx: i, body, level, pos, memo: HashMap::new() });
         self.depth = depth;
         let r = self.exprlike(def);
         self.depth = saved_depth;
@@ -1363,9 +1390,8 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         match node {
             Node::Let { name, value } => {
                 let v = self.exprlike(value)?;
-                let depth = self.frames.len();
                 let level = self.scopes.last_mut().unwrap();
-                level.bindings.insert(name.as_str(), Binding { value: v, depth, body: level.body });
+                level.bindings.insert(name.as_str(), Binding { value: v, body: level.body, def: value });
                 Ok(None)
             }
             Node::Loop { index, from, to, step, body } => {

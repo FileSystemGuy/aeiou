@@ -90,6 +90,8 @@ struct Scope<'a> {
     nonneg_indices: HashSet<&'a str>,
     fields: HashSet<&'a str>,
     forward: HashSet<&'a str>,
+    /// The `let` names this body binds more than once: an `at` naming one is refused (V3).
+    twice: HashSet<&'a str>,
 }
 
 /// State shared across every scope of one actor, as `check.py` shares `channels` and `written`.
@@ -104,13 +106,14 @@ struct ActorState<'a> {
 
 impl<'a> Scope<'a> {
     fn new(fields: HashSet<&'a str>) -> Self {
-        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new() }
+        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new() }
     }
 
     fn child(&self) -> Self {
         let mut s = self.clone();
         s.bindings.push(HashMap::new());
         s.forward = HashSet::new();
+        s.twice = HashSet::new();
         s
     }
 
@@ -536,13 +539,14 @@ impl<'a> Checker<'a> {
 
     fn body(&mut self, nodes: &'a [Node], path: &P, scope: &Scope<'a>, st: &mut ActorState<'a>) {
         let mut scope = scope.child();
-        scope.forward = nodes
-            .iter()
-            .filter_map(|n| match n {
-                Node::Let { name, .. } => Some(name.as_str()),
-                _ => None,
-            })
-            .collect();
+        scope.forward = HashSet::new();
+        for n in nodes {
+            if let Node::Let { name, .. } = n {
+                if !scope.forward.insert(name.as_str()) {
+                    scope.twice.insert(name.as_str());
+                }
+            }
+        }
         for (i, node) in nodes.iter().enumerate() {
             let kind = node.kind();
             let pp = p(path, &[&i.to_string(), kind]);
@@ -1091,6 +1095,10 @@ impl<'a> Checker<'a> {
         // a binding of the same loop body: the one being defined, or any `let` of this body
         if (binding == Some(name) || scope.forward.contains(name)) && !ok {
             self.err(path, format!("`{name} @` names a binding of this loop body, so its index must be {{sub: [{{index: {loop_index}}}, e]}} with e provably >= 1"));
+        }
+        // of two `let`s of one name in this body, which one an `at` reads is not defined
+        if scope.twice.contains(name) {
+            self.err(path, format!("`{name} @` names a binding this body defines more than once, so which one it reads is not defined"));
         }
         self.expr(idx, &p(path, &["index"]), scope, st, None);
     }

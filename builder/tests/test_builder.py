@@ -889,3 +889,36 @@ def test_integers_outside_64_bits_are_refused_by_builder_checker_and_runner(tmp_
     out = subprocess.run([str(runner), "check", str(f)], capture_output=True, text=True)
     assert out.returncode != 0
     assert [l.strip() for l in (out.stdout + out.stderr).splitlines() if "is outside" in l] == want
+
+
+def test_at_names_the_binding_its_body_shadows():
+    """`x @ i` names a `let` of the body it is written in, before or after it, over an outer
+    `x` (rule V3, "which binding"): check.py holds the inner one to the step-back rule, as the
+    runner evaluates it, and refuses an `at` on a name its body binds twice (RC1 review)."""
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def doc(inner):
+        return {
+            "ast": "0.10", "name": "shadow",
+            "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
+            "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "i", "to": 3, "body": [
+                {"let": {"name": "x", "value": {"mul": [{"index": "i"}, 1000]}}},
+                {"loop": {"index": "j", "to": 4, "body": inner + [
+                    {"stat": {"file": {"object": {"namespace": "o", "fields": {"v": {"ref": "x"}}}}}}]}}]}}]}},
+        }
+
+    def at(index):
+        return {"cond": {"if": {"eq": [{"index": "j"}, 0]}, "then": 0,
+                         "else": {"at": {"ref": "x", "index": index}}}}
+
+    back = {"sub": [{"index": "j"}, 1]}
+    assert not check.Check(doc([{"let": {"name": "y", "value": at(back)}},
+                                {"let": {"name": "x", "value": at(back)}}]), "x").run()
+    # the inner `x`, defined after the `at`, is the one named: `j` itself does not step back
+    e = check.Check(doc([{"let": {"name": "y", "value": at({"index": "j"})}},
+                         {"let": {"name": "x", "value": {"index": "j"}}}]), "x").run()
+    assert any("names a binding of this loop body" in x for x in e), e
+    e = check.Check(doc([{"let": {"name": "x", "value": {"index": "j"}}},
+                         {"let": {"name": "x", "value": at(back)}}]), "x").run()
+    assert any("`x @` names a binding this body defines more than once" in x for x in e), e
