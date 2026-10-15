@@ -9,8 +9,8 @@ one `../diskann-build/kit/build.py` wrote. What was read off the traces is in `A
 Versions: Python 3.11, diskannpy 0.7.0 (no wheel for 3.12), numpy 1.25.0, Linux 6.18.
 
 ```
-T="strace -f --seccomp-bpf -ttt -T -yy -o"
-E="-e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_destroy"
+T="strace -f --seccomp-bpf -ttt -T -yy -v -o"
+E="-e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy"
 C=cases/sift1m-nocache                                           # or cases/sift1m-cache; from this directory
 $T trace.nocache.txt $E python kit/search.py /mnt/nfs/index query.fbin --queries 1000 --threads 2 --batch
 $T trace.cache.txt $E python kit/search.py /mnt/nfs/index query.fbin --queries 1000 --threads 2 \
@@ -26,8 +26,10 @@ Three things about the capture:
 
 - `%desc` does not include the AIO calls; they are named. `--seccomp-bpf` lets the calls
   that are not traced run at full speed, which a search with OpenMP threads needs.
-- `strace` prints the first 32 requests of an `io_submit`. The searches submit at most
-  `beam`; the node cache's load submits more, and `hops.py` only counts those.
+- `strace` prints the first 32 requests of an `io_submit` unless given `-v`; the 2026-10-02
+  traces were taken without it. The searches submit at most `beam`; the node cache's
+  breadth-first load submits a whole level at once, and `hops.py` only counts a submit of
+  more than 32 requests, by the call's own count, so a trace with `-v` or without reads the same.
 - **The trace has no query boundaries.** Without a node cache a query starts at the submit
   of one read of a medoid's sector, and `hops.py` cuts there. With a cache nothing marks
   it, so `search.py` without `--batch` issues a `stat` of `/aeiou-query-mark` between

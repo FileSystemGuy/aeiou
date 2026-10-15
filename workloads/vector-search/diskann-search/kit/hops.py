@@ -2,7 +2,7 @@
 sizes; per query (a query starts at search.py's mark, or without marks at the submit that reads a
 medoid's sector, which only an index without a node cache issues), rounds and
 sector reads; how the sector reads spread over the file; and the submits of more than 32
-requests (the node cache's load), which `strace` abbreviates and which are only counted.
+requests (the node cache's breadth-first levels), which are only counted.
 
     python hops.py TRACE INDEX_DIR [--prefix ann] [--tail N] [--params DOC]
 
@@ -14,6 +14,12 @@ import numpy as np
 
 SUBMIT = re.compile(r"^(\d+) +([\d.]+) io_submit\(\w+, (\d+), ")
 OFF = re.compile(r"aio_nbytes=(\d+), aio_offset=(\d+)")
+# A search round submits at most `beam` requests (4 traced) and the node cache's load blocks of 8;
+# the breadth-first levels that find the cache's nodes submit a level at once, the medoids (one per
+# build shard: 13 traced) and then their neighbours (hundreds). A submit of more than BULK is such a
+# level. The count is the call's own (its second argument), never the printed array, which `strace`
+# without `-v` cuts at 32 elements: the same submits are bulk with `-v` or without.
+BULK = 32
 
 
 def main():
@@ -43,7 +49,9 @@ def main():
             continue
         tid, n = int(m.group(1)), int(m.group(3))
         io = [(int(b), int(o)) for b, o in OFF.findall(line)]
-        if len(io) != n:                              # strace prints 32 elements: a bulk submit, the node cache's load
+        if n > BULK:                                  # a breadth-first level of the node cache's load
+            if marked:                                # the load precedes the first mark
+                sys.exit(f"hops.py: a query round of {n} requests (thread {tid}); a beam over {BULK} is not told from the node cache's load")
             bulk.append(n)
             continue
         sizes.update(b for b, _ in io)

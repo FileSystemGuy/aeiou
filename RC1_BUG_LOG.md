@@ -509,3 +509,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `test_the_runner_loads_an_export_that_mkdirs_its_root` (a real `aeiou dry-run`): 8 fail on the
   old trace.py, 8 pass on the new; test_trace.py 80 passed (+1 xfail held for a pending fix).
 
+## 24. diskann-search's `hops.py` read its trace through strace's 32-element cut
+
+- **Where:** `workloads/vector-search/diskann-search/kit/hops.py` (the bulk-submit test) and the
+  capture command in that mechanism's README.
+- **Found by:** the fix of bug 15: the kit's comment "strace prints 32 elements" showed it
+  classified the node cache's bulk load by `len(io) != n` (iocbs printed fewer than requested),
+  so its README could not take the `-v` every other capture command now has.
+- **Defect:** on a trace taken with `-v` (whole arrays), hops.py's `bulk_submits`,
+  `bulk_requests`, and `bulk_largest` fell to 0, `before_first_query` absorbed the
+  breadth-first level, and `request_bytes` counted the load (hops and node_cache stayed right
+  only because the marked capture drops what precedes the first query).
+- **Fix:** a submit of more than `BULK = 32` requests, by the call's own count `n`, is a
+  breadth-first level of the cache load (a query round submits at most the beam, 4 traced; the
+  cache blocks are 8): on a cut trace that is exactly the old test, so earlier output is
+  unchanged; a submit over 32 after the first query mark now exits with a message rather than
+  being miscounted. The README's command adds `-v` (and `io_pgetevents`, as the others name).
+- **Evidence:** new `builder/tests/test_kits.py`: `test_hops_reads_a_trace_with_and_without_v_alike`
+  (one synthetic trace printed cut and whole: identical report and `--params`) and
+  `test_hops_refuses_a_query_round_over_the_bulk_size` fail on the old hops.py and pass on the
+  new.
+- **Noted, record unchanged:** the committed sift1m-cache capture's fan-out `"32": 1` is the cut
+  752-request breadth-first level (10,765 = 10,000 + 13 + 752); the record is short ~720 reads
+  (~0.65%) in a part of the load the abstract does not claim to model; its `params.json`
+  node_cache (10,765, taken from `n`) is right. A recapture with `-v` would correct the record.
+
