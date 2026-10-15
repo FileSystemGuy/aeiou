@@ -652,8 +652,10 @@ pub struct RootCheck {
 }
 
 /// Every path the trace reads without creating must exist with at least the farthest read's
-/// extent; every path it creates must not exist (after `--clean-namespaces` removed them).
-pub fn check_root(tf: &TraceFile, root: &Path) -> Result<RootCheck> {
+/// extent; with `creates`, every path it creates must not exist (after `--clean-namespaces`
+/// removed them). `--root` is shared by every host and only rank 0 prepares it, so only rank
+/// 0 checks the creates, after its clean; another host checking them would race that clean.
+pub fn check_root(tf: &TraceFile, root: &Path, creates: bool) -> Result<RootCheck> {
     for p in &tf.inputs {
         let full = root.join(p);
         let md = std::fs::symlink_metadata(&full).map_err(|e| anyhow!("trace `{}`: {} ({}): {e}: the application's data must be under --root", tf.name, p, full.display()))?;
@@ -663,7 +665,7 @@ pub fn check_root(tf: &TraceFile, root: &Path) -> Result<RootCheck> {
             }
         }
     }
-    for p in &tf.header.creates {
+    for p in tf.header.creates.iter().filter(|_| creates) {
         let full = root.join(p);
         if std::fs::symlink_metadata(&full).is_ok() {
             bail!("trace `{}`: {} exists, and the trace creates it: remove it or pass --clean-namespaces", tf.name, p);

@@ -1692,10 +1692,12 @@ within a round. `dry-run --gpu 0` prints the lines as `app#0 [lane,ordinal] op p
 **Before the gate.** The run prints each trace (lines, lanes, opens, creates, sha256), then
 checks under `--root`: every path the trace reads without creating must exist, a regular
 file with at least the farthest read's end as its size; every path in `creates` must not
-exist. `--clean-namespaces` (rank 0, with the namespaces) removes the `creates` set, last
-first, and nothing else: a trace's root is the application's own data, which the runner
-never empties. **V16:** a trace with a nonempty `creates` in an actor template whose
-resolved instance count exceeds one is refused (the copies would write the same files);
+exist, which rank 0 alone checks, after its clean, as it alone checks the output namespaces
+(another host's check would race that clean; 2026-10-14, RC1 review). `--clean-namespaces`
+(rank 0, with the namespaces) removes the `creates` set, last first, and nothing else: a
+trace's root is the application's own data, which the runner never empties. **V16:** a
+trace with a nonempty `creates` in an actor template whose resolved instance count exceeds
+one is refused (the copies would write the same files);
 one with no creates may run in `G` instances, which is `G` clients replaying one
 application's sequence against the same files, not a model of `G` ranks. The limits of §11
 count a trace's lanes as threads and its peak of open ids as files. The JSON report (§12)

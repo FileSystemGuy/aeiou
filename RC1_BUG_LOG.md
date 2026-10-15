@@ -725,3 +725,22 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   builder tests touching arrays 184 passed. faiss lists=8192 datagen 1.7 s vs 1.9 s; diskann
   unchanged. Fixed in an isolated worktree and applied.
 
+## 33. On several hosts, a trace's created paths were checked by every rank while rank 0 cleaned them
+
+- **Where:** `runner/aeiou/src/trace.rs` (`check_root`, new `creates` argument),
+  `runner/aeiou/src/main.rs` (`run_connected`); runner REFERENCE §13 *Before the gate*.
+- **Found by:** review of the coordinator: a trace node run on 2 ranks with `--clean-namespaces`
+  over a root holding a stale created path failed 2 of 6 tries.
+- **Defect:** every rank checked that the paths the trace creates were absent, but only rank 0
+  removes them under `--clean-namespaces` (it alone prepares the shared root, CLAUDE.md), and
+  nothing ordered the two before the gate: rank 1 could see the stale path first and refuse
+  with "out/final exists … remove it or pass --clean-namespaces", the flag the user had passed.
+- **Fix:** the created-path check runs on rank 0 alone, after its clean, as output namespaces
+  already work (`prepare_namespaces` is rank 0's); other ranks check the trace's inputs and say
+  the created paths are rank 0's to check. No fingerprint change.
+- **Evidence:** the repro passes 10 of 10 tries. `tests/trace.rs::only_rank_0_checks_what_a_trace_creates_after_its_clean`
+  (two processes, each rank its own root holding the stale path, so a rank 1 that checks always
+  fails) fails without the fix and passes with it; `--test all` 85 passed.
+- **Noted:** failing coordinator datagen tests leave 2–4 GB each in `/tmp` and filled the disk
+  during the review (cleaned; queued as a test-hygiene bug).
+

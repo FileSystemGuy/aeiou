@@ -1378,9 +1378,15 @@ fn run_connected(
             }
         }
     }
+    // the paths a trace creates are checked absent by rank 0 alone, after its clean: the other
+    // hosts would race it (they check what rank 0 does not prepare, the inputs)
     for t in traces.iter() {
-        let c = aeiou::trace::check_root(t, &a.root)?;
-        writeln!(out, "trace {}: {} input path(s) present under --root, {} to be created absent", c.file, c.inputs, c.creates)?;
+        let c = aeiou::trace::check_root(t, &a.root, a.rank == 0)?;
+        if a.rank == 0 {
+            writeln!(out, "trace {}: {} input path(s) present under --root, {} to be created absent", c.file, c.inputs, c.creates)?;
+        } else {
+            writeln!(out, "trace {}: {} input path(s) present under --root, {} to be created checked by rank 0", c.file, c.inputs, c.creates)?;
+        }
     }
     out.flush()?;
 

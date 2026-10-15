@@ -240,24 +240,26 @@ fn root_checks_before_the_gate_and_clean_namespaces() {
     let root = d.join("root");
     std::fs::create_dir_all(root.join("out")).unwrap();
     // inputs missing
-    let e = aeiou::trace::check_root(tf, &root).unwrap_err().to_string();
+    let e = aeiou::trace::check_root(tf, &root, true).unwrap_err().to_string();
     assert!(e.contains("shared") && e.contains("--root"), "{e}");
     populate(&root);
     // an input shorter than the trace reads
     std::fs::write(root.join("shared"), vec![b'x'; 100]).unwrap();
-    let e = aeiou::trace::check_root(tf, &root).unwrap_err().to_string();
+    let e = aeiou::trace::check_root(tf, &root, true).unwrap_err().to_string();
     assert!(e.contains("100 bytes") && e.contains("8192"), "{e}");
     populate(&root);
-    let c = aeiou::trace::check_root(tf, &root).unwrap();
+    let c = aeiou::trace::check_root(tf, &root, true).unwrap();
     assert_eq!((c.inputs, c.creates), (2, 2));
     // a created path present is refused; `clean` removes exactly the creates
     std::fs::write(root.join("out/final"), b"old").unwrap();
     std::fs::write(root.join("keep"), b"mine").unwrap();
-    let e = aeiou::trace::check_root(tf, &root).unwrap_err().to_string();
+    let e = aeiou::trace::check_root(tf, &root, true).unwrap_err().to_string();
     assert!(e.contains("out/final") && e.contains("--clean-namespaces"), "{e}");
+    // a host other than rank 0 does not check the creates (rank 0 checks them after its clean)
+    aeiou::trace::check_root(tf, &root, false).unwrap();
     assert_eq!(aeiou::trace::clean(tf, &root).unwrap(), 1);
     assert!(root.join("keep").exists() && !root.join("out/final").exists());
-    aeiou::trace::check_root(tf, &root).unwrap();
+    aeiou::trace::check_root(tf, &root, true).unwrap();
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -330,5 +332,41 @@ fn a_path_outside_root_is_refused_at_load_and_nothing_outside_is_touched() {
     assert!(!out.status.success() && err.contains("`..` component"), "{err}");
     assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
     assert_eq!(std::fs::read(d.join("outside/victimdir/keep")).unwrap(), b"precious");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// Several hosts with `--clean-namespaces` and a path the trace creates left by an earlier
+/// run: only rank 0 removes it, so only rank 0 may check it absent, after its clean; a check
+/// on another host raced that clean and failed the run at random. Made deterministic here:
+/// rank 1's view of the root keeps the stale path (another directory with the same inputs,
+/// as a client whose cache still shows the removed path would), which nobody but rank 0 is
+/// allowed to empty, so a rank 1 that checked the creates would always refuse.
+#[test]
+fn only_rank_0_checks_what_a_trace_creates_after_its_clean() {
+    let d = tmpdir("ranks");
+    let p = abstract_with(&d, FIXTURE, Some(1));
+    let (root0, root1) = (d.join("root0"), d.join("root1"));
+    for r in [&root0, &root1] {
+        populate(r);
+        std::fs::write(r.join("out/final"), b"old").unwrap();
+    }
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let mut children = Vec::new();
+    for (rank, root) in [(0, &root0), (1, &root1)] {
+        let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.arg("run").arg(&p).args(["--gpus", "2", "--time-scale", "0", "--clean-namespaces", "--ranks", "2"]).arg("--root").arg(root);
+        c.arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}"));
+        children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap());
+    }
+    let outs: Vec<_> = children.into_iter().map(|c| c.wait_with_output().unwrap()).collect();
+    for (rank, o) in outs.iter().enumerate() {
+        assert!(o.status.success(), "rank {rank}: {}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    }
+    let r1 = String::from_utf8_lossy(&outs[1].stdout);
+    assert!(r1.contains("trace t.jsonl: 2 input path(s) present under --root, 2 to be created checked by rank 0"), "{r1}");
+    assert!(String::from_utf8_lossy(&outs[0].stdout).contains("trace t.jsonl: 1 created path(s) removed"));
+    // rank 0 cleaned and ran on its root; rank 1 touched nothing on its own
+    assert_eq!(std::fs::read(root0.join("out/final")).unwrap().len(), 1000);
+    assert_eq!(std::fs::read(root1.join("out/final")).unwrap(), b"old");
     std::fs::remove_dir_all(&d).unwrap();
 }
