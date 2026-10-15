@@ -328,11 +328,20 @@ _RESUMED = re.compile(r"^<\.\.\. (\w+) resumed>\s*(.*)$", re.S)
 _RET = re.compile(r"^(-?\d+|0x[0-9a-f]+|\?)")
 _DUR = re.compile(r"<(\d+\.\d+)>$")
 _ERRNO = re.compile(r"^\s*(E[A-Z0-9]+)")
+# CLONE_FILES in the flags of a `clone` (its `flags=` argument, the second: `child_stack=` is
+# first) or a `clone3` (the `flags` field of its struct, the first argument)
+_CLONE_FILES = re.compile(r"\bflags=[^,}]*\bCLONE_FILES\b")
 _FD = re.compile(r"^(-?\d+|AT_FDCWD)(?:<(.*)>)?$", re.S)
 _IOV_LEN = re.compile(r"iov_len=(\d+)")
 _IOCB = re.compile(r"aio_data=(\w+), aio_lio_opcode=IOCB_CMD_(\w+).*?aio_fildes=(\d+)(?:<(.*?)>)?, .*?aio_nbytes=(\d+), aio_offset=(-?\d+)")
 _EVENT = re.compile(r"\{data=(\w+), obj=\w+, res=(-?\d+)")
 UNFINISHED = "<unfinished ...>"
+
+
+def shares_files(name: str, args: str) -> bool:
+    """Whether a `clone`/`clone3` (whose argument text is `args`) shares the descriptor table
+    with its child; `fork` and `vfork` copy it."""
+    return name in ("clone", "clone3") and _CLONE_FILES.search(args) is not None
 
 
 def split_args(s: str) -> list[str]:
@@ -536,10 +545,10 @@ class Tracer:
     def _adopt(self, tid: int) -> dict[int, File]:
         """A tid seen before its `clone` returned (or with no `clone` in the trace): the child
         of the one unfinished `clone`, if there is exactly one."""
-        waiting = [(p, pend) for p, pend in self.pending.items() if pend[0] in CLONES]
+        waiting = [(p, pend) for p, pend in self.pending.items() if pend[0] in CLONES and p != tid]   # never its own child
         if len(waiting) == 1:
             p, pend = waiting[0]
-            return self._child(p, tid, "CLONE_FILES" in pend[1])
+            return self._child(p, tid, shares_files(pend[0], pend[1]))
         if self.tables:
             self.notes["threads_without_clone"] += 1
         t = self.tables[tid] = {}
@@ -686,7 +695,7 @@ class Tracer:
         when = (tid, issued, done)
         if name in CLONES:
             if ret > 0:
-                self._child(tid, ret, name in ("clone", "clone3") and "CLONE_FILES" in (a[0] if a else ""))
+                self._child(tid, ret, shares_files(name, ", ".join(a)))
             return
         if name in ("chdir", "fchdir"):
             if ret == 0 and a:

@@ -935,3 +935,51 @@ def test_metrics_and_export_give_an_escaped_file_one_name():
     assert header["creates"] == ["c<d>e"] and header["opens"] == 6 and header["notes"] == {}
     paths = [e["path"] for e in events if "path" in e]
     assert paths == ["café", "café", "c<d>e", "x\\y", "a b", "n,m", "café"]
+
+
+# a thread opens and reads, the main thread closes and reopens the path (taking the same
+# descriptor), the thread reads again: one table, so the close is the thread's open's and the
+# second read is on the new open. The thread is made by legacy `clone` (glibc < 2.34, as
+# glibc 2.31 prints it under strace -f, flags the second argument) or by `clone3`.
+SHARED_TABLE = """
+100 1700000006.000000 {clone} = 101 <0.000050>
+101 1700000006.000100 openat(AT_FDCWD</d>, "/d/x", O_RDONLY) = 3</d/x> <0.000010>
+101 1700000006.000200 read(3</d/x>, "..."..., 4096) = 4096 <0.000010>
+100 1700000006.000300 close(3</d/x>) = 0 <0.000010>
+100 1700000006.000400 openat(AT_FDCWD</d>, "/d/x", O_RDONLY) = 3</d/x> <0.000010>
+101 1700000006.000500 read(3</d/x>, "..."..., 4096) = 4096 <0.000010>
+"""
+LEGACY_CLONE = ("clone(child_stack=0x7f5c3a1fdfb0, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM"
+                "|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, parent_tid=[101], tls=0x7f5c3a1fe700, child_tidptr=0x7f5c3a1fe9d0)")
+CLONE3 = "clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f5c3a1fe9d0, parent_tid=0x7f5c3a1fe9d0, exit_signal=0, stack=0x7f5c399fd000, stack_size=0x7fff00, tls=0x7f5c3a1fe6c0} => {parent_tid=[101]}, 88)"
+
+
+def _shared_table(clone, unfinished=False):
+    text = SHARED_TABLE.format(clone=clone)
+    if unfinished:   # the thread's first call comes before its clone returns: the `_adopt` path
+        lines = text.strip().splitlines()
+        lines[0] = f"100 1700000006.000000 {clone} <unfinished ...>"
+        lines.insert(2, "100 1700000006.000150 <... " + clone.split("(")[0] + " resumed>) = 101 <0.000200>")
+        text = "\n".join(lines)
+    lines = text.strip().splitlines()
+    return metrics_of(lines, ["/d"]), trace.export_of(lines, "/d")
+
+
+@pytest.mark.parametrize("unfinished", [False, True])
+def test_a_legacy_clone_shares_the_descriptor_table_as_clone3_does(unfinished):
+    m3, (h3, ev3) = _shared_table(CLONE3, unfinished)
+    m, (h, ev) = _shared_table(LEGACY_CLONE, unfinished)
+    assert m == m3 and h == h3 and ev == ev3
+    ops = [(e["lane"], e["op"], e["fd"], e.get("offset")) for e in ev]
+    assert ops == [(0, "open", 0, None), (0, "read", 0, 0), (1, "close", 0, None), (1, "open", 1, None), (0, "read", 1, 0)]
+    # a fork copies the table: the thread's descriptor 3 stays its first open
+    mf, (hf, evf) = _shared_table("clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f)", unfinished)
+    assert [(e["lane"], e["op"], e["fd"]) for e in evf][-1] == (0, "read", 0)
+
+
+def test_shares_files_reads_the_flags_argument_only():
+    assert trace.shares_files("clone", LEGACY_CLONE[6:-1])
+    assert trace.shares_files("clone3", CLONE3[7:-1])
+    assert not trace.shares_files("clone", "child_stack=NULL, flags=CLONE_CHILD_CLEARTID|SIGCHLD, child_tidptr=0x7f")
+    assert not trace.shares_files("clone", "child_stack=NULL, flags=CLONE_FILESYSTEM_X")   # whole flag names only
+    assert not trace.shares_files("fork", "flags=CLONE_FILES")

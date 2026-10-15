@@ -185,3 +185,38 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Left open (noted):** an unseeded `_random.Random()` through the C type, and a default from
   a file's `st_mtime` (stable across both builds), are not caught.
 
+## 9. aeiou-trace missed CLONE_FILES on a legacy `clone()`, so threads lost their shared descriptors
+
+- **Where:** `builder/aeiou/trace.py`, `Tracer.call` (the CLONES branch) and `_adopt`; new
+  `shares_files`.
+- **Found by:** review of aeiou-trace: two traces identical but for `clone(` against `clone3(`
+  (a thread opens and reads, main closes and reopens the path, the thread reads again) gave
+  different exports and metrics. Every clone in the tests was a fork, so it was untested.
+- **Defect:** the branch looked for CLONE_FILES in the first argument, where clone3's struct
+  holds it but legacy clone's is `child_stack=`; its flags are the second argument. Under glibc
+  older than 2.34 (RHEL 8, Ubuntu 20.04) every pthread is a legacy clone, so every thread was
+  given a copy of the descriptor table: the close was missing from the export and the thread's
+  second read went to the stale, closed open at a sequential 4096 (run lengths, first touches,
+  and rereads wrong). `_adopt` (a child calling before its clone returns) searched the whole
+  line instead, which could match anywhere.
+- **Fix:** `shares_files(name, args)` looks for CLONE_FILES only inside a `flags=` value
+  (clone's argument, clone3's field), whole word; both sites use it. No other clone flag is
+  read. No fingerprint or contract change.
+- **Evidence:** `test_trace.py::test_a_legacy_clone_shares_the_descriptor_table_as_clone3_does[False]`
+  (glibc 2.31-style lines against clone3; metrics, header, events identical; a fork control)
+  fails without the fix and passes with it; `test_shares_files_reads_the_flags_argument_only`;
+  test_trace.py: 64 passed.
+
+## 10. aeiou-trace recursed without end on a task's own unfinished clone
+
+- **Where:** `builder/aeiou/trace.py`, `Tracer._adopt`.
+- **Found by:** the fixer of bug 9, exercising `_adopt` with an unfinished clone as the parent's
+  first traced call and the child's first call before `<... resumed>`.
+- **Defect:** `table(parent)` called `_adopt(parent)`, which picked the parent's *own* pending
+  clone as the one it was born of, then `_child(parent, parent)`, and round again: `aeiou-trace`
+  died with RecursionError on such a trace.
+- **Fix:** the waiting-clone filter excludes the task itself (`p != tid`: a task is never its
+  own child). Same commit as bug 9.
+- **Evidence:** `test_a_legacy_clone_shares_the_descriptor_table_as_clone3_does[True]` raises
+  RecursionError with the guard removed and passes with it.
+
