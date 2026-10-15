@@ -117,3 +117,45 @@ fn a_wrong_file_for_the_abstract_says_what_an_abstract_is() {
     assert!(err.starts_with(&format!("aeiou dry-run: {}: ", bad.display())) && !err.contains("Usage:"), "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A number that can only be meaningless is a usage error in the frame, never a panic, a bare
+/// parse error with status 1, or a silent clamp (RC1 review): dry-run's --ranks, --steps,
+/// --metrics-block, --metrics-sample, --gpu, --limit, --threads; run's and datagen's zeros.
+#[test]
+fn a_meaningless_number_is_a_usage_error() {
+    let ast = example("file_per_sample.ast.json");
+    let dry = |extra: &[&str]| frame(&mut aeiou(&[&["dry-run", &ast, "--gpus", "2"], extra].concat()), "aeiou dry-run").0;
+    assert_eq!(dry(&["--ranks", "0"]), "--ranks 0: the run needs at least one host");
+    let (message, _) = frame(aeiou(&["dry-run", &ast, "--gpus", "2"]).env("AEIOU_RANKS", "0"), "aeiou dry-run");
+    assert_eq!(message, "--ranks 0: the run needs at least one host (--ranks from env AEIOU_RANKS)");
+    assert_eq!(dry(&["--ranks=-1"]), "--ranks -1: the run needs at least one host");
+    assert_eq!(dry(&["--threads", "0"]), "--threads 0: the walk needs a thread");
+    for s in ["1..x", "x..2", "3", "5..1", "2..2", "-1..2"] {
+        assert_eq!(dry(&["--gpu", "0", &format!("--steps={s}")]), format!("--steps {s}: expected A..B, whole numbers with 0 <= A < B"));
+    }
+    assert_eq!(dry(&["--metrics-block", "0"]), "--metrics-block 0: the block size is at least 1 byte");
+    assert_eq!(dry(&["--metrics-sample", "0"]), "--metrics-sample 0: N is at least 1 (1 keeps every block)");
+    assert_eq!(dry(&["--gpu", "0", "--limit", "0"]), "--limit 0: nothing would be printed");
+    assert_eq!(dry(&["--gpu=-1"]), "--gpu -1: instance ids start at 0");
+    // --gpu 2 of --gpus 2 named no instance and printed nothing, with status 0
+    assert_eq!(dry(&["--gpu", "2"]), "--gpu 2: no actor has that instance (ids: gpu 0..2)");
+    assert_eq!(dry(&["--gpu", "5"]), "--gpu 5: no actor has that instance (ids: gpu 0..2)");
+    let o = aeiou(&["dry-run", &ast, "--gpus", "2", "--gpu", "1", "--steps", "0..1", "--limit", "3"]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.starts_with("gpu#1 [")).count(), 3);
+    let run = |extra: &[&str]| frame(&mut aeiou(&[&["run", &ast, "--gpus", "1", "--root", "/nonexistent"], extra].concat()), "aeiou run").0;
+    assert_eq!(run(&["--threads", "0"]), "--threads 0: an event loop needs a thread (leave it out for one per core)");
+    assert_eq!(run(&["--buffer-mib", "0"]), "--buffer-mib 0: a whole number of MiB above 0 that fits in memory");
+    assert_eq!(run(&["--buffer-mib", &(usize::MAX >> 10).to_string()]), format!("--buffer-mib {}: a whole number of MiB above 0 that fits in memory", usize::MAX >> 10));
+    assert_eq!(run(&["--write-compress", "0"]), "--write-compress 0: the compression ratio is at least 1");
+    assert_eq!(run(&["--time-scale=-1"]), "--time-scale -1: a factor of 0 or more");
+    assert_eq!(run(&["--time-scale", "inf"]), "--time-scale inf: a factor of 0 or more");
+    assert_eq!(run(&["--iowq-max-workers", "0"]), "--iowq-max-workers 0: a cap of no workers (leave it out for the kernel's default)");
+    assert_eq!(run(&["--max-gap", "NaN"]), "--max-gap NaN: a number of seconds, 0 or more");
+    let gen = |extra: &[&str]| frame(&mut aeiou(&[&["datagen", &ast, "--root", "/nonexistent"], extra].concat()), "aeiou datagen").0;
+    assert_eq!(gen(&["--writers", "0"]), "--writers 0: the datagen needs a writer (leave it out for one per core)");
+    assert_eq!(gen(&["--dedupe", "0"]), "--dedupe 0: the dedupe ratio is at least 1");
+    assert_eq!(gen(&["--compress", "0"]), "--compress 0: the compression ratio is at least 1");
+    // a window too long for a Duration panicked in the conversion
+    assert!(gen(&["--progress-secs", "1e30"]).ends_with(": a positive number of seconds"));
+}

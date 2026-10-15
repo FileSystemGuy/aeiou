@@ -650,3 +650,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `a_subset_runs_whole_directories_of_the_corpus`, `a_killed_datagen_or_grow_settles_at_whole_directories`)
   failed once each under the load of parallel builds and passed alone (queued as a timing check).
 
+## 30. Meaningless numeric options panicked, exited 1, or were silently bent into something else
+
+- **Where:** `runner/aeiou/src/main.rs` (`dry_run`, `resolve_run`, `datagen_cmd`),
+  `runner/aeiou/src/dryrun.rs` (`write_report`).
+- **Found by:** review of the runner's CLI against runner REFERENCE §15 (a bad value is a usage
+  error, exit 2; a panic is never acceptable), then a sweep of every numeric option of
+  dry-run, run, and datagen.
+- **Defect:** `dry-run --ranks 0` (or `AEIOU_RANKS=0`) panicked dividing by zero (exit 101);
+  `--steps 1..x` and `--metrics-block 0`/`--metrics-sample 0` exited 1 outside the frame;
+  `--gpu 5` with two instances, `--gpu=-1`, `--steps 5..1`, `--limit 0`, `--threads 0` printed
+  nothing and exited 0; `datagen --progress-secs 1e30` panicked; `--dedupe 0`/`--compress 0`
+  were silently recorded as 1, `--writers 0` ran; `run --buffer-mib 0` became 1 MiB (a huge value
+  wrapped on `<< 20`), `--write-compress 0` became 1, a negative or NaN `--time-scale` became 0
+  and `inf` would sleep forever, `--threads 0` meant the default, `--iowq-max-workers 0` no cap,
+  `--max-gap` took negatives and NaN.
+- **Fix:** each is a usage error in the shared frame (exit 2) naming the flag, the value, and
+  the rule (`--ranks 0: the run needs at least one host`, `--gpu 5: no actor has that instance
+  (ids: gpu 0..2)`, `--steps S: expected A..B, whole numbers with 0 <= A < B`, …), with the
+  layer named when the value came from the environment; `write_report` can no longer divide by
+  zero. No fingerprint or contract change.
+- **Evidence:** `tests/usage.rs::a_meaningless_number_is_a_usage_error` (every case above, and
+  a valid `--gpu 1 --steps 0..1 --limit 3` printing exactly 3 lines) fails on the old main.rs
+  (exit 101 for 2) and passes on the new; `--test all` 82 passed, man pages included.
+

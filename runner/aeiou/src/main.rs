@@ -468,6 +468,25 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     if o.ranks < 1 || o.rank < 0 || o.rank >= o.ranks {
         aeiou::usage!("--rank {} of --ranks {}: rank must be in [0, ranks){}", o.rank, o.ranks, l.from(&["rank", "ranks"]));
     }
+    // values that can only be meaningless, refused rather than clamped to something else
+    if o.threads == Some(0) {
+        aeiou::usage!("--threads 0: an event loop needs a thread (leave it out for one per core){}", l.from(&["threads"]));
+    }
+    if o.buffer_mib == 0 || o.buffer_mib.checked_mul(1 << 20).is_none() {
+        aeiou::usage!("--buffer-mib {}: a whole number of MiB above 0 that fits in memory{}", o.buffer_mib, l.from(&["buffer-mib"]));
+    }
+    if o.write_compress == 0 {
+        aeiou::usage!("--write-compress 0: the compression ratio is at least 1{}", l.from(&["write-compress"]));
+    }
+    if !(o.time_scale >= 0.0 && o.time_scale.is_finite()) {
+        aeiou::usage!("--time-scale {}: a factor of 0 or more{}", o.time_scale, l.from(&["time-scale"]));
+    }
+    if o.iowq_max_workers == Some(0) {
+        aeiou::usage!("--iowq-max-workers 0: a cap of no workers (leave it out for the kernel's default){}", l.from(&["iowq-max-workers"]));
+    }
+    if let Some(g) = o.max_gap.filter(|g| !(*g >= 0.0 && g.is_finite())) {
+        aeiou::usage!("--max-gap {g}: a number of seconds, 0 or more{}", l.from(&["max-gap"]));
+    }
     Ok((o, l))
 }
 
@@ -653,8 +672,18 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     if ranks < 1 || rank < 0 || rank >= ranks {
         aeiou::usage!("--rank {rank} of --ranks {ranks}: rank must be in [0, ranks){}", l.from(&["rank", "ranks"]));
     }
-    if !(progress_secs > 0.0 && progress_secs.is_finite()) {
-        aeiou::usage!("--progress-secs {progress_secs}: a positive number of seconds{}", l.from(&["progress-secs"]));
+    let progress = match std::time::Duration::try_from_secs_f64(progress_secs) {
+        Ok(d) if progress_secs > 0.0 => d,
+        _ => aeiou::usage!("--progress-secs {progress_secs}: a positive number of seconds{}", l.from(&["progress-secs"])),
+    };
+    if writers == Some(0) {
+        aeiou::usage!("--writers 0: the datagen needs a writer (leave it out for one per core){}", l.from(&["writers"]));
+    }
+    if a.dedupe == 0 {
+        aeiou::usage!("--dedupe 0: the dedupe ratio is at least 1");
+    }
+    if a.compress == 0 {
+        aeiou::usage!("--compress 0: the compression ratio is at least 1");
     }
     let cfg = parse_config(&a.shape, a.gpus, 0)?;
     // at a dataset root, rank 0 alone reads the manifest (DESIGN_REVIEW.md §3.70): with several
@@ -729,7 +758,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
     let object_threads = object_engine(&endpoints, object_threads, &l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress: std::time::Duration::from_secs_f64(progress_secs), resume, resize, settle, sigint: true, ignore_space };
+    let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress, resume, resize, settle, sigint: true, ignore_space };
     let mut out = std::io::stdout();
     match &opts.resume {
         Some(m) if !m.progress["settle"].is_null() => {
@@ -1548,6 +1577,35 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     let threads = l.layered::<usize>("threads", a.threads, None)?;
     miss.check()?;
     l.finish()?;
+    if let Some(r) = ranks.filter(|r| *r < 1) {
+        aeiou::usage!("--ranks {r}: the run needs at least one host{}", l.from(&["ranks"]));
+    }
+    if threads == Some(0) {
+        aeiou::usage!("--threads 0: the walk needs a thread{}", l.from(&["threads"]));
+    }
+    if let Some(g) = a.gpu.filter(|g| *g < 0) {
+        aeiou::usage!("--gpu {g}: instance ids start at 0");
+    }
+    // the outermost loop's indices are 0 and up, so an empty or negative range prints nothing
+    let steps = match &a.steps {
+        None => None,
+        Some(s) => {
+            let range = s.split_once("..").and_then(|(lo, hi)| Some((lo.trim().parse::<i64>().ok()?, hi.trim().parse::<i64>().ok()?)));
+            match range {
+                Some((lo, hi)) if 0 <= lo && lo < hi => Some((lo, hi)),
+                _ => aeiou::usage!("--steps {s}: expected A..B, whole numbers with 0 <= A < B"),
+            }
+        }
+    };
+    if a.limit == Some(0) {
+        aeiou::usage!("--limit 0: nothing would be printed");
+    }
+    if a.metrics_block == 0 {
+        aeiou::usage!("--metrics-block 0: the block size is at least 1 byte");
+    }
+    if a.metrics_sample == 0 {
+        aeiou::usage!("--metrics-sample 0: N is at least 1 (1 keeps every block)");
+    }
     let (abstract_path, gpus) = (abstract_path.expect("checked"), gpus.expect("checked"));
     let cfg = parse_config(&a.run.shape, gpus, a.run.seed)?;
     let loaded = aeiou::load(&abstract_path)?;
@@ -1557,23 +1615,21 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     model.traces = loaded.traces.clone();
 
     let filter = if a.gpu.is_some() || a.steps.is_some() || a.limit.is_some() {
-        let steps = match &a.steps {
-            None => None,
-            Some(s) => {
-                let Some((lo, hi)) = s.split_once("..") else { aeiou::usage!("--steps {s}: expected A..B") };
-                Some((lo.parse::<i64>()?, hi.parse::<i64>()?))
-            }
-        };
-        Some(dryrun::Filter { actor: Some(a.gpu.unwrap_or(0)), steps, limit: a.limit })
+        let actor = a.gpu.unwrap_or(0);
+        // --gpu names an instance of any template: it must be below the largest count
+        let counts = aeiou::vm::actor_counts(&model)?;
+        let most = counts.iter().map(|(_, n)| *n).max().unwrap_or(0);
+        if actor >= most {
+            let each: Vec<String> = counts.iter().map(|(name, n)| format!("{name} 0..{n}")).collect();
+            aeiou::usage!("--gpu {actor}: no actor has that instance (ids: {})", each.join(", "));
+        }
+        Some(dryrun::Filter { actor: Some(actor), steps, limit: a.limit })
     } else {
         None
     };
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
 
     let started = std::time::Instant::now();
-    if a.metrics_block == 0 || a.metrics_sample == 0 {
-        bail!("--metrics-block and --metrics-sample must be at least 1");
-    }
     let metrics = (a.metrics || a.metrics_json.is_some()).then_some(aeiou::metrics::Opts { block: a.metrics_block, sample: a.metrics_sample });
     let mut report = dryrun::run_with(&model, threads, filter, metrics)?;
     let projections = aeiou::project::project_all(&model, threads)?;

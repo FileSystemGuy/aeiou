@@ -329,7 +329,7 @@ pub fn write_report(out: &mut impl Write, r: &Report, ranks: Option<i64>, gpus: 
         crate::metrics::write_text(out, &r.total, "  ")?;
     }
     writeln!(out, "fingerprint {:016x}", r.total.fingerprint)?;
-    if let Some(ranks) = ranks {
+    if let Some(ranks) = ranks.map(|r| r.max(1)) {
         let per_host = (gpus + ranks - 1) / ranks;
         // instances are assigned to hosts by contiguous id range: host h owns [h·per_host, (h+1)·per_host)
         let mut worst: u64 = 0;
