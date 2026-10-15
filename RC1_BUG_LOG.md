@@ -2549,3 +2549,90 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   datagen form's own usage line (the fresh form's bytes unchanged); "--time-scale -1: a factor of 0
   or more" etc.; no stray space; "not a dataset id (64 lowercase hex digits, …)" exit 2.
 - **Evidence:** `usage::messages_say_what_is_wrong` fails on HEAD and passes; same suite runs as bug 112.
+
+## 119. Any non-UTF-8 environment variable or argument made every `aeiou` subcommand panic
+
+- **Where:** `runner/aeiou/src/main.rs` (`args_os`, clap `InvalidUtf8` naming the argument),
+  `runner/aeiou/src/options.rs` (`vars_os` filtered on the `AEIOU_` bytes, environment held as
+  `OsString`, `Layered::from_env(&OsStr)`); `runner/aeiou/tests/options.rs`, unit tests.
+- **Found by:** RC1 third-round UI review (RV3b): `env "FOO=$(printf 'a\xff')" aeiou dry-run …` panicked
+  in `std::env::vars()` (any variable on the host, not only `AEIOU_*`), exit 101; a non-UTF-8
+  `--root`, `aeiou check` path, `AEIOU_ROOT`, or `--param` value panicked in `args()`.
+- **Fix:** arguments and environment are read as OS strings; a path takes any bytes; a text option
+  or variable that is not UTF-8 is a usage error naming it ("AEIOU_COORDINATOR: \"a\\xFF\" is not
+  UTF-8", "\"steps=\\xFF\": not UTF-8, where the option takes text (a path may be any bytes)"), exit 2.
+- **Evidence:** `options::odd_values_from_the_lower_layers_and_the_defaults_in_effect` panics on HEAD's
+  options.rs/main.rs (`env.rs:162:83 … "a\xFF"`) and passes; unit test
+  `empty_and_non_utf8_values_and_the_toml_types`; merged on HEAD 2ca77ed: `--tests --lib --bins`
+  with MinIO all pass (all 152, lib 70), builder suite with MinIO 406, CI's checker diff empty.
+  Fixed in an isolated worktree and applied.
+
+## 120. The documented cluster config (`threads = 8` in `[run]`) was refused for every sync or mmap abstract, as were backend knobs from env or config
+
+- **Where:** `runner/aeiou/src/main.rs` (`run_checked` pass-over block, `pass_over`/`pass_over_flag`,
+  `object_engine`/`object_part` take `&mut Layers`, the `--defer-taskrun`/`--sqpoll` exclusion after
+  the pass-over), `options.rs` (`Layers::pass_over`); `man/aeiou-config.5.md`, `man/aeiou.1.md`,
+  `runner/REFERENCE.md` §14; tests.
+- **Found by:** RV3b: the aeiou-config(5) EXAMPLE verbatim on file_per_sample → "--threads sets the
+  event-loop threads of … this run has one thread per actor (--threads from config …)", exit 2;
+  13 of 14 committed abstracts declare sync or mmap; `AEIOU_OBJECT_THREADS` refused POSIX datagen.
+- **Fix:** a backend knob from env or config the run's API cannot use (io_uring knobs, `--aio-depth`,
+  `--threads`, mmap knobs, POSIX knobs when every name is s3, `--object-threads`/`--object-part-mib`
+  with no object store) is passed over with a `WARNING: … is not used: …` line in the options block
+  and `layers.warnings` in the report, and dropped from `layers.options`; the command line's is
+  still refused.
+- **Evidence:** `options::fixed_options_are_refused_from_the_environment_and_the_file` (rewritten)
+  fails on HEAD and passes; unit test `a_knob_from_a_lower_layer_is_passed_over_and_a_default_shows_its_value`;
+  same suite runs as bug 119.
+
+## 121. An empty `AEIOU_ROOT` (or `root = ""`) was taken as the current directory
+
+- **Where:** `runner/aeiou/src/options.rs` (empty values from env or config); `man/aeiou-config.5.md`; tests.
+- **Found by:** RV3b: `AEIOU_ROOT= aeiou datagen …` wrote `./train` with `root =  [env AEIOU_ROOT]`,
+  exit 0, while `--root ""` is refused; an unset shell variable in a launcher would put a corpus, or
+  `--clean-namespaces`, in the cwd. `AEIOU_COORDINATOR=`, `AEIOU_CONFIG=` were accepted too.
+- **Fix:** an empty value from env or config where a value is required is a usage error ("AEIOU_ROOT:
+  empty, and a value is required (leave it unset for none)"), for root, coordinator, report-json,
+  endpoint, and config (an empty `AEIOU_CONFIG` no longer means no file); `endpoint = []` stays the
+  empty list.
+- **Evidence:** `options::odd_values_from_the_lower_layers_and_the_defaults_in_effect` (nothing written
+  in the cwd) and the unit test; before-evidence by command, since the test stops at bug 119's panic
+  on HEAD; same suite runs as bug 119.
+
+## 122. `AEIOU_NO_X` for a command-line-only boolean suggested a spelling that is itself refused
+
+- **Where:** `runner/aeiou/src/options.rs` (the no-x check moved from `ConfigFile::load` to `finish`);
+  `man/aeiou-config.5.md`; tests.
+- **Found by:** RV3b: `AEIOU_NO_METRICS=1` → "set in the environment as AEIOU_METRICS=true or false",
+  which is then refused as the command line's alone; also `AEIOU_NO_CLEAN_NAMESPACES`, `[dry-run]
+  no-metrics`.
+- **Fix:** "AEIOU_NO_METRICS: --metrics is the command line's alone (`--no-metrics` there)".
+- **Evidence:** the extended no-x unit test and the integration test; same suite runs as bug 119.
+
+## 123. Config type errors showed Rust Debug output (`got String("3")`)
+
+- **Where:** `runner/aeiou/src/options.rs` (`toml_described`); tests.
+- **Found by:** RV3b: `[dry-run] threads = "3"` → "expected an integer, got String(\"3\")".
+- **Fix:** "expected an integer, got the string \"3\"", "expected true or false, got the integer 1".
+- **Evidence:** unit test `empty_and_non_utf8_values_and_the_toml_types`; same suite runs as bug 119.
+
+## 124. The options block showed `none` where a default was in effect
+
+- **Where:** `runner/aeiou/src/options.rs`, `main.rs` (`show_default` in `datagen_cmd`, `dry_run`,
+  `run_checked`); tests.
+- **Found by:** RV3b: datagen `writers = none [default]` then "writers 20"; `object-threads = none` while
+  help says 2; dry-run `threads = none` then "on 20 thread(s)", against §14 "its value in effect".
+- **Fix:** the block shows the value in effect ("20 (all cores)", "one per actor", "256", "fault", "2",
+  "8"); the report JSON keeps `null` for a default.
+- **Evidence:** the integration and unit tests above; same suite runs as bug 119.
+
+## 125. The docs disagreed with the code, and each other, on which options are layered
+
+- **Where:** `man/aeiou-config.5.md` (DESCRIPTION, FILE FORMAT, ENVIRONMENT, OPTIONS BY KIND),
+  `runner/REFERENCE.md` §14 (lists, pass-over, Values, negation, refusals, Tests), `man/aeiou.1.md`.
+- **Found by:** RV3b: aeiou-config(5) listed datagen layered as only root/endpoint/writers/object-threads
+  while aeiou(1) marked `--rank`, `--ranks`, `--coordinator`, `--progress-secs` *Layered* and their
+  variables work; §14 omitted `--object-threads`, `--object-part-mib`, `--progress-secs`.
+- **Fix:** the lists follow the code, with datagen's fixed forms (`--resume`, `--grow`, `--shrink`,
+  `--settle`) named.
+- **Evidence:** man tests (`man.rs`, `test_man.py`) pass; same suite runs as bug 119.

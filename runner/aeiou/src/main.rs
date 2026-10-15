@@ -520,9 +520,8 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
     miss.need(!(o.sqpoll_shared && o.sqpoll.is_none()), "--sqpoll <IDLE_MS>", "a kernel submission thread per loop", Some(&because("needed by --sqpoll-shared", &["sqpoll-shared"])));
     miss.check()?;
     l.finish()?;
-    if o.defer_taskrun && o.sqpoll.is_some() {
-        aeiou::usage!("--defer-taskrun and --sqpoll exclude each other{}", l.from(&["defer-taskrun", "sqpoll"]));
-    }
+    // (--defer-taskrun against --sqpoll is checked once the backend has passed over the knobs
+    // it cannot use: `run_checked`)
     if o.ranks < 1 || o.rank < 0 || o.rank >= o.ranks {
         aeiou::usage!("--rank {} of --ranks {}: rank must be in [0, ranks){}", o.rank, o.ranks, l.from(&["rank", "ranks"]));
     }
@@ -587,7 +586,9 @@ struct DryRunArgs {
 
 fn main() {
     use clap::CommandFactory;
-    let args: Vec<String> = std::env::args().collect();
+    // `args_os`: an argument that is not UTF-8 is clap's to judge (a path takes it, text is a
+    // usage error), never a panic here
+    let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     // the subcommand named on the line, for the frame of a usage error (`usage.rs`): the
     // command as typed and its usage line
     let sub = args.iter().skip(1).map(String::as_str).find(|a| options::SUBCOMMANDS.contains(a)).map(str::to_string);
@@ -631,6 +632,11 @@ fn main() {
             use clap::error::ErrorKind;
             if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
                 e.exit();
+            }
+            if e.kind() == ErrorKind::InvalidUtf8 {
+                // clap does not say which: the arguments that are not UTF-8, as the process has them
+                let bad: Vec<String> = std::env::args_os().skip(1).filter(|a| a.to_str().is_none()).map(|a| format!("{a:?}")).collect();
+                usage_exit(&format!("{}: not UTF-8, where the option takes text (a path may be any bytes)", bad.join(", ")));
             }
             eprint!("{}", usage::reframe(&e.render().to_string(), &prog, &usage_text()));
             std::process::exit(2);
@@ -854,8 +860,9 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &endpoints)?;
-    let object_threads = object_engine(&endpoints, object_threads, &l)?;
+    let object_threads = object_engine(&endpoints, object_threads, &mut l)?;
     let writers = writers.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+    l.show_default("writers", format!("{writers} (all cores)"));
     let opts = DatagenOpts { root, endpoints, writers, dedupe, compress, datasets: a.datasets.clone(), rank, ranks, progress, resume, resize, settle, sigint: true, ignore_space };
     let mut out = stdout();
     match &opts.resume {
@@ -1018,7 +1025,7 @@ fn read_at_root(at: &str, flag: &str, n: Option<i64>, cfg: &Config) -> Result<se
 }
 
 fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
-    let (a, mut layers) = resolve_run(a, config)?;
+    let (mut a, mut layers) = resolve_run(a, config)?;
     let mut doc = aeiou::report::Doc { full_takes: a.report_takes, ..Default::default() };
     if let Some(path) = &a.report_json {
         // never leave an earlier run's report where this run's is expected, and find a place
@@ -1028,7 +1035,7 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
             aeiou::usage!("--report-json {}: cannot write the report there: {e}{}", path.display(), layers.from(&["report-json"]));
         }
     }
-    let r = run_checked(&a, &mut layers, &mut doc);
+    let r = run_checked(&mut a, &mut layers, &mut doc);
     if let Some(path) = &a.report_json {
         let error = r.as_ref().err().map(|e| format!("{e:#}"));
         match (doc.write(path, error.as_deref()), &r) {
@@ -1040,12 +1047,16 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
     r
 }
 
+/// What an object-engine option from the environment or the config file is passed over for.
+const NO_OBJECT_STORE: &str = "no dataset or namespace is placed in an object store";
+
 /// The object engine's runtime threads when a name is placed in an object store (the option
-/// is refused otherwise), set before the first object call builds the runtime.
-fn object_engine(endpoints: &aeiou::endpoint::Endpoints, given: Option<usize>, l: &Layers) -> Result<Option<usize>> {
+/// is refused otherwise from the command line, passed over from a lower layer), set before the
+/// first object call builds the runtime.
+fn object_engine(endpoints: &aeiou::endpoint::Endpoints, given: Option<usize>, l: &mut Layers) -> Result<Option<usize>> {
     if !endpoints.any_object() {
-        if given.is_some() {
-            aeiou::usage!("--object-threads: no dataset or namespace is placed in an object store{}", l.from(&["object-threads"]));
+        if given.is_some() && !l.pass_over("object-threads", NO_OBJECT_STORE) {
+            aeiou::usage!("--object-threads: {NO_OBJECT_STORE}{}", l.from(&["object-threads"]));
         }
         return Ok(None);
     }
@@ -1053,19 +1064,21 @@ fn object_engine(endpoints: &aeiou::endpoint::Endpoints, given: Option<usize>, l
     if n == 0 {
         aeiou::usage!("--object-threads 0: the runtime needs a worker{}", l.from(&["object-threads"]));
     }
+    l.show_default("object-threads", n.to_string());
     aeiou::object::set_threads(n);
     Ok(Some(n))
 }
 
 /// The part size of a run's uploads, MiB, when a name is placed in an object store.
-fn object_part(endpoints: &aeiou::endpoint::Endpoints, given: Option<u64>, l: &Layers) -> Result<Option<u64>> {
+fn object_part(endpoints: &aeiou::endpoint::Endpoints, given: Option<u64>, l: &mut Layers) -> Result<Option<u64>> {
     if !endpoints.any_object() {
-        if given.is_some() {
-            aeiou::usage!("--object-part-mib: no dataset or namespace is placed in an object store{}", l.from(&["object-part-mib"]));
+        if given.is_some() && !l.pass_over("object-part-mib", NO_OBJECT_STORE) {
+            aeiou::usage!("--object-part-mib: {NO_OBJECT_STORE}{}", l.from(&["object-part-mib"]));
         }
         return Ok(None);
     }
     let mib = given.unwrap_or(aeiou::object::DEFAULT_PART >> 20);
+    l.show_default("object-part-mib", mib.to_string());
     if !(aeiou::object::MIN_PART >> 20..=aeiou::object::MAX_PART >> 20).contains(&mib) {
         aeiou::usage!("--object-part-mib {mib}: S3 takes parts of 5 MiB to 5 GiB{}", l.from(&["object-part-mib"]));
     }
@@ -1100,12 +1113,39 @@ fn run_s3(a: &RunOptions, declared: S3Api) -> Result<S3Api> {
     }
 }
 
-fn run_checked(a: &RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
+/// A backend knob this run cannot use, set from the environment or the config file (which may
+/// serve other runs: one file for a cluster), is passed over with a warning in the block and
+/// taken as unset; from the command line it stays, for the check after this to refuse.
+fn pass_over<T>(layers: &mut Layers, name: &str, value: &mut Option<T>, usable: bool, why: &str) {
+    if value.is_some() && !usable && layers.pass_over(name, why) {
+        *value = None;
+    }
+}
+
+/// `pass_over` for a boolean knob.
+fn pass_over_flag(layers: &mut Layers, name: &str, value: &mut bool, usable: bool, why: &str) {
+    if *value && !usable && layers.pass_over(name, why) {
+        *value = false;
+    }
+}
+
+fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
     let mut cfg = parse_config(&a.run.shape, a.gpus, a.run.seed)?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &a.endpoints)?;
     let used = aeiou::validate::protocols(&loaded.ast, !loaded.traces.is_empty());
+    if !used.posix {
+        let why = "every dataset and namespace is `protocol: s3`";
+        pass_over(layers, "iowq-max-workers", &mut a.iowq_max_workers, false, why);
+        pass_over(layers, "sqpoll", &mut a.sqpoll, false, why);
+        pass_over_flag(layers, "sqpoll-shared", &mut a.sqpoll_shared, false, why);
+        pass_over_flag(layers, "defer-taskrun", &mut a.defer_taskrun, false, why);
+        pass_over_flag(layers, "coop-taskrun", &mut a.coop_taskrun, false, why);
+        pass_over(layers, "aio-depth", &mut a.aio_depth, false, why);
+        pass_over(layers, "mmap-mode", &mut a.mmap_mode, false, why);
+        pass_over(layers, "mmap-consume", &mut a.mmap_consume, false, why);
+    }
     // an option for a protocol the abstract has no names on would change nothing: refused
     if !used.posix {
         let given: Vec<&str> = [
@@ -1143,6 +1183,33 @@ fn run_checked(a: &RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc
         );
     }
     let event_loop = backend.event_loop() || s3.event_loop();
+    {
+        let api = backend.api.name();
+        let no_ring = format!("--posix {api} has no ring");
+        pass_over(layers, "iowq-max-workers", &mut a.iowq_max_workers, backend.uring(), &no_ring);
+        pass_over(layers, "sqpoll", &mut a.sqpoll, backend.uring(), &no_ring);
+        pass_over_flag(layers, "sqpoll-shared", &mut a.sqpoll_shared, backend.uring(), &no_ring);
+        pass_over_flag(layers, "defer-taskrun", &mut a.defer_taskrun, backend.uring(), &no_ring);
+        pass_over_flag(layers, "coop-taskrun", &mut a.coop_taskrun, backend.uring(), &no_ring);
+        pass_over(layers, "aio-depth", &mut a.aio_depth, backend.libaio(), &format!("--posix {api} has no AIO context"));
+        pass_over(layers, "threads", &mut a.threads, event_loop, "this run has one thread per actor");
+        pass_over(layers, "mmap-mode", &mut a.mmap_mode, backend.mmap(), &format!("--posix {api} maps nothing"));
+        pass_over(layers, "mmap-consume", &mut a.mmap_consume, backend.mmap(), &format!("--posix {api} maps nothing"));
+        // the block shows what a default comes to
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        layers.show_default("threads", if event_loop { format!("{cores} (one per core, at most one per actor instance)") } else { "one per actor".into() });
+        if backend.libaio() {
+            layers.show_default("aio-depth", aeiou::aio::DEPTH.to_string());
+        }
+        if backend.mmap() {
+            layers.show_default("mmap-mode", MmapMode::default().name().to_string());
+            layers.show_default("mmap-consume", MmapConsume::default().name().to_string());
+        }
+    }
+    let a: &RunOptions = a;
+    if a.defer_taskrun && a.sqpoll.is_some() {
+        aeiou::usage!("--defer-taskrun and --sqpoll exclude each other{}", layers.from(&["defer-taskrun", "sqpoll"]));
+    }
     let object_threads = object_engine(&endpoints, a.object_threads, layers)?;
     let object_part = object_part(&endpoints, a.object_part_mib, layers)?;
     let expect_fingerprint = match &a.expect_fingerprint {
@@ -1762,6 +1829,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         None
     };
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+    l.show_default("threads", format!("{threads} (all cores)"));
 
     let started = std::time::Instant::now();
     let metrics = (a.metrics || a.metrics_json.is_some()).then_some(aeiou::metrics::Opts { block: metrics_block, sample: metrics_sample });

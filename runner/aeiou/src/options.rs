@@ -17,6 +17,7 @@
 //! run, so it is printed in the suite's frame and exits 2.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -99,9 +100,8 @@ impl ConfigFile {
                     path.display()
                 );
             }
-            let Some(t) = v.as_table() else { crate::usage!("config {}: [{k}] must be a table", path.display()) };
-            if let Some(n) = t.keys().find(|n| n.starts_with("no-")) {
-                crate::usage!("config {}: [{k}] {n}: a boolean is written as its name with true or false (`{} = false`); `--no-x` is the command line's negation", path.display(), &n[3..]);
+            if !v.is_table() {
+                crate::usage!("config {}: [{k}] must be a table", path.display());
             }
         }
         Ok(ConfigFile { path: path.to_path_buf(), sha256, tables })
@@ -114,8 +114,38 @@ impl ConfigFile {
 
 /// A value a layered option can take, from the environment's text or the file's TOML value.
 pub trait Layered: Sized + Show {
-    fn from_env(s: &str) -> Result<Self>;
+    fn from_env_str(s: &str) -> Result<Self>;
     fn from_toml(v: &toml::Value) -> Result<Self>;
+    /// The environment's value as the process has it: text, refused when it is not UTF-8 (a
+    /// path takes the bytes as they are).
+    fn from_env(s: &OsStr) -> Result<Self> {
+        match s.to_str() {
+            Some(t) => Self::from_env_str(t),
+            None => anyhow::bail!("{s:?} is not UTF-8"),
+        }
+    }
+}
+
+/// A TOML value as a message names it: its type and its value (`the string "3"`).
+pub fn toml_described(v: &toml::Value) -> String {
+    match v {
+        toml::Value::String(s) => format!("the string {s:?}"),
+        toml::Value::Integer(i) => format!("the integer {i}"),
+        toml::Value::Float(f) => format!("the float {f}"),
+        toml::Value::Boolean(b) => format!("the boolean {b}"),
+        toml::Value::Datetime(d) => format!("the datetime {d}"),
+        toml::Value::Array(a) => format!("an array of {} value(s)", a.len()),
+        toml::Value::Table(_) => "a table".into(),
+    }
+}
+
+/// An empty value where one is needed is refused, as the command line refuses `--root ""`
+/// (an empty path would be the working directory).
+fn non_empty(s: &str) -> Result<()> {
+    if s.trim().is_empty() {
+        anyhow::bail!("empty, and a value is required (leave it unset for none)");
+    }
+    Ok(())
 }
 
 /// How an option's value is shown in the block and recorded as JSON.
@@ -131,9 +161,9 @@ macro_rules! int_layered {
             fn json(&self) -> Value { json!(*self) }
         }
         impl Layered for $t {
-            fn from_env(s: &str) -> Result<Self> { s.trim().parse::<$t>().map_err(|e| anyhow::anyhow!("{s:?}: {e}")) }
+            fn from_env_str(s: &str) -> Result<Self> { s.trim().parse::<$t>().map_err(|e| anyhow::anyhow!("{s:?}: {e}")) }
             fn from_toml(v: &toml::Value) -> Result<Self> {
-                let i = v.as_integer().ok_or_else(|| anyhow::anyhow!("expected an integer, got {v:?}"))?;
+                let i = v.as_integer().ok_or_else(|| anyhow::anyhow!("expected an integer, got {}", toml_described(v)))?;
                 <$t>::try_from(i).map_err(|_| anyhow::anyhow!("{i} is out of range"))
             }
         }
@@ -150,14 +180,14 @@ impl Show for f64 {
     }
 }
 impl Layered for f64 {
-    fn from_env(s: &str) -> Result<Self> {
+    fn from_env_str(s: &str) -> Result<Self> {
         s.trim().parse::<f64>().map_err(|e| anyhow::anyhow!("{s:?}: {e}"))
     }
     fn from_toml(v: &toml::Value) -> Result<Self> {
         match v {
             toml::Value::Float(f) => Ok(*f),
             toml::Value::Integer(i) => Ok(*i as f64),
-            _ => crate::usage!("expected a number, got {v:?}"),
+            _ => crate::usage!("expected a number, got {}", toml_described(v)),
         }
     }
 }
@@ -171,7 +201,7 @@ impl Show for bool {
     }
 }
 impl Layered for bool {
-    fn from_env(s: &str) -> Result<Self> {
+    fn from_env_str(s: &str) -> Result<Self> {
         match s.trim() {
             "true" | "1" | "yes" | "on" => Ok(true),
             "false" | "0" | "no" | "off" => Ok(false),
@@ -179,7 +209,7 @@ impl Layered for bool {
         }
     }
     fn from_toml(v: &toml::Value) -> Result<Self> {
-        v.as_bool().ok_or_else(|| anyhow::anyhow!("expected true or false, got {v:?}"))
+        v.as_bool().ok_or_else(|| anyhow::anyhow!("expected true or false, got {}", toml_described(v)))
     }
 }
 
@@ -192,11 +222,14 @@ impl Show for String {
     }
 }
 impl Layered for String {
-    fn from_env(s: &str) -> Result<Self> {
+    fn from_env_str(s: &str) -> Result<Self> {
+        non_empty(s)?;
         Ok(s.to_string())
     }
     fn from_toml(v: &toml::Value) -> Result<Self> {
-        v.as_str().map(str::to_string).ok_or_else(|| anyhow::anyhow!("expected a string, got {v:?}"))
+        let s = v.as_str().ok_or_else(|| anyhow::anyhow!("expected a string, got {}", toml_described(v)))?;
+        non_empty(s)?;
+        Ok(s.to_string())
     }
 }
 
@@ -209,28 +242,39 @@ impl Show for PathBuf {
     }
 }
 impl Layered for PathBuf {
-    fn from_env(s: &str) -> Result<Self> {
+    fn from_env_str(s: &str) -> Result<Self> {
+        Self::from_env(OsStr::new(s))
+    }
+    /// A path is the bytes as the environment has them, UTF-8 or not, but never empty.
+    fn from_env(s: &OsStr) -> Result<Self> {
+        non_empty(&s.to_string_lossy())?;
         Ok(PathBuf::from(s))
     }
     fn from_toml(v: &toml::Value) -> Result<Self> {
-        v.as_str().map(PathBuf::from).ok_or_else(|| anyhow::anyhow!("expected a path string, got {v:?}"))
+        let s = v.as_str().ok_or_else(|| anyhow::anyhow!("expected a path string, got {}", toml_described(v)))?;
+        non_empty(s)?;
+        Ok(PathBuf::from(s))
     }
 }
 
 /// A list: whitespace-separated in the environment, an array of strings (or one string) in
-/// the file.
+/// the file. `[]` is the empty list; an empty string is refused, in the file as in the
+/// environment.
 impl Layered for Vec<String> {
-    fn from_env(s: &str) -> Result<Self> {
+    fn from_env_str(s: &str) -> Result<Self> {
+        non_empty(s)?;
         Ok(s.split_whitespace().map(str::to_string).collect())
     }
     fn from_toml(v: &toml::Value) -> Result<Self> {
+        let one = |x: &toml::Value| -> Result<String> {
+            let s = x.as_str().ok_or_else(|| anyhow::anyhow!("expected strings, got {}", toml_described(x)))?;
+            non_empty(s)?;
+            Ok(s.to_string())
+        };
         match v {
-            toml::Value::String(s) => Ok(vec![s.clone()]),
-            toml::Value::Array(a) => a
-                .iter()
-                .map(|x| x.as_str().map(str::to_string).ok_or_else(|| anyhow::anyhow!("expected strings, got {x:?}")))
-                .collect(),
-            _ => crate::usage!("expected a string or an array of strings, got {v:?}"),
+            toml::Value::String(_) => Ok(vec![one(v)?]),
+            toml::Value::Array(a) => a.iter().map(one).collect(),
+            _ => crate::usage!("expected a string or an array of strings, got {}", toml_described(v)),
         }
     }
 }
@@ -270,10 +314,16 @@ pub struct Layers {
     sub: String,
     pub config: Option<ConfigFile>,
     config_source: Source,
-    env: BTreeMap<String, String>,
+    /// The `AEIOU_*` variables, their values as the process has them (a value need not be
+    /// UTF-8 until an option reads it as text); a name that is not UTF-8 is kept lossily, and
+    /// is no option.
+    env: BTreeMap<String, OsString>,
     pub entries: Vec<Entry>,
     env_used: BTreeSet<String>,
     keys_used: BTreeSet<String>,
+    /// The fixed options of this invocation, for the refusal of their negation below the
+    /// command line.
+    fixed_used: BTreeSet<String>,
     pub warnings: Vec<String>,
 }
 
@@ -285,12 +335,14 @@ impl Layers {
     /// The layers of subcommand `sub`, with the config file `--config` named (else
     /// `AEIOU_CONFIG`, else none), over the process environment.
     pub fn new(sub: &str, config_cli: Option<&Path>) -> Result<Layers> {
-        let env: BTreeMap<String, String> = std::env::vars().filter(|(k, _)| k.starts_with(ENV_PREFIX)).collect();
+        // `vars_os`: a variable that is not UTF-8, ours or anyone's, is no reason to stop
+        let env: BTreeMap<String, OsString> =
+            std::env::vars_os().filter(|(k, _)| k.as_encoded_bytes().starts_with(ENV_PREFIX.as_bytes())).map(|(k, v)| (k.to_string_lossy().into_owned(), v)).collect();
         Layers::with_env(sub, config_cli, env)
     }
 
     /// `new`, over a given environment (the tests').
-    pub fn with_env(sub: &str, config_cli: Option<&Path>, env: BTreeMap<String, String>) -> Result<Layers> {
+    pub fn with_env(sub: &str, config_cli: Option<&Path>, env: BTreeMap<String, OsString>) -> Result<Layers> {
         if !SUBCOMMANDS.contains(&sub) {
             crate::usage!("no subcommand `{sub}`");
         }
@@ -298,18 +350,29 @@ impl Layers {
         let (config_path, config_source) = match config_cli {
             Some(p) => (Some(p.to_path_buf()), Source::Cli),
             None => match env.get(ENV_CONFIG) {
-                Some(p) if !p.is_empty() => {
+                Some(p) => {
                     env_used.insert(ENV_CONFIG.to_string());
-                    (Some(PathBuf::from(p)), Source::Env(ENV_CONFIG.into()))
+                    let p = PathBuf::from_env(p).map_err(|e| err(format!("{ENV_CONFIG}: {e:#}")))?;
+                    (Some(p), Source::Env(ENV_CONFIG.into()))
                 }
-                _ => (None, Source::Default),
+                None => (None, Source::Default),
             },
         };
         let config = match &config_path {
             Some(p) => Some(ConfigFile::load(p)?),
             None => None,
         };
-        Ok(Layers { sub: sub.to_string(), config, config_source, env, entries: Vec::new(), env_used, keys_used: BTreeSet::new(), warnings: Vec::new() })
+        Ok(Layers {
+            sub: sub.to_string(),
+            config,
+            config_source,
+            env,
+            entries: Vec::new(),
+            env_used,
+            keys_used: BTreeSet::new(),
+            fixed_used: BTreeSet::new(),
+            warnings: Vec::new(),
+        })
     }
 
     fn table_value(&self, name: &str) -> Option<&toml::Value> {
@@ -323,6 +386,7 @@ impl Layers {
     /// A fixed option: the command line's or the default, never the environment's or the
     /// file's, which are refused when they name it.
     pub fn fixed<T: Show>(&mut self, name: &str, value: &T, given: bool) -> Result<()> {
+        self.fixed_used.insert(name.to_string());
         let env = env_name(name);
         if self.env.contains_key(&env) {
             crate::usage!("{env} is set, but --{name} is the command line's alone: nothing the fingerprint, a dataset id, or a safety check depends on may come from the environment or the config file");
@@ -378,6 +442,31 @@ impl Layers {
         }
     }
 
+    /// A layered option resolved already that this run cannot use (a backend knob the run's
+    /// API has no use for, an object-engine option with no name in an object store): from the
+    /// command line it is the caller's to refuse, and this returns false; from the environment
+    /// or the file, which may serve other runs (one file for a cluster), it is passed over
+    /// with a warning that says `why`, its entry is dropped, and this returns true.
+    pub fn pass_over(&mut self, name: &str, why: &str) -> bool {
+        let Some(i) = self.entries.iter().position(|e| e.name == name) else { return false };
+        match self.entries[i].source.clone() {
+            Source::Cli | Source::Default => false,
+            s => {
+                self.entries.remove(i);
+                self.warnings.push(format!("--{name} from {} is not used: {why}", s.describe()));
+                true
+            }
+        }
+    }
+
+    /// The value a default resolves to, shown in the block in place of `none` when it is known
+    /// (`writers = 20 (all cores)`); the JSON keeps the default as it was given.
+    pub fn show_default(&mut self, name: &str, shown: String) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.name == name && e.source == Source::Default) {
+            e.shown = shown;
+        }
+    }
+
     /// A layered boolean: `--name` on the command line is true, `--name=false` false, absent
     /// is the lower layers'. Returns the value in effect.
     pub fn flag(&mut self, name: &str, cli: Option<bool>, default: bool) -> Result<bool> {
@@ -390,6 +479,19 @@ impl Layers {
     pub fn finish(&mut self) -> Result<()> {
         if let Some(c) = &self.config {
             if let Some(t) = c.table(&self.sub) {
+                // a negation, first: the file writes a boolean under its own name, and a fixed
+                // one not at all
+                if let Some(k) = t.keys().find(|k| k.starts_with("no-")) {
+                    let option = &k[3..];
+                    if self.fixed_used.contains(option) {
+                        crate::usage!(
+                            "config {}: [{}] {k}: --{option} is the command line's alone (`--no-{option}` there): nothing the fingerprint, a dataset id, or a safety check depends on may come from the environment or the config file",
+                            c.path.display(),
+                            self.sub
+                        );
+                    }
+                    crate::usage!("config {}: [{}] {k}: a boolean is written as its name with true or false (`{option} = false`); `--no-x` is the command line's negation", c.path.display(), self.sub);
+                }
                 for k in t.keys() {
                     if !self.keys_used.contains(k) {
                         if ALL_OPTIONS.contains(&k.as_str()) {
@@ -406,6 +508,9 @@ impl Layers {
             }
             if let Some(rest) = k.strip_prefix("AEIOU_NO_") {
                 let option = rest.to_ascii_lowercase().replace('_', "-");
+                if self.fixed_used.contains(&option) {
+                    crate::usage!("{k}: --{option} is the command line's alone (`--no-{option}` there): nothing the fingerprint, a dataset id, or a safety check depends on may come from the environment or the config file");
+                }
                 if ALL_OPTIONS.contains(&option.as_str()) {
                     crate::usage!("{k}: a boolean is set in the environment as {}=true or false; `--no-x` is the command line's negation", env_name(&option));
                 }
@@ -506,8 +611,8 @@ fn shown(v: &Value) -> String {
 mod tests {
     use super::*;
 
-    fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, OsString> {
+        pairs.iter().map(|(k, v)| (k.to_string(), OsString::from(v))).collect()
     }
 
     fn write(dir: &Path, text: &str) -> PathBuf {
@@ -595,11 +700,24 @@ mod tests {
         assert!(e.contains("`nope`"), "{e}");
         // the negation is the command line's: the file and the environment say false
         let cfg = write(&d, "[run]\nno-require-cold = true\n");
-        let e = Layers::with_env("run", Some(&cfg), env(&[])).unwrap_err().to_string();
+        let mut l = Layers::with_env("run", Some(&cfg), env(&[])).unwrap();
+        let e = l.finish().unwrap_err().to_string();
         assert!(e.contains("no-require-cold") && e.contains("`require-cold = false`"), "{e}");
         let mut l = Layers::with_env("run", None, env(&[("AEIOU_NO_REQUIRE_COLD", "1")])).unwrap();
         let e = l.finish().unwrap_err().to_string();
         assert!(e.contains("AEIOU_REQUIRE_COLD=true or false"), "{e}");
+        // the negation of a fixed boolean: the command line's alone, never `AEIOU_X=false`
+        let mut l = Layers::with_env("dry-run", None, env(&[("AEIOU_NO_METRICS", "1")])).unwrap();
+        l.fixed("metrics", &false, false).unwrap();
+        let e = l.finish().unwrap_err().to_string();
+        assert!(e.contains("AEIOU_NO_METRICS: --metrics is the command line's alone (`--no-metrics` there)"), "{e}");
+        assert!(!e.contains("AEIOU_METRICS="), "{e}");
+        let cfg = write(&d, "[dry-run]\nno-metrics = true\n");
+        let mut l = Layers::with_env("dry-run", Some(&cfg), env(&[])).unwrap();
+        l.fixed("metrics", &false, false).unwrap();
+        let e = l.finish().unwrap_err().to_string();
+        assert!(e.contains("[dry-run] no-metrics: --metrics is the command line's alone (`--no-metrics` there)"), "{e}");
+        assert!(!e.contains("metrics = false"), "{e}");
         let mut l = Layers::with_env("run", None, env(&[("AEIOU_BOGUS", "1"), ("AEIOU_ROOT", "/x"), ("AEIOU_SCHEMA_DIR", "/s")])).unwrap();
         l.layered::<usize>("threads", None, None).unwrap();
         l.finish().unwrap();
@@ -613,7 +731,7 @@ mod tests {
         let cfg = write(&d, "[run]\nthreads = \"three\"\n");
         let mut l = Layers::with_env("run", None, env(&[("AEIOU_CONFIG", cfg.display().to_string().as_str())])).unwrap();
         let e = l.layered::<usize>("threads", None, None).unwrap_err();
-        assert!(format!("{e:#}").contains("[run] threads") && format!("{e:#}").contains("integer"), "{e:#}");
+        assert!(format!("{e:#}").contains("[run] threads: expected an integer, got the string \"three\""), "{e:#}");
         l.finish().unwrap();
         assert_eq!(l.entries.last().unwrap().source, Source::Env(ENV_CONFIG.into()));
         let mut l = Layers::with_env("run", None, env(&[("AEIOU_THREADS", "x")])).unwrap();
@@ -621,6 +739,91 @@ mod tests {
         let mut l = Layers::with_env("run", None, env(&[("AEIOU_REQUIRE_COLD", "yes"), ("AEIOU_MAX_GAP", "30")])).unwrap();
         assert!(l.flag("require-cold", None, false).unwrap());
         assert_eq!(l.layered::<f64>("max-gap", None, None).unwrap(), Some(30.0));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// RC1 review: an empty value or one that is not UTF-8, from the environment or the file,
+    /// is a usage error naming the variable or the key (an empty root was the working
+    /// directory); a path that is not UTF-8 is taken as it is; a config type error names the
+    /// TOML type and value, never Rust's Debug.
+    #[test]
+    fn empty_and_non_utf8_values_and_the_toml_types() {
+        use std::os::unix::ffi::OsStrExt;
+        let d = tmp();
+        for (var, name) in [("AEIOU_ROOT", "root"), ("AEIOU_REPORT_JSON", "report-json")] {
+            let mut l = Layers::with_env("run", None, env(&[(var, "")])).unwrap();
+            let e = l.layered::<PathBuf>(name, None, None).unwrap_err();
+            assert!(e.downcast_ref::<crate::usage::UsageError>().is_some());
+            assert!(format!("{e:#}").starts_with(&format!("{var}: empty")), "{e:#}");
+        }
+        let mut l = Layers::with_env("run", None, env(&[("AEIOU_COORDINATOR", " ")])).unwrap();
+        assert!(format!("{:#}", l.layered::<String>("coordinator", None, None).unwrap_err()).starts_with("AEIOU_COORDINATOR: empty"));
+        let mut l = Layers::with_env("run", None, env(&[("AEIOU_ENDPOINT", "")])).unwrap();
+        assert!(format!("{:#}", l.layered::<Vec<String>>("endpoint", None, None).unwrap_err()).starts_with("AEIOU_ENDPOINT: empty"));
+        let e = Layers::with_env("run", None, env(&[("AEIOU_CONFIG", "")])).unwrap_err();
+        assert!(format!("{e:#}").starts_with("AEIOU_CONFIG: empty"), "{e:#}");
+        let cfg = write(&d, "[run]\nroot = \"\"\ncoordinator = \"\"\nendpoint = [\"\"]\nreport-json = 3\nrequire-cold = 1\nmax-gap = \"5\"\n");
+        let mut l = Layers::with_env("run", Some(&cfg), env(&[])).unwrap();
+        for (name, want) in [
+            ("root", "[run] root: empty"),
+            ("coordinator", "[run] coordinator: empty"),
+            ("endpoint", "[run] endpoint: empty"),
+            ("report-json", "[run] report-json: expected a path string, got the integer 3"),
+            ("require-cold", "[run] require-cold: expected true or false, got the integer 1"),
+            ("max-gap", "[run] max-gap: expected a number, got the string \"5\""),
+        ] {
+            let e = match name {
+                "root" | "report-json" => l.layered::<PathBuf>(name, None, None).map(|_| ()),
+                "coordinator" => l.layered::<String>(name, None, None).map(|_| ()),
+                "endpoint" => l.layered::<Vec<String>>(name, None, None).map(|_| ()),
+                "require-cold" => l.flag(name, None, false).map(|_| ()),
+                _ => l.layered::<f64>(name, None, None).map(|_| ()),
+            }
+            .unwrap_err();
+            assert!(format!("{e:#}").contains(want), "{name}: {e:#}");
+            assert!(!format!("{e:#}").contains("Integer(") && !format!("{e:#}").contains("String("), "{e:#}");
+        }
+        // the empty list is a list
+        let cfg = write(&d, "[run]\nendpoint = []\n");
+        let mut l = Layers::with_env("run", Some(&cfg), env(&[])).unwrap();
+        assert_eq!(l.layered::<Vec<String>>("endpoint", None, None).unwrap(), Some(vec![]));
+        // not UTF-8: a path as it is, text refused naming the variable
+        let raw = |b: &[u8]| OsStr::from_bytes(b).to_os_string();
+        let mut e = env(&[]);
+        e.insert("AEIOU_ROOT".into(), raw(b"/tmp/r\xff"));
+        e.insert("AEIOU_COORDINATOR".into(), raw(b"h\xff:1"));
+        let mut l = Layers::with_env("run", None, e).unwrap();
+        assert_eq!(l.layered::<PathBuf>("root", None, None).unwrap().unwrap().as_os_str().as_bytes(), b"/tmp/r\xff");
+        let e = l.layered::<String>("coordinator", None, None).unwrap_err();
+        assert!(e.downcast_ref::<crate::usage::UsageError>().is_some());
+        assert_eq!(format!("{e:#}"), "AEIOU_COORDINATOR: \"h\\xFF:1\" is not UTF-8");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_knob_from_a_lower_layer_is_passed_over_and_a_default_shows_its_value() {
+        let d = tmp();
+        let cfg = write(&d, "[run]\nthreads = 8\n");
+        let mut l = Layers::with_env("run", Some(&cfg), env(&[("AEIOU_AIO_DEPTH", "64")])).unwrap();
+        l.layered::<usize>("threads", None, None).unwrap();
+        l.layered::<u32>("aio-depth", None, None).unwrap();
+        l.layered::<u32>("sqpoll", Some(5), None).unwrap();
+        l.layered::<u64>("object-part-mib", None, None).unwrap();
+        assert!(l.pass_over("threads", "this run has one thread per actor"));
+        assert!(l.pass_over("aio-depth", "--posix sync has no AIO context"));
+        assert!(!l.pass_over("sqpoll", "--posix sync has no ring"), "the command line's is the caller's to refuse");
+        assert!(!l.pass_over("object-part-mib", "x"), "a default is not passed over");
+        assert_eq!(
+            l.warnings,
+            vec![format!("--threads from config {} is not used: this run has one thread per actor", cfg.display()), "--aio-depth from env AEIOU_AIO_DEPTH is not used: --posix sync has no AIO context".to_string()]
+        );
+        assert!(!l.entries.iter().any(|e| e.name == "threads" || e.name == "aio-depth"));
+        l.show_default("object-part-mib", "8".into());
+        l.show_default("sqpoll", "0".into());
+        let shown = |l: &Layers, n: &str| l.entries.iter().find(|e| e.name == n).unwrap().shown.clone();
+        assert_eq!(shown(&l, "object-part-mib"), "8");
+        assert_eq!(shown(&l, "sqpoll"), "5", "only a default's value is replaced");
+        assert_eq!(l.json()["options"]["object-part-mib"]["value"], Value::Null);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

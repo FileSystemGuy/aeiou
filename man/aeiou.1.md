@@ -482,7 +482,8 @@ turns it off, and the last one on the line wins.
 
   Event-loop threads for `--posix io_uring` and `libaio` and `--s3 async`; default one per
   core, at most one per actor instance. The other APIs run one thread per actor and refuse
-  the flag. *Layered.*
+  the flag (from the environment or the config file it is passed over with a warning, as
+  is every backend knob the run's API cannot use; **aeiou-config**(5)). *Layered.*
 - **--buffer-mib** *MIB*
 
   The per-thread read and write buffer rings, in MiB. Default 8. *Layered.*
@@ -622,7 +623,8 @@ The abstract is identical under every backend; a backend maps operations to an A
 never changes the stream or the fingerprint. Each protocol has its own API: `--posix` for
 the `posix` names, with the cache mode `--cache`, and `--s3` for the `s3` names. A run
 compares only with runs under the same choices. An option for a protocol the abstract has
-no names on is refused, since it would change nothing.
+no names on is refused, since it would change nothing (a knob from the environment or the
+config file is passed over with a warning instead).
 
 | `--posix` | API |
 |---|---|
@@ -743,8 +745,9 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
   A layered option's value, the long flag upper-cased with `_` for `-`
   (`AEIOU_BUFFER_MIB`, `AEIOU_REQUIRE_COLD`). Booleans take `true`/`false`, `1`/`0`,
   `yes`/`no`, `on`/`off`; `AEIOU_NO_X` is refused with the spelling to use. A variable
-  naming a fixed option is refused; one naming no option of any subcommand is warned about
-  and ignored.
+  naming a fixed option is refused, as is an empty one, or one that is not UTF-8 where the
+  option takes text; one naming no option of any subcommand is warned about and ignored;
+  a backend knob the run cannot use is passed over with a warning.
 
 ## FILES
 

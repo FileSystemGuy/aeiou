@@ -154,18 +154,50 @@ fn fixed_options_are_refused_from_the_environment_and_the_file() {
     let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg));
     assert!(!ok);
     assert!(err.contains("top level"), "{err}");
-    // a knob the backend cannot take says which layer set it
-    std::fs::write(&cfg, "[run]\naio-depth = 64\n").unwrap();
-    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
-    assert!(!ok);
-    assert!(err.contains(&format!("--aio-depth is a libaio knob; --posix sync has no AIO context (--aio-depth from config {})", cfg.display())), "{err}");
-    std::fs::write(&cfg, "[run]\n").unwrap();
-    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]).arg("--root").arg(&d).arg("--config").arg(&cfg).env("AEIOU_THREADS", "4"));
-    assert!(!ok);
-    assert!(err.contains("has one thread per actor (--threads from env AEIOU_THREADS)"), "{err}");
+    // a knob the backend cannot take: from the command line it is refused (the knobs' own
+    // tests have the messages); from the environment or the file, which may serve other runs
+    // (one file for a cluster), it is passed over with a warning in the block (RC1 review)
     let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2", "--threads", "4"]).arg("--root").arg(&d));
     assert!(!ok);
     assert!(err.lines().next().unwrap().ends_with("has one thread per actor"), "{err}");
+    std::fs::write(&cfg, "[run]\naio-depth = 64\nsqpoll = 10\nmmap-mode = \"populate\"\nobject-threads = 4\nobject-part-mib = 16\n").unwrap();
+    let json = d.join("report.json");
+    let (ok, text, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL)
+        .args(["--gpus", "2", "--time-scale", "0"])
+        .arg("--root")
+        .arg(&d)
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--report-json")
+        .arg(&json)
+        .env("AEIOU_THREADS", "4")
+        .env("AEIOU_DEFER_TASKRUN", "true"));
+    // the run goes as far as the dataset, which is not there: no usage error
+    assert!(!ok && !err.contains("knob") && !err.contains("Usage:"), "{err}");
+    assert!(err.contains("train"), "{err}");
+    let c = cfg.display();
+    for w in [
+        format!("--aio-depth from config {c} is not used: --posix sync has no AIO context"),
+        format!("--sqpoll from config {c} is not used: --posix sync has no ring"),
+        "--defer-taskrun from env AEIOU_DEFER_TASKRUN is not used: --posix sync has no ring".to_string(),
+        "--threads from env AEIOU_THREADS is not used: this run has one thread per actor".to_string(),
+        format!("--mmap-mode from config {c} is not used: --posix sync maps nothing"),
+        format!("--object-threads from config {c} is not used: no dataset or namespace is placed in an object store"),
+        format!("--object-part-mib from config {c} is not used: no dataset or namespace is placed in an object store"),
+    ] {
+        assert!(text.contains(&format!("  WARNING: {w}\n")), "{w}\n{text}");
+    }
+    let rows = block(&text);
+    for name in ["aio-depth", "sqpoll", "defer-taskrun", "threads", "mmap-mode", "object-threads", "object-part-mib"] {
+        assert!(!rows.iter().any(|r| r.0 == name), "{name} passed over and still in the block: {rows:?}");
+    }
+    let doc = read(&json);
+    assert!(doc["layers"]["options"].get("threads").is_none(), "{}", doc["layers"]);
+    assert_eq!(doc["layers"]["warnings"].as_array().unwrap().len(), 7, "{}", doc["layers"]);
+    // datagen, likewise, for the object engine's threads from the environment
+    let (ok, text, err) = out(aeiou("datagen", "file_per_sample.ast.json", &["samples=30"]).arg("--root").arg(d.join("dg")).env("AEIOU_OBJECT_THREADS", "4"));
+    assert!(ok, "{err}");
+    assert!(text.contains("  WARNING: --object-threads from env AEIOU_OBJECT_THREADS is not used: no dataset or namespace is placed in an object store\n"), "{text}");
     // --root is required, from any layer: listed as missing (tests/usage.rs has the frame)
     let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "2"]));
     assert!(!ok);
@@ -336,6 +368,95 @@ fn a_change_of_a_dataset_root_passes_over_the_place_from_the_lower_layers() {
     // the command line's is refused
     let (ok, _, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(&at).arg("--root").arg(&root).env_remove("AEIOU_CONFIG").env_remove("AEIOU_ROOT"));
     assert!(!ok && err.contains("--root given too"), "{err}");
+}
+
+/// RC1 review: a variable or an argument that is not UTF-8 never panics (it was exit 101 for any
+/// variable at all): a path takes the bytes, text is a usage error naming it; an empty value from
+/// the environment or the file is a usage error (an empty root was the working directory); a
+/// fixed boolean's negation below the command line says it is the command line's; a config type
+/// error names the TOML type; and the block shows what a default comes to.
+#[test]
+fn odd_values_from_the_lower_layers_and_the_defaults_in_effect() {
+    use std::os::unix::ffi::OsStrExt;
+    let d = tmpdir("odd");
+    let raw = |b: &[u8]| std::ffi::OsStr::from_bytes(b).to_os_string();
+    // anyone's variable that is not UTF-8
+    let (ok, _, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).env("AEIOU_TEST_NOT_UTF8_FOO", raw(b"a\xff")).env("NOT_OURS", raw(b"b\xff")));
+    assert!(ok, "{err}");
+    // a root that is not UTF-8, from the command line and from the environment: written there
+    let mut at = d.as_os_str().to_os_string();
+    at.push(raw(b"/cli\xff"));
+    let (ok, _, err) = out(aeiou("datagen", "file_per_sample.ast.json", &["samples=30"]).arg("--root").arg(&at));
+    assert!(ok, "{err}");
+    assert!(Path::new(&at).join("train/.aeiou-dataset.json").exists());
+    let mut at = d.as_os_str().to_os_string();
+    at.push(raw(b"/env\xff"));
+    let (ok, _, err) = out(aeiou("datagen", "file_per_sample.ast.json", &["samples=30"]).env("AEIOU_ROOT", &at));
+    assert!(ok, "{err}");
+    assert!(Path::new(&at).join("train/.aeiou-dataset.json").exists());
+    // an abstract whose path is not UTF-8
+    let mut dir = d.as_os_str().to_os_string();
+    dir.push(raw(b"/d\xff"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ast = Path::new(&dir).join("a.ast.json");
+    std::fs::copy(crate::common::workload_ast("file_per_sample.ast.json"), &ast).unwrap();
+    let (ok, text, err) = out(Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("check").arg(&ast).env_remove("AEIOU_CONFIG"));
+    assert!(ok && text.contains("ok   a.ast.json"), "{text}\n{err}");
+    // text that is not UTF-8: a usage error naming it, from either layer
+    let code = |c: &mut Command| c.output().unwrap().status.code();
+    let mut c = aeiou("dry-run", "file_per_sample.ast.json", &SMALL);
+    c.args(["--gpus", "1", "--param"]).arg(raw(b"steps=\xff"));
+    assert_eq!(code(&mut c), Some(2));
+    let (_, _, err) = out(&mut c);
+    assert!(err.starts_with("aeiou dry-run: \"steps=\\xFF\": not UTF-8"), "{err}");
+    let mut c = aeiou("run", "file_per_sample.ast.json", &SMALL);
+    c.args(["--gpus", "1"]).arg("--root").arg(&d).env("AEIOU_COORDINATOR", raw(b"h\xff:1"));
+    assert_eq!(code(&mut c), Some(2));
+    let (_, _, err) = out(&mut c);
+    assert!(err.starts_with("aeiou run: AEIOU_COORDINATOR: \"h\\xFF:1\" is not UTF-8"), "{err}");
+    // empty, from the environment and the file: refused, nothing written in the working directory
+    let cwd = d.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let mut c = aeiou("datagen", "file_per_sample.ast.json", &["samples=30"]);
+    c.env("AEIOU_ROOT", "").current_dir(&cwd);
+    assert_eq!(code(&mut c), Some(2));
+    let (_, _, err) = out(&mut c);
+    assert!(err.starts_with("aeiou datagen: AEIOU_ROOT: empty"), "{err}");
+    assert_eq!(std::fs::read_dir(&cwd).unwrap().count(), 0);
+    let cfg = d.join("aeiou.toml");
+    std::fs::write(&cfg, "[run]\nroot = \"\"\n").unwrap();
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--config").arg(&cfg).current_dir(&cwd));
+    assert!(!ok && err.contains("[run] root: empty"), "{err}");
+    for var in ["AEIOU_REPORT_JSON", "AEIOU_ENDPOINT", "AEIOU_CONFIG"] {
+        let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).env(var, ""));
+        assert!(!ok && err.starts_with(&format!("aeiou run: {var}: empty")), "{var}: {err}");
+    }
+    // the negation of a fixed boolean, from the environment and the file
+    let (ok, _, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).env("AEIOU_NO_METRICS", "1"));
+    assert!(!ok && err.contains("AEIOU_NO_METRICS: --metrics is the command line's alone (`--no-metrics` there)") && !err.contains("AEIOU_METRICS="), "{err}");
+    std::fs::write(&cfg, "[dry-run]\nno-metrics = true\n").unwrap();
+    let (ok, _, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--config").arg(&cfg));
+    assert!(!ok && err.contains("[dry-run] no-metrics: --metrics is the command line's alone"), "{err}");
+    let (ok, _, err) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(&d).env("AEIOU_NO_CLEAN_NAMESPACES", "1"));
+    assert!(!ok && err.contains("AEIOU_NO_CLEAN_NAMESPACES: --clean-namespaces is the command line's alone"), "{err}");
+    // a type error: the TOML type and value
+    std::fs::write(&cfg, "[dry-run]\nthreads = \"3\"\n").unwrap();
+    let (ok, _, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--config").arg(&cfg));
+    assert!(!ok && err.contains("[dry-run] threads: expected an integer, got the string \"3\""), "{err}");
+    // the defaults in effect
+    let cores = std::thread::available_parallelism().unwrap().get();
+    let (ok, text, err) = out(aeiou("dry-run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]));
+    assert!(ok, "{err}");
+    assert_eq!(row(&block(&text), "threads").1, format!("{cores} (all cores)"));
+    let (ok, text, err) = out(aeiou("datagen", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1"]).arg("--root").arg(d.join("dg")));
+    assert!(ok, "{err}");
+    assert_eq!(row(&block(&text), "writers").1, format!("{cores} (all cores)"));
+    let (_, text, _) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1", "--time-scale", "0"]).arg("--root").arg(d.join("dg")));
+    assert_eq!(row(&block(&text), "threads").1, "one per actor");
+    let (_, text, _) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).args(["--gpus", "1", "--time-scale", "0", "--posix", "libaio"]).arg("--root").arg(d.join("dg")));
+    let rows = block(&text);
+    assert_eq!(row(&rows, "threads").1, format!("{cores} (one per core, at most one per actor instance)"));
+    assert_eq!(row(&rows, "aio-depth").1, "256");
 }
 
 /// A `--root` given as a bare relative name that does not exist yet (`dg1`, not `./dg1`): the

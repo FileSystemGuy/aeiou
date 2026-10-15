@@ -1855,12 +1855,13 @@ check depends on may come from a layer the command line does not show. For `run`
 the abstract, `--gpus`, `--seed`, `--param`, `--params-file`, `--subset`, `--posix`, `--cache`, `--s3`,
 `--expect-fingerprint`, `--expect-dataset-id`, `--clean-namespaces`, `--ignore-limits`; for
 `datagen` the abstract, `--gpus`, `--param`, `--params-file`, `--dedupe`, `--compress`,
-`--dataset` (the payload is part of what the run compares); for `dry-run` the identity and
+`--dataset` (the payload is part of what the run compares), `--ignore-space` (a safety check),
+and `--resume`, `--grow`, `--shrink`, `--settle`; for `dry-run` the identity and
 the output and metrics flags. A *layered* option may come from any layer: for `run` `--root`, `--endpoint`,
 `--threads`, `--buffer-mib`, `--write-compress`, `--time-scale`, the io_uring, libaio, and
-mmap knobs, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`,
+mmap knobs, `--object-threads`, `--object-part-mib`, `--rank`, `--ranks`, `--coordinator`, `--rank-rotate`, `--max-gap`,
 `--require-cold`, `--drop-caches`, `--report-json`, `--report-takes`; for `datagen` `--root`, `--endpoint`,
-`--writers`, `--rank`, `--ranks`, `--coordinator`; for `dry-run` `--threads` and `--ranks`. `--rank` from the environment is
+`--writers`, `--object-threads`, `--progress-secs`, `--rank`, `--ranks`, `--coordinator`; for `dry-run` `--threads` and `--ranks`. `--rank` from the environment is
 the case the layers exist for: a launcher sets `AEIOU_RANK` from its own rank variable and
 the same command line runs on every host. ("Replace" is the only merge rule: `--endpoint`, the one
 list, is replaced whole by a higher layer's, whitespace-separated in `AEIOU_ENDPOINT` and an
@@ -1869,7 +1870,25 @@ listed with everything else the command lacks, in one message (§15). `datagen -
 `--grow`, `--shrink`, and `--settle` take the place from the manifest (§5): `--root` or
 `--endpoint` on their command line is a usage error, but the environment's or the file's is
 passed over with a warning in the block (2026-10-14), so one `[datagen]` table serves a fresh
-datagen and the changes of the dataset it wrote.
+datagen and the changes of the dataset it wrote. Likewise a knob the run cannot use
+(2026-10-15, RC1 review): `--threads` under a thread-per-actor API, the io_uring knobs
+without a ring, `--aio-depth` without libaio, the mmap knobs without `mmap`, every POSIX knob
+when every name is `s3`, and `--object-threads`, `--object-part-mib` with no name in an
+object store, are refused from the command line (they would change nothing) but passed over
+from the environment or the file with a warning, `--threads from config /etc/aeiou.toml is
+not used: this run has one thread per actor`, and leave the block and the report's
+`layers`: the one file for a cluster may carry every backend's knobs, and was refused for
+every `sync` abstract before. `--defer-taskrun` against `--sqpoll` is checked after that.
+
+**Values.** An empty value from the environment or the file (`AEIOU_ROOT=`, `root = ""`,
+`AEIOU_CONFIG=`) is a usage error naming the variable or key, as `--root ""` is clap's; an
+empty root had been the working directory. Arguments and variables are read as the process
+has them (`args_os`, `vars_os`): a variable that is not UTF-8, ours or anyone's, had panicked
+every subcommand (exit 101); now a path takes the bytes as they are, and text that is not
+UTF-8 is a usage error naming the argument or the variable. A config value of the wrong type
+is named as TOML has it, `expected an integer, got the string "3"`. A default the program
+resolves is shown in the block as what it comes to (`writers = 20 (all cores)`, `threads =
+one per actor`, `aio-depth = 256` under libaio, `object-threads = 2`); `layers` keeps `null`.
 
 **Negation: `--[no-]x`.** Every boolean of every subcommand has a negation: `--x` turns it
 on, `--no-x` turns it off, the last one on the line wins, so the command line can turn off
@@ -1882,8 +1901,10 @@ file a boolean is a value, `true` or `false` under its own name; a `no-x` key or
 `AEIOU_NO_X` variable is refused with the spelling to use, so the double negative
 `no-require-cold = true` cannot be written. The layered booleans are `--sqpoll-shared`,
 `--defer-taskrun`, `--coop-taskrun`, `--require-cold`, `--drop-caches`, `--report-takes`;
-the fixed ones, `--clean-namespaces`, `--ignore-limits`, and dry-run's `--metrics`, have the
-negation too, for the regularity (nothing below the command line can turn them on). Their
+the fixed ones, `--clean-namespaces`, `--ignore-limits`, datagen's `--ignore-space`, and dry-run's `--metrics`, have the
+negation too, for the regularity (nothing below the command line can turn them on), and
+their `AEIOU_NO_X` or `no-x` is refused as the command line's alone (`--no-x` there), never
+pointed at an `AEIOU_X=false` that would be refused in turn. Their
 cross-checks (`--sqpoll-shared` needs `--sqpoll`, `--defer-taskrun` excludes it,
 `--report-takes` needs `--report-json`) are made on the resolved values, since the two sides
 may come from different layers. Clap renders the row from a long name spelled `[no-]x` with
@@ -1917,8 +1938,8 @@ options (cli > env > config > default)
 ```
 
 A refusal or cross-check of a layered option says which layer set it when that was not the
-command line: `--aio-depth is a libaio knob; --posix sync has no AIO context (--aio-depth
-from config /etc/aeiou.toml)`, `--threads … (--threads from env AEIOU_THREADS)`; a value the
+command line: `--aio-depth 0: a context needs room for a request (--aio-depth from config
+/etc/aeiou.toml)`, `--rank 3 of --ranks 2: … (--rank from env AEIOU_RANK)`; a value the
 user typed gets no suffix. `--root` missing from every layer names the three places it may be
 given, and the usage lines of `run` and `datagen` show it as required. The checks made during
 the run (`--max-gap` exceeded, `--require-cold` refusing a warm host, the limits that
@@ -1939,9 +1960,10 @@ not read the profile an interactive one does, so a variable set in the operator'
 absent on the remote hosts. Under `aeiou-launch` every host's block arrives with its rank
 prefix, and the differences table shows the rest.
 
-**Tests.** `options.rs` (precedence, the negation, the refusals, typed values, the
-differences), `tests/options.rs` through the binary (every subcommand's block, the layers,
-the refusals, the report's `layers`, two ranks with a differing `--buffer-mib` and the named
+**Tests.** `options.rs` (precedence, the negation, the refusals, typed values, empty and
+non-UTF-8 values, the knobs passed over, the differences), `tests/options.rs` through the
+binary (every subcommand's block, the layers, the refusals, the knobs passed over, odd values
+and the defaults in effect, the report's `layers`, two ranks with a differing `--buffer-mib` and the named
 identity refusal, the `--[no-]x` help rows and their alignment, `--x --no-x` both ways, the
 notation typed literally), and `main.rs`'s check that `options::ALL_OPTIONS` is the set of clap
 definitions; `builder/tests/test_options.py` for the Python mirror and `aeiou-datagen`.
