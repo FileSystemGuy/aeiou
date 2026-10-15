@@ -102,10 +102,10 @@ pub(crate) fn run(model: &'static Model<'static>, sh: &Arc<Shared>, counts: &[(&
             match h.join() {
                 Ok(Ok(r)) => total.merge(&r),
                 Ok(Err(e)) => {
-                    first.get_or_insert(e);
+                    crate::run::keep_cause(&mut first, e);
                 }
                 Err(_) => {
-                    first.get_or_insert(anyhow!("an event loop panicked"));
+                    crate::run::keep_cause(&mut first, anyhow!("an event loop panicked"));
                 }
             }
         }

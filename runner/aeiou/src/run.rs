@@ -663,9 +663,13 @@ impl Channel {
         }
     }
 
+    /// A producer failed: the first cause is kept, so a worker that only saw the abort another
+    /// worker raised never replaces that worker's error with "run aborted".
     fn fail(&self, msg: String) {
         let mut st = self.m.lock().unwrap();
-        st.failed = Some(msg);
+        if st.failed.as_deref().is_none_or(|f| echoes_abort(f) && !echoes_abort(&msg)) {
+            st.failed = Some(msg);
+        }
         st.closed = true;
         self.cv.notify_all();
     }
@@ -762,6 +766,22 @@ pub(crate) fn tight_timers() {
 pub(crate) fn panicked(p: Box<dyn std::any::Any + Send>) -> anyhow::Error {
     let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
     anyhow!("panicked: {}", msg.as_deref().unwrap_or("(no message)"))
+}
+
+/// An error that only echoes the abort another thread raised ("run aborted: another actor
+/// failed", "producer failed: run aborted", a barrier left on the abort), not a cause.
+pub(crate) fn echoes_abort(e: &str) -> bool {
+    e.contains("run aborted")
+}
+
+/// Keep the run's root cause in `slot`: the first error that is not an echo of the abort, else
+/// the first. Threads end and are joined in any order, and a thread that only saw the abort
+/// can be joined (or fail a channel) before the one that raised it.
+pub(crate) fn keep_cause(slot: &mut Option<anyhow::Error>, e: anyhow::Error) {
+    match slot {
+        Some(s) if !echoes_abort(&format!("{s:#}")) || echoes_abort(&format!("{e:#}")) => {}
+        _ => *slot = Some(e),
+    }
 }
 
 /// A buffer the runner could not allocate for an op: the op's error, so the run ends with
@@ -1363,27 +1383,22 @@ impl Runner {
         r
     }
 
-    /// Join loader workers; what they counted is this actor's, and the first error is the result.
+    /// Join loader workers; what they counted is this actor's, and the cause (`keep_cause`) is
+    /// the result.
     fn join_loaders(&mut self, loaders: Vec<(String, JoinHandle<(Result<()>, Stats)>)>) -> Result<()> {
-        let mut result = Ok(());
+        let mut cause = None;
         for (name, h) in loaders {
             match h.join() {
                 Ok((r, st)) => {
                     self.a.st.merge(&st);
                     if let Err(e) = r {
-                        if result.is_ok() {
-                            result = Err(e.context(format!("loader `{name}` worker")));
-                        }
+                        keep_cause(&mut cause, e.context(format!("loader `{name}` worker")));
                     }
                 }
-                Err(_) => {
-                    if result.is_ok() {
-                        result = Err(anyhow!("loader `{name}`: a worker panicked"));
-                    }
-                }
+                Err(_) => keep_cause(&mut cause, anyhow!("loader `{name}`: a worker panicked")),
             }
         }
-        result
+        cause.map_or(Ok(()), Err)
     }
 
     /// A loader declared again (in the next iteration of a loop) once every batch of the last
@@ -1528,13 +1543,14 @@ impl Sink<'static, 'static> for Runner {
                 while join.remaining.load(Ordering::Acquire) != 0 {
                     std::thread::park();
                 }
-                first?;
+                // the cause, by sub-actor index, before the sub-actors that only saw the abort
                 let mut errs = std::mem::take(&mut *join.errs.lock().unwrap_or_else(|e| e.into_inner()));
                 errs.sort_by_key(|(k, _)| *k);
-                match errs.into_iter().next() {
-                    Some((_, e)) => Err(e),
-                    None => Ok(true),
+                let mut cause = first.err();
+                for (_, e) in errs {
+                    keep_cause(&mut cause, e);
                 }
+                cause.map_or(Ok(true), Err)
             }
             ForkKind::Loader { name, index, workers, prefetch, batches, ordered } => {
                 let chan = Arc::new(Channel::new(workers * prefetch, ordered, Some(batches)));
@@ -2271,16 +2287,8 @@ pub fn run_with(model: &'static Model<'static>, opts: RunOpts, input_objects: Ha
     for (template, actor, h) in handles {
         match h.join() {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                if first_err.is_none() {
-                    first_err = Some(e.context(format!("actor `{template}` instance {actor}")));
-                }
-            }
-            Err(_) => {
-                if first_err.is_none() {
-                    first_err = Some(anyhow!("actor `{template}` instance {actor} panicked"));
-                }
-            }
+            Ok(Err(e)) => keep_cause(&mut first_err, e.context(format!("actor `{template}` instance {actor}"))),
+            Err(_) => keep_cause(&mut first_err, anyhow!("actor `{template}` instance {actor} panicked")),
         }
     }
     let elapsed = t0.elapsed();
@@ -2830,7 +2838,7 @@ impl Runner {
                 errs.push((lane, e));
             }
         }
-        let cause = errs.iter().position(|(_, e)| !format!("{e:#}").contains("run aborted")).unwrap_or(0);
+        let cause = errs.iter().position(|(_, e)| !echoes_abort(&format!("{e:#}"))).unwrap_or(0);
         match errs.into_iter().nth(cause) {
             Some((lane, e)) => Err(e.context(format!("trace `{}` lane {lane}", tf.name))),
             None => Ok(()),

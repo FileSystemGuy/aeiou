@@ -830,6 +830,55 @@ fn an_op_whose_buffer_cannot_be_allocated_ends_the_run_with_its_error() {
     }
 }
 
+/// A failed run reports its cause, never a thread that only saw the abort, whatever order the
+/// threads end and are joined in (RC1 review: about one run in ten of the test above reported
+/// "take `batches`: producer failed: run aborted: another actor failed"). Each part fails one
+/// thread on a read whose buffer cannot be allocated, and has another, joined or read first,
+/// wait out a longer compute and then meet the abort: loader worker 1 failed the channel again
+/// with the abort, over worker 0's error, before the consumer's take; sub-actor 0 of a
+/// `parallel` was the fork's error ahead of sub-actor 1's; actor 0 was joined before actor 1.
+#[test]
+fn a_failed_run_reports_its_cause_not_the_abort_it_raised() {
+    let root = tmpdir("cause");
+    let huge = r#"{"open":{"file":{"file":{"dataset":"d","id":0}},"flags":["RDONLY"]}},
+        {"read":{"file":{"file":{"dataset":"d","id":0}},"len":70368744177664}},
+        {"close":{"file":{"file":{"dataset":"d","id":0}}}}"#;
+    // the thread whose `who` is 0 fails at 100 ms, when every thread has started (a loader
+    // worker that starts after the failure finds the channel closed and ends quietly); the
+    // others meet the abort at 400 ms, and the consumer takes at 900 ms
+    let wait = |who: &str| format!(r#"{{"compute":{{"ns":{{"add":[100000000,{{"mul":[{who},300000000]}}]}}}}}}"#);
+    let bodies = [
+        ("loader", 1, format!(r#"{{"loader":{{"name":"q","index":"b","workers":2,"prefetch":1,"batches":2,"body":[{}, {huge}]}}}},
+            {{"compute":{{"ns":900000000}}}},
+            {{"loop":{{"index":"s","to":2,"body":[{{"take":{{"channel":"q"}}}}]}}}}"#, wait(r#"{"index":"b"}"#))),
+        ("parallel", 1, format!(r#"{{"parallel":{{"index":"p","width":2,"body":[{}, {huge}]}}}}"#, wait(r#"{"sub":[1,{"index":"p"}]}"#))),
+        ("actors", 2, format!("{}, {huge}", wait(r#"{"sub":[1,{"actor":"id"}]}"#))),
+    ];
+    let mut wrong = Vec::new();
+    for (what, gpus, body) in bodies {
+        let ast = format!(
+            r#"{{"ast":"0.10","name":"cause",
+              "datasets":{{"d":{{"pattern":"d/f{{id:04}}","layout":"whole","access":"indexed","count":1,"size":{{"const":8192}},"seed":7}}}},
+              "actors":{{"gpu":{{"body":[{body}]}}}}}}"#
+        );
+        let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(&ast).unwrap_or_else(|e| panic!("{what}: {e:#}"))));
+        let cfg: &'static Config = Box::leak(Box::new(config(gpus, 0, &[])));
+        let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+        let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
+        let data = root.join(what);
+        gen(loaded, cfg, model, &data);
+        for backend in [BackendKind::Sync, BackendKind::Uring] {
+            let mut o = opts(&data, backend);
+            o.time_scale = 1.0;
+            let e = format!("{:#}", run::run(model, o, std::collections::HashMap::new()).map(|_| ()).expect_err("the run fails"));
+            if !e.contains("buffer allocation of 70368744177664 bytes failed") || e.contains("run aborted") {
+                wrong.push(format!("{what}, {backend:?}: {e}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "the abort reported, not its cause:\n{}", wrong.join("\n"));
+}
+
 /// An `array` file is sparse (`DESIGN_REVIEW.md` §3.72): datagen writes each slot's content and
 /// leaves its tail a hole, so what it writes and counts is the projection's bytes (`gen`), the
 /// manifest's `bytes_written` is the same exactly, the file's length is still every slot's, its

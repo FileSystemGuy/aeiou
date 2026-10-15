@@ -1155,3 +1155,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   resume params, which fail on HEAD's binary); `--test all -- object coord datagen` 28 passed,
   on HEAD eddce97 plus this change. The fixers now also run the builder tests that exercise a
   runner change.
+
+## 51. A failed run could report "run aborted: another actor failed" instead of its cause
+
+- **Where:** `runner/aeiou/src/run.rs` (`Channel::fail`, new `echoes_abort` and
+  `keep_cause`, `join_loaders`, the `parallel` fork's join, `run_with`'s actor join, the trace
+  lanes' selection), `runner/aeiou/src/uring.rs` (`run`, `run_s3`), `runner/aeiou/src/aio.rs`
+  (`run`).
+- **Found by:** review of the execution engines, then confirmed by
+  `run::an_op_whose_buffer_cannot_be_allocated_ends_the_run_with_its_error` (bug 31's test)
+  failing about 1 run in 10: "take `batches`: producer failed: run aborted: another actor
+  failed".
+- **Defect:** two mechanisms. `Channel::fail` overwrote the recorded error: loader worker 0
+  failed and raised the abort, worker 1's next op bailed "run aborted" and failed the channel
+  again, replacing the cause the consumer then reported. And every join kept the first error in
+  join order, so a thread that only saw the abort beat the thread that raised it (actors, loader
+  workers, `parallel` sub-actors, event loops). The cause of a failed run was lost by timing.
+- **Fix:** an error whose message says "run aborted" is an echo (`echoes_abort`, the test the
+  trace-lane join already used); `keep_cause` keeps the first error that is not an echo, else
+  the first; `Channel::fail` keeps its first message unless that is an echo and the new one is
+  not; every join site uses `keep_cause`. No fingerprint, dataset id, or AST changes.
+- **Evidence:** the flaky test failed 4/40 before and passed 40/40 after; the new
+  `run::a_failed_run_reports_its_cause_not_the_abort_it_raised` (a loader, a `parallel` of
+  two, and two actors, under `sync` and `io_uring`, one thread failing at 100 ms and another
+  meeting the abort at 400 ms) fails 3/3 without the fix with four wrong reports and passes
+  10/10 with it; `--test all run` 29 passed, `coord` 21, `--lib` 42.
