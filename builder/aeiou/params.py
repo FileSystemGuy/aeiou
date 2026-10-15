@@ -15,7 +15,9 @@ sets and a fitted set can be reviewed and hashed on its own. The runner applies 
 The value rules are the runner's (`runner/aeiou/src/eval.rs`): a name must be declared, `gpus`
 may not appear, and a value replaces a default of the same kind (scalar, array, distribution;
 an array may change length, its elements keep the default's element kind), because the
-builder decided at build time how each slot is consumed.
+builder decided at build time how each slot is consumed; and, as the runner does, rule V3 is
+judged again on the distributions given and a pattern's divisor must bind to a positive integer
+(V23), so `check` refuses every file `aeiou run --params-file` refuses.
 """
 from __future__ import annotations
 
@@ -97,6 +99,41 @@ def check(ast: dict, pset: dict, *, ast_sha256: str | None = None, name: str = "
                 if kind_of(x) != kind_of(default[0]):
                     errors.append(f"{name}: {pname}[{i}]: the default's elements are {kind_of(default[0])}, this one is {kind_of(x)}")
                     break
+    if not errors:
+        errors += given_rules(ast, pset.get("params", {}), name=name)
+    return errors
+
+
+def given_rules(ast: dict, given: dict, *, name: str = "params") -> list[str]:
+    """The rules the runner judges again on the values a run is given, past their kinds:
+    V3 on the parameters' distributions (`validate::check_given`: a value whose minimum is
+    below the default's can turn an `at` offset into zero, `DESIGN_REVIEW.md` §3.57) and
+    V23 on the pattern divisors they bind (`eval::bind_pattern`: a positive integer)."""
+    from .pattern import Pattern
+    from .validate import _load
+    _, chk = _load()
+
+    class Given(chk.Check):
+        def at_least(self, e, k, scope):
+            if isinstance(e, dict) and len(e) == 1 and e.get("param") in given:
+                v = given[e["param"]]
+                return isinstance(v, dict) and self.at_least(v, k, scope)
+            return super().at_least(e, k, scope)
+
+    errors = [f"{name}: invalid with the parameters given: {e}" for e in Given(ast, ast["name"]).run()]
+    values = {k: p["default"] for k, p in ast.get("params", {}).items()} | given
+    patterns = [(f"dataset `{n}`", d["pattern"]) for n, d in ast.get("datasets", {}).items() if d.get("layout") != "array"]
+    patterns += [(f"namespace `{n}`", s["pattern"]) for n, s in ast.get("namespaces", {}).items()]
+    for where, src in patterns:
+        try:
+            pt = Pattern(src)
+            for p in pt.params():
+                v = values.get(p)
+                if not isinstance(v, int) or isinstance(v, bool):
+                    raise ValueError(f"pattern `{src}`: divisor `{p}`: parameter `{p}` is not an integer")
+            pt.bind(values)
+        except ValueError as e:
+            errors.append(f"{name}: {where}: {e}")
     return errors
 
 

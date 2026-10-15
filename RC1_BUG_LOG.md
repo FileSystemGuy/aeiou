@@ -93,3 +93,25 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   queued separately). `test_trace.py::test_an_aio_context_no_io_submit_names_is_noted` fails on
   the old trace.py and passes on the new; test_trace.py + test_man.py: 77 passed.
 
+## 5. `aeiou-params check` passed parameter files the runner refuses
+
+- **Where:** `builder/aeiou/params.py`, `check()` (new `given_rules`).
+- **Found by:** review of the builder core, comparing `aeiou-params check` with what `aeiou run
+  --params-file` does to the same file (`validate::check_given`, `eval::bind_pattern`); man
+  aeiou-params(1) promises "the runner's rules", and CI runs it on every committed set.
+- **Defect:** `check` compared only each value's kind with its default's. It passed
+  `{"files_per_directory": 2.5}` for file_per_sample (the runner: "divisor `files_per_directory`:
+  parameter … is not an integer", V23) and a set making lmcache_local_disk's reuse arm `const 0`
+  (the runner: 13 "`kind @` names a binding of this loop body, so its index must be … provably
+  >= 1" errors, V3).
+- **Fix:** after the kind checks, `given_rules` re-judges V3 with the given values as the
+  runner does (the schema checker reused through `validate._load()`, `at_least` of a given
+  parameter judged from its value) and binds every non-array dataset's and every namespace's
+  pattern to the defaults overlaid with the given values (V23: a divisor must be a positive
+  integer), with the runner's wording. The `safetensors` and `npz` subcommands go through the
+  same `check`. Every committed parameter file still passes.
+- **Evidence:** both reproductions now FAIL, exit 1 (the reuse case's 13 errors identical to the
+  runner's); `test_params.py::test_given_values_are_judged_as_the_runner_judges_them` (2.5, True,
+  0, 7 as divisors; the reuse arm) fails without the `given_rules` call and passes with it;
+  test_params.py + test_usage.py: 34 passed.
+
