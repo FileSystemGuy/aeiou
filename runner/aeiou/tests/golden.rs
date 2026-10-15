@@ -1163,3 +1163,29 @@ fn a_channel_a_loaders_workers_use_is_declared_once_or_beside_it() {
         rejects(&doc(&body), "depend on timing (V26)");
     }
 }
+
+/// A float literal is read to the nearest f64, as Python's `json` reads it: serde_json without
+/// `float_roundtrip` read 4503599627370495.5, 9007199254740993.0, and 123456789.12345679 one ULP
+/// off, so the AST's sha256 differed from check.py's (a parameter file pinned to check.py's hash
+/// was refused by `dry-run --params-file`) and a `max` printed as 4503599627370495.0 (RC1 review).
+/// The hashes are check.py's, 2026-10-15.
+#[test]
+fn float_literals_are_read_as_check_py_reads_them() {
+    let doc = |size: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "t", "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}}, "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
+        )
+    };
+    for (x, sha) in [
+        ("4503599627370495.5", "906f30b218c13d9a30ec8480ea0f0c82845f41bf0803d85f4888c6a8851763f0"),
+        ("9007199254740993.0", "2209817e240952aef423a17d9e59fc8a5f99adc720e4d24085b749b623abf01f"),
+        ("123456789.12345679", "65ebe307323246e3a885d9c2240fce2ac6fb4291841f785ed418aa2c9ea6ed64"),
+    ] {
+        let loaded = aeiou::load_str(&doc(&format!(r#"{{"const": {x}}}"#))).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(loaded.sha256, sha, "{x}");
+    }
+    rejects(
+        &doc(r#"{"normal": {"mean": 0, "sd": 1, "min": 9007199254740992, "max": 4503599627370495.5}}"#),
+        "t: datasets/d/size: normal: min 9007199254740992 is above max 4503599627370495.5",
+    );
+}

@@ -1966,3 +1966,42 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   HEAD 40392a7 (bug 83) plus the change: `--test all` 131 passed twice, `--lib` 65, builder suite
   365 passed (object tests skipped, run in the final check). Fixed in an isolated worktree and
   applied.
+
+## 85. The runner read some JSON float literals one ULP off, so its AST hash was not the builder's
+
+- **Where:** `runner/aeiou/Cargo.toml` (serde_json's `float_roundtrip` feature);
+  `runner/aeiou/tests/golden.rs`; `builder/tests/test_params.py`.
+- **Found by:** the second regression review (pre-existing at the tag): serde_json without
+  `float_roundtrip` parses floats "best effort", up to one ULP off.
+- **Defect:** a dataset size `{"const": X}` hashed differently in `aeiou check` and check.py for
+  X = 4503599627370495.5, 9007199254740993.0, 123456789.12345679; a normal's min > max message
+  printed max `4503599627370495.0` for `…495.5`; a parameter file pinned to the builder's hash
+  passed `aeiou-params check` and was refused by `aeiou dry-run --params-file` ("is for AST
+  9dd21b2c…, not 93bfce21…"), and the runner ran a value one ULP from the document's. The
+  committed ASTs happened to hash alike.
+- **Fix:** serde_json with `float_roundtrip` (the locked 1.0.151 has it; Cargo.lock unchanged,
+  no new crate), which every JSON reader of the runner uses (abstracts, parameter files,
+  manifests, the coordinator's frames, trace files). Every committed AST's sha256 and every
+  fingerprint compared (1 and 4 GPUs, those under 120 s with both binaries) unchanged.
+- **Evidence:** `golden::float_literals_are_read_as_check_py_reads_them` (three sha256 pinned
+  from check.py, the min > max message) and
+  `test_params.py::test_a_file_pinned_to_the_builders_hash_is_taken_by_the_runner` fail on the
+  old binary and pass; `--lib` 66 passed, `--test all` 132, test_builder, test_params,
+  test_formats 152.
+
+## 86. The geometry cache held every sample offset of its newest file, however many
+
+- **Where:** `runner/aeiou/src/eval.rs` (`DsMeta::file_geom(file, max_offsets)`);
+  `runner/aeiou/src/vm.rs` (`file_geom_within`, `geom_held`, the bound's doc).
+- **Found by:** the second regression review of bug 78: the eviction loop never evicts the
+  newest entry, so one file of N samples kept 8·N bytes of offsets in every VM, a per-sample
+  table over a one-file dataset (CLAUDE.md: never per-file data structures; caches bounded).
+- **Defect:** a one-file compound dataset of 8,000,000 samples dry-ran at maxrss 71 MB per VM.
+- **Fix:** a file with more samples than `GEOM_OFFSETS` (2^20) is held by its size alone, its
+  offsets never built; `sample_offset` then asks `DsMeta`, as before bug 78, so results are
+  identical (the same run: 9.4 MB, same fingerprint). Such a file's offsets cost O(samples per
+  file) again (0.64 s → 2.07 s for that run). No fingerprint, dataset id, or AST changes.
+- **Evidence:** `vm::tests::the_geometry_cache_never_holds_more_offsets_than_its_bound` (cap 30,
+  files of 100/100/20, packed and TFRecord, sizes and offsets equal `DsMeta`'s, all 220 ids at
+  the production bound) failed "100 offsets held after file 0" with the gate undone and
+  passes; suites as bug 85.

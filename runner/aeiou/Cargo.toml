@@ -13,7 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: a float literal is read to the nearest f64, as Python's json reads it (the AST hash, RC1 review)
+serde_json = { version = "1", features = ["float_roundtrip"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 sha2 = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

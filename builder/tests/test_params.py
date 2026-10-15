@@ -359,3 +359,22 @@ def test_non_json_numbers_in_a_parameter_file_are_refused(tmp_path, lit):
             r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(ast), "--params-file", str(f)],
                                capture_output=True, text=True, cwd=str(tmp_path))
             assert r.returncode == 1 and "not JSON" in r.stderr, r.stderr
+
+
+def test_a_file_pinned_to_the_builders_hash_is_taken_by_the_runner(tmp_path):
+    """A float literal is read to the nearest f64 by both sides: the runner's serde_json read
+    123456789.12345679 one ULP off, so a parameter file pinned to the hash `aeiou-params` computes
+    passed `check` and was refused by `dry-run --params-file` as a file for another AST (RC1 review)."""
+    a, f = tmp_path / "h.ast.json", tmp_path / "h.params.json"
+    a.write_text('{"ast": "0.10", "name": "h", "params": {"sz": {"default": 123456789.12345679}}, '
+                 '"datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 4096, "seed": 1}}, '
+                 '"actors": {"gpu": {"body": [{"compute": {"ns": {"param": "sz"}}}]}}}')
+    f.write_text(json.dumps({"params_version": 1, "abstract": "h", "ast_sha256": emit.sha256(emit.load(a)), "params": {}}))
+    r = _run(["check", a, f])
+    assert r.returncode == 0, r.stdout + r.stderr
+    runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
+    if not runner.exists():
+        pytest.skip("runner binary not built")
+    r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)],
+                       capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stderr

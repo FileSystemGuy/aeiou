@@ -921,24 +921,28 @@ impl<'a> DsMeta<'a> {
     /// `sample_offset` each draw again per call, O(samples in the file), held by the VM for the
     /// files it is reading (`Vm::file_geom`). The values are those functions' to the bit;
     /// `offsets` is `None` where `sample_offset` would refuse (several columns, an offset past
-    /// 2^63-1), and an `Err` is `file_size`'s refusal, so a caller falls back to them for the
-    /// error message.
-    pub fn file_geom(&self, file: i64) -> Result<FileGeom> {
+    /// 2^63-1) or the file has more than `max_offsets` samples (a per-sample table is never
+    /// held past that bound), and an `Err` is `file_size`'s refusal, so a caller falls back to
+    /// them for the error message.
+    pub fn file_geom(&self, file: i64, max_offsets: usize) -> Result<FileGeom> {
         let DsMeta::Files { spf, framing: layout, .. } = self else { bail!("`{}` is an array dataset", self.name()) };
         let n = self.samples_in_file(file)?;
         let first = file * spf;
+        let keep = usize::try_from(n).is_ok_and(|n| n <= max_offsets);
         if layout.is_packed() {
-            let mut offsets = Vec::with_capacity(n as usize);
+            let mut offsets = Vec::with_capacity(if keep { n as usize } else { 0 });
             let mut total = 0i64;
             for i in 0..n {
-                offsets.push(total);
+                if keep {
+                    offsets.push(total);
+                }
                 total = total.checked_add(self.sample_size(first + i)?).ok_or_else(|| self.overflow(format!("the size of file {file}")))?;
             }
-            return Ok(FileGeom { size: total, offsets: Some(offsets) });
+            return Ok(FileGeom { size: total, offsets: keep.then_some(offsets) });
         }
         let lens = self.unit_lens(file)?;
         let size = self.file_size_from_units(file, &lens)?;
-        if layout.columns.len() != 1 {
+        if layout.columns.len() != 1 || !keep {
             return Ok(FileGeom { size, offsets: None });
         }
         let col = &layout.columns[0];
@@ -1404,7 +1408,7 @@ pub(crate) mod tests {
             with_model(&dataset(123, 50, format), |model| {
                 let meta = &model.datasets[0];
                 for file in 0..3 {
-                    let g = meta.file_geom(file).unwrap();
+                    let g = meta.file_geom(file, usize::MAX).unwrap();
                     assert_eq!(g.size, meta.file_size(file).unwrap(), "format `{format}` file {file}");
                     let n = meta.samples_in_file(file).unwrap();
                     match &g.offsets {
@@ -1420,7 +1424,7 @@ pub(crate) mod tests {
                         }
                     }
                 }
-                assert!(meta.file_geom(3).is_err());
+                assert!(meta.file_geom(3, usize::MAX).is_err());
             });
         }
     }

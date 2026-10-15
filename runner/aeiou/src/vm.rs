@@ -477,9 +477,15 @@ pub struct Vm<'m, 'a> {
 }
 
 /// The bounds of a VM's file geometry cache (`Vm::geom`): the files an actor interleaves
-/// (a `cycle` of shards, the files of a batch), and 8 MiB of sample offsets.
+/// (a `cycle` of shards, the files of a batch), and 8 MiB of sample offsets. A file of more
+/// samples than `GEOM_OFFSETS` is held by its size alone, its offsets asked of `DsMeta`.
 const GEOM_FILES: usize = 16;
 const GEOM_OFFSETS: usize = 1 << 20;
+
+/// The sample offsets `geom` holds.
+fn geom_held(geom: &[((usize, i64), Arc<FileGeom>)]) -> usize {
+    geom.iter().map(|(_, g)| g.offsets.as_ref().map_or(0, |o| o.len())).sum()
+}
 
 impl<'m, 'a: 'm> Vm<'m, 'a> {
     pub fn new(model: &'m Model<'a>, template: &'a str, actor: i64, actor_count: i64) -> Self {
@@ -1308,6 +1314,12 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
     /// one sample fills the file (`file_size` is one draw) or `file_geom` refuses (the caller
     /// asks `DsMeta` again, for its error).
     fn file_geom(&mut self, ds: usize, file: i64) -> Option<Arc<FileGeom>> {
+        self.file_geom_within(ds, file, GEOM_OFFSETS)
+    }
+
+    /// `file_geom` holding at most `max_offsets` offsets, the newest file's included (RC1
+    /// review: the newest file was always kept, so a file of n samples held 8·n bytes).
+    fn file_geom_within(&mut self, ds: usize, file: i64, max_offsets: usize) -> Option<Arc<FileGeom>> {
         let model = self.model;
         let meta = &model.datasets[ds];
         if !matches!(meta, DsMeta::Files { spf, .. } if *spf > 1) {
@@ -1319,10 +1331,9 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             self.geom.push(e);
             return Some(g);
         }
-        let g = Arc::new(meta.file_geom(file).ok()?);
+        let g = Arc::new(meta.file_geom(file, max_offsets).ok()?);
         self.geom.push(((ds, file), g.clone()));
-        let held = |v: &Vec<((usize, i64), Arc<FileGeom>)>| v.iter().map(|(_, g)| g.offsets.as_ref().map_or(0, |o| o.len())).sum::<usize>();
-        while self.geom.len() > 1 && (self.geom.len() > GEOM_FILES || held(&self.geom) > GEOM_OFFSETS) {
+        while self.geom.len() > 1 && (self.geom.len() > GEOM_FILES || geom_held(&self.geom) > max_offsets) {
             self.geom.remove(0);
         }
         Some(g)
@@ -2004,5 +2015,51 @@ mod tests {
         assert_eq!(int(c.get(&(1, n / 2, vec![]))), Some(n / 2));
         assert_eq!(int(c.get(&(1, n / 2 - 1, vec![]))), None, "the smaller half is shed");
         assert_eq!(int(c.get(&(1, -1, vec![]))), Some(-1), "the value just inserted is kept");
+    }
+
+    /// RC1 review: the geometry cache always kept the file it had just computed, so one file of
+    /// n samples (a dataset of one big shard) held a table of n offsets in every VM. A file of
+    /// more samples than the bound is held by its size alone, and what the cache answers is
+    /// `DsMeta`'s to the bit.
+    #[test]
+    fn the_geometry_cache_never_holds_more_offsets_than_its_bound() {
+        let tfrecord = r#", "format": {"class": "tfrecord", "reader": "tf.data", "framing": {"columns": [{"row_header": 12, "row_footer": 4, "weight": 1}]}}"#;
+        let cap = 30;
+        for format in ["", tfrecord] {
+            // files of 100, 100, and 20 samples: two past the bound, one under it
+            let text = format!(
+                r#"{{"ast": "0.10", "name": "t",
+                  "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
+                     "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
+                  "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
+            );
+            let loaded = crate::load_str(&text).unwrap_or_else(|e| panic!("{e:#}"));
+            let cfg = Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![] };
+            let params = Params::new(&loaded.ast, &cfg).unwrap();
+            let model = build_model(&loaded.ast, &cfg, &params).unwrap();
+            let meta = &model.datasets[0];
+            let mut vm = Vm::new(&model, "gpu", 0, 1);
+            for file in [0, 2, 1, 2, 0, 1] {
+                let g = vm.file_geom_within(0, file, cap).expect("a container file's geometry");
+                assert!(geom_held(&vm.geom) <= cap, "format `{format}`: {} offsets held after file {file}", geom_held(&vm.geom));
+                assert_eq!(g.size, meta.file_size(file).unwrap(), "format `{format}` file {file}");
+                let n = meta.samples_in_file(file).unwrap();
+                match &g.offsets {
+                    Some(o) => {
+                        assert!(n as usize <= cap);
+                        for (i, off) in o.iter().enumerate() {
+                            assert_eq!(*off, meta.sample_offset(file * 100 + i as i64).unwrap(), "format `{format}` file {file} sample {i}");
+                        }
+                    }
+                    None => assert!(n as usize > cap, "format `{format}` file {file}: {n} samples, no offsets"),
+                }
+            }
+            // and through the production bound, the offsets the VM reads are DsMeta's
+            let mut vm = Vm::new(&model, "gpu", 0, 1);
+            for id in (0..220).rev() {
+                let want = meta.sample_offset(id).unwrap();
+                assert_eq!(vm.sample_offset(0, id).ok(), Some(want), "format `{format}` sample {id}");
+            }
+        }
     }
 }
