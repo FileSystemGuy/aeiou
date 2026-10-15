@@ -81,7 +81,7 @@ A body is an array of statements: thirteen control forms and eighteen operations
 | `let {name, value}` | Bind a name to a positional value or a handle, visible to later siblings and child bodies, not to sibling bodies. A `let` is the way to use one draw twice. |
 | `loop {index, from, to, step, body}` | `for index in [from, to) step step`. The index joins every random key inside. |
 | `parallel {index, width, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end. |
-| `channel {name, capacity, ordered}` | A bounded channel in the enclosing actor. |
+| `channel {name, capacity, ordered}` | A bounded channel in the enclosing actor, shared by its sub-actors; never inside a `parallel` or `loader` body (V26). |
 | `put {channel, seq}`, `take {channel}` | Deliver item `seq` (blocks while full); wait for the next item (in `seq` order if ordered). |
 | `loader {name, index, workers, prefetch, batches, ordered, body}` | PyTorch's DataLoader: `workers` sub-actors, worker `w` builds batches `w, w+W, ...`, an ordered channel of `workers x prefetch` slots bounding batches started, exactly `batches` batches. |
 | `barrier {scope}` | `global`, `host`, or a named group. |
@@ -207,6 +207,8 @@ these, and the builder enforces most of them at construction:
 - **V23** A divisor named in a pattern is a declared parameter whose default is an integer.
 - **V24** In a `parallel` or `loader` body, a `read` or `write` without an `offset`, and any
   `lseek`, names a handle that body opened. **V25** A dataset's size is never below 0.
+- **V26** No `channel` or `loader` inside a `parallel` or `loader` body: a channel is the
+  actor's, shared by its sub-actors, so it is declared before the fork.
 
 ## PARAMETER FILES
 

@@ -346,9 +346,16 @@ class Check:
         varies = self.varies(a["width"], scope)
         self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"], True, p if varies else None))
 
+    # V26: a channel is the actor's, shared by its sub-actors, so one declared in a sub-actor
+    # would be declared by each of them, and which declaration replaced which depends on timing
+    def declared_outside_forks(self, kind, p):
+        if self.fork_opens is not None:
+            self.err(p, f"a `{kind}` inside a `parallel` or `loader` body: its channel is the actor's, shared by every sub-actor, so each sub-actor would declare it again over the others' and what it holds would depend on timing; declare it before the fork (V26)")
+
     def n_loader(self, a, p, scope):
         for k in ("workers", "prefetch", "batches"):
             self.expr(a[k], p + [k], scope)
+        self.declared_outside_forks("loader", p)
         scope.channels.add(a["name"])
         varies = self.varies(a["batches"], scope)
         self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"], True, p if varies else None))
@@ -391,6 +398,7 @@ class Check:
 
     def n_channel(self, a, p, scope):
         self.expr(a["capacity"], p + ["capacity"], scope)
+        self.declared_outside_forks("channel", p)
         scope.channels.add(a["name"])
 
     def n_put(self, a, p, scope):

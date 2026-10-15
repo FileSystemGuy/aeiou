@@ -1531,9 +1531,9 @@ impl Sink<'static, 'static> for Runner {
             Control::Channel { name, capacity, ordered } => {
                 let mut ch = self.inst.channels.lock().unwrap();
                 if let Some(old) = ch.get(name) {
-                    // a channel in a loop is declared again each iteration: the last one is
-                    // retired when nothing it delivered is left untaken (closed, so a take still
-                    // parked on it fails instead of waiting forever)
+                    // a channel in a loop is declared again each iteration (by the actor, never a
+                    // sub-actor, V26): the last one is retired when nothing it delivered is left
+                    // untaken (closed, so a take still parked on it fails instead of waiting forever)
                     if old.total.is_some() {
                         bail!("channel `{name}` declared twice");
                     }

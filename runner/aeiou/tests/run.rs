@@ -1151,3 +1151,44 @@ fn stream_abstracts_take_every_shard_for_any_batch() {
         }
     }
 }
+
+/// A `channel` or `loader` declared inside a `parallel` or `loader` body is refused (V26): the
+/// channel is the actor's, shared by its sub-actors, and since a channel in a loop may be
+/// declared again once it is empty (bug 37), each sub-actor's declaration replaced the
+/// other's when it happened to be empty, so `run` failed ("declared again with 1 item(s) put
+/// and not taken"), hung, or passed as timing had it (RC1 regression review). The shape that
+/// means it, the actor declaring the channel in each iteration and its sub-actors putting and
+/// taking, runs alike under both engines whatever the timing.
+#[test]
+fn a_channel_declared_inside_a_fork_is_refused_whatever_the_timing() {
+    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"ch_fork","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let sub = |decl: &str| {
+        format!(
+            r#"{{"parallel":{{"index":"p","width":2,"body":[
+                {{"compute":{{"ns":{{"mul":[{{"index":"p"}},50000000]}}}}}},
+                {decl}
+                {{"put":{{"channel":"c","seq":{{"index":"p"}}}}}},
+                {{"compute":{{"ns":100000000}}}},
+                {{"take":{{"channel":"c"}}}}]}}}}"#
+        )
+    };
+    let chan = r#"{"channel":{"name":"c","capacity":1}},"#;
+    for bad in [doc(&sub(chan)), doc(&sub(r#"{"loader":{"name":"c","index":"b","workers":1,"prefetch":1,"batches":1,"body":[{"compute":{"ns":1000}}]}},"#))] {
+        let e = format!("{:#}", aeiou::load_str(&bad).err().expect("refused"));
+        assert!(e.contains("parallel/body/1/") && e.contains("inside a `parallel` or `loader` body") && e.contains("(V26)"), "{e}");
+    }
+    let good = doc(&format!(r#"{{"loop":{{"index":"e","to":3,"body":[{chan} {}]}}}}"#, sub("")));
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(&good).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(1, 0, &[])));
+    let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
+    let root = tmpdir("ch-fork");
+    for backend in [BackendKind::Sync, BackendKind::Uring] {
+        for scale in [0.0, 0.2] {
+            let mut o = opts(&root, backend);
+            o.time_scale = scale;
+            let r = go(model, o);
+            assert_eq!((r.stats.puts, r.stats.takes), (6, 6), "{backend:?}, time scale {scale}");
+        }
+    }
+}

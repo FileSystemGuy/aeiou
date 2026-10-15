@@ -259,7 +259,9 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
 - **`channel` / `put` / `take`** are the general form: `put` blocks while `capacity` items are
   delivered and untaken; `take` returns the next in `seq` order, or any item if unordered. A
   `channel` declared again (in a loop) replaces the last one when nothing put on it is left
-  untaken, and is an error otherwise.
+  untaken, and is an error otherwise. A channel or loader is the actor's, declared outside any
+  `parallel` or `loader` body (V26, 2026-10-15): declared by sub-actors, each replaced the
+  others' when it happened to be empty, so the run's outcome depended on timing.
 - **Barrier.** The participants of `barrier {scope}` are the instances of every template
   whose body contains it outside any `parallel` or `loader` (a barrier inside a sub-actor is
   refused). An instance that finishes leaves its barriers; a generation completed by

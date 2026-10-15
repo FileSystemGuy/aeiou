@@ -1067,3 +1067,40 @@ def test_a_size_that_is_not_a_number_is_refused_whatever_the_order():
     assert _size_errs({"normal": {"mean": 0, "sd": 1, "min": nan, "max": 5}}) == infinite
     # a weight of 0 is never drawn
     assert _size_errs({"mixture": [{"weight": 0, "dist": {"const": nan}}, arm(5)]}) == []
+
+
+def test_a_channel_or_loader_inside_a_fork_is_refused():
+    """V26 (RC1 regression review), as the runner has it: a `channel` or `loader` inside a
+    `parallel` or `loader` body is refused, at any depth; one declared by the actor and used by
+    its sub-actors, or declared again in each iteration of the actor's loop, is not."""
+    from aeiou.validate import _load
+    _, check = _load()
+
+    def errs(*body):
+        return check.Check({"ast": "0.10", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+
+    chan = {"channel": {"name": "c", "capacity": 2}}
+
+    def loader(*body):
+        return {"loader": {"name": "q", "index": "b", "workers": 2, "prefetch": 1, "batches": 2, "body": list(body)}}
+
+    def par(*body):
+        return {"parallel": {"index": "p", "width": 2, "body": list(body)}}
+
+    put_take = [{"put": {"channel": "c", "seq": {"index": "p"}}}, {"take": {"channel": "c"}}]
+    take_q = {"loop": {"index": "s", "to": 2, "body": [{"take": {"channel": "q"}}]}}
+    compute = {"compute": {"ns": 1}}
+    # accepted: the actor declares, its sub-actors put and take; a channel and a loader per iteration
+    assert errs(chan, par(*put_take)) == []
+    assert errs({"loop": {"index": "e", "to": 2, "body": [chan, loader(compute), par(*put_take), take_q]}}) == []
+    for body, path in [
+        ([par(chan, *put_take)], "parallel/body/0/channel"),
+        ([loader(chan), take_q], "loader/body/0/channel"),
+        ([par(loader(compute), take_q)], "parallel/body/0/loader"),
+        ([loader(par(chan)), take_q], "loader/body/0/parallel/body/0/channel"),
+    ]:
+        kind = path.rsplit("/", 1)[1]
+        e = errs(*body)
+        assert len(e) == 1, e
+        assert e[0].startswith(f"v26: actors/gpu/body/0/{path}: a `{kind}` inside a `parallel` or `loader` body")
+        assert e[0].endswith("(V26)")

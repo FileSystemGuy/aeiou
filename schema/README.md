@@ -87,7 +87,7 @@ python3 schema/check.py path/to/x.ast.json   # one file
 | `let {name, value}` | Bind a name to a positional value or a handle. Visible for the rest of the enclosing body and in child bodies; not in sibling bodies. |
 | `loop {index, from, to, step, body}` | `for index in [from, to) step step`. The index joins every RNG key inside. |
 | `parallel {index, width, body}` | `width` concurrent sub-actors, index `0..width`, joined at the end. |
-| `channel {name, capacity, ordered}` | Declare a bounded channel in the enclosing actor. |
+| `channel {name, capacity, ordered}` | Declare a bounded channel in the enclosing actor, shared by its sub-actors (never in a `parallel` or `loader` body, V26). |
 | `put {channel, seq}` / `take {channel}` | Deliver item `seq` (blocks while full) / wait for the next item (in `seq` order if ordered). |
 | `loader {name, index, workers, prefetch, batches, ordered, body}` | PyTorch sugar the runner keeps: `workers` sub-actors, worker `w` builds batches `w, w+W, …`; an ordered channel `name` of `workers × prefetch` slots; exactly `batches` batches. |
 | `barrier {scope}` | `global`, `host`, or a named group. |
@@ -383,6 +383,13 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   `array`'s sizes are clamped to `[0, slot]` and are exempt. Judged on the parameter defaults, and by the runner again on
   the values in effect (as V3); what the document does not show (a bound through `div`, say)
   the runner refuses when it draws it, naming the dataset and the sample.
+- **V26 a channel is declared by the actor** (added 2026-10-15, contract 0.10, no committed
+  AST affected). No `channel` or `loader` inside a `parallel` or `loader` body, at any depth.
+  A channel is the actor's, shared by every sub-actor, and one declared in a loop is declared
+  again in each iteration, replacing the last once nothing put on it is left untaken
+  (`runner/REFERENCE.md` §4); declared by sub-actors it was declared once by each, over the
+  others' when theirs happened to be empty, so the run failed, hung, or passed as timing had
+  it. Declare it before the fork; the sub-actors put and take on it.
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)

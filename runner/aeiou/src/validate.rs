@@ -291,6 +291,14 @@ impl<'a> Checker<'a> {
         self.errors.push(format!("{}: {}: {}", self.ast.name, path.join("/"), msg.as_ref()));
     }
 
+    /// V26: a channel is the actor's, shared by its sub-actors, so one declared in a sub-actor
+    /// would be declared by each of them, and which declaration replaced which depends on timing.
+    fn declared_outside_forks(&mut self, kind: &str, pp: &P, st: &ActorState<'a>) {
+        if st.fork_opens.is_some() {
+            self.err(pp, format!("a `{kind}` inside a `parallel` or `loader` body: its channel is the actor's, shared by every sub-actor, so each sub-actor would declare it again over the others' and what it holds would depend on timing; declare it before the fork (V26)"));
+        }
+    }
+
     fn run(&mut self) {
         let ast = self.ast;
         if !is_ident(&ast.name) {
@@ -688,6 +696,7 @@ impl<'a> Checker<'a> {
                 self.expr(workers, &p(pp, &["workers"]), scope, st, None);
                 self.expr(prefetch, &p(pp, &["prefetch"]), scope, st, None);
                 self.expr(batches, &p(pp, &["batches"]), scope, st, None);
+                self.declared_outside_forks("loader", pp, st);
                 st.channels.insert(name);
                 let inner = scope.with_index(index, true, self.varies(batches, scope).then(|| pp.clone()));
                 let outer = st.fork_opens.replace(Vec::new());
@@ -699,6 +708,7 @@ impl<'a> Checker<'a> {
                     self.err(&p(pp, &["name"]), "not an identifier");
                 }
                 self.expr(capacity, &p(pp, &["capacity"]), scope, st, None);
+                self.declared_outside_forks("channel", pp, st);
                 st.channels.insert(name);
             }
             Node::Put { channel, seq } => {

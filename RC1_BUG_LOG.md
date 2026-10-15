@@ -1726,3 +1726,28 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   mixture pair both ways, `min`/`max` both ways, three clamps, a weight-0 NaN arm still
   accepted) fail on the old code and pass; on HEAD df06a74 plus the change: golden 24 passed,
   test_builder and test_params 101 passed, check.py ok over every committed AST.
+
+## 75. A channel declared inside a `parallel` body failed or hung by timing (regression of bug 37)
+
+- **Where:** `schema/check.py` and `runner/aeiou/src/validate.rs` (new rule V26,
+  `declared_outside_forks` in `loader`/`channel`); `runner/aeiou/src/run.rs` `Control::Channel`
+  (comment); `schema/README.md` §3, §4; `man/aeiou-abstract.7.md`; `runner/REFERENCE.md` §4.
+- **Found by:** the regression review of the RC1 fixes: bug 37 lets a channel be declared
+  again in each iteration of a loop, and a declaration inside a fork body is made once by each
+  sub-actor over the shared `Instance.channels`.
+- **Defect:** `parallel width 2 { channel c; put c; take c }` passed both checkers, then
+  `aeiou run` failed "channel c declared again with 1 item(s) put and not taken" under sync and
+  io_uring, hung under sync at `--time-scale 0`, and failed "nothing will complete" under
+  io_uring at time scale 0: which sub-actor's declaration replaced which depended on timing.
+  A loader inside a `parallel` did the same.
+- **Fix:** a channel is the actor's, shared by its sub-actors (as the docs already said); both
+  checkers refuse a `channel` or `loader` inside a `parallel` or `loader` body at any depth,
+  with one path and message (V26, contract 0.10, no committed AST affected). The per-iteration
+  redeclaration bug 37 allowed is kept. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `golden::a_channel_or_loader_inside_a_fork_is_refused`,
+  `run::a_channel_declared_inside_a_fork_is_refused_whatever_the_timing` (the intended shape
+  runs with 6 puts and 6 takes under sync and io_uring at time scale 0 and 0.2), and
+  `test_builder.py::test_a_channel_or_loader_inside_a_fork_is_refused` fail on the old code
+  and pass; on HEAD 3f2c3cc plus the change: `--test all -- run golden loader parallel man` 68
+  passed, `--lib` 61, test_builder, test_catalog, test_man, test_params 172 passed, both
+  checkers ok over every committed AST. Fixed in an isolated worktree and applied.

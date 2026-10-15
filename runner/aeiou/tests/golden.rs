@@ -1079,3 +1079,29 @@ fn a_size_that_is_not_a_number_is_refused_whatever_the_order() {
     // a weight of 0 is never drawn
     aeiou::load_str(&doc(&format!(r#"{{"mixture": [{{"weight": 0, "dist": {{"const": {nan}}}}}, {}]}}"#, arm("5")))).unwrap_or_else(|e| panic!("{e:#}"));
 }
+
+/// V26 (RC1 regression review), as `check.py` has it: a `channel` or `loader` inside a
+/// `parallel` or `loader` body is refused, at any depth; one declared by the actor and used by
+/// its sub-actors, or declared again in each iteration of the actor's loop, is not.
+#[test]
+fn a_channel_or_loader_inside_a_fork_is_refused() {
+    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let chan = r#"{"channel":{"name":"c","capacity":2}}"#;
+    let loader = |body: &str| format!(r#"{{"loader":{{"name":"q","index":"b","workers":2,"prefetch":1,"batches":2,"body":[{body}]}}}}"#);
+    let par = |body: &str| format!(r#"{{"parallel":{{"index":"p","width":2,"body":[{body}]}}}}"#);
+    let put_take = r#"{"put":{"channel":"c","seq":{"index":"p"}}}, {"take":{"channel":"c"}}"#;
+    let take_q = r#"{"loop":{"index":"s","to":2,"body":[{"take":{"channel":"q"}}]}}"#;
+    // accepted: the actor declares, its sub-actors put and take; a channel and a loader per iteration
+    aeiou::load_str(&doc(&format!("{chan}, {}", par(put_take)))).unwrap();
+    aeiou::load_str(&doc(&format!(r#"{{"loop":{{"index":"e","to":2,"body":[{chan}, {}, {}, {take_q}]}}}}"#, loader(r#"{"compute":{"ns":1}}"#), par(put_take)))).unwrap();
+    for (body, path) in [
+        (par(&format!("{chan}, {put_take}")), "parallel/body/0/channel"),
+        (format!("{}, {take_q}", loader(chan)), "loader/body/0/channel"),
+        (par(&format!("{}, {take_q}", loader(r#"{"compute":{"ns":1}}"#))), "parallel/body/0/loader"),
+        (format!("{}, {take_q}", loader(&par(chan))), "loader/body/0/parallel/body/0/channel"),
+    ] {
+        let kind = path.rsplit('/').next().unwrap();
+        rejects(&doc(&body), &format!("{path}: a `{kind}` inside a `parallel` or `loader` body"));
+        rejects(&doc(&body), "(V26)");
+    }
+}
