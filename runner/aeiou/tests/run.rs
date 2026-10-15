@@ -788,3 +788,48 @@ fn a_local_barrier_releases_without_waiting_out_its_poll() {
     hs.into_iter().for_each(|h| h.join().unwrap());
     assert!(t.elapsed() < std::time::Duration::from_secs(2), "100 barriers of four threads took {:?}", t.elapsed());
 }
+
+/// A sub-actor starts from the parent's open files and as-written sums at the fork, and
+/// nothing it does moves the parent's: the dry run walked the sub-actors inline in the
+/// parent's state, so a sub-actor's open and read of the parent's file moved the parent's
+/// position, and the dry run's fingerprint was not the stream `run` issued (RC1 review).
+/// An op at the file position of a handle the fork body did not open is refused (V24): the
+/// sub-actors would share the descriptor's position, and the offsets would depend on timing.
+#[test]
+fn a_fork_leaves_the_parents_file_positions_as_run_does() {
+    const AST: &str = r#"{"ast":"0.10","name":"fork_positions",
+      "datasets":{"d":{"pattern":"d/f{id:04}","layout":"whole","access":"indexed","count":1,"size":{"const":8192},"seed":7}},
+      "actors":{"gpu":{"body":[
+        {"open":{"file":{"file":{"dataset":"d","id":0}},"flags":["RDONLY"]}},
+        {"read":{"file":{"file":{"dataset":"d","id":0}},"len":2048}},
+        {"parallel":{"index":"p","width":3,"body":[
+          {"open":{"file":{"file":{"dataset":"d","id":0}},"flags":["RDONLY"]}},
+          {"read":{"file":{"file":{"dataset":"d","id":0}},"len":1024,"repeat":{"add":[{"index":"p"},1]}}},
+          {"read":{"file":{"file":{"dataset":"d","id":0}},"len":512,"offset":7680}},
+          {"close":{"file":{"file":{"dataset":"d","id":0}}}}
+        ]}},
+        {"read":{"file":{"file":{"dataset":"d","id":0}},"len":1024}},
+        {"close":{"file":{"file":{"dataset":"d","id":0}}}}
+      ]}}}"#;
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(AST).unwrap()));
+    let cfg: &'static Config = Box::leak(Box::new(config(1, 0, &[])));
+    let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
+    let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
+    let root = tmpdir("fork-pos");
+    gen(loaded, cfg, model, &root);
+    let (fp, ops, bytes) = dry_fingerprint(model);
+    // the parent's last read is at 2048, where its own read left it
+    assert_eq!((ops, bytes), (1 + 1 + 3 * 3 + 6 + 1 + 1, 2048 + 6 * 1024 + 3 * 512 + 1024));
+    for backend in [BackendKind::Sync, BackendKind::Uring] {
+        let r = go(model, opts(&root, backend));
+        assert_eq!(r.stats.fingerprint, fp, "{backend:?}: the dry run is the stream run issues");
+        assert_eq!((r.stats.ops, r.stats.bytes_read), (ops, bytes), "{backend:?}");
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+    // without the sub-actor's own open, its read would be at the inherited descriptor's position
+    let shared = AST.replacen(r#"{"open":{"file":{"file":{"dataset":"d","id":0}},"flags":["RDONLY"]}},
+          {"read""#, r#"{"read""#, 1);
+    assert_ne!(shared, AST);
+    let e = format!("{:#}", aeiou::load_str(&shared).err().expect("refused"));
+    assert!(e.contains("parallel/body/0/read/file") && e.contains("(V24)"), "{e}");
+}

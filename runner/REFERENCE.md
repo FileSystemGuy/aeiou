@@ -235,7 +235,13 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   `threads` is therefore the number of threads the run created, not the number of
   sub-actors it ran. Every sub-actor starts from a snapshot of its parent's
   position and bindings (`vm::Snapshot`) and sees the files the parent had open at the fork;
-  what it opens itself is its own. The VM's walk runs on the thread, so blocking calls
+  what it opens itself is its own. The VM's file positions and as-written sums are the
+  snapshot's too: a sub-actor's reads, writes, opens, and closes move neither a sibling's nor
+  the parent's, and the dry run, which walks the sub-actors inline in index order, gives
+  each the parent's state at the fork and the parent its own back after the last (2026-10-14;
+  the walk had carried them from sub-actor to sub-actor and back to the parent, so its
+  fingerprint was not the stream `run` issued). The kernel's position of an inherited
+  descriptor is shared, so an op at it is refused (V24, `schema/README.md` §4). The VM's walk runs on the thread, so blocking calls
   are simply blocking: this is the `sync` fidelity reference of `PROJECT_BRIEF.md` §5~~, and
   the asynchronous backends will need a resumable VM instead~~. The VM is resumable since
   2026-10-01 (`vm.rs`: `next` yields one event at a time), and the `io_uring` backends park

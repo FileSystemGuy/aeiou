@@ -312,6 +312,13 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   or namespace's pattern is a declared parameter whose default is an integer (`gpus` is not
   declared, so it is never one); a value of zero or less is refused when the model is built
   (`DESIGN_REVIEW.md` §3.75).
+- **V24 a sub-actor positions its ops on an inherited handle** (added 2026-10-14, contract
+  0.10, no committed AST affected). In a `parallel` or `loader` body, a `read` or `write`
+  without an `offset`, and any `lseek`, names a handle that body opened earlier (an `open` of
+  the same handle expression, in document order, in the innermost such body). A handle the
+  parent opened is a descriptor the sub-actors share, with one kernel file position, so
+  where such an op lands would depend on which sub-actor ran first; the runner's model gives
+  each sub-actor the parent's position at the fork (`runner/REFERENCE.md` §4, *Threads*).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -517,4 +524,4 @@ the committed sets; the reasoning is `DESIGN_REVIEW.md` §3.27.
   document with the version changed. Every committed AST was regenerated, `per_shard` and
   `per_file` renamed `samples_per_file`, `files` renamed `samples`, and `file_per_sample` and
   `npy_per_sample` given `files_per_directory`; no fingerprint and no dataset id changed.
-  Reasoning in `DESIGN_REVIEW.md` §3.75.
+  Reasoning in `DESIGN_REVIEW.md` §3.75. Later (2026-10-14), rule V24 (§4); no AST changed.

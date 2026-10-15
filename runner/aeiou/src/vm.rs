@@ -377,6 +377,11 @@ enum Cont<'a> {
     Body { nodes: &'a [Node], i: usize },
     /// A loop whose frame is the last of `frames`: iteration `k` of `iters` is next.
     Loop { body: &'a [Node], from: i64, step: i64, iters: i64, k: i64 },
+    /// A fork walked inline (`inline_fork`): a loop over the sub-actors in which every
+    /// sub-actor starts from the parent's open files and as-written sums at the fork, and the
+    /// parent gets them back unchanged when the last has ended, as a sub-actor's own
+    /// `Snapshot` gives it under `run` (`runner/REFERENCE.md` §4, Threads).
+    Fork { body: &'a [Node], iters: i64, k: i64, open: HashMap<Arc<str>, FileState>, written: HashMap<Arc<str>, i64> },
     /// Pop the phase label when the phase body ends.
     PhaseEnd,
     Io(IoSeq<'a>),
@@ -588,10 +593,15 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         self.pending_fork.take().expect("accept_fork without a pending fork");
     }
 
-    /// After an `Event::Fork`: walk the sub-actors here, in index order (the dry run).
+    /// After an `Event::Fork`: walk the sub-actors here, in index order (the dry run). Each
+    /// sub-actor sees the parent's file state at the fork, never an earlier sibling's, and the
+    /// parent's is restored after the last: what `snapshot`/`resume` give the drivers of `run`.
     pub fn inline_fork(&mut self) {
         let pf = self.pending_fork.take().expect("inline_fork without a pending fork");
-        self.push_loop(pf.index, 0, 1, pf.width, pf.loader, pf.body);
+        self.frames.push(Frame { name: pf.index, idx: 0, from: 0, step: 1, iters: pf.width, loader: pf.loader });
+        self.depth = self.frames.len();
+        let (open, written) = (self.open.clone(), self.written.clone());
+        self.stack.push(Cont::Fork { body: pf.body, iters: pf.width, k: 0, open, written });
     }
 
     fn push_body(&mut self, nodes: &'a [Node]) {
@@ -1303,6 +1313,24 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                         self.push_body(body);
                     } else {
                         self.stack.pop();
+                        self.frames.pop();
+                        self.depth = self.frames.len();
+                    }
+                }
+                Cont::Fork { body, iters, k, open, written } => {
+                    if *k < *iters {
+                        let (body, idx) = (*body, *k);
+                        if idx > 0 {
+                            self.open.clone_from(open);
+                            self.written.clone_from(written);
+                        }
+                        *k += 1;
+                        self.frames.last_mut().unwrap().idx = idx;
+                        self.push_body(body);
+                    } else {
+                        let Some(Cont::Fork { open, written, .. }) = self.stack.pop() else { unreachable!() };
+                        self.open = open;
+                        self.written = written;
                         self.frames.pop();
                         self.depth = self.frames.len();
                     }

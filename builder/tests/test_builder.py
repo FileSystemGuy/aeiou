@@ -361,6 +361,42 @@ def test_a_divisor_is_a_declared_integer_parameter():
     assert resolved_dataset(ast, "train", {"files_per_directory": 1300})["pattern"] == "train/{id div 1300:05}/img_{id:09}.jpg"
 
 
+def test_a_sub_actor_positions_its_ops_on_an_inherited_handle():
+    """V24 (2026-10-14) in check.py as in the runner's validator: in a `parallel` or `loader`
+    body, a read or write without an offset, or an lseek, names a handle the body opened."""
+    import copy
+    from aeiou.validate import _load
+    _, check = _load()
+    f = {"file": {"dataset": "d", "id": 0}}
+    ast = {"ast": "0.10", "name": "t",
+           "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 1,
+                              "size": {"const": 4096}, "seed": 1}},
+           "actors": {"gpu": {"body": [
+               {"open": {"file": f, "flags": ["RDONLY"]}},
+               {"parallel": {"index": "p", "width": 2, "body": [
+                   {"read": {"file": f, "len": 512, "offset": 0}},
+                   {"open": {"file": f, "flags": ["RDONLY"]}},
+                   {"lseek": {"file": f, "offset": 512, "whence": "SET"}},
+                   {"read": {"file": f, "len": 512}},
+                   {"close": {"file": f}}]}},
+               {"read": {"file": f, "len": 512}},
+               {"close": {"file": f}}]}}}
+    assert not check.Check(copy.deepcopy(ast), "x").run()
+    body = lambda a: a["actors"]["gpu"]["body"][1]["parallel"]["body"]
+    for mutate, needle in [
+        (lambda a: body(a)[0]["read"].pop("offset"), "parallel/body/0/read/file: read that uses the file position"),
+        (lambda a: body(a).insert(0, {"lseek": {"file": f, "offset": 0, "whence": "SET"}}), "lseek that uses the file position"),
+        (lambda a: body(a).pop(1), "lseek that uses the file position"),
+        # an inner fork shares what the outer body opened
+        (lambda a: body(a).insert(4, {"parallel": {"index": "q", "width": 2, "body": [{"read": {"file": f, "len": 1}}]}}),
+         "parallel/body/4/parallel/body/0/read/file"),
+    ]:
+        bad = copy.deepcopy(ast)
+        mutate(bad)
+        errs = check.Check(bad, "x").run()
+        assert any(needle in e and "(V24)" in e for e in errs), (needle, errs)
+
+
 # ---- the harness ----
 
 def _run_cli(args, cwd=BUILDER):

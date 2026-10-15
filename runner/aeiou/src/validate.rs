@@ -88,6 +88,9 @@ struct Scope<'a> {
 struct ActorState<'a> {
     channels: HashSet<&'a str>,
     written: HashSet<&'a str>,
+    /// Inside a `parallel` or `loader` body: the handles opened so far in the innermost one
+    /// (by their `Debug` form, as `check.py` compares them by their JSON), for V24.
+    fork_opens: Option<Vec<String>>,
 }
 
 impl<'a> Scope<'a> {
@@ -553,7 +556,9 @@ impl<'a> Checker<'a> {
                 }
                 self.expr(width, &p(pp, &["width"]), scope, st, None);
                 let inner = scope.with_index(index, true);
+                let outer = st.fork_opens.replace(Vec::new());
                 self.body(body, &p(pp, &["body"]), &inner, st);
+                st.fork_opens = outer;
             }
             Node::Loader { name, index, workers, prefetch, batches, body, .. } => {
                 if !is_ident(name) {
@@ -567,7 +572,9 @@ impl<'a> Checker<'a> {
                 self.expr(batches, &p(pp, &["batches"]), scope, st, None);
                 st.channels.insert(name);
                 let inner = scope.with_index(index, true);
+                let outer = st.fork_opens.replace(Vec::new());
                 self.body(body, &p(pp, &["body"]), &inner, st);
+                st.fork_opens = outer;
             }
             Node::Channel { name, capacity, .. } => {
                 if !is_ident(name) {
@@ -749,6 +756,25 @@ impl<'a> Checker<'a> {
         }
         if let Node::Write { file, .. } = node {
             self.note_write(file, scope, st);
+        }
+        // V24: a sub-actor shares the descriptors it inherits, and with them the kernel's file
+        // position, so an op at that position on one is timing-dependent
+        if let Some(opened) = &mut st.fork_opens {
+            let unpositioned = match node {
+                Node::Open { file, .. } => {
+                    opened.push(format!("{file:?}"));
+                    None
+                }
+                Node::Read { file, offset: None, .. } => Some(("read", file)),
+                Node::Write { file, offset: None, .. } => Some(("write", file)),
+                Node::Lseek { file, .. } => Some(("lseek", file)),
+                _ => None,
+            };
+            if let Some((what, file)) = unpositioned {
+                if !opened.contains(&format!("{file:?}")) {
+                    self.err(&p(pp, &["file"]), format!("{what} that uses the file position of a handle this `parallel` or `loader` body did not open: its sub-actors share the descriptor and its position, so the offsets would depend on timing; give an `offset`, or open the handle in the body (V24)"));
+                }
+            }
         }
         if let Node::Read { file, repeat: Some(Repeat::UntilEof(_)), .. } = node {
             self.check_until_eof(file, pp, scope, st);

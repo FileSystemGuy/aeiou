@@ -400,3 +400,30 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   (traceback; exit 1; byte mismatch) and pass on the new; trace, usage, man, encoding suites: 97
   passed.
 
+## 19. `dry-run` and `run` disagreed on file positions across a `parallel` or `loader` fork
+
+- **Where:** `runner/aeiou/src/vm.rs` (`inline_fork`, new `Cont::Fork`, its handling in
+  `step`); new validity rule V24 in `runner/aeiou/src/validate.rs` and `schema/check.py`;
+  schema/README §4 (V24, noted on the 0.10 entry), runner REFERENCE §4 *Threads*.
+- **Found by:** review of the runner's semantic core: an AST opening a 4 KiB file, a
+  `parallel` of width 4 reading 1 KiB at the file position, then a parent read.
+- **Defect:** the dry run walked the sub-actors inline in the parent's VM, so open-file
+  positions, as-written sums, and the open map carried from sibling to sibling and back to the
+  parent (reads at 0/1024/2048/3072, the parent at 4096 → 0; fingerprint 466901655c00fe8b),
+  while `run`, the io_uring loop, and metrics give every sub-actor a snapshot and never merge
+  back (REFERENCE §4 *Threads*): `run --expect-fingerprint` failed ("off=0 len=1024 expected
+  1024 bytes, got 0"). An AST both checkers accepted had a dry-run fingerprint that was not
+  the stream run issues. Even with matching snapshots, sub-actors share the parent's descriptor
+  and so the kernel's position: under `sync` which sibling reads first decides the offsets.
+- **Fix:** `inline_fork` starts each sub-actor from a copy of the parent's state at the fork
+  and gives the parent its own back after the last, as `snapshot`/`resume` do; V24 refuses, in
+  a `parallel` or `loader` body, a read or write without `offset`, or an `lseek`, on a handle
+  the innermost such body did not open (the offsets would depend on timing). Both checkers give
+  the same message and path. No committed AST does this: every fingerprint and dataset id is
+  unchanged (golden tests; `aeiou-catalog check --runner` ok); the contract stays 0.10.
+- **Evidence:** `tests/run.rs::a_fork_leaves_the_parents_file_positions_as_run_does` (dry-run
+  fingerprint, ops, and bytes equal run's under sync and io_uring; the parent's last read at
+  2048; the shared-descriptor variant refused) fails on the old vm.rs and passes on the new;
+  `test_builder.py::test_a_sub_actor_positions_its_ops_on_an_inherited_handle` holds check.py's
+  V24; `--test all` 78 passed, `--lib` 40, MinIO object tests 4, builder 314 passed.
+

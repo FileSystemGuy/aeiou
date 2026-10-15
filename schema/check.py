@@ -60,6 +60,8 @@ class Check:
         self.namespaces = ast.get("namespaces", {})
         self.ops = Counter()
         self.traces = False
+        # inside a `parallel` or `loader` body: the handles opened so far in the innermost one (V24)
+        self.fork_opens = None
 
     def err(self, path, msg):
         self.errors.append(f"{self.name}: {'/'.join(map(str, path))}: {msg}")
@@ -242,13 +244,18 @@ class Check:
 
     def n_parallel(self, a, p, scope):
         self.expr(a["width"], p + ["width"], scope)
-        self.body(a["body"], p + ["body"], scope.with_index(a["index"]))
+        self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"]))
 
     def n_loader(self, a, p, scope):
         for k in ("workers", "prefetch", "batches"):
             self.expr(a[k], p + [k], scope)
         scope.channels.add(a["name"])
-        self.body(a["body"], p + ["body"], scope.with_index(a["index"]))
+        self.fork_body(a["body"], p + ["body"], scope.with_index(a["index"]))
+
+    def fork_body(self, nodes, path, scope):
+        outer, self.fork_opens = self.fork_opens, []
+        self.body(nodes, path, scope)
+        self.fork_opens = outer
 
     def n_channel(self, a, p, scope):
         self.expr(a["capacity"], p + ["capacity"], scope)
@@ -299,6 +306,14 @@ class Check:
             self.expr(rep, p + ["repeat"], scope)
         if kind == "write":
             self.note_write(a["file"], scope)
+        # V24: a sub-actor shares the descriptors it inherits, and with them the kernel's file
+        # position, so an op at that position on one is timing-dependent
+        if self.fork_opens is not None:
+            if kind == "open":
+                self.fork_opens.append(json.dumps(a["file"], sort_keys=True))
+            elif (kind in ("read", "write") and "offset" not in a) or kind == "lseek":
+                if json.dumps(a["file"], sort_keys=True) not in self.fork_opens:
+                    self.err(p + ["file"], f"{kind} that uses the file position of a handle this `parallel` or `loader` body did not open: its sub-actors share the descriptor and its position, so the offsets would depend on timing; give an `offset`, or open the handle in the body (V24)")
         if kind == "read" and rep == "until_eof":
             self.check_until_eof(a["file"], p, scope)
         # V12: datasets are read-only
