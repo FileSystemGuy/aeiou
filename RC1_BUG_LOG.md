@@ -632,3 +632,21 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   (peak 1 and 80 reads under each engine, equal fingerprints) fails on the old uring.rs (peak
   40) and passes on the new; `--test all` 81, `uring_knobs`, `limits`, `--lib` passed.
 
+## 29. V12 let an abstract `mkdir` or `rmdir` a dataset's directories
+
+- **Where:** schema/README §4 (V12), `schema/check.py`, `runner/aeiou/src/validate.rs`.
+- **Found by:** review of the builder core, comparing the builder's `_read_only` and V14
+  (input namespaces: mkdir and rmdir listed) with V12 (datasets are read-only, CLAUDE.md).
+- **Defect:** V12 listed write, ftruncate, fallocate, unlink, and rename but not mkdir or rmdir,
+  so a hand-written AST with `rmdir` (or `mkdir`) of `{"dir": {"dataset": "d", "id": 0}}`
+  passed both checkers, and `aeiou run` would have removed a directory of a read-only corpus.
+- **Fix:** both ops are in V12 in all three places, with the same message and path in both
+  checkers ("rmdir on dataset `d`: datasets are read-only (V12)"). No committed AST changes;
+  CI's diff of the two checkers' output over every committed AST is empty.
+- **Evidence:** `golden.rs::validator_rejects_what_check_py_rejects` (two new cases) and
+  `test_builder.py::test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory` fail
+  without the fix and pass with it; test_builder.py 49 passed. Fixed in an isolated worktree.
+- **Noted:** several coordinator/datagen timing tests (`a_killed_datagen_leaves_a_manifest_that_is_true`,
+  `a_subset_runs_whole_directories_of_the_corpus`, `a_killed_datagen_or_grow_settles_at_whole_directories`)
+  failed once each under the load of parallel builds and passed alone (queued as a timing check).
+

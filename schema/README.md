@@ -235,10 +235,11 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   refused by the builder; the runner checks the dataset against the manifest at startup.
 - **V10 Continuous draws round** to the nearest integer wherever an integer is consumed
   (sizes, counts, indices, nanoseconds).
-- **V12 Datasets are read-only** (added 2026-09-30). No `write`, `ftruncate`, `fallocate`,
-  `unlink`, or `rename` may target a dataset file, directory, sample, region, or chunk (through
-  a binding or directly), and `open` on one may not carry `WRONLY`, `RDWR`, `CREAT`, `TRUNC`,
-  or `APPEND`. Writes go to namespaces. This is what makes the manifest (§7) true for the run.
+- **V12 Datasets are read-only** (added 2026-09-30; `mkdir` and `rmdir` 2026-10-14, as the
+  builder and V14 already refused them). No `write`, `ftruncate`, `fallocate`, `unlink`,
+  `rename`, `mkdir`, or `rmdir` may target a dataset file, directory, sample, region, or chunk
+  (through a binding or directly), and `open` on one may not carry `WRONLY`, `RDWR`, `CREAT`,
+  `TRUNC`, or `APPEND`. Writes go to namespaces. This is what makes the manifest (§7) true for the run.
 - **V13 Reserved names** (added 2026-09-30). No path component of a dataset or namespace
   pattern may begin with `.aeiou`; that prefix belongs to the manifest and any future
   sidecar. Two datasets may not share a root (the constant directory prefix of the

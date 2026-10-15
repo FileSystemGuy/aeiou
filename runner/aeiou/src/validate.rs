@@ -780,7 +780,7 @@ impl<'a> Checker<'a> {
             self.check_until_eof(file, pp, scope, st);
         }
         // V12: datasets are read-only
-        if matches!(node, Node::Write { .. } | Node::Ftruncate { .. } | Node::Fallocate { .. } | Node::Unlink(_) | Node::Rename { .. }) {
+        if matches!(node, Node::Write { .. } | Node::Ftruncate { .. } | Node::Fallocate { .. } | Node::Unlink(_) | Node::Rename { .. } | Node::Mkdir { .. } | Node::Rmdir { .. }) {
             for (key, h) in &handles {
                 if let Some(ds) = self.dataset_of(h, scope) {
                     self.err(&p(pp, &[key]), format!("{kind} on dataset `{ds}`: datasets are read-only (V12)"));

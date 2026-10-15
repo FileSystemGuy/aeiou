@@ -673,3 +673,21 @@ def test_choose_weights_and_divisor_defaults_the_runner_cannot_use_are_refused()
     w.param("dd", 2)
     w.dataset("d", pattern="d{id div dd}/f{id}", layout="whole", access="indexed", count=4,
               size=const(4096), seed=1)
+
+
+def test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory():
+    """V12 covers a dataset's directories as the builder and V14 do: a hand-written AST that
+    creates or removes one is refused by the reference checker (RC1 review)."""
+    import copy
+    from aeiou.validate import _load
+    _, check = _load()
+    base = {"ast": "0.10", "name": "m", "params": {},
+            "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "map",
+                               "count": 8, "size": {"const": 4096}, "seed": 1}},
+            "actors": {"gpu": {"count": 1, "body": []}}}
+    assert check.Check(copy.deepcopy(base), "x").run() == []
+    for kind in ("mkdir", "rmdir"):
+        ast = copy.deepcopy(base)
+        ast["actors"]["gpu"]["body"] = [{kind: {"dir": {"dir": {"dataset": "d", "id": 0}}}}]
+        errs = check.Check(ast, "x").run()
+        assert any(f"{kind} on dataset `d`: datasets are read-only (V12)" in e for e in errs), errs

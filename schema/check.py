@@ -22,7 +22,7 @@ SCHEMA = json.loads((HERE / "abstract-ast.schema.json").read_text(encoding="utf-
 CONTROL = {"let", "loop", "parallel", "channel", "put", "take", "loader", "barrier",
            "compute", "cond", "choose", "phase", "trace"}
 INDEX_BINDERS = {"loop", "parallel", "loader"}
-MUTATING_OPS = {"write", "ftruncate", "fallocate", "unlink"}          # V12 and V14, plus rename and open flags
+MUTATING_OPS = {"write", "ftruncate", "fallocate", "unlink"}          # V12 and V14, plus rename, mkdir, rmdir, and open flags
 WRITE_FLAGS = {"WRONLY", "RDWR", "CREAT", "TRUNC", "APPEND"}
 RESERVED_PREFIX = ".aeiou"                                            # V13: the manifest and sidecars
 
@@ -317,8 +317,8 @@ class Check:
         if kind == "read" and rep == "until_eof":
             self.check_until_eof(a["file"], p, scope)
         # V12: datasets are read-only
-        if kind in MUTATING_OPS or kind == "rename":
-            for key in ("file", "from", "to"):
+        if kind in MUTATING_OPS or kind in ("rename", "mkdir", "rmdir"):
+            for key in ("file", "dir", "from", "to"):
                 if key in a and self.dataset_of(a[key], scope):
                     self.err(p + [key], f"{kind} on dataset `{self.dataset_of(a[key], scope)}`: datasets are read-only (V12)")
         if kind == "open" and set(a["flags"]) & WRITE_FLAGS and self.dataset_of(a["file"], scope):

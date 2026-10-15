@@ -357,6 +357,9 @@ fn validator_rejects_what_check_py_rejects() {
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": {"param": "gpus"}, "body": []}}"#).replace(r#""n": {"default": 3}"#, r#""gpus": {"default": 3}"#), "reserved");
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 1, "body": [{"let": {"name": "f", "value": {"consume": "d"}}}, {"write": {"file": {"ref": "f"}, "len": 1}}]}}"#), "read-only (V12)");
     rejects(&base(ds, r#"{"loop": {"index": "i", "to": 1, "body": [{"open": {"file": {"file": {"dataset": "d", "id": 0}}, "flags": ["WRONLY"]}}]}}"#), "read-only (V12)");
+    // a dataset's directories too, as the builder and V14 refuse them
+    rejects(&base(ds, r#"{"rmdir": {"dir": {"dir": {"dataset": "d", "id": 0}}}}"#), "rmdir on dataset `d`: datasets are read-only (V12)");
+    rejects(&base(ds, r#"{"mkdir": {"dir": {"dir": {"dataset": "d", "id": 0}}}}"#), "mkdir on dataset `d`: datasets are read-only (V12)");
     rejects(&base(r#""d": {"layout": "whole", "access": "map", "pattern": ".aeiou-x/{id}", "count": 10, "size": {"const": 1}, "seed": 1}"#, ""), ".aeiou");
     rejects(&base(ds, r#"{"let": {"name": "f", "value": {"consume": "d"}}}"#), "outside any loop");
     // contract 0.8: one dataset shape; the fields each layout takes (V20) and access (V21)
