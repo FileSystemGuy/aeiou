@@ -232,6 +232,44 @@ struct ScopeLevel<'a> {
 /// overflowed the stack, 2026-10-02).
 const AT_CACHE_MAX: usize = 1 << 16;
 
+/// `Vm::at_cache`'s key: the definition, the index, and the indices of the enclosing loops.
+type AtKey = (usize, i64, Vec<i64>);
+
+/// The values of `x @ i` already evaluated. A full cache sheds half its entries, those with
+/// the smaller indices, and of entries with the same index the ones inserted first; the
+/// half is found by selection, so an insert costs O(1) amortized however the indices are
+/// spread. (Entries with the index at the cut were all kept, so when most indices were
+/// equal, an `at` in a short loop nested in a long one, nothing was shed: every insert then
+/// sorted the whole cache, and it grew without bound; RC1 review.)
+#[derive(Default)]
+struct AtCache<'a> {
+    map: HashMap<AtKey, (Value<'a>, u64)>,
+    /// Inserts so far: an entry's order among those of its index.
+    seq: u64,
+}
+
+impl<'a> AtCache<'a> {
+    fn get(&self, k: &AtKey) -> Option<Value<'a>> {
+        self.map.get(k).map(|(v, _)| v.clone())
+    }
+
+    fn insert(&mut self, k: AtKey, v: Value<'a>) {
+        if self.map.len() >= AT_CACHE_MAX {
+            let mut order: Vec<(i64, u64)> = self.map.iter().map(|(k, (_, s))| (k.1, *s)).collect();
+            let half = order.len() / 2;
+            let (_, &mut cut, _) = order.select_nth_unstable(half);
+            self.map.retain(|k, (_, s)| (k.1, *s) >= cut);
+        }
+        self.seq += 1;
+        self.map.insert(k, (v, self.seq));
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
 /// An active `x @ i` evaluation: frame `frame` reads as `idx`, sibling lets of `body` are
 /// re-evaluated at that index and memoized. Names resolve as they do where the definition
 /// is written: a `ref` to the nearest `let` of `body` before `pos` (the definition being
@@ -415,7 +453,7 @@ pub struct Vm<'m, 'a> {
     /// stores nothing the definition does not say; it makes a chain that steps back one
     /// index per iteration (`x @ k-1`) one link per iteration instead of a walk to the
     /// start, and keeps the recursion as deep as one link, not as the loop is long.
-    at_cache: HashMap<(usize, i64, Vec<i64>), Value<'a>>,
+    at_cache: AtCache<'a>,
     /// Frames visible to the expression being evaluated (shorter during a shifted evaluation).
     depth: usize,
     fields: Option<HashMap<&'a str, Value<'a>>>,
@@ -453,7 +491,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             frames: Vec::new(),
             scopes: vec![ScopeLevel { bindings: HashMap::new(), body: &[], depth: 0 }],
             shifts: Vec::new(),
-            at_cache: HashMap::new(),
+            at_cache: AtCache::default(),
             depth: 0,
             fields: None,
             open: HashMap::new(),
@@ -480,7 +518,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             frames: snap.frames,
             scopes: snap.scopes,
             shifts: Vec::new(),
-            at_cache: HashMap::new(),
+            at_cache: AtCache::default(),
             depth,
             fields: None,
             open: snap.open,
@@ -985,7 +1023,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         // a namespace's field values are not part of the key, so nothing is kept under them
         let key = if self.fields.is_none() { Some((def as *const ExprLike as usize, i, (0..frame).map(|f| self.frame_index(f)).collect::<Vec<i64>>())) } else { None };
         if let Some(v) = key.as_ref().and_then(|k| self.at_cache.get(k)) {
-            return Ok(v.clone());
+            return Ok(v);
         }
         // Rule V3 says an `at` inside a loop body's own bindings goes to a strictly smaller index.
         // The checkers prove it; this is the net under a proof they got wrong: a body already
@@ -1003,12 +1041,6 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         self.depth = saved_depth;
         self.shifts.pop();
         if let (Some(k), Ok(v)) = (key, &r) {
-            if self.at_cache.len() >= AT_CACHE_MAX {
-                let mut idx: Vec<i64> = self.at_cache.keys().map(|k| k.1).collect();
-                idx.sort_unstable();
-                let cut = idx[idx.len() / 2];
-                self.at_cache.retain(|k, _| k.1 >= cut);
-            }
             self.at_cache.insert(k, v.clone());
         }
         r
@@ -1926,4 +1958,51 @@ pub fn actor_counts<'a>(model: &'a Model<'a>) -> Result<Vec<(&'a str, i64)>> {
         out.push((name.as_str(), count));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn int(v: Option<Value>) -> Option<i64> {
+        v.map(|v| match v {
+            Value::Int(n) => n,
+            v => panic!("{v:?}"),
+        })
+    }
+
+    /// Keys that share their index (an `at` in a short loop nested in a long one: the index
+    /// repeats, the outer loop's moves) are shed like any others: the cache stays bounded and
+    /// keeps the entries inserted last.
+    #[test]
+    fn the_at_cache_is_bounded_when_indices_repeat() {
+        let mut c = AtCache::default();
+        let n = 3 * AT_CACHE_MAX as i64;
+        for j in 0..n {
+            c.insert((1, 0, vec![j]), Value::Int(j));
+            assert!(c.len() <= AT_CACHE_MAX, "{} entries after {j}", c.len());
+        }
+        let (newest, oldest_kept) = (n - 1, n - AT_CACHE_MAX as i64 / 2);
+        assert_eq!(int(c.get(&(1, 0, vec![newest]))), Some(newest), "the newest entry is kept");
+        assert_eq!(int(c.get(&(1, 0, vec![oldest_kept]))), Some(oldest_kept), "so is one inserted half a cache before it");
+        assert_eq!(int(c.get(&(1, 0, vec![0]))), None, "the first is shed");
+    }
+
+    /// Of entries with different indices, those with the larger are kept, whatever the order
+    /// they were inserted in.
+    #[test]
+    fn the_at_cache_keeps_the_larger_indices() {
+        let mut c = AtCache::default();
+        let n = AT_CACHE_MAX as i64;
+        for i in (0..n).rev() {
+            c.insert((1, i, vec![]), Value::Int(i));
+        }
+        assert_eq!(c.len(), AT_CACHE_MAX);
+        c.insert((1, -1, vec![]), Value::Int(-1));
+        assert_eq!(c.len(), AT_CACHE_MAX / 2 + 1);
+        assert_eq!(int(c.get(&(1, n - 1, vec![]))), Some(n - 1), "the first inserted, the largest index, is kept");
+        assert_eq!(int(c.get(&(1, n / 2, vec![]))), Some(n / 2));
+        assert_eq!(int(c.get(&(1, n / 2 - 1, vec![]))), None, "the smaller half is shed");
+        assert_eq!(int(c.get(&(1, -1, vec![]))), Some(-1), "the value just inserted is kept");
+    }
 }

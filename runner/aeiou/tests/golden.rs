@@ -536,6 +536,33 @@ fn a_long_at_chain_is_one_link_per_iteration() {
     assert_eq!(ops[199_999].3, "o/199999");     // 66,666 full periods of 0 + 1 + 2, then 0 + 1
 }
 
+/// An `at` in a short loop nested in a long one evaluates at the same few indices under every
+/// outer index; the values kept are shed all the same, at a constant cost per value. (They were
+/// shed by sorting their indices, which shed nothing when the indices were equal: past 65,536
+/// values every one sorted them all, 18 s for 100,000 outer indices; RC1 review.)
+#[test]
+fn an_at_in_a_short_loop_nested_in_a_long_one_stays_linear() {
+    let text = r#"{
+  "ast": "0.10", "name": "nested_chain",
+  "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
+  "actors": {"gpu": {"count": 1, "body": [
+    {"loop": {"index": "j", "to": 200000, "body": [
+      {"loop": {"index": "i", "to": 2, "body": [
+        {"let": {"name": "x", "value": {"cond": {"if": {"eq": [{"index": "i"}, 0]}, "then": {"index": "j"},
+            "else": {"add": [{"at": {"ref": "x", "index": {"sub": [{"index": "i"}, 1]}}}, 1]}}}}},
+        {"stat": {"file": {"object": {"namespace": "o", "fields": {"v": {"ref": "x"}}}}}}
+      ]}}
+    ]}}
+  ]}}
+}"#;
+    let t = std::time::Instant::now();
+    let ops = collect(text, &config(1, 1, &[]), "gpu", 1);
+    let took = t.elapsed();
+    assert_eq!(ops.len(), 400_000);
+    assert_eq!((ops[1].3.as_str(), ops[399_998].3.as_str(), ops[399_999].3.as_str()), ("o/1", "o/199999", "o/200000"));
+    assert!(took < std::time::Duration::from_secs(20), "200,000 outer indices took {took:?}");
+}
+
 /// A divisor named in a pattern (contract 0.10, DESIGN_REVIEW §3.75) is bound to the parameter's
 /// value: the names, the directory count, and the resolved definition use the number, so at the
 /// default the dataset id is the literal pattern's, and another width is another dataset.

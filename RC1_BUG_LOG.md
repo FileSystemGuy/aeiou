@@ -1882,3 +1882,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** `run::a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs` (repeated seq
   and `seq -1` at two time scales, three stuck shapes, both engines) failed "hung" on the old
   code and passes; suites as bug 79.
+
+## 81. An `x @ i` in a short loop nested in a long one sorted its whole cache on every insert
+
+- **Where:** `runner/aeiou/src/vm.rs` (`AtCache`, `AtKey`; `Vm::at`, `Vm::at_cache`).
+- **Found by:** the runner semantics review (S4, performance). Measured before fixing: for an
+  ordinary `x @ (i-d)` chain the old eviction (sort the indices at 65,536 entries, keep those
+  `>=` the median) was already amortized O(log n), as the review had not seen; the defect is
+  the case where most keys share one index.
+- **Defect:** the key is (definition, index, enclosing indices), so in
+  `loop j<N { loop i<2 { x = cond(i>0, x @ (i-1)+1, j) } }` the index repeats and only `j`
+  moves; every entry equal to the median was kept, nothing was shed, and from 65,536 entries
+  every insert sorted the whole cache, which grew without bound: `aeiou dry-run` took 0.08 s
+  at N=60k, 17.7 s at 100k, 84.6 s at 150k (hours at 1e6); `--metrics` at 100k 23.8 s.
+- **Fix:** each entry carries its insert sequence; a full cache sheds exactly half, ordered by
+  (index, sequence), the same smaller-indices-first policy with ties shed oldest first, the cut
+  found by `select_nth_unstable` (O(n)), so an insert is O(1) amortized and the cache stays at
+  `AT_CACHE_MAX`. The cache memoizes a pure function, so no value changes; N=100k 0.13 s,
+  1e6 1.1 s; wide-`d` chains are no slower. No fingerprint, dataset id, or AST changes.
+- **Evidence:** `golden::an_at_in_a_short_loop_nested_in_a_long_one_stays_linear` (200,000 × 2,
+  values checked, under 20 s) failed on the old vm.rs in 159 s and passes in 0.59 s; unit tests
+  `the_at_cache_is_bounded_when_indices_repeat` and `the_at_cache_keeps_the_larger_indices`;
+  72 committed (AST, params, gpus) dry-runs identical before and after (7 over 120 s in both);
+  on HEAD fdf31c8 plus the change: `--lib` 65 passed, `--test all` 129, the 11 committed ASTs
+  under 120 s keep their 4-GPU fingerprints. Fixed in an isolated worktree and applied.
