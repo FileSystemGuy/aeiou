@@ -220,3 +220,58 @@ def test_npz_framing_is_read_from_real_archives_and_compared_with_the_abstract(t
     np.savez(s, y=np.array([0]), x=x)
     r = _run(["npz", ast, s])
     assert r.returncode == 1 and "not the first member" in r.stderr
+
+
+def _one_line_failure(r, code=1):
+    """A refusal in the suite's frame: the exit status, no traceback, the tool's name first."""
+    assert r.returncode == code, (r.stdout, r.stderr)
+    assert "Traceback" not in r.stderr, r.stderr
+    assert r.stderr.startswith("aeiou-params "), r.stderr
+
+
+@pytest.mark.parametrize("cmd", ["defaults", "check", "safetensors", "npz"])
+@pytest.mark.parametrize("text", ["[]", "{}"])
+def test_json_that_is_no_abstract_is_rejected_in_one_line(tmp_path, cmd, text):
+    """JSON that is no abstract: `AST rejected`, exit 1, as aeiou-catalog describe and the runner
+    say it, never a traceback from the first key the command reads (RC1 review)."""
+    ast = tmp_path / "x.ast.json"
+    ast.write_text(text)
+    pset = tmp_path / "p.params.json"
+    pset.write_text('{"params_version": 1, "abstract": "x", "params": {}}')
+    args = {"defaults": [ast, "-o", tmp_path / "o.json"], "check": [ast, pset],
+            "safetensors": [ast, pset, "-o", tmp_path / "o.json"], "npz": [ast, pset]}[cmd]
+    r = _run([cmd, *args])
+    _one_line_failure(r)
+    assert "AST rejected" in r.stderr
+    assert not (tmp_path / "o.json").exists()
+
+
+def test_bad_inputs_and_options_are_one_line_errors(tmp_path):
+    """Every input aeiou-params reads or writes fails in one line, and a bad option value is a
+    usage error in the frame (exit 2), never a traceback (RC1 review)."""
+    st, npz = ast_path("safetensors_load"), ast_path("npy_per_sample")
+    out = tmp_path / "o.json"
+    huge = tmp_path / "huge.safetensors"                     # a header longer than the file: no allocation
+    huge.write_bytes((1 << 60).to_bytes(8, "little") + b"{}")
+    flat = tmp_path / "flat.safetensors"                     # a header that is JSON but no tensor table
+    head = b'{"a": 1}'
+    flat.write_bytes(len(head).to_bytes(8, "little") + head)
+    nojson = tmp_path / "nojson.safetensors"
+    nojson.write_bytes((4).to_bytes(8, "little") + b"{{{{")
+    for shard, words in [(huge, "not a safetensors file"), (flat, "not a safetensors file"),
+                         (nojson, "not a safetensors file"), (tmp_path / "nope.safetensors", "No such file"),
+                         (tmp_path, "Is a directory")]:
+        r = _run(["safetensors", st, shard, "-o", out])
+        _one_line_failure(r)
+        assert words in r.stderr, r.stderr
+    r = _run(["npz", npz, tmp_path / "nope.npz"])
+    _one_line_failure(r)
+    assert "No such file" in r.stderr
+    r = _run(["defaults", npz, "-o", tmp_path / "no" / "dir.json"])
+    _one_line_failure(r)
+    assert "No such file" in r.stderr
+    for opt in (["--tp", "0"], ["--tp", "-2"], ["--tp", "x"], ["--column", "("], ["--row", "[a"]):
+        r = _run(["safetensors", st, huge, "-o", out, *opt])
+        _one_line_failure(r, 2)
+        assert f"argument {opt[0]}:" in r.stderr and "Usage: aeiou-params safetensors" in r.stderr, r.stderr
+    assert not out.exists()

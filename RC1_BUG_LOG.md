@@ -462,3 +462,23 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   the real tree, and write/check/describe of a fixture tree under C.UTF-8 and ASCII,
   byte-identical) fails without the fix and passes with it.
 
+## 22. `aeiou-params` answered bad inputs and options with tracebacks
+
+- **Where:** `builder/aeiou/params.py`: `_load_ast`, `read_safetensors_header`, `npz_framing`,
+  every `-o` write (new `_write`), and the `--tp`, `--column`, `--row` argument types.
+- **Found by:** the fixer of bug 20 (`aeiou-params defaults` on JSON that is not an abstract),
+  then a sweep of all four subcommands for the same class.
+- **Defect:** an AST file holding `[]` or `{}` raised AttributeError/KeyError in every
+  subcommand; `safetensors` trusted a shard's 8-byte header length (MemoryError on junk), took
+  any JSON header as a tensor table (TypeError), and raised on a missing shard; `npz` raised on a
+  missing archive; an `-o` into a missing directory raised FileNotFoundError; `--tp 0` was
+  accepted (the abstract computes `gpu_id % tp`); a bad `--column`/`--row` regex raised
+  `re.error`.
+- **Fix:** the AST is validated after loading ("AST rejected: …", exit 1, as aeiou-catalog);
+  the safetensors header is checked against the file size and each entry for dtype, shape, and
+  data_offsets; missing inputs and unwritable outputs are one-line errors (exit 1); `--tp` must
+  be a positive integer and `--column`/`--row` valid regexes, as usage errors (exit 2).
+- **Evidence:** `test_params.py::test_json_that_is_no_abstract_is_rejected_in_one_line` (four
+  subcommands, `[]` and `{}`) and `test_bad_inputs_and_options_are_one_line_errors` (the rest):
+  9 fail on the old params.py, 37 pass on the new; params, usage, man suites: 61 passed.
+

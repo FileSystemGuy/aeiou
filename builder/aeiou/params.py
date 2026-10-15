@@ -21,6 +21,7 @@ judged again on the distributions given and a pattern's divisor must bind to a p
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import pathlib
@@ -174,10 +175,32 @@ ROW_RE = r"(o_proj|down_proj)\.weight$"
 
 
 def read_safetensors_header(path) -> tuple[int, dict]:
-    """(header length N, header JSON) of a safetensors file: 8 bytes little-endian N, then N bytes."""
-    with open(path, "rb") as f:
-        n = int.from_bytes(f.read(8), "little")
-        header = json.loads(f.read(n))
+    """(header length N, header JSON) of a safetensors file: 8 bytes little-endian N, then N bytes;
+    BuildError, in one line, for a file that is not there or not one."""
+    path = pathlib.Path(path)
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            n = int.from_bytes(f.read(8), "little")
+            if size < 8 or n > size - 8:            # never allocate what the file cannot hold
+                raise BuildError(f"{path.name}: not a safetensors file (a header of {n} bytes in a file of {size})")
+            header = json.loads(f.read(n))
+    except OSError as e:
+        raise BuildError(f"{path}: {e.strerror}") from None
+    except ValueError as e:
+        raise BuildError(f"{path.name}: not a safetensors file (its header is not JSON: {e})") from None
+    if not isinstance(header, dict):
+        raise BuildError(f"{path.name}: not a safetensors file (its header is not a JSON object)")
+    for name, t in header.items():
+        if name == "__metadata__":
+            continue
+        ok = isinstance(t, dict) and isinstance(t.get("dtype"), str) and isinstance(t.get("shape"), list) \
+            and all(isinstance(x, int) and not isinstance(x, bool) for x in t["shape"]) \
+            and isinstance(t.get("data_offsets"), list) and len(t["data_offsets"]) == 2 \
+            and all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in t["data_offsets"]) \
+            and t["data_offsets"][0] <= t["data_offsets"][1]
+        if not ok:
+            raise BuildError(f"{path.name}: not a safetensors file (tensor `{name}` has no dtype, shape, and data_offsets [begin, end])")
     return n, header
 
 
@@ -220,9 +243,21 @@ def safetensors_table(shards: list, *, tp: int = 8, column: str = COLUMN_RE, row
 # ----------------------------------------------------------------------------------------------
 
 def _load_ast(path) -> tuple[dict, str]:
+    """The abstract and its hash. Not there, or not JSON: a usage error (`emit.load`); JSON that
+    is no abstract: `AST rejected`, in one line per error, as every tool that reads one."""
     from .emit import load, sha256
+    from .validate import validate
+    path = pathlib.Path(path)
     ast = load(path)
+    validate(ast, path.name)
     return ast, sha256(ast)
+
+
+def _write(out: pathlib.Path, text: str) -> None:
+    try:
+        out.write_text(text, encoding="utf-8")
+    except OSError as e:
+        raise BuildError(f"{out}: {e.strerror}") from None
 
 
 # npz: npy_per_sample' archive framing from real files (source 1, configuration)
@@ -239,7 +274,10 @@ def npz_framing(path, member: str = "x") -> dict:
     import struct
     import zipfile
     path = pathlib.Path(path)
-    size = path.stat().st_size
+    try:
+        size = path.stat().st_size
+    except OSError as e:
+        raise BuildError(f"{path}: {e.strerror}") from None
     try:
         z = zipfile.ZipFile(path)
     except (zipfile.BadZipFile, OSError) as e:
@@ -282,6 +320,24 @@ def npz_params(archives: list, member: str = "x") -> tuple[dict, list]:
     return {"framing": recs[0]["framing"], "cd_len": recs[0]["cd_len"]}, recs
 
 
+def _positive(v: str) -> int:
+    try:
+        n = int(v)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"'{v}' is not a positive integer")
+    return n
+
+
+def _regex(v: str) -> str:
+    try:
+        re.compile(v)
+    except re.error as e:
+        raise argparse.ArgumentTypeError(f"'{v}' is not a regular expression ({e})") from None
+    return v
+
+
 def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     """The parser and its subcommands' parsers by name (the usage a `Missing` list shows)."""
     ap = usage.Parser(prog="aeiou-params", description="Parameter files of an abstract (schema/README.md §8): write its defaults as a set, validate sets against it, build a set from real files",
@@ -301,9 +357,9 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     s.add_argument("ast", **abstract, help="The safetensors_load abstract (its parameter names are checked)")
     s.add_argument("shards", nargs="*", type=pathlib.Path, metavar="SHARDS", help="Shard files in dataset id order")
     s.add_argument("-o", "--out", type=pathlib.Path, metavar="FILE", help="Required: the parameter file to write")
-    s.add_argument("--tp", type=int, default=8, help="Tensor-parallel degree [default: 8]")
-    s.add_argument("--column", default=COLUMN_RE, metavar="REGEX", help="Regex of column-parallel tensors")
-    s.add_argument("--row", default=ROW_RE, metavar="REGEX", help="Regex of row-parallel tensors")
+    s.add_argument("--tp", type=_positive, default=8, help="Tensor-parallel degree [default: 8]")
+    s.add_argument("--column", type=_regex, default=COLUMN_RE, metavar="REGEX", help="Regex of column-parallel tensors")
+    s.add_argument("--row", type=_regex, default=ROW_RE, metavar="REGEX", help="Regex of row-parallel tensors")
     s.add_argument("--doc", metavar="TEXT", help="The set's `doc` line")
     s.add_argument("--pin", action="store_true", help="Record the AST hash so the set is for this exact shape")
     n = sub.add_parser("npz", help="Read npy_per_sample' framing and cd_len from real .npz archives and compare them with the abstract's defaults", usage="aeiou-params npz [OPTIONS] <ABSTRACT_PATH> <ARCHIVES>...")
@@ -348,7 +404,7 @@ def _main(a) -> int:
     if a.cmd == "defaults":
         pset = defaults(ast, doc=a.doc, pin=a.pin)
         out = a.out or pathlib.Path(f"{ast['name']}.defaults.params.json")
-        out.write_text(render(pset, {"tool": f"aeiou-params {__version__}", "command": "defaults", "ast_sha256": sha}), encoding="utf-8")
+        _write(out, render(pset, {"tool": f"aeiou-params {__version__}", "command": "defaults", "ast_sha256": sha}))
         print(f"wrote {out}  ({len(pset['params'])} parameters)")
         return 0
     if a.cmd == "check":
@@ -380,7 +436,7 @@ def _main(a) -> int:
         prov = {"tool": f"aeiou-params {__version__}", "command": "safetensors", "ast_sha256": sha,
                 "shards": [{"file": p.name, "sha256": file_sha256(p)} for p in a.shards],
                 "column": a.column, "row": a.row}
-        a.out.write_text(render(pset, prov), encoding="utf-8")
+        _write(a.out, render(pset, prov))
         print(f"wrote {a.out}  ({len(values['shard'])} tensors in {values['shards']} shard(s))")
         return 0
     if a.cmd == "npz":
@@ -403,7 +459,7 @@ def _main(a) -> int:
                 raise BuildError("\n  ".join(errors))
             prov = {"tool": f"aeiou-params {__version__}", "command": "npz", "ast_sha256": sha, "member": a.member,
                     "archives": [{"file": p.name, "bytes": r["bytes"], "members": r["members"]} for p, r in zip(a.archives, recs)]}
-            a.out.write_text(render(pset, prov), encoding="utf-8")
+            _write(a.out, render(pset, prov))
             print(f"wrote {a.out}")
         return 1 if differs and not a.out else 0
     return 1
