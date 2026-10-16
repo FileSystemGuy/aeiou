@@ -178,9 +178,15 @@ struct Scope<'a> {
     varying: Vec<HashSet<&'a str>>,
     /// per level of `bindings`, the kind each binding there is known to have (V27)
     kinds: Vec<HashMap<&'a str, Option<&'static str>>>,
+    /// per level of `bindings`, a dataset and an `input` namespace each binding there may name
+    /// (V12, V14), found where it is bound: through an alias, either arm of a `cond`, an `at`
+    reads: Vec<HashMap<&'a str, ReadOnly<'a>>>,
     /// the innermost enclosing frame whose count varies with an enclosing one (V6)
     count_varies: Option<P>,
 }
+
+/// A dataset and an `input` namespace a binding may name, the first found of each (V12, V14).
+type ReadOnly<'a> = (Option<&'a str>, Option<&'a str>);
 
 /// State shared across every scope of one actor, as `check.py` shares `channels` and `written`.
 #[derive(Default)]
@@ -199,7 +205,7 @@ struct ActorState<'a> {
 
 impl<'a> Scope<'a> {
     fn new(fields: HashSet<&'a str>) -> Self {
-        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], kinds: vec![HashMap::new()], count_varies: None }
+        Scope { bindings: vec![HashMap::new()], indices: Vec::new(), nonneg_indices: HashSet::new(), fields, forward: HashSet::new(), twice: HashSet::new(), varying: vec![HashSet::new()], kinds: vec![HashMap::new()], reads: vec![HashMap::new()], count_varies: None }
     }
 
     fn child(&self) -> Self {
@@ -207,6 +213,7 @@ impl<'a> Scope<'a> {
         s.bindings.push(HashMap::new());
         s.varying.push(HashSet::new());
         s.kinds.push(HashMap::new());
+        s.reads.push(HashMap::new());
         s.forward = HashSet::new();
         s.twice = HashSet::new();
         s
@@ -226,9 +233,10 @@ impl<'a> Scope<'a> {
         s
     }
 
-    fn bind(&mut self, name: &'a str, value: &'a ExprLike, varies: bool, kind: Option<&'static str>) {
+    fn bind(&mut self, name: &'a str, value: &'a ExprLike, varies: bool, kind: Option<&'static str>, reads: ReadOnly<'a>) {
         self.bindings.last_mut().unwrap().insert(name, value);
         self.kinds.last_mut().unwrap().insert(name, kind);
+        self.reads.last_mut().unwrap().insert(name, reads);
         let v = self.varying.last_mut().unwrap();
         if varies {
             v.insert(name);
@@ -243,6 +251,11 @@ impl<'a> Scope<'a> {
 
     fn kind_of(&self, name: &str) -> Option<&'static str> {
         self.bindings.iter().zip(&self.kinds).rev().find(|(b, _)| b.contains_key(name)).and_then(|(_, k)| k.get(name).copied().flatten())
+    }
+
+    /// The dataset and the `input` namespace the binding `name` may name (V12, V14).
+    fn reads_of(&self, name: &str) -> ReadOnly<'a> {
+        self.bindings.iter().zip(&self.reads).rev().find(|(b, _)| b.contains_key(name)).and_then(|(_, r)| r.get(name).copied()).unwrap_or_default()
     }
 
     fn lookup(&self, name: &str) -> Option<&'a ExprLike> {
@@ -938,7 +951,8 @@ impl<'a> Checker<'a> {
                     },
                     _ => value,
                 };
-                scope.bind(name, bound, varies, kind);
+                let reads = self.may_name(value, scope);
+                scope.bind(name, bound, varies, kind, reads);
             }
             Node::Loop { index, from, to, step, body } => {
                 if !is_ident(index) {
@@ -1261,19 +1275,20 @@ impl<'a> Checker<'a> {
         if self.ast.namespaces.get(ns).and_then(|n| n.protocol) == Some(Protocol::S3) { Some(ns) } else { None }
     }
 
-    /// Namespace name if the handle is (a binding to) an object of an `input` namespace.
+    /// Namespace name if the handle is (a binding that may be) an object of an `input` namespace.
     fn input_namespace_of(&self, h: &'a Handle, scope: &Scope<'a>) -> Option<&'a str> {
+        if let Handle::Ref(name) = h {
+            return scope.reads_of(name).1;
+        }
         let ns = self.object_namespace(h, scope)?;
         if self.ast.namespaces.get(ns).and_then(|n| n.input).unwrap_or(false) { Some(ns) } else { None }
     }
 
-    /// Dataset name if the handle is (a binding to) a dataset file, dir, sample, region, or chunk.
+    /// Dataset name if the handle is (a binding that may be) a dataset file, dir, sample, region,
+    /// or chunk.
     fn dataset_of(&self, h: &'a Handle, scope: &Scope<'a>) -> Option<&'a str> {
         match h {
-            Handle::Ref(name) => match scope.lookup(name) {
-                Some(ExprLike::Handle(v)) => self.dataset_of(v, scope),
-                _ => None,
-            },
+            Handle::Ref(name) => scope.reads_of(name).0,
             Handle::File(f) => match (&f.dataset, &f.of) {
                 (Some(ds), _) => Some(ds.as_str()),
                 (None, Some(of)) => self.dataset_of(of, scope),
@@ -1285,6 +1300,27 @@ impl<'a> Checker<'a> {
             Handle::Unit(u) => self.dataset_of(&u.of, scope),
             Handle::Column(c) => self.dataset_of(&c.of, scope),
             Handle::Object { .. } => None,
+        }
+    }
+
+    /// V12, V14: the dataset and the `input` namespace a `let` value may name, so a write
+    /// through the binding is refused if any handle it may hold is read-only: a handle, an
+    /// alias or an `at` of a binding by what that binding may name, a `cond` by either arm, the
+    /// `then` arm's first (RC1 review: a handle chosen by `cond` from a dataset handle was
+    /// written through unrefused). As `check.py`'s `may_name`.
+    fn may_name(&self, v: &'a ExprLike, scope: &Scope<'a>) -> ReadOnly<'a> {
+        match v {
+            ExprLike::Handle(h) => (self.dataset_of(h, scope), self.input_namespace_of(h, scope)),
+            ExprLike::Expr(Expr::Node(n)) => match n.as_ref() {
+                ExprNode::Ref(name) => scope.reads_of(name),
+                ExprNode::At { name, .. } if !scope.forward.contains(name.as_str()) => scope.reads_of(name),
+                ExprNode::Cond(c) => {
+                    let (t, e) = (self.may_name(&c.then, scope), self.may_name(&c.otherwise, scope));
+                    (t.0.or(e.0), t.1.or(e.1))
+                }
+                _ => (None, None),
+            },
+            _ => (None, None),
         }
     }
 
@@ -1977,6 +2013,12 @@ impl<'a> Checker<'a> {
             Handle::Ref(name) => {
                 if scope.lookup(name).is_none() {
                     self.err(path, format!("handle binding `{name}` not in scope"));
+                } else if !scope.fields.contains(name.as_str()) {
+                    // V27: a handle position names a binding to a handle (RC1 review: `let x = 1`
+                    // then a write on `{ref: x}` passed and failed at run, "`x` is a int")
+                    if let Some(k) = scope.kind_of(name).filter(|k| *k != "handle") {
+                        self.err(path, format!("expected a handle, got {} (V27)", kind_name(k)));
+                    }
                 }
             }
             Handle::File(f) => {

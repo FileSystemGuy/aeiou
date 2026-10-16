@@ -674,7 +674,7 @@ class Check:
         v = a["value"]
         if isinstance(v, dict) and set(v) == {"ref"} and scope.lookup(v["ref"]) is not None:
             v = scope.lookup(v["ref"])
-        scope.bind(a["name"], v, self.varies(a["value"], scope), self.kind(a["value"], scope))
+        scope.bind(a["name"], v, self.varies(a["value"], scope), self.kind(a["value"], scope), self.may_name(a["value"], scope))
 
     def n_loop(self, a, p, scope):
         for k in ("from", "to", "step"):
@@ -888,25 +888,24 @@ class Check:
         return None
 
     def input_namespace_of(self, h, scope):
-        """Namespace name if the handle is (a binding to) an object of an `input` namespace."""
+        """Namespace name if the handle is (a binding that may be) an object of an `input` namespace."""
         if not isinstance(h, dict) or len(h) != 1:
             return None
         k, a = next(iter(h.items()))
         if k == "ref":
-            v = scope.lookup(a)
-            return self.input_namespace_of(v, scope) if isinstance(v, dict) else None
+            return scope.reads_of(a)[1]
         if k == "object" and self.namespaces.get(a["namespace"], {}).get("input"):
             return a["namespace"]
         return None
 
     def dataset_of(self, h, scope):
-        """Dataset name if the handle is (a binding to) a dataset file, dir, sample, region, or chunk."""
+        """Dataset name if the handle is (a binding that may be) a dataset file, dir, sample,
+        region, or chunk."""
         if not isinstance(h, dict) or len(h) != 1:
             return None
         k, a = next(iter(h.items()))
         if k == "ref":
-            v = scope.lookup(a)
-            return self.dataset_of(v, scope) if isinstance(v, dict) else None
+            return scope.reads_of(a)[0]
         if k == "file":
             return a["dataset"] if "dataset" in a else self.dataset_of(a["of"], scope)
         if k in ("dir",):
@@ -918,6 +917,22 @@ class Check:
         if k in ("unit", "column"):
             return self.dataset_of(a["of"], scope)
         return None
+
+    def may_name(self, v, scope):
+        """V12, V14: the dataset and the `input` namespace a `let` value may name, so a write
+        through the binding is refused if any handle it may hold is read-only: a handle, an
+        alias or an `at` of a binding by what that binding may name, a `cond` by either arm, the
+        `then` arm's first (RC1 review: a handle chosen by `cond` from a dataset handle was
+        written through unrefused). As the runner's `may_name`."""
+        if not isinstance(v, dict) or len(v) != 1:
+            return (None, None)
+        k, a = next(iter(v.items()))
+        if k == "cond":
+            t, e = self.may_name(a["then"], scope), self.may_name(a["else"], scope)
+            return (t[0] or e[0], t[1] or e[1])
+        if k == "at":
+            return (None, None) if a["ref"] in scope.forward else scope.reads_of(a["ref"])
+        return (self.dataset_of(v, scope), self.input_namespace_of(v, scope))
 
     # ---- the as_written rule (ABSTRACTS.md §9.7) ----
     def object_namespace(self, h, scope):
@@ -1247,6 +1262,10 @@ class Check:
         if k == "ref":
             if scope.lookup(a) is None:
                 self.err(p, f"handle binding `{a}` not in scope")
+            elif a not in scope.fields and scope.kind_of(a) not in (None, "handle"):
+                # V27: a handle position names a binding to a handle (RC1 review: `let x = 1`
+                # then a write on `{ref: x}` passed and failed at run)
+                self.err(p, f"expected a handle, got {self.KINDS[scope.kind_of(a)]} (V27)")
         elif k == "file":
             if "dataset" in a and a.get("id") is None:
                 # a `null` id is no id, as the runner reads it
@@ -1316,6 +1335,7 @@ class Scope:
         self.bindings, self.indices = {}, list(parent.indices) if parent else []
         self.varying = set()  # the bindings here whose value varies (V6)
         self.kinds = {}  # the kind each binding here is known to have, or None (V27)
+        self.reads = {}  # a dataset and an `input` namespace each binding here may name (V12, V14)
         # the innermost enclosing frame whose count varies with an enclosing one (V6), or None
         self.count_varies = parent.count_varies if parent else None
         self.nonneg_indices = set(parent.nonneg_indices) if parent else set()
@@ -1339,9 +1359,10 @@ class Scope:
             s.nonneg_indices.discard(name)
         return s
 
-    def bind(self, name, value, varies=False, kind=None):
+    def bind(self, name, value, varies=False, kind=None, reads=(None, None)):
         self.bindings[name] = value
         self.kinds[name] = kind
+        self.reads[name] = reads
         if varies:
             self.varying.add(name)
         else:
@@ -1362,6 +1383,15 @@ class Scope:
                 return s.kinds[name]
             s = s.parent
         return None
+
+    def reads_of(self, name):
+        """The dataset and the `input` namespace the binding `name` may name (V12, V14)."""
+        s = self
+        while s:
+            if name in s.bindings:
+                return s.reads[name]
+            s = s.parent
+        return (None, None)
 
     def lookup(self, name):
         s = self

@@ -26,7 +26,11 @@ fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
 }
 
 fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {
-    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&crate::common::workload_ast(name)).unwrap()));
+    leaked_model_at(&crate::common::workload_ast(name), cfg)
+}
+
+fn leaked_model_at(ast: &Path, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {
+    let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(ast).unwrap()));
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
@@ -627,7 +631,9 @@ fn datagen_on_two_processes_end_to_end() {
 fn a_killed_datagen_leaves_a_manifest_that_is_true() {
     use std::io::BufRead;
     let files = 20000i64;
-    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "20000")]));
+    let dir = tmpdir("dg-killed-ast");
+    let ast = small_corpus_ast(&dir);
+    let (loaded, cfg, model) = leaked_model_at(&ast, config(1, 1, &[("samples", "20000")]));
     let meta = &model.datasets[0];
     for ranks in [1i64, 2] {
         let root = tmpdir("dg-killed");
@@ -635,7 +641,7 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
         let mut children = Vec::new();
         for rank in 0..ranks {
             let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-            c.arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root);
+            c.arg("datagen").arg(&ast).arg("--root").arg(&root);
             c.args(["--writers", "2", "--progress-secs", "0.02", "--param", &format!("samples={files}")]);
             if ranks > 1 {
                 c.args(["--ranks", &ranks.to_string(), "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
@@ -778,8 +784,27 @@ fn resize_ranks(op: &str, n: i64, at: &std::path::Path, ranks: i64, extra: &[&st
 }
 
 fn datagen_one(root: &PathBuf, files: i64) {
-    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(root).args(["--writers", "3", "--param", &format!("samples={files}")]).output().unwrap();
+    datagen_at(&crate::common::workload_ast("file_per_sample.ast.json"), root, files);
+}
+
+fn datagen_at(ast: &Path, root: &PathBuf, files: i64) {
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(ast).arg("--root").arg(root).args(["--writers", "3", "--param", &format!("samples={files}")]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
+/// `file_per_sample` with files of about 8 KiB in place of 110 KB, written in `dir` (a
+/// directory of its own, never a datagen root), for the tests that write, kill, resume, grow,
+/// shrink, and settle corpora of thousands of files: the counts, the directories of 1,300, the
+/// claim order, and the windows are the workload's, at a fourteenth of the bytes (RC1 review:
+/// those tests wrote 1 to 2.5 GB each, and beside the other suites on a full disk a datagen
+/// failed with ENOSPC). A datagen of 20,000 of them still takes some 0.6 s here, thirty
+/// windows of 20 ms, so a kill or a signal lands while it writes.
+fn small_corpus_ast(dir: &Path) -> PathBuf {
+    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(crate::common::workload_ast("file_per_sample.ast.json")).unwrap()).unwrap();
+    doc["datasets"]["train"]["size"] = serde_json::json!({"lognormal": {"median": 8192, "sigma": 0.45}});
+    let path = dir.join("file_per_sample.ast.json");
+    std::fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+    path
 }
 
 /// A grow and a shrink (DESIGN_REVIEW.md §3.70), on one host and on two, leave the corpus a
@@ -788,14 +813,16 @@ fn datagen_one(root: &PathBuf, files: i64) {
 #[test]
 fn grow_and_shrink_make_the_corpus_of_the_new_count() {
     // 1300 files a directory: 3000 has three, 5000 four, 2100 two
+    let dir = tmpdir("dg-resize-ast");
+    let ast = small_corpus_ast(&dir);
     let fresh5 = tmpdir("dg-fresh5");
     let fresh21 = tmpdir("dg-fresh21");
-    datagen_one(&fresh5, 5000);
-    datagen_one(&fresh21, 2100);
+    datagen_at(&ast, &fresh5, 5000);
+    datagen_at(&ast, &fresh21, 2100);
     let id = |r: &PathBuf| aeiou::payload::Manifest::read(&r.join("train")).unwrap();
     for ranks in [1i64, 2] {
         let root = tmpdir("dg-resize");
-        datagen_one(&root, 3000);
+        datagen_at(&ast, &root, 3000);
         let was = id(&root).id();
         let outs = resize_ranks("--grow", 5000, &root.join("train"), ranks, &[]);
         assert!(outs.iter().all(|(ok, _, _)| *ok), "{ranks} rank(s): {outs:?}");
@@ -806,7 +833,7 @@ fn grow_and_shrink_make_the_corpus_of_the_new_count() {
         assert_eq!((&m.provenance["files_written"], &m.provenance["bytes_written"]), (&f.provenance["files_written"], &f.provenance["bytes_written"]));
         let r = &m.provenance["resizes"][0];
         assert_eq!((r["op"].as_str(), r["from"].as_i64(), r["to"].as_i64(), r["from_id"].as_str(), r["files_written"].as_i64(), r["ranks"].as_i64()), (Some("grow"), Some(3000), Some(5000), Some(was.as_str()), Some(2000), Some(ranks)));
-        let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "5000")]));
+        let (loaded, cfg, _) = leaked_model_at(&ast, config(1, 1, &[("samples", "5000")]));
         run::check_datasets(loaded, cfg, &root).unwrap();
 
         let outs = resize_ranks("--shrink", 2100, &root.join("train"), 3 - ranks, &[]);
@@ -819,7 +846,7 @@ fn grow_and_shrink_make_the_corpus_of_the_new_count() {
         assert_eq!((m.state.as_str(), m.id()), ("complete", f.id()));
         assert_eq!((&m.provenance["files_written"], &m.provenance["bytes_written"]), (&f.provenance["files_written"], &f.provenance["bytes_written"]));
         assert_eq!(m.provenance["resizes"][1]["op"], "shrink");
-        let (loaded, cfg, _) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "2100")]));
+        let (loaded, cfg, _) = leaked_model_at(&ast, config(1, 1, &[("samples", "2100")]));
         run::check_datasets(loaded, cfg, &root).unwrap();
     }
 }
@@ -831,8 +858,10 @@ fn grow_and_shrink_make_the_corpus_of_the_new_count() {
 fn a_killed_grow_is_finished_by_resume() {
     use std::io::BufRead;
     let (from, to) = (2000i64, 20000i64);
+    let dir = tmpdir("dg-grow-killed-ast");
+    let ast = small_corpus_ast(&dir);
     let root = tmpdir("dg-grow-killed");
-    datagen_one(&root, from);
+    datagen_at(&ast, &root, from);
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
     c.args(["datagen", "--grow", &to.to_string()]).arg(root.join("train")).args(["--writers", "2", "--progress-secs", "0.02"]);
     let mut child = c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap();
@@ -851,7 +880,7 @@ fn a_killed_grow_is_finished_by_resume() {
     child.wait().unwrap();
     let m = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert_eq!((m.state.as_str(), m.progress["from"].as_i64(), m.dataset["count"].as_i64()), ("growing", Some(from), Some(to)));
-    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "20000")]));
+    let (loaded, cfg, model) = leaked_model_at(&ast, config(1, 1, &[("samples", "20000")]));
     let e = run::check_datasets(loaded, cfg, &root).unwrap_err().to_string();
     assert!(e.contains("the manifest says `growing`") && e.contains("--resume"), "{e}");
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--grow", "30000"]).arg(root.join("train")).output().unwrap();
@@ -1021,12 +1050,12 @@ fn settle(at: &std::path::Path) -> (bool, String, String) {
 
 /// The settled corpus is what a datagen of its count writes: the names and sizes, the id a
 /// run accepts, the totals; the ids the settle finished or wrote again, and a sample of the
-/// rest, are the payload's. Returns the count.
-fn check_settled(root: &PathBuf, was: &aeiou::payload::Manifest, asked: i64) -> i64 {
+/// rest, are the payload's. Returns the count. `ast` is the abstract the corpus was made from.
+fn check_settled(ast: &Path, root: &PathBuf, was: &aeiou::payload::Manifest, asked: i64) -> i64 {
     let after = aeiou::payload::Manifest::read(&root.join("train")).unwrap();
     assert_eq!(after.state, "complete");
     let s = after.dataset["count"].as_i64().unwrap();
-    let (loaded, cfg, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", &s.to_string())]));
+    let (loaded, cfg, model) = leaked_model_at(ast, config(1, 1, &[("samples", &s.to_string())]));
     let meta = &model.datasets[0];
     assert!(listing(&root.join("train")) == expected(meta, s), "the settled corpus is not the {s}-file one");
     run::check_datasets(loaded, cfg, root).unwrap();
@@ -1052,13 +1081,15 @@ fn check_settled(root: &PathBuf, was: &aeiou::payload::Manifest, asked: i64) -> 
 #[test]
 fn a_killed_datagen_or_grow_settles_at_whole_directories() {
     let files = 20000i64;
+    let dir = tmpdir("dg-settle-ast");
+    let ast = small_corpus_ast(&dir);
     for (op, ranks) in [("datagen", 2i64), ("grow", 1)] {
         let root = tmpdir("dg-settle");
         let from = 2000i64;
         let args: Vec<String> = match op {
-            "datagen" => vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("samples={files}")],
+            "datagen" => vec![ast.to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("samples={files}")],
             _ => {
-                datagen_one(&root, from);
+                datagen_at(&ast, &root, from);
                 vec!["--grow".into(), files.to_string(), root.join("train").to_string_lossy().into_owned()]
             }
         };
@@ -1084,7 +1115,7 @@ fn a_killed_datagen_or_grow_settles_at_whole_directories() {
         let o = settle(&root.join("train"));
         assert!(o.0, "{op}: {o:?}");
         assert!(o.1.contains(&format!("of the {files} asked")), "{}", o.1);
-        let s = check_settled(&root, &m, files);
+        let s = check_settled(&ast, &root, &m, files);
         let low = if op == "grow" { from } else { 0 };
         assert_eq!(s, low.max(claimed.min(files)), "{op}: settled at the boundary {claimed}");
         assert!(s % 1300 == 0 || s == files || s == from, "{op}: {s} is not a directory boundary");
@@ -1104,8 +1135,10 @@ fn a_killed_datagen_or_grow_settles_at_whole_directories() {
 #[test]
 fn a_killed_shrink_settles_without_removing_more() {
     let (files, to) = (20000i64, 100i64);
+    let dir = tmpdir("dg-settle-shrink-ast");
+    let ast = small_corpus_ast(&dir);
     let root = tmpdir("dg-settle-shrink");
-    datagen_one(&root, files);
+    datagen_at(&ast, &root, files);
     let args: Vec<String> = vec!["--shrink".into(), to.to_string(), root.join("train").to_string_lossy().into_owned(), "--writers".into(), "1".into(), "--progress-secs".into(), "0.01".into()];
     let mut children = spawn_ranks(&args, 1);
     let _rest = windows(&mut children[0], 2, |l| !l.contains(" 0/"));
@@ -1117,7 +1150,7 @@ fn a_killed_shrink_settles_without_removing_more() {
     noted(&root.join("train"), 90.0);
     let o = settle(&root.join("train"));
     assert!(o.0, "{o:?}");
-    let s = check_settled(&root, &m, to);
+    let s = check_settled(&ast, &root, &m, to);
     let claimed = m.progress["claimed"].as_i64().unwrap();
     assert_eq!(s, to.max(claimed.min(files)));
     assert!(there - s <= 1300, "the settle removed {} files past the run in hand", there - s);
@@ -1131,12 +1164,14 @@ fn a_killed_shrink_settles_without_removing_more() {
 #[test]
 fn ctrl_c_stops_every_host_and_leaves_a_true_manifest() {
     let files = 20000i64;
-    let (_, _, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "20000")]));
+    let dir = tmpdir("dg-ctrl-c-ast");
+    let ast = small_corpus_ast(&dir);
+    let (_, _, model) = leaked_model_at(&ast, config(1, 1, &[("samples", "20000")]));
     let meta = &model.datasets[0];
     // and SIGTERM (Slurm, systemd, docker, timeout) as Ctrl-C: the host it reached exits 143
     for (ranks, at, sig) in [(2i64, 1usize, libc::SIGINT), (1, 0, libc::SIGINT), (2, 1, libc::SIGTERM)] {
         let root = tmpdir("dg-ctrl-c");
-        let mut args = vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("samples={files}")];
+        let mut args = vec![ast.to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("samples={files}")];
         args.extend(["--writers", "2", "--progress-secs", "0.05"].map(String::from));
         let mut children = spawn_ranks(&args, ranks);
         let rest = windows(&mut children[0], 1, |l| !l.contains(" 0/"));
@@ -1163,7 +1198,7 @@ fn ctrl_c_stops_every_host_and_leaves_a_true_manifest() {
         // stopped: no wait for the windows
         let o = settle(&root.join("train"));
         assert!(o.0, "{o:?}");
-        let s = check_settled(&root, &m, files);
+        let s = check_settled(&ast, &root, &m, files);
         assert_eq!(s, m.progress["claimed"].as_i64().unwrap());
     }
 }

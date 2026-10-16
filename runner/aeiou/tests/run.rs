@@ -1091,7 +1091,9 @@ fn a_loader_in_a_loop_runs_once_per_iteration() {
 /// in the set: once behind its deadline the event loop must reap without sleeping, as the
 /// blocking path skips the sleep (RC1 review: the loop's 0 ns `io_uring_enter` wait still
 /// slept on an hrtimer, about 100 µs on the CI host's VM, so 5,000 computes of 20 µs ran
-/// 0.48 s over there, and 40,000 of 2 µs about 0.1 s over here).
+/// 0.48 s over there, and 40,000 of 2 µs about 0.1 s over here). Each is the best of a few
+/// tries (`least_over`): a loaded host's late wake-ups are transient, the overshoot this test
+/// guards against is in every run.
 #[test]
 fn consecutive_computes_take_their_sum_on_every_backend() {
     let root = tmpdir("computes");
@@ -1106,15 +1108,18 @@ fn consecutive_computes_take_their_sum_on_every_backend() {
         let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, p).unwrap()));
         let ideal = std::time::Duration::from_nanos(n * ns);
         for backend in [BackendKind::Sync, BackendKind::Uring] {
-            let mut o = opts(&root.join("data"), backend);
-            o.time_scale = 1.0;
-            let r = go(model, o);
-            assert_eq!(r.stats.compute_ns, n * ns, "{backend:?}");
-            assert!(r.elapsed >= ideal, "{backend:?}: {:?} is shorter than the computes' {ideal:?}", r.elapsed);
             // the run's setup and one late wake-up on a loaded host, never one per compute
             // (5000 × the 50 µs slack is 250 ms)
-            let over = r.elapsed - ideal;
-            assert!(over < std::time::Duration::from_millis(50), "{backend:?}: {n} computes of {ns} ns took {:?}, {over:?} over their sum", r.elapsed);
+            let limit = std::time::Duration::from_millis(50);
+            let over = least_over(limit, || {
+                let mut o = opts(&root.join("data"), backend);
+                o.time_scale = 1.0;
+                let r = go(model, o);
+                assert_eq!(r.stats.compute_ns, n * ns, "{backend:?}");
+                assert!(r.elapsed >= ideal, "{backend:?}: {:?} is shorter than the computes' {ideal:?}", r.elapsed);
+                r.elapsed - ideal
+            });
+            assert!(over < limit, "{backend:?}: {n} computes of {ns} ns took {over:?} over their sum {ideal:?} at the least of {TRIES} runs");
         }
     }
 }
@@ -1122,7 +1127,8 @@ fn consecutive_computes_take_their_sum_on_every_backend() {
 /// A run ends when its work does: the `libaio` loops' `io_destroy` (about 50 ms here, an RCU
 /// grace period the kernel waits out at a context's teardown) comes after the last compute
 /// and is not the workload's time (RC1 review: one compute of 400 ms took 0.453 s under
-/// `libaio`, 0.400 s under `sync`, whatever the number of computes).
+/// `libaio`, 0.400 s under `sync`, whatever the number of computes). The best of a few tries
+/// (`least_over`), as the teardown is in every run and a loaded host's late wake-up is not.
 #[test]
 fn libaio_teardown_is_not_in_the_elapsed_time() {
     let root = tmpdir("aio-teardown");
@@ -1137,13 +1143,36 @@ fn libaio_teardown_is_not_in_the_elapsed_time() {
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, p).unwrap()));
     let ideal = std::time::Duration::from_nanos(ns);
     for backend in [BackendKind::LibAio, BackendKind::LibAioDirect] {
-        let mut o = opts(&root.join("data"), backend);
-        o.time_scale = 1.0;
-        let r = go(model, o);
-        assert!(r.elapsed >= ideal, "{backend:?}: {:?} is shorter than the compute's {ideal:?}", r.elapsed);
-        let over = r.elapsed - ideal;
-        assert!(over < std::time::Duration::from_millis(20), "{backend:?}: a compute of {ideal:?} took {:?}, {over:?} over it", r.elapsed);
+        let limit = std::time::Duration::from_millis(20);
+        let over = least_over(limit, || {
+            let mut o = opts(&root.join("data"), backend);
+            o.time_scale = 1.0;
+            let r = go(model, o);
+            assert!(r.elapsed >= ideal, "{backend:?}: {:?} is shorter than the compute's {ideal:?}", r.elapsed);
+            r.elapsed - ideal
+        });
+        assert!(over < limit, "{backend:?}: a compute of {ideal:?} took {over:?} over it at the least of {TRIES} runs");
     }
+}
+
+/// Runs, at most, of each measurement of the timing tests above.
+const TRIES: usize = 5;
+
+/// The least of up to `TRIES` overshoots `measure` returns, stopping at the first under
+/// `limit`. What those tests guard against (a slack paid per compute, a teardown in the
+/// elapsed time) is deterministic and in every run, so it fails all of them and the limit
+/// keeps its meaning; a late wake-up on a host loaded by the suites beside it is not, and one
+/// clean run is enough (RC1 review: under parallel load one run in a few went 24-156 ms over
+/// a limit of 20 or 50 ms, with no regression).
+fn least_over(limit: std::time::Duration, mut measure: impl FnMut() -> std::time::Duration) -> std::time::Duration {
+    let mut least = std::time::Duration::MAX;
+    for _ in 0..TRIES {
+        least = least.min(measure());
+        if least < limit {
+            break;
+        }
+    }
+    least
 }
 
 /// A thread's buffer ring is grown and faulted in before an op's clock starts: the first read

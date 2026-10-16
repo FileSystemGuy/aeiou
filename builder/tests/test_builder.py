@@ -1596,7 +1596,9 @@ def test_check_py_refuses_the_shared_refusal_cases_as_the_runner_does():
     Among them: a pattern the runner cannot parse (check.py took it), a `const` of an expression
     (check.py walked it as a distribution's arguments), a dataset field other than `{id}` and
     `{k}`, and an alias `let f = {ref: g}` of a dataset handle (a write through it passed the
-    runner's V12, and a rebinding cycle sent check.py into a RecursionError)."""
+    runner's V12, and a rebinding cycle sent check.py into a RecursionError), a handle chosen by
+    `cond` from a dataset or input-namespace handle, and a handle position naming an integer
+    (both passed both checkers)."""
     import jsonschema
     from aeiou.validate import _load
     schema, check = _load()

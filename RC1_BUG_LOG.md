@@ -3325,3 +3325,66 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   average 50, the two failures being load-dependent timing tests outside the object engine (passing
   when rerun alone, in the timing-margin lane); builder `test_object.py` with MinIO 15 passed. Fixed
   in an isolated worktree and applied.
+
+## 172. A write or unlink through a `cond`-chosen or `at` binding of a dataset or input-namespace handle passed V12/V14
+
+- **Where:** `runner/aeiou/src/validate.rs` and `schema/check.py` (`Scope.reads`, `reads_of`,
+  `may_name`; `dataset_of` and `input_namespace_of` for `{ref}`); `schema/README.md` V12, V14;
+  `runner/aeiou/tests/refusals.json`.
+- **Found by:** lane 2 (R76, from reading uncovered checker branches). With `g = consume d` and
+  `let f = cond(i == 0, <an object>, {ref: g})`, an open for writing and a write on `f` passed both
+  checkers ("ok … ops: close=1 open=1 write=1"); an unlink through a `cond` over an input namespace
+  passed too. A binding's dataset was found only when its value was itself a handle.
+- **Fix:** each `let` records, when bound, the first dataset and the first input namespace its value
+  may name: a handle directly, an alias or a non-forward `at` by what its binding may name, a `cond`
+  by either arm. The read-only checks read that record, so a later rebinding neither hides nor
+  invents one. Both checkers agree on path and message, e.g. "…/write/file: write on dataset `d`:
+  datasets are read-only (V12)".
+- **Evidence:** six new shared refusal cases (cond write, cond unlink, nested alias, rebinding, `at`
+  write, plus bug 173's) fail with the fix undone ("7 of 130 cases" in the Rust shared-refusals test;
+  "AssertionError: cond write V12" in Python) and pass with it. Applied on bd7c0cf: `--tests --lib
+  --bins` with MinIO all pass (lib 89, all 219); builder suite with MinIO 663; checker diff
+  identical (14 lines); hermetic `--twice --check` rc 0; 22 parameter files fit. Fixed in an
+  isolated worktree and applied.
+
+## 173. A handle position naming a binding of another kind (`let x = 1; write {ref: x}`) passed both checkers
+
+- **Where:** `runner/aeiou/src/validate.rs`, `schema/check.py` (V27, handle positions);
+  `schema/README.md` V27; `runner/aeiou/tests/refusals.json`.
+- **Found by:** lane 2 (R76): the abstract passed `check`, and `aeiou dry-run` then failed with
+  "`x` is a int, not a handle".
+- **Fix:** a `{ref: x}` in a handle position whose binding has a known kind other than handle is
+  refused: "expected a handle, got an integer (V27)" (fields exempt, as in `kind()`).
+- **Evidence:** the cases "handle names an integer V27" and "file of an alias of a parameter V27"
+  fail with HEAD's checkers and pass; same suite runs as bug 172.
+
+## 174. Two timing tests failed under parallel load
+
+- **Where:** `runner/aeiou/tests/run.rs` (`least_over`;
+  `consecutive_computes_take_their_sum_on_every_backend`, `libaio_teardown_is_not_in_the_elapsed_time`).
+- **Found by:** load-dependent failures in full-suite runs (bugs 165 and 171 evidence). Reproduced by
+  lane 2 with 30 CPU burners beside the `run::` module, 8 runs: the first test failed 7 of 8 (e.g.
+  "Sync: 5000 computes of 20000 ns took 256 ms, 156 ms over") and the second 3 of 8 (24–48 ms over).
+- **Fix:** each test takes the least overshoot of up to five runs and stops at the first under the
+  limit. The limits (50 ms and 20 ms) and the in-run asserts are unchanged, so a deterministic
+  regression, which is what they guard, still fails all five tries.
+- **Evidence:** under the same load, 30 runs of the module: neither test failed. Same suite runs as
+  bug 172. (`run::the_first_large_read_is_not_charged_the_rings_growth` still failed 1 of 30 under
+  that load; it is left as it is, best of three at 2.5×.)
+
+## 175. The coordinated datagen tests wrote up to 9.5 GB at once
+
+- **Where:** `runner/aeiou/tests/coord.rs` (`small_corpus_ast`, `leaked_model_at`, `datagen_at`,
+  `check_settled` taking the AST).
+- **Found by:** lane 2 (R78), and likely the cause of a one-off failure of
+  `coord::a_killed_datagen_leaves_a_manifest_that_is_true` at its resume (coord.rs:707) at load
+  average 50 (not reproduced: 0 of 10 on HEAD under load; the resume rewrites the 2.5 GB corpus
+  while other suites write beside it, which is consistent with ENOSPC). Six tests wrote the
+  110 KB-per-file corpus of `file_per_sample`, 2.5 GB each.
+- **Fix:** those six tests use a copy of the abstract with `lognormal(median 8192, σ 0.45)` files,
+  written into a temporary directory of their own. They keep 20,000 files, directories of 1,300,
+  the claim order and the window counts, and the kill still lands mid-write (about 30 windows of
+  20 ms). The tests that run the real workload afterwards keep the real abstract.
+- **Evidence:** peak disk use of the `coord::` module went from 9470 MB (25.0 s) to 1880 MB (11.3 s).
+  The killed-datagen test passed 32 of 32 runs as 4 parallel streams under 40 burners. Same suite
+  runs as bug 172.

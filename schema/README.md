@@ -289,7 +289,9 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   builder and V14 already refused them). No `write`, `ftruncate`, `fallocate`, `unlink`,
   `rename`, `mkdir`, or `rmdir` may target a dataset file, directory, sample, region, or chunk
   (through a binding or directly), and `open` on one may not carry `WRONLY`, `RDWR`, `CREAT`,
-  `TRUNC`, or `APPEND`. Writes go to namespaces. This is what makes the manifest (§7) true for the run.
+  `TRUNC`, or `APPEND`. A binding may name what its value may be where it is bound: an alias's
+  or an `at`'s binding, either arm of a `cond` (2026-10-15: a handle chosen by `cond` from a
+  dataset handle was written through unrefused). Writes go to namespaces. This is what makes the manifest (§7) true for the run.
 - **V13 Reserved names** (added 2026-09-30). No path component of a dataset or namespace
   pattern may begin with `.aeiou`; that prefix belongs to the manifest and any future
   sidecar. Two datasets may not share a root (the constant directory prefix of the
@@ -302,7 +304,8 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
 - **V14 Input namespaces are read-only** (added 2026-09-30). A namespace declared
   `input: true` holds objects a previous run wrote; the run that declares it reads them and
   may not `write`, `ftruncate`, `fallocate`, `unlink`, `rename`, `mkdir`, or `rmdir` an
-  object of it, nor `open` one with a write-mode flag. Namespaces that share a root share its
+  object of it, nor `open` one with a write-mode flag, through a binding that may name one as
+  V12 reads it. Namespaces that share a root share its
   manifest (§6), so they must agree on `input`. The runner requires the writer's
   `.aeiou-namespace.json` at the root and never empties an input root. Reasoning in
   `DESIGN_REVIEW.md` §3.24.
@@ -440,7 +443,9 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   strings, two bools, two handles, or `null` and anything, as the runner compares them, and
   the parameter an `elem`, `len`, or `sum` reads is an array, a `sum`'s of numbers only
   (2026-10-15): `{"eq": [1, "a"]}` as a condition had passed both checkers and failed the run
-  with "eq: cannot compare int with str".
+  with "eq: cannot compare int with str". A handle position (`file`, `dir`, `from`, `to`, a
+  handle's `of`) names a binding to a handle (2026-10-15): `let x = 1` then a `write` on
+  `{"ref": "x"}` had passed both checkers and failed the run with "`x` is a int, not a handle".
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
