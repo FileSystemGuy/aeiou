@@ -17,9 +17,11 @@ workloads/
         <ast_name>.ast.json  the abstract, generated, never edited by hand
         kit/                 the capture and fitting scripts of the traced application
         params/              test-sized parameter sets: fixtures, not workloads
+        shape.defaults.json, DESCRIPTION.defaults.md
+                             generated, for a mechanism with no case: its shape and prose at the defaults
         cases/<case>/
           README.md          the load, its kind, the GPU counts its parameters hold at
-          case.toml          its curated attributes (kind, modality, model family), GPU counts, length, runs
+          case.toml          its curated attributes (kind, modality, model family), GPU counts, length, metrics block, runs
           params.json        the parameter set (writer.params.json and reader.params.json for a pair)
           shape.json         generated: the measured attributes of each run, its op counts, its datasets' projections
           DESCRIPTION.md     generated: the abstract in prose at these parameters, a paragraph and an account
@@ -68,10 +70,10 @@ table until it has a case). A new case: `cases/<case>/` with its parameter file,
 `case.toml`. A capture: `captures/<capture>/` under the case it was traced as, with a
 `capture.toml` holding the verdict `aeiou-trace compare --judge` gives
 (`builder/tests/test_trace.py` checks it). Then `aeiou-catalog write --runner
-runner/target/release/aeiou` measures the shapes and regenerates `CATALOG.md` and the category
-READMEs. An attribute or value not in `attributes.toml` is refused: add it there first, with
-its meaning; a new category or class is a new value there, and `write` makes its directory. CI
-rebuilds every AST, checks every parameter file against its abstract, and runs
-`aeiou-catalog check`.
+runner/target/release/aeiou` measures the shapes and regenerates `CATALOG.md`, the category and
+class READMEs, and every `shape.json` and `DESCRIPTION.md`. An attribute or value not in
+`attributes.toml` is refused: add it there first, with its meaning; a new category or class is
+a new value there, and `write` makes its directory. CI rebuilds every AST, checks every
+parameter file against its abstract, and runs `aeiou-catalog check`.
 
 Traces we may not publish stay out of this tree, pointers to them included.
