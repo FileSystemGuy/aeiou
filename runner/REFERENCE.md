@@ -73,7 +73,7 @@ aeiou/src/
   limits.rs    the limits before the gate: the estimate of open files and threads from a bounded walk,
                the soft limits raised, the refusal that names the limit (§11)
   report.rs    `run --report-json`: the run's identity, results, and verdict as JSON (§12)
-  payload.rs   positional content (SFC64 in 4 KiB pieces, `aeiou-positional/3`), the manifest
+  payload.rs   positional content (SFC64 in 4 KiB pieces, `aeiou-positional/4`), the manifest
   datagen.rs   `aeiou datagen`
   main.rs      the CLI
 aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests, parameter files
@@ -486,7 +486,8 @@ as root). The same runs on the loopback NFS mount are §7.
 
 - **Payload** (`payload.rs`). Content is cut into 1 MiB blocks; block `b` of unit `u` under
   seed `s` is the prefix of the 1 MiB block seeded `labeled_key(s, "payload", [u, b])`
-  (`aeiou-positional/3`, 2026-10-11, `DESIGN_REVIEW.md` §3.70): an SFC64 stream (`Sfc64`, the
+  (`aeiou-positional/3`, 2026-10-11, `DESIGN_REVIEW.md` §3.70; the wrapper `/4` since 2026-10-15,
+  below): an SFC64 stream (`Sfc64`, the
   algorithm of numpy's `SFC64` bit generator, its state `a`, `b`, `c` the first three SplitMix64
   outputs from the block seed, the counter 1, twelve outputs discarded; each output
   little-endian) laid out in 4 KiB pieces, each the next `⌈4096 / C⌉` bytes of the stream and
@@ -497,10 +498,26 @@ as root). The same runs on the loopback NFS mount are §7.
   (`/2`)~~: a file below `1/C` MiB then did not compress at all (a 110 KB image at `C = 2`
   measured 1.00), and the generator was an external crate and wheel kept bit-identical. The
   prefix of a block is independent of how it is read out, so a verifier can regenerate any
-  piece with numpy alone. Dedupe is the wrapper's, by seed reuse (`aeiou-positional/2`,
-  2026-10-04, unchanged in `/3`): a dataset named by ids uses `u = id div D` and `b` the
-  block of the logical offset (a chunked file is the logical file cut at `chunk`), so every
-  run of `D` consecutive files carries the same bytes, whatever the count; an `array`
+  piece with numpy alone. Dedupe is the wrapper's, by seed reuse, and **since 2026-10-15
+  (`aeiou-positional/4`, `DESIGN_REVIEW.md` §3.77; the payload bytes, and so every dataset
+  id, changed)** a unit's bytes lie at their own file offsets: a dataset named by ids uses
+  `b` = the file offset ÷ 1 MiB (a chunked file's offset in the logical file cut at
+  `chunk`), and a container's framing is written over the unit's bytes rather than pushing
+  them along, so the files of a unit share whole 4 KiB blocks but for the blocks holding
+  framing at differing offsets. A file of several samples has `u = id div D`; a file of one
+  sample has its set among the group of `G = 8·D` ids `id div G`, the group ordered by (size
+  draw, id) and cut into sets of `D` (`payload::Units`; the draws are the ids' own, past the
+  count too, so a set is a function of the id alone), so a set's files are of near sizes and
+  its unique bytes near `1/D` of them. Measured at 4 KiB blocks, `--dedupe 2`: TFRecord and
+  Parquet shards (`samples_per_file` 256) 1.86, `hdf5_map` 2.0, `file_per_sample` 1.85;
+  `--dedupe 3` over 60 `lmcache_shared_fs` prompts 2.68 (`/3`: 1.07, 1.07, 2.0, 1.58, 2.33).
+  What stays unique is inherent: a block holding framing, and a set's largest file's tail
+  (the more sizes vary, the more; a dataset's last, partial group, whose sets miss ids past
+  the count, is the worst case, and why `G` is `8·D` and not more). ~~`aeiou-positional/2`,
+  2026-10-04, unchanged in `/3`: `u = id div D` and `b` the block of the logical offset, a
+  container's samples back to back from offset 0~~: the framing moved the shared bytes off
+  the 4 KiB grid after the first sample (TFRecord at `--dedupe 2`: 1.07), and two files of
+  a unit kept the larger's tail. An `array`
   dataset (one file) uses `u = 0` and `b div D`; a namespace object written by `run` uses
   `s = labeled_key(namespace seed, "object", [xxh3(path)])`, `u = 0`; a dataset's inventory
   (contract 0.9) is seeded `labeled_key(s, "inventory", [b div D])`, a label of its own, so its
@@ -807,7 +824,8 @@ as root). The same runs on the loopback NFS mount are §7.
   filled in place, so it goes to a file in `O_DIRECT` blocks or into an upload in 8 MiB
   parts holding one piece, and each file is checked against the size its layout predicts.
   The payload of a container starts anywhere in a block, so `Filler` makes a block read in
-  order from its start in place, continuing its generator, rather than through the
+  order from its start in place, continuing its generator (and stepping it over the framing
+  between two samples, up to 64 KiB, since `/4`), rather than through the
   one-block cache (8 GiB to tmpfs at 16 writers: 12.1 GB/s through the cache, 20.7 in
   place). The manifest's `format.writer` names `aeiou datagen tfrecord writer` or
   `aeiou datagen ustar writer`, so the dataset id differs from the Python writer's for the

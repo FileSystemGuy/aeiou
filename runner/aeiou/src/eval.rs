@@ -901,6 +901,19 @@ impl<'a> DsMeta<'a> {
         }
     }
 
+    /// The size draw of id `id` of a files dataset, at any id, the count's or beyond, and 0
+    /// for a draw below 0: what the payload's dedupe sets are formed by
+    /// (`payload::Units`), so no file's bytes depend on the count.
+    pub fn size_draw(&self, id: i64) -> Result<u64> {
+        match self {
+            DsMeta::Files { size, seed, .. } => {
+                let mut w = Words::new(dataset_key(*seed, id));
+                Ok(sample(size, &mut w, None)?.as_int()?.max(0) as u64)
+            }
+            DsMeta::Array { .. } => bail!("`{}` is an array dataset", self.name()),
+        }
+    }
+
     /// Samples held by file `file` of a files dataset (the last file may be short).
     pub fn samples_in_file(&self, file: i64) -> Result<i64> {
         match self {

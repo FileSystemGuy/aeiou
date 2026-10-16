@@ -719,7 +719,7 @@ fn a_killed_datagen_leaves_a_manifest_that_is_true() {
                 let got = std::fs::read(&path).unwrap();
                 let mut want = vec![0u8; meta.file_size(id).unwrap() as usize];
                 let seed = meta.dataset_seed();
-                filler.fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk, 1), 0, &mut want);
+                filler.fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk), 0, &mut want);
                 assert!(got == want, "{}: not the payload", path.display());
             }
         }
@@ -872,7 +872,7 @@ fn a_killed_grow_is_finished_by_resume() {
     for id in (0..to).step_by(997) {
         let mut want = vec![0u8; meta.file_size(id).unwrap() as usize];
         let seed = meta.dataset_seed();
-        aeiou::payload::Filler::new(1).fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk, 1), 0, &mut want);
+        aeiou::payload::Filler::new(1).fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk), 0, &mut want);
         assert!(files[&meta.file_path(id, None).unwrap().to_string()] == want, "id {id}: not the payload");
     }
 }
@@ -975,7 +975,7 @@ fn is_payload(root: &std::path::Path, meta: &aeiou::eval::DsMeta<'_>, id: i64) -
     let got = std::fs::read(root.join(meta.file_path(id, None).unwrap().to_string())).unwrap_or_default();
     let mut want = vec![0u8; meta.file_size(id).unwrap() as usize];
     let seed = meta.dataset_seed();
-    aeiou::payload::Filler::new(1).fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk, 1), 0, &mut want);
+    aeiou::payload::Filler::new(1).fill_range(|blk| aeiou::payload::file_block_seed(seed, id as u64, blk), 0, &mut want);
     got == want
 }
 

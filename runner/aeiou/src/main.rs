@@ -174,7 +174,9 @@ struct DatagenArgs {
     /// requests are made on the writers' threads). Default 2.
     #[arg(long, value_name = "N", help_heading = "Writer")]
     object_threads: Option<usize>,
-    /// Dedupe ratio: every `dedupe` consecutive files (or 1 MiB blocks of an array file) share content.
+    /// Dedupe ratio: files share their content `dedupe` by `dedupe`, at the same offsets (files of
+    /// one sample in sets of near sizes), so 4 KiB blocks repeat near `dedupe` times; an array file
+    /// repeats 1 MiB blocks.
     #[arg(long, default_value_t = 1, help_heading = "Writer")]
     dedupe: u64,
     /// Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest 0x5A.

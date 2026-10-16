@@ -3575,8 +3575,9 @@ per directory (the VFS lock) and per mount (the NFS session), not per process.
   not: `u = id mod ceil(files / D)` made the groups depend on the count, so a prefix of the
   ids had a ratio below `D` (down to 1 when the prefix is at most `files / D`) and growing
   the count would have changed what existing files should contain. The wrapper now groups
-  `D` consecutive files (`u = id div D`) and `D` consecutive blocks of a regions file; every
-  prefix and every extension has ratio `D`. No dataset id had been published, so the version
+  `D` consecutive files (`u = id div D`) and `D` consecutive blocks of a regions file; ~~every
+  prefix and every extension has ratio `D`~~ (true only of files of equal sizes without
+  framing between samples; 2026-10-15, §3.77: `aeiou-positional/4`). No dataset id had been published, so the version
   bump cost nothing; with `D = 1` the bytes are unchanged. The Python writer and the Rust
   writer moved together.
 - *The launcher.* `aeiou-launch` already passed the command verbatim; it now says `run` or
@@ -6322,6 +6323,81 @@ takes the file count, `ceil(count / samples_per_file)`; `tests/golden.rs`
 `a_compound_datasets_directories_are_counted_from_its_files` fails without it. No committed
 abstract has a compound dataset with directories, so no fingerprint, dataset id, or shape
 changed; the describer, without a projection, counts directories from files as well.
+
+### 3.77 Dedupe in 4 KiB blocks: the payload at its own file offsets, and sets of near sizes (`aeiou-positional/4`; found in the RC1 review and decided 2026-10-15)
+
+**This changes the payload bytes, and so every dataset id** (the manifest's `payload.wrapper`
+is `aeiou-positional/4`; a corpus written before reads as another payload and `aeiou run`
+refuses it until it is generated again). No fingerprint, shape, or op count changes: the op
+stream never depended on the bytes.
+
+**What was wrong.** `--dedupe D` is documented as a ratio the generator honours, and §3.62
+said every prefix and every extension has ratio `D`. That held for files of equal sizes and
+nothing else. A storage system deduplicates fixed blocks (4 KiB here, `scratchpad/rv3c/dedupe.py`
+of the review), and two things kept the shared bytes from lining up:
+- *Containers.* A file's payload was its unit's stream laid end to end in the samples, the
+  framing between them, so after the first sample the shared bytes sat at offsets that
+  depended on the file's own sample sizes: TFRecord and Parquet at `--dedupe 2` measured
+  1.068, while the manifest said 2. (HDF5, whose rows are contiguous after a header of one
+  size, measured 2.0.)
+- *Sizes that vary.* The `D` files of a unit (`id div D`) share its prefix, so its unique
+  bytes are the largest file's: `file_per_sample` (lognormal, σ 0.45) measured 1.58 at
+  `--dedupe 2`, and `lmcache_shared_fs` 2.33 at `--dedupe 3`.
+
+**What changed.**
+1. *The payload at its own offsets.* The byte at file offset `x` of a file of unit `u` is the
+   byte at `x` of `u`'s stream (block `x ÷ 1 MiB`), and a container's framing is written
+   over it instead of pushing it along. The files of a unit then share every 4 KiB block but
+   those holding framing at differing offsets, and a block of a sample is the same in every
+   file whose sample covers it. A chunked file was already so (its chunks at their offsets in
+   the logical file); a whole file is unchanged.
+2. *Sets of near sizes.* A file of one sample (`whole`, `chunked`, or a container of one) is
+   in the set of `D` files of nearest sizes among its group of `G = 8·D` consecutive ids
+   (`id div G`): the group ordered by (size draw, id), cut into sets of `D`, `u = group·8 +
+   rank div D`. The draws are the ids' own, past the count too, so a file's set, and its
+   bytes, do not depend on the count, and a grow, a shrink, a resume, and a run over a prefix
+   are the same arithmetic as before (`builder/tests/test_formats.py` grows and shrinks a
+   corpus of one-sample TFRecord files and compares it with a fresh one byte for byte). With
+   sizes all equal, or `D = 1`, the rank is the id's place and `u = id div D`, so such files'
+   bytes are `/3`'s. Files of several samples keep `u = id div D`: their sizes are sums of many
+   draws and close, and ranking them would cost the framing of `G` files per group.
+
+**Measured** at 4 KiB blocks (the review's five cases; `--dedupe 2` but the last):
+
+| corpus | `/3` | `/4` |
+|---|---|---|
+| `tfrecord_stream`, 2,048 samples of 256 per file | 1.068 | 1.864 |
+| `parquet_stream`, the same | 1.068 | 1.865 |
+| `hdf5_map`, 2,048 rows of 256 per file | 2.0 | 2.0 |
+| `file_per_sample`, 4,000 images | 1.581 | 1.851 |
+| `lmcache_shared_fs` `sysp`, 60 prompts, 1 MiB chunks, `--dedupe 3` | 2.328 | 2.683 |
+
+The compression ratio is unchanged (`--compress 2`: zlib over 64 KiB pieces 1.957 and 1.971
+before, 1.957 and 1.974 after), and so is datagen's rate (1 GiB corpora to tmpfs, four
+writers, best of three: TFRecord 6,140 and 6,089 MB/s, images 7,512 and 7,609, LMCache
+chunks 4,764 and 4,789, before and after). `Filler` steps a block's generator over the framing
+between two samples (up to 64 KiB) rather than making the block in its one-block cache, so
+each block is still made once.
+
+**What stays below `D`, and why it is not removed.** A block holding framing is unique in each
+file (a TFRecord record's 16 bytes, a tar header, a Parquet row's 4-byte length): the smaller
+the samples, the more such blocks. A set's largest file keeps its tail, by how much its sizes
+differ; a larger group makes the sets' sizes closer (simulated over lognormal σ 0.45: 1.61,
+1.81, 1.89, 1.93 for `G` = `D`, `4·D`, `8·D`, `16·D` at `D = 2`), but the last group of a
+dataset is partial, its sets missing ids past the count, and a large group then costs a small
+dataset: at 50 files and `D = 3`, `16·D` gave 2.67 where `8·D` gave 2.60 and `D` 2.11, but
+at 20 files 1.54 where `8·D` gave 2.32. `8·D` was below `id div D` only at 20 files of
+the LMCache sizes (σ 0.3: 1.66 against 1.74) of the counts tried (20 to 10,000 files). Exact `D` for files of varying sizes would need a file's place among
+all the files of its size, a table or a pass over the ids, which the corpus's rules forbid
+(no per-file structures; bytes a function of the dataset seed, the id, and the offset). The
+manifest records `D`, the setting; the ratio a store sees is the table's.
+
+**Considered and not done.** Repeating blocks within a file (`array`'s rule) for every file:
+exact for large files, but a file under `D` blocks would not dedupe at all, and a repeat
+within a compressor's window is compressed away (zstd's window is megabytes), so `--compress`
+would no longer be the ratio. A projected ratio printed by datagen: exact for files of one
+sample (the sets are known), not for containers without walking every framing, and the
+table above tells a submitter what to expect.
 
 ## 4. Plan changes
 

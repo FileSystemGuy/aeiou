@@ -180,9 +180,11 @@ class FormatClass:
 
     def write_file(self, out, first_id: int, sizes: list, payload, geo):
         """Write one container holding samples `first_id …` of the given payload sizes into
-        `out`, a writable byte stream that need not seek (a `Sink`); `payload(logical_offset,
-        n)` returns the sample bytes of the file's payload stream (`payload.pieces(offset, n)`
-        the same bytes as views of its blocks, with no copy). Returns what `check_file`
+        `out`, a writable byte stream that need not seek (a `Sink`); `payload(offset, n)` returns
+        the bytes of the file's payload unit at file offset `offset`, where a sample's bytes go
+        (`aeiou-positional/4`: the unit's bytes at their own offsets, the framing written over
+        the rest; `payload.pieces(offset, n)` the same bytes as views of its blocks, with no
+        copy). Returns what `check_file`
         needs of the writer beyond the byte count (the library's own record of the framing)."""
         raise NotImplementedError
 
@@ -248,8 +250,8 @@ class TfRecord(FormatClass):
     def write_file(self, out, first_id, sizes, payload, geo):
         off = 0
         for s in sizes:
-            data = payload(off, s)
-            off += s
+            data = payload(off + 12, s)
+            off += 16 + s
             length = struct.pack("<Q", s)
             out.write(length)
             out.write(struct.pack("<I", _masked_crc32c(length)))
@@ -314,13 +316,11 @@ class WebDataset(FormatClass):
         import io
         import tarfile
         with tarfile.open(fileobj=out, mode="w", format=tarfile.USTAR_FORMAT) as tf:
-            off = 0
             for i, s in enumerate(sizes):
                 sid = first_id + i
                 for ext, n in self.members:
-                    data = payload(off, s) if n is None else bytes(n)
-                    if n is None:
-                        off += s
+                    # the member's data follows its one 512-byte ustar header
+                    data = payload(tf.offset + 512, s) if n is None else bytes(n)
                     ti = tarfile.TarInfo(f"{sid:09}.{ext}")
                     ti.size = len(data)
                     ti.mtime = 0
@@ -453,7 +453,7 @@ class Hdf5(FormatClass):
         if len(head) != geo.framing.file_header:
             raise BuildError(f"the dataset's data starts at {len(head)}, the framing says {geo.framing.file_header}")
         out.write(head)
-        for piece in payload.pieces(0, n * row):
+        for piece in payload.pieces(len(head), n * row):
             out.write(piece)
 
 
@@ -646,17 +646,15 @@ class Parquet(FormatClass):
         return pa.Table.from_arrays(arrays, schema=schema)
 
     def _write(self, out, first_id, sizes, data, pad: int):
-        """Write the file one row group at a time, `data(offset, n)` giving each group's
-        sample bytes; returns the footer's metadata as the writer wrote it."""
+        """Write the file one row group at a time, `data(first, group)` giving the sample bytes
+        of the group of sizes `group` from the file's sample `first`, end to end; returns the
+        footer's metadata as the writer wrote it."""
         pa, pq = _lib("pyarrow"), _lib("pyarrow.parquet").parquet
         schema = self._schema()
         w = pq.ParquetWriter(pa.PythonFile(out, mode="w"), schema, **self.writer_options())
-        off = 0
         for g in range(0, len(sizes), self.rows):
             group = sizes[g:g + self.rows]
-            k = sum(group)
-            w.write_table(self._group(schema, first_id + g, group, data(off, k)), row_group_size=self.rows)
-            off += k
+            w.write_table(self._group(schema, first_id + g, group, data(g, group)), row_group_size=self.rows)
         w.add_key_value_metadata({"aeiou.pad": "p" * pad})
         w.close()
         return w.writer.metadata
@@ -668,7 +666,7 @@ class Parquet(FormatClass):
         it to the size the framing declares."""
         zeros = bytes(max(sum(sizes[g:g + self.rows]) for g in range(0, len(sizes), self.rows)))
         sink = Sink()
-        self._write(sink, first_id, sizes, lambda off, n: memoryview(zeros)[:n], 0)
+        self._write(sink, first_id, sizes, lambda g, group: memoryview(zeros)[:sum(group)], 0)
         footer0 = int.from_bytes(sink.tail[:4], "little")
         target = geo.framing.file_footer - 8 + geo.framing.file_footer_per_unit * geo.units
         pad = target - footer0
@@ -676,7 +674,17 @@ class Parquet(FormatClass):
             pad = target - footer0 - (varint_len(pad) - 1)
         if pad < 0:
             raise BuildError(f"the natural footer ({footer0} bytes) exceeds the declared {target}: raise the class's footer margins")
-        return self._write(out, first_id, sizes, payload, pad)
+        b = next(c for c, (_, t) in enumerate(self.columns) if t == "binary")
+
+        def data(g, group):
+            # each row its 4-byte length, then the sample: the unit's bytes at the sample's offset
+            at = geo.col_offset(g // self.rows, b) + geo.framing.columns[b].header
+            out = bytearray()
+            for s in group:
+                out += payload(at + 4, s)
+                at += 4 + s
+            return out
+        return self._write(out, first_id, sizes, data, pad)
 
     def check_file(self, name, written, sizes, geo, m):
         """`m`: the footer's metadata as the writer wrote it."""

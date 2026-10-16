@@ -249,7 +249,8 @@ written yet (`DESIGN_REVIEW.md` §3.28 says why).
 **`aeiou-datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--gpus G] [--dedupe D]
 [--compress C] [--threads N] [--dataset NAME]… [--config FILE]** writes every dataset that has a format class:
 names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
-bytes under `aeiou-positional/3` (numpy's `SFC64` in 4 KiB pieces, `payload_block`;
+bytes under `aeiou-positional/4` (numpy's `SFC64` in 4 KiB pieces, `payload_block`; each
+sample's bytes the unit's at the sample's file offset, the unit `dedupe_unit`;
 bit-identical to the Rust writer's, `tests/test_payload.py`), each file checked against the geometry its framing predicts (`framing.py`), then the
 manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names the writer
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the

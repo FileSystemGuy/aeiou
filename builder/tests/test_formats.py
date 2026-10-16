@@ -161,7 +161,7 @@ def test_datagen_tfrecord_round_trip(tmp_path):
     sizes = _parse_tfrecord(files[2])
     assert sizes == [sample_size({"lognormal": {"median": 20000, "sigma": 0.45}}, seed, 2 * 128 + i) for i in range(128)]
     m = json.loads((root / "train" / ".aeiou-dataset.json").read_text())
-    assert m["manifest_version"] == 3 and m["state"] == "complete" and m["format"]["class"] == "tfrecord" and m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/3"
+    assert m["manifest_version"] == 3 and m["state"] == "complete" and m["format"]["class"] == "tfrecord" and m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/4"
     assert m["dataset"]["count"] == 768 and m["dataset"]["samples_per_file"] == 128
     assert "doc" not in m["dataset"]
     assert m["provenance"]["files_written"] == 6
@@ -228,7 +228,8 @@ def test_streamed_hdf5_and_parquet_are_the_files_the_libraries_write(tmp_path):
         h.write_file(formats.Sink(out), 0, sizes, Payload(7, 0, 1), _geometry(h, "map", const(h.row_bytes), sizes))
         path = tmp_path / f"whole-{n}.h5"
         with h5py.File(path, "w") as f:
-            f.create_dataset("records", data=np.frombuffer(Payload(7, 0, 1)(0, n * h.row_bytes), dtype="u1").reshape((n, 16, 16, 3)))
+            # the rows are the unit's bytes at their own file offsets (aeiou-positional/4)
+            f.create_dataset("records", data=np.frombuffer(Payload(7, 0, 1)(h.data_offset(), n * h.row_bytes), dtype="u1").reshape((n, 16, 16, 3)))
         assert out.getvalue() == path.read_bytes(), f"{n} rows"
     p = formats.parquet(rows_per_group=8)
     sizes = [sample_size({"lognormal": {"median": 3000, "sigma": 0.45}}, 11, i) for i in range(32)]
@@ -328,6 +329,8 @@ RUST_CASES = {
     # whole row groups and no short last file (brief item 31)
     "parquet": (lambda tmp: ast_path("parquet_stream"), ["samples=768", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
     "parquet_types": (parquet_types_ast, ["samples=768", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    # a file of one sample: its payload unit is its set among 8 × D ids by size (aeiou-positional/4)
+    "tfrecord_one": (lambda tmp: ast_path("tfrecord_stream"), ["samples=40", "samples_per_file=1", "sample_median=20000"], ["batch=4", "steps=2"]),
 }
 
 
@@ -355,7 +358,7 @@ def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     assert f"({name.split('_')[0]}, aeiou datagen " in rs.stdout
     py = _tool("datagen", [ast_file, "--root", tmp_path / "py", "--writers", "3", *flags])
     assert py.returncode == 0, py.stdout + py.stderr
-    _same_files(tmp_path / "rs", tmp_path / "py", 6 if name != "hdf5" else 5)
+    _same_files(tmp_path / "rs", tmp_path / "py", {"hdf5": 5, "tfrecord_one": 40}.get(name, 6))
     m_rs, m_py = (json.loads((tmp_path / w / "train" / ".aeiou-dataset.json").read_text()) for w in ("rs", "py"))
     for k in ("manifest_version", "dataset", "payload"):
         assert m_rs[k] == m_py[k], k
@@ -430,7 +433,8 @@ def test_aeiou_datagen_resumes_a_container_corpus(name, tmp_path):
 
 
 # a grow from a short last file and a shrink to one (Parquet: whole files, brief item 31)
-RESIZES = {"tfrecord": (900, 300), "webdataset": (900, 300), "hdf5": (100, 40), "parquet": (1024, 512), "parquet_types": (1024, 512)}
+RESIZES = {"tfrecord": (900, 300), "webdataset": (900, 300), "hdf5": (100, 40), "parquet": (1024, 512), "parquet_types": (1024, 512),
+           "tfrecord_one": (55, 21)}
 
 
 @needs_runner

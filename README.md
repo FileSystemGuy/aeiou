@@ -86,7 +86,9 @@ An abstract goes through five stages, each a tool of the suite.
 - **The fingerprint is order-independent.** It sums per-operation hashes, so timing can
   never change it, and two runs that agree executed the same positioned operations.
 - **Data is reproducible, not self-describing.** No block headers (they force a dedupe
-  ratio of one); dedupe and compression are ratios the generator honours; the runner checks
+  ratio of one); dedupe and compression are ratios the generator honours (dedupe in whole
+  4 KiB blocks, near `D` where sizes vary or framing sits between samples:
+  `runner/REFERENCE.md` §5); the runner checks
   counts and errnos only, and content verification is an offline tool, never in a scored run.
 - **Datasets are sample spaces; the runner is format-ignorant.** A container format (Parquet,
   HDF5, TFRecord, tar) is a generic framing formula in the AST plus a reader protocol the

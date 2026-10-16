@@ -107,8 +107,9 @@ every missing argument listed at once.
   *Layered.*
 - **--dedupe** *DEDUPE*
 
-  Dedupe ratio: every *DEDUPE* files share content. Default 1. Recorded in the manifest's
-  payload block.
+  Dedupe ratio: files share their content *DEDUPE* by *DEDUPE*, each byte at its own file
+  offset (`aeiou-positional/4`, as `aeiou datagen`: aeiou(1)). Default 1. Recorded in the
+  manifest's payload block.
 - **--compress** *COMPRESS*
 
   Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest

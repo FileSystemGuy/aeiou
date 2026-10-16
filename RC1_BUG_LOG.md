@@ -2939,3 +2939,42 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   the ETA still runs on ids.
 - **Evidence:** `layout::a_chunked_datasets_progress_counts_the_files_its_summary_does` fails on HEAD
   (`0/24 files` against 156) and passes; same suite runs as bug 142.
+
+## 146. `--dedupe D` did not give a dedupe ratio near D: containers got about 1.07 and variable-size files about 1.58 (CHANGES EVERY DATASET ID: payload `aeiou-positional/4`)
+
+- **Where:** `runner/aeiou/src/payload.rs` (wrapper `aeiou-positional/4`, `file_block_seed(seed, unit,
+  block)`, `DEDUPE_SETS`, `Units`, `Filler` stepping over framing gaps), `runner/aeiou/src/formats.rs`
+  (`Stream::read`/`skim` at the file's own offset; `pay_at` gone), `runner/aeiou/src/datagen.rs`
+  (`write_share`: a `Units` per writer thread, seed by unit), `runner/aeiou/src/eval.rs`
+  (`DsMeta::size_draw`), `main.rs` (`--dedupe` help); `builder/aeiou/formats.py` (writers at file
+  offsets), `builder/aeiou/datagen.py` (the Python payload mirror only: wrapper, `DEDUPE_SETS`,
+  `dedupe_unit`); `DESIGN_REVIEW.md` new §3.77 (dated 2026-10-15) and §3.62's claim struck;
+  `runner/REFERENCE.md` §5; `builder/REFERENCE.md`; `README.md`; `man/aeiou.1.md`,
+  `man/aeiou-datagen.1.md`; tests.
+- **Found by:** RC1 third-round datagen review (RV3c), measured over 4 KiB blocks (SHA-1) with
+  `--dedupe 2`: tfrecord_stream 1.068, parquet_stream 1.068, hdf5_map 2.0, file_per_sample
+  (lognormal) 1.58, lmcache `--dedupe 3` 2.13–2.33, while the manifest recorded D, against
+  `--help`, README ("ratios the generator honours") and §3.62. The payload was seeded along each
+  file's logical sample stream: in a container each file's framing falls at its own points, so
+  after the first sample the shared bytes left the 4 KiB grid; files of different sizes in a set
+  shared only a prefix.
+- **Fix (recorded decision, §3.77):** the byte at file offset x of a file in unit u is byte x of u's
+  stream, and container framing is written over it, so only blocks holding framing at differing
+  offsets differ; one-sample files are put in sets of near sizes: ids in groups of 8·D, each group
+  ordered by (size draw, id) and cut into sets of D (sizes drawn from the ids, so a file's set never
+  depends on the count: grow, shrink, resume, prefix runs hold; equal sizes or D = 1 reduce to
+  `id div D`, keeping their bytes). Exact D for varying sizes would need a per-file table, which
+  the invariants forbid; what stays unique (framing blocks, a set's largest file's tail) is
+  documented. No fingerprint, AST hash, shape, or op count changes; dataset ids change, and a corpus
+  written before is refused by `aeiou run` until generated again.
+- **Evidence:** after: tfrecord 1.864, parquet 1.865, hdf5_map 2.0, file_per_sample 1.851, lmcache
+  `--dedupe 3` 2.683; compression unchanged (1.9571/1.9571, 1.971/1.9736); throughput within noise
+  (TFRecord 6140→6089 MB/s, file_per_sample 7512→7609, LMCache 4764→4789); Rust and Python writers
+  byte-identical (tfrecord, webdataset, hdf5, parquet, parquet_types, and a new one-sample
+  `tfrecord_one`, with grow/shrink/settle). `run::dedupe_gives_near_the_ratio_in_4_kib_blocks`,
+  `dedupe_sets_files_of_near_sizes_and_does_not_depend_on_the_count`, the four `formats::` byte
+  tests and 7 pytest identity tests fail with HEAD's source restored and pass. Merged on HEAD
+  918dcfe: `--tests --lib --bins` with MinIO pass (all 167, lib 78), `cargo check --tests` without
+  `object` clean, builder suite with MinIO and `AEIOU_REQUIRE=runner,formats,strace,header,py-formats`
+  419 passed, `aeiou-catalog check` 13 mechanisms, 16 cases ok, `aeiou-build --hermetic --twice
+  --check` rc 0 (no AST hash changed). Fixed in an isolated worktree and applied.

@@ -10,12 +10,17 @@
 //! is). Any prefix of a few KiB, and any compression unit of 4 KiB or more, has ratio `C`,
 //! and no piece is all zeros (`/2` used `dgen-data`'s layout, the last `(C−1)/C` of the block
 //! zero-filled, so a file below `1/C` MiB did not compress at all). Dedupe is by seed reuse
-//! across units (`/2`, 2026-10-04; `/1` grouped by `id mod ceil(count / D)`, which made the
-//! groups depend on the count, so that a prefix of the ids had a lower ratio and a dataset
-//! could not grow; `DESIGN_REVIEW.md` §3.62):
-//! - a `files` dataset: `u = id div D`, `b` = logical offset in the file ÷ 1 MiB (a chunked
-//!   file is the logical file cut at `chunk`), so every run of `D` consecutive files carries
-//!   the same bytes block for block, whatever the count;
+//! across units, and a unit's content is laid at the file's own offsets (`aeiou-positional/4`,
+//! 2026-10-15, `DESIGN_REVIEW.md` §3.77), so files sharing a unit share whole 4 KiB blocks:
+//! - a `files` dataset: `b` = the file offset ÷ 1 MiB (a chunked file's offset in the logical
+//!   file, cut at `chunk`); a container's framing is written over the unit's bytes, which are
+//!   not shifted by it, so only the blocks holding framing at differing offsets differ. A file
+//!   of one sample: `u` its set of `D` files of near sizes (`Units`); a file of
+//!   several, `u = id div D`. Either is a function of the id alone, whatever the count
+//!   (`/1` grouped by `id mod ceil(count / D)`, so a prefix of the ids had a lower ratio and a
+//!   dataset could not grow, §3.62; `/2` and `/3` grouped `id div D` and laid a container's
+//!   samples end to end, so framing shifted the shared bytes off the 4 KiB grid, and files of
+//!   differing sizes left the larger's tail unique);
 //! - an `array` dataset (one file): `u = 0`, `b = (offset ÷ 1 MiB) div D`, so every run of
 //!   `D` consecutive blocks is one block repeated;
 //! - a namespace object written by `aeiou run`: `seed = labeled_key(namespace seed, "object",
@@ -39,7 +44,7 @@ use crate::pattern::Pattern;
 use crate::rng::labeled_key;
 
 pub const BLOCK: u64 = 1 << 20;
-pub const WRAPPER: &str = "aeiou-positional/3";
+pub const WRAPPER: &str = "aeiou-positional/4";
 pub const GENERATOR: &str = "sfc64";
 pub const GENERATOR_VERSION: &str = "1";
 /// The piece a compression ratio applies to, and its fill.
@@ -103,10 +108,56 @@ pub fn block_seed(seed: u64, unit: u64, block: u64) -> u64 {
     labeled_key(seed, "payload", &[unit, block])
 }
 
-/// The seed of logical block `block` of file `id` of a `files` dataset under dedupe ratio
-/// `dedupe`: `D` consecutive files share a unit (since `aeiou-positional/2`).
-pub fn file_block_seed(seed: u64, id: u64, block: u64, dedupe: u64) -> u64 {
-    block_seed(seed, id / dedupe.max(1), block)
+/// The seed of block `block` (file offset ÷ 1 MiB) of a file of unit `unit` (`Units`).
+pub fn file_block_seed(seed: u64, unit: u64, block: u64) -> u64 {
+    block_seed(seed, unit, block)
+}
+
+/// The dedupe sets a group of one-sample files is cut into: a group is `DEDUPE_SETS × D`
+/// consecutive ids (`aeiou-positional/4`, `DESIGN_REVIEW.md` §3.77).
+pub const DEDUPE_SETS: u64 = 8;
+
+/// The payload units of the files of a `files` dataset under dedupe ratio `D`: a file of
+/// several samples has `u = id div D`. Files of one sample have sizes that vary by file, and
+/// the files of a unit share its prefix, so its unique bytes are the largest file's: the ids
+/// are taken in groups of `G = DEDUPE_SETS × D` (`id div G`, whatever the count), each group's
+/// ids ordered by (size, id) and cut into sets of `D`, so a set's files are of near sizes and
+/// whole 4 KiB blocks repeat near `D` times. The sizes are the size draws of the ids, beyond
+/// the count too, so no file's bytes depend on the count. At `D = 1`, or sizes all equal, `u`
+/// is `id div D`. One group is kept, since a writer takes ids in runs.
+pub struct Units {
+    dedupe: u64,
+    one_sample: bool,
+    group: Option<u64>,
+    units: Vec<u64>,
+}
+
+impl Units {
+    pub fn new(dedupe: u64, one_sample: bool) -> Self {
+        Units { dedupe: dedupe.max(1), one_sample, group: None, units: Vec::new() }
+    }
+
+    /// The unit of file `id`; `size_of(id)` is the size draw of a one-sample file's id.
+    pub fn unit(&mut self, id: u64, size_of: impl Fn(u64) -> Result<u64>) -> Result<u64> {
+        let d = self.dedupe;
+        if d == 1 || !self.one_sample {
+            return Ok(id / d);
+        }
+        let g = DEDUPE_SETS * d;
+        let group = id / g;
+        if self.group != Some(group) {
+            let first = group * g;
+            let mut order: Vec<(u64, u64)> = (first..first + g).map(|i| Ok((size_of(i)?, i))).collect::<Result<_>>()?;
+            order.sort_unstable();
+            self.units.clear();
+            self.units.resize(g as usize, 0);
+            for (rank, &(_, i)) in order.iter().enumerate() {
+                self.units[(i - first) as usize] = group * DEDUPE_SETS + rank as u64 / d;
+            }
+            self.group = Some(group);
+        }
+        Ok(self.units[(id % g) as usize])
+    }
 }
 
 /// The seed of block `block` of an `array` dataset's one file under dedupe ratio `dedupe`:
@@ -256,11 +307,16 @@ pub struct Filler {
     cache: Vec<u8>,
     scratch: Vec<u8>,
     cursor: Option<Cursor>,
+    skip: [u8; 512],
 }
+
+/// The most a block being made in order is stepped over to a range further on (a container's
+/// framing between two samples) rather than the whole block made into the cache.
+const SKIP: usize = 64 << 10;
 
 impl Filler {
     pub fn new(compress: u64) -> Self {
-        Filler { compress: compress.max(1), cache_seed: None, cache: Vec::new(), scratch: Vec::new(), cursor: None }
+        Filler { compress: compress.max(1), cache_seed: None, cache: Vec::new(), scratch: Vec::new(), cursor: None, skip: [0; 512] }
     }
 
     /// The first `out.len()` bytes (≤ 1 MiB) of the block seeded `seed`.
@@ -301,15 +357,21 @@ impl Filler {
             let in_block = (pos % BLOCK) as usize;
             let n = ((BLOCK as usize) - in_block).min(buf.len() - done);
             let seed = seed_of(block);
-            let next = matches!(&self.cursor, Some(c) if c.seed == seed && c.at == in_block);
+            // a container's next sample, a little past the last: the framing between skipped
+            let next = matches!(&self.cursor, Some(c) if c.seed == seed && c.at <= in_block && in_block - c.at <= SKIP);
             if in_block == 0 && n as u64 == BLOCK {
                 self.fill_block(seed, &mut buf[done..done + n]);
             } else if next || in_block == 0 {
+                let r = random_per_piece(self.compress);
                 if !next {
                     self.cursor = Some(Cursor::new(seed));
                 }
-                let r = random_per_piece(self.compress);
-                self.cursor.as_mut().unwrap().fill(r, &mut buf[done..done + n]);
+                let c = self.cursor.as_mut().unwrap();
+                while c.at < in_block {
+                    let k = (in_block - c.at).min(self.skip.len());
+                    c.fill(r, &mut self.skip[..k]);
+                }
+                c.fill(r, &mut buf[done..done + n]);
             } else {
                 if self.cache_seed != Some(seed) || self.cache.len() < in_block + n {
                     self.cache.resize(BLOCK as usize, 0);
@@ -682,6 +744,50 @@ mod tests {
         let mut mid = vec![0u8; 10000];
         f.fill_range(|_| 42, 5000, &mut mid);
         assert_eq!(&full[5000..15000], &mid[..]);
+    }
+
+    #[test]
+    fn ranges_with_gaps_between_them_are_the_blocks_bytes() {
+        // a container's samples: ranges in order with framing skipped between, near and far
+        let mut whole = vec![0u8; 2 * BLOCK as usize];
+        let mut f = Filler::new(2);
+        f.fill_block(5, &mut whole[..BLOCK as usize]);
+        f.fill_block(6, &mut whole[BLOCK as usize..]);
+        let seed_of = |b: u64| 5 + b;
+        let mut f = Filler::new(2);
+        let mut at = 12usize;
+        for (len, gap) in [(5000usize, 16usize), (70_000, 4), (3, 300_000), (900_000, 1), (100, 0), (8192, 70_000)] {
+            if at + len > whole.len() {
+                break;
+            }
+            let mut got = vec![0u8; len];
+            f.fill_range(seed_of, at as u64, &mut got);
+            assert_eq!(got, &whole[at..at + len], "at {at}");
+            at += len + gap;
+        }
+    }
+
+    #[test]
+    fn units_are_sets_of_near_sizes_within_a_group() {
+        // equal sizes, or D = 1, or files of several samples: `id div D`
+        let mut u = Units::new(3, true);
+        assert!((0..100).all(|i| u.unit(i, |_| Ok(7)).unwrap() == i / 3));
+        let mut u = Units::new(1, true);
+        assert!((0..100).all(|i| u.unit(i, |i| Ok(1000 - i)).unwrap() == i));
+        let mut u = Units::new(2, false);
+        assert!((0..100).all(|i| u.unit(i, |_| bail!("not drawn")).unwrap() == i / 2));
+        // decreasing sizes: each group of 16 ids reversed, sets of the two nearest
+        let mut u = Units::new(2, true);
+        let size = |i: u64| Ok(10_000 - i);
+        for i in 0..64 {
+            let (g, k) = (i / 16, i % 16);
+            assert_eq!(u.unit(i, size).unwrap(), g * DEDUPE_SETS + (15 - k) / 2, "id {i}");
+        }
+        // asked out of order, the same units (the group is drawn again)
+        assert_eq!(u.unit(3, size).unwrap(), (15 - 3) / 2);
+        // a draw that fails is the datagen's error
+        let mut u = Units::new(2, true);
+        assert!(u.unit(5, |i| if i == 9 { bail!("bad draw") } else { Ok(i) }).is_err());
     }
 
     #[test]

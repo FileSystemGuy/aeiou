@@ -5,8 +5,9 @@
 //!
 //! A file is a byte stream (`Stream`) pulled in pieces of any size, so it goes to a file in
 //! `O_DIRECT` blocks or into an upload in parts with nothing held but a piece: framing bytes
-//! are made as they are reached, and the payload of each sample is the file's payload stream
-//! (`payload.rs`, the samples' bytes back to back from logical offset 0) filled in place.
+//! are made as they are reached, and the payload of each sample is the bytes of the file's
+//! payload unit at the sample's own file offset (`payload.rs`, `aeiou-positional/4`: the
+//! framing written over the unit's bytes, never shifting them) filled in place.
 //!
 //! - **TFRecord**: records back to back, each `u64 length ‖ masked crc32c(length) ‖ data ‖
 //!   masked crc32c(data)`, the CRC taken as the data streams past.
@@ -613,9 +614,9 @@ pub struct Stream<'s, 'a> {
     /// Framing bytes waiting to be sent, from `small_at`.
     small: Vec<u8>,
     small_at: usize,
-    /// Payload bytes of the current sample still to send, at this logical offset.
+    /// Payload bytes of the current sample still to send: the bytes of the file's unit at
+    /// their own file offsets (`aeiou-positional/4`), framing written over the rest.
     pay_left: u64,
-    pay_at: u64,
     /// After the payload: TFRecord's data CRC, so far; WebDataset's padding.
     crc: u32,
     after: After,
@@ -641,7 +642,7 @@ impl<'s, 'a> Stream<'s, 'a> {
             DsMeta::Array { .. } => bail!("`{}` is an array dataset: no container", meta.name()),
         };
         let n = meta.samples_in_file(file)?;
-        Ok(Stream { writer, meta, seed_of, filler, first: file * spf, n, sample: 0, member: 0, small: Vec::with_capacity(TAR_RECORD as usize), small_at: 0, pay_left: 0, pay_at: 0, crc: 0, after: After::Nothing, pos: 0, ended: false, done: false, pq: PqAt::default() })
+        Ok(Stream { writer, meta, seed_of, filler, first: file * spf, n, sample: 0, member: 0, small: Vec::with_capacity(TAR_RECORD as usize), small_at: 0, pay_left: 0, crc: 0, after: After::Nothing, pos: 0, ended: false, done: false, pq: PqAt::default() })
     }
 
     /// Bytes sent so far.
@@ -835,7 +836,6 @@ impl<'s, 'a> Stream<'s, 'a> {
                 self.small_at = self.small.len();
             } else if self.pay_left > 0 {
                 self.pos += self.pay_left;
-                self.pay_at += self.pay_left;
                 self.pay_left = 0;
             } else {
                 self.advance()?;
@@ -857,11 +857,10 @@ impl<'s, 'a> Stream<'s, 'a> {
             } else if self.pay_left > 0 {
                 let k = (self.pay_left.min((out.len() - at) as u64)) as usize;
                 let piece = &mut out[at..at + k];
-                self.filler.fill_range(self.seed_of, self.pay_at, piece);
+                self.filler.fill_range(self.seed_of, self.pos, piece);
                 if let After::Crc = self.after {
                     self.crc = crc32c::crc32c_append(self.crc, piece);
                 }
-                self.pay_at += k as u64;
                 self.pay_left -= k as u64;
                 at += k;
                 self.pos += k as u64;
@@ -977,7 +976,7 @@ mod tests {
         out
     }
 
-    /// The payload stream of a file, logical bytes `[at, at + len)`.
+    /// The bytes of the files' unit at file offsets `[at, at + len)`.
     fn payload(at: u64, len: u64) -> Vec<u8> {
         let mut b = vec![0u8; len as usize];
         Filler::new(1).fill_range(seed_of, at, &mut b);
@@ -1154,17 +1153,17 @@ mod tests {
                 assert_eq!(b.len() as i64, meta.file_size(file).unwrap());
                 // pulled in odd pieces, the same bytes
                 assert_eq!(file_bytes(&w, meta, file, 7), b);
-                let (mut at, mut logical, mut n) = (0usize, 0u64, 0);
+                let (mut at, mut n) = (0usize, 0);
                 while at < b.len() {
                     let len = u64::from_le_bytes(b[at..at + 8].try_into().unwrap());
                     assert_eq!(len, 1000);
                     assert_eq!(&b[at + 8..at + 12], &masked_crc32c(crc32c::crc32c(&b[at..at + 8])).to_le_bytes());
                     let data = &b[at + 12..at + 12 + len as usize];
-                    assert_eq!(data, payload(logical, len), "file {file} record {n}");
+                    // the unit's bytes at their own file offsets, the framing over the rest
+                    assert_eq!(data, payload(at as u64 + 12, len), "file {file} record {n}");
                     let crc = &b[at + 12 + len as usize..at + 16 + len as usize];
                     assert_eq!(crc, masked_crc32c(crc32c::crc32c(data)).to_le_bytes());
                     at += 16 + len as usize;
-                    logical += len;
                     n += 1;
                 }
                 assert_eq!(n, meta.samples_in_file(file).unwrap());
@@ -1203,7 +1202,7 @@ mod tests {
                 assert_eq!(b.len() as i64, meta.file_size(file).unwrap());
                 assert_eq!(b.len() % TAR_RECORD as usize, 0);
                 assert_eq!(file_bytes(&w, meta, file, 333), b);
-                let (mut at, mut logical) = (0usize, 0u64);
+                let mut at = 0usize;
                 let n = meta.samples_in_file(file).unwrap();
                 for k in 0..n {
                     for (ext, size) in [("jpg", 1000usize), ("cls", 4)] {
@@ -1217,8 +1216,7 @@ mod tests {
                         assert_eq!(&h[148..156], format!("{sum:06o}\0 ").as_bytes());
                         let data = &b[at + 512..at + 512 + size];
                         if ext == "jpg" {
-                            assert_eq!(data, payload(logical, 1000), "file {file} sample {k}");
-                            logical += 1000;
+                            assert_eq!(data, payload(at as u64 + 512, 1000), "file {file} sample {k}");
                         } else {
                             assert!(data.iter().all(|&x| x == 0));
                         }
@@ -1267,7 +1265,7 @@ mod tests {
                 assert_eq!(b.len() as i64, meta.file_size(file).unwrap());
                 assert_eq!(b.len() as u64, 16 + 300 * rows);
                 assert!(b[..16].iter().all(|&x| x == mark));
-                assert_eq!(&b[16..], payload(0, 300 * rows));
+                assert_eq!(&b[16..], payload(16, 300 * rows));
             }
         });
     }
@@ -1299,7 +1297,6 @@ mod tests {
                 // the first row group: each chunk its page header and rows, in the layout's places
                 let rows = meta.samples_in_file(file).unwrap().min(4);
                 let mut at = 4usize;
-                let mut logical = 0u64;
                 for (ci, (_, ty)) in columns.iter().enumerate() {
                     let data = if *ty == PqType::Binary { rows as u64 * 104 } else { ty.width() * rows as u64 };
                     let head = parquet_page_header(data, rows).unwrap();
@@ -1308,8 +1305,7 @@ mod tests {
                     for r in 0..rows {
                         if *ty == PqType::Binary {
                             assert_eq!(&b[at..at + 4], 100u32.to_le_bytes());
-                            assert_eq!(&b[at + 4..at + 104], payload(logical, 100));
-                            logical += 100;
+                            assert_eq!(&b[at + 4..at + 104], payload(at as u64 + 4, 100));
                             at += 104;
                         } else {
                             let mut v = Vec::new();

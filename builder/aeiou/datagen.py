@@ -1,5 +1,5 @@
 """`aeiou-datagen`: write the container datasets an abstract declares, through their format
-classes, with the runner's payload (`runner/REFERENCE.md` §5: `aeiou-positional/3`, an SFC64
+classes, with the runner's payload (`runner/REFERENCE.md` §5: `aeiou-positional/4`, an SFC64
 stream from numpy laid out in 4 KiB pieces), and the manifest `aeiou run` checks (`schema/README.md` §6).
 
     aeiou-datagen AST --root DIR [--params-file FILE]… [--param k=v]… [--gpus G]
@@ -61,7 +61,8 @@ MANIFEST_NAME = ".aeiou-dataset.json"
 PART = 8 << 20   # the runner's `object::DEFAULT_PART`: what `aeiou datagen` sends a part at
 MANIFEST_VERSION = 3   # `state` since 2026-10-12 (DESIGN_REVIEW.md §3.70), contract 0.8's dataset since 2026-10-13 (§3.72); this writer writes it once, `complete`
 BLOCK = 1 << 20
-GENERATOR, GENERATOR_VERSION, WRAPPER = "sfc64", "1", "aeiou-positional/3"
+GENERATOR, GENERATOR_VERSION, WRAPPER = "sfc64", "1", "aeiou-positional/4"
+DEDUPE_SETS = 8   # payload.rs `DEDUPE_SETS`: a group of one-sample files is 8 × D ids
 PIECE, FILL = 4096, 0x5A
 _M64 = (1 << 64) - 1
 
@@ -156,6 +157,20 @@ def payload_block(seed: int, compress: int):
     out = np.full((pieces, PIECE), FILL, dtype=np.uint8)
     out[:, :r] = raw[:pieces * r].reshape(pieces, r)
     return out.reshape(-1)
+
+
+def dedupe_unit(size: dict, seed: int, file: int, dedupe: int, one_sample: bool) -> int:
+    """The payload unit of file `file` (`aeiou-positional/4`, payload.rs `Units`): `file div D`,
+    or for files of one sample the set of `D` files of near sizes in the group of
+    `DEDUPE_SETS × D` ids ordered by (size draw, id), whatever the count."""
+    d = max(1, dedupe)
+    if d == 1 or not one_sample:
+        return file // d
+    g = DEDUPE_SETS * d
+    first = file // g * g
+    order = sorted((max(0, sample_size(size, seed, i)), i) for i in range(first, first + g))
+    rank = next(r for r, (_, i) in enumerate(order) if i == file)
+    return first // g * DEDUPE_SETS + rank // d
 
 
 class Payload:
@@ -355,13 +370,15 @@ class Job:
         n = min(self.spf, self.count - first)
         return [sample_size(self.size, self.seed, first + i) for i in range(n)]
 
+    def unit(self, file: int) -> int:
+        return dedupe_unit(self.size, self.seed, file, self.dedupe, self.spf == 1)
+
     def write(self, file: int) -> tuple:
         sizes = self.sizes(file)
         geo = FileGeometry(self.framing, sizes)
         rel = self.pattern.format(id=file)
         place = self.at(rel)
-        # since `aeiou-positional/2`: `dedupe` consecutive files share a unit, whatever the count
-        payload = Payload(self.seed, file // self.dedupe, self.compress)
+        payload = Payload(self.seed, self.unit(file), self.compress)
         with opened(place) as out:
             sink = Sink(out)
             try:
@@ -495,7 +512,7 @@ def parser() -> usage.Parser:
     ap.add_argument("--root", type=pathlib.Path, metavar="DIR", help="Required: directory the abstract's paths are relative to. From the command line, else $AEIOU_ROOT, else `root` in the [datagen] table of the config file")
     ap.add_argument("--endpoint", action="append", metavar="NAME=DIR", help="Put the root directory of the abstract's dataset NAME at DIR instead of under --root, or, for a name declared `protocol: s3`, at s3://BUCKET[/PREFIX] in the store the AWS_* environment names (repeatable; names sharing a root share its place). From the command line, else $AEIOU_ENDPOINT (whitespace-separated), else `endpoint` in the [datagen] table of the config file (an array)")
     ap.add_argument("--writers", type=int, metavar="N", help="Files written at once, a process each (Python holds its lock between the library calls) (default: all cores)")
-    ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: every `dedupe` consecutive files share content [default: 1]")
+    ap.add_argument("--dedupe", type=int, default=1, help="Dedupe ratio: files share their content `dedupe` by `dedupe`, at the same offsets (files of one sample in sets of near sizes), so 4 KiB blocks repeat near `dedupe` times [default: 1]")
     ap.add_argument("--compress", type=int, default=1, help="Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest 0x5A [default: 1]")
     ap.add_argument("--dataset", action="append", default=[], metavar="NAME", help="Only these datasets (default: all)")
     ap.add_argument("--rank", type=int, metavar="R", help="This host's index among --ranks hosts (default: 0)")

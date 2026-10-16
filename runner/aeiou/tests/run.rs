@@ -711,34 +711,97 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     assert!(m.opts.as_deref().map(|o| o.starts_with("rw") || o.starts_with("ro")).unwrap_or(false), "{m:?}");
 }
 
-#[test]
-fn dedupe_groups_consecutive_files_and_does_not_depend_on_the_count() {
-    // aeiou-positional/2 and /3: `dedupe` consecutive files share a unit, so a prefix of the ids has
-    // the full ratio and a dataset can grow; file `id`'s bytes are the same under any count
-    let six = tmpdir("dd6");
-    let four = tmpdir("dd4");
-    let (l6, c6, m6) = leaked_model("file_per_sample", config(1, 1, &[("samples", "6")]));
-    let (l4, c4, m4) = leaked_model("file_per_sample", config(1, 1, &[("samples", "4")]));
-    for (l, c, m, root) in [(l6, c6, m6, &six), (l4, c4, m4, &four)] {
-        let params = Params::new(&l.ast, c).unwrap();
-        let opts = DatagenOpts { root: root.to_path_buf(), endpoints: Default::default(), writers: 2, dedupe: 2, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
-        datagen(l, c, &params, m, &opts, None, &mut Vec::new()).unwrap();
+/// The 4 KiB-block dedupe ratio of the data files under `root`: their bytes over the unique
+/// blocks' (what a fixed-block deduplicating store keeps).
+fn block_dedupe(root: &std::path::Path) -> f64 {
+    use sha2::Digest;
+    fn walk(d: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if !p.file_name().unwrap().to_string_lossy().starts_with(".aeiou") {
+                out.push(p);
+            }
+        }
     }
-    let file = |root: &PathBuf, id: i64| std::fs::read(root.join(m6.datasets[0].file_path(id, None).unwrap().as_ref())).unwrap();
-    let prefix_equal = |a: &[u8], b: &[u8]| {
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    let (mut total, mut unique) = (0usize, 0usize);
+    let mut seen = std::collections::HashSet::new();
+    for f in files {
+        for block in std::fs::read(&f).unwrap().chunks(4096) {
+            total += block.len();
+            if seen.insert(sha2::Sha256::digest(block)) {
+                unique += block.len();
+            }
+        }
+    }
+    total as f64 / unique as f64
+}
+
+fn datagen_into(name: &str, params: &[(&str, &str)], dedupe: u64, root: &std::path::Path) -> &'static Model<'static> {
+    let (l, c, m) = leaked_model(name, config(1, 1, params));
+    let p = Params::new(&l.ast, c).unwrap();
+    let opts = DatagenOpts { root: root.to_path_buf(), endpoints: Default::default(), writers: 2, dedupe, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
+    datagen(l, c, &p, m, &opts, None, &mut Vec::new()).unwrap();
+    m
+}
+
+#[test]
+fn dedupe_sets_files_of_near_sizes_and_does_not_depend_on_the_count() {
+    // aeiou-positional/4 (DESIGN_REVIEW.md §3.77): a file of one sample shares its unit with the
+    // files of its set, `D` ids of near sizes among 8 × D (ordered by the size draws, those past
+    // the count too), so file `id`'s bytes are the same under any count and a set's files are
+    // prefixes of its largest
+    let forty = tmpdir("dd40");
+    let seventeen = tmpdir("dd17");
+    let m40 = datagen_into("file_per_sample", &[("samples", "40")], 2, &forty);
+    datagen_into("file_per_sample", &[("samples", "17")], 2, &seventeen);
+    let file = |root: &PathBuf, id: i64| std::fs::read(root.join(m40.datasets[0].file_path(id, None).unwrap().as_ref())).unwrap();
+    let shares = |a: &[u8], b: &[u8]| {
         let n = a.len().min(b.len());
         a[..n] == b[..n]
     };
-    assert!(prefix_equal(&file(&six, 0), &file(&six, 1)), "files 0 and 1 share a unit");
-    assert!(prefix_equal(&file(&six, 2), &file(&six, 3)));
-    assert!(prefix_equal(&file(&six, 4), &file(&six, 5)));
-    assert!(!prefix_equal(&file(&six, 1), &file(&six, 2)), "files 1 and 2 do not");
-    for id in 0..4 {
-        assert_eq!(file(&six, id), file(&four, id), "file {id} under count 6 and count 4");
+    for id in 0..17 {
+        assert_eq!(file(&forty, id), file(&seventeen, id), "file {id} under count 40 and count 17");
     }
-    let m = aeiou::payload::Manifest::read(&six.join("train")).unwrap();
-    assert_eq!(m.payload.wrapper, "aeiou-positional/3");
+    // every file of the first 32 ids (whole groups) shares a prefix with exactly one other
+    let mut not_consecutive = 0;
+    for id in 0..32 {
+        let a = file(&forty, id);
+        let partners: Vec<i64> = (0..40).filter(|&j| j != id && shares(&a, &file(&forty, j))).collect();
+        assert_eq!(partners.len(), 1, "file {id}: {partners:?}");
+        assert_eq!(partners[0] / 16, id / 16, "file {id}: a set lies in its group of 16 ids");
+        not_consecutive += (partners[0] / 2 != id / 2) as usize;
+    }
+    assert!(not_consecutive > 0, "the sets are by size, not `id div D`");
+    let m = aeiou::payload::Manifest::read(&forty.join("train")).unwrap();
+    assert_eq!(m.payload.wrapper, "aeiou-positional/4");
     assert_eq!(m.payload.dedupe, 2);
+}
+
+#[test]
+fn dedupe_gives_near_the_ratio_in_4_kib_blocks() {
+    // R33: `aeiou-positional/3` laid a container's samples end to end, so the framing moved the
+    // shared bytes off the 4 KiB grid (TFRecord at `--dedupe 2`: 1.07), and grouped `id div D`,
+    // so files of lognormal sizes kept the larger's tail (file_per_sample: 1.6)
+    let whole = tmpdir("ddr-whole");
+    datagen_into("file_per_sample", &[("samples", "320")], 2, &whole);
+    let r = block_dedupe(&whole);
+    assert!(r > 1.8 && r <= 2.0, "file_per_sample --dedupe 2: {r}");
+    let three = tmpdir("ddr-three");
+    datagen_into("file_per_sample", &[("samples", "240")], 3, &three);
+    let r = block_dedupe(&three);
+    assert!(r > 2.6 && r <= 3.0, "file_per_sample --dedupe 3: {r}");
+    #[cfg(feature = "formats")]
+    {
+        let tfr = tmpdir("ddr-tfr");
+        datagen_into("tfrecord_stream", &[("samples", "256"), ("samples_per_file", "64")], 2, &tfr);
+        let r = block_dedupe(&tfr);
+        // a block holding a record's framing differs, and so does the larger file's tail
+        assert!(r > 1.75 && r <= 2.0, "tfrecord_stream --dedupe 2: {r}");
+    }
 }
 
 /// A corpus larger than the free space at its root is refused before anything is written

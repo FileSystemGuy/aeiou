@@ -1072,6 +1072,7 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                         let failed = &failed;
                         s.spawn(move || {
                             let mut filler = Filler::new(spec.compress);
+                            let mut units = payload::Units::new(dedupe, *spf == 1);
                             let mut buf = Aligned::new();
                             let mut ahead = None;
                             loop {
@@ -1130,7 +1131,8 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                             return Ok(());
                                         }
                                         let size = meta.file_size(file)? as u64;
-                                        let seed_of = |blk: u64| payload::file_block_seed(seed, file as u64, blk, dedupe);
+                                        let unit = units.unit(file as u64, |i| meta.size_draw(i as i64))?;
+                                        let seed_of = |blk: u64| payload::file_block_seed(seed, unit, blk);
                                         if let Some(c) = &plan.container {
                                             let path = meta.file_path(file, None)?.to_string();
                                             // an object already there counts toward the totals (a

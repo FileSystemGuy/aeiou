@@ -1,4 +1,4 @@
-"""The payload (`aeiou-positional/3`): numpy's SFC64 in the state the runner gives it, laid out
+"""The payload (`aeiou-positional/4`): numpy's SFC64 in the state the runner gives it, laid out
 in 4 KiB pieces, the same bytes as `runner/aeiou/src/payload.rs` (whose tests pin the same
 values), and, when the runner is built, the same bytes as the files `aeiou datagen` writes."""
 import hashlib
@@ -17,7 +17,7 @@ ROOT = BUILDER.parent
 sys.path.insert(0, str(BUILDER))
 np = pytest.importorskip("numpy")
 
-from aeiou.datagen import BLOCK, FILL, PIECE, Payload, payload_block, sfc64  # noqa: E402
+from aeiou.datagen import BLOCK, FILL, PIECE, Payload, dedupe_unit, payload_block, sfc64  # noqa: E402
 
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 needs_runner = pytest.mark.skipif(not RUNNER.exists(), reason="runner binary not built")
@@ -56,9 +56,12 @@ def test_the_rust_writer_writes_the_same_bytes(tmp_path):
     r = subprocess.run([str(RUNNER), "datagen", str(ast), "--root", str(root), "--param", "samples=12", "--dedupe", "2",
                         "--compress", "3", "--writers", "2"], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
-    seed = json.loads(ast.read_text())["datasets"]["train"]["seed"]
+    train = json.loads(ast.read_text())["datasets"]["train"]
     m = json.loads((root / "train" / ".aeiou-dataset.json").read_text())
-    assert m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/3"
+    assert m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/4"
+    units = [dedupe_unit(train["size"], train["seed"], i, 2, True) for i in range(12)]
+    # sets of 2 among the 16 ids [0, 16), by size: not `id div 2`, and each unit at most twice
+    assert units != [i // 2 for i in range(12)] and max(units.count(u) for u in units) <= 2
     for i in range(12):
         data = (root / "train" / f"{i // 1300:05}" / f"img_{i:09}.jpg").read_bytes()
-        assert data == bytes(Payload(seed, i // 2, 3)(0, len(data))), i
+        assert data == bytes(Payload(train["seed"], units[i], 3)(0, len(data))), i

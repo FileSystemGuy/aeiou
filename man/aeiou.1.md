@@ -329,9 +329,14 @@ turns it off, and the last one on the line wins.
   store. Default 2. *Layered.*
 - **--dedupe** *DEDUPE*
 
-  Dedupe ratio: every *DEDUPE* consecutive files (or 1 MiB blocks of an `array` file) share
-  content, whatever the count, so a prefix of the ids has the ratio too. Default 1. Part of
-  the payload the manifest records.
+  Dedupe ratio: files share their content *DEDUPE* by *DEDUPE*, each byte at its own file
+  offset, so whole 4 KiB blocks repeat near *DEDUPE* times (`aeiou-positional/4`). Files of
+  one sample share in sets of near sizes among each 8 × *DEDUPE* consecutive ids, files of
+  several samples *DEDUPE* consecutive ids; a block holding a container's framing differs,
+  and a set's largest file keeps its tail (`--dedupe 2`: TFRecord and Parquet shards near
+  1.86, lognormal image files near 1.85, equal sizes 2). An `array` file repeats each 1 MiB
+  block *DEDUPE* times. The sets are functions of the id, whatever the count. Default 1. Part
+  of the payload the manifest records.
 - **--compress** *COMPRESS*
 
   Compression ratio: in every 4 KiB, the first ⌈4096/C⌉ bytes are random and the rest
