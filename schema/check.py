@@ -34,6 +34,60 @@ def dataset_root(d: dict) -> str:
     return prefix.rpartition("/")[0]
 
 
+_LOWER, _DIGITS = set("abcdefghijklmnopqrstuvwxyz"), set("0123456789")
+
+
+def pattern_fields(src: str) -> list:
+    """The fields of a path pattern as the runner parses it (`runner/aeiou/src/pattern.rs`), each
+    `(name, op, param, in_dir)`: `op` `div`, `mod`, or None, `param` the parameter naming the
+    divisor or None, `in_dir` whether the field is in the directory part. A pattern the runner
+    cannot parse raises ValueError with the runner's message."""
+    fields, rest = [], src
+    while "{" in rest:
+        after = rest[rest.index("{") + 1:]
+        if "}" not in after:
+            raise ValueError(f"pattern `{src}`: unclosed `{{`")
+        spec, rest = after.split("}", 1)
+        expr, colon, fmt = spec.partition(":")
+        expr, fmt = expr.strip(), fmt.strip() if colon else ""
+        words = expr.split()
+        op = param = None
+        if len(words) == 1:
+            name = words[0]
+        elif len(words) == 3:
+            name, op, n = words
+            if op not in ("div", "mod"):
+                raise ValueError(f"pattern `{src}`: unknown field operator `{op}`")
+            if n[0] in _LOWER or n[0] == "_":
+                if not set(n) <= _LOWER | _DIGITS | {"_"}:
+                    raise ValueError(f"pattern `{src}`: bad parameter name `{n}` in `{{{spec}}}`")
+                param = n
+            else:
+                if not re.fullmatch(r"[+-]?[0-9]+", n) or not -2**63 <= int(n) < 2**63:
+                    raise ValueError(f"pattern `{src}`: bad number in `{{{spec}}}`")
+                if int(n) <= 0:
+                    raise ValueError(f"pattern `{src}`: `{op} {int(n)}` needs a positive divisor")
+        else:
+            raise ValueError(f"pattern `{src}`: cannot parse field `{{{spec}}}`")
+        if not name or not set(name) <= _LOWER | _DIGITS | {"_"}:
+            raise ValueError(f"pattern `{src}`: bad field name `{name}`")
+        digits = fmt[1:] if fmt.startswith("0") else fmt
+        digits = digits[:-1] if digits.endswith(("x", "d")) else digits
+        if digits and (not re.fullmatch(r"\+?[0-9]+", digits) or int(digits) >= 2**64):
+            raise ValueError(f"pattern `{src}`: bad format `{fmt}` in `{{{spec}}}`")
+        fields.append((name, op, param, "/" in rest))
+    return fields
+
+
+def parses(src: str) -> bool:
+    """Whether the runner can parse the path pattern `src` (`pattern_fields`)."""
+    try:
+        pattern_fields(src)
+    except ValueError:
+        return False
+    return True
+
+
 def protocols(ast: dict, traces: bool) -> tuple:
     """(posix, s3): the protocols an abstract has names on. `posix` when a dataset or namespace
     declares it (or none), when a `trace` node runs (its files are under --root), or when no
@@ -258,18 +312,26 @@ class Check:
                 self.err(path, f"layout `{layout}` needs `{k}` (V20)")
             elif k in d and k not in need and k not in may:
                 self.err(path + [k], f"layout `{layout}` takes no `{k}` (V20)")
-        fields = set(re.findall(r"\{([a-z_][a-z0-9_]*)", d["pattern"]))
-        if layout == "array" and fields:
-            self.err(path + ["pattern"], "an `array` is one file: its pattern has no fields (V20)")
-        elif layout == "chunked" and "k" not in fields:
-            self.err(path + ["pattern"], "a `chunked` dataset's pattern needs a `{k}` field (V20)")
-        elif layout in ("whole", "compound") and "k" in fields:
-            self.err(path + ["pattern"], "`{k}` names a chunk: only a `chunked` dataset has one (V20)")
-        elif layout != "array" and "id" not in fields:
-            self.err(path + ["pattern"], "the pattern needs an `{id}` field (V20)")
+        # a pattern the runner cannot parse is refused by `reserved`, with the runner's message,
+        # and has no fields to judge here
+        parsed = pattern_fields(d["pattern"]) if parses(d["pattern"]) else None
+        fields = {f[0] for f in parsed or ()}
+        if parsed is not None:
+            if layout == "array" and fields:
+                self.err(path + ["pattern"], "an `array` is one file: its pattern has no fields (V20)")
+            elif layout == "chunked" and "k" not in fields:
+                self.err(path + ["pattern"], "a `chunked` dataset's pattern needs a `{k}` field (V20)")
+            elif layout in ("whole", "compound") and "k" in fields:
+                self.err(path + ["pattern"], "`{k}` names a chunk: only a `chunked` dataset has one (V20)")
+            elif layout != "array" and "id" not in fields:
+                self.err(path + ["pattern"], "the pattern needs an `{id}` field (V20)")
+            # the run formats a dataset's names from `id` and `k` alone
+            for f in sorted(fields - {"id", "k"}):
+                self.err(path + ["pattern"], f"`{{{f}}}` is no field of a dataset: its names are formatted from `{{id}}` and, `chunked`, `{{k}}` (V20)")
         if layout == "array" and d["access"] != "indexed":
             self.err(path + ["access"], "an `array` is `indexed`: its slots are looked up by position (V21)")
-        if d["access"] in ("map", "stream") and re.search(r"\{id mod ", d["pattern"].rpartition("/")[0]):
+        # the `id` fields of the directory part, as the runner reads them (`{ id  mod 16}` too)
+        if d["access"] in ("map", "stream") and any(f[0] == "id" and f[1] == "mod" and f[3] for f in parsed or ()):
             self.err(path + ["pattern"], "a consumed dataset's directories are `{id div D}` or none, never `mod`, so a subset of it is whole directories (V21)")
 
     def inventory(self, d: dict, path: list):
@@ -289,7 +351,7 @@ class Check:
             self.err(ip + ["name"], f"`{n}` is not a file name: the inventory lies directly in the dataset's root, its name a constant (V22)")
         elif n.startswith(RESERVED_PREFIX):
             self.err(ip + ["name"], f"`{n}` begins with `{RESERVED_PREFIX}`, reserved for the manifest (V13)")
-        elif re.fullmatch(glob, n):
+        elif parses(d["pattern"]) and re.fullmatch(glob, n):
             self.err(ip + ["name"], f"`{n}` is a name the pattern `{d['pattern']}` can produce in the dataset's root (V22)")
 
     # ---- entry ----
@@ -430,9 +492,14 @@ class Check:
         for comp in pattern.split("/"):
             if comp.startswith(RESERVED_PREFIX):
                 self.err(path, f"path component `{comp}` begins with `{RESERVED_PREFIX}`, reserved for the manifest (V13)")
+        # the pattern as the runner parses it: a field it cannot read is refused with its message
+        try:
+            fields = pattern_fields(pattern)
+        except ValueError as e:
+            return self.err(path + ["pattern"], str(e))
         # V23 (contract 0.10, DESIGN_REVIEW.md §3.75): a divisor named in a pattern is a declared
         # parameter whose default is an integer
-        for name in re.findall(r"\{\s*[a-z_][a-z0-9_]*\s+(?:div|mod)\s+([a-z_][a-z0-9_]*)", pattern):
+        for name in [f[2] for f in fields if f[2] is not None]:
             p = self.ast.get("params", {}).get(name)
             if p is None:
                 self.err(path + ["pattern"], f"divisor `{name}` is not a declared parameter (V23)")
@@ -601,7 +668,13 @@ class Check:
 
     def n_let(self, a, p, scope):
         self.exprlike(a["value"], p + ["value"], scope, dist_ok=False, binding=a["name"])
-        scope.bind(a["name"], a["value"], self.varies(a["value"], scope), self.kind(a["value"], scope))
+        # an alias (`{ref: g}`) is bound to what `g` is here, as the run binds it: the rules that
+        # follow a binding to its handle or distribution (V3, V12, V14, V18) read through it, and
+        # a later `let` of `g` (`let g = {ref: f}`) changes nothing, nor makes a cycle to follow
+        v = a["value"]
+        if isinstance(v, dict) and set(v) == {"ref"} and scope.lookup(v["ref"]) is not None:
+            v = scope.lookup(v["ref"])
+        scope.bind(a["name"], v, self.varies(a["value"], scope), self.kind(a["value"], scope))
 
     def n_loop(self, a, p, scope):
         for k in ("from", "to", "step"):
@@ -886,6 +959,9 @@ class Check:
             for i, arm in enumerate(a):
                 if arm["dist"] is not None:
                     self.distref(arm["dist"], p + [i, "dist"], scope)
+        elif k == "const":
+            # before the argument maps below: a `const` of an expression node is that expression
+            self.expr(a, p, scope)
         elif isinstance(a, dict):
             for kk, vv in a.items():
                 if isinstance(vv, (dict, list)) or kk in ("lo", "hi", "mean", "sd", "median", "min", "max"):
@@ -898,8 +974,6 @@ class Check:
                 lo, hi = self.number(a.get("min")), self.number(a.get("max"))
                 if lo is not None and hi is not None and float(lo) > float(hi):
                     self.err(p, f"{k}: min {lo} is above max {hi}")
-        elif k == "const":
-            self.expr(a, p, scope)
 
     def distref(self, v, p, scope):
         if isinstance(v, dict) and next(iter(v)) in SCHEMA["$defs"]["dist"]["properties"]:

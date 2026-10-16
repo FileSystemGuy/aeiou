@@ -1586,3 +1586,29 @@ def test_a_comparison_or_array_read_the_runner_refuses_is_refused_at_check(tmp_p
     if runner.exists():
         r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(a), "--params-file", str(f)], capture_output=True, text=True, cwd=str(tmp_path))
         assert r.returncode == 1 and want in r.stderr, r.stderr
+
+
+def test_check_py_refuses_the_shared_refusal_cases_as_the_runner_does():
+    """`runner/aeiou/tests/refusals.json`: documents with what each checker says of them, held
+    by this test for check.py and by `golden.rs` for the runner (RC1 review). A case refused by
+    a rule of `check.py` carries the errors both give, path and message; one the JSON Schema
+    refuses carries the paths it refuses at (the runner states those rules too, in its words).
+    Among them: a pattern the runner cannot parse (check.py took it), a `const` of an expression
+    (check.py walked it as a distribution's arguments), a dataset field other than `{id}` and
+    `{k}`, and an alias `let f = {ref: g}` of a dataset handle (a write through it passed the
+    runner's V12, and a rebinding cycle sent check.py into a RecursionError)."""
+    import jsonschema
+    from aeiou.validate import _load
+    schema, check = _load()
+    validator = jsonschema.Draft202012Validator(schema)
+    cases = json.loads((ROOT / "runner" / "aeiou" / "tests" / "refusals.json").read_text(encoding="utf-8"))
+    assert len(cases) > 100
+    for c in cases:
+        ast, name = c["ast"], c["ast"]["name"]
+        assert not check.int_range(ast), c["why"]
+        paths = sorted({"/".join(map(str, e.absolute_path)) for e in validator.iter_errors(ast)})
+        if "schema" in c:
+            assert paths == c["schema"], c["why"]
+            continue
+        assert not paths, (c["why"], paths)
+        assert check.Check(ast, name).run() == [f"{name}: {e}" for e in c["errors"]], c["why"]

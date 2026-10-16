@@ -163,8 +163,8 @@ an `s3` dataset or namespace through its object engine (**aeiou**(1) OBJECT STOR
 where an object is written once, in order from 0, by one upload that its `close` completes
 (V18).
 
-**Actors**: `{count, body}`; `count` defaults to `{param: gpus}`. Instances have global ids
-`0..count`.
+**Actors**: `{count, body}`; `count` defaults to `--gpus` (the reserved `gpus`, which no
+expression reads; `{actor: count}` is the count). Instances have global ids `0..count`.
 
 **Parameters**: `params` maps each name to a default (a scalar, a distribution, or an
 array), with `unit`, `doc`, and `cli` (whether `--param` may override it). `gpus` is

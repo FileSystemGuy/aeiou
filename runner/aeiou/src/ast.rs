@@ -447,15 +447,6 @@ pub enum Protocol {
     S3,
 }
 
-impl Protocol {
-    pub fn name(self) -> &'static str {
-        match self {
-            Protocol::Posix => "posix",
-            Protocol::S3 => "s3",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldType {
@@ -696,15 +687,6 @@ impl Node {
                 | Node::Take { .. } | Node::Loader { .. } | Node::Barrier { .. } | Node::Compute { .. }
                 | Node::Cond { .. } | Node::Choose { .. } | Node::Phase { .. } | Node::Trace { .. }
         )
-    }
-}
-
-impl Expr {
-    pub fn lit_int(&self) -> Option<i64> {
-        match self {
-            Expr::Lit(Literal::Int(n)) => Some(*n),
-            _ => None,
-        }
     }
 }
 

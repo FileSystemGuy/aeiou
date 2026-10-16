@@ -83,6 +83,30 @@ enum Least {
     Unbounded,
 }
 
+/// A number the document shows: a literal, or a parameter's value in effect.
+#[derive(Clone, Copy)]
+enum Number {
+    Int(i64),
+    Float(f64),
+}
+
+impl Number {
+    fn value(self) -> f64 {
+        match self {
+            Number::Int(n) => n as f64,
+            Number::Float(x) => x,
+        }
+    }
+
+    /// As check.py prints it (`1e+20`, `1e-05`).
+    fn text(self) -> String {
+        match self {
+            Number::Int(n) => n.to_string(),
+            Number::Float(x) => crate::canon::python_float_repr(x),
+        }
+    }
+}
+
 /// V27: what each kind of value is called in a message.
 fn kind_name(kind: &str) -> &'static str {
     match kind {
@@ -349,17 +373,15 @@ fn inventory_sibling(d: &Dataset) -> String {
     rest.split('/').next().unwrap_or("").to_string()
 }
 
-/// Whether `name` matches a pattern component, each `{field}` standing for one or more of the
-/// characters an integer field can format to (digits, hex digits, a sign, padding).
+/// Whether `name` matches a component of a pattern that parses, each `{field}` standing for one
+/// or more of the characters an integer field can format to (digits, hex digits, a sign, padding).
 fn glob_component(component: &str, name: &str) -> bool {
     let mut parts: Vec<&str> = Vec::new();
     let mut rest = component;
     while let Some(open) = rest.find('{') {
         parts.push(&rest[..open]);
-        rest = match rest[open..].find('}') {
-            Some(close) => &rest[open + close + 1..],
-            None => "",
-        };
+        let close = rest[open..].find('}').expect("a pattern that parses closes every field");
+        rest = &rest[open + close + 1..];
     }
     parts.push(rest);
     fn m(parts: &[&str], s: &str) -> bool {
@@ -435,23 +457,31 @@ impl<'a> Checker<'a> {
                 self.err(&p(path, &[k]), format!("layout `{l}` takes no `{k}` (V20)"));
             }
         }
-        let fields = crate::pattern::Pattern::parse(&d.pattern).map(|pt| pt.field_names().iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_or_default();
-        match d.layout {
-            Layout::Array if !fields.is_empty() => self.err(&p(path, &["pattern"]), "an `array` is one file: its pattern has no fields (V20)"),
-            Layout::Chunked if !fields.iter().any(|f| f == "k") => self.err(&p(path, &["pattern"]), "a `chunked` dataset's pattern needs a `{k}` field (V20)"),
-            Layout::Whole | Layout::Compound if fields.iter().any(|f| f == "k") => self.err(&p(path, &["pattern"]), "`{k}` names a chunk: only a `chunked` dataset has one (V20)"),
-            Layout::Whole | Layout::Chunked | Layout::Compound if !fields.iter().any(|f| f == "id") => self.err(&p(path, &["pattern"]), "the pattern needs an `{id}` field (V20)"),
-            _ => {}
+        // a pattern that does not parse is refused by `divisors`, with the parser's message, and
+        // has no fields to judge here (RC1 review: it was also said to need an `{id}`)
+        let parsed = crate::pattern::Pattern::parse(&d.pattern).ok();
+        if let Some(pt) = &parsed {
+            let fields = pt.field_names();
+            match d.layout {
+                Layout::Array if !fields.is_empty() => self.err(&p(path, &["pattern"]), "an `array` is one file: its pattern has no fields (V20)"),
+                Layout::Chunked if !fields.contains(&"k") => self.err(&p(path, &["pattern"]), "a `chunked` dataset's pattern needs a `{k}` field (V20)"),
+                Layout::Whole | Layout::Compound if fields.contains(&"k") => self.err(&p(path, &["pattern"]), "`{k}` names a chunk: only a `chunked` dataset has one (V20)"),
+                Layout::Whole | Layout::Chunked | Layout::Compound if !fields.contains(&"id") => self.err(&p(path, &["pattern"]), "the pattern needs an `{id}` field (V20)"),
+                _ => {}
+            }
+            // the run formats a dataset's names from `id` and `k` alone
+            let mut others: Vec<&str> = fields.iter().copied().filter(|f| *f != "id" && *f != "k").collect();
+            others.sort();
+            others.dedup();
+            for f in others {
+                self.err(&p(path, &["pattern"]), format!("`{{{f}}}` is no field of a dataset: its names are formatted from `{{id}}` and, `chunked`, `{{k}}` (V20)"));
+            }
         }
         if d.layout == Layout::Array && d.access != Access::Indexed {
             self.err(&p(path, &["access"]), "an `array` is `indexed`: its slots are looked up by position (V21)");
         }
-        if d.access.consumed() {
-            if let Ok(pt) = crate::pattern::Pattern::parse(&d.pattern) {
-                if pt.dir_id_fields().iter().any(|f| matches!(f.op, Some((crate::pattern::FieldOp::Mod, _)))) {
-                    self.err(&p(path, &["pattern"]), "a consumed dataset's directories are `{id div D}` or none, never `mod`, so a subset of it is whole directories (V21)");
-                }
-            }
+        if d.access.consumed() && parsed.is_some_and(|pt| pt.dir_id_fields().iter().any(|f| matches!(f.op, Some((crate::pattern::FieldOp::Mod, _))))) {
+            self.err(&p(path, &["pattern"]), "a consumed dataset's directories are `{id div D}` or none, never `mod`, so a subset of it is whole directories (V21)");
         }
     }
 
@@ -468,7 +498,7 @@ impl<'a> Checker<'a> {
             self.err(&p(&ip, &["name"]), format!("`{n}` is not a file name: the inventory lies directly in the dataset's root, its name a constant (V22)"));
         } else if n.starts_with(RESERVED_PREFIX) {
             self.err(&p(&ip, &["name"]), format!("`{n}` begins with `{RESERVED_PREFIX}`, reserved for the manifest (V13)"));
-        } else if glob_component(&inventory_sibling(d), n) {
+        } else if crate::pattern::Pattern::parse(&d.pattern).is_ok() && glob_component(&inventory_sibling(d), n) {
             self.err(&p(&ip, &["name"]), format!("`{n}` is a name the pattern `{}` can produce in the dataset's root (V22)", d.pattern));
         }
     }
@@ -896,7 +926,19 @@ impl<'a> Checker<'a> {
                 self.exprlike(value, &p(pp, &["value"]), scope, st, Some(name));
                 let varies = self.exprlike_varies(value, scope);
                 let kind = self.like_kind(value, scope);
-                scope.bind(name, value, varies, kind);
+                // an alias (`{ref: g}`) is bound to what `g` is here, as the run binds it: the
+                // rules that follow a binding to its handle or distribution (V3, V12, V14, V18)
+                // read through it (RC1 review: they stopped at it, so a write through an alias
+                // of a dataset handle passed), and a later `let` of `g` changes nothing, nor
+                // makes a cycle to follow (one made `aeiou check` spin forever)
+                let bound = match value {
+                    ExprLike::Expr(Expr::Node(n)) => match n.as_ref() {
+                        ExprNode::Ref(target) => scope.lookup(target).unwrap_or(value),
+                        _ => value,
+                    },
+                    _ => value,
+                };
+                scope.bind(name, bound, varies, kind);
             }
             Node::Loop { index, from, to, step, body } => {
                 if !is_ident(index) {
@@ -1462,10 +1504,12 @@ impl<'a> Checker<'a> {
         self.err(path, format!("{name}: cannot compare {} with {} (V27)", kind_name(x), kind_name(y)));
     }
 
-    /// V27: the parameter `elem`, `len`, or `sum` reads is an array by its value in effect, and
-    /// for `sum` (`numbers`) of integers and floats only, as the runner reads it.
+    /// The parameter `elem`, `len`, or `sum` reads is declared (V1) and (V27) an array by its
+    /// value in effect, and for `sum` (`numbers`) of integers and floats only, as the runner
+    /// reads it.
     fn array(&mut self, name: &str, op: &str, path: &P, numbers: bool) {
         match self.param_value(name) {
+            None => self.err(path, format!("unknown parameter array `{name}`")),
             Some(PValue::Array(a)) => {
                 if numbers {
                     if let Some(k) = a.iter().map(pvalue_kind).find(|k| !matches!(*k, "int" | "float")) {
@@ -1474,7 +1518,6 @@ impl<'a> Checker<'a> {
                 }
             }
             Some(_) => self.err(path, format!("{op}: parameter `{name}` is not an array (V27)")),
-            None => {}
         }
     }
 
@@ -1604,28 +1647,12 @@ impl<'a> Checker<'a> {
             ExprNode::At { name, index } => self.at(name, index, path, scope, st, binding),
             ExprNode::Draw(d) => self.distref(&d.dist, path, scope, st),
             ExprNode::Elem { array, index } => {
-                if !self.ast.params.contains_key(array) {
-                    self.err(path, format!("unknown parameter array `{array}`"));
-                } else {
-                    self.array(array, "elem", path, false);
-                }
+                self.array(array, "elem", path, false);
                 self.expr(index, &p(path, &["index"]), scope, st, None);
                 self.int(index, &p(path, &["index"]), scope);
             }
-            ExprNode::Len(name) => {
-                if !self.ast.params.contains_key(name) {
-                    self.err(path, format!("unknown parameter array `{name}`"));
-                } else {
-                    self.array(name, "len", path, false);
-                }
-            }
-            ExprNode::Sum(name) => {
-                if !self.ast.params.contains_key(name) {
-                    self.err(path, format!("unknown parameter array `{name}`"));
-                } else {
-                    self.array(name, "sum", path, true);
-                }
-            }
+            ExprNode::Len(name) => self.array(name, "len", path, false),
+            ExprNode::Sum(name) => self.array(name, "sum", path, true),
             ExprNode::Size(h) | ExprNode::Offset(h) | ExprNode::UnitIndex(h) | ExprNode::Units(h) | ExprNode::Chunks(h) => self.handle(h, path, scope, st),
             ExprNode::Count(name) => {
                 if !self.ast.datasets.contains_key(name) {
@@ -1786,14 +1813,10 @@ impl<'a> Checker<'a> {
     /// The number an expression is known to be: a literal, or a `param` whose value in effect
     /// (given, else the default) is a number. Anything else is not known before the run.
     fn number(&self, e: &Expr) -> Option<f64> {
-        match self.number_lit(e)? {
-            Literal::Int(n) => Some(*n as f64),
-            Literal::Float(x) => Some(*x),
-            _ => None,
-        }
+        self.number_lit(e).map(Number::value)
     }
 
-    fn number_lit<'e>(&'e self, e: &'e Expr) -> Option<&'e Literal> {
+    fn number_lit(&self, e: &Expr) -> Option<Number> {
         let l = match e {
             Expr::Lit(l) => l,
             Expr::Node(n) => match n.as_ref() {
@@ -1804,7 +1827,11 @@ impl<'a> Checker<'a> {
                 _ => return None,
             },
         };
-        matches!(l, Literal::Int(_) | Literal::Float(_)).then_some(l)
+        match l {
+            Literal::Int(n) => Some(Number::Int(*n)),
+            Literal::Float(x) => Some(Number::Float(*x)),
+            _ => None,
+        }
     }
 
     /// `min` above `max` on a `normal` or `lognormal`: the runner clamps to `min` and then to
@@ -1812,20 +1839,11 @@ impl<'a> Checker<'a> {
     /// Compared as the clamp compares, in f64 (2^53 + 1 is not above 2^53 there); the values
     /// printed as check.py prints them (`1e+20`, `1e-05`).
     fn bounds(&mut self, kind: &str, min: Option<&Expr>, max: Option<&Expr>, path: &P) {
-        let text = |l: &Literal| match l {
-            Literal::Int(n) => n.to_string(),
-            Literal::Float(x) => crate::canon::python_float_repr(*x),
-            _ => String::new(),
-        };
-        let (Some(min), Some(max)) = (min, max) else {
+        let (Some(lo), Some(hi)) = (min.and_then(|e| self.number_lit(e)), max.and_then(|e| self.number_lit(e))) else {
             return;
         };
-        let (Some(lo), Some(hi)) = (self.number_lit(min), self.number_lit(max)) else {
-            return;
-        };
-        let (a, b) = (text(lo), text(hi));
-        if self.number(min) > self.number(max) {
-            self.err(path, format!("{kind}: min {a} is above max {b}"));
+        if lo.value() > hi.value() {
+            self.err(path, format!("{kind}: min {} is above max {}", lo.text(), hi.text()));
         }
     }
 
@@ -1988,10 +2006,10 @@ impl<'a> Checker<'a> {
             Handle::Object { namespace, fields } => match self.ast.namespaces.get(namespace) {
                 None => self.err(path, format!("unknown namespace `{namespace}`")),
                 Some(ns) => {
-                    let have: Vec<&String> = fields.keys().collect();
-                    let want: Vec<&String> = ns.fields.keys().collect();
-                    if have != want {
-                        self.err(path, format!("object fields {have:?} != namespace fields {want:?}"));
+                    if !fields.keys().eq(ns.fields.keys()) {
+                        // the sorted names as check.py prints them (`json.dumps`): `["k", "v"]`
+                        let list = |names: Vec<&String>| format!("[{}]", names.iter().map(|n| serde_json::to_string(n).unwrap_or_default()).collect::<Vec<_>>().join(", "));
+                        self.err(path, format!("object fields {} != namespace fields {}", list(fields.keys().collect()), list(ns.fields.keys().collect())));
                     }
                     for (f, e) in fields {
                         self.expr(e, &p(path, &["fields", f]), scope, st, None);

@@ -184,8 +184,9 @@ geometry a format class declares is the geometry its writer produces, checked at
 **Namespaces:** `{pattern, fields, size, seed}` for objects the run creates. `size` is an
 expression or `as_written` (§4, rule V4).
 
-**Actors:** `{count, body}`; `count` defaults to `{param: gpus}`. Instances have global ids
-`0..count`; `{actor: id}` reads it.
+**Actors:** `{count, body}`; `count` defaults to `--gpus` (the reserved `gpus`, which no
+expression reads: `{param: gpus}` is an unknown parameter). Instances have global ids
+`0..count`; `{actor: id}` reads it, `{actor: count}` the count.
 
 ## 3. Where the `ABSTRACTS.md` §9 constructs went
 
@@ -354,7 +355,8 @@ The schema cannot express these; `check.py` does, and the Rust validator must.
   `samples_per_file`, `chunk`, `slot`, `format`; `chunked` needs `chunk`; `compound` needs
   `samples_per_file` and may have `format`; `array` needs `slot`. A pattern's fields: an
   `array`'s none (it is one file; a sharded array is not built), a `chunked` dataset's `{id}`
-  and `{k}`, the others' `{id}` alone (`DESIGN_REVIEW.md` §3.72).
+  and `{k}`, the others' `{id}` alone (`DESIGN_REVIEW.md` §3.72); a field of another name is
+  refused (2026-10-15: one passed both checkers and failed the run, which has no value for it).
 - **V21 access** (added 2026-10-13, contract 0.8). An `array` is `indexed`. `consume` takes a
   `map` or `stream` dataset; an `indexed` one is looked up by id (`file`, `pick`). A consumed
   dataset's directory part is `{id div D}` or has no `id` field, never `{id mod M}`, so a

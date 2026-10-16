@@ -323,22 +323,6 @@ pub struct Snapshot<'m, 'a> {
     body: &'a [Node],
 }
 
-impl<'m, 'a> Snapshot<'m, 'a> {
-    pub fn template(&self) -> &'a str {
-        self.template
-    }
-    pub fn actor(&self) -> i64 {
-        self.actor
-    }
-    /// The enclosing loop indices at the fork, the fork's own index last (its `from`).
-    pub fn indices(&self) -> Vec<i64> {
-        self.frames.iter().map(|f| f.idx).collect()
-    }
-    pub fn phase(&self) -> Option<Arc<str>> {
-        self.phases.last().cloned()
-    }
-}
-
 enum EvalError {
     BelowFrom,
     Other(anyhow::Error),
@@ -757,39 +741,30 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
             }
             ExprNode::Elem { array, index } => {
                 let i = self.expr(index)?.as_int()?;
-                match self.param(array)? {
-                    Value::Array(a) => {
-                        if i < 0 || i as usize >= a.len() {
-                            return other(format!("elem: index {i} outside parameter array `{array}` of {}", a.len()));
-                        }
-                        Value::from_pvalue(&a[i as usize])
-                    }
-                    _ => return other(format!("elem: parameter `{array}` is not an array")),
+                let a = self.array(array, "elem")?;
+                if i < 0 || i as usize >= a.len() {
+                    return other(format!("elem: index {i} outside parameter array `{array}` of {}", a.len()));
                 }
+                Value::from_pvalue(&a[i as usize])
             }
-            ExprNode::Len(array) => match self.param(array)? {
-                Value::Array(a) => Value::Int(a.len() as i64),
-                _ => return other(format!("len: parameter `{array}` is not an array")),
-            },
-            ExprNode::Sum(array) => match self.param(array)? {
-                Value::Array(a) => {
-                    let mut int = 0i64;
-                    let mut float = 0f64;
-                    let mut any_float = false;
-                    for x in a {
-                        match Value::from_pvalue(x) {
-                            Value::Int(n) => int = int.checked_add(n).ok_or_else(|| anyhow!("sum overflow"))?,
-                            Value::Float(f) => {
-                                any_float = true;
-                                float += f;
-                            }
-                            v => return other(format!("sum: element of `{array}` is {}", v.kind())),
+            ExprNode::Len(array) => Value::Int(self.array(array, "len")?.len() as i64),
+            ExprNode::Sum(array) => {
+                let mut int = 0i64;
+                let mut float = 0f64;
+                let mut any_float = false;
+                for x in self.array(array, "sum")? {
+                    match Value::from_pvalue(x) {
+                        Value::Int(n) => int = int.checked_add(n).ok_or_else(|| anyhow!("sum: the integers of `{array}` pass 2^63-1"))?,
+                        Value::Float(f) => {
+                            any_float = true;
+                            float += f;
                         }
+                        // rule V27 refuses a `sum` over a parameter whose elements are not numbers
+                        v => return other(format!("sum: element of `{array}` is {}", v.kind())),
                     }
-                    if any_float { Value::Float(float + int as f64) } else { Value::Int(int) }
                 }
-                _ => return other(format!("sum: parameter `{array}` is not an array")),
-            },
+                if any_float { Value::Float(float + int as f64) } else { Value::Int(int) }
+            }
             ExprNode::Size(h) => {
                 let hv = self.handle(h)?;
                 Value::Int(self.size_of(&hv)?)
@@ -917,14 +892,22 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
         }
     }
 
+    /// A declared parameter's value in effect (`gpus` is not one: V2 reserves it, and both
+    /// checkers refuse `{param: gpus}` as unknown; `{actor: count}` is the instance count).
     fn param(&self, name: &str) -> ER<Value<'a>> {
-        if name == "gpus" {
-            return Ok(Value::Int(self.model.cfg.gpus));
-        }
         let params: &'a Params = self.model.params;
         match params.values.get(name) {
             Some(v) => Ok(Value::from_pvalue(v)),
             None => other(format!("unknown param `{name}`")),
+        }
+    }
+
+    /// The elements of the parameter array `op` (`elem`, `len`, `sum`) reads; rule V27 refuses
+    /// one that is not an array, by its value in effect.
+    fn array(&self, name: &str, op: &str) -> ER<&'a [PValue]> {
+        match self.param(name)? {
+            Value::Array(a) => Ok(a),
+            _ => other(format!("{op}: parameter `{name}` is not an array")),
         }
     }
 
@@ -1190,7 +1173,7 @@ impl<'m, 'a: 'm> Vm<'m, 'a> {
                             v.as_int()?;
                         }
                         (Some(t), _) => return other(format!("object field `{name}` of `{namespace}` is {:?}, got {}", t, v.kind())),
-                        (None, _) => return other(format!("object field `{name}` is not a field of `{namespace}`")),
+                        (None, _) => unreachable!("object field `{name}` of `{namespace}`: the checkers refuse fields other than the namespace's"),
                     }
                     vals.insert(name.as_str(), v);
                 }

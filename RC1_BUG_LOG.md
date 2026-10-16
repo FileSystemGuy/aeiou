@@ -3217,3 +3217,67 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Fix:** the close sends the PUT (or the last part and the completion); POSIX closes are unchanged.
 - **Evidence:** `object::a_traces_close_of_an_object_sends_it` fails without the fix (`left: (None,
   None) right: (Some(10), …)`) and passes; same suite runs as bug 161.
+
+## 165. check.py did not parse patterns as the runner does, and the runner added a false V20 error to a pattern it could not parse
+
+- **Where:** `schema/check.py` (`pattern_fields`/`parses`, a port of `pattern.rs` with its messages, used
+  in `layout_fields`, `inventory`, `reserved`), `runner/aeiou/src/validate.rs` (field checks and the
+  V22 glob skipped for a pattern that does not parse); `runner/aeiou/tests/refusals.json` (new, 123
+  documents with the errors both checkers must give), `runner/aeiou/tests/cov_c1.rs` (new),
+  `builder/tests/test_builder.py`.
+- **Found by:** RC1 round-4 coverage lane C1 (ast, vm, eval, validate), covering validate.rs's pattern
+  refusals and checking each against check.py: check.py accepted an unclosed `{`, an unknown
+  operator, a bad number, a zero divisor, an unparseable field, a bad field name, a bad format;
+  missed `{id  mod 16}` and `{ id mod 16}` in V21 (its regex wants one space); said "divisor `a` is
+  not a declared parameter" for `{id div aB}`; the runner added "the pattern needs an `{id}` field
+  (V20)" to any pattern it could not parse.
+- **Fix:** both parse alike and refuse alike.
+- **Evidence:** `cov_c1::the_shared_refusal_cases_are_refused_as_check_py_refuses_them` and
+  `test_check_py_refuses_the_shared_refusal_cases_as_the_runner_does` (one shared fixture) fail with
+  HEAD's checkers (Rust 19 of 122 cases, check.py 23 of 123, two RecursionErrors) and pass. Lane
+  C1's coverage tests (ast.rs 75.5→100%, eval.rs 87.5→94.7, validate.rs 89.2→97.2, vm.rs
+  84.9→95.3) and its deletions of dead code (`Protocol::name`, `Expr::lit_int`, `Snapshot`
+  accessors, `Value::as_handle`, `Display for Value`, the VM's `{param: gpus}` special case, which
+  both checkers refuse; README §2 and aeiou-abstract(7) corrected) go in with these. Merged on HEAD
+  e0c8d37 (the field-list message kept in JSON form, as bug 159 made check.py print it):
+  `--tests --lib --bins` with MinIO pass (all 218, lib 89; one load-dependent failure of
+  `run::libaio_teardown_is_not_in_the_elapsed_time`, passing 5 of 5 alone and in a full rerun),
+  builder suite with MinIO 650, CI's checker diff empty, `aeiou-build --hermetic --twice --check`
+  rc 0, 22 parameter files ok, `aeiou-catalog check` ok. Fixed in an isolated worktree and applied.
+
+## 166. check.py never checked a `const` whose argument is an expression
+
+- **Where:** `schema/check.py` (the `const` branch before the argument-map branch); the shared fixture.
+- **Found by:** lane C1: `{const: {param: zz}}` and `{const: {add: [1, "x"]}}` passed check.py, and
+  `{const: {size: {file: …}}}` failed with "unhandled expression kind `file`".
+- **Fix:** the argument of `const` is checked as an expression.
+- **Evidence:** the shared fixture's cases fail with HEAD's check.py and pass; same suite runs as bug 165.
+
+## 167. An alias (`let f = {ref: g}`) slipped writes past V12/V14/V18 in the runner, and a rebound alias hung `aeiou check` and crashed check.py
+
+- **Where:** `runner/aeiou/src/validate.rs`, `schema/check.py` (an alias bound to its target's value at
+  that point, as the run binds it); the shared fixture.
+- **Found by:** lane C1: a write, an open for writing, or an unlink through an alias passed the
+  runner's V12, V14 and V18 though check.py refused them; `let f = {ref: g}; let g = {ref: f}` made
+  `aeiou check` spin forever and check.py die with RecursionError.
+- **Fix:** both checkers resolve an alias once, when bound.
+- **Evidence:** the shared fixture's alias cases fail with HEAD's checkers (the hanging case left out
+  of the before-run, since it hangs) and pass; same suite runs as bug 165.
+
+## 168. A dataset pattern field other than `{id}` or `{k}` passed both checkers and failed at dry-run
+
+- **Where:** `runner/aeiou/src/validate.rs`, `schema/check.py` (V20); `schema/README.md` V20; the shared fixture.
+- **Found by:** lane C1: `d/{foo}_{id}` passed; the dry-run then failed "no value for field `foo`",
+  though README V20 already disallowed it.
+- **Fix:** both refuse "`{foo}` is no field of a dataset: … (V20)".
+- **Evidence:** the fixture case fails with HEAD's checkers and passes; same suite runs as bug 165.
+
+## 169. A `normal`/`lognormal` draw past the 64-bit integers became 2^63−1 silently, and a NaN draw 0
+
+- **Where:** `runner/aeiou/src/eval.rs` (the draw goes through `Value::as_int`); `runner/aeiou/tests/cov_c1.rs`.
+- **Found by:** lane C1: a size of `normal{mean: 1e19, sd: 1, min: 0}` made `aeiou dry-run` report
+  "mean file 8192.00 PiB".
+- **Fix:** refused: "normal: float 10000000000000000000 where an integer is needed is outside the
+  64-bit integers of the contract"; in-range draws round as before (no fingerprint change).
+- **Evidence:** `a_normal_draw_past_the_64_bit_integers_is_refused` fails without the fix (`compute
+  9223372036854775807`) and passes; same suite runs as bug 165.

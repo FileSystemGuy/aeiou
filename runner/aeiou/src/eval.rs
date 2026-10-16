@@ -325,13 +325,6 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn as_handle(&self) -> Result<&HVal> {
-        match self {
-            Value::Handle(h) => Ok(h),
-            other => bail!("expected a handle, got {}", other.kind()),
-        }
-    }
-
     pub fn from_literal(l: &Literal) -> Value<'a> {
         match l {
             Literal::Null => Value::None,
@@ -347,21 +340,6 @@ impl<'a> Value<'a> {
             PValue::Scalar(l) => Value::from_literal(l),
             PValue::Dist(d) => Value::Dist(d),
             PValue::Array(a) => Value::Array(a),
-        }
-    }
-}
-
-impl std::fmt::Display for Value<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::None => write!(f, "none"),
-            Value::Bool(b) => write!(f, "{b}"),
-            Value::Int(n) => write!(f, "{n}"),
-            Value::Float(x) => write!(f, "{x}"),
-            Value::Str(s) => write!(f, "{s:?}"),
-            Value::Dist(_) => write!(f, "<dist>"),
-            Value::Array(a) => write!(f, "<array[{}]>", a.len()),
-            Value::Handle(h) => write!(f, "{h:?}"),
         }
     }
 }
@@ -394,13 +372,15 @@ pub fn sample<'a>(d: &RDist<'a>, w: &mut Words, domain: Option<&Perm>) -> Result
             Value::Int(w.next_range(*lo, *hi))
         }
         RDist::Uniform64 => Value::Int(w.next_u64() as i64),
+        // rounded as `as_int` rounds, and refused where it refuses: `as` would make a draw past
+        // the 64-bit integers 2^63-1 and a NaN 0, silently (RC1 review)
         RDist::Normal { mean, sd, min, max } => {
             let x = mean + sd * w.next_normal();
-            Value::Int(clamp(x, *min, *max).round() as i64)
+            Value::Int(Value::Float(clamp(x, *min, *max)).as_int().context("normal")?)
         }
         RDist::Lognormal { median, sigma, min, max } => {
             let x = median * (sigma * w.next_normal()).exp();
-            Value::Int(clamp(x, *min, *max).round() as i64)
+            Value::Int(Value::Float(clamp(x, *min, *max)).as_int().context("lognormal")?)
         }
         RDist::Empirical { values, cum } => {
             let total = *cum.last().unwrap_or(&0.0);
@@ -1148,8 +1128,8 @@ impl<'a> DsMeta<'a> {
                     DirScheme::Div(n) => d * n,
                     DirScheme::Mod(_) | DirScheme::Plain => d,
                     DirScheme::Constant => 0,
-                    DirScheme::NoDir => bail!("dataset `{}` has no directory part", self.name()),
-                    DirScheme::Unsupported => bail!("dataset `{}`: `dir` needs at most one `id` field in the directory part", self.name()),
+                    // `dir_scheme` gives both no directories, refused above
+                    DirScheme::NoDir | DirScheme::Unsupported => unreachable!("dataset `{}`: a directory of a scheme with none", self.name()),
                 };
                 let s = pattern.format_dir(|f| match f {
                     "id" => Some(FieldValue::Int(id)),
