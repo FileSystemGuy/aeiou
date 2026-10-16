@@ -3281,3 +3281,23 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   64-bit integers of the contract"; in-range draws round as before (no fingerprint change).
 - **Evidence:** `a_normal_draw_past_the_64_bit_integers_is_refused` fails without the fix (`compute
   9223372036854775807`) and passes; same suite runs as bug 165.
+
+## 170. faiss-ivf-ondisk `kit/mkindex.py` with a relative OUT stored a lists-file name the other kit scripts cannot open
+
+- **Where:** `workloads/vector-search/faiss-ivf-ondisk/kit/mkindex.py` (the `OnDiskInvertedLists`
+  file name), `kit/search.py` (its comment); `builder/tests/test_kits.py`,
+  `builder/tests/standins/` (test-only stand-ins for torch, torchvision, transformers,
+  safetensors, faiss, diskannpy and PIL, each recording its calls to `$AEIOU_STANDIN_LOG`).
+- **Found by:** lane C6 (coverage of the library-bound kits, which no test ran: dcp params 64.7%,
+  faiss faults 50.6, params 45.5, search 29.6, nine kits never run). Driving the faiss kit end to end
+  against the stand-ins with `mkindex.py --out out` (relative) recorded the index's lists file as
+  `out/merged_index.ivfdata`, a name relative to the directory mkindex ran in; `search.py`,
+  `faults.py` and `params.py` chdir into OUT before reading the index, so they look for
+  `out/out/merged_index.ivfdata`, which does not exist.
+- **Fix:** the lists file is named `os.path.join(os.path.abspath(a.out), "merged_index.ivfdata")`.
+  The comment in `search.py` that claimed the name was relative to OUT is corrected.
+- **Evidence:** `test_faiss_kit_builds_searches_fits_and_faults_the_case_s_index` fails without the
+  fix (the stored name `'out/merged_index.ivfdata'`) and passes with it. Every kit script is now at
+  90% coverage or more (faiss faults 97.5, the rest 100; dcp params 100). Applied on dd430e1:
+  builder suite with MinIO 663 passed, `aeiou-catalog check` ok. Fixed in an isolated worktree and
+  applied.

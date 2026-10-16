@@ -43,7 +43,9 @@ def main():
         names.append(os.path.join(a.out, "block_%d.index" % s))
         faiss.write_index(sub, names[-1])
     index = faiss.read_index(trained)
-    merge_ondisk(index, names, os.path.join(a.out, "merged_index.ivfdata"))
+    # the index stores the lists file's name as given, and a reader opens it as stored, from its own
+    # working directory (search.py's is OUT): absolute, or a relative OUT names a file that is not there
+    merge_ondisk(index, names, os.path.join(os.path.abspath(a.out), "merged_index.ivfdata"))
     faiss.write_index(index, os.path.join(a.out, "populated.index"))
     for f in names + [trained]:
         os.unlink(f)

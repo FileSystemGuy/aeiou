@@ -736,3 +736,378 @@ def test_dcp_load_params_from_a_checkpoint_s_metadata(monkeypatch):
          "layer2.weight": Tensor(f32, [Chunk((0,), (2,))])})
     assert dp.params(m, 777, 200, "d") == {"params_version": 1, "abstract": "dcp_load", "doc": "d", "params": {
         "items": 3, "item_bytes": [32, 8, 16], "item_off": [0, 50, 100], "read_order": [0, 2, 1], "meta_bytes": 777, "restore_step": 200}}
+
+
+# --- kit scripts run whole against the stand-ins of builder/tests/standins/ (test fakes) ---------
+# Each test runs the script as its README does, the stand-ins first on its path, and checks what it
+# asked of the library against the kit's README and the committed case it was traced for.
+
+STANDINS = pathlib.Path(__file__).resolve().parent / "standins"
+WL = ROOT / "workloads"
+
+
+def _standin_run(tmp_path, script, *args, env=None, cwd=None):
+    """`python SCRIPT ARGS` with the stand-ins on its path: the process and the calls it made."""
+    log = tmp_path / "standin.log"
+    log.unlink(missing_ok=True)
+    path = os.pathsep.join(p for p in (str(STANDINS), os.environ.get("PYTHONPATH")) if p)
+    e = dict(os.environ, PYTHONPATH=path, AEIOU_STANDIN_LOG=str(log), **(env or {}))
+    r = subprocess.run([sys.executable, str(script), *map(str, args)], capture_output=True, text=True, timeout=300, env=e, cwd=cwd)
+    return r, [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def _case(path):
+    return json.loads((WL / path / "params.json").read_text())
+
+
+def _calls(calls, name):
+    return [c for c in calls if c["call"] == name]
+
+
+def _by_rank(calls):
+    """The calls of each rank process, by the rank its `init_process_group` named."""
+    rank = {c["pid"]: c["rank"] for c in _calls(calls, "init_process_group")}
+    out = {}
+    for c in calls:
+        if c["pid"] in rank:
+            out.setdefault(rank[c["pid"]], []).append(c)
+    return out
+
+
+def _numels(mib):
+    """The kit's full-tensor element counts for sizes in MiB (fp32, even)."""
+    return [int(m * (1 << 20)) // 4 // 2 * 2 for m in mib]
+
+
+def test_dcp_save_kit_saves_each_rank_s_half_of_the_case_s_items_at_its_steps(tmp_path):
+    """`dcp-save/kit/save.py ROOT 2 2` (its README): two gloo ranks on one rendezvous, each item
+    a DTensor sharded on dimension 0, saved at the case's checkpoint steps, each rank's share of an
+    item the case's `item_bytes`; `--torch-save` writes the same full tensors in one archive."""
+    case = _case("checkpointing/dcp-save/cases/toy-6-items")["params"]
+    out = tmp_path / "out"
+    r, calls = _standin_run(tmp_path, WL / "checkpointing/dcp-save/kit/save.py", out, 2, 2)
+    assert r.returncode == 0, r.stderr
+    ranks = _by_rank(calls)
+    assert sorted(ranks) == [0, 1]
+    steps = [os.path.join(out, "ckpt", f"step_{s:06}") for s in range(case["ckpt_every"], case["steps"] + 1, case["ckpt_every"])]
+    for cs in ranks.values():
+        assert cs[0]["call"] == "init_process_group" and cs[-1]["call"] == "destroy_process_group"
+        assert (cs[0]["backend"], cs[0]["world_size"], cs[0]["master"]) == ("gloo", 2, ["127.0.0.1", "29511"])
+        assert [(c["device_type"], c["mesh_shape"]) for c in _calls(cs, "init_device_mesh")] == [("cpu", [2])]
+        assert {tuple(c["placements"]) for c in _calls(cs, "distribute_tensor")} == {("Shard(0)",)}
+        saves = _calls(cs, "dcp.save")
+        assert [c["checkpoint_id"] for c in saves] == steps
+        for s in saves:
+            assert list(s["items"]) == [f"layer{i}.weight" for i in range(case["items"])]
+            assert [n * 4 for n in s["items"].values()] == case["item_bytes"]
+    r, calls = _standin_run(tmp_path, WL / "checkpointing/dcp-save/kit/save.py", "--torch-save", tmp_path / "ts")
+    assert r.returncode == 0, r.stderr
+    (save,) = _calls(calls, "save")
+    assert save["path"] == os.path.join(tmp_path / "ts", "ckpt", "rank0.pt") and (tmp_path / "ts" / "ckpt").is_dir()
+    assert [n * 4 // 2 for n in save["items"].values()] == case["item_bytes"]
+
+
+@pytest.mark.parametrize("case, mib", [
+    ("small-last-6-items", "32,64,32,16,1,0.004"),
+    ("mixed-9-items", "32,1,64,0.004,0.004,1,32,0.004,16"),
+    ("name-order-17-items", "32,0.5,0.5,0.5,0.5,0.5,0.5,0.004,0.004,0.004,0.75,0.75,0.75,0.75,1.9,1.9,16"),
+])
+def test_dcp_load_kit_loads_each_rank_s_shard_of_the_case_s_checkpoint(tmp_path, case, mib):
+    """`dcp-load/kit/load.py [--save] ROOT 2 STEP ITEMS` (its README): `--save` saves random
+    tensors (seed 1) and a load restores into zeros in place, from `ckpt/step_STEP`; each rank's
+    share of item `i` is the case's `item_bytes[i]`, and the step its `restore_step`."""
+    p = _case(f"checkpointing/dcp-load/cases/{case}")["params"]
+    out, step = tmp_path / "out", p["restore_step"]
+    path = os.path.join(out, "ckpt", f"step_{step:06}")
+    for mode in (["--save"], []):
+        r, calls = _standin_run(tmp_path, WL / "checkpointing/dcp-load/kit/load.py", *mode, out, 2, step, mib)
+        assert r.returncode == 0, r.stderr
+        ranks = _by_rank(calls)
+        assert sorted(ranks) == [0, 1]
+        for cs in ranks.values():
+            assert (cs[0]["backend"], cs[0]["world_size"], cs[0]["master"]) == ("gloo", 2, ["127.0.0.1", "29512"])
+            assert cs[-1]["call"] == "destroy_process_group"
+            made = _calls(cs, "rand" if mode else "zeros")
+            assert [c["n"] for c in made] == _numels(float(m) for m in mib.split(",")) and not _calls(cs, "zeros" if mode else "rand")
+            if mode:
+                assert _calls(cs, "Generator.manual_seed")[0]["seed"] == 1 and all(c["generator"] for c in made)
+            (io,) = _calls(cs, "dcp.save" if mode else "dcp.load")
+            assert io["checkpoint_id"] == path
+            assert [n * 4 for n in io["items"].values()] == p["item_bytes"]
+
+
+_DCP_METADATA = """
+import pickle, sys, torch
+from torch.distributed.checkpoint.metadata import *
+f32 = TensorProperties(torch.float32)
+m = Metadata({"layer0.weight": TensorStorageMetadata(f32, [ChunkStorageMetadata((0,), (6,)), ChunkStorageMetadata((6,), (6,))]),
+              "layer1.weight": TensorStorageMetadata(f32, [ChunkStorageMetadata((0,), (2,)), ChunkStorageMetadata((2,), (2,))])},
+             {MetadataIndex("layer0.weight", (0,)): StorageInfo("__0_0.distcp", 0, 30),
+              MetadataIndex("layer0.weight", (6,)): StorageInfo("__1_0.distcp", 0, 30),
+              MetadataIndex("layer1.weight", (0,)): StorageInfo("__0_0.distcp", 30, 14),
+              MetadataIndex("layer1.weight", (2,)): StorageInfo("__1_0.distcp", 30, 14)})
+with open(sys.argv[1], "wb") as f:
+    pickle.dump(m, f)
+"""
+
+
+def test_dcp_load_params_reads_the_metadata_in_the_checkpoint_it_is_given(tmp_path):
+    """`dcp-load/kit/params.py CKPT STEP DOC` (its README): the `.metadata` pickle in CKPT, a path
+    relative to the caller, its size the `meta_bytes`, rank 0's items the items."""
+    ckpt = tmp_path / "ckpt" / "step_000200"
+    ckpt.mkdir(parents=True)
+    script = tmp_path / "mkmeta.py"
+    script.write_text(_DCP_METADATA)
+    r, _ = _standin_run(tmp_path, script, ckpt / ".metadata")
+    assert r.returncode == 0, r.stderr
+    r, _ = _standin_run(tmp_path, WL / "checkpointing/dcp-load/kit/params.py", "ckpt/step_000200", 200, "a doc", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == {"params_version": 1, "abstract": "dcp_load", "doc": "a doc", "params": {
+        "items": 2, "item_bytes": [24, 8], "item_off": [0, 30], "read_order": [0, 1],
+        "meta_bytes": (ckpt / ".metadata").stat().st_size, "restore_step": 200}}
+
+
+def test_safetensors_kit_saves_the_case_s_model_and_loads_it(tmp_path):
+    """`safetensors-load/kit/mkmodel.py DIR` (its README): a seeded random GPT-2 whose tensor
+    table is the case's (12 tensors a layer and 4 more; the embedding vocab x width fp32, the
+    positions table positions x width), in 100MB shards unless told; `loadmodel.py` loads the
+    directory last on its line and copies every parameter only with `--touch`."""
+    case = _case("model-loading/safetensors-load/cases/gpt2-random")["params"]
+    r, calls = _standin_run(tmp_path, WL / "model-loading/safetensors-load/kit/mkmodel.py", tmp_path / "model")
+    assert r.returncode == 0, r.stderr
+    assert [c["call"] for c in calls] == ["manual_seed", "save_pretrained"] and calls[0]["seed"] == 1
+    save = calls[1]
+    cfg = save["config"]
+    assert (save["path"], save["max_shard_size"]) == (str(tmp_path / "model"), "100MB")
+    assert 12 * cfg["n_layer"] + 4 == len(case["shard"]) and cfg["n_embd"] % cfg["n_head"] == 0
+    assert case["bytes"][0] == cfg["vocab_size"] * cfg["n_embd"] * 4 and cfg["n_positions"] * cfg["n_embd"] * 4 in case["bytes"]
+    r, calls = _standin_run(tmp_path, WL / "model-loading/safetensors-load/kit/mkmodel.py", tmp_path / "model", "50MB")
+    assert r.returncode == 0 and calls[1]["max_shard_size"] == "50MB", r.stderr
+    for flag, out in (("--touch", "8\n"), ("--notouch", "")):
+        r, calls = _standin_run(tmp_path, WL / "model-loading/safetensors-load/kit/loadmodel.py", flag, tmp_path / "model")
+        assert (r.returncode, r.stdout) == (0, out), r.stderr
+        assert [(c["call"], c["path"]) for c in calls] == [("from_pretrained", str(tmp_path / "model"))]
+
+
+def test_safetensors_touch_copies_every_tensor_of_every_shard_in_file_order(tmp_path):
+    """`safetensors-load/kit/touch.py DIR`: the shards in name order, each opened for torch, its
+    tensors taken by their data offsets (the order of the case's `off` within a shard), never the
+    header's key order; `ONE=1` first sets one thread."""
+    case = _case("model-loading/safetensors-load/cases/gpt2-random")["params"]
+    for s in set(case["shard"]):
+        offs = [o for o, k in zip(case["off"], case["shard"]) if k == s]
+        assert offs == sorted(offs)
+    d = tmp_path / "model"
+    d.mkdir()
+    for name, keys in (("model-00002-of-00002", ["z", "a"]), ("model-00001-of-00002", ["b", "c", "a"])):
+        h = {"__metadata__": {"format": "pt"}}
+        for k in reversed(keys):                         # the header lists them against file order
+            i = keys.index(k)
+            h[k] = {"dtype": "F32", "shape": [2], "data_offsets": [8 * i, 8 * i + 8]}
+        b = json.dumps(h).encode()
+        (d / f"{name}.safetensors").write_bytes(struct.pack("<Q", len(b)) + b + bytes(8 * len(keys)))
+    (d / "config.json").write_text("{}")
+    for env, threads in (({"ONE": "1"}, [("set_num_threads", 1)]), ({}, [])):
+        r, calls = _standin_run(tmp_path, WL / "model-loading/safetensors-load/kit/touch.py", d, env=env)
+        assert r.returncode == 0, r.stderr
+        assert [(c["call"], c["n"]) for c in calls[:len(threads)]] == threads
+        got = [(c["call"], os.path.basename(c["path"]), c.get("name", c.get("framework"))) for c in calls[len(threads):]]
+        assert got == [("safe_open", "model-00001-of-00002.safetensors", "pt")] + [
+            ("get_tensor", "model-00001-of-00002.safetensors", k) for k in ("b", "c", "a")] + [
+            ("safe_open", "model-00002-of-00002.safetensors", "pt")] + [("get_tensor", "model-00002-of-00002.safetensors", k) for k in ("z", "a")]
+
+
+def test_imagefolder_kit_writes_the_corpus_and_trains_over_it_as_the_case_says(tmp_path):
+    """`file-per-sample/kit/mkcorpus.py ROOT N` (its README): JPEGs at quality 75 at
+    train/{id div 1300:05}/img_{id:09}.jpg, sized from the encoder's bytes per pixel to near
+    lognormal(110 KiB, 0.45); `train.py ROOT/train 16 2 2`: ImageFolder with the README's
+    transforms, a seeded shuffling DataLoader with the case's batch and workers, dropping the
+    last batch, so the steps are the case's samples // batch x epochs."""
+    np = pytest.importorskip("numpy")
+    case = _case("input-pipeline/map/file-per-sample/cases/imagefolder-jpeg")["params"]
+    n = 40
+    r, calls = _standin_run(tmp_path, WL / "input-pipeline/map/file-per-sample/kit/mkcorpus.py", tmp_path / "c", n)
+    assert r.returncode == 0, r.stderr
+    assert {(c["format"], c["quality"]) for c in calls} == {("JPEG", 75)} and len(calls) == n + 1
+    files = sorted(p.relative_to(tmp_path / "c").as_posix() for p in (tmp_path / "c").rglob("*") if p.is_file())
+    assert files == [f"train/00000/img_{i:09}.jpg" for i in range(n)]
+    ln = np.log([(tmp_path / "c" / f).stat().st_size for f in files])
+    assert abs(ln.mean() - np.log(110 * 1024)) < 0.25 and 0.3 < ln.std() < 0.6, (np.exp(ln.mean()), ln.std())
+    assert r.stdout.startswith("bytes per pixel ")
+    r, calls = _standin_run(tmp_path, WL / "input-pipeline/map/file-per-sample/kit/train.py", tmp_path / "c/train", case["batch"],
+                            case["workers"], 2)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == f"files {n} steps {n // case['batch'] * 2}\n" and case["steps"] == case["samples"] // case["batch"] * 2
+    assert [c["call"] for c in calls] == ["manual_seed", "ImageFolder", "DataLoader"] and calls[0]["seed"] == 1
+    assert (calls[1]["root"], calls[1]["classes"]) == (str(tmp_path / "c/train"), 1)
+    assert calls[1]["transform"] == ["RandomResizedCrop(224,)", "RandomHorizontalFlip()", "ToTensor()"]
+    dl = calls[2]
+    assert (dl["batch_size"], dl["num_workers"], dl["shuffle"], dl["drop_last"], dl["samples"]) == (case["batch"], case["workers"], True, True, n)
+
+
+@pytest.mark.parametrize("case", ["npy-8mib", "npy-140mib"])
+def test_npy_kit_trains_over_the_corpus_as_the_case_says(tmp_path, case):
+    """`npy-per-sample/kit/train.py ROOT/train BATCH 2 2 x|xy` (its README) over what
+    `mkcorpus.py` wrote: every archive in the class directories, `np.load` of each in a seeded
+    shuffling DataLoader with the case's batch and workers, dropping the last batch, so the steps
+    are the case's samples // batch x epochs."""
+    pytest.importorskip("numpy")
+    p = _case(f"input-pipeline/map/npy-per-sample/cases/{case}")["params"]
+    n = 2 * p["batch"] + 1
+    r = _run(WL / "input-pipeline/map/npy-per-sample/kit/mkcorpus.py", tmp_path / "c", n, 1 << 20, 0)
+    assert r.returncode == 0, r.stderr
+    assert p["steps"] == p["samples"] // p["batch"] * 2
+    for members in ("x", "xy"):
+        r, calls = _standin_run(tmp_path, WL / "input-pipeline/map/npy-per-sample/kit/train.py", tmp_path / "c/train", p["batch"],
+                                p["workers"], 2, members)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == f"files {n} steps {n // p['batch'] * 2}\n"
+        assert [c["call"] for c in calls] == ["manual_seed", "DataLoader"] and calls[0]["seed"] == 1
+        dl = calls[1]
+        assert (dl["batch_size"], dl["num_workers"], dl["shuffle"], dl["drop_last"], dl["samples"]) == (p["batch"], p["workers"], True, True, n)
+
+
+def _fvecs(path, rows):
+    """An .fvecs file of float32 rows (each row its dimension, then the floats)."""
+    import numpy as np
+    rows = np.asarray(rows, dtype="float32")
+    a = np.empty((len(rows), rows.shape[1] + 1), dtype="int32")
+    a[:, 0] = rows.shape[1]
+    a[:, 1:] = rows.view("int32")
+    a.tofile(path)
+
+
+def test_faiss_kit_builds_searches_fits_and_faults_the_case_s_index(tmp_path):
+    """`faiss-ivf-ondisk/kit/` as its README runs it, OUT relative to the caller: `mkindex.py`
+    builds the case's `IVF1024,PQ32` index (trained on sift_learn, sift_base added in four
+    contiguous id ranges, merged on disk into OUT/merged_index.ivfdata by an absolute name, so the
+    search, run from OUT, finds it); `search.py --queries 20 --threads 1` makes the case's 20 calls
+    of one query at nprobe 64; `params.py` records those parameters and the trace's reads of the
+    index file; `faults.py` probes as the search did."""
+    np = pytest.importorskip("numpy")
+    case = _case("vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32")["params"]
+    rng = np.random.default_rng(1)
+    (tmp_path / "sift").mkdir()
+    _fvecs(tmp_path / "sift/sift_learn.fvecs", rng.random((50, 128)))
+    _fvecs(tmp_path / "sift/sift_base.fvecs", rng.random((101, 128)))
+    _fvecs(tmp_path / "sift/sift_query.fvecs", rng.random((30, 128)))
+    kit = WL / "vector-search/faiss-ivf-ondisk/kit"
+    r, calls = _standin_run(tmp_path, kit / "mkindex.py", "sift", "out", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    (fac,) = _calls(calls, "index_factory")
+    assert (fac["d"], fac["description"]) == (128, f"IVF{case['lists']},PQ{case['code_size']}")
+    assert [c["shape"] for c in _calls(calls, "Index.train")] == [[50, 128]]
+    assert [c["ids"] for c in _calls(calls, "Index.add_with_ids")] == [[0, 24], [25, 49], [50, 74], [75, 100]]
+    (merge,) = _calls(calls, "merge_ondisk")
+    assert merge["ivfdata"] == str(tmp_path / "out" / "merged_index.ivfdata")
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["merged_index.ivfdata", "populated.index"]
+    assert r.stderr == f"101 vectors, {case['lists']} lists, code_size {case['code_size']}\n"
+
+    for batch, sizes in ((1, [1] * 20), (3, [3] * 6 + [2])):
+        r, calls = _standin_run(tmp_path, kit / "search.py", "out", "sift/sift_query.fvecs", "--queries", case["calls"] * case["batch"],
+                                "--threads", case["threads"], "--batch", batch, cwd=tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert [c["n"] for c in _calls(calls, "omp_set_num_threads")] == [case["threads"]]
+        assert [(c["path"], c["cwd"]) for c in _calls(calls, "read_index")] == [("populated.index", str(tmp_path / "out"))]
+        s = _calls(calls, "Index.search")
+        assert [c["n"] for c in s] == sizes and {(c["k"], c["nprobe"]) for c in s} == {(10, case["nprobe"])}
+
+    (tmp_path / "trace.txt").write_text(
+        f'9 1.0 read(5<{tmp_path}/out/populated.index>, "IwPQ"..., 8192) = 8192 <0.000010>\n'
+        f'9 1.1 read(5<{tmp_path}/out/populated.index>, ""..., 516096) = 400 <0.000010>\n')
+    r, calls = _standin_run(tmp_path, kit / "params.py", "out", "sift/sift_query.fvecs", "trace.txt", "a doc", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    f = json.loads(r.stdout)
+    p = f["params"]
+    assert (f["abstract"], f["doc"], set(p)) == ("faiss_ivf_ondisk", "a doc", set(case))
+    same = ("threads", "calls", "batch", "nprobe", "prefetch", "lists", "code_size")
+    assert {k: p[k] for k in same} == {k: case[k] for k in same}
+    assert p["index_bytes"] == (tmp_path / "out/populated.index").stat().st_size and p["index_reads"] == [8192, 516096]
+    assert (p["list_bytes"]["lognormal"]["min"], p["list_bytes"]["lognormal"]["max"]) == (0, case["code_size"] + 8)
+    assert [(c["n"], c["k"]) for c in _calls(calls, "quantizer.search")] == [(30, case["nprobe"])]
+
+    r, calls = _standin_run(tmp_path, kit / "faults.py", "out", "sift/sift_query.fvecs", "--queries", 1, "--threads", 1, cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.splitlines()
+    assert lines[0] == f"probes 64, distinct lists 64 of 1024, their bytes {64 * (case['code_size'] + 8)}"
+    assert re.fullmatch(r"pages: resident before \d+, of the probed lists 1, resident after \d+, probed and not resident \d+, "
+                        r"resident and not probed \d+", lines[1]) and len(lines) in (2, 3)
+    assert [(c["n"], c["k"], c["nprobe"]) for c in _calls(calls, "Index.search")] == [(1, 10, 64)]
+    assert [c["n"] for c in _calls(calls, "omp_set_num_threads")] == [1]
+
+
+def test_diskann_build_kit_converts_the_base_and_builds_as_the_case_says(tmp_path):
+    """`diskann-build/kit/build.py` as its README runs it: `--fbin` writes the fvecs rows as an
+    .fbin; a build of the base into INDEX_DIR (made) asks for the case's graph degree, build list
+    and build memory, l2, fp32, a thread per CPU unless told."""
+    np = pytest.importorskip("numpy")
+    doc = _case("vector-search/diskann-build/cases/sift1m-13-shards")["doc"]
+    rows = np.arange(40, dtype="float32").reshape(10, 4) / 8
+    _fvecs(tmp_path / "base.fvecs", rows)
+    build = WL / "vector-search/diskann-build/kit/build.py"
+    r, calls = _standin_run(tmp_path, build, "--fbin", tmp_path / "base.fvecs", tmp_path / "base.fbin")
+    assert r.returncode == 0, r.stderr
+    assert [(c["call"], c["shape"], c["dtype"]) for c in calls] == [("vectors_to_file", [10, 4], "float32")]
+    b = (tmp_path / "base.fbin").read_bytes()
+    assert struct.unpack("<II", b[:8]) == (10, 4) and np.frombuffer(b[8:], dtype="float32").reshape(10, 4).tolist() == rows.tolist()
+    for extra, threads in (([], os.cpu_count()), (["--threads", "20"], 20)):
+        r, calls = _standin_run(tmp_path, build, tmp_path / "base.fbin", tmp_path / "index", *extra)
+        assert r.returncode == 0, r.stderr
+        (c,) = calls
+        assert (tmp_path / "index").is_dir() and c["call"] == "build_disk_index"
+        assert (c["data"], c["index_directory"], c["distance_metric"], c["num_threads"]) == (
+            str(tmp_path / "base.fbin"), str(tmp_path / "index"), "l2", threads)
+        assert f"degree {c['graph_degree']}," in doc and f"build list {c['complexity']}," in doc
+        assert f"(build memory {c['build_memory_maximum']} GB)" in doc
+        assert c["search_memory_maximum"] == 0.03 and "float32" in c["vector_dtype"]
+
+
+@pytest.fixture
+def standins_imported(monkeypatch, tmp_path):
+    """The stand-ins importable in this process for one test (their log in `tmp_path`), and gone
+    from `sys.modules` after it."""
+    before = set(sys.modules)
+    monkeypatch.syspath_prepend(str(STANDINS))
+    monkeypatch.setenv("AEIOU_STANDIN_LOG", str(tmp_path / "standin.log"))
+    yield tmp_path / "standin.log"
+    for name in set(sys.modules) - before:
+        del sys.modules[name]
+
+
+def test_diskann_search_kit_marks_every_query_and_searches_as_the_case_says(monkeypatch, tmp_path, standins_imported):
+    """`diskann-search/kit/search.py` as its README runs it (in this process, `os.stat` watched):
+    the case's beam 4 and search list 100, the node cache and its mechanism passed through, and
+    without `--batch` a `stat` of hops.py's mark before every query; `--batch` is one call over the
+    threads and no mark."""
+    import runpy
+    np = pytest.importorskip("numpy")
+    import standin
+    case = _case("vector-search/diskann-search/cases/sift1m-cache")
+    assert "search list 100, beam 4," in case["doc"] and case["params"]["beam"] == 4
+    q = tmp_path / "query.fbin"
+    q.write_bytes(struct.pack("<II", 5, 4) + np.arange(20, dtype="float32").tobytes())
+    stat = os.stat
+
+    def watched(path, *a, **kw):
+        if path == "/aeiou-query-mark":
+            standin.record("stat", path=path)
+        return stat(path, *a, **kw)
+    monkeypatch.setattr(os, "stat", watched)
+    script = str(WL / "vector-search/diskann-search/kit/search.py")
+    for extra in (["--cache", "10000", "--cache-mechanism", "2"], ["--batch"]):
+        standins_imported.unlink(missing_ok=True)
+        monkeypatch.setattr(sys, "argv", [script, str(tmp_path / "index"), str(q), "--queries", "3", "--threads", "2", *extra])
+        runpy.run_path(script, run_name="__main__")
+        calls = [json.loads(line) for line in standins_imported.read_text().splitlines()]
+        assert [c["call"] for c in calls[:2]] == ["vectors_from_file", "StaticDiskIndex"]
+        ix = calls[1]
+        assert (ix["index_directory"], ix["num_threads"], ix["distance_metric"], ix["dimensions"]) == (str(tmp_path / "index"), 2, "l2", 4)
+        assert "float32" in ix["vector_dtype"]
+        if extra[0] == "--batch":
+            assert (ix["num_nodes_to_cache"], ix["cache_mechanism"]) == (0, 0)
+            assert [(c["call"], c["shape"], c["k"], c["complexity"], c["threads"], c["beam"]) for c in calls[2:]] == [
+                ("batch_search", [3, 4], 10, 100, 2, 4)]
+        else:
+            assert (ix["num_nodes_to_cache"], ix["cache_mechanism"]) == (10000, 2)
+            assert [c["call"] for c in calls[2:]] == ["stat", "search"] * 3
+            assert {(c["dim"], c["k"], c["complexity"], c["beam"]) for c in calls[3::2]} == {(4, 10, 100, 4)}

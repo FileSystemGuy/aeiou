@@ -30,7 +30,7 @@ def main():
     if a.threads:
         faiss.omp_set_num_threads(a.threads)
     xq = fvecs(a.queries_file)[:a.queries]
-    os.chdir(a.out)                      # the index names its lists file relative to itself
+    os.chdir(a.out)                      # the index by its name in OUT; it names its lists file absolutely (mkindex.py)
     index = faiss.read_index("populated.index")
     index.nprobe = a.nprobe
     for i in range(0, len(xq), a.batch):
