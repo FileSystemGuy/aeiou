@@ -226,10 +226,12 @@ fn an_option_narrowing_an_absent_one_is_a_usage_error() {
 fn a_reader_that_goes_away_is_a_quiet_141() {
     use std::process::Stdio;
     let ast = example("file_per_sample.ast.json");
-    // stdout a pipe whose read end is closed before the command prints its first line
+    // stdout a pipe whose read end is closed before the command starts, so its first line
+    // never fits in the pipe's buffer (closed after the spawn, a fast child wrote and exited 0)
     let gone = |c: &mut Command| -> (Option<i32>, String) {
-        let mut child = c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        drop(child.stdout.take());
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let child = c.stdout(Stdio::from(writer)).stderr(Stdio::piped()).spawn().unwrap();
         let o = child.wait_with_output().unwrap();
         (o.status.code(), String::from_utf8_lossy(&o.stderr).into_owned())
     };

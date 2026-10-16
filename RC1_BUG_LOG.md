@@ -2978,3 +2978,43 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `object` clean, builder suite with MinIO and `AEIOU_REQUIRE=runner,formats,strace,header,py-formats`
   419 passed, `aeiou-catalog check` 13 mechanisms, 16 cases ok, `aeiou-build --hermetic --twice
   --check` rc 0 (no AST hash changed). Fixed in an isolated worktree and applied.
+
+## 147. The `| head` test of bug 112 raced: the child could fill the pipe before the test closed its reader
+
+- **Where:** `runner/aeiou/tests/usage.rs` (`a_reader_that_goes_away_is_a_quiet_141`).
+- **Found by:** a failure under load while verifying bugs 135–140: the test spawned with
+  `Stdio::piped()` and dropped the read end after the spawn, so a child that wrote into the pipe
+  buffer first exited 0. Reproduced with a 500 ms sleep between spawn and drop: `left: (Some(0),
+  "") right: (Some(141), "")`.
+- **Fix:** `std::io::pipe()`, the reader dropped before the spawn, the writer handed to the child.
+- **Evidence:** with the same delay after the spawn the fixed test passes; 120 runs (15 rounds × 8
+  in parallel beside 8 CPU burners) all pass; on HEAD 1882f14 plus the change `--tests --lib --bins`
+  with MinIO pass (all 168, lib 78), builder suite with MinIO 419. Fixed in an isolated worktree
+  and applied.
+
+## 148. A rename of an s3 path with a handle open for writing copied no object (or an older one), and a handle open on the target overwrote the renamed object at its close
+
+- **Where:** `runner/aeiou/src/object.rs` (rename: EBUSY when the source has an unsent upload; `settle`
+  of `Answer::Renamed` marks a write handle on the target `unlinked`; `Handle` doc);
+  `runner/REFERENCE.md` §16 op table (`close`, `rename` rows); `runner/aeiou/tests/object.rs`.
+- **Found by:** the RC1 fix of bugs 135–140 (an unlink's kin): POSIX renames the open file and
+  leaves a handle on the replaced target unnamed; here the copy found no object (or the older one)
+  and the close PUT at the old key, and a target handle's close PUT over the renamed object.
+- **Fix:** a rename whose source has a handle open for writing is refused, EBUSY ("an object is made
+  by its close, so it is renamed after it (V18)"): a multipart upload's key is fixed when it
+  starts, and a deferred rename would leave the old target visible; a handle open for writing on
+  the target sends nothing at its close (bug 136's flag), as POSIX leaves it unnamed.
+- **Evidence:** `object::a_rename_and_the_handles_open_for_writing_on_its_paths` (blocking and async;
+  target case: f1 is the renamed 8192 bytes, manifest `["o/f1"]`; source case: refused, f0 keeps
+  its 4096 bytes, no open upload) fails on HEAD ("it succeeded"; `left: (None, Some(5120)) right:
+  (None, Some(8192))`) and passes; same suite runs as bug 147.
+
+## 149. REFERENCE §16 said container datasets in an object store are written only by the Python `aeiou-datagen`
+
+- **Where:** `runner/REFERENCE.md` §16, the *`aeiou datagen`* paragraph.
+- **Found by:** the RC1 fix of bug 135: `datagen.rs` `write_container` writes containers to stores
+  through `store.put_parts` in a `formats` build.
+- **Fix:** the paragraph says a `formats` build writes them the same way (the format's writer filling
+  each part, checked against the layout part by part), as `aeiou-datagen` does; `man/aeiou.1.md`
+  already said so.
+- **Evidence:** read against `write_container`; `test_man.py`/`man.rs` pass; same suite runs as bug 147.

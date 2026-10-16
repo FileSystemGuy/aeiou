@@ -113,7 +113,8 @@ pub fn errno_of(e: &io::Error) -> Option<i32> {
 /// A file of the abstract that lives in an object store, as an actor holds it open: the
 /// store, the key's part below the endpoint's prefix, and, when it was opened for writing,
 /// its upload (`None` inside while an op of the handle has it on the runtime), and whether
-/// its path was unlinked while it was open for writing (its close then makes no object).
+/// its path was unlinked, or renamed over, while it was open for writing (its close then
+/// makes no object).
 pub struct Handle {
     pub store: Arc<Store>,
     pub rest: String,
@@ -365,6 +366,12 @@ pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Share
             if !store.same_bucket(&to_store) {
                 return Step::Done(Err(error(libc::EXDEV, format!("rename {} to {to}: the target is in another bucket ({})", op.path, to_store.uri()))));
             }
+            // a handle open for writing on the source (and not unlinked) has made no object yet:
+            // the copy would find none, or an older one, and its close would put the object back
+            // at the old name, where POSIX renames the open file
+            if a.fds.get(op.path).as_deref().and_then(|f| f.as_object()).is_some_and(|h| h.upload.is_some() && !h.unlinked.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Step::Done(Err(error(libc::EBUSY, format!("rename {} to {to}: the handle open on {} has an upload its close never sent; an object is made by its close, so it is renamed after it (V18)", op.path, op.path))));
+            }
             let f = store.rename(&rest, &to_store, &to_rest);
             Step::Send(Box::pin(async move { Answer::Renamed(f.await) }))
         }
@@ -388,6 +395,12 @@ pub(crate) fn settle(a: &mut crate::run::ActorState, op: &crate::vm::Op, answer:
         }
         Answer::Renamed(r) => {
             if r.is_ok() {
+                // a handle open for writing on the target goes on unnamed, as at an unlink: its
+                // close would otherwise put its object over the one renamed there
+                let to = op.path2.unwrap_or("");
+                if let Some(h) = a.fds.get(to).as_deref().and_then(|f| f.as_object()).filter(|h| h.upload.is_some()) {
+                    h.unlinked.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 a.removed.push(op.path.to_string());
                 a.created.push((op.path2.unwrap_or("").to_string(), a.actor));
             }

@@ -757,6 +757,50 @@ fn an_object_unlinked_while_open_for_writing_is_never_made() {
     }
 }
 
+/// A rename onto a path a handle has open for writing leaves that handle unnamed, as POSIX
+/// does: its close makes no object, which would otherwise overwrite the renamed one. A rename
+/// of a path whose own upload is unsent is refused: the object is made by the close (V18), so
+/// the copy would find nothing, or an older object, and the close would put the object back at
+/// the old name (RC1 review).
+#[test]
+fn a_rename_and_the_handles_open_for_writing_on_its_paths() {
+    let m = minio("a_rename_and_the_handles_open_for_writing_on_its_paths");
+    let dir = tmpdir("renamed");
+    let ns = r#""namespaces": {"o": {"pattern": "o/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}}"#;
+    let bind = r#"{"let": {"name": "s", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
+              {"let": {"name": "t", "value": {"object": {"namespace": "o", "fields": {"k": 1}}}}}"#;
+    let open = |f: &str, len: u64| format!(r#"{{"open": {{"file": {{"ref": "{f}"}}, "flags": ["WRONLY", "CREAT", "TRUNC"]}}}}, {{"write": {{"file": {{"ref": "{f}"}}, "len": {len}}}}}"#);
+    let put = |f: &str, len: u64| format!(r#"{}, {{"close": {{"file": {{"ref": "{f}"}}}}}}"#, open(f, len));
+    let rename = r#"{"rename": {"from": {"ref": "s"}, "to": {"ref": "t"}}}"#;
+    let write = |name: &str, body: String| {
+        let p = dir.join(format!("{name}.ast.json"));
+        std::fs::write(&p, format!(r#"{{"ast": "0.10", "name": "{name}", {ns}, "actors": {{"gpu": {{"body": [{bind}, {body}]}}}}}}"#)).unwrap();
+        p
+    };
+    // the target open for writing: t holds s's 8192 bytes, and t's handle closes unnamed
+    let onto = write("onto", format!(r#"{}, {}, {rename}, {{"write": {{"file": {{"ref": "t"}}, "len": 1024}}}}, {{"close": {{"file": {{"ref": "t"}}}}}}"#, open("t", 4096), put("s", 8192)));
+    // the source open for writing, over an older s: refused, the bucket as the older s left it
+    let from = write("from", format!(r#"{}, {}, {rename}, {{"close": {{"file": {{"ref": "s"}}}}}}"#, put("s", 4096), open("s", 8192)));
+    let size = |key: &str| -> Option<u64> {
+        let o = curl(&m, &format!("/bench/{key}"), &["-I"]);
+        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length: ").map(|v| v.trim().parse().unwrap())).unwrap())
+    };
+    for s3 in ["blocking", "async"] {
+        let prefix = format!("rn{s3}");
+        let o = aeiou(Some(&m), &["run", onto.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", &format!("o=s3://bench/{prefix}"), "--s3", s3]);
+        ok(&o);
+        assert_eq!((size(&format!("{prefix}/f0")), size(&format!("{prefix}/f1"))), (None, Some(8192)), "{s3}: t is the renamed s");
+        let manifest: serde_json::Value = serde_json::from_slice(&curl(&m, &format!("/bench/{prefix}/.aeiou-namespace.json"), &[]).stdout).unwrap();
+        let names: Vec<&str> = manifest["objects"].as_array().unwrap().iter().map(|o| o[0].as_str().unwrap()).collect();
+        assert_eq!(names, ["o/f1"], "{s3}: {manifest}");
+        let prefix = format!("rf{s3}");
+        let o = aeiou(Some(&m), &["run", from.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", &format!("o=s3://bench/{prefix}"), "--s3", s3]);
+        refused(&o, "rename o/f0 to o/f1: the handle open on o/f0 has an upload its close never sent; an object is made by its close, so it is renamed after it (V18)");
+        assert_eq!((size(&format!("{prefix}/f0")), size(&format!("{prefix}/f1"))), (Some(4096), None), "{s3}: the older s, untouched");
+        assert_eq!(open_uploads(&m, &format!("{prefix}/f0")), 0, "{s3}: s's upload was left on the store");
+    }
+}
+
 #[test]
 fn a_store_throttling_is_retried_and_every_retry_reported() {
     let m = minio("a_store_throttling_is_retried_and_every_retry_reported");
