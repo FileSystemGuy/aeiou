@@ -5,7 +5,8 @@ name: release
 # libhdf5 at the versions uv.lock pins; DESIGN_REVIEW.md §3.70), and `aeiou-launch`, the manual pages as roff and as Markdown, the
 # committed abstracts under workloads/ with their parameter files, READMEs, descriptions, and catalog records, the builder's wheel, and
 # QUICKSTART.md. Built on ubuntu-22.04 so the binary runs on glibc 2.34 and later (RHEL 9,
-# Ubuntu 22.04, Debian 12 and newer); the runner links nothing but libc. Nothing is
+# Ubuntu 22.04, Debian 12 and newer); the runner links nothing but the C runtime (its S3 client
+# uses rustls, no OpenSSL). Nothing is
 # published to a registry. The tag must equal the version in runner/Cargo.toml and
 # builder/pyproject.toml.
 on:
@@ -44,7 +45,9 @@ jobs:
 
       - name: Build the runner
         working-directory: runner
-        run: cargo build --release --features formats --bin aeiou   # the container writers (DESIGN_REVIEW.md §3.70)
+        # the default features: the container writers (DESIGN_REVIEW.md §3.70) and the object engine (§3.65,
+        # runner/REFERENCE.md §16), so one binary serves every format and S3 stores alike (2026-10-16)
+        run: cargo build --release --bin aeiou
 
       - name: Build the builder's wheel
         working-directory: builder
@@ -85,6 +88,8 @@ jobs:
         run: |
           mkdir smoke && tar xzf "$DIST.tar.gz" -C smoke && cd "smoke/$DIST"
           bin/aeiou --version
+          # the object engine is in (a build without it carries this refusal)
+          ! grep -aq 'built without the object engine' bin/aeiou
           bin/aeiou-header --version
           # HDF5 through the aeiou-header beside aeiou, in an environment with no Python
           env -i PATH=/usr/bin:/bin bin/aeiou datagen workloads/input-pipeline/map/hdf5/hdf5_map.ast.json --root /tmp/smoke-h5 \

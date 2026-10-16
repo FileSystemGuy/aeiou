@@ -221,7 +221,7 @@ def test_aeiou_datagen_streams_containers_into_the_bucket(name, minio, tmp_path)
     prefix = f"rust-{name}/data"
     r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
                         "--writers", "3", *flags], capture_output=True, text=True, env=minio.env)
-    if "--features formats" in r.stderr:
+    if "no container writers" in r.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "unused").exists(), "nothing written to a local file system"
@@ -260,7 +260,7 @@ def test_aeiou_datagen_resumes_into_the_bucket(name, minio, tmp_path):
     prefix = f"resume-{name}/data"
     r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
                         "--writers", "3", "--dedupe", "2", *flags], capture_output=True, text=True, env=minio.env)
-    if "--features formats" in r.stderr:
+    if "no container writers" in r.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert r.returncode == 0, r.stdout + r.stderr
     mkey = f"{prefix}/.aeiou-dataset.json"
@@ -305,7 +305,7 @@ def test_aeiou_datagen_grows_and_shrinks_in_the_bucket(name, minio, tmp_path):
     def fresh(prefix, n):
         r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
                             "--writers", "3", *flags, "--param", f"{count}={n}"], capture_output=True, text=True, env=minio.env)
-        if "--features formats" in r.stderr:
+        if "no container writers" in r.stderr:
             pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
         assert r.returncode == 0, r.stdout + r.stderr
 

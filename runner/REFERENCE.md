@@ -97,7 +97,7 @@ aeiou/tests/limits.rs   the limit checks (§11): the estimate against the counte
 aeiou/tests/report.rs   the JSON report (§12) through the binary: against the text, failed runs, two ranks
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
 aeiou/tests/trace.rs    the `trace` node (§13); options.rs, usage.rs: the layers (§14) and the frame (§15) through the binary
-aeiou/tests/object.rs   the object engine against a local MinIO (`--features object`, `TEST_MINIO_BIN`; §16)
+aeiou/tests/object.rs   the object engine against a local MinIO (the default feature `object`, `TEST_MINIO_BIN`; §16)
 aeiou/tests/man.rs      man/aeiou.1.md against every subcommand's `--help`
 aeiou-launch            the ssh loop: one rank per host
 ```
@@ -830,8 +830,8 @@ as root). The same runs on the loopback NFS mount are §7.
   writes every dataset that has a format class, with the same names, sizes, payload, and
   manifest form (its `format` block records the class and writer library); ~~`aeiou datagen`
   refuses such a dataset~~. **Since 2026-10-12** (`DESIGN_REVIEW.md` §3.70) `aeiou datagen`
-  built with the cargo feature `formats` (off by default, as `object` is; it brings the
-  crate `crc32c`; the release binary is built with it) writes TFRecord and WebDataset (tar) itself (`formats.rs`), byte for byte
+  built with the cargo feature `formats` (~~off by default, as `object` is~~ a default feature,
+  as `object` is, since 2026-10-16; it brings the crate `crc32c`) writes TFRecord and WebDataset (tar) itself (`formats.rs`), byte for byte
   the Python writer's files: a file is a byte stream pulled in pieces (`Stream`), framing
   made as it is reached (TFRecord's CRC taken as the data streams past; CPython `tarfile`'s
   ustar headers, mode 0644, owner 0, mtime 0, no device numbers), the samples' payload
@@ -2119,11 +2119,13 @@ the same bytes for the same mistake but for the command's name.
 
 ## 16. The object engine (2026-10-09)
 
-`src/object.rs`, behind the cargo feature `object` (`cargo build --release --features
-object`): the ops of a dataset declared `protocol: s3` (contract 0.7; `object` in 0.6) issued to an S3
+`src/object.rs`, the cargo feature `object` (a default feature since 2026-10-16): the ops of a dataset declared `protocol: s3` (contract 0.7; `object` in 0.6) issued to an S3
 store through Apache `object_store` 0.14.2 (`aws` feature, pinned), the library chosen over
-`s3dlio` by measurement (`DESIGN_REVIEW.md` §3.65). The default build has no tokio, no
-`object_store`, and refuses an object endpoint (`Store` is an empty enum there). ~~Reads first:
+`s3dlio` by measurement (`DESIGN_REVIEW.md` §3.65). ~~The default build has no tokio, no
+`object_store`, and refuses an object endpoint (`Store` is an empty enum there).~~ `object` is
+a default feature (2026-10-16), so every build, the release's included, serves directories and S3
+stores; a build with `--no-default-features` has no tokio, no `object_store`, and refuses an
+object endpoint (`Store` is an empty enum there). ~~Reads first:
 object namespaces, and every op that would change a store, wait for the engine's writes.~~
 Reads first; the writes (object namespaces, every op that changes a store, the namespace
 manifest as an object) the same night.
@@ -2278,9 +2280,10 @@ read back to the dry run's fingerprint under `sync`, `posix-aio`, `mmap`, `io_ur
 1,300 objects, with its header reads past every object's end, under `sync` and `io_uring`;
 and the refusals, which need no server. The tests that need one start MinIO from the binary `TEST_MINIO_BIN` names, on a free port with a
 directory of their own, and create the bucket with `curl --aws-sigv4`; they fail, naming
-it, when it is unset (a Rust test has no skipped state; `DESIGN_REVIEW.md` §3.75 item iv). CI's `runner-object` job downloads the last MinIO release that
+it, when it is unset (a Rust test has no skipped state; `DESIGN_REVIEW.md` §3.75 item iv). CI's `runner-tests` job (every test of the runner, since `object` became a default feature,
+2026-10-16) and its `runner-object` job download the last MinIO release that
 has binaries (`RELEASE.2025-09-07T16-13-09Z`; the project stopped publishing them and archived
-its repository) and checks its SHA-256 before running them. Since the writes: the shared KV
+its repository) and check its SHA-256 before running them. Since the writes: the shared KV
 store (`lmcache_shared_fs`) written into a bucket with 6 MiB chunks in 5 MiB parts (every chunk
 file a two-part upload, then a copy and a `DELETE`), to the dry run's fingerprint; a second
 run refused on the non-empty prefix and one with `--clean-namespaces` (under `io_uring`)

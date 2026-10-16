@@ -580,7 +580,7 @@ fn container(name: &str, resolved: &Value) -> Result<Container> {
     }
     #[cfg(not(feature = "formats"))]
     bail!(
-        "dataset `{name}` is a `{}` container: this build of aeiou has no container writers (the cargo feature `formats` adds TFRecord, WebDataset, HDF5, and Parquet, as the release binary has them)",
+        "dataset `{name}` is a `{}` container: this build of aeiou has no container writers (the cargo feature `formats`, a default feature, adds TFRecord, WebDataset, HDF5, and Parquet; this build left it out)",
         fmt["class"].as_str().unwrap_or("?")
     )
 }

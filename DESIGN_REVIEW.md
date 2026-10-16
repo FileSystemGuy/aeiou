@@ -4486,6 +4486,20 @@ abstract traced on POSIX is another workload (candidates: `s3torchconnector`, `s
 data loader, or one the WG names); and whether the POSIX-engine crate shared with `s3dlio`
 is worth offering.~~
 
+**Every build has the object engine (decided by the user 2026-10-16).** `object` is a default
+feature, so every build of `aeiou`, the release tarball's included, reads and writes S3 and a
+user who wants S3 needs no other binary ("minimize the surprise factor"). This revises the
+choice above to keep the default build tokio-free: tokio and `object_store` are now in every
+build, the runtime still built only on the first object call, so a run that touches no object
+store starts no tokio thread. `--no-default-features` builds without the engine, which refuses an
+object endpoint; CI tests that refusal, and its main runner job, `runner-tests`, now runs every
+test the engine has against MinIO (until then only `runner-object` did). The cost: the binary grows from about 45 MB to about
+88 MB, and its libraries stay libc, libm, and libgcc_s (the S3 client is rustls and ring, no
+OpenSSL). The release's smoke test refuses a binary that carries the no-engine refusal. The same
+day, for the same reason, `formats` (the container writers, §3.70, off by default until then) became
+a default feature too: a plain `cargo build` writes every container format, as the release
+binary always did.
+
 ### 3.66 A catalog of workloads: `workloads/<category>/…/<mechanism>/cases/<case>`, and a dictionary of the attributes it is searched by (proposed 2026-10-10; the shape of it decided the same day, the details open)
 
 **The question (the user's).** Traces and the abstracts fitted to them are accumulating, and

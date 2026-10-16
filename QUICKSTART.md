@@ -7,7 +7,7 @@ and, for the runner alone, no Python.
 
 | Path | What |
 |---|---|
-| `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 Linux, glibc 2.34 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. |
+| `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 Linux, glibc 2.34 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. Reads and writes S3 object stores as well as directories (**aeiou**(1), OBJECT STORES). |
 | `bin/aeiou-header` | Made by `aeiou datagen`, never by you: the header of an HDF5 file, from libhdf5 (one file carrying Python, numpy, h5py). It must stay beside `bin/aeiou`; only the host of rank 0 runs it, so client hosts need `aeiou` alone. |
 | `bin/aeiou-launch` | One `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh. A POSIX shell script. |
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
@@ -89,5 +89,5 @@ decide what the numbers mean, so include them.
 ## From source instead
 
 To patch and rebuild, clone the repository and follow the quick start in its `README.md`:
-`cargo build --release --features formats` in `runner/` (the release binary's features) and `uv sync --extra test --extra formats` in
+`cargo build --release` in `runner/` (the default features, the release binary's: the container writers and the S3 engine) and `uv sync --extra test --extra formats` in
 `builder/`.

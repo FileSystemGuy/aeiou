@@ -7,9 +7,9 @@ Nothing here depends on Python. The manual is [aeiou(1)](../man/aeiou.1.md) and
 fixes and every choice made in building it, is [REFERENCE.md](REFERENCE.md).
 
 ```
-cargo build --release --features formats   # formats: the TFRecord, tar, HDF5, and Parquet writers of datagen
-cargo build --release --features object,formats   # object: the object engine, for names declared `protocol: s3`
-cargo test --release --features formats
+cargo build --release   # default features, the release binary's: formats (the TFRecord, tar, HDF5, and Parquet
+                        # writers of datagen) and object (the object engine, for names declared `protocol: s3`)
+TEST_MINIO_BIN=/path/to/minio cargo test --release   # the object tests start that MinIO server
 ./target/release/aeiou check $(find ../workloads -name '*.ast.json')
 ./target/release/aeiou dry-run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
 ./target/release/aeiou run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
@@ -127,7 +127,7 @@ checker, container layouts by hand, datagen-and-run round trips over every commi
 abstract under every backend on a temporary directory, the io_uring knobs, the metrics,
 the limit checks, the JSON report through the binary, two-rank runs as threads and as
 processes, the option layers, the usage frame, and the manual page against `--help`. The
-object engine's tests (`--features object`) run against a local MinIO
+object engine's tests (the default feature `object`) run against a local MinIO
 (`TEST_MINIO_BIN`), as CI runs them.
 
 ## Pointers

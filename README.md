@@ -162,11 +162,11 @@ one frame, listing every missing argument at once, and exits 2.
 **Runner (Rust, edition 2021).** `clap` for the command line, `serde`/`serde_json` for the
 AST and the reports, `toml` for the config file, `sha2` for identities, `xxhash-rust`
 (xxh3) for positional keys and the fingerprint, its own SFC64 for the positional payload,
-`libc` and the `io-uring` crate for the backends, `anyhow` for errors. Behind the cargo
-feature `object`, the object engine: Apache `object_store` (S3), `tokio`, `futures`, `bytes`;
-behind `formats`, the container writers of `aeiou datagen`, with `crc32c` (the release binary
-is built with `formats`). Blocking `std::net` for the coordinator; no tokio in the default
-build, no MPI. Linux interfaces: `io_uring` (with `SQPOLL`,
+`libc` and the `io-uring` crate for the backends, `anyhow` for errors. The object engine,
+the cargo feature `object`, on by default: Apache `object_store` (S3), `tokio`, `futures`,
+`bytes`; `formats`, also on by default, the container writers of `aeiou datagen`, with
+`crc32c`. Blocking `std::net` for the coordinator, tokio only in the
+object engine; no MPI. Linux interfaces: `io_uring` (with `SQPOLL`,
 `DEFER_TASKRUN`, `COOP_TASKRUN`, io-wq worker caps), the kernel AIO calls, glibc POSIX AIO,
 `mmap` with `madvise`, `O_DIRECT`, `posix_fadvise`, `mincore`, `/proc/sys/vm/drop_caches`,
 `/proc/self/mountstats` for NFS RPC counts, `getrusage`, the rlimits and sysctls a run
@@ -188,8 +188,9 @@ NumPy, `torch.distributed.checkpoint`, safetensors, DiskANN, FAISS, vLLM with LM
 
 **CI.** GitHub Actions, four jobs: the builder tests with the hermetic rebuild of every
 abstract against the committed ASTs and every parameter file against its abstract; the
-runner's tests (`cargo nextest`, feature `formats`); the object engine's tests against a
-pinned MinIO, with `aeiou-datagen` into the bucket read back to the dry-run fingerprint; and
+runner's whole suite (`cargo nextest`), the object engine's tests against a pinned MinIO
+included; the object engine's tests again in a build without `formats`, with
+`aeiou-datagen` into the bucket read back to the dry-run fingerprint; and
 the integration job that diffs the Rust checker against the reference checker, runs every
 Python test against the binary (the container datasets to their fingerprints, the metrics of
 an strace of the runner held to its own dry run), and checks the workload catalog. A test
@@ -203,8 +204,10 @@ abstracts with their cases and catalog, and the builder's wheel, for x86_64 Linu
 attached to every tag; [QUICKSTART.md](QUICKSTART.md) is the guide for it. From source:
 
 ```
-# the runner (`formats`: aeiou datagen writes TFRecord and tar, as the release binary does)
-cd runner && cargo build --release --features formats && cargo test --release --features formats && cd ..
+# the runner, with its default features as the release binary has them (`formats`: aeiou
+# datagen's container writers; `object`: the object engine, for S3 stores); its object tests
+# start the MinIO server TEST_MINIO_BIN names (runner/REFERENCE.md §16)
+cd runner && cargo build --release && TEST_MINIO_BIN=/path/to/minio cargo test --release && cd ..
 
 # the builder (or: pip install -e 'builder[test,formats]')
 cd builder && uv sync --extra test --extra formats && uv run pytest && cd ..
@@ -269,7 +272,7 @@ Not built, in rough order of interest:
   dataset and namespace built the same day, the mount counters still `--root`'s alone):
   transport and buffer beside them; ~~then object storage through Apache `object_store` behind a feature flag (item 17; ~~`s3dlio`~~ decided 2026-10-09, `DESIGN_REVIEW.md` §3.65),~~
   ~~the object engine's writes (object namespaces, multipart at `close`, V18) and~~ ~~the object engine's event-loop
-  bridge,~~ its reads of datasets and its writes of namespaces (multipart at `close`, V18) on Apache `object_store` behind the cargo feature `object`,
+  bridge,~~ its reads of datasets and its writes of namespaces (multipart at `close`, V18) on Apache `object_store` (the cargo feature `object`, on by default since 2026-10-16),
   under `--s3 blocking` or `async` (an API per protocol, contract 0.7), built 2026-10-09 (item 17, `runner/REFERENCE.md` §16); `aeiou-datagen` (the Python container writer) to object stores built 2026-10-11, each file streamed into an upload with no local copy, and every writer, HDF5 and Parquet included, holding a piece of its file rather than the file (`DESIGN_REVIEW.md` §3.69); a measurement against a real store not yet; and the backends from the brief's list not yet written: `gds`, `nixl-posix`, `libnfs`.
 - A run on real hosts (the coordinator's connect window and heartbeat constants have only
   met `localhost`), and tensor-parallel sharding of a KV chunk, where `--gpus` is today

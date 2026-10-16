@@ -4,8 +4,10 @@ on:
   push:
   pull_request:
 
-# Four jobs on four runners (4 cores each); the fourth, `runner-object`, builds the object engine
-# (its tests without the container writers, so the build without `formats` is compiled too). `abstracts` needs no Rust. The runner's own
+# Four jobs on four runners (4 cores each). The runner's whole suite, the object engine's tests
+# against MinIO included (`object` and `formats` are default features, 2026-10-16), runs in `runner-tests`; the
+# fourth, `runner-object`, runs the object engine's tests again in the build without `formats`, so
+# that build is compiled too, and the Python writer into a bucket read back by the engine. `abstracts` needs no Rust. The runner's own
 # tests and the Python tests that drive the built binary each build on their own runner from
 # one shared Rust cache: the test binaries are compiled only where they are run, and the
 # integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers, the
@@ -46,11 +48,19 @@ jobs:
           workspaces: runner
           shared-key: runner
       - uses: taiki-e/install-action@nextest
-      - name: Build and test
+      - name: MinIO server, for the object engine's tests (the pinned release, as runner-object's)
+        run: |
+          curl -sSfL -o /tmp/minio https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
+          echo "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f  /tmp/minio" | sha256sum -c
+          chmod +x /tmp/minio
+      - name: Build and test, every test the object engine's included
         working-directory: runner
-        run: cargo nextest run --release --features formats
+        run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release
+      - name: A build without the object engine refuses an object endpoint
+        working-directory: runner
+        run: "cargo test --release --no-default-features --lib endpoint::"
 
-  # The object engine (cargo feature `object`, runner/REFERENCE.md §16) against MinIO: the last
+  # The object engine (cargo feature `object`, on by default; runner/REFERENCE.md §16) against MinIO: the last
   # release that has binaries (the project archived its repository), checked by SHA-256.
   runner-object:
     runs-on: ubuntu-latest
@@ -69,7 +79,7 @@ jobs:
           chmod +x /tmp/minio
       - name: Build with the object engine and test it
         working-directory: runner
-        run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release --features object -E 'test(/object/) | test(/endpoint/)'
+        run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release --no-default-features --features object -E 'test(/object/) | test(/endpoint/)'
       - uses: astral-sh/setup-uv@v5
       - name: Builder with the format classes' libraries and the S3 client
         working-directory: builder
@@ -77,7 +87,7 @@ jobs:
       - name: aeiou-datagen into the bucket, read back by the object engine to the dry-run fingerprint
         working-directory: builder
         run: |
-          cargo build --release --features object,formats --bin aeiou --manifest-path ../runner/Cargo.toml
+          cargo build --release --bin aeiou --manifest-path ../runner/Cargo.toml
           ln -sf ../../../builder/.venv/bin/aeiou-header ../runner/target/release/aeiou-header
           AEIOU_REQUIRE=runner,object,formats,header,minio,py-formats,py-s3 TEST_MINIO_BIN=/tmp/minio AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_object.py
 
@@ -92,7 +102,7 @@ jobs:
           shared-key: runner
       - name: Build the binary
         working-directory: runner
-        run: cargo build --release --features formats --bin aeiou
+        run: cargo build --release --bin aeiou
       - uses: astral-sh/setup-uv@v5
       - name: Builder with the format classes' libraries
         working-directory: builder

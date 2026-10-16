@@ -686,8 +686,8 @@ key `imagenet/00001/img_000001300.jpg` of the bucket `data`.
 ## OBJECT STORES
 
 A name declared `protocol: s3` is read and written through the object engine, built on Apache
-`object_store` with the cargo feature `object` (a build without it, the release's binary
-among them, refuses an object endpoint). The store is the one the environment names: `AWS_ENDPOINT_URL`,
+`object_store` with the cargo feature `object`, on by default (the release's binary has it; a build with
+cargo's default features turned off refuses an object endpoint). The store is the one the environment names: `AWS_ENDPOINT_URL`,
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_ALLOW_HTTP=true` for a
 plain-HTTP endpoint; requests are path-style unless `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` is
 set. Operations map as follows; the stream, the fingerprint, and the dataset ids are the

@@ -352,7 +352,7 @@ def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     params = _params(corpus)
     flags = [*params, "--dedupe", "2", "--compress", "3"]
     rs = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "rs", "--writers", "3", *flags], capture_output=True, text=True)
-    if "--features formats" in rs.stderr:
+    if "no container writers" in rs.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert rs.returncode == 0, rs.stdout + rs.stderr
     assert f"({name.split('_')[0]}, aeiou datagen " in rs.stdout
@@ -389,7 +389,7 @@ def test_the_stream_writers_in_this_process_write_the_rust_writers_bytes(name, t
     ast_file = make(tmp_path)
     rs = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "rs", *_params(corpus), "--dedupe", "2", "--compress", "3"],
                         capture_output=True, text=True)
-    if "--features formats" in rs.stderr:
+    if "no container writers" in rs.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert rs.returncode == 0, rs.stdout + rs.stderr
     ast = json.loads(ast_file.read_text())
@@ -427,7 +427,7 @@ def test_a_parquet_projection_reads_its_column_chunks_and_no_more(columns, tmp_p
             fmt.close(g, s)
     ast_file = w.write(tmp_path, provenance=False)
     dg = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "r"], capture_output=True, text=True)
-    if "--features formats" in dg.stderr:
+    if "no container writers" in dg.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert dg.returncode == 0, dg.stdout + dg.stderr
     run = subprocess.run([RUNNER, "run", ast_file, "--root", tmp_path / "r", "--gpus", "1", "--time-scale", "0",
@@ -472,7 +472,7 @@ def test_an_hdf5_row_smaller_than_the_sieve_reads_the_sieve_up_to_eof(tmp_path):
             fmt.close(g, f)
     ast_file = w.write(tmp_path, provenance=False)
     dg = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "r"], capture_output=True, text=True)
-    if "--features formats" in dg.stderr:
+    if "no container writers" in dg.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert dg.returncode == 0, dg.stdout + dg.stderr
     run = subprocess.run([RUNNER, "run", ast_file, "--root", tmp_path / "r", "--gpus", "1", "--time-scale", "0",
@@ -501,7 +501,7 @@ def test_the_webdataset_reader_protocol_runs_over_the_tars_aeiou_datagen_writes(
             fmt.stream(g, s)
     ast_file = w.write(tmp_path, provenance=False)
     dg = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "r"], capture_output=True, text=True)
-    if "--features formats" in dg.stderr:
+    if "no container writers" in dg.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert dg.returncode == 0, dg.stdout + dg.stderr
     run = subprocess.run([RUNNER, "run", ast_file, "--root", tmp_path / "r", "--gpus", "1", "--time-scale", "0",
@@ -634,7 +634,7 @@ def test_aeiou_datagen_resumes_a_container_corpus(name, tmp_path):
     root = tmp_path / "rs" / "train"
     rs = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "rs", "--writers", "3", *_params(corpus), "--dedupe", "2", "--compress", "3"],
                         capture_output=True, text=True)
-    if "--features formats" in rs.stderr:
+    if "no container writers" in rs.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert rs.returncode == 0, rs.stdout + rs.stderr
     whole = {p.name: p.read_bytes() for p in root.iterdir() if p.name != ".aeiou-dataset.json"}
@@ -677,7 +677,7 @@ def test_aeiou_datagen_grows_and_shrinks_a_container_corpus(name, tmp_path):
     def fresh(where, samples):
         params = [p if not p.startswith("samples=") else f"samples={samples}" for p in corpus]
         r = subprocess.run([RUNNER, "datagen", ast_file, "--root", where, "--writers", "3", *_params(params), "--dedupe", "2"], capture_output=True, text=True)
-        if "--features formats" in r.stderr:
+        if "no container writers" in r.stderr:
             pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
         assert r.returncode == 0, r.stdout + r.stderr
         return where / "train"
@@ -713,7 +713,7 @@ def test_aeiou_datagen_settles_an_interrupted_grow(name, tmp_path):
     def fresh(where, samples):
         params = [p if not p.startswith("samples=") else f"samples={samples}" for p in corpus]
         r = subprocess.run([RUNNER, "datagen", ast_file, "--root", where, "--writers", "3", *_params(params), "--dedupe", "2"], capture_output=True, text=True)
-        if "--features formats" in r.stderr:
+        if "no container writers" in r.stderr:
             pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
         assert r.returncode == 0, r.stdout + r.stderr
         return where / "train"
@@ -805,7 +805,7 @@ def test_hdf5_headers_come_from_rank_0_alone(tmp_path):
     lone.parent.mkdir()
     shutil.copy2(RUNNER, lone)
     alone = subprocess.run([lone, "datagen", make(tmp_path), "--root", tmp_path / "x", *flags], capture_output=True, text=True)
-    if "--features formats" in alone.stderr:
+    if "no container writers" in alone.stderr:
         pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
     assert alone.returncode == 1 and f"{lone.parent / 'aeiou-header'} not found" in alone.stderr, alone.stderr
     with socket.socket() as s:

@@ -1,7 +1,8 @@
 //! The object engine (`DESIGN_REVIEW.md` §3.65): the ops of a dataset or namespace declared
 //! `protocol: s3`, issued to an S3 store through Apache `object_store`, the library chosen
 //! over `s3dlio` by measurement (the same entry). It is built with the cargo feature
-//! `object`; the default build has no tokio and refuses an object endpoint.
+//! `object`, a default feature; a build without it (`--no-default-features`) has no tokio and
+//! refuses an object endpoint.
 //!
 //! **Where.** `--endpoint NAME=s3://BUCKET[/PREFIX]` places a name's root at a prefix of a
 //! bucket, as a directory endpoint places it in a directory (`endpoint.rs`): the abstract's
