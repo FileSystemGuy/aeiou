@@ -469,3 +469,216 @@ fn the_root_check_places_a_read_where_the_walk_does_after_a_short_write_or_a_fai
         assert_eq!(rep.stats.bytes_read, 150, "{}", be.describe());
     }
 }
+
+/// Every op a trace line may hold, issued under the blocking driver and the event loops to
+/// the dry run's fingerprint: the descriptor ops on a file the trace makes (sync, truncate,
+/// allocate, advise, ioctl, seek, stat, a listing), a read that failed in the trace (its
+/// errno the op's `expect`, its count 0), a failed `mkdir`, and the path ops that take it
+/// all away again.
+#[test]
+fn every_op_of_a_trace_runs_to_the_dry_runs_fingerprint() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":["dir"]}
+{"lane":0,"op":"mkdir","path":"dir","mode":493}
+{"lane":0,"op":"mkdir","path":"in","ret":"EEXIST"}
+{"lane":0,"op":"open","fd":0,"path":"dir/a","flags":["WRONLY","CREAT","TRUNC"],"mode":420}
+{"lane":0,"op":"write","fd":0,"len":100,"ret":100}
+{"lane":0,"op":"fsync","fd":0}
+{"lane":0,"op":"fdatasync","fd":0}
+{"lane":0,"op":"ftruncate","fd":0,"len":50}
+{"lane":0,"op":"fallocate","fd":0,"offset":0,"len":200}
+{"lane":0,"op":"fadvise","fd":0,"advice":"DONTNEED"}
+{"lane":0,"op":"ioctl","fd":0,"request":"TCGETS","ret":"ENOTTY"}
+{"lane":0,"op":"lseek","fd":0,"offset":0,"whence":"SET","ret":0}
+{"lane":0,"op":"read","fd":0,"len":10,"ret":"EBADF"}
+{"lane":0,"op":"fstat","fd":0}
+{"lane":0,"op":"close","fd":0}
+{"lane":0,"op":"open","fd":1,"path":"dir","flags":["RDONLY","DIRECTORY"]}
+{"lane":0,"op":"readdir","fd":1}
+{"lane":0,"op":"close","fd":1}
+{"lane":0,"op":"rename","path":"dir/a","to":"dir/b"}
+{"lane":0,"op":"stat","path":"dir/b"}
+{"lane":0,"op":"unlink","path":"dir/b"}
+{"lane":0,"op":"rmdir","path":"dir"}
+"#;
+    let d = tmpdir("every-op");
+    let p = abstract_with(&d, lines, Some(1));
+    let (loaded, model) = leaked(&p, 1);
+    let tf = loaded.traces.get("t.jsonl").unwrap();
+    // `in` is named only by the failed mkdir: no input; `dir` is made by the trace
+    assert_eq!(tf.inputs, Vec::<String>::new());
+    assert_eq!(tf.ops, 21);
+    let dry = dryrun::run(model, 1, None).unwrap();
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("in"), b"x").unwrap();
+    for be in [BackendKind::Sync, BackendKind::Uring, BackendKind::LibAio, BackendKind::PosixAio] {
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap_or_else(|e| panic!("{}: {e:#}", be.describe()));
+        assert_eq!(rep.stats.fingerprint, dry.total.fingerprint, "{}", be.describe());
+        assert_eq!((rep.stats.ops, rep.stats.expected_errors, rep.stats.bytes_written), (21, 3, 100), "{}", be.describe());
+        assert!(!root.join("dir").exists(), "{}", be.describe());
+    }
+}
+
+/// A read that returned nothing read nothing: one past the end of its file (an HDF5 library
+/// probing for its superblock at 512, 1024, 2048, … of a small file, a `pread` at a stale
+/// size) says the file was no longer than its offset, never that it was at least that long,
+/// so the root check holds the file to the reads that returned bytes (RC1 review: a read of 0
+/// at 4096 refused the 100-byte file the application read).
+#[test]
+fn a_read_that_returned_nothing_asks_nothing_of_the_files_size() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":[]}
+{"lane":0,"op":"open","fd":0,"path":"f","flags":["RDONLY"]}
+{"lane":0,"op":"read","fd":0,"offset":0,"len":100,"ret":100}
+{"lane":0,"op":"read","fd":0,"offset":4096,"len":100,"ret":0}
+{"lane":0,"op":"read","fd":0,"offset":100,"len":100,"ret":0}
+{"lane":0,"op":"close","fd":0}
+"#;
+    let d = tmpdir("eof-probe");
+    let p = abstract_with(&d, lines, Some(1));
+    let (loaded, model) = leaked(&p, 1);
+    let tf = loaded.traces.get("t.jsonl").unwrap();
+    assert_eq!(tf.read_extent["f"], 100);
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("f"), vec![b'f'; 100]).unwrap();
+    aeiou::trace::check_root(tf, &root, true).unwrap();
+    let dry = dryrun::run(model, 1, None).unwrap();
+    let rep = run::run(model, opts(&root, BackendKind::Sync, false), Default::default()).unwrap();
+    assert_eq!((rep.stats.fingerprint, rep.stats.bytes_read), (dry.total.fingerprint, 100));
+    // one byte short of the read that returned bytes is still refused
+    std::fs::write(root.join("f"), vec![b'f'; 99]).unwrap();
+    let e = aeiou::trace::check_root(tf, &root, true).unwrap_err().to_string();
+    assert!(e.contains("99 bytes, the trace reads to 100"), "{e}");
+}
+
+/// The errno a trace (or an abstract's `expect`) names is matched by its number, whatever the
+/// errno: an `O_NOFOLLOW` open of a symlink fails `ELOOP` in the application and in the run
+/// alike (RC1 review: an errno outside a short list of names was "E?", so it matched no
+/// `expect` and failed a run that did exactly what the application did), and a name's alias
+/// (`ENOTSUP` for `EOPNOTSUPP`, `EWOULDBLOCK` for `EAGAIN`) is the same errno.
+#[test]
+fn every_errno_a_trace_names_matches_the_one_the_run_gets() {
+    let lines = r#"
+{"aeiou_trace":1,"lanes":1,"creates":[]}
+{"lane":0,"op":"open","fd":0,"path":"link","flags":["RDONLY","NOFOLLOW"],"ret":"ELOOP"}
+{"lane":0,"op":"open","fd":1,"path":"f/x","flags":["RDONLY"],"ret":"ENOTDIR"}
+{"lane":0,"op":"open","fd":2,"path":"f","flags":["RDONLY"]}
+{"lane":0,"op":"lseek","fd":2,"offset":0,"whence":"SET","ret":0}
+{"lane":0,"op":"close","fd":2}
+"#;
+    let d = tmpdir("errno");
+    let p = abstract_with(&d, lines, Some(1));
+    let (_, model) = leaked(&p, 1);
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("f"), b"x").unwrap();
+    std::os::unix::fs::symlink("f", root.join("link")).unwrap();
+    for be in [BackendKind::Sync, BackendKind::Uring] {
+        let rep = run::run(model, opts(&root, be, false), Default::default()).unwrap_or_else(|e| panic!("{}: {e:#}", be.describe()));
+        assert_eq!(rep.stats.expected_errors, 2, "{}", be.describe());
+    }
+    use aeiou::backend::{errno_is, errno_name};
+    assert_eq!([libc::ELOOP, libc::ESPIPE, libc::EOPNOTSUPP, libc::EAGAIN].map(|c| errno_name(c).into_owned()), ["ELOOP", "ESPIPE", "EOPNOTSUPP", "EAGAIN"]);
+    assert!(errno_is("ENOTSUP", libc::EOPNOTSUPP) && errno_is("EOPNOTSUPP", libc::EOPNOTSUPP) && errno_is("EWOULDBLOCK", libc::EAGAIN) && errno_is("EDEADLOCK", libc::EDEADLK));
+    assert!(!errno_is("ENOENT", libc::EIO) && !errno_is("E?", 0) && !errno_is("ENOSUCH", libc::EIO));
+    assert_eq!(errno_name(4095), "E4095");
+}
+
+/// A trace's header names a format this runner reads, its opens are numbered in order, its
+/// lanes are as many as the header says, and one file is named with one sha256.
+#[test]
+fn a_trace_of_another_format_or_out_of_order_is_refused_at_load() {
+    let d = tmpdir("refused");
+    let stat = r#"{"lane":0,"op":"stat","path":"f"}"#;
+    for (lines, want) in [
+        (format!("{}\n{stat}", r#"{"aeiou_trace":2}"#), "aeiou_trace 2 is not 1"),
+        (format!("{}\n{}", r#"{"aeiou_trace":1}"#, r#"{"lane":0,"op":"open","fd":1,"path":"f","flags":["RDONLY"]}"#), "line 2: open id 1 out of order (expected 0)"),
+        (format!("{}\n{stat}", r#"{"aeiou_trace":1,"lanes":2}"#), "1 lanes in the file, the header says 2"),
+        (format!("{}\n{}", r#"{"aeiou_trace":1}"#, r#"{"lane":0,"op":"submit","ops":[{"op":"write","fd":0,"len":1}]}"#), "`submit` member 0 is a sequential write (no `offset`)"),
+        ("\n  \n".to_string(), "empty file"),
+        (format!("{}\n{stat}", r#"{"aeiou_trace":1,"creates":["../up"]}"#), "line 1: path `../up` has a `..` component"),
+    ] {
+        let p = abstract_with(&d, &lines, Some(1));
+        let e = format!("{:#}", aeiou::load(&p).err().unwrap_or_else(|| panic!("loaded: {lines}")));
+        assert!(e.contains(want), "{e}");
+    }
+    // one file named twice with two sha256 values; and a trace inside a `choose` arm is found
+    let text = format!("{}\n{stat}", r#"{"aeiou_trace":1}"#);
+    std::fs::write(d.join("t.jsonl"), &text).unwrap();
+    let good = sha(text.as_bytes());
+    let doc = |other: &str| {
+        format!(
+            r#"{{"ast": "0.10", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
+            "actors": {{"app": {{"count": 1, "body": [{{"choose": {{"arms": [
+               {{"weight": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{good}"}}}}]}},
+               {{"weight": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{other}"}}}}]}}]}}}}]}}}}}}"#
+        )
+    };
+    let p = d.join("two.ast.json");
+    std::fs::write(&p, doc(&good)).unwrap();
+    let loaded = aeiou::load(&p).unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(aeiou::trace::refs(&loaded.ast).len(), 2);
+    std::fs::write(&p, doc(&"0".repeat(64))).unwrap();
+    let e = format!("{:#}", aeiou::load(&p).err().expect("two sha256 values for one file"));
+    assert!(e.contains("trace `t.jsonl` is named with two sha256 values"), "{e}");
+}
+
+/// A trace's paths are issued where the run places them: one under the root of a dataset or
+/// namespace given an `--endpoint` lives there, so the checks before the gate look for it
+/// there too, and `--clean-namespaces` removes what the trace creates there (RC1 review: the
+/// checks looked under `--root`, refusing a run whose input was where the run reads it).
+#[test]
+fn a_traces_paths_are_checked_where_their_endpoints_place_them() {
+    let d = tmpdir("endpoint");
+    let lines = r#"{"aeiou_trace":1,"lanes":1,"creates":["o/new"]}
+{"lane":0,"op":"open","fd":0,"path":"d/f0","flags":["RDONLY"]}
+{"lane":0,"op":"read","fd":0,"len":100,"ret":100}
+{"lane":0,"op":"close","fd":0}
+{"lane":0,"op":"open","fd":1,"path":"o/new","flags":["WRONLY","CREAT","TRUNC"]}
+{"lane":0,"op":"write","fd":1,"len":10,"ret":10}
+{"lane":0,"op":"close","fd":1}"#;
+    std::fs::write(d.join("t.jsonl"), lines).unwrap();
+    let ast = d.join("t.ast.json");
+    std::fs::write(
+        &ast,
+        format!(
+            r#"{{"ast": "0.10", "name": "trace_ep", "doc": "t", "params": {{}},
+             "datasets": {{"d": {{"layout": "whole", "pattern": "d/f{{id}}", "count": 1, "size": {{"const": 100}}, "seed": 3, "access": "map"}}}},
+             "namespaces": {{"o": {{"pattern": "o/f{{k}}", "fields": {{"k": "int"}}, "size": "as_written", "seed": 1}}}},
+             "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{}"}}}}]}}}}}}"#,
+            sha(lines.as_bytes())
+        ),
+    )
+    .unwrap();
+    let (root, data, out) = (d.join("root"), d.join("data"), d.join("out"));
+    std::fs::create_dir_all(&root).unwrap();
+    let aeiou = |args: &[&str]| {
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(args).env_remove("AEIOU_CONFIG").output().unwrap();
+        (o.status.success(), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+    };
+    let (a, r, dd, oo) = (ast.to_str().unwrap(), root.to_str().unwrap(), format!("d={}", data.display()), format!("o={}", out.display()));
+    let (ok, o) = aeiou(&["datagen", a, "--root", r, "--endpoint", &dd]);
+    assert!(ok, "{o}");
+    let run = |extra: &[&str]| {
+        let mut args = vec!["run", a, "--gpus", "1", "--root", r, "--endpoint", &dd, "--endpoint", &oo, "--time-scale", "0"];
+        args.extend(extra);
+        aeiou(&args)
+    };
+    let (ok, o) = run(&[]);
+    assert!(ok, "{o}");
+    assert!(o.contains("trace t.jsonl: 1 input path(s) present under --root, 1 to be created absent"), "{o}");
+    assert_eq!(std::fs::metadata(out.join("new")).unwrap().len(), 10);
+    assert!(!root.join("o").exists() && !root.join("d").exists());
+    // the input at its endpoint, short of where the trace reads
+    std::fs::write(data.join("f0"), b"short").unwrap();
+    let (ok, o) = run(&["--clean-namespaces"]);
+    assert!(!ok && o.contains("trace `t.jsonl`: d/f0 is 5 bytes, the trace reads to 100"), "{o}");
+    // missing at its endpoint, though a file of that name is under --root
+    std::fs::remove_file(data.join("f0")).unwrap();
+    std::fs::create_dir_all(root.join("d")).unwrap();
+    std::fs::write(root.join("d/f0"), vec![0u8; 100]).unwrap();
+    let (ok, o) = run(&["--clean-namespaces"]);
+    assert!(!ok && o.contains(&format!("trace `t.jsonl`: d/f0 ({}): No such file or directory", data.join("f0").display())), "{o}");
+}

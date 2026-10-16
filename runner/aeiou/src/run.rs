@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{Ast, Node};
 use crate::endpoint::Place;
-use crate::backend::{errno_name, Backend, BackendKind, MmapConsume, MmapMode, MmapStats, OpenFile, ALIGN};
+use crate::backend::{errno_is, errno_name, Backend, BackendKind, MmapConsume, MmapMode, MmapStats, OpenFile, ALIGN};
 use crate::coord::{Coordinator, Local};
 use crate::counters::{HostCounters, Sampler};
 use crate::dryrun::{human_bytes, human_ns};
@@ -1344,7 +1344,7 @@ impl ActorState {
             Err(e) => {
                 let code = crate::object::errno_of(&e).unwrap_or(0);
                 let name = errno_name(code);
-                if op.expect.iter().any(|x| x == name) {
+                if op.expect.iter().any(|x| errno_is(x, code)) {
                     self.st.expected_errors += 1;
                     self.record(op, ctx, ns, 0);
                     Ok(())
@@ -3208,6 +3208,17 @@ impl Runner {
             OpKind::Close => {
                 let oid = b_oid.expect("a close has its id");
                 let last = table.close(oid, o.path, &self.sh.aborted)?;
+                // an object's close sends it (`object.rs`: the upload, one PUT or the last part
+                // and the completion), so it is issued as every use is, lent under its path;
+                // dropped, the upload was discarded and the namespace manifest listed an
+                // object the store never got (RC1 review)
+                if let Some(f) = last.as_ref().filter(|f| f.as_object().is_some()) {
+                    self.a.fds.own.insert(key.clone(), f.clone());
+                    drop(last);
+                    let (r, ns) = issue_timed(&mut *self.be, &self.sh, &mut self.a, &mut self.rbuf, &mut self.wbuf, o);
+                    self.a.fds.own.remove(key);
+                    return self.a.settle(o, ctx, r, ns);
+                }
                 let t = Instant::now();
                 drop(last);
                 let ns = t.elapsed().as_nanos() as u64;

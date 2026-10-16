@@ -838,3 +838,186 @@ fn a_store_throttling_is_retried_and_every_retry_reported() {
     assert!(report["result"]["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().starts_with("2 object request(s) failed")), "{report}");
     assert!(curl(&m, "/bench/throttled/f0", &["-I"]).status.success());
 }
+
+/// The objects below `prefix/`: each key past the prefix, with its size and ETag (an MD5 of
+/// the bytes of an object sent in one PUT), the manifest left out.
+fn objects(m: &Minio, prefix: &str) -> std::collections::BTreeMap<String, (u64, String)> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut token = String::new();
+    loop {
+        let xml = String::from_utf8_lossy(&curl(m, &format!("/bench?list-type=2&prefix={prefix}/{token}"), &[]).stdout).to_string();
+        let tag = |s: &str, t: &str| s.split(&format!("<{t}>")).nth(1).and_then(|r| r.split(&format!("</{t}>")).next()).map(str::to_string);
+        for c in xml.split("<Contents>").skip(1) {
+            let key = tag(c, "Key").unwrap();
+            if !key.ends_with(".aeiou-dataset.json") {
+                out.insert(key[prefix.len() + 1..].to_string(), (tag(c, "Size").unwrap().parse().unwrap(), tag(c, "ETag").unwrap()));
+            }
+        }
+        match tag(&xml, "NextContinuationToken") {
+            Some(t) => token = format!("&continuation-token={}", t.replace('+', "%2B").replace('/', "%2F").replace('=', "%3D")),
+            None => return out,
+        }
+    }
+}
+
+/// A grow and a shrink of a dataset in an object store (`DESIGN_REVIEW.md` §3.70) leave the
+/// objects a datagen of the new count sends, byte for byte, and the new count's id: the
+/// shrink's removals go out in batches of `DELETE`s, from the top down, and the grow sends
+/// what is missing.
+#[test]
+fn an_object_dataset_grows_and_shrinks_to_the_corpus_of_the_new_count() {
+    let m = minio("an_object_dataset_grows_and_shrinks_to_the_corpus_of_the_new_count");
+    let dir = tmpdir("resize");
+    let ast = object_variant("npy_per_sample", &["train"], &dir);
+    let root = dir.join("root");
+    let gen = |prefix: &str, n: i64| {
+        let n = format!("samples={n}");
+        let e = format!("train=s3://bench/{prefix}");
+        ok(&aeiou(Some(&m), &["datagen", ast.to_str().unwrap(), "--root", root.to_str().unwrap(), "--endpoint", &e, "--param", &n, "--param", "sample_mean=3000", "--param", "sample_sd=0", "--param", "files_per_directory=8", "--writers", "3"]));
+    };
+    let id = |prefix: &str| -> String {
+        let v: serde_json::Value = serde_json::from_slice(&curl(&m, &format!("/bench/{prefix}/.aeiou-dataset.json"), &[]).stdout).unwrap();
+        serde_json::from_value::<aeiou::payload::Manifest>(v).unwrap().id()
+    };
+    gen("rz", 30);
+    gen("rz18", 18);
+    gen("rz30", 30);
+    let out = ok(&aeiou(Some(&m), &["datagen", "--shrink", "18", "s3://bench/rz", "--writers", "3"]));
+    assert!(out.contains("count 30 -> 18"), "{out}");
+    assert_eq!(objects(&m, "rz"), objects(&m, "rz18"), "the shrunk corpus is not the 18-sample one");
+    assert_eq!(id("rz"), id("rz18"));
+    let out = ok(&aeiou(Some(&m), &["datagen", "--grow", "30", "s3://bench/rz", "--writers", "3"]));
+    assert!(out.contains("count 18 -> 30: 12 file(s) to write"), "{out}");
+    assert_eq!(objects(&m, "rz"), objects(&m, "rz30"), "the grown corpus is not the 30-sample one");
+    assert_eq!(id("rz"), id("rz30"));
+}
+
+/// An abstract and the files of a trace (`lines`) over an s3 dataset `d` and an s3
+/// namespace `o`, in `dir`; returns the abstract's path.
+fn trace_on_objects(dir: &Path, lines: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    std::fs::write(dir.join("t.jsonl"), lines).unwrap();
+    let sha: String = Sha256::digest(lines.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    let ast = dir.join("t.ast.json");
+    std::fs::write(
+        &ast,
+        format!(
+            r#"{{"ast": "0.10", "name": "trace_s3", "doc": "t", "params": {{}},
+             "datasets": {{"d": {{"layout": "whole", "pattern": "d/f{{id}}", "count": 1, "size": {{"const": 100}}, "seed": 3, "access": "map", "protocol": "s3"}}}},
+             "namespaces": {{"o": {{"pattern": "o/f{{k}}", "fields": {{"k": "int"}}, "size": "as_written", "seed": 1, "protocol": "s3"}}}},
+             "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{sha}"}}}}]}}}}}}"#
+        ),
+    )
+    .unwrap();
+    ast
+}
+
+/// The last close of a traced open of an object sends the object, as an abstract's close
+/// does: one PUT, or the completion of parts all sent by the writes (here two whole ones of
+/// 5 MiB), under either object API (RC1 review:
+/// the trace's close dropped the handle, so its upload was discarded, no object was made,
+/// and the namespace manifest listed it anyway).
+#[test]
+fn a_traces_close_of_an_object_sends_it() {
+    let m = minio("a_traces_close_of_an_object_sends_it");
+    let dir = tmpdir("trace-close");
+    let ast = trace_on_objects(
+        &dir,
+        r#"{"aeiou_trace":1,"lanes":2,"creates":["o/small","o/large"]}
+{"lane":0,"op":"open","fd":0,"path":"o/small","flags":["WRONLY","CREAT","TRUNC"]}
+{"lane":0,"op":"write","fd":0,"len":10,"ret":10}
+{"lane":1,"op":"open","fd":1,"path":"o/large","flags":["WRONLY","CREAT","TRUNC"]}
+{"lane":1,"op":"write","fd":1,"len":4194304,"ret":4194304}
+{"lane":1,"op":"write","fd":1,"len":4194304,"ret":4194304}
+{"lane":1,"op":"write","fd":1,"len":2097152,"ret":2097152}
+{"lane":0,"op":"close","fd":0}
+{"lane":1,"op":"close","fd":1}"#,
+    );
+    let (a, r) = (ast.to_str().unwrap(), dir.join("root"));
+    let r = r.to_str().unwrap();
+    ok(&aeiou(Some(&m), &["datagen", a, "--root", r, "--endpoint", "d=s3://bench/tcd", "--endpoint", "o=s3://bench/tco"]));
+    let size = |key: &str| -> Option<u64> {
+        let o = curl(&m, &format!("/bench/{key}"), &["-I"]);
+        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length: ").map(|v| v.trim().parse().unwrap())).unwrap())
+    };
+    for (s3, posix) in [("blocking", "sync"), ("async", "io_uring")] {
+        let o = format!("o=s3://bench/tc{s3}");
+        ok(&aeiou(Some(&m), &["run", a, "--gpus", "1", "--root", r, "--endpoint", "d=s3://bench/tcd", "--endpoint", &o, "--s3", s3, "--posix", posix, "--object-part-mib", "5", "--time-scale", "0"]));
+        assert_eq!((size(&format!("tc{s3}/small")), size(&format!("tc{s3}/large"))), (Some(10), Some(10 << 20)), "{s3}");
+        assert_eq!(open_uploads(&m, &format!("tc{s3}/large")), 0, "{s3}");
+    }
+}
+
+/// A trace replays what the application called, whatever it was, so on a name placed in an
+/// object store it issues what an abstract may not (V18): each is answered the object way,
+/// with the errno its trace line expects. An upload is written in order from 0 (`ESPIPE`
+/// elsewhere), read through no handle that writes it (`EBADF`), never truncated, allocated,
+/// or opened `RDWR`; a handle that reads writes nothing; a rename
+/// stays in the store (`EXDEV`); `mkdir` and `rmdir` send nothing. The input the trace reads
+/// is checked in the store before the gate, under both object APIs.
+#[test]
+fn a_trace_on_object_names_gets_the_object_answers() {
+    let m = minio("a_trace_on_object_names_gets_the_object_answers");
+    let dir = tmpdir("trace");
+    let lines = [
+        r#"{"aeiou_trace":1,"lanes":1,"creates":["o/a","o/b","o/e"]}"#,
+        r#"{"lane":0,"op":"open","fd":0,"path":"d/f0","flags":["RDONLY"]}"#,
+        r#"{"lane":0,"op":"read","fd":0,"offset":0,"len":100,"ret":100}"#,
+        r#"{"lane":0,"op":"read","fd":0,"offset":0,"len":0,"ret":0}"#,
+        r#"{"lane":0,"op":"read","fd":0,"offset":4096,"len":100,"ret":0}"#,
+        r#"{"lane":0,"op":"write","fd":0,"offset":0,"len":1,"ret":"EBADF"}"#,
+        r#"{"lane":0,"op":"close","fd":0}"#,
+        r#"{"lane":0,"op":"open","fd":1,"path":"o/a","flags":["WRONLY","CREAT","TRUNC"]}"#,
+        r#"{"lane":0,"op":"write","fd":1,"len":10,"ret":10}"#,
+        r#"{"lane":0,"op":"write","fd":1,"offset":100,"len":10,"ret":"ESPIPE"}"#,
+        r#"{"lane":0,"op":"read","fd":1,"offset":0,"len":10,"ret":"EBADF"}"#,
+        r#"{"lane":0,"op":"ftruncate","fd":1,"len":0,"ret":"EOPNOTSUPP"}"#,
+        r#"{"lane":0,"op":"fallocate","fd":1,"len":10,"ret":"EOPNOTSUPP"}"#,
+        r#"{"lane":0,"op":"ioctl","fd":1,"request":"FIONREAD"}"#,
+        r#"{"lane":0,"op":"ioctl","fd":1,"request":"TCGETS","ret":"ENOTTY"}"#,
+        r#"{"lane":0,"op":"open","fd":2,"path":"o/a","flags":["RDWR"],"ret":"EOPNOTSUPP"}"#,
+        r#"{"lane":0,"op":"mkdir","path":"o/sub"}"#,
+        r#"{"lane":0,"op":"rmdir","path":"o/sub"}"#,
+        r#"{"lane":0,"op":"close","fd":1}"#,
+        r#"{"lane":0,"op":"rename","path":"o/a","to":"local/x","ret":"EXDEV"}"#,
+        r#"{"lane":0,"op":"rename","path":"o/a","to":"o/b"}"#,
+        r#"{"lane":0,"op":"stat","path":"o/a","ret":"ENOENT"}"#,
+        r#"{"lane":0,"op":"stat","path":"o/b"}"#,
+        r#"{"lane":0,"op":"unlink","path":"o/b"}"#,
+        r#"{"lane":0,"op":"open","fd":3,"path":"o/e","flags":["WRONLY","CREAT","TRUNC"]}"#,
+        r#"{"lane":0,"op":"close","fd":3}"#,
+        r#"{"lane":0,"op":"rename","path":"o/none","to":"o/x","ret":"ENOENT"}"#,
+    ]
+    .join("\n");
+    let ast = trace_on_objects(&dir, &lines);
+    let (a, root) = (ast.to_str().unwrap(), dir.join("root"));
+    let r = root.to_str().unwrap();
+    ok(&aeiou(Some(&m), &["datagen", a, "--root", r, "--endpoint", "d=s3://bench/tr/d", "--endpoint", "o=s3://bench/tr/o"]));
+    for (i, (s3, posix)) in [("blocking", "sync"), ("async", "io_uring")].into_iter().enumerate() {
+        let o = format!("o=s3://bench/tr/o{i}");
+        let out = ok(&aeiou(Some(&m), &["run", a, "--gpus", "1", "--root", r, "--endpoint", "d=s3://bench/tr/d", "--endpoint", &o, "--s3", s3, "--posix", posix, "--time-scale", "0"]));
+        assert!(out.contains("trace t.jsonl: 1 input path(s) present under --root, 3 to be created absent"), "{s3}: {out}");
+        assert!(out.contains("expected-errors 10"), "{s3}: {out}");
+        let listed = String::from_utf8_lossy(&curl(&m, &format!("/bench?list-type=2&prefix=tr/o{i}/"), &[]).stdout).to_string();
+        assert!(!listed.contains(&format!("tr/o{i}/a<")) && !listed.contains(&format!("tr/o{i}/b<")) && listed.contains(".aeiou-namespace.json"), "{s3}: {listed}");
+        // an object opened for writing and closed with nothing written is one empty PUT
+        assert!(listed.contains(&format!("<Key>tr/o{i}/e</Key>")) && listed.contains("<Size>0</Size>"), "{s3}: {listed}");
+    }
+    // a store that refuses the credentials: the run fails before the gate, naming the store
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou"))
+        .args(["run", a, "--gpus", "1", "--root", r, "--endpoint", "d=s3://bench/tr/d", "--endpoint", "o=s3://bench/tr/o8", "--time-scale", "0"])
+        .env_remove("AEIOU_CONFIG")
+        .env("AWS_ENDPOINT_URL", &m.url)
+        .env("AWS_ACCESS_KEY_ID", USER)
+        .env("AWS_SECRET_ACCESS_KEY", "not-the-secret")
+        .env("AWS_REGION", "us-east-1")
+        .env("AWS_ALLOW_HTTP", "true")
+        .output()
+        .unwrap();
+    refused(&o, "s3://bench/tr/");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("403"), "{}", String::from_utf8_lossy(&o.stderr));
+    // the input the trace reads, missing in the store, is refused before the gate, named there
+    curl(&m, "/bench/tr/d/f0", &["-X", "DELETE"]);
+    let o = aeiou(Some(&m), &["run", a, "--gpus", "1", "--root", r, "--endpoint", "d=s3://bench/tr/d", "--endpoint", "o=s3://bench/tr/o9", "--time-scale", "0"]);
+    refused(&o, "trace `t.jsonl`: d/f0 (s3://bench/tr/d/f0): No such file or directory");
+}

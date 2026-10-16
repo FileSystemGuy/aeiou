@@ -32,6 +32,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::ast::{Advice, Ast, IoctlRequest, Node, OpenFlag, Whence};
+use crate::endpoint::Place;
 use crate::vm::{flag_bits, Op, OpCtx, OpKind};
 
 pub const FORMAT: u64 = 1;
@@ -111,13 +112,6 @@ impl LineOp {
         match self {
             LineOp::Close { fd, .. } | LineOp::Read { fd, .. } | LineOp::Write { fd, .. } | LineOp::Lseek { fd, .. } | LineOp::Fstat { fd, .. } | LineOp::Fsync { fd, .. } | LineOp::Fdatasync { fd, .. } | LineOp::Readdir { fd, .. } | LineOp::Ioctl { fd, .. } | LineOp::Fadvise { fd, .. } | LineOp::Ftruncate { fd, .. } | LineOp::Fallocate { fd, .. } => Some(*fd),
             _ => None,
-        }
-    }
-    pub fn ret(&self) -> &Ret {
-        static OK: Ret = Ret::Int(0);
-        match self {
-            LineOp::Open { ret, .. } | LineOp::Close { ret, .. } | LineOp::Read { ret, .. } | LineOp::Write { ret, .. } | LineOp::Lseek { ret, .. } | LineOp::Fstat { ret, .. } | LineOp::Fsync { ret, .. } | LineOp::Fdatasync { ret, .. } | LineOp::Readdir { ret, .. } | LineOp::Ioctl { ret, .. } | LineOp::Fadvise { ret, .. } | LineOp::Ftruncate { ret, .. } | LineOp::Fallocate { ret, .. } | LineOp::Stat { ret, .. } | LineOp::Unlink { ret, .. } | LineOp::Mkdir { ret, .. } | LineOp::Rmdir { ret, .. } | LineOp::Rename { ret, .. } => ret,
-            LineOp::Submit { .. } => &OK,
         }
     }
 }
@@ -320,7 +314,9 @@ impl TraceFile {
                         LineOp::Read { offset, ret, .. } => {
                             let off = offset.unwrap_or(pos[fd]);
                             let end = off.checked_add(ret.count().max(0)).ok_or_else(|| past("read's end"))?;
-                            if !created.contains(&path) {
+                            // a read that returned nothing (at or past the end) says the file
+                            // was no longer than its offset, not that it was at least that long
+                            if ret.count() > 0 && !created.contains(&path) {
                                 let e = extent.entry(path).or_insert(0);
                                 *e = (*e).max(end);
                             }
@@ -703,34 +699,67 @@ pub struct RootCheck {
     pub creates: usize,
 }
 
+/// What is at a trace's path where the run issues its ops (`place`: under `--root`, or at the
+/// endpoint of the dataset or namespace whose root it falls under, a directory or an object
+/// store), and where that is, for messages: `Ok(None)` when nothing is there, else whether it
+/// is a regular file (an object) and its size.
+fn found(place: &(impl Place + ?Sized), p: &str) -> (String, std::io::Result<Option<(bool, u64)>>) {
+    if let Some((store, rest)) = place.object(p) {
+        let r = match crate::object::block(store.stat(&rest)) {
+            Ok(n) => Ok(Some((true, n as u64))),
+            Err(e) if crate::object::errno_of(&e) == Some(libc::ENOENT) => Ok(None),
+            Err(e) => Err(e),
+        };
+        return (store.show(&rest), r);
+    }
+    let full = place.at(p);
+    let r = match std::fs::symlink_metadata(&full) {
+        Ok(md) => Ok(Some((md.is_file(), md.len()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    };
+    (full.display().to_string(), r)
+}
+
 /// Every path the trace reads without creating must exist with at least the farthest read's
 /// extent; with `creates`, every path it creates must not exist (after `--clean-namespaces`
-/// removed them). `--root` is shared by every host and only rank 0 prepares it, so only rank
-/// 0 checks the creates, after its clean; another host checking them would race that clean.
-pub fn check_root(tf: &TraceFile, root: &Path, creates: bool) -> Result<RootCheck> {
+/// removed them). Each is looked for where the run issues it (`place`: `--root`, or the
+/// endpoint of the name whose root it falls under). `--root` is shared by every host and only
+/// rank 0 prepares it, so only rank 0 checks the creates, after its clean; another host
+/// checking them would race that clean.
+pub fn check_root(tf: &TraceFile, place: &(impl Place + ?Sized), creates: bool) -> Result<RootCheck> {
     for p in &tf.inputs {
-        let full = root.join(p);
-        let md = std::fs::symlink_metadata(&full).map_err(|e| anyhow!("trace `{}`: {} ({}): {e}: the application's data must be under --root", tf.name, p, full.display()))?;
+        let (at, r) = found(place, p);
+        let missing = |e: String| anyhow!("trace `{}`: {} ({at}): {e}: the application's data must be under --root (or the endpoint of the name it falls under)", tf.name, p);
+        let (is_file, len) = r.map_err(|e| missing(e.to_string()))?.ok_or_else(|| missing(std::io::Error::from_raw_os_error(libc::ENOENT).to_string()))?;
         if let Some(need) = tf.read_extent.get(p) {
-            if md.is_file() && (md.len() as i64) < *need {
-                bail!("trace `{}`: {} is {} bytes, the trace reads to {need}", tf.name, p, md.len());
+            if is_file && (len as i64) < *need {
+                bail!("trace `{}`: {} is {} bytes, the trace reads to {need}", tf.name, p, len);
             }
         }
     }
     for p in tf.header.creates.iter().filter(|_| creates) {
-        let full = root.join(p);
-        if std::fs::symlink_metadata(&full).is_ok() {
-            bail!("trace `{}`: {} exists, and the trace creates it: remove it or pass --clean-namespaces", tf.name, p);
+        if let (at, Ok(Some(_))) = found(place, p) {
+            bail!("trace `{}`: {} ({at}) exists, and the trace creates it: remove it or pass --clean-namespaces", tf.name, p);
         }
     }
     Ok(RootCheck { file: tf.name.clone(), inputs: tf.inputs.len(), creates: tf.header.creates.len() })
 }
 
-/// `--clean-namespaces` for a trace: remove what the trace creates, last first, nothing else.
-pub fn clean(tf: &TraceFile, root: &Path) -> Result<usize> {
+/// `--clean-namespaces` for a trace: remove what the trace creates, last first, nothing else,
+/// where the run issues it (`place`, as for `check_root`).
+pub fn clean(tf: &TraceFile, place: &(impl Place + ?Sized)) -> Result<usize> {
     let mut removed = 0;
     for p in tf.header.creates.iter().rev() {
-        let full = root.join(p);
+        if let Some((store, rest)) = place.object(p) {
+            if let (_, Ok(None)) = found(place, p) {
+                continue;
+            }
+            crate::object::block(store.delete(&rest)).with_context(|| format!("trace `{}`: removing {}", tf.name, store.show(&rest)))?;
+            removed += 1;
+            continue;
+        }
+        let full = place.at(p);
         let r = match std::fs::symlink_metadata(&full) {
             Ok(md) if md.is_dir() => std::fs::remove_dir_all(&full),
             Ok(_) => std::fs::remove_file(&full),

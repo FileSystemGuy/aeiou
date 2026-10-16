@@ -3163,3 +3163,57 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Found by:** lane C4, covering the projection reader against a corpus `aeiou datagen` wrote.
 - **Fix:** a `BuildError` naming the projection.
 - **Evidence:** the parametrized test fails before and passes; same suite runs as bug 157.
+
+## 161. A trace's paths were checked (and cleaned) under `--root` even when an endpoint places them elsewhere
+
+- **Where:** `runner/aeiou/src/trace.rs` (`check_root`, `clean` take a `&impl Place`; lookups by
+  endpoint, a HEAD/DELETE on an object store), `runner/aeiou/src/main.rs` (passes `&opts`);
+  `runner/REFERENCE.md` §13 *Before the gate*; `runner/aeiou/tests/trace.rs`.
+- **Found by:** RC1 round-4 coverage lane C3 (datagen, object, coord, trace), reading trace.rs's
+  uncovered placement code: the run issues a path under a dataset or namespace at its endpoint,
+  but the checks before the gate and `--clean-namespaces` used `--root/path`. Repro: a dataset at
+  `--endpoint d=DIR`, a trace reading `d/f0`: "d/f0 (…/root/d/f0): No such file or directory …: the
+  application's data must be under --root".
+- **Fix:** both look a path up where the run will issue it.
+- **Evidence:** `trace::a_traces_paths_are_checked_where_their_endpoints_place_them` fails without the
+  fix (that message) and passes. Lane C3's coverage tests (datagen.rs 87.9→91.2%, object.rs
+  89.0→91.7, coord.rs 89.8→97.0, trace.rs 89.7→95.4; new `tests/cov_c3.rs`: coordinator protocol
+  violations by hand over TCP, refused Hellos, barrier departures, datagen refusals, HDF5 headers
+  across ranks; object grow/shrink and trace answers on s3; every trace op on four engines) go in
+  with these; the dead `LineOp::ret()` is deleted; C2's errno test follows the new table. Merged on
+  HEAD d21aff5: `--tests --lib --bins` with MinIO pass (all 196, lib 89), `cargo check --tests`
+  without features clean, builder suite with MinIO and `AEIOU_REQUIRE=runner,formats,strace,header,py-formats`
+  649 passed, `aeiou-catalog check` ok. Fixed in an isolated worktree and applied.
+
+## 162. A traced read that returned 0 bytes made the root check demand the file reach its offset
+
+- **Where:** `runner/aeiou/src/trace.rs` (read extent); `runner/REFERENCE.md` §13; `runner/aeiou/tests/trace.rs`.
+- **Found by:** lane C3: the extent was offset + count even for a count of 0, so a read past the end
+  (HDF5 probing for its superblock at 512, 1024, 2048, …) refused the real file ("d/f0 is 100 bytes,
+  the trace reads to 4096").
+- **Fix:** only reads that returned bytes count toward a file's extent.
+- **Evidence:** `trace::a_read_that_returned_nothing_asks_nothing_of_the_files_size` fails without the
+  fix (`read_extent` 4096 where 100) and passes; same suite runs as bug 161.
+
+## 163. An errno outside a 22-name list was "E?", so a trace or `expect` naming it could never match
+
+- **Where:** `runner/aeiou/src/backend.rs` (a full Linux errno table with strace's names; `errno_name`
+  returns `Cow`, `E<n>` for unknown numbers; `errno_is` with the aliases EWOULDBLOCK, ENOTSUP,
+  EDEADLOCK and `E<n>`), `runner/aeiou/src/run.rs` (`expect` matched by number); `runner/REFERENCE.md`
+  §5 *Structural checks*; tests.
+- **Found by:** lane C3: ELOOP, ESPIPE, ENODATA, ERANGE printed as "E?". Repro: an `O_NOFOLLOW` open of a
+  symlink traced as ELOOP: "… Too many levels of symbolic links (os error 40) (E?)", exit 1.
+- **Fix:** every errno has its name, and an expectation matches by number.
+- **Evidence:** `trace::every_errno_a_trace_names_matches_the_one_the_run_gets` fails before and
+  passes; the repro now gives `expected-errors 1`, exit 0; same suite runs as bug 161.
+
+## 164. A traced close of an s3 object dropped the handle, so no object was made, yet the namespace manifest listed it
+
+- **Where:** `runner/aeiou/src/run.rs` (`trace_issue`), `runner/aeiou/src/uring.rs` (trace lane `Close`
+  in `Stage::Acquire`): the last close of an object handle goes through the engine; tests.
+- **Found by:** lane C3: under both `--s3` APIs the last close of a traced open only dropped the
+  descriptor, discarding the upload; the run exited 0 and `.aeiou-namespace.json` listed `o/a`
+  with 10 bytes while the bucket held only the manifest.
+- **Fix:** the close sends the PUT (or the last part and the completion); POSIX closes are unchanged.
+- **Evidence:** `object::a_traces_close_of_an_object_sends_it` fails without the fix (`left: (None,
+  None) right: (Some(10), …)`) and passes; same suite runs as bug 161.

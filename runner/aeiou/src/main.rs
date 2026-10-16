@@ -1619,7 +1619,7 @@ fn run_connected(
         }
         if a.clean_namespaces {
             for t in traces.iter() {
-                let n = aeiou::trace::clean(t, &a.root)?;
+                let n = aeiou::trace::clean(t, &opts)?;
                 if n > 0 {
                     writeln!(out, "trace {}: {n} created path(s) removed", t.name)?;
                 }
@@ -1629,7 +1629,7 @@ fn run_connected(
     // the paths a trace creates are checked absent by rank 0 alone, after its clean: the other
     // hosts would race it (they check what rank 0 does not prepare, the inputs)
     for t in traces.iter() {
-        let c = aeiou::trace::check_root(t, &a.root, a.rank == 0)?;
+        let c = aeiou::trace::check_root(t, &opts, a.rank == 0)?;
         if a.rank == 0 {
             writeln!(out, "trace {}: {} input path(s) present under --root, {} to be created absent", c.file, c.inputs, c.creates)?;
         } else {

@@ -1971,6 +1971,7 @@ impl<E: Engine> Loop<E> {
                         // the descriptor closes with the last close line, after every use
                         // (`OpenTable::close`); an earlier close line is just a line
                         let oid = c.oid.expect("a close has its id");
+                        let path: Arc<str> = Arc::from(b.op.path);
                         let s = &mut inst.slots[oid];
                         if !c.counted {
                             s.closes_left = s.closes_left.saturating_sub(1);
@@ -1983,10 +1984,21 @@ impl<E: Engine> Loop<E> {
                         if s.uses_left > 0 {
                             return Ok(Advance::Blocked);
                         }
-                        let at = Instant::now();
-                        drop(s.fd.take());
-                        let ns = at.elapsed().as_nanos() as u64;
-                        return self.lane_finish(id, Ok(0), ns);
+                        // an object's close sends it (`object.rs`), so it goes to the engine,
+                        // lent under its path as a use is; dropped, the upload was discarded
+                        // and the namespace manifest listed an object the store never got
+                        // (RC1 review)
+                        match s.fd.take() {
+                            Some(fd) if fd.as_object().is_some() => {
+                                t.io.a.fds.own.insert(path, fd);
+                            }
+                            fd => {
+                                let at = Instant::now();
+                                drop(fd);
+                                let ns = at.elapsed().as_nanos() as u64;
+                                return self.lane_finish(id, Ok(0), ns);
+                            }
+                        }
                     }
                     OpKind::Open => {}
                     _ => {
@@ -2002,6 +2014,7 @@ impl<E: Engine> Loop<E> {
                         }
                     }
                 }
+                let b = l.built_of(&c);
                 match issue(&mut self.io, &mut self.objects, &sh, &mut t.io, &b.op)? {
                     Issued::Done(r, ns) => self.lane_finish(id, r, ns),
                     Issued::Pending => {

@@ -342,8 +342,10 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
 - **Structural checks, every op.** A read must return the computed count; a write its
   length; `readdir` the computed entry count for a one-sample-per-file, unchunked dataset
   directory (`.aeiou*` entries not counted); a failing op's errno must be in the statement's
-  `expect` list. Anything else aborts the run with the actor, position, and op. The runner
-  never looks at the bytes (`PROJECT_BRIEF.md` §5, *Data verification*).
+  `expect` list (matched by number: any errno's name as `strace` prints it, an alias such as
+  `ENOTSUP` or `EWOULDBLOCK`, or `E<number>`; 2026-10-15, RC1 review). Anything else aborts
+  the run with the actor, position, and op. The runner never looks at the bytes
+  (`PROJECT_BRIEF.md` §5, *Data verification*).
 - **Parameter files** (2026-09-30, `schema/README.md` §8). `--params-file FILE` applies a
   `.params.json` set over the defaults; several apply in order and `--param` applies last.
   The file must name this abstract (and this AST's hash, if it names one); every value must
@@ -1853,10 +1855,13 @@ at submission, so the reuse-distance histogram of that pair differs by the reord
 within a round. `dry-run --gpu 0` prints the lines as `app#0 [lane,ordinal] op path`.
 
 **Before the gate.** The run prints each trace (lines, lanes, opens, creates, sha256), then
-checks under `--root`: every path the trace reads without creating must exist, a regular
-file with at least the farthest read's end as its size; every path in `creates` must not
-exist, which rank 0 alone checks, after its clean, as it alone checks the output namespaces
-(another host's check would race that clean; 2026-10-14, RC1 review). `--clean-namespaces`
+checks under `--root` (a path under the root of a dataset or namespace given an `--endpoint`
+where that places it, as the run issues it; 2026-10-15, RC1 review): every path the trace
+reads without creating must exist, a regular file with at least the farthest read's end as
+its size (of a read that returned bytes: one that returned 0, past the end, says the file
+was no longer; 2026-10-15, RC1 review); every path in `creates` must not exist, which rank
+0 alone checks, after its clean, as it alone checks the output namespaces (another host's
+check would race that clean; 2026-10-14, RC1 review). `--clean-namespaces`
 (rank 0, with the namespaces) removes the `creates` set, last first, and nothing else: a
 trace's root is the application's own data, which the runner never empties. **V16:** a
 trace with a nonempty `creates` in an actor template whose resolved instance count exceeds

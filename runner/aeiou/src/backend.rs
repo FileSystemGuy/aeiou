@@ -358,32 +358,71 @@ pub fn open_flags(bits: u64) -> libc::c_int {
     f
 }
 
-pub fn errno_name(code: i32) -> &'static str {
-    match code {
-        libc::ENOENT => "ENOENT",
-        libc::EEXIST => "EEXIST",
-        libc::ENOTTY => "ENOTTY",
-        libc::EISDIR => "EISDIR",
-        libc::ENOTDIR => "ENOTDIR",
-        libc::ENOTEMPTY => "ENOTEMPTY",
-        libc::EACCES => "EACCES",
-        libc::EPERM => "EPERM",
-        libc::EINVAL => "EINVAL",
-        libc::ENOSPC => "ENOSPC",
-        libc::EBADF => "EBADF",
-        libc::ENAMETOOLONG => "ENAMETOOLONG",
-        libc::EIO => "EIO",
-        libc::EOPNOTSUPP => "EOPNOTSUPP",
-        libc::EXDEV => "EXDEV",
-        libc::EBUSY => "EBUSY",
-        libc::EMFILE => "EMFILE",
-        libc::ENFILE => "ENFILE",
-        libc::EFBIG => "EFBIG",
-        libc::EAGAIN => "EAGAIN",
-        libc::EINTR => "EINTR",
-        libc::ESTALE => "ESTALE",
-        _ => "E?",
+/// Every errno of the platform by its name, as `strace` prints it (and so as `aeiou-trace
+/// export` writes it and an `expect` names it). A name outside a short list once came out
+/// as `E?` and matched no `expect`, failing a trace that did what the application did (RC1
+/// review).
+const ERRNO_NAMES: &[(i32, &str)] = &[
+    (libc::EPERM, "EPERM"), (libc::ENOENT, "ENOENT"), (libc::ESRCH, "ESRCH"), (libc::EINTR, "EINTR"),
+    (libc::EIO, "EIO"), (libc::ENXIO, "ENXIO"), (libc::E2BIG, "E2BIG"), (libc::ENOEXEC, "ENOEXEC"),
+    (libc::EBADF, "EBADF"), (libc::ECHILD, "ECHILD"), (libc::EAGAIN, "EAGAIN"), (libc::ENOMEM, "ENOMEM"),
+    (libc::EACCES, "EACCES"), (libc::EFAULT, "EFAULT"), (libc::ENOTBLK, "ENOTBLK"),
+    (libc::EBUSY, "EBUSY"), (libc::EEXIST, "EEXIST"), (libc::EXDEV, "EXDEV"), (libc::ENODEV, "ENODEV"),
+    (libc::ENOTDIR, "ENOTDIR"), (libc::EISDIR, "EISDIR"), (libc::EINVAL, "EINVAL"),
+    (libc::ENFILE, "ENFILE"), (libc::EMFILE, "EMFILE"), (libc::ENOTTY, "ENOTTY"),
+    (libc::ETXTBSY, "ETXTBSY"), (libc::EFBIG, "EFBIG"), (libc::ENOSPC, "ENOSPC"),
+    (libc::ESPIPE, "ESPIPE"), (libc::EROFS, "EROFS"), (libc::EMLINK, "EMLINK"), (libc::EPIPE, "EPIPE"),
+    (libc::EDOM, "EDOM"), (libc::ERANGE, "ERANGE"), (libc::EDEADLK, "EDEADLK"),
+    (libc::ENAMETOOLONG, "ENAMETOOLONG"), (libc::ENOLCK, "ENOLCK"), (libc::ENOSYS, "ENOSYS"),
+    (libc::ENOTEMPTY, "ENOTEMPTY"), (libc::ELOOP, "ELOOP"), (libc::ENOMSG, "ENOMSG"),
+    (libc::EIDRM, "EIDRM"), (libc::ECHRNG, "ECHRNG"), (libc::EL2NSYNC, "EL2NSYNC"),
+    (libc::EL3HLT, "EL3HLT"), (libc::EL3RST, "EL3RST"), (libc::ELNRNG, "ELNRNG"),
+    (libc::EUNATCH, "EUNATCH"), (libc::ENOCSI, "ENOCSI"), (libc::EL2HLT, "EL2HLT"),
+    (libc::EBADE, "EBADE"), (libc::EBADR, "EBADR"), (libc::EXFULL, "EXFULL"), (libc::ENOANO, "ENOANO"),
+    (libc::EBADRQC, "EBADRQC"), (libc::EBADSLT, "EBADSLT"), (libc::EBFONT, "EBFONT"),
+    (libc::ENOSTR, "ENOSTR"), (libc::ENODATA, "ENODATA"), (libc::ETIME, "ETIME"), (libc::ENOSR, "ENOSR"),
+    (libc::ENONET, "ENONET"), (libc::ENOPKG, "ENOPKG"), (libc::EREMOTE, "EREMOTE"),
+    (libc::ENOLINK, "ENOLINK"), (libc::EADV, "EADV"), (libc::ESRMNT, "ESRMNT"), (libc::ECOMM, "ECOMM"),
+    (libc::EPROTO, "EPROTO"), (libc::EMULTIHOP, "EMULTIHOP"), (libc::EDOTDOT, "EDOTDOT"),
+    (libc::EBADMSG, "EBADMSG"), (libc::EOVERFLOW, "EOVERFLOW"), (libc::ENOTUNIQ, "ENOTUNIQ"),
+    (libc::EBADFD, "EBADFD"), (libc::EREMCHG, "EREMCHG"), (libc::ELIBACC, "ELIBACC"),
+    (libc::ELIBBAD, "ELIBBAD"), (libc::ELIBSCN, "ELIBSCN"), (libc::ELIBMAX, "ELIBMAX"),
+    (libc::ELIBEXEC, "ELIBEXEC"), (libc::EILSEQ, "EILSEQ"), (libc::ERESTART, "ERESTART"),
+    (libc::ESTRPIPE, "ESTRPIPE"), (libc::EUSERS, "EUSERS"), (libc::ENOTSOCK, "ENOTSOCK"),
+    (libc::EDESTADDRREQ, "EDESTADDRREQ"), (libc::EMSGSIZE, "EMSGSIZE"), (libc::EPROTOTYPE, "EPROTOTYPE"),
+    (libc::ENOPROTOOPT, "ENOPROTOOPT"), (libc::EPROTONOSUPPORT, "EPROTONOSUPPORT"),
+    (libc::ESOCKTNOSUPPORT, "ESOCKTNOSUPPORT"), (libc::EOPNOTSUPP, "EOPNOTSUPP"),
+    (libc::EPFNOSUPPORT, "EPFNOSUPPORT"), (libc::EAFNOSUPPORT, "EAFNOSUPPORT"),
+    (libc::EADDRINUSE, "EADDRINUSE"), (libc::EADDRNOTAVAIL, "EADDRNOTAVAIL"),
+    (libc::ENETDOWN, "ENETDOWN"), (libc::ENETUNREACH, "ENETUNREACH"), (libc::ENETRESET, "ENETRESET"),
+    (libc::ECONNABORTED, "ECONNABORTED"), (libc::ECONNRESET, "ECONNRESET"), (libc::ENOBUFS, "ENOBUFS"),
+    (libc::EISCONN, "EISCONN"), (libc::ENOTCONN, "ENOTCONN"), (libc::ESHUTDOWN, "ESHUTDOWN"),
+    (libc::ETOOMANYREFS, "ETOOMANYREFS"), (libc::ETIMEDOUT, "ETIMEDOUT"),
+    (libc::ECONNREFUSED, "ECONNREFUSED"), (libc::EHOSTDOWN, "EHOSTDOWN"),
+    (libc::EHOSTUNREACH, "EHOSTUNREACH"), (libc::EALREADY, "EALREADY"),
+    (libc::EINPROGRESS, "EINPROGRESS"), (libc::ESTALE, "ESTALE"), (libc::EUCLEAN, "EUCLEAN"),
+    (libc::ENOTNAM, "ENOTNAM"), (libc::ENAVAIL, "ENAVAIL"), (libc::EISNAM, "EISNAM"),
+    (libc::EREMOTEIO, "EREMOTEIO"), (libc::EDQUOT, "EDQUOT"), (libc::ENOMEDIUM, "ENOMEDIUM"),
+    (libc::EMEDIUMTYPE, "EMEDIUMTYPE"), (libc::ECANCELED, "ECANCELED"), (libc::ENOKEY, "ENOKEY"),
+    (libc::EKEYEXPIRED, "EKEYEXPIRED"), (libc::EKEYREVOKED, "EKEYREVOKED"),
+    (libc::EKEYREJECTED, "EKEYREJECTED"), (libc::EOWNERDEAD, "EOWNERDEAD"),
+    (libc::ENOTRECOVERABLE, "ENOTRECOVERABLE"), (libc::ERFKILL, "ERFKILL"),
+];
+
+/// The other names of an errno of `ERRNO_NAMES`.
+const ERRNO_ALIASES: &[(i32, &str)] = &[(libc::EAGAIN, "EWOULDBLOCK"), (libc::EOPNOTSUPP, "ENOTSUP"), (libc::EDEADLK, "EDEADLOCK")];
+
+/// The name of an errno; `E<number>` for one the platform does not name.
+pub fn errno_name(code: i32) -> std::borrow::Cow<'static, str> {
+    match ERRNO_NAMES.iter().find(|(c, _)| *c == code) {
+        Some((_, n)) => std::borrow::Cow::Borrowed(n),
+        None => std::borrow::Cow::Owned(format!("E{code}")),
     }
+}
+
+/// `name` names the errno `code`: its name, an alias of it, or `E<number>`.
+pub fn errno_is(name: &str, code: i32) -> bool {
+    ERRNO_NAMES.iter().chain(ERRNO_ALIASES).any(|(c, n)| *c == code && *n == name) || name.strip_prefix('E').and_then(|d| d.parse::<i32>().ok()) == Some(code)
 }
 
 fn cpath(p: &Path) -> io::Result<CString> {
@@ -1237,10 +1276,12 @@ mod tests {
             (libc::ENOTEMPTY, "ENOTEMPTY"), (libc::EACCES, "EACCES"), (libc::EPERM, "EPERM"), (libc::EINVAL, "EINVAL"), (libc::ENOSPC, "ENOSPC"),
             (libc::EBADF, "EBADF"), (libc::ENAMETOOLONG, "ENAMETOOLONG"), (libc::EIO, "EIO"), (libc::EOPNOTSUPP, "EOPNOTSUPP"), (libc::EXDEV, "EXDEV"),
             (libc::EBUSY, "EBUSY"), (libc::EMFILE, "EMFILE"), (libc::ENFILE, "ENFILE"), (libc::EFBIG, "EFBIG"), (libc::EAGAIN, "EAGAIN"),
-            (libc::EINTR, "EINTR"), (libc::ESTALE, "ESTALE"), (libc::ECHILD, "E?"),
+            (libc::EINTR, "EINTR"), (libc::ESTALE, "ESTALE"), (libc::ECHILD, "ECHILD"),
         ] {
             assert_eq!(errno_name(code), name);
         }
+        // a number the table does not name is `E<n>`, as builder trace.py names it
+        assert_eq!(errno_name(9999), "E9999");
         for api in [Api::Sync, Api::PosixAio, Api::LibAio, Api::Uring, Api::Mmap] {
             assert_eq!(Api::parse(api.name()), Some(api));
         }

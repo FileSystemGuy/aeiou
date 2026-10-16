@@ -4,6 +4,7 @@
 mod common;
 mod coord;
 mod cov_c2;
+mod cov_c3;
 mod golden;
 mod layout;
 mod man;
