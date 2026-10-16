@@ -377,6 +377,233 @@ def test_aeiou_datagen_writes_the_python_writers_bytes(name, tmp_path):
     assert "fingerprint matches" in run.stdout
 
 
+@needs_runner
+@pytest.mark.parametrize("name", ["tfrecord", "webdataset", "tfrecord_one"])
+def test_the_stream_writers_in_this_process_write_the_rust_writers_bytes(name, tmp_path):
+    """`aeiou-datagen` runs the TFRecord and WebDataset writers in its writer processes, out of
+    this process's sight: here every file goes through the class's `write_file` and
+    `check_file` in this process, with dedupe and compression, and is the file `aeiou datagen`
+    wrote, byte for byte."""
+    from aeiou import datagen
+    make, corpus, _ = RUST_CASES[name]
+    ast_file = make(tmp_path)
+    rs = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "rs", *_params(corpus), "--dedupe", "2", "--compress", "3"],
+                        capture_output=True, text=True)
+    if "--features formats" in rs.stderr:
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+    assert rs.returncode == 0, rs.stdout + rs.stderr
+    ast = json.loads(ast_file.read_text())
+    values = datagen.param_values(ast, [], [tuple(p.split("=", 1)) for p in corpus], 1)
+    job = datagen.Job(ast, "shards", values, lambda rel: tmp_path / "py" / rel, 2, 3)
+    assert type(job.klass).__name__ == {"webdataset": "WebDataset"}.get(name, "TfRecord")
+    for f in range(job.files):
+        job.write(f)
+    rs_files = sorted(p.relative_to(tmp_path / "rs") for p in (tmp_path / "rs").rglob("*")
+                      if p.is_file() and p.name != ".aeiou-dataset.json")
+    assert rs_files == sorted(p.relative_to(tmp_path / "py") for p in (tmp_path / "py").rglob("*") if p.is_file())
+    assert len(rs_files) == job.files
+    for f in rs_files:
+        assert (tmp_path / "rs" / f).read_bytes() == (tmp_path / "py" / f).read_bytes(), f
+
+
+@needs_runner
+@pytest.mark.parametrize("columns", [["b", "image"], ["a", "label"], ["label", "a", "b"]])
+def test_a_parquet_projection_reads_its_column_chunks_and_no_more(columns, tmp_path):
+    """`read_all(columns=…)`, the projected `iter_batches`: per row group, one WILLNEED and one
+    read per run of adjacent projected chunks, after the 64 KiB footer read; the bytes the
+    run reads are the chunks' as pyarrow's footer places them in the files `aeiou datagen`
+    wrote."""
+    import pyarrow.parquet as pq
+    cols = (("image", "binary"), ("label", "int64"), ("a", "int32"), ("b", "float32"))
+    fmt = formats.parquet(rows_per_group=8, columns=cols)
+    w = Workload("proj")
+    d = w.dataset("d", pattern="d/{id:03}.parquet", layout="compound", access="stream", count=64, samples_per_file=32,
+                  size=lognormal(median=2000, sigma=0.45), seed=5, format=fmt)
+    with w.actor("gpu") as g:
+        with g.loop("i", 2):
+            s = g.let("s", d.consume())
+            fmt.open_reads(g, s)
+            fmt.read_all(g, s, columns=columns)
+            fmt.close(g, s)
+    ast_file = w.write(tmp_path, provenance=False)
+    dg = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "r"], capture_output=True, text=True)
+    if "--features formats" in dg.stderr:
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+    assert dg.returncode == 0, dg.stdout + dg.stderr
+    run = subprocess.run([RUNNER, "run", ast_file, "--root", tmp_path / "r", "--gpus", "1", "--time-scale", "0",
+                          "--report-json", tmp_path / "r.json"], capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    res = json.loads((tmp_path / "r.json").read_text())["result"]
+    names = [n for n, _ in cols]
+    idx = sorted(names.index(c) for c in columns)
+    runs = [r for r in fmt._column_runs(columns)]
+    assert [c for a, b in runs for c in range(a, b + 1)] == idx
+    want, groups = 0, 0
+    for f in sorted((tmp_path / "r" / "d").glob("*.parquet")):
+        md = pq.ParquetFile(f).metadata
+        want += min(64 * KiB, f.stat().st_size)
+        for r in range(md.num_row_groups):
+            rg = md.row_group(r)
+            for a, b in runs:
+                first, last = rg.column(a), rg.column(b)
+                want += last.data_page_offset + last.total_compressed_size - first.data_page_offset
+        groups += md.num_row_groups
+    assert groups == 8   # whole row groups (a short last one is brief item 31)
+    assert res["bytes_read"] == want
+    assert res["by_kind"] == {"open": 2, "fstat": 4, "read": 2 + groups * len(runs), "fadvise": groups * len(runs), "close": 2}
+
+
+@needs_runner
+def test_an_hdf5_row_smaller_than_the_sieve_reads_the_sieve_up_to_eof(tmp_path):
+    """libhdf5 reads `min(sieve, EOF − offset)` for a row smaller than its 64 KiB sieve: the
+    rows near the end of a file read to EOF and never past it (no committed abstract has such
+    a row)."""
+    fmt = formats.hdf5(shape=(16, 16, 3))
+    assert fmt.row_bytes == 768 < fmt.sieve
+    w = Workload("small_rows")
+    d = w.dataset("d", pattern="d/{id:03}.h5", layout="compound", access="map", count=64, samples_per_file=16,
+                  size=const(768), seed=9, format=fmt)
+    with w.actor("gpu") as g:
+        with g.loop("j", 64):
+            s = g.let("s", d.consume())
+            f = g.let("f", s.container)
+            fmt.open_reads(g, f)
+            fmt.read_sample(g, f, s)
+            fmt.close(g, f)
+    ast_file = w.write(tmp_path, provenance=False)
+    dg = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "r"], capture_output=True, text=True)
+    if "--features formats" in dg.stderr:
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+    assert dg.returncode == 0, dg.stdout + dg.stderr
+    run = subprocess.run([RUNNER, "run", ast_file, "--root", tmp_path / "r", "--gpus", "1", "--time-scale", "0",
+                          "--report-json", tmp_path / "r.json"], capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    head = fmt.data_offset()
+    eof = head + 16 * 768
+    assert {p.stat().st_size for p in (tmp_path / "r" / "d").glob("*.h5")} == {eof}
+    meta = sum(n for n, _ in fmt.META_READS)
+    want = 4 * sum(min(fmt.sieve, eof - (head + i * 768)) for i in range(16)) + 64 * meta
+    assert json.loads((tmp_path / "r.json").read_text())["result"]["bytes_read"] == want
+
+
+@needs_runner
+def test_the_webdataset_reader_protocol_runs_over_the_tars_aeiou_datagen_writes(tmp_path):
+    """`WebDataset.stream`, CPython's `tarfile` over `open()` (no committed abstract streams a
+    tar): the fstat, the `TCGETS` ioctl a regular file answers ENOTTY, the lseek, and the reads
+    to EOF, over each shard once; the run reads every byte of the corpus."""
+    fmt = formats.webdataset(members=(("jpg", None), ("cls", 4)), xfer=64 * KiB)
+    w = Workload("wds")
+    d = w.dataset("d", pattern="d/shard-{id:03}.tar", layout="compound", access="stream", count=24, samples_per_file=8,
+                  size=lognormal(median=3000, sigma=0.45), seed=11, format=fmt)
+    with w.actor("gpu") as g:
+        with g.loop("i", 3):
+            s = g.let("s", d.consume())
+            fmt.stream(g, s)
+    ast_file = w.write(tmp_path, provenance=False)
+    dg = subprocess.run([RUNNER, "datagen", ast_file, "--root", tmp_path / "r"], capture_output=True, text=True)
+    if "--features formats" in dg.stderr:
+        pytest.skip(f"{RUNNER} is not built with the cargo feature `formats`")
+    assert dg.returncode == 0, dg.stdout + dg.stderr
+    run = subprocess.run([RUNNER, "run", ast_file, "--root", tmp_path / "r", "--gpus", "1", "--time-scale", "0",
+                          "--report-json", tmp_path / "r.json"], capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    res = json.loads((tmp_path / "r.json").read_text())["result"]
+    tars = sorted((tmp_path / "r" / "d").glob("*.tar"))
+    assert len(tars) == 3 and res["bytes_read"] == sum(t.stat().st_size for t in tars)
+    assert {k: res["by_kind"][k] for k in ("open", "fstat", "ioctl", "lseek", "close")} == {k: 3 for k in ("open", "fstat", "ioctl", "lseek", "close")}
+    assert res["expected_errors"] == 3   # each TCGETS: ENOTTY, as the abstract expects
+
+
+def test_the_mean_sample_size_of_every_distribution():
+    """What a class places its framing constants by: the mean of the dataset's size, with
+    parameters at their values, and a refusal for what has no mean or is not a size."""
+    from aeiou.nodes import Param
+    mean = formats.expected_sample_bytes
+    assert mean({"const": {"param": "n"}}, {"n": 10}) == 10.0
+    assert mean({"const": Param("n")}, {"n": 12}) == 12.0
+    assert mean(Param("s"), {"s": {"const": 8}}) == 8.0
+    assert mean(uniform(1, 3), None) == 2.0
+    assert mean(empirical([10, 20], [1, 3]), {}) == 17.5
+    assert mean(mixture((1, const(10)), (3, const(20)), (5, None)), {}) == 17.5   # a `none` arm is no sample
+    for size, why in [(5, "not a size distribution: 5"), (zipf(1.1), "cannot take the mean of a `zipf` size distribution"),
+                      ({"const": "x"}, "numbers or parameters, got 'x'"), ({"const": True}, "numbers or parameters, got True"),
+                      ({"const": 1, "uniform": 2}, "not a size distribution")]:
+        with pytest.raises(BuildError, match=re.escape(why)):
+            mean(size, {})
+
+
+def test_a_sink_counts_and_keeps_the_tail():
+    out = io.BytesIO()
+    s = formats.Sink(out)
+    assert s.write(b"abc") == 3 and s.write(memoryview(b"0123456789")) == 10 and s.write(b"") == 0
+    assert s.tell() == 13 and s.tail == b"23456789" and out.getvalue() == b"abc0123456789"
+    assert s.writable() and not s.seekable() and s.mode == "wb" and not s.closed
+    s.flush(), s.close()
+    counting = formats.Sink()
+    counting.write(b"xy")
+    assert counting.tell() == 2 and counting.tail == b"xy"
+
+
+def test_what_the_classes_refuse_at_construction():
+    with pytest.raises(BuildError, match=r"format class needs `aeiou_no_such_library`: install the builder's `formats` extra"):
+        formats._lib("aeiou_no_such_library")
+    for kw, why in [({"shape": (0, 2)}, "hdf5 shape must be a plain integer >= 1"), ({"shape": (2.0,)}, "hdf5 shape"),
+                    ({"sieve": True}, "hdf5 sieve must be a plain integer >= 1")]:
+        with pytest.raises(BuildError, match=why):
+            formats.hdf5(**kw)
+    with pytest.raises(BuildError, match=r"parquet: column x: type str \(binary or one of"):
+        formats.parquet(columns=(("image", "binary"), ("x", "str")))
+    with pytest.raises(BuildError, match=r"exactly one member is the sample"):
+        formats.webdataset(members=(("jpg", None), ("png", None)))
+    with pytest.raises(BuildError, match=r"unknown format class `zip` \(known: \["):
+        formats.FormatClass.from_spec({"class": "zip"})
+    # hdf5 without a size: no size check, the framing all the same
+    assert formats.hdf5(shape=(4,)).spec("map")["framing"]["file_header"] == formats.hdf5(shape=(4,)).data_offset()
+
+
+def test_a_writer_that_drifts_from_its_framing_is_refused(monkeypatch):
+    """`check_file` and the writers' own checks: the byte count, the row groups, a column
+    chunk's place, the HDF5 header's length, a footer past its declared size, and a pyarrow
+    whose page headers the class no longer predicts."""
+    from types import SimpleNamespace as NS
+    from aeiou.datagen import Payload
+    t = formats.tfrecord()
+    sizes = [100, 200]
+    geo = _geometry(t, "stream", const(150), sizes)
+    t.check_file("x", geo.file_size, sizes, geo, None)
+    with pytest.raises(BuildError, match=rf"x: {geo.file_size + 1} bytes written, the framing predicts {geo.file_size}"):
+        t.check_file("x", geo.file_size + 1, sizes, geo, None)
+    h = formats.hdf5(shape=(16, 16, 3))
+    assert h.header(3) is h.header(3)   # once per row count
+    with pytest.raises(BuildError, match=rf"the dataset's data starts at {h.data_offset()}, the framing says 1"):
+        h.write_file(formats.Sink(), 0, [768] * 3, Payload(1, 0, 1), NS(framing=NS(file_header=1)))
+    p = formats.parquet(rows_per_group=4)
+    with pytest.raises(BuildError, match=r"the natural footer \(\d+ bytes\) exceeds the declared 0"):
+        p.write_file(formats.Sink(), 0, [10] * 4, Payload(1, 0, 1), NS(framing=NS(file_footer=8, file_footer_per_unit=0), units=1))
+    s8 = [1000] * 8
+    g8 = _geometry(p, "stream", const(1000), s8)
+    m8 = p.write_file(formats.Sink(), 0, s8, Payload(1, 0, 1), g8)
+    p.check_file("ok", g8.file_size, s8, g8, m8)
+    m4 = p.write_file(formats.Sink(), 0, s8[:4], Payload(1, 0, 1), _geometry(p, "stream", const(1000), s8[:4]))
+    with pytest.raises(BuildError, match=r"y: 1 row groups, the framing predicts 2"):
+        p.check_file("y", g8.file_size, s8, g8, m4)
+    other = [900] * 8
+    m_other = p.write_file(formats.Sink(), 0, other, Payload(1, 0, 1), _geometry(p, "stream", const(1000), other))
+    with pytest.raises(BuildError, match=r"z: row group 0 column 0 at 4 for \d+ bytes; the framing predicts 4 for \d+"):
+        p.check_file("z", g8.file_size, s8, g8, m_other)
+    monkeypatch.setattr(formats, "parquet_page_header", lambda data, rows: 0)
+    with pytest.raises(BuildError, match=r"parquet: pyarrow .* writes a \d+-byte page header for 1 rows of 1 bytes, the class predicts 0"):
+        formats.parquet().probe()
+
+
+@pytest.mark.parametrize("columns, why", [([], "projection [] over"), (["a", "a"], "projection ['a', 'a'] over"),
+                                          (["image", "x"], "projection ['image', 'x'] over")])
+def test_a_parquet_projection_names_columns_of_the_class(columns, why):
+    fmt = formats.parquet(columns=(("image", "binary"), ("label", "int64"), ("a", "int32")))
+    with pytest.raises(BuildError, match=re.escape(f"parquet: {why} columns ['image', 'label', 'a']")):
+        fmt._column_runs(columns)
+
+
 def _unfinish(root, ranges, delete=(), shorten=()):
     """Make a complete corpus look like one a crash left: the manifest `writing` with `ranges`
     unfinished, some of those files gone and some cut short."""

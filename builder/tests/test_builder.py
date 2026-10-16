@@ -583,6 +583,24 @@ def test_v18_an_object_is_written_once_in_order():
     ast = build("s3", plain)
     ast["actors"]["x"]["body"][0]["open"]["flags"] = ["RDONLY", "TRUNC"]
     assert any("open with TRUNC without WRONLY" in e and "(V18)" in e for e in check.Check(ast, "x").run())
+    # the builder refuses in the checker's words (it said `declared protocol object`, the
+    # protocol's name before contract 0.7)
+    for flags, edit in [("RDONLY|TRUNC", None), ("WRONLY|CREAT|APPEND", None),
+                        (None, lambda b: b.insert(1, {"ftruncate": {"file": b[0]["open"]["file"], "len": 0}})),
+                        (None, lambda b: b.insert(1, {"fallocate": {"file": b[0]["open"]["file"], "len": 1}}))]:
+        doc = build("s3", plain)
+        body = doc["actors"]["x"]["body"]
+        if flags:
+            body[0]["open"]["flags"] = flags.split("|")
+            with pytest.raises(BuildError) as e:
+                build("s3", lambda x, f: (x.open(f, flags), x.close(f)))
+        else:
+            edit(body)
+            kind = next(iter(body[1]))
+            with pytest.raises(BuildError) as e:
+                build("s3", lambda x, f: getattr(x, kind)(f, body[1][kind]["len"]))
+        said = [m.split(": ", 2)[2] for m in check.Check(doc, "x").run() if "(V18)" in m]   # `x: path: why`
+        assert said == [str(e.value)], (said, str(e.value))
 
     # the upload is sent by the close, so an s3 name opened for writing is closed later in the
     # same body, on the same handle, no `let` rebinding a name it reads in between (bug R29)

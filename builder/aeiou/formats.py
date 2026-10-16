@@ -574,9 +574,9 @@ class Parquet(FormatClass):
 
     def _column_runs(self, columns):
         names = [n for n, _ in self.columns]
-        idx = sorted(names.index(c) for c in columns)
-        if len(set(idx)) != len(idx) or not idx:
+        if not columns or len(set(columns)) != len(columns) or not set(columns) <= set(names):
             raise BuildError(f"parquet: projection {columns!r} over columns {names}")
+        idx = sorted(names.index(c) for c in columns)
         runs, start = [], idx[0]
         for a, b in zip(idx, idx[1:] + [None]):
             if b != a + 1:

@@ -7,6 +7,7 @@ adding it."""
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import pathlib
 import random
@@ -26,6 +27,10 @@ from test_builder import BUILDER
 
 @pytest.fixture
 def stubbed():
+    yield from _stubbing()
+
+
+def _stubbing():
     """Run `_stub_entropy_and_clocks` and put every attribute it replaces back afterwards."""
     try:
         import numpy.random as npr
@@ -173,3 +178,75 @@ def test_a_failed_child_names_its_script_once(tmp_path):
     assert "FAIL w.py: child build failed (PYTHONHASHSEED=1):" in r.stderr, r.stderr
     assert "w.py: w.py:" not in r.stderr
     assert "two Workloads named 'w'" in r.stderr
+
+
+def test_check_names_an_abstract_never_written(tmp_path):
+    script = _script(tmp_path, "")
+    r = _cli(["--check", "-o", tmp_path, script], cwd=tmp_path)
+    assert r.returncode == 1
+    assert f"MISSING {tmp_path / 'w.ast.json'}" in r.stdout, r.stdout
+    assert not (tmp_path / "w.ast.json").exists()
+
+
+def test_a_relative_read_resolves_against_the_working_directory(tmp_path, monkeypatch):
+    """`open('data.bin')` in a script reads from the child's cwd, which the harness sets to the
+    script's directory: allowed there, denied from anywhere else."""
+    (tmp_path / "w").mkdir()
+    script = tmp_path / "w" / "s.py"
+    script.write_text("")
+    hook = hermetic._audit_hook(script)
+    monkeypatch.chdir(tmp_path / "w")
+    hook("open", ("data.bin", "r", 0))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(HermeticViolation, match=f"read of {tmp_path}/data.bin is denied"):
+        hook("open", ("data.bin", "r", 0))
+
+
+def test_without_numpy_the_stdlib_stubs_still_go_in(monkeypatch):
+    """numpy is optional: with it absent (`import numpy.random` raises) the clocks, entropy, and
+    `random` are stubbed all the same."""
+    monkeypatch.setitem(sys.modules, "numpy.random", None)
+    gen = _stubbing()
+    assert next(gen) is None
+    try:
+        for draw in (lambda: time.time(), lambda: os.urandom(1), lambda: random.random(), lambda: random.Random()):
+            with pytest.raises(HermeticViolation):
+                draw()
+    finally:
+        next(gen, None)
+
+
+# ---- the child `aeiou-build --hermetic` spawns ----
+
+def _child(tmp_path, script, *flags):
+    """The child's protocol, run with this environment (the parent scrubs it, which would keep
+    coverage out): the script's ASTs as one JSON object on stdout, or exit 1 with the reason on
+    the last line of stderr."""
+    boot = "from aeiou.cli import _child_main; _child_main()"
+    env = {**os.environ, "PYTHONPATH": str(BUILDER)}
+    return subprocess.run([sys.executable, "-c", boot, str(script), "--schema-dir", str(BUILDER.parent / "schema"),
+                           *flags], capture_output=True, text=True, cwd=str(tmp_path), env=env)
+
+
+@pytest.mark.parametrize("flags", [(), ("--hermetic",)])
+def test_the_child_prints_every_ast_of_its_script(tmp_path, flags):
+    script = _script(tmp_path, "w.param('n', 3)")
+    script.write_text(script.read_text() + "v = Workload('v')\n"
+                      "e = v.dataset('e', pattern='e/{id}', layout='whole', access='map', count=1, size=const(1), seed=1)\n"
+                      "with v.actor('b') as b:\n    b.stat(e.pick())\n")
+    r = _child(tmp_path, script, *flags)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert list(out) == ["w", "v"] and out["w"]["params"]["n"]["default"] == 3 and out["v"]["name"] == "v"
+
+
+@pytest.mark.parametrize("body, reason", [
+    ("x = 1\n", "BuildError: {script}: no Workload was constructed"),
+    ("from aeiou import *\nWorkload('w')\nWorkload('w')\n", "BuildError: two Workloads named 'w'"),
+])
+def test_a_child_that_fails_ends_its_stderr_with_the_reason(tmp_path, body, reason):
+    script = tmp_path / "s.py"
+    script.write_text(body)
+    r = _child(tmp_path, script)   # unsandboxed: under coverage, the hermetic child cannot save its data, and says so last
+    assert r.returncode == 1 and r.stdout == ""
+    assert r.stderr.strip().splitlines()[-1].startswith(reason.format(script=script)), r.stderr

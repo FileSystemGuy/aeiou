@@ -139,11 +139,11 @@ def _weighted_median(h: dict):
     if not total:
         return None
     acc = 0
-    for lo, w in weights:
+    for lo, w in weights[:-1]:
         acc += w
         if 2 * acc >= total:
             return lo
-    return weights[-1][0]
+    return weights[-1][0]   # the last bucket brings the sum to the total
 
 
 def _accesses(r: dict, this: str) -> int:

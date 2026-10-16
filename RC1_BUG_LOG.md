@@ -3117,3 +3117,49 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   chat.py, serve.sh, diskann params, npy mkcorpus 0→100%, hops 97→100%; faiss params/faults/search
   and dcp-load params ~30–65%, the rest of each being `main()` calls into torch/faiss, absent here;
   kits that are only library calls stay unmeasured).
+
+## 157. The Python option layers took an empty value as the current directory and worded refusals unlike the runner
+
+- **Where:** `builder/aeiou/options.py` (ports of options.rs `non_empty` and `toml_described`, Rust's f64
+  printing, no trimming of env paths and strings, `(os error N)` for an unreadable config);
+  `builder/tests/test_options.py`.
+- **Found by:** RC1 round-4 coverage lane C4 (Python), reading options.py's uncovered refusals against
+  bugs 121/123 in options.rs: `AEIOU_ROOT=` became `Path("")` (`.`), printed `root = . [env
+  AEIOU_ROOT]` and generated into the working directory, where `aeiou datagen` refuses "AEIOU_ROOT:
+  empty, and a value is required (leave it unset for none)"; refusals said `got 'three'` where the
+  runner says `got the string "three"`.
+- **Fix:** the same refusals, word for word, as the runner (the module serves the deprecated
+  `aeiou-datagen`; the bug is in the shared option layer).
+- **Evidence:** test_options.py compares every kind and refusal with the runner's own output: 19
+  failed before, 31 pass after. Lane C4's coverage (formats.py 81.3→98.9%, options.py 84.0→98.7,
+  cli.py 84.3→98.7, coord.py 84.3→96.2, emit.py 84.3→99.1, builder.py 88.7→99.2, hermetic.py
+  89.2→92.8, catalog.py 89.5→97.2, tests/conftest.py 64.3→100, schema/check.py 92.8→98.3; new
+  test_checkers.py, test_emit.py, test_misuse.py) goes in with these. On HEAD 6eef6e0 plus the
+  change: builder suite with MinIO and `AEIOU_REQUIRE=runner,formats,strace,header,py-formats` 649
+  passed, CI's checker diff empty, `aeiou-build --hermetic --twice --check` rc 0, 22 parameter
+  files ok, `aeiou-catalog check` ok. Fixed in an isolated worktree and applied.
+
+## 158. The builder's V18 refusal used the protocol's pre-0.7 name and, for CREAT/TRUNC without WRONLY, the wrong reason
+
+- **Where:** `builder/aeiou/builder.py`; `builder/tests/test_builder.py`.
+- **Found by:** lane C4: "declared protocol object", where check.py and validate.rs say "declared
+  `protocol: s3`: … (V18)".
+- **Fix:** the checkers' words exactly.
+- **Evidence:** a test asserting builder message == checker message for four refusals fails before
+  and passes; same suite runs as bug 157.
+
+## 159. check.py and validate.rs disagreed on one message (`['a', 'j']` vs `["a", "j"]`)
+
+- **Where:** `schema/check.py`; new `builder/tests/test_checkers.py`.
+- **Found by:** lane C4: check.py printed a Python list repr of field names where the runner prints JSON.
+- **Fix:** check.py prints the names as JSON.
+- **Evidence:** test_checkers.py (46 documents each breaking one rule, judged by `Check` and by
+  `aeiou check`, identical path and message lists; 4 accepted by both) fails on this case before
+  and passes (51); same suite runs as bug 157.
+
+## 160. A Parquet projection naming an unknown column raised `ValueError: 'x' is not in list`
+
+- **Where:** `builder/aeiou/formats.py` (`read_all`); `builder/tests/test_formats.py`.
+- **Found by:** lane C4, covering the projection reader against a corpus `aeiou datagen` wrote.
+- **Fix:** a `BuildError` naming the projection.
+- **Evidence:** the parametrized test fails before and passes; same suite runs as bug 157.

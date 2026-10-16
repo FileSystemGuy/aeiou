@@ -1202,7 +1202,8 @@ class Check:
             if ns is None:
                 self.err(p, f"unknown namespace `{a['namespace']}`")
             elif set(a["fields"]) != set(ns["fields"]):
-                self.err(p, f"object fields {sorted(a['fields'])} != namespace fields {sorted(ns['fields'])}")
+                # the names as the runner prints them (`{:?}` of the sorted names: `["j"]`)
+                self.err(p, f"object fields {json.dumps(sorted(a['fields']))} != namespace fields {json.dumps(sorted(ns['fields']))}")
             for f, e in a["fields"].items():
                 self.expr(e, p + ["fields", f], scope)
                 # V27: an `int` field takes an integer or a float, rounded (never a bool); a `str` field a string

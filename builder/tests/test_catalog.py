@@ -5,6 +5,7 @@ without the dry runs, and one small case is re-measured when the runner binary i
 import json
 import os
 import pathlib
+import re
 import shutil
 import sys
 
@@ -506,3 +507,118 @@ def test_check_write_and_describe_under_an_ascii_locale(tree):
     assert "±".encode("utf-8") in files[pathlib.Path("CATALOG.md")]
     files[pathlib.Path("CATALOG.md")].decode("utf-8")
     assert out["C"] == out["C.UTF-8"]
+
+
+# ---------------------------------------------------------------- every refusal of the records
+
+@pytest.mark.parametrize("extra, measures, message", [
+    ("[[[\n", None, "attributes.toml: "),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'guessed'\n", None, "attribute bogus: source must be curated, derived, or measured, level mechanism or case"),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'measured'\n", None, "attribute bogus: measured, but aeiou-catalog has no measure of that name"),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'measured'\nclasses = [{min = 1}]\n", {"bogus"}, "attribute bogus: a measured attribute needs classes, each with a name"),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'curated'\n", None, "attribute bogus: needs values"),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'derived'\nmultiple = true\nvalues = {a = {}}\n", None, "attribute bogus: only a curated attribute takes several values"),
+    ("[attribute.class.values.zzz]\ncategory = 'nowhere'\n", None, "class zzz: its category 'nowhere' is not a value of category"),
+    ("", {"unheard"}, "aeiou-catalog measures unheard, which the dictionary does not define"),
+])
+def test_the_dictionary_is_refused_by_name(tmp_path, monkeypatch, extra, measures, message):
+    text = (WORKLOADS / "attributes.toml").read_text()
+    (tmp_path / "attributes.toml").write_text(text + "\n" + extra)
+    if measures:
+        monkeypatch.setattr(catalog, "MEASURES", {**catalog.MEASURES, **{m: None for m in measures}})
+    with pytest.raises(catalog.BuildError, match=re.escape(message)):
+        catalog.load_dictionary(tmp_path)
+
+
+def test_a_number_outside_every_class_and_a_path_outside_the_tree():
+    assert catalog.classify({"classes": [{"name": "low", "max": 1}, {"name": "mid", "min": 2, "max": 3}]}, 1.5) is None
+    assert catalog._rel(pathlib.Path("/elsewhere/x"), pathlib.Path("/workloads")) == "/elsewhere/x"
+    # the byte-weighted median of one bucket, and of the last of several
+    assert catalog._weighted_median({"buckets": [[4096, 3]]}) == 4096
+    assert catalog._weighted_median({"buckets": [[1, 1], [2, 1], [4096, 1]]}) == 4096
+
+
+MECH_DIR = "checkpointing/dcp-save"
+
+
+def _rewrite(path, text):
+    path.write_text(text)
+
+
+@pytest.mark.parametrize("change, message", [
+    # the records' files
+    (lambda t: _rewrite(t / MECH, "= ="), "checkpointing/dcp-save/mechanism.toml: "),
+    (lambda t: _rewrite(t / CASE / "case.toml", "[[run\n"), f"{CASE}/case.toml: "),
+    (lambda t: (t / CASE / "case.toml").unlink(), f"{CASE}: a case without case.toml"),
+    (lambda t: (t / CASE / "captures" / "2026-10-01" / "capture.toml").unlink(), f"{CASE}/captures/2026-10-01: a capture without capture.toml"),
+    (lambda t: _rewrite(t / MECH_DIR / "dcp_save.ast.json", "{"), f"{MECH_DIR}/dcp_save.ast.json: "),
+    (lambda t: ((t / "checkpointing" / "lone").mkdir(), _rewrite(t / "checkpointing" / "lone" / "mechanism.toml", "")),
+     "checkpointing/lone/mechanism.toml: a mechanism.toml where no abstract is"),
+    (lambda t: shutil.rmtree(t / "input-pipeline" / "map"), "input-pipeline/map: a class without its directory"),
+    # mechanism.toml
+    (lambda t: edit(t / MECH, 'category = "checkpointing"', 'category = "input-pipeline"\nclass = "shuffle"'),
+     "class 'shuffle' is not a class of input-pipeline (map, stream)"),
+    (lambda t: edit(t / MECH, 'domain = ["ai"]', 'domain = ["ai"]\n[defaults]\nast = "dcp_save"'),
+     "[defaults] is for a mechanism with no case; this one has cases"),
+    # case.toml
+    (lambda t: edit(t / CASE / "case.toml", 'gpus = [2]', 'gpus = [2]\nmetrics_block = 0'), "metrics_block must be a positive integer (bytes)"),
+    (lambda t: edit(t / CASE / "case.toml", '[[run]]\nast = "dcp_save"\nparams = "params.json"', ''),
+     "a case runs at least one AST: a [[run]] with ast and params"),
+    (lambda t: edit(t / CASE / "case.toml", 'params = "params.json"', 'params = "params.json"\nseed = 3'),
+     "[[run]]: unknown key(s) seed (allowed: ast, params)"),
+    (lambda t: edit(t / CASE / "case.toml", 'params = "params.json"', 'params = "params.json"\n[[run]]\nast = "dcp_save"\nparams = "params.json"'),
+     "two runs of one AST: a case runs each abstract once"),
+    (lambda t: _rewrite(t / CASE / "params.json", "{"), f"{CASE}/params.json: "),
+    (lambda t: edit(t / CASE / "params.json", '"abstract": "dcp_save"', '"abstract": "dcp_load"'),
+     "its abstract is 'dcp_load', the case runs it as dcp_save"),
+    # capture.toml
+    (lambda t: edit(t / CASE / "captures" / "2026-10-01" / "capture.toml", 'raw_trace', 'kept = 1\nraw_trace'),
+     "capture.toml: unknown key(s) kept (allowed: pair, raw_trace)"),
+    (lambda t: edit(t / CASE / "captures" / "2026-10-01" / "capture.toml", 'verdict = "accepted"', 'verdict = "accepted"\nnote = "x"'),
+     "[[pair]]: unknown key(s) note (allowed: ast, params, trace, verdict)"),
+    (lambda t: edit(t / CASE / "captures" / "2026-10-01" / "capture.toml", 'ast = "dcp_save"', 'ast = "dcp_load"'),
+     "[[pair]] ast 'dcp_load' is not one of the case's runs (dcp_save)"),
+    (lambda t: edit(t / CASE / "captures" / "2026-10-01" / "capture.toml", 'ast = "dcp_save"', 'ast = "dcp_save"\nparams = "fitted.params.json"'),
+     "[[pair]] params 'fitted.params.json' is not a file of the capture"),
+    (lambda t: _rewrite(t / CASE / "captures" / "2026-10-01" / "other.tolerances.json", "{}"),
+     f"{CASE}/captures/2026-10-01/other.tolerances.json: a tolerance file with no trace beside it"),
+])
+def test_every_record_refusal_names_its_file(tree, change, message):
+    change(tree)
+    found = problems(tree)
+    assert any(p.startswith(message) or message in p for p in found), found
+    with pytest.raises(catalog.BuildError, match=re.escape(message)):
+        catalog.capture_pairs(tree)
+
+
+@pytest.mark.parametrize("defaults, message", [
+    ('ast = "dcp_load"', "[defaults] ast 'dcp_load' is not an abstract of this mechanism"),
+    ('ast = "dcp_save"\nlength = "items_total"', "[defaults] length 'items_total' is not an integer parameter of dcp_save"),
+    ('ast = "dcp_save"\ngpus = 0', "[defaults] gpus must be a positive integer"),
+    ('ast = "dcp_save"\nseeds = 3', "[defaults]: unknown key(s) seeds (allowed: ast, gpus, length)"),
+])
+def test_the_defaults_of_a_mechanism_without_cases(tree, defaults, message):
+    shutil.rmtree(tree / MECH_DIR / "cases")
+    with open(tree / MECH, "a") as f:
+        f.write(f"\n[defaults]\n{defaults}\n")
+    assert any(message in p for p in problems(tree)), problems(tree)
+
+
+def test_a_dry_run_that_fails_names_its_command(tmp_path):
+    run = {"abstract": {"path": tmp_path / "x.ast.json", "doc": {"name": "x"}}, "params": None}
+    with pytest.raises(catalog.BuildError, match=r"^false dry-run .*x\.ast\.json --gpus 2 --seed 1 --metrics-block 4096 --metrics-json .*: exit 1"):
+        catalog._dry_run("false", run, 2, 4096, 1, None, tmp_path)
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_a_case_with_a_length_is_measured_down_to_its_check_length():
+    """The halving of `shape`: the case's length, then shorter ones while the numbers hold;
+    measured again here, the committed faiss shape entry, byte for byte (its check length is
+    the case's: at half of it the numbers differ)."""
+    import concurrent.futures
+    mechanisms, _ = catalog.load(WORKLOADS, ATTRS)
+    m = next(m for m in mechanisms if m["rel"] == str(pathlib.Path(FAISS).parent.parent))
+    case = next(c for c in m["cases"] if c["name"] == pathlib.Path(FAISS).name)
+    with concurrent.futures.ThreadPoolExecutor(len(catalog.SEEDS)) as pool:
+        s = catalog.shape(str(RUNNER), case["runs"][0], case["gpus"][0], case["block"], case["length"], ATTRS, pool)
+    assert s == json.loads((WORKLOADS / FAISS / "shape.json").read_text())["runs"][0]

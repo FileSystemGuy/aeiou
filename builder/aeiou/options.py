@@ -13,7 +13,10 @@ suite's frame and exits 2.
 """
 from __future__ import annotations
 
+import decimal
 import hashlib
+import json
+import math
 import os
 import pathlib
 import sys
@@ -58,48 +61,93 @@ def _json(v):
     return v
 
 
+def _quoted(s: str) -> str:
+    """A string as the runner's messages quote one (Rust's `{:?}`)."""
+    return json.dumps(s, ensure_ascii=False)
+
+
+def _rust_float(x: float) -> str:
+    """An f64 as Rust's `{}` prints it: the shortest digits, never an exponent, no `.0`."""
+    if math.isnan(x):
+        return "NaN"
+    if math.isinf(x):
+        return "inf" if x > 0 else "-inf"
+    s = format(decimal.Decimal(repr(x)), "f")
+    return s.rstrip("0").rstrip(".") if "." in s else s
+
+
+def _described(v) -> str:
+    """A TOML value as the runner names it in a refusal (options.rs `toml_described`)."""
+    if isinstance(v, str):
+        return f"the string {_quoted(v)}"
+    if isinstance(v, bool):
+        return f"the boolean {'true' if v else 'false'}"
+    if isinstance(v, int):
+        return f"the integer {v}"
+    if isinstance(v, float):
+        return f"the float {_rust_float(v)}"
+    if isinstance(v, list):
+        return f"an array of {len(v)} value(s)"
+    if isinstance(v, dict):
+        return "a table"
+    return f"the datetime {v}"
+
+
+def _non_empty(s: str) -> str:
+    """An empty value where one is needed is refused, as the command line refuses `--root ""`
+    (an empty path would be the working directory; options.rs `non_empty`)."""
+    if not s.strip():
+        raise ValueError("empty, and a value is required (leave it unset for none)")
+    return s
+
+
 def _from_env(text: str, kind):
-    text = text.strip()
     if kind is bool:
-        if text in ("true", "1", "yes", "on"):
+        if text.strip() in ("true", "1", "yes", "on"):
             return True
-        if text in ("false", "0", "no", "off"):
+        if text.strip() in ("false", "0", "no", "off"):
             return False
-        raise ValueError(f"{text!r}: expected true or false")
+        raise ValueError(f"{_quoted(text.strip())}: expected true or false")
     if kind is pathlib.Path:
-        return pathlib.Path(text)
+        return pathlib.Path(_non_empty(text))
+    if kind is str:
+        return _non_empty(text)
     if kind is list:
-        return text.split()
-    return kind(text)
+        return _non_empty(text).split()
+    return kind(text.strip())
 
 
 def _from_toml(v, kind):
     if kind is bool:
         if isinstance(v, bool):
             return v
-        raise ValueError(f"expected true or false, got {v!r}")
+        raise ValueError(f"expected true or false, got {_described(v)}")
     if kind is int:
         if isinstance(v, int) and not isinstance(v, bool):
             return v
-        raise ValueError(f"expected an integer, got {v!r}")
+        raise ValueError(f"expected an integer, got {_described(v)}")
     if kind is float:
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             return float(v)
-        raise ValueError(f"expected a number, got {v!r}")
+        raise ValueError(f"expected a number, got {_described(v)}")
     if kind is pathlib.Path:
         if isinstance(v, str):
-            return pathlib.Path(v)
-        raise ValueError(f"expected a path string, got {v!r}")
+            return pathlib.Path(_non_empty(v))
+        raise ValueError(f"expected a path string, got {_described(v)}")
     if kind is str:
         if isinstance(v, str):
-            return v
-        raise ValueError(f"expected a string, got {v!r}")
+            return _non_empty(v)
+        raise ValueError(f"expected a string, got {_described(v)}")
     if kind is list:
         if isinstance(v, str):
-            return [v]
-        if isinstance(v, list) and all(isinstance(x, str) for x in v):
+            return [_non_empty(v)]
+        if isinstance(v, list):
+            for x in v:
+                if not isinstance(x, str):
+                    raise ValueError(f"expected strings, got {_described(x)}")
+                _non_empty(x)
             return list(v)
-        raise ValueError(f"expected a string or an array of strings, got {v!r}")
+        raise ValueError(f"expected a string or an array of strings, got {_described(v)}")
     raise TypeError(kind)
 
 
@@ -109,7 +157,7 @@ class ConfigFile:
         try:
             data = path.read_bytes()
         except OSError as e:
-            raise UsageError(f"config {path}: {e.strerror}") from None
+            raise UsageError(f"config {path}: {e.strerror} (os error {e.errno})") from None
         self.sha256 = hashlib.sha256(data).hexdigest()
         try:
             self.tables = tomllib.loads(data.decode("utf-8"))

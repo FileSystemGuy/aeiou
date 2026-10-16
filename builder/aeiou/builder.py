@@ -926,9 +926,10 @@ class Cursor:
     def _once_in_order(self, h, what):
         """V18: an object in an object store is written once, in order from 0, by one upload."""
         ns = self._object_store_namespace(h)
-        if ns:
-            raise BuildError(f"{what} on namespace {ns}, declared protocol object: an object is written once, "
-                             f"in order from 0, and has no {what} (schema/README.md V18)")
+        if ns:   # in the reference checker's words (schema/check.py, validate.rs)
+            why = ("an object is made only by the upload an open with WRONLY begins, and a read-only handle writes none"
+                   if what.endswith("without WRONLY") else f"an object is written once, in order from 0, and has no {what}")
+            raise BuildError(f"{what} on namespace `{ns}`, declared `protocol: s3`: {why} (V18)")
 
     def _input_namespace_of(self, h):
         if isinstance(h, Ref):

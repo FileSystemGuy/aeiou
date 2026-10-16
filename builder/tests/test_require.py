@@ -4,7 +4,6 @@ suite names a capability, so no test can lack one unseen (DESIGN_REVIEW.md §3.7
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 
@@ -37,7 +36,15 @@ def test_library():
 
 
 def probe(tmp_path, require):
-    shutil.copy(TESTS / "conftest.py", tmp_path / "conftest.py")
+    # the suite's conftest itself, loaded from where it is (a copy would be another file, its
+    # coverage nobody's), its hooks exposed under the names pytest looks for
+    (tmp_path / "conftest.py").write_text(
+        "import importlib.util\n"
+        f"_spec = importlib.util.spec_from_file_location('aeiou_conftest', {str(TESTS / 'conftest.py')!r})\n"
+        "_real = importlib.util.module_from_spec(_spec)\n"
+        "_spec.loader.exec_module(_real)\n"
+        "pytest_configure = _real.pytest_configure\n"
+        "pytest_runtest_makereport = _real.pytest_runtest_makereport\n")
     (tmp_path / "test_probe.py").write_text(PROBE)
     env = {k: v for k, v in os.environ.items() if k != "AEIOU_REQUIRE"}
     if require is not None:
