@@ -3388,3 +3388,34 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** peak disk use of the `coord::` module went from 9470 MB (25.0 s) to 1880 MB (11.3 s).
   The killed-datagen test passed 32 of 32 runs as 4 parallel streams under 40 burners. Same suite
   runs as bug 172.
+
+## 176. The AgentX corpus fit counted a request's hits on another model's chunks
+
+- **Where:** `workloads/kvcache/lmcache-local-disk/kit/agentx.py` (`walk`, `shared_prefix`,
+  `prefixes`); refitted `kit/agentx.reference.json`, `cases/agentx/params.json`, its `shape.json`,
+  `DESCRIPTION.md` and `README.md`; `workloads/CATALOG.md`; the AgentX section of the mechanism's
+  `README.md`; `DESIGN_REVIEW.md` §3.59; `ABSTRACTS.md`; `builder/tests/test_kits.py`, `test_trace.py`.
+- **Found by:** kit review (round 4). `walk` kept one chunk store per session, but LMCache keys a
+  chunk by its model, and 187 of the corpus's 393 sessions mix models. A Haiku sub-agent's request
+  counted hits on Opus chunks, and such a hit could set the sub-agents' shared-prefix floor high
+  enough to split the other model's chains. In the test fixture, session 1's request 3 (model `m2`)
+  counted `stored 0, hit 1` on model `m`'s chunks. The user decided (2026-10-15): "the fit should
+  key chunks by model".
+- **Fix:** one store and one shared-prefix floor per session and model. `shared_prefix` with a model
+  looks only at that model's requests and store. A replay fit (`--replay`) keeps one store per
+  session, because the replay sends every request to one model and the server really did share
+  chunks across them; `holds` and `replay_agentx.py` are unchanged. The committed files were first
+  reproduced with the old code: `cases/agentx/params.json` and both replay captures' fitted files
+  byte-identical. `agentx.reference.json` differed only in `subagent_shared_prefix_tokens`: it was
+  never rerun after the 2026-10-08 `if hit:` filter, and the commit that made it reproduces it.
+  `cases/agentx-odirect` was fitted by the 2026-10-07 code, and the new code's replay fit equals
+  HEAD's, so it is left as committed. Then refitted. Chains went from 10,391 to 10,079 and the
+  longest from 1,190 to 1,519 requests; rewrites went from 3.74% to 3.86%. Per request, the
+  reference stored 14.41 → 14.46 chunks and hit 840.14 → 840.08. The agentx case's op count went
+  from 434,281,464 to 432,060,816. Its params SHA and fingerprint change; no dataset id does.
+  Recorded in DESIGN_REVIEW §3.59, dated 2026-10-15.
+- **Evidence:** the new `test_agentx_keys_chunks_by_model` fails with the old `agentx.py`
+  (`[(2, 0), (1, 1), (0, 2)] != [(2, 0), (2, 0), (1, 1)]`, plus two existing tests whose numbers
+  came from cross-model hits) and passes with the fix. Applied on a1fdba5: builder suite with
+  MinIO 664 passed; `aeiou-catalog check` "13 mechanisms, 16 cases: ok"; checker diff identical;
+  hermetic `--twice --check` rc 0; 22 parameter files fit. Fixed in an isolated worktree and applied.

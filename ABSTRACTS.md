@@ -1310,10 +1310,12 @@ a think time, the reply's length, and the prompt's 64-token KV blocks as hash id
 reuse structure is in the file and the fit needs no server.
 
 - **What it gives.** A prompt of 219k tokens on average (p90 651k; the corpus caps it at
-  990,016), growing by a median 1,728 tokens per turn; 10,391 chains, 8,138 of them one side
-  call and the sessions of hundreds of turns (median 65, longest 1,190); 3.7 % of continuing
-  turns edit the end of the context (a mean of 32k tokens dropped); 43 % of requests are
-  sub-agents', sharing 27,648 tokens of system prompt and tools with their session; a
+  990,016), growing by a median 1,728 tokens per turn; ~~10,391 chains, 8,138~~ 10,079
+  chains, 7,762 of them one side call and the sessions of hundreds of turns (median 65,
+  longest ~~1,190~~ 1,519); ~~3.7 %~~ 3.9 % of continuing turns edit the end of the context (a
+  mean of 32k tokens dropped); 43 % of requests are sub-agents', sharing ~~27,648~~ 29,696
+  tokens of system prompt and tools with their session (2026-10-15: a session's chunks keyed
+  by model, as LMCache keys them, `DESIGN_REVIEW.md` §3.59); a
   think time of median 4.8 s and p99 51 minutes. Four parameters came of it: `turns`,
   `prefill_step`, `trim`, `think`.
 - **What it does not give.** `keep` (no engine behind the proxy) and the call sequence,

@@ -4,11 +4,11 @@
  "chunk_tokens": 256,
  "context": 990016,
  "requests": 98827,
- "chains": 10391,
- "first": 10391,
+ "chains": 10079,
+ "first": 10079,
  "chunks_stored": {
-  "total": 1423862,
-  "mean": 14.41,
+  "total": 1429519,
+  "mean": 14.46,
   "shares": [
    0,
    1,
@@ -29,17 +29,17 @@
    14,
    19,
    29,
-   144
+   145
   ]
  },
  "chunks_hit": {
-  "total": 83028255,
-  "mean": 840.14,
+  "total": 83022598,
+  "mean": 840.08,
   "shares": [
    0,
-   36,
+   35,
    129,
-   170,
+   169,
    212,
    259,
    308,
@@ -88,7 +88,7 @@
   "mean": 1077.4
  },
  "subagent_shared_prefix_tokens": {
-  "median": 27648,
-  "n": 1697
+  "median": 29696,
+  "n": 1516
  }
 }

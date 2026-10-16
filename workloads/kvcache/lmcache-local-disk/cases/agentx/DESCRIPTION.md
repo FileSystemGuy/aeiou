@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one. In the catalog it is `kvcache/lmcache-local-disk`: application `vllm-lmcache`, format `lmcache-chunks`, phase inference, domain ai. Not yet decided between the two; the case's README says why (`agentx`: agentic data, a llm model), its parameters holding at 1 GPU. Traced: a capture is within the tolerances. `sysp` holds 393 samples, stored as chunk objects (1.5 TiB in 50,304 files and 393 directories), looked up by id; sizes always 4.0 GiB (a lognormal clamped to it). `subp` holds 393 samples, stored as chunk objects (1.4 TiB in 45,588 files and 393 directories), looked up by id; sizes always 3.6 GiB (a lognormal clamped to it). It writes the objects of `kv`, each 32 MiB. The one `gpu` actor (one per GPU): 98,827 times: in phase `warm` while `r < warm`, else `serve`,, compute for `draw(think)`; `load` in parallel, each: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s` below `⌈(stored − had) / (prefill_step div chunk_tokens)⌉`: compute for `prefill_per_token × min((stored − had − s × (prefill_step div chunk_tokens)) × chunk_tokens, prefill_step)`; for each `k` below `min(stored, had + (s + 1) × (prefill_step div chunk_tokens))`: open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `decode_per_token × out`. Measured by dry run at 1 GPU (434,281,464 ops: 72,380,244 close, 72,380,244 fstat, 72,380,244 ioctl, 72,380,244 lseek, 72,380,244 open, 70,864,473 read, 1,515,771 write; 2.1 PiB read, 46.3 TiB written): read runs: large (32 MiB); write runs: large (32 MiB); read requests: large (32 MiB); write requests: large (32 MiB); share of bytes read: read-mostly (97.9%); metadata ops per data op: high (3); reads its own writes: yes; share of block reads that are re-reads: repeated (98.4%); share of accesses to the hottest 1% of blocks: uniform (6.3%).
+One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one. In the catalog it is `kvcache/lmcache-local-disk`: application `vllm-lmcache`, format `lmcache-chunks`, phase inference, domain ai. Not yet decided between the two; the case's README says why (`agentx`: agentic data, a llm model), its parameters holding at 1 GPU. Traced: a capture is within the tolerances. `sysp` holds 393 samples, stored as chunk objects (1.5 TiB in 50,304 files and 393 directories), looked up by id; sizes always 4.0 GiB (a lognormal clamped to it). `subp` holds 393 samples, stored as chunk objects (1.4 TiB in 45,588 files and 393 directories), looked up by id; sizes always 3.6 GiB (a lognormal clamped to it). It writes the objects of `kv`, each 32 MiB. The one `gpu` actor (one per GPU): 98,827 times: in phase `warm` while `r < warm`, else `serve`,, compute for `draw(think)`; `load` in parallel, each: open, fstat, ioctl TCGETS, lseek, read 32 MiB, close; for each `s` below `⌈(stored − had) / (prefill_step div chunk_tokens)⌉`: compute for `prefill_per_token × min((stored − had − s × (prefill_step div chunk_tokens)) × chunk_tokens, prefill_step)`; for each `k` below `min(stored, had + (s + 1) × (prefill_step div chunk_tokens))`: open for writing, fstat, ioctl TCGETS, lseek, write 32 MiB, close; compute for `decode_per_token × out`. Measured by dry run at 1 GPU (432,060,816 ops: 72,010,136 close, 72,010,136 fstat, 72,010,136 ioctl, 72,010,136 lseek, 72,010,136 open, 70,475,146 read, 1,534,990 write; 2.1 PiB read, 46.8 TiB written): read runs: large (32 MiB); write runs: large (32 MiB); read requests: large (32 MiB); write requests: large (32 MiB); share of bytes read: read-mostly (98%); metadata ops per data op: high (3); reads its own writes: yes; share of block reads that are re-reads: repeated (98.4%); share of accesses to the hottest 1% of blocks: uniform (6.25%).
 
 ## The account
 
@@ -33,17 +33,17 @@ One engine per actor; `concurrency` request slots; each request continues an ear
 | `sub_tokens_max` | 29,696 tokens | 100,000 tokens | tokens |  |
 | `sub_pop` | Zipf over the ids with exponent 1.1, in a rank order fixed by the dataset seed | same | — | [measure] |
 | `sub_per_slot` | false | same | — | [config: load] a slot's sub-agent conversations all start with the sub-agent prefix of its own index (one session's sub-agents); false picks one per conversation by `sub_pop` |
-| `kind` | one of 0 (4.16%), 1 (8.37%), 2 (87.5%) | always 0 | — | [config: load] the prefix a new conversation opens with: 0 the system prompt (the main agent's tools and system prompt), 1 a sub-agent's prefix, 2 none (measured in the AgentX corpus: a prompt is its tools, then its system prompt, then its messages, and a sub-agent's are its own, §3.63) |
-| `first_in` | one of 20 weighted values, median 2,944 tokens, 5th–95th percentile 59 tokens to 21,643 tokens, mean 8,914 tokens | always -1 tokens | tokens | the tokens of a new conversation's first prompt past its prefix; -1 draws them from `turn_in` as for any request (measured in the AgentX corpus: a chain's first prompt is not a turn's growth, §3.63) |
+| `kind` | one of 0 (4.26%), 1 (7.16%), 2 (88.6%) | always 0 | — | [config: load] the prefix a new conversation opens with: 0 the system prompt (the main agent's tools and system prompt), 1 a sub-agent's prefix, 2 none (measured in the AgentX corpus: a prompt is its tools, then its system prompt, then its messages, and a sub-agent's are its own, §3.63) |
+| `first_in` | one of 20 weighted values, median 2,944 tokens, 5th–95th percentile 61 tokens to 21,688 tokens, mean 8,832 tokens | always -1 tokens | tokens | the tokens of a new conversation's first prompt past its prefix; -1 draws them from `turn_in` as for any request (measured in the AgentX corpus: a chain's first prompt is not a turn's growth, §3.63) |
 | `sys_held` | always 0 tokens | same | tokens | [config: GPU KV memory against the prefixes] the tokens of the system prompt the engine holds when a request arrives, apart from its conversation: a prefix many requests share stays in the engine's own cache (measured in the AgentX replay: the whole main-agent prefix in 89 of 103 requests, §3.63) |
 | `sub_held` | always 0 tokens | same | tokens | [config: GPU KV memory against the prefixes] the same for a sub-agent prefix |
 | `reuse` | a mixture: 0% none; 100% always 1 | a mixture: 15% none; 85% always 40 | — | none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one |
 | `keep` | one of 0 tokens (91%), 1,000,000 tokens (9%) | same | tokens | [config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are read. Drawn once per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together |
 | `retain` | 98,827 | 5,000 | count | older chunks are evicted [config: capacity] |
 | `context` | 990,208 tokens | 8,192 tokens | tokens | [config: model] a conversation whose next prompt and reply would not fit starts anew |
-| `turns` | one of 100 weighted values, median 1, 5th–95th percentile 1 to 33, mean 9.5 | always 0 | count | [config: load] the requests a conversation has, drawn when it starts; 0 for no limit, the conversation then ends by `reuse`'s none arm or the context. A session of many turns and a side call of one are the same slot's conversations (measured in the AgentX corpus, §3.59) |
-| `trim` | a mixture: 96.3% always 0 tokens; 3.74% one of 20 weighted values, median 589 tokens, 5th–95th percentile 266 tokens to 106,705 tokens, mean 31,724 tokens | always 0 tokens | tokens | [config: load] tokens the client drops from the end of its conversation before a request (an agent editing its context; measured in the AgentX corpus, §3.59); the chunks past the kept prefix are stored again under their names, where the real store writes new files |
-| `turn_in` | one of 20 weighted values, median 436 tokens, 5th–95th percentile 0 tokens to 5,768 tokens, mean 2,269 tokens | one of 20 weighted values, median 17 tokens, 5th–95th percentile 1 token to 214 tokens, mean 80.7 tokens | tokens | the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean) |
+| `turns` | one of 100 weighted values, median 1, 5th–95th percentile 1 to 34, mean 9.8 | always 0 | count | [config: load] the requests a conversation has, drawn when it starts; 0 for no limit, the conversation then ends by `reuse`'s none arm or the context. A session of many turns and a side call of one are the same slot's conversations (measured in the AgentX corpus, §3.59) |
+| `trim` | a mixture: 96.1% always 0 tokens; 3.86% one of 20 weighted values, median 589 tokens, 5th–95th percentile 266 tokens to 107,214 tokens, mean 31,703 tokens | always 0 tokens | tokens | [config: load] tokens the client drops from the end of its conversation before a request (an agent editing its context; measured in the AgentX corpus, §3.59); the chunks past the kept prefix are stored again under their names, where the real store writes new files |
+| `turn_in` | one of 20 weighted values, median 436 tokens, 5th–95th percentile 0 tokens to 5,792 tokens, mean 2,316 tokens | one of 20 weighted values, median 17 tokens, 5th–95th percentile 1 token to 214 tokens, mean 80.7 tokens | tokens | the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean) |
 | `turn_out` | one of 20 weighted values, median 411 tokens, 5th–95th percentile 40 tokens to 3,358 tokens, mean 1,077 tokens | one of 20 weighted values, median 248 tokens, 5th–95th percentile 12 tokens to 615 tokens, mean 284 tokens | tokens | generated tokens (measured: ShareGPT replies, the same way) |
 | `prefill_per_token` | 40 µs | same | ns |  |
 | `decode_per_token` | 12 ms | same | ns |  |
@@ -65,11 +65,11 @@ The API the traced application used: `posix` sync (none declared); a run under a
 - 1 (`concurrency`) in parallel, `slot` = 0 onward, joined at the end:
   - 98,827 times (`warm + requests`), `r` = 0 to 98,826:
     - `d` is drawn from a mixture: 0% none; 100% always 1 (`reuse`).
-    - `inn` is drawn from one of 20 weighted values, median 436 tokens, 5th–95th percentile 0 tokens to 5,768 tokens, mean 2,269 tokens (`turn_in`).
+    - `inn` is drawn from one of 20 weighted values, median 436 tokens, 5th–95th percentile 0 tokens to 5,792 tokens, mean 2,316 tokens (`turn_in`).
     - `out` is drawn from one of 20 weighted values, median 411 tokens, 5th–95th percentile 40 tokens to 3,358 tokens, mean 1,077 tokens (`turn_out`).
     - `kp` is drawn from one of 0 tokens (91%), 1,000,000 tokens (9%) (`keep`).
-    - `tr` is drawn from a mixture: 96.3% always 0 tokens; 3.74% one of 20 weighted values, median 589 tokens, 5th–95th percentile 266 tokens to 106,705 tokens, mean 31,724 tokens (`trim`).
-    - `tn` is drawn from one of 100 weighted values, median 1, 5th–95th percentile 1 to 33, mean 9.5 (`turns`).
+    - `tr` is drawn from a mixture: 96.1% always 0 tokens; 3.86% one of 20 weighted values, median 589 tokens, 5th–95th percentile 266 tokens to 107,214 tokens, mean 31,703 tokens (`trim`).
+    - `tn` is drawn from one of 100 weighted values, median 1, 5th–95th percentile 1 to 34, mean 9.8 (`turns`).
     - `back` = `d ≠ none and d ≤ r`.
     - `more` = `back and (turns@(r − d) = 0 or turn@(r − d) + 1 < turns@(r − d))`.
     - `prior` = `(if back then max(ptoks@(r − d) + out@(r − d) − tr, 0) else 0)`.
@@ -78,8 +78,8 @@ The API the traced application used: `posix` sync (none declared); a run under a
     - `turns` = `(if cont then turns@(r − d) else tn)`.
     - `turn` = `(if cont then turn@(r − d) + 1 else 0)`.
     - `sp` = `(if cont then sp@(r − d) else (if sys_per_slot = true then sysp[slot mod sys_prompts] else pick(sysp)))`.
-    - `kd` is drawn from one of 0 (4.16%), 1 (8.37%), 2 (87.5%) (`kind`).
-    - `fi` is drawn from one of 20 weighted values, median 2,944 tokens, 5th–95th percentile 59 tokens to 21,643 tokens, mean 8,914 tokens (`first_in`).
+    - `kd` is drawn from one of 0 (4.26%), 1 (7.16%), 2 (88.6%) (`kind`).
+    - `fi` is drawn from one of 20 weighted values, median 2,944 tokens, 5th–95th percentile 61 tokens to 21,688 tokens, mean 8,832 tokens (`first_in`).
     - `sh` is drawn from always 0 tokens (`sys_held`).
     - `bh` is drawn from always 0 tokens (`sub_held`).
     - `kind` = `(if cont then kind@(r − d) else kd)`.
@@ -159,7 +159,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
 
 From `aeiou dry-run --metrics-json` at 1 GPU, the median of seeds 1, 2, 3.
 
-Ops in all (seed 1): 434,281,464: 72,380,244 `close`, 72,380,244 `fstat`, 72,380,244 `ioctl`, 72,380,244 `lseek`, 72,380,244 `open`, 70,864,473 `read`, 1,515,771 `write`; 2.1 PiB read, 46.3 TiB written.
+Ops in all (seed 1): 432,060,816: 72,010,136 `close`, 72,010,136 `fstat`, 72,010,136 `ioctl`, 72,010,136 `lseek`, 72,010,136 `open`, 70,475,146 `read`, 1,534,990 `write`; 2.1 PiB read, 46.8 TiB written.
 
 | Attribute | Class | Value |
 |---|---|---|
@@ -167,8 +167,8 @@ Ops in all (seed 1): 434,281,464: 72,380,244 `close`, 72,380,244 `fstat`, 72,380
 | `run_length_write` (write runs) | large | 32 MiB |
 | `request_size_read` (read requests) | large | 32 MiB |
 | `request_size_write` (write requests) | large | 32 MiB |
-| `read_share` (share of bytes read) | read-mostly | 97.9% |
+| `read_share` (share of bytes read) | read-mostly | 98% |
 | `metadata` (metadata ops per data op) | high | 3 |
 | `reads_own_writes` (reads its own writes) | yes | yes |
 | `reread` (share of block reads that are re-reads) | repeated | 98.4% |
-| `skew` (share of accesses to the hottest 1% of blocks) | uniform | 6.3% |
+| `skew` (share of accesses to the hottest 1% of blocks) | uniform | 6.25% |

@@ -3307,8 +3307,8 @@ yet run.
 
 | per request | corpus | abstract, seeds 1 and 2 |
 |---|---|---|
-| chunks stored | 14.41 | 15.6, 15.4 (the 108 % above) |
-| chunks hit | 840 | 784, 850 (loads 713, 773 at 0.91) |
+| chunks stored | ~~14.41~~ 14.46 | ~~15.6, 15.4 (the 108 % above)~~ 15.5, 15.0 (2026-10-15) |
+| chunks hit | 840 | ~~784, 850 (loads 713, 773 at 0.91)~~ 784, 808 (loads 713, 735 at 0.91; 2026-10-15) |
 | prompt tokens, mean | 218,922 | — |
 
 The hit count depends on how finely `turns` resolves its tail (`--turn-bins`, 100 by
@@ -3318,6 +3318,25 @@ and the corpus's long sessions grow more slowly per turn (and are compacted), so
 abstract's longest conversations reach the 990k-token cap and are cut. A growth that
 depends on the chain's length is not drawn here. The fit at 100 shares is within 10 % on
 hits and 9 % on stores; `tests/test_trace.py` repeats it on 10,000 requests.
+
+**Chunks keyed by model (decided by the user 2026-10-15, RC1 review).** The chains were
+keyed by model and the store was not: one store per session served every model, so a
+request counted hits on another model's chunks, and a sub-agent's first prompt found its
+prefix in another model's (`agentx.py` `walk` and `shared_prefix`). LMCache keys a chunk by
+its model (another model's tokens are other tokens), and 187 of the 393 sessions mix models
+(Opus, Haiku, Sonnet, and others). The store, and the shared prefix that a request must keep
+more of to join a chain, are now per session and model. The corpus fit and the reference,
+refitted: 10,079 chains (10,391), 7,762 of one request (8,138), the longest 1,519 requests
+(1,190); rewrites 3.86 % of continuations (3.74 %), the chain growing by 107 % of the
+corpus's (108 %); `kind` 429, 722, 8,928 (432, 870, 9,089); `sub_tokens` 29,696 unchanged
+(1,516 sub-agent groups found a prefix, 1,519); `first_in` and `turn_in` shift by a few
+percent in their upper shares. The reference stores 14.46 chunks a request (14.41) and hits
+840.08 (840.14); its sub-agent prefix median, 27,648 over 1,697 groups since 2026-10-02,
+was the walk of that day (it counted groups that found nothing) and is now the fit's,
+29,696. The abstract at the new fit, all 98,827 requests, seeds 1 and 2: 15.5 and 15.0
+chunks stored a request (15.3, 15.1 at the old fit), loads 713 and 735 (717, 769). The
+replays' fits are unchanged, by design: a replay serves one model, so the store a replay's
+requests met is one per session, the server's, as `holds` already took it.
 
 **Choices (~~for the user to confirm~~ decided 2026-10-03).**
 

@@ -6,7 +6,7 @@
       "ast": "lmcache_local_disk",
       "ast_sha256": "d2b8c38a4f877c9906f6991d90a176c1f01fda1fd3180a0418ead105c64e84bd",
       "params": "params.json",
-      "params_sha256": "dfdaf5cc197725844bc6c98255d73978143610e8854a6040e674fdc8c92af260",
+      "params_sha256": "af695ecb220e43b937dfc5d57b8bbe7665fa50feaa84f8708033968261aee932",
       "gpus": 1,
       "block": 33554432,
       "seeds": [
@@ -21,18 +21,18 @@
       },
       "stable": true,
       "moving": [],
-      "ops": 434281464,
+      "ops": 432060816,
       "counts": {
-        "close": 72380244,
-        "fstat": 72380244,
-        "ioctl": 72380244,
-        "lseek": 72380244,
-        "open": 72380244,
-        "read": 70864473,
-        "write": 1515771
+        "close": 72010136,
+        "fstat": 72010136,
+        "ioctl": 72010136,
+        "lseek": 72010136,
+        "open": 72010136,
+        "read": 70475146,
+        "write": 1534990
       },
-      "bytes_read": 2377817140494336,
-      "bytes_written": 50860834947072,
+      "bytes_read": 2364753494147072,
+      "bytes_written": 51505717575680,
       "datasets": [
         {
           "bytes": 1529679446016,
@@ -75,8 +75,8 @@
           "class": "large"
         },
         "read_share": {
-          "value": 0.979058,
-          "spread": 0.00221362,
+          "value": 0.979606,
+          "spread": 0.00126459,
           "class": "read-mostly"
         },
         "metadata": {
@@ -90,13 +90,13 @@
           "class": "yes"
         },
         "reread": {
-          "value": 0.983566,
-          "spread": 0.00167716,
+          "value": 0.983659,
+          "spread": 0.000566545,
           "class": "repeated"
         },
         "skew": {
-          "value": 0.0629879,
-          "spread": 0.00630616,
+          "value": 0.0624535,
+          "spread": 0.00502399,
           "class": "uniform"
         }
       }

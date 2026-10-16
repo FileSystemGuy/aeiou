@@ -7,7 +7,7 @@ it was never traced at that scale. The captures are of 8-session replays on one 
 each with the parameters fitted to it (`fitted.params.json`): example-case evidence
 (`DESIGN_REVIEW.md` §3.66).
 
-`params.json` (lmcache_local_disk): Fitted by agentx.py to traces.jsonl (393 sessions): 98827 requests in 10391 chains; 3.7% of continuing requests cut their chain (trim) and the chain grows by 108% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the main agent's prefix (the prefix its cuts most often keep), sub_tokens the median prefix a sub-agent's first prompt shares with its session, kind the chains' first prompts by the prefix they open with; keep not measured (the proxy saw no engine).
+`params.json` (lmcache_local_disk): Fitted by agentx.py to traces.jsonl (393 sessions): 98827 requests in 10079 chains; 3.9% of continuing requests cut their chain (trim) and the chain grows by 107% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the main agent's prefix (the prefix its cuts most often keep), sub_tokens the median prefix a sub-agent's first prompt shares with its session, kind the chains' first prompts by the prefix they open with; keep not measured (the proxy saw no engine).
 
 One engine (`--gpus 1`). Captures:
 

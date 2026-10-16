@@ -27,6 +27,11 @@ What the corpus gives, and how the abstracts take it:
   the context was replaced). A request extends its chain when its blocks begin with the
   chain's last prompt, and rewrites it when it keeps a shorter prefix.
 
+  What a session "had stored" is of the request's own model: LMCache keys a chunk by its
+  model, so another model's chunks are never a hit (2026-10-15; until then one store per
+  session served every model, and 187 of the 393 sessions mix models). A replay serves
+  one model, and its fit counts one store per session (`walk`).
+
   reuse      1, with no none arm: a slot is one agent and serves its own chain, and a
              conversation ends by its length. Sub-agents are chains on other slots, and the
              parent's think time spans their run
@@ -42,7 +47,7 @@ What the corpus gives, and how the abstracts take it:
              a fifth of the turns the prompt grew by less than the reply and the clipped
              sample overstates growth; the doc of the fitted file says by how much
   first_in   a chain's first prompt past the prefix it opens with: in less its kind's
-             prefix or what its session had stored of it, the longer, at least 0 (a first
+             prefix or what its session had stored of it (of its model), the longer, at least 0 (a first
              prompt is not a turn's growth; a chain of neither kind often opens with
              another sub-agent type's tools, which the session had stored)
   turn_out   the generated tokens
@@ -53,7 +58,7 @@ What the corpus gives, and how the abstracts take it:
              (the system prompt and the tool definitions), its median; every chain starts
              past it~~ (2026-10-08: that measure is the sub-agents' prefix, `sub_tokens`)
   sub_tokens the prefix a sub-agent's first prompt shares with what its session already
-             stored (its tools and system prompt, which are not the main agent's), its median
+             stored of its model (its tools and system prompt, which are not the main agent's), its median
   kind       the chains' first prompts by the prefix they open with: the session's
              main-agent prefix (0), its sub-agents' (1), or neither (2: a tool set changed
              mid-session, or a session without sub-agents). From Anthropic's documentation:
@@ -84,7 +89,7 @@ vLLM's prefix cache under the replay and compares its holds with the measured on
 
 `reference` is the corpus's own chunk accounting, the thing a dry run at the fitted
 parameters is compared with: per request, the whole 256-token chunks its prompt holds, how
-many of them the session had stored before (the prefix the store would hit), and how many
+many of them the session had stored before of its model (the prefix the store would hit), and how many
 are new (stored now), with totals, means, and equal shares.
 """
 import argparse, collections, datetime, json, re, statistics
@@ -126,13 +131,18 @@ def flatten(requests, out, own=-1, counter=None):
         out.sort(key=lambda gr: gr[1]["t"])
 
 
-def shared_prefix(flat, per, model=None):
+def shared_prefix(flat, per, model=None, pooled=False):
     """The hash ids of a session's shared prefix (the system prompt and the tool definitions):
     the longest prefix a sub-agent group's first prompt found stored, by `walk`'s rule over
     all the session's requests; empty for a session without sub-agents. With `model`, of
-    that model's sub-agents only (another model's tokens are other tokens)."""
+    that model's sub-agents only (another model's tokens are other tokens), and found in that
+    model's store only, as LMCache keys a chunk by its model (2026-10-15); `pooled`, or no
+    `model`, one store for every model's requests, as one engine serving one model holds them
+    (a replay's, `replay_agentx.py`)."""
     store, seen, best = set(), set(), []
     for g, r in flat:
+        if model is not None and not pooled and r["model"] != model:
+            continue
         h = r["hash_ids"]
         whole = h[:-1]
         ch = [tuple(whole[i:i + per]) for i in range(0, len(whole) - per + 1, per)]
@@ -180,22 +190,27 @@ def main_prefix(flat, blocks, model=None):
     return []
 
 
-def prefixes(flat, per, blocks):
-    """A session's prefixes by (kind, model): 0 the main agent's, 1 its sub-agents'."""
+def prefixes(flat, per, blocks, pooled=False):
+    """A session's prefixes by (kind, model): 0 the main agent's, 1 its sub-agents' (`pooled` as
+    `shared_prefix` says)."""
     models = {r["model"] for _, r in flat}
-    return {(k, m): (main_prefix(flat, blocks, m) if k == 0 else shared_prefix(flat, per, m)) for k in (0, 1) for m in models}
+    return {(k, m): (main_prefix(flat, blocks, m) if k == 0 else shared_prefix(flat, per, m, pooled)) for k in (0, 1) for m in models}
 
 
 def walk(path, traces, chunk_tokens, context, played=None, main=0):
     """Per request: its session and its index among the session's requests (`ti`, `fi`), its chain, whether it starts one, in, out, the blocks it keeps of the chain's
-    last prompt, think time, and its chunks stored and hit under a store that never evicts;
-    and the prefix of each sub-agent group's first prompt that the session had stored.
+    last prompt, think time, and its chunks stored and hit under a store that never evicts,
+    one per session and model (LMCache keys a chunk by its model: another model's tokens are
+    other tokens, 2026-10-15; until then one per session, and a request counted hits on
+    another model's chunks); and the prefix of each sub-agent group's first prompt that the
+    session had stored of its model.
 
     Chains as the module doc says. `in` is a count of 64-token blocks and the last block of
     a prompt is partial as often as not, so its hash differs once the prompt has grown: a
     request that keeps all but that block extends the chain, and the block is left out of
     the chunk accounting. With `played` (a set of (session, index) pairs, `replay_agentx.py`'s),
-    only the requests a replay sent: the store and the chains are the server's. A chain's
+    only the requests a replay sent: the store and the chains are the server's, one store for
+    the session's requests of every model (the replay serves one model). A chain's
     `kind` is the prefix its first prompt opens with: 0 the session's main-agent prefix (the
     first `main` blocks, `main_prefix`), 1 its sub-agents' (`shared_prefix`), 2 neither."""
     per = max(1, chunk_tokens // BLOCK)                # hash ids per chunk
@@ -205,11 +220,11 @@ def walk(path, traces, chunk_tokens, context, played=None, main=0):
         for ti, line in enumerate(f):
             if ti >= traces:
                 break
-            store = set()
+            stores = collections.defaultdict(set)     # the session's store per model (one under a replay)
             flat = []
             flatten(json.loads(line)["requests"], flat)
-            sys_blocks = 0                             # the session's shared prefix, in blocks: the longest a sub-agent's first prompt found stored
-            lead = prefixes(flat, per, main)
+            sys_blocks = collections.Counter()         # per store, the session's shared prefix, in blocks: the longest a sub-agent's first prompt found stored
+            lead = prefixes(flat, per, main, played is not None)
             kinds = {}                                 # chain -> its kind
             last = {}                                  # chain -> its last request; chains are keyed by (group, model) and continuity
             seen_group = set()
@@ -217,6 +232,8 @@ def walk(path, traces, chunk_tokens, context, played=None, main=0):
                 if r["in"] > context or played is not None and (ti, fi) not in played:
                     continue
                 h = r["hash_ids"]
+                sk = None if played is not None else r["model"]
+                store = stores[sk]
                 whole = h[:-1]
                 ch = [tuple(whole[i:i + per]) for i in range(0, len(whole) - per + 1, per)]
                 hit = 0
@@ -229,9 +246,9 @@ def walk(path, traces, chunk_tokens, context, played=None, main=0):
                     seen_group.add(g)
                     if hit:                            # a group that found nothing has no prefix to measure
                         shared.append(hit * chunk_tokens)
-                    sys_blocks = max(sys_blocks, hit * per)
+                    sys_blocks[sk] = max(sys_blocks[sk], hit * per)
                 # the agent's open chain of this model whose last prompt it keeps the most of, past the shared prefix
-                best, kept = None, sys_blocks
+                best, kept = None, sys_blocks[sk]
                 for c, prev in last.items():
                     if c[0] == (g, r["model"]):
                         k = common(prev["hash_ids"], h)

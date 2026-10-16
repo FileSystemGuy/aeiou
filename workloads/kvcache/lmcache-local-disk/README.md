@@ -79,6 +79,12 @@ sends the corpus's requests to a vLLM server (a block's tokens generated from it
 the prefix structure is the corpus's) for the `strace` and LMCache's log, as `replay.py` does
 for ShareGPT. ~~Written for the trace box; not run yet.~~ Run 2026-10-07 (below).
 
+The corpus's chunk accounting keys a session's chunks by model, as LMCache does (2026-10-15,
+`DESIGN_REVIEW.md` §3.59): 187 of the 393 sessions mix models, and until then a request
+counted hits on another model's chunks. `params.json` and `agentx.reference.json` were
+refitted; the replays' fits are not changed (the replay serves one model, and its store is the
+server's).
+
 ## The AgentX replay on a GPU (2026-10-07)
 
 `DESIGN_REVIEW.md` §3.63. Qwen2.5-0.5B at 128k context (YaRN), 2 GiB of engine KV, the first

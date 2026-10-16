@@ -228,11 +228,38 @@ def test_agentx_walk_builds_chains_by_continuity_and_counts_a_never_evicting_sto
                    (0, 2, 1, True, 1, 0, 1, 1), (0, 3, 1, False, 1, 320, 0, 2),
                    (0, 4, 0, False, 0, 256, 0, 2),                                     # a rewrite: 4 of 7 blocks
                    (1, 0, 2, True, 2, 0, 1, 0), (1, 1, 3, True, 2, 0, 0, 0),           # a side call: a chain of its own
-                   (1, 3, 4, True, 0, 0, 0, 1)]                                        # fi 2 is over the context
+                   (1, 3, 4, True, 0, 0, 1, 0)]       # fi 2 is over the context; m2's chunks are its own, never m's
     assert shared == [128]
     assert [r["think"] for r in rows] == [0.5] * 5 + [1.0, None, 2.0]
     assert [r["fi"] for r in ax.walk(corpus, 1, 128, 4096)[0]] == [0, 1, 2, 3, 4]       # --traces 1: session 0 only
     assert [(r["ti"], r["fi"]) for r in ax.walk(corpus, 10 ** 9, 128, 4096, {(0, 1), (1, 3)}, 4)[0]] == [(0, 1), (1, 3)]   # a replay's
+
+
+def test_agentx_keys_chunks_by_model(monkeypatch, tmp_path):
+    """LMCache keys a chunk by its model (2026-10-15): a request of model b never hits the chunks
+    its session stored for model a, in the corpus's accounting (`walk`'s hits and stores) or in
+    the sub-agents' shared prefix (`shared_prefix` with a model, `sub_tokens`). A replay serves one
+    model, so its walk and `shared_prefix` without a model (`holds`, `replay_agentx.py`) keep one
+    store per session."""
+    ax = _kit(monkeypatch, "agentx")
+    session = [_req(0, [1, 2, 3, 4, 5], 300, 10, model="a"),
+               {"type": "subagent", "requests": [_req(1, [1, 2, 7, 8, 9], 300, 5, model="b")]},
+               _req(2, [1, 2, 3, 4, 6], 300, 8, model="b")]
+    p = tmp_path / "traces.jsonl"
+    p.write_text(json.dumps({"requests": session}) + "\n")
+    rows, shared = ax.walk(p, 10 ** 9, 128, 4096)
+    assert [(r["stored"], r["hit"]) for r in rows] == [(2, 0), (2, 0), (1, 1)]       # b hits only its sub-agent's [1, 2]
+    assert shared == []                                                              # the sub-agent found nothing of b's
+    flat = []
+    ax.flatten(session, flat)
+    assert ax.shared_prefix(flat, 2, "b") == [] and ax.shared_prefix(flat, 2, "b", pooled=True) == [1, 2] == ax.shared_prefix(flat, 2)
+    rows, shared = ax.walk(p, 10 ** 9, 128, 4096, {(0, 0), (0, 1), (0, 2)})          # a replay's: one engine, one model
+    assert [(r["stored"], r["hit"]) for r in rows] == [(2, 0), (1, 1), (0, 2)] and shared == [128]
+    out = tmp_path / "ref.json"
+    r = _agentx("reference", p, "--chunk-tokens", 128, "--context", 4096, "--bins", 1, "-o", out)
+    assert r.returncode == 0, r.stderr
+    ref = json.loads(out.read_text())
+    assert (ref["chunks_stored"]["total"], ref["chunks_hit"]["total"], ref["subagent_shared_prefix_tokens"]) == (5, 1, {"median": 0, "n": 0})
 
 
 def _agentx(*args):
@@ -272,11 +299,11 @@ def test_agentx_reference_is_the_corpus_chunk_accounting(tmp_path, corpus):
     assert r.returncode == 0, r.stderr
     ref = json.loads(out.read_text())
     assert (ref["corpus"], ref["traces"], ref["requests"], ref["chains"], ref["first"]) == ("traces.jsonl", 2, 8, 5, 5)
-    assert ref["chunks_stored"] == {"total": 5, "mean": 0.62, "shares": [0, 1]}
-    assert ref["chunks_hit"] == {"total": 8, "mean": 1.0, "shares": [0, 2]}
+    assert ref["chunks_stored"] == {"total": 6, "mean": 0.75, "shares": [0, 1]}
+    assert ref["chunks_hit"] == {"total": 7, "mean": 0.88, "shares": [0, 2]}
     assert ref["out_tokens"] == {"total": 63, "mean": 7.9}
     assert ref["subagent_shared_prefix_tokens"] == {"median": 128, "n": 1}
-    assert "requests 8, chains 5, chunks stored 5 (0.62 per request), hit 8" in r.stdout
+    assert "requests 8, chains 5, chunks stored 6 (0.75 per request), hit 7" in r.stdout
 
 
 def test_agentx_needs_its_outputs():

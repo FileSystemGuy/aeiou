@@ -586,7 +586,7 @@ def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_p
     assert r.returncode == 0, r.stderr
     kinds = dict(re.findall(r"(\w+)=(\d+)", re.search(r"by kind: (.*)", r.stdout)[1]))
     stored, loaded = int(kinds["write"]) / n, int(kinds["read"]) / n
-    assert ref["chunks_stored"]["mean"] == 14.41 and ref["chunks_hit"]["mean"] == 840.14 and ref["requests"] == 98827
+    assert ref["chunks_stored"]["mean"] == 14.46 and ref["chunks_hit"]["mean"] == 840.08 and ref["requests"] == 98827
     assert 0.95 * ref["chunks_stored"]["mean"] < stored < 1.2 * ref["chunks_stored"]["mean"], stored
     assert 0.8 * ref["chunks_hit"]["mean"] < loaded / 0.91 < 1.2 * ref["chunks_hit"]["mean"], loaded
     p = json.loads((case / "params.json").read_text())["params"]
