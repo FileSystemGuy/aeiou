@@ -88,7 +88,7 @@ jobs:
           bin/aeiou-header --version
           # HDF5 through the aeiou-header beside aeiou, in an environment with no Python
           env -i PATH=/usr/bin:/bin bin/aeiou datagen workloads/input-pipeline/map/hdf5/hdf5_map.ast.json --root /tmp/smoke-h5 \
-            --param samples=20 --param per_file=8 | grep "header(s) from"
+            --param samples=20 --param samples_per_file=8 | grep "header(s) from"
           bin/aeiou check $(find workloads -name '*.ast.json')
           bin/aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 1 \
             --params-file workloads/input-pipeline/map/file-per-sample/params/smoke.params.json | tail -3
