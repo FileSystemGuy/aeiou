@@ -18,7 +18,7 @@ and, for the runner alone, no Python.
 ## First run
 
 ```
-tar xzf aeiou-0.1.0-x86_64-linux.tar.gz && cd aeiou-0.1.0-x86_64-linux
+tar xzf aeiou-0.2.0-x86_64-linux.tar.gz && cd aeiou-0.2.0-x86_64-linux
 export PATH=$PWD/bin:$PATH
 
 # 1. the runner validates every shipped abstract and prints its hash and op counts
@@ -66,8 +66,8 @@ The Python builder in `wheel/` is needed only to author or change workloads or t
 trace with an abstract:
 
 ```
-python3 -m venv .venv && .venv/bin/pip install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
-# or: uv tool install 'aeiou[formats] @ ./wheel/aeiou-0.1.0-py3-none-any.whl'
+python3 -m venv .venv && .venv/bin/pip install 'aeiou[formats] @ ./wheel/aeiou-0.2.0-py3-none-any.whl'
+# or: uv tool install 'aeiou[formats] @ ./wheel/aeiou-0.2.0-py3-none-any.whl'
 ```
 
 The manual pages, in `share/man/` and as Markdown in `man/`: **aeiou**(1), the runner;

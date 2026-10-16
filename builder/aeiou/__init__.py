@@ -18,7 +18,7 @@ never runs a workload.
     w.write()
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .nodes import BuildError, Expr, Dist, Handle, Ref, Index, Param  # noqa: E402
 from .dists import (const, uniform, uniform64, normal, lognormal, empirical, zipf, hotset,  # noqa: E402

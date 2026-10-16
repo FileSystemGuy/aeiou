@@ -1629,7 +1629,7 @@ thing a person reads. **The choices below were made while building and confirmed
 the same day (decided 2026-10-01).**
 
 ```
-{ "aeiou_report": 1, "runner": "0.1.0",
+{ "aeiou_report": 1, "runner": "0.2.0",
   "abstract": {"name", "sha256"}, "seed", "gpus", "params": {…resolved…}, "posix", "cache", "s3", "posix_declared", "cache_declared", "s3_declared",
   "host", "rank", "ranks", "gpu_ids": [lo, hi],
   "facts": {host, kernel, cpus, cpus_online, memory, cgroup_memory_max},   this host's (2026-10-13)
