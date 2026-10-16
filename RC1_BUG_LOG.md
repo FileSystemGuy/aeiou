@@ -3301,3 +3301,27 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   90% coverage or more (faiss faults 97.5, the rest 100; dcp params 100). Applied on dd430e1:
   builder suite with MinIO 663 passed, `aeiou-catalog check` ok. Fixed in an isolated worktree and
   applied.
+
+## 171. A run that failed while an upload's `CreateMultipartUpload` was unanswered left that upload on the store
+
+- **Where:** `runner/aeiou/src/object.rs` (`mod imp`: `Upload::send`, new `begin`, `Begun`,
+  `abort_dropped`); `runner/aeiou/tests/object.rs`; `runner/REFERENCE.md` §16.
+- **Found by:** CI on d21aff5: `object::a_failed_run_leaves_no_upload_on_the_store` failed (`left: 1,
+  right: 0`); reproduced 1 of 20 locally under `taskset -c 0,1`. `Upload::send` awaited
+  `put_multipart` inside the op's future. When `--s3 async` cancelled the in-flight ops of a failed
+  run while that request was out, the store had already made the upload. But `self.multi` was still
+  `None`, so `Upload`'s Drop had no id to abort and `quiesce` saw nothing pending. Ruled out by
+  experiment against the pinned MinIO: bug 137's abort counting is sound (traced), a late part does
+  not revive an aborted upload (404 NoSuchUpload, count 0), and the listing is consistent.
+- **Fix:** the begin request runs on a task of its own (`begin`), counted for `quiesce`. The task
+  returns a `Begun` guard; if the op that wanted it is gone, the guard is dropped untaken and aborts
+  the upload, counted before its own count goes. The abort-on-drop logic is one helper,
+  `abort_dropped`, shared with `Upload`. No fingerprint, dataset id or contract change.
+- **Evidence:** the new `object::a_failed_run_leaves_no_upload_whose_beginning_was_unanswered` (a
+  proxy holds the answer to `POST ?uploads` for 1.5 s, and the run fails at 100 ms) fails every
+  time without the fix ("the failed run left the upload it began on the store, left: 1, right: 0")
+  and passes with it; both upload tests passed 60 of 60 under `taskset -c 0,1` with a CPU burner.
+  Applied on 66956d3: `object::` 16/16 with MinIO; `--tests --lib --bins` 217 of 219 at load
+  average 50, the two failures being load-dependent timing tests outside the object engine (passing
+  when rerun alone, in the timing-margin lane); builder `test_object.py` with MinIO 15 passed. Fixed
+  in an isolated worktree and applied.

@@ -659,7 +659,7 @@ mod imp {
                     return Err(error(libc::EFBIG, format!("{}: over {max} bytes, S3's limit of {} parts per upload in parts of {} MiB; a larger --object-part-mib uploads it", self.show, super::MAX_PARTS, self.part >> 20)));
                 }
                 if self.multi.is_none() {
-                    self.multi = Some(self.s3.put_multipart(&self.key).await.map_err(|e| io_err(&self.show, e))?);
+                    self.multi = Some(begin(&self.s3, &self.key, &self.show).await?);
                 }
                 let up = self.multi.as_mut().expect("started");
                 self.parts += 1;
@@ -705,21 +705,59 @@ mod imp {
 
     impl Drop for Upload {
         fn drop(&mut self) {
-            if let Some(mut up) = self.multi.take() {
-                // on one of the runtime's own threads (an answer no loop took, an op its loop
-                // cancelled), where `block_on` panics, the abort goes on the runtime, counted
-                // for `quiesce`
-                match tokio::runtime::Handle::try_current() {
-                    Ok(h) => {
-                        let pending = Pending::new();
-                        drop(h.spawn(async move {
-                            let _ = up.abort().await;
-                            drop(pending);
-                        }))
-                    }
-                    Err(_) => drop(block(up.abort())),
-                }
+            if let Some(up) = self.multi.take() {
+                abort_dropped(up);
             }
+        }
+    }
+
+    /// Abort `up`, an upload no one will finish: on one of the runtime's own threads (an
+    /// answer no loop took, an op its loop cancelled), where `block_on` panics, the abort goes
+    /// on the runtime, counted for `quiesce`; elsewhere it is waited for.
+    fn abort_dropped(mut up: Box<dyn MultipartUpload>) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) => {
+                let pending = Pending::new();
+                drop(h.spawn(async move {
+                    let _ = up.abort().await;
+                    drop(pending);
+                }))
+            }
+            Err(_) => drop(block(up.abort())),
+        }
+    }
+
+    /// An upload begun on a task of its own (`begin`), counted for `quiesce` until it is taken
+    /// or, dropped untaken (the op that wanted it gone), aborted.
+    struct Begun {
+        up: Option<Box<dyn MultipartUpload>>,
+        _pending: Pending,
+    }
+
+    impl Drop for Begun {
+        fn drop(&mut self) {
+            // the abort is counted before this one's count goes
+            if let Some(up) = self.up.take() {
+                abort_dropped(up);
+            }
+        }
+    }
+
+    /// Begin the multipart upload of `key` (`CreateMultipartUpload`). The store makes the
+    /// upload when the request reaches it, whether or not its answer is taken: an op cancelled
+    /// while the request is out (a run that failed) would leave an upload whose id it never
+    /// learned, so the request runs on a task of its own, which `quiesce` waits for and which
+    /// aborts the upload when the op is gone by the time the answer comes.
+    async fn begin(s3: &AmazonS3, key: &Path, show: &str) -> io::Result<Box<dyn MultipartUpload>> {
+        let (s3, key, pending) = (s3.clone(), key.clone(), Pending::new());
+        let task = runtime().spawn(async move {
+            let up = s3.put_multipart(&key).await?;
+            object_store::Result::Ok(Begun { up: Some(up), _pending: pending })
+        });
+        match task.await {
+            Ok(Ok(mut b)) => Ok(b.up.take().expect("an upload begun")),
+            Ok(Err(e)) => Err(io_err(show, e)),
+            Err(e) => Err(error(libc::EIO, format!("{show}: the request that begins its upload was stopped ({e})"))),
         }
     }
 

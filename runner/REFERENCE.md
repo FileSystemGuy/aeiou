@@ -2180,7 +2180,11 @@ that would send part 10,001 or pass 5 TiB (`EFBIG`, naming the limit) before sen
 failed upload is aborted, so the store keeps no parts of it. Under `--s3 async` an event loop
 that ends with ops in flight (the run failed) cancels them and waits, up to 10 s, for the
 aborts of the uploads they held (`object::quiesce`); the process once exited first, leaving
-the upload on the store whenever a part was on its way (2026-10-15).
+the upload on the store whenever a part was on its way (2026-10-15). The request that begins
+an upload (`CreateMultipartUpload`) runs on a task of its own, which the loop waits for too
+and which aborts the upload when the op that wanted it was cancelled before the answer came:
+the store makes the upload whatever becomes of its answer, and a cancelled op once dropped
+the request and never learned the upload's id (2026-10-15, a store slow to answer under load).
 
 **Threads.** One multi-thread tokio runtime per process, built on the first object call
 with `--object-threads` workers (default 2; `run` and `datagen`, layered, refused when no

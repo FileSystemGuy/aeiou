@@ -646,10 +646,12 @@ fn throttling_proxy(m: &Minio, fail: usize) -> String {
 }
 
 /// A proxy to `m` on a free port that passes what the client sends at `rate` bytes a second
-/// (a slow link to the store: an upload's part takes a while), and the answers as they come.
-/// Its URL.
-fn slow_proxy(m: &Minio, rate: u64) -> String {
+/// (a slow link to the store: an upload's part takes a while), and the answers as they come,
+/// but for the answer to a `CreateMultipartUpload` (`POST ...?uploads`), which it holds for
+/// `hold` (a store slow to begin an upload: its request is made, its answer late). Its URL.
+fn slow_proxy(m: &Minio, rate: u64, hold: Duration) -> String {
     use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     let upstream = m.url.trim_start_matches("http://").to_string();
@@ -658,11 +660,21 @@ fn slow_proxy(m: &Minio, rate: u64) -> String {
             let Ok(c) = c else { return };
             let s = std::net::TcpStream::connect(&upstream).unwrap();
             let (mut c2, mut s2) = (c.try_clone().unwrap(), s.try_clone().unwrap());
+            // a create sent on this connection: its answer, the next one, is held
+            let begun = std::sync::Arc::new(AtomicBool::new(false));
+            let seen = begun.clone();
             std::thread::spawn(move || {
                 let mut buf = [0u8; 16384];
                 loop {
                     let k = c2.read(&mut buf).unwrap_or(0);
-                    if k == 0 || s2.write_all(&buf[..k]).is_err() {
+                    if k == 0 {
+                        break;
+                    }
+                    let line = String::from_utf8_lossy(&buf[..k.min(512)]).lines().next().unwrap_or("").to_string();
+                    if line.starts_with("POST ") && line.contains("?uploads") {
+                        seen.store(true, Ordering::SeqCst);
+                    }
+                    if s2.write_all(&buf[..k]).is_err() {
                         break;
                     }
                     std::thread::sleep(Duration::from_secs_f64(k as f64 / rate as f64));
@@ -671,7 +683,19 @@ fn slow_proxy(m: &Minio, rate: u64) -> String {
             });
             std::thread::spawn(move || {
                 let (mut s, mut c) = (s, c);
-                let _ = std::io::copy(&mut s, &mut c);
+                let mut buf = [0u8; 16384];
+                loop {
+                    let k = s.read(&mut buf).unwrap_or(0);
+                    if k == 0 {
+                        break;
+                    }
+                    if begun.swap(false, Ordering::SeqCst) {
+                        std::thread::sleep(hold);
+                    }
+                    if c.write_all(&buf[..k]).is_err() {
+                        break;
+                    }
+                }
                 let _ = c.shutdown(std::net::Shutdown::Write);
             });
         }
@@ -709,7 +733,7 @@ fn a_failed_run_leaves_no_upload_on_the_store() {
               {"stat": {"file": {"ref": "g"}}}]}}}"#,
     )
     .unwrap();
-    let url = slow_proxy(&m, 10 << 20);
+    let url = slow_proxy(&m, 10 << 20, Duration::ZERO);
     for i in 0..2 {
         let prefix = format!("orphan{i}");
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
@@ -719,6 +743,43 @@ fn a_failed_run_leaves_no_upload_on_the_store() {
         refused(&o, &format!("actor `x` instance 0: x#0 [] stat orph/f99: s3://bench/{prefix}/f99: no such object (ENOENT)"));
         assert_eq!(open_uploads(&m, &format!("{prefix}/f0")), 0, "the failed run left its upload on the store");
     }
+}
+
+/// A run that fails while the store has yet to answer the request that begins an upload
+/// (`CreateMultipartUpload`) leaves no upload on the store either: the store makes the upload
+/// whether or not its answer is taken, so the request runs on a task of its own, which the run
+/// waits for and which aborts the upload when the op that wanted it is gone. The op once
+/// dropped the request with it, and the upload, its id never known, stayed (a store slow to
+/// begin one under load: `a_failed_run_leaves_no_upload_on_the_store` failed so on CI; RC1 review).
+#[test]
+fn a_failed_run_leaves_no_upload_whose_beginning_was_unanswered() {
+    let m = minio("a_failed_run_leaves_no_upload_whose_beginning_was_unanswered");
+    let dir = tmpdir("unanswered");
+    let ast = dir.join("unanswered.ast.json");
+    // `w` begins an upload at its first part; `x` fails the run (ENOENT) at 100 ms, the store's
+    // answer to the begin held for 1.5 s
+    std::fs::write(
+        &ast,
+        r#"{"ast": "0.10", "name": "unanswered",
+            "namespaces": {"o": {"pattern": "f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
+            "actors": {"w": {"body": [
+              {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
+              {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}},
+              {"loop": {"index": "j", "to": 2, "body": [{"write": {"file": {"ref": "f"}, "len": 5242880}}]}},
+              {"close": {"file": {"ref": "f"}}}]},
+             "x": {"body": [
+              {"compute": {"ns": 100000000}},
+              {"let": {"name": "g", "value": {"object": {"namespace": "o", "fields": {"k": 99}}}}},
+              {"stat": {"file": {"ref": "g"}}}]}}}"#,
+    )
+    .unwrap();
+    let url = slow_proxy(&m, 1 << 30, Duration::from_millis(1500));
+    let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+    c.args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", "o=s3://bench/unanswered", "--s3", "async", "--object-part-mib", "5"]);
+    c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", &url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", SECRET).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
+    let o = c.output().unwrap();
+    refused(&o, "actor `x` instance 0: x#0 [] stat f99: s3://bench/unanswered/f99: no such object (ENOENT)");
+    assert_eq!(open_uploads(&m, "unanswered/f0"), 0, "the failed run left the upload it began on the store");
 }
 
 /// A path unlinked while a handle has it open for writing makes no object at that handle's
