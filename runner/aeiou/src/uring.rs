@@ -799,18 +799,40 @@ enum Completion {
 /// any is in flight. The loop then settles each answer on its own thread, so the actor's
 /// state is never touched by a worker. A read's buffer is owned by the op while it is in
 /// flight, from a FIFO of buffers that grows to `--buffer-mib` as the engine's pool does.
+/// A loop that ends with ops in flight (the run failed) cancels them and waits, a bounded
+/// while, for the aborts of the uploads they held (`Drop`): the process would otherwise exit
+/// first and leave their parts on the store.
 struct Objects {
     done: Arc<Mutex<Vec<(usize, crate::object::Answer)>>>,
     efd: Arc<OwnedFd>,
     in_flight: usize,
+    /// The ops in flight, by task.
+    spawned: Vec<(usize, crate::object::Spawned)>,
     free: VecDeque<Vec<u8>>,
     total: usize,
     target: usize,
 }
 
+/// How long a loop that failed waits for the aborts of the uploads its ops held.
+const ABORT_WAIT: Duration = Duration::from_secs(10);
+
+impl Drop for Objects {
+    fn drop(&mut self) {
+        if self.in_flight == 0 {
+            return;
+        }
+        for (_, s) in self.spawned.drain(..) {
+            s.cancel();
+        }
+        if !crate::object::quiesce(ABORT_WAIT) {
+            eprintln!("warning: the object engine's uploads were not all aborted within {} s; the store may keep parts of them (an incomplete multipart upload)", ABORT_WAIT.as_secs());
+        }
+    }
+}
+
 impl Objects {
     fn new(efd: Arc<OwnedFd>, target: usize) -> Self {
-        Objects { done: Arc::new(Mutex::new(Vec::new())), efd, in_flight: 0, free: VecDeque::new(), total: 0, target }
+        Objects { done: Arc::new(Mutex::new(Vec::new())), efd, in_flight: 0, spawned: Vec::new(), free: VecDeque::new(), total: 0, target }
     }
 
     fn buffer(&mut self, len: usize) -> Vec<u8> {
@@ -832,12 +854,15 @@ impl Objects {
         use crate::object::{Sink, Step};
         // the buffer is the runner's, taken before the op's clock starts
         let sink = (op.kind == OpKind::Read).then(|| Sink::Owned(self.buffer(op.issue_len() as usize), op.issue_len() as usize));
+        if op.kind == OpKind::Write {
+            crate::object::reserve(op.len as u64);
+        }
         t.started = Instant::now();
         match crate::object::start(store, rest, sh, &mut t.a, op, sink) {
             Step::Done(r) => Issued::Done(r, t.started.elapsed().as_nanos() as u64),
             Step::Send(f) => {
                 let (done, efd, id) = (self.done.clone(), self.efd.clone(), t.id);
-                crate::object::spawn(
+                let spawned = crate::object::spawn(
                     f,
                     Box::new(move |answer| {
                         done.lock().unwrap().push((id, answer));
@@ -846,6 +871,7 @@ impl Objects {
                         unsafe { libc::write(efd.as_raw_fd(), &one as *const u64 as *const libc::c_void, 8) };
                     }),
                 );
+                self.spawned.push((id, spawned));
                 self.in_flight += 1;
                 Issued::Pending
             }
@@ -856,6 +882,7 @@ impl Objects {
     fn take(&mut self) -> Vec<(usize, crate::object::Answer)> {
         let got = std::mem::take(&mut *self.done.lock().unwrap());
         self.in_flight -= got.len();
+        self.spawned.retain(|(id, _)| !got.iter().any(|(g, _)| g == id));
         got
     }
 
@@ -1148,6 +1175,12 @@ impl<E: Engine> Loop<E> {
         }
     }
 
+    /// An error of task `id`'s op, said as the thread runner says it: in its actor instance.
+    fn in_actor(&self, id: usize, e: anyhow::Error) -> anyhow::Error {
+        let a = &self.tasks[id].io.a;
+        e.context(format!("actor `{}` instance {}", a.template, a.actor))
+    }
+
     fn label(&self, id: usize) -> String {
         match &self.tasks[id].prog {
             Prog::Vm(vm) => {
@@ -1189,7 +1222,7 @@ impl<E: Engine> Loop<E> {
             while let Some(id) = self.runnable.pop_front() {
                 self.tasks[id].queued = false;
                 if !self.tasks[id].done {
-                    self.step(id)?;
+                    self.step(id).map_err(|e| self.in_actor(id, e))?;
                 }
             }
             if self.live == 0 {
@@ -1218,12 +1251,12 @@ impl<E: Engine> Loop<E> {
                 if ud == EFD {
                     self.efd_posted = false;
                 } else {
-                    self.complete(ud as usize, Completion::Kernel(res))?;
+                    self.complete(ud as usize, Completion::Kernel(res)).map_err(|e| self.in_actor(ud as usize, e))?;
                 }
             }
             if self.objects.in_flight > 0 {
                 for (id, answer) in self.objects.take() {
-                    self.complete(id, Completion::Object(answer))?;
+                    self.complete(id, Completion::Object(answer)).map_err(|e| self.in_actor(id, e))?;
                 }
             }
             let now = Instant::now();

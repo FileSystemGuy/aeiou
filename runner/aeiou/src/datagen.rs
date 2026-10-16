@@ -424,7 +424,10 @@ fn write_inventory(p: &Plan<'_, '_>, count: i64, opts: &DatagenOpts, spec: &Payl
     let seed_of = |blk: u64| payload::inventory_block_seed(seed, blk, dedupe);
     let mut filler = Filler::new(spec.compress);
     if let Some((store, rest)) = opts.endpoints.object(&path) {
-        store.put_parts(&rest, size, crate::object::DEFAULT_PART, &mut |at, b| filler.fill_range(&seed_of, at, b))
+        store.put_parts(&rest, size, crate::object::DEFAULT_PART, &mut |at, b| {
+            filler.fill_range(&seed_of, at, b);
+            Ok(())
+        })
             .with_context(|| format!("dataset `{}`: writing its inventory {}", p.name, store.show(&rest)))?;
         return Ok(());
     }
@@ -640,23 +643,18 @@ fn write_container(c: &Container, meta: &DsMeta<'_>, file: i64, seed_of: &dyn Fn
         let mut stream = crate::formats::Stream::new(&c.writer, meta, file, seed_of, filler)?;
         let drift = |at: u64, what: &str| anyhow::anyhow!("{what}: the writer made {at} bytes, the layout predicts {size}: the format class's layout does not match its writer");
         if let Some((store, rest)) = opts.endpoints.object(path) {
-            let mut failed: Option<anyhow::Error> = None;
-            store.put_parts(&rest, size, crate::object::DEFAULT_PART, &mut |_, b| {
-                if failed.is_some() {
-                    return;
+            // checked part by part, the end included, before the upload completes: a writer
+            // that drifts from the layout, or a stop, aborts it, so no object is left that a
+            // resume would take for whole (one is a whole file when it is there)
+            store.put_parts(&rest, size, crate::object::DEFAULT_PART, &mut |at, b| {
+                if mode.halted() {
+                    return Err(Halted.into());
                 }
-                match stream.read(b) {
-                    Ok(n) if n == b.len() => {}
-                    Ok(_) => failed = Some(drift(stream.pos(), path)),
-                    Err(e) => failed = Some(e),
+                if stream.read(b)? != b.len() || at + b.len() as u64 == size && stream.read(&mut [0u8; 1])? != 0 {
+                    return Err(drift(stream.pos(), path));
                 }
+                Ok(())
             })?;
-            if let Some(e) = failed {
-                return Err(e);
-            }
-            if stream.read(&mut buf[..1])? != 0 {
-                return Err(drift(stream.pos(), path));
-            }
             return Ok(size);
         }
         let full = opts.endpoints.path(&opts.root, path);
@@ -1145,7 +1143,14 @@ fn write_share(plan: &Plan<'_, '_>, opts: &DatagenOpts, spec: &PayloadSpec, mode
                                                 continue;
                                             }
                                             if let Some((store, rest)) = opts.endpoints.object(&path) {
-                                                store.put_parts(&rest, len, crate::object::DEFAULT_PART, &mut |at, b| filler.fill_range(&seed_of, logical + at, b))?;
+                                                store.put_parts(&rest, len, crate::object::DEFAULT_PART, &mut |at, b| {
+                                                    // a stop between parts aborts the upload: no object
+                                                    if mode.halted() {
+                                                        return Err(Halted.into());
+                                                    }
+                                                    filler.fill_range(&seed_of, logical + at, b);
+                                                    Ok(())
+                                                })?;
                                                 got = (got.0 + 1, got.1 + len);
                                                 continue;
                                             }

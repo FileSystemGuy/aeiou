@@ -2109,14 +2109,14 @@ sample), and `aeiou datagen`.
 | `open` (read) | none: the handle (`OpenFile::object`) is the store and the key, no descriptor, not counted among the open files |
 | `open` for writing (`WRONLY`, with or without `CREAT`, `TRUNC`) | none: the handle carries an `Upload`, empty; the object is new whatever was at its key (a POSIX `open` without `CREAT` of a missing file would fail; the engine does not ask). `WRONLY` alone begins one (`CREAT` or `TRUNC` without it is refused by V18; 2026-10-15) |
 | `write` at the effective offset | the bytes, made from the payload (`run::fill`'s positional content), appended to the part being filled; a part of `--object-part-mib` that fills goes out before the write returns, the first starting a multipart upload (`CreateMultipartUpload`, `UploadPart`). An offset other than the bytes written so far is `ESPIPE` (V18) |
-| `close` of a handle opened for writing | one `PUT` of what was written when no part went out (an empty object for no writes), else the last part and `CompleteMultipartUpload`, so the close is a timed op that can carry most of an object's transfer; a sub-actor closing a handle it inherited sends nothing, as it closes no descriptor. An upload dropped unfinished (a failed run) is aborted. V18 refuses an open for writing with no close after it in its body; should an actor still end with an upload unsent, or open its path again, the run fails (`ActorState::unclosed`, 2026-10-15) rather than count an object it never made |
+| `close` of a handle opened for writing | one `PUT` of what was written when no part went out (an empty object for no writes), else the last part and `CompleteMultipartUpload`, so the close is a timed op that can carry most of an object's transfer; a sub-actor closing a handle it inherited sends nothing, as it closes no descriptor. An upload dropped unfinished (a failed run) is aborted. V18 refuses an open for writing with no close after it in its body; should an actor still end with an upload unsent, or open its path again, the run fails (`ActorState::unclosed`, 2026-10-15) rather than count an object it never made. A handle whose path was unlinked while it was open makes no object at its close, as POSIX leaves no file: nothing is sent, or the multipart upload is aborted (2026-10-15; its close once put back the object the `unlink` deleted, which the namespace manifest, dropping unlinked paths, left out) |
 | `read` at the effective offset | one `GET` of `bytes=off-(off+len-1)` streamed into the actor's buffer ring (one copy, from the HTTP client's buffers); a range over the end is a short read, a start at or past it the server's 416, a read of 0 bytes |
 | `stat`, `fstat` | `HEAD`; a 404 is followed by a `LIST` below the key, size 0 when it finds one (a directory), `ENOENT` otherwise. `fstat` of a handle being written is its written size, sent nothing; `stat` of an object not yet closed is `ENOENT`, as the store has none |
 | `readdir` | `LIST` with the delimiter `/` (`list_with_delimiter`, every page): objects plus common prefixes, names beginning `.aeiou` not counted |
 | `lseek`, `fadvise`, `fsync`, `fdatasync` | none (an upload is durable at its `close`; a seek away from the end shows at the next write) |
 | `ioctl` | none; `TCGETS` is `ENOTTY`, as for a regular file |
-| `unlink` | `DELETE`; a missing key is no error, as S3 has it, so an `expect: [ENOENT]` is never used |
-| `rename` | a copy on the server (`CopyObject`) and a `DELETE` of the source: two requests, not atomic, a reader between them sees both names; the target may be under another endpoint's prefix in the same bucket (on the same server); one in another bucket or outside the object store is `EXDEV` |
+| `unlink` | `DELETE`; a missing key is no error, as S3 has it, so an `expect: [ENOENT]` is never used. A handle open for writing on the path (the actor's, or one it inherited) is marked, and its close makes no object |
+| `rename` | a copy on the server (`CopyObject`) and a `DELETE` of the source: two requests, not atomic, a reader between them sees both names; the target may be under another endpoint's prefix in the same bucket (on the same server); one in another bucket or outside the object store is `EXDEV`. S3 copies at most 5 GiB in one `CopyObject`, and `object_store` 0.14.2 has no multipart copy (`UploadPartCopy`): a copy that fails is followed by a `HEAD` of the source, and one over 5 GiB is `EFBIG`, naming the limit (2026-10-15); a store that copies more (MinIO) renames it |
 | `mkdir`, `rmdir` | none: a prefix is no object (and is not recorded among the objects created) |
 | `read` of a handle opened for writing | `EBADF`, as for `O_WRONLY` |
 | `open` with `APPEND`, `RDWR`, `EXCL`, or `CREAT` or `TRUNC` without `WRONLY`; `ftruncate`; `fallocate` | refused by V18 at `aeiou check` (`schema/README.md` §4); `EOPNOTSUPP` here should one come (a read-only `CREAT` or `TRUNC` opens for reading) |
@@ -2137,11 +2137,17 @@ atomic as the rename into place is for a directory, and a run reading the namesp
 `input` `GET`s it (`read_object`) for the same checks (V14, V15, `--max-gap`). The objects a
 run records as created are the ones it opened with `CREAT` or renamed to, as under POSIX.
 `--object-part-mib` (default 8, 5 to 5120, S3's bounds on a part; `run` only, layered,
-refused without an object name) sets the part size; `aeiou datagen` keeps 8 MiB. Memory: one
-part per handle open for writing, allocated at its first write. S3 takes at most 10,000 parts
+refused without an object name) sets the part size; `aeiou datagen` keeps 8 MiB. Memory: part
+buffers in a pool per actor thread (or event loop), made and pre-faulted before a write's
+clock starts (`object::reserve`, as `run::Ring` is for a POSIX write) and filled again once
+the store lets go of them (2026-10-15: each part was a new, zero-filled allocation inside the
+write's latency, charging the backend more than its API). S3 takes at most 10,000 parts
 and 5 TiB per object, so a run's upload, whose size is not known up front, refuses the write
 that would send part 10,001 or pass 5 TiB (`EFBIG`, naming the limit) before sending it; a
-failed upload is aborted, so the store keeps no parts of it.
+failed upload is aborted, so the store keeps no parts of it. Under `--s3 async` an event loop
+that ends with ops in flight (the run failed) cancels them and waits, up to 10 s, for the
+aborts of the uploads they held (`object::quiesce`); the process once exited first, leaving
+the upload on the store whenever a part was on its way (2026-10-15).
 
 **Threads.** One multi-thread tokio runtime per process, built on the first object call
 with `--object-threads` workers (default 2; `run` and `datagen`, layered, refused when no
@@ -2206,7 +2212,9 @@ and failing the run on it would measure luck.
 `object::DEFAULT_PART` (8 MiB) when larger, or of the whole MiB that keeps an object over
 78 GiB within 10,000 parts (`object::part_for`; over 5 TiB is refused before a request), each
 part made from the payload and sent before the next, and the upload aborted should a part or
-the completion fail; the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix (atomic, so no
+the completion fail, or a part not be made (a container writer that drifts from its layout,
+checked part by part and its end before the completion, or a stop between parts: no object
+is left that a resume would take for whole; 2026-10-15); the manifest is one `PUT` of `.aeiou-dataset.json` at the prefix (atomic, so no
 temporary name), and there is no `syncfs`. An `array` dataset is refused: a sparse layout
 written at offsets has no object form. The writers' threads make the requests, as actors do.
 A container dataset in a store is `aeiou-datagen`'s, which streams each file from its format

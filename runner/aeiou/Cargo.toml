@@ -26,11 +26,13 @@ toml = { version = "1.1.6", default-features = false, features = ["parse", "serd
 object_store = { version = "=0.14.2", default-features = false, features = ["aws"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
+# what object_store's payloads are made of: a part buffer handed to the store comes back to its pool (`Bytes::from_owner`)
+bytes = { version = "1.9", default-features = false, optional = true }
 # the container writers of `aeiou datagen` (DESIGN_REVIEW.md §3.70), behind the `formats` feature
 crc32c = { version = "0.6", optional = true }
 
 [features]
-object = ["dep:object_store", "dep:tokio", "dep:futures"]
+object = ["dep:object_store", "dep:tokio", "dep:futures", "dep:bytes"]
 formats = ["dep:crc32c"]
 
 [[test]]

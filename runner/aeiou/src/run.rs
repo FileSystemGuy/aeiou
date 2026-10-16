@@ -1554,7 +1554,12 @@ fn reserve(sh: &Shared, rbuf: &mut Ring, wbuf: &mut Ring, op: &Op) -> std::io::R
             let len = if sh.opts.backend.direct() { let (lo, hi) = round_out(op.offset, len); hi - lo } else { len };
             rbuf.ensure(len as usize)
         }
-        OpKind::Write if sh.opts.endpoints.object(op.path).is_none() => wbuf.ensure(op.len as usize),
+        // an object's write fills the engine's part buffers, made here likewise
+        OpKind::Write if sh.opts.endpoints.object(op.path).is_some() => {
+            crate::object::reserve(op.len as u64);
+            Ok(())
+        }
+        OpKind::Write => wbuf.ensure(op.len as usize),
         _ => Ok(()),
     }
 }

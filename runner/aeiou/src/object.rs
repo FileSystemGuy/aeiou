@@ -23,7 +23,9 @@
 //! upload before the write returns, and `close` sends the object, one `PUT` when it fits in
 //! a part and the last part and the completion otherwise, so an object exists from its
 //! `close`; `fstat` of a handle being written is its written size, sent nothing. `unlink` is
-//! a `DELETE`, `rename` a copy and a `DELETE` (not atomic), `mkdir` and `rmdir` send nothing
+//! a `DELETE` (a handle open for writing on the path then makes no object at its close, as
+//! POSIX leaves no file), `rename` a copy (one `CopyObject`: at most 5 GiB on S3) and a
+//! `DELETE` (not atomic), `mkdir` and `rmdir` send nothing
 //! (a prefix is no object), and `ftruncate`, `fallocate`, and `O_APPEND` are refused by V18
 //! before a run (`validate.rs`), and here with `EOPNOTSUPP` should one come.
 //!
@@ -110,11 +112,13 @@ pub fn errno_of(e: &io::Error) -> Option<i32> {
 
 /// A file of the abstract that lives in an object store, as an actor holds it open: the
 /// store, the key's part below the endpoint's prefix, and, when it was opened for writing,
-/// its upload (`None` inside while an op of the handle has it on the runtime).
+/// its upload (`None` inside while an op of the handle has it on the runtime), and whether
+/// its path was unlinked while it was open for writing (its close then makes no object).
 pub struct Handle {
     pub store: Arc<Store>,
     pub rest: String,
     pub upload: Option<std::sync::Mutex<Option<Upload>>>,
+    pub unlinked: std::sync::atomic::AtomicBool,
 }
 
 impl Handle {
@@ -125,7 +129,7 @@ impl Handle {
     }
 }
 
-pub use imp::{block, set_threads, spawn, threads, Reader, Store, Upload};
+pub use imp::{block, quiesce, reserve, set_threads, spawn, threads, Reader, Spawned, Store, Upload};
 
 /// The requests of the process's engine that the store or the connection failed in a way
 /// `object_store` sends again (`runner/REFERENCE.md` §16, *Timeouts and retries*), by cause:
@@ -251,19 +255,24 @@ pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Share
                 Ok(u) => u.map(|u| std::sync::Mutex::new(Some(u))),
                 Err(e) => return Step::Done(Err(e)),
             };
-            let file = crate::backend::OpenFile::object(Handle { store: store.clone(), rest, upload });
+            let file = crate::backend::OpenFile::object(Handle { store: store.clone(), rest, upload, unlinked: Default::default() });
             a.opened(sh, op.path, op.aux, file);
             Step::Done(Ok(0))
         }
         OpKind::Close => {
             // the owner's close sends the object; a sub-actor closing what it inherited does not
-            let up = a.fds.own.get(op.path).cloned().and_then(|f| f.as_object().and_then(|h| h.upload.as_ref()).map(|c| c.lock().unwrap().take()));
+            let own = a.fds.own.get(op.path).cloned();
+            let up = own.as_deref().and_then(|f| f.as_object().and_then(|h| h.upload.as_ref()).map(|c| c.lock().unwrap().take()));
+            let unlinked = own.as_deref().and_then(|f| f.as_object()).is_some_and(|h| h.unlinked.load(std::sync::atomic::Ordering::Relaxed));
             if let Err(e) = a.close(op.path) {
                 return Step::Done(Err(e));
             }
             match up {
                 None => Step::Done(Ok(0)),
                 Some(None) => Step::Done(Err(busy(op))),
+                // its path was unlinked while it was open: POSIX leaves no file, so the upload
+                // is abandoned (its parts, if any went out, aborted) and makes no object
+                Some(Some(up)) if unlinked => Step::Send(Box::pin(async move { Answer::Done(up.discard().await.map(|_| 0)) })),
                 Some(Some(up)) => Step::Send(Box::pin(async move { Answer::Done(up.finish().await.map(|_| 0)) })),
             }
         }
@@ -339,6 +348,12 @@ pub(crate) fn start<'a>(store: &Arc<Store>, rest: String, sh: &crate::run::Share
             Step::Send(Box::pin(async move { Answer::Done(f.await.map(|n| n as i64)) }))
         }
         OpKind::Unlink => {
+            // a handle open for writing on the path (this actor's, or one it inherited) goes on
+            // unnamed, as a POSIX file does: its close makes no object, which would otherwise
+            // put back what this removes and leave an object the manifest leaves out
+            if let Some(h) = a.fds.get(op.path).as_deref().and_then(|f| f.as_object()).filter(|h| h.upload.is_some()) {
+                h.unlinked.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             let f = store.delete(&rest);
             Step::Send(Box::pin(async move { Answer::Removed(f.await) }))
         }
@@ -430,20 +445,147 @@ mod imp {
         runtime().handle().block_on(f)
     }
 
-    /// Run `f` on the runtime without waiting; `done` gets its answer on a worker.
-    pub fn spawn(f: super::Fut<'static, super::Answer>, done: Box<dyn FnOnce(super::Answer) + Send>) {
-        runtime().spawn(async move { done(f.await) });
+    /// Tasks on the runtime that hold an upload: an op `spawn`ed by an event loop, and the
+    /// abort of an upload dropped on a worker. A run that failed waits for them (`quiesce`)
+    /// before the process exits, which would otherwise end them and leave the upload's parts
+    /// on the store.
+    static PENDING: AtomicUsize = AtomicUsize::new(0);
+
+    struct Pending;
+
+    impl Pending {
+        fn new() -> Pending {
+            PENDING.fetch_add(1, Ordering::SeqCst);
+            Pending
+        }
     }
 
-    /// An object being written through one handle: the part being filled, what has been
-    /// written, and the multipart upload once a part has gone out. Dropped unfinished (a
-    /// run that failed), it aborts the upload, so the store keeps no parts.
+    impl Drop for Pending {
+        fn drop(&mut self) {
+            PENDING.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// An op `spawn`ed on the runtime, which its loop can stop (`cancel`) when the run fails.
+    pub struct Spawned(tokio::task::AbortHandle);
+
+    impl Spawned {
+        /// Drop the op where it is (an upload it holds is aborted, a task `quiesce` waits for).
+        pub fn cancel(&self) {
+            self.0.abort();
+        }
+    }
+
+    /// Run `f` on the runtime without waiting; `done` gets its answer on a worker.
+    pub fn spawn(f: super::Fut<'static, super::Answer>, done: Box<dyn FnOnce(super::Answer) + Send>) -> Spawned {
+        // the op's future is dropped before its count: an upload it held counts its abort first
+        struct Task {
+            f: super::Fut<'static, super::Answer>,
+            _pending: Pending,
+        }
+        let mut t = Task { f, _pending: Pending::new() };
+        Spawned(
+            runtime()
+                .spawn(async move {
+                    let answer = (&mut t.f).await;
+                    done(answer);
+                    drop(t);
+                })
+                .abort_handle(),
+        )
+    }
+
+    /// Wait until no task on the runtime holds an upload, for at most `limit`; `false` when
+    /// some still do (their uploads may be left on the store).
+    pub fn quiesce(limit: std::time::Duration) -> bool {
+        let t0 = std::time::Instant::now();
+        while PENDING.load(Ordering::SeqCst) > 0 {
+            if t0.elapsed() >= limit {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        true
+    }
+
+    /// The part buffers of this thread's uploads (an actor's thread, or an event loop's):
+    /// buffers of the run's part size, filled by the writes and handed to the store, each
+    /// coming back here when the store lets go of it. A write fills a buffer the runner
+    /// allocated and faulted before the op's clock started (`reserve`), as a POSIX write's
+    /// comes from the pre-faulted ring (`run::Ring`): an op is charged only its API.
+    type Pool = std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>;
+
+    thread_local! {
+        static POOL: Pool = Pool::default();
+    }
+
+    /// A part handed to the store: its first `len` bytes; back to `home` when dropped.
+    struct Part {
+        v: Vec<u8>,
+        len: usize,
+        home: Pool,
+    }
+
+    impl AsRef<[u8]> for Part {
+        fn as_ref(&self) -> &[u8] {
+            &self.v[..self.len]
+        }
+    }
+
+    impl Drop for Part {
+        fn drop(&mut self) {
+            let v = std::mem::take(&mut self.v);
+            if v.len() == super::part_size() as usize {
+                self.home.lock().unwrap().push(v);
+            }
+        }
+    }
+
+    fn new_part(n: usize) -> Vec<u8> {
+        let mut v = vec![0u8; n];
+        crate::run::prefault(v.as_mut_ptr(), n);
+        v
+    }
+
+    /// A part buffer from this thread's pool, or a new one when it has none.
+    fn take_part(n: usize) -> Vec<u8> {
+        POOL.with(|p| p.lock().unwrap().pop()).filter(|v| v.len() == n).unwrap_or_else(|| new_part(n))
+    }
+
+    /// Before the clock of a write of `len` bytes to an object: this thread's pool holds the
+    /// part buffers it can fill.
+    pub fn reserve(len: u64) {
+        let n = super::part_size() as usize;
+        let want = (len as usize).div_ceil(n) + 1;
+        POOL.with(|p| {
+            let mut p = p.lock().unwrap();
+            p.retain(|v| v.len() == n);
+            while p.len() < want {
+                p.push(new_part(n));
+            }
+        });
+    }
+
+    /// The parts a write filled, to `send` before it returns.
+    pub struct Parts(Vec<PutPayload>);
+
+    impl Parts {
+        pub fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
+    }
+
+    /// An object being written through one handle: the part being filled (`buf`, its first
+    /// `filled` bytes made), what has been written, and the multipart upload once a part has
+    /// gone out. Dropped unfinished (a run that failed), it aborts the upload, so the store
+    /// keeps no parts.
     pub struct Upload {
         s3: AmazonS3,
         key: Path,
         show: String,
         part: usize,
         buf: Vec<u8>,
+        filled: usize,
         written: u64,
         multi: Option<Box<dyn MultipartUpload>>,
         /// Parts sent (or being sent): S3 takes at most `MAX_PARTS`.
@@ -456,10 +598,22 @@ mod imp {
             self.written
         }
 
+        /// The first `filled` bytes of the part being filled, as a payload (its buffer goes
+        /// back to this thread's pool when the store lets go of it).
+        fn payload(&mut self) -> PutPayload {
+            let v = std::mem::take(&mut self.buf);
+            let len = std::mem::take(&mut self.filled);
+            if v.is_empty() {
+                return PutPayload::default();
+            }
+            let home = POOL.with(|p| p.clone());
+            PutPayload::from(bytes::Bytes::from_owner(Part { v, len, home }))
+        }
+
         /// `len` bytes at `offset`, which must be the end of what is written (else
         /// `ESPIPE`), made by `fill(offset, bytes)` into the part being filled; returns the
         /// parts that filled, for `send` before the write returns.
-        pub fn fill(&mut self, offset: u64, len: u64, fill: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<Vec<Vec<u8>>> {
+        pub fn fill(&mut self, offset: u64, len: u64, fill: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<Parts> {
             if offset != self.written {
                 return Err(io::Error::from_raw_os_error(libc::ESPIPE));
             }
@@ -469,25 +623,24 @@ mod imp {
             let mut full = Vec::new();
             let mut at = 0u64;
             while at < len {
-                if self.buf.capacity() == 0 {
-                    self.buf = Vec::with_capacity(self.part);
+                if self.buf.is_empty() {
+                    self.buf = take_part(self.part);
                 }
-                let take = ((len - at) as usize).min(self.part - self.buf.len());
-                let from = self.buf.len();
-                self.buf.resize(from + take, 0);
-                fill(offset + at, &mut self.buf[from..]);
+                let take = ((len - at) as usize).min(self.part - self.filled);
+                fill(offset + at, &mut self.buf[self.filled..self.filled + take]);
+                self.filled += take;
                 at += take as u64;
                 self.written += take as u64;
-                if self.buf.len() == self.part {
-                    full.push(std::mem::take(&mut self.buf));
+                if self.filled == self.part {
+                    full.push(self.payload());
                 }
             }
-            Ok(full)
+            Ok(Parts(full))
         }
 
         /// Send `parts` in order, the first one starting the multipart upload.
-        pub async fn send(&mut self, parts: Vec<Vec<u8>>) -> io::Result<()> {
-            for data in parts {
+        pub async fn send(&mut self, parts: Parts) -> io::Result<()> {
+            for data in parts.0 {
                 if self.parts == super::MAX_PARTS {
                     let max = super::MAX_PARTS * self.part as u64;
                     return Err(error(libc::EFBIG, format!("{}: over {max} bytes, S3's limit of {} parts per upload in parts of {} MiB; a larger --object-part-mib uploads it", self.show, super::MAX_PARTS, self.part >> 20)));
@@ -497,29 +650,42 @@ mod imp {
                 }
                 let up = self.multi.as_mut().expect("started");
                 self.parts += 1;
-                up.put_part(PutPayload::from(data)).await.map_err(|e| io_err(&self.show, e))?;
+                up.put_part(data).await.map_err(|e| io_err(&self.show, e))?;
             }
             Ok(())
         }
 
         /// The `close`: one `PUT` of what is written when no part has gone out, else the
-        /// last part and the completion.
+        /// last part and the completion. The upload stays the handle's until it completes, so
+        /// a close stopped on the way (a run that failed) aborts it.
         pub async fn finish(mut self) -> io::Result<()> {
             if self.multi.is_none() {
-                let data = PutPayload::from(std::mem::take(&mut self.buf));
+                let data = self.payload();
                 return self.s3.put(&self.key, data).await.map(|_| ()).map_err(|e| io_err(&self.show, e));
             }
-            if !self.buf.is_empty() {
-                let last = std::mem::take(&mut self.buf);
-                self.send(vec![last]).await?;
+            if self.filled > 0 {
+                let last = self.payload();
+                self.send(Parts(vec![last])).await?;
             }
-            let mut up = self.multi.take().expect("started");
-            match up.complete().await {
-                Ok(_) => Ok(()),
+            match self.multi.as_mut().expect("started").complete().await {
+                Ok(_) => {
+                    self.multi = None;
+                    Ok(())
+                }
                 Err(e) => {
+                    let mut up = self.multi.take().expect("started");
                     let _ = up.abort().await;
                     Err(io_err(&self.show, e))
                 }
+            }
+        }
+
+        /// The `close` of a handle whose path was unlinked: no object; the multipart upload,
+        /// when a part went out, aborted.
+        pub async fn discard(mut self) -> io::Result<()> {
+            match self.multi.take() {
+                Some(mut up) => up.abort().await.map_err(|e| io_err(&self.show, e)),
+                None => Ok(()),
             }
         }
     }
@@ -527,10 +693,17 @@ mod imp {
     impl Drop for Upload {
         fn drop(&mut self) {
             if let Some(mut up) = self.multi.take() {
-                // on one of the runtime's own threads (an answer no loop took), where
-                // `block_on` panics, the abort goes on the runtime
+                // on one of the runtime's own threads (an answer no loop took, an op its loop
+                // cancelled), where `block_on` panics, the abort goes on the runtime, counted
+                // for `quiesce`
                 match tokio::runtime::Handle::try_current() {
-                    Ok(h) => drop(h.spawn(async move { up.abort().await })),
+                    Ok(h) => {
+                        let pending = Pending::new();
+                        drop(h.spawn(async move {
+                            let _ = up.abort().await;
+                            drop(pending);
+                        }))
+                    }
                     Err(_) => drop(block(up.abort())),
                 }
             }
@@ -833,7 +1006,7 @@ mod imp {
         /// An upload of the object at `rest`, in parts of `--object-part-mib`; nothing is
         /// sent until a part fills or the handle closes.
         pub fn upload(&self, rest: &str) -> io::Result<Upload> {
-            Ok(Upload { s3: self.s3.clone(), key: self.key(rest)?, show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), written: 0, multi: None, parts: 0 })
+            Ok(Upload { s3: self.s3.clone(), key: self.key(rest)?, show: self.show(rest), part: super::part_size() as usize, buf: Vec::new(), filled: 0, written: 0, multi: None, parts: 0 })
         }
 
         /// `DELETE` (a missing key is no error, as S3 has it).
@@ -844,11 +1017,18 @@ mod imp {
 
         /// A copy on the server and a `DELETE` of the source; `to` is below the prefix of
         /// `into`, a store of the same bucket (`same_bucket`): this one or another endpoint's.
+        /// The copy is one `CopyObject`, which S3 refuses for a source over 5 GiB; `object_store`
+        /// has no multipart copy (`UploadPartCopy`), so a copy that fails is followed by a
+        /// `HEAD` of the source, and one over 5 GiB is `EFBIG`, naming the limit (a store
+        /// that copies more, as MinIO does, renames it).
         pub fn rename(&self, from: &str, into: &Store, to: &str) -> Fut<'static, io::Result<()>> {
             let (s3, f, t, show) = (self.s3.clone(), self.key(from), into.key(to), self.show(from));
             Box::pin(async move {
                 let (f, t) = (f?, t?);
-                s3.copy(&f, &t).await.map_err(|e| io_err(&show, e))?;
+                if let Err(e) = s3.copy(&f, &t).await {
+                    let size = s3.head(&f).await.map(|m| m.size).unwrap_or(0);
+                    return Err(too_big_to_copy(&show, size, &e).unwrap_or_else(|| io_err(&show, e)));
+                }
                 s3.delete(&f).await.map_err(|e| io_err(&show, e))
             })
         }
@@ -896,39 +1076,54 @@ mod imp {
         /// one `PUT` when it fits in one part, a multipart upload otherwise, in parts of `part`
         /// bytes or of the size that keeps them within S3's 10,000 (`part_for`), each part sent
         /// before the next is made. An object over 5 TiB is refused before anything is sent.
-        pub fn put_parts(&self, rest: &str, size: u64, part: u64, fill: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<()> {
+        /// A `fill` that fails (the writer drifted from the layout, the datagen is stopping)
+        /// sends no more: the upload is aborted, never completed with what it has, so no
+        /// object is made and its error is the one returned.
+        pub fn put_parts(&self, rest: &str, size: u64, part: u64, fill: &mut dyn FnMut(u64, &mut [u8]) -> anyhow::Result<()>) -> anyhow::Result<()> {
             let show = self.show(rest);
             let Some(part) = super::part_for(size, part) else {
-                return Err(error(libc::EFBIG, format!("{show}: {size} bytes are over S3's largest object, {} (5 TiB)", super::MAX_OBJECT)));
+                return Err(error(libc::EFBIG, format!("{show}: {size} bytes are over S3's largest object, {} (5 TiB)", super::MAX_OBJECT)).into());
             };
-            let mut make = |at: u64, len: u64| {
+            let mut make = |at: u64, len: u64| -> anyhow::Result<Vec<u8>> {
                 let mut v = vec![0u8; len as usize];
-                fill(at, &mut v);
-                v
+                fill(at, &mut v)?;
+                Ok(v)
             };
             if size <= part {
-                return self.put(rest, make(0, size));
+                return Ok(self.put(rest, make(0, size)?)?);
             }
             let key = self.key(rest)?;
             block(async {
                 let mut up = self.s3.put_multipart(&key).await.map_err(|e| io_err(&show, e))?;
-                send_parts(up.as_mut(), size, part, &mut make).await.map_err(|e| io_err(&show, e))
+                send_parts(up.as_mut(), size, part, &show, &mut make).await
             })
         }
     }
 
+    /// A rename's copy that failed, of a source of `size` bytes: past S3's limit on one
+    /// `CopyObject` (5 GiB), the error that says so.
+    fn too_big_to_copy(show: &str, size: u64, e: &dyn std::fmt::Display) -> Option<io::Error> {
+        (size > super::MAX_PART).then(|| {
+            error(
+                libc::EFBIG,
+                format!("{show}: {size} bytes: S3 copies at most 5 GiB in one CopyObject, and object_store {} has no multipart copy (UploadPartCopy), so a rename of an object over 5 GiB has no object form here ({e})", super::LIBRARY_VERSION),
+            )
+        })
+    }
+
     /// The parts of an object of `size` bytes, `part` bytes each, made by `make(at, len)`,
-    /// sent in order through `up` and completed; on any error the upload is aborted, so the
-    /// store keeps no parts of it, and the error is the one that stopped it.
-    async fn send_parts(up: &mut dyn MultipartUpload, size: u64, part: u64, make: &mut dyn FnMut(u64, u64) -> Vec<u8>) -> object_store::Result<()> {
+    /// sent in order through `up` and completed; on any error (the store's, or `make`'s) the
+    /// upload is aborted, so the store keeps no parts of it and no object is made, and the
+    /// error is the one that stopped it.
+    async fn send_parts(up: &mut dyn MultipartUpload, size: u64, part: u64, show: &str, make: &mut dyn FnMut(u64, u64) -> anyhow::Result<Vec<u8>>) -> anyhow::Result<()> {
         let r = async {
             let mut at = 0u64;
             while at < size {
                 let len = (size - at).min(part);
-                up.put_part(PutPayload::from(make(at, len))).await?;
+                up.put_part(PutPayload::from(make(at, len)?)).await.map_err(|e| io_err(show, e))?;
                 at += len;
             }
-            up.complete().await.map(|_| ())
+            up.complete().await.map(|_| ()).map_err(|e| anyhow::Error::from(io_err(show, e)))
         }
         .await;
         if r.is_err() {
@@ -987,8 +1182,54 @@ mod imp {
             }
         }
 
-        fn send(fake: &mut Fake, size: u64, part: u64) -> object_store::Result<()> {
-            block(send_parts(fake, size, part, &mut |_, len| vec![0; len as usize]))
+        fn send(fake: &mut Fake, size: u64, part: u64) -> anyhow::Result<()> {
+            block(send_parts(fake, size, part, "s3://b/k", &mut |_, len| Ok(vec![0; len as usize])))
+        }
+
+        /// A part that cannot be made (a container writer that drifted from its layout, a
+        /// datagen stopping) sends nothing more and is never completed: the upload is
+        /// aborted, so no object is left with zeros where the part was (RC1 review).
+        /// A write fills part buffers made before its clock (`reserve`), and a part the store
+        /// has let go of is filled again: no allocation or page fault inside a write's latency
+        /// (RC1 review).
+        #[test]
+        fn a_part_buffer_is_made_before_the_write_and_filled_again() {
+            let n = super::super::part_size() as usize;
+            let s3 = AmazonS3Builder::new().with_bucket_name("b").with_region("us-east-1").with_endpoint("http://127.0.0.1:9").with_allow_http(true).build().unwrap();
+            let mut up = Upload { s3, key: Path::from("k"), show: "s3://b/k".into(), part: n, buf: Vec::new(), filled: 0, written: 0, multi: None, parts: 0 };
+            let pooled = || POOL.with(|p| p.lock().unwrap().iter().map(|v| v.as_ptr() as usize).collect::<Vec<_>>());
+            reserve(n as u64 + 1);
+            let made = pooled();
+            assert_eq!(made.len(), 3);
+            let parts = up.fill(0, n as u64 + 1, &mut |_, b| b.fill(7)).unwrap();
+            assert_eq!(parts.0.len(), 1);
+            // the full part and the one being filled are the pool's, not new
+            assert_eq!(pooled().len(), 1);
+            assert!(made.contains(&(parts.0[0].as_ref()[0].as_ptr() as usize)));
+            assert!(made.contains(&(up.buf.as_ptr() as usize)));
+            // the store done with the part, it is back
+            drop(parts);
+            assert_eq!(pooled().len(), 2);
+            assert!(pooled().iter().all(|p| made.contains(p)));
+            reserve(1);
+            assert_eq!(pooled().len(), 2, "no buffer made where the pool has them");
+        }
+
+        #[test]
+        fn a_rename_of_an_object_over_5_gib_names_the_copy_limit() {
+            assert!(too_big_to_copy("s3://b/k", 5 << 30, &"refused").is_none());
+            let e = too_big_to_copy("s3://b/k", (5 << 30) + 1, &"InvalidRequest").unwrap();
+            assert_eq!(super::super::errno_of(&e), Some(libc::EFBIG));
+            assert!(e.to_string().contains("s3://b/k: 5368709121 bytes: S3 copies at most 5 GiB in one CopyObject"), "{e}");
+            assert!(e.to_string().contains("(InvalidRequest)"), "{e}");
+        }
+
+        #[test]
+        fn a_part_that_cannot_be_made_aborts_the_upload() {
+            let mut bad = Fake::default();
+            let e = block(send_parts(&mut bad, 25, 10, "s3://b/k", &mut |at, len| if at == 10 { anyhow::bail!("the writer made 13 bytes, the layout predicts 25") } else { Ok(vec![0; len as usize]) })).unwrap_err();
+            assert!(e.to_string().contains("the layout predicts 25"), "{e}");
+            assert_eq!(*bad.log.lock().unwrap(), ["part 1 10", "abort"]);
         }
 
         #[test]
@@ -1016,18 +1257,18 @@ mod imp {
             let log = Arc::new(Mutex::new(Vec::new()));
             let part = 5usize << 20;
             let fake = Fake { log: log.clone(), parts: super::super::MAX_PARTS - 1, ..Fake::default() };
-            let mut up = Upload { s3, key: Path::from("k"), show: "s3://b/k".into(), part, buf: Vec::new(), written: 0, multi: Some(Box::new(fake)), parts: super::super::MAX_PARTS - 1 };
+            let mut up = Upload { s3, key: Path::from("k"), show: "s3://b/k".into(), part, buf: Vec::new(), filled: 0, written: 0, multi: Some(Box::new(fake)), parts: super::super::MAX_PARTS - 1 };
             // part 10,000 goes out
-            block(up.send(vec![vec![0; 1]])).unwrap();
+            block(up.send(Parts(vec![PutPayload::from(vec![0; 1])]))).unwrap();
             assert_eq!(*log.lock().unwrap(), ["part 10000 1"]);
             // part 10,001 is refused here, never sent
-            let e = block(up.send(vec![vec![0; 1]])).unwrap_err();
+            let e = block(up.send(Parts(vec![PutPayload::from(vec![0; 1])]))).unwrap_err();
             assert_eq!(super::super::errno_of(&e), Some(libc::EFBIG));
             assert!(e.to_string().contains("10000 parts per upload in parts of 5 MiB"), "{e}");
             assert_eq!(log.lock().unwrap().len(), 1);
             // a write past 5 TiB is refused before its bytes are made
             up.written = super::super::MAX_OBJECT - 1;
-            let e = up.fill(super::super::MAX_OBJECT - 1, 2, &mut |_, _| panic!("no bytes made")).unwrap_err();
+            let Err(e) = up.fill(super::super::MAX_OBJECT - 1, 2, &mut |_, _| panic!("no bytes made")) else { panic!("a write past 5 TiB was taken") };
             assert_eq!(super::super::errno_of(&e), Some(libc::EFBIG));
             // dropped unfinished, the upload is aborted
             drop(up);
@@ -1067,8 +1308,28 @@ mod imp {
         unreachable!("{NONE}")
     }
 
-    pub fn spawn(_: Fut<'static, super::Answer>, _: Box<dyn FnOnce(super::Answer) + Send>) {
+    pub fn spawn(_: Fut<'static, super::Answer>, _: Box<dyn FnOnce(super::Answer) + Send>) -> Spawned {
         unreachable!("{NONE}")
+    }
+
+    pub struct Spawned;
+
+    impl Spawned {
+        pub fn cancel(&self) {}
+    }
+
+    pub fn quiesce(_: std::time::Duration) -> bool {
+        true
+    }
+
+    pub fn reserve(_: u64) {}
+
+    pub enum Parts {}
+
+    impl Parts {
+        pub fn is_empty(&self) -> bool {
+            match *self {}
+        }
     }
 
     /// No store: this build has no object engine, and `open` says so.
@@ -1088,13 +1349,16 @@ mod imp {
         pub fn written(&self) -> u64 {
             match *self {}
         }
-        pub fn fill(&mut self, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<Vec<Vec<u8>>> {
+        pub fn fill(&mut self, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<Parts> {
             match *self {}
         }
-        pub async fn send(&mut self, _: Vec<Vec<u8>>) -> io::Result<()> {
+        pub async fn send(&mut self, _: Parts) -> io::Result<()> {
             match *self {}
         }
         pub async fn finish(self) -> io::Result<()> {
+            match self {}
+        }
+        pub async fn discard(self) -> io::Result<()> {
             match self {}
         }
     }
@@ -1151,7 +1415,7 @@ mod imp {
         pub fn delete_all(&self, _: &[String]) -> io::Result<()> {
             match *self {}
         }
-        pub fn put_parts(&self, _: &str, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8])) -> io::Result<()> {
+        pub fn put_parts(&self, _: &str, _: u64, _: u64, _: &mut dyn FnMut(u64, &mut [u8]) -> anyhow::Result<()>) -> anyhow::Result<()> {
             match *self {}
         }
     }

@@ -2788,3 +2788,82 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   lib 73), builder suite with MinIO 407 (one load-dependent failure in an exported-trace test,
   traced to a separate pre-existing `aeiou-trace export` bug, queued). Fixed in an isolated worktree
   and applied.
+
+## 135. Container datagen to an object store completed an upload whose part could not be made, so a bad object stayed and `--resume` kept it
+
+- **Where:** `runner/aeiou/src/object.rs` (`Store::put_parts`/`send_parts` take a fallible fill; an
+  error aborts the multipart upload), `runner/aeiou/src/datagen.rs` (`write_container`: halt before
+  each part, short-part and end-of-stream checks before the completion; `write_share` halts
+  between parts); `runner/REFERENCE.md` §16; tests.
+- **Found by:** RC1 third-round object-engine review (RV3a, plausible), confirmed by code: the fill
+  callback could not fail; on drift it left the part zeroed and `put_parts` sent and completed it;
+  the over-length check ran after completion; a later `--resume` takes any object present as whole;
+  halt was never checked inside an object.
+- **Fix:** a part that cannot be made aborts the upload, never completed, and its error (Halted
+  included) is returned; the checks run before the completion.
+- **Evidence:** `object::imp::tests::a_part_that_cannot_be_made_aborts_the_upload` fails with the old
+  zero-fill-and-send restored (`unwrap_err() on an Ok value`) and passes; merged on HEAD a2cb0d5:
+  `--tests --lib --bins` with MinIO pass (lib 76, all 162/163 with one flake of bug 112's test,
+  queued, 5 clean reruns of `--test all`), `cargo check --tests` without `object` clean, offline
+  build with and without features, builder suite with MinIO 407, `aeiou-catalog check` ok. Fixed in
+  an isolated worktree and applied. (Adds `bytes`, already in Cargo.lock, as an optional dependency
+  of `object` for bug 138; nothing downloaded.)
+
+## 136. Unlinking an s3 path whose own handle was open for writing deleted nothing, and the close then made the object the manifest left out
+
+- **Where:** `runner/aeiou/src/object.rs` (`Handle::unlinked`, `unlink` marks open write handles on
+  the path, close calls `Upload::discard`); `runner/REFERENCE.md` §16 op table; tests.
+- **Found by:** RV3a (plausible), reproduced: open `WRONLY|CREAT|TRUNC`, write, unlink, close under
+  blocking and async: the bucket held `f0`, `f1`, the manifest's `objects` was `[]`; POSIX leaves no file.
+- **Fix:** as POSIX: the close of an unlinked path sends nothing (or aborts a multipart upload
+  already begun), so the bucket and the manifest agree.
+- **Evidence:** `object::an_object_unlinked_while_open_for_writing_is_never_made` (PUT-sized and
+  multipart, blocking and async) fails without the fix (`only the manifest … left: 3 right: 1`) and
+  passes; same suite runs as bug 135.
+
+## 137. A failed `--s3 async` run could exit before its spawned aborts ran, leaving multipart uploads on the store
+
+- **Where:** `runner/aeiou/src/object.rs` (`spawn` returns `Spawned`, a `PENDING` count of op tasks and
+  aborts, `quiesce`, `Upload::finish` keeps the upload until completion), `runner/aeiou/src/uring.rs`
+  (`Objects` drop cancels in-flight ops and quiesces up to 10 s, warning on timeout); tests.
+- **Found by:** RV3a (plausible): `Upload::drop` on a runtime worker only spawns the abort. Reproduced
+  through a 10 MiB/s proxy: 3 of 3 failed runs left an upload.
+- **Fix:** a failed event loop cancels its in-flight object ops and waits (bounded) for every pending
+  op and abort before the process goes on to exit; a close cancelled midway still aborts.
+- **Evidence:** `object::a_failed_run_leaves_no_upload_on_the_store` (slow proxy) fails with the
+  `Objects` drop disabled (`left: 1 right: 0`) and passes; 0 of 3 after; same suite runs as bug 135.
+
+## 138. An object write's part buffer was allocated and zero-filled on the op's clock
+
+- **Where:** `runner/aeiou/src/object.rs` (per-thread part-buffer pool, `reserve(len)` pre-faulting,
+  parts sent as `Bytes::from_owner(Part)` and returned on drop), `run.rs` (`reserve` for object
+  writes), `uring.rs` (`Objects::issue` reserves before the clock); `runner/aeiou/Cargo.toml`
+  (`bytes`, optional, `object` only); tests.
+- **Found by:** RV3a (plausible), confirmed by code: each part was a fresh `Vec::with_capacity` plus a
+  `resize` zero-fill inside `start()`, timed, unlike the POSIX ring reserved before the clock
+  (bug 62's rule: charge a backend only its API).
+- **Fix:** buffers are made and pre-faulted before the clock and reused; no zero-fill.
+- **Evidence:** `a_part_buffer_is_made_before_the_write_and_filled_again` passes (no pool existed
+  before, so no failing form); 32 × 8 MiB writes to local MinIO within noise before and after; same
+  suite runs as bug 135.
+
+## 139. Event-loop errors (io_uring, libaio, `--s3 async`) lacked the "actor `x` instance 0:" context the thread runner gives
+
+- **Where:** `runner/aeiou/src/uring.rs` (`Loop::serve` wraps `step`/`complete` errors with `in_actor`).
+- **Found by:** RV3a (plausible), reproduced: sync and blocking print `actor `x` instance 0: x#0 []
+  stat miss/f99: …`; the event loops printed `x#0 [] stat miss/f99: …`.
+- **Fix:** the same context on every engine.
+- **Evidence:** asserted in `object::a_failed_run_leaves_no_upload_on_the_store`, which fails without
+  the fix and passes; all five engines checked by hand; same suite runs as bug 135.
+
+## 140. A rename of an object over 5 GiB failed with the store's opaque CopyObject error
+
+- **Where:** `runner/aeiou/src/object.rs` (`Store::rename`: on a failed copy, a `HEAD`; `too_big_to_copy`
+  → EFBIG); `runner/REFERENCE.md` §16 rename row; tests.
+- **Found by:** RV3a (plausible): one `CopyObject`, which AWS limits to 5 GiB; object_store 0.14.2 has
+  no multipart copy (`PutPartPayload::Copy` is crate-private). Not reproduced (disk).
+- **Fix:** when the copy fails and the source is over 5 GiB, EFBIG naming the limit and the missing
+  UploadPartCopy, with the store's error; no extra request on success; a store that copies more
+  (MinIO) still renames.
+- **Evidence:** unit test `a_rename_of_an_object_over_5_gib_names_the_copy_limit` passes; same suite
+  runs as bug 135.

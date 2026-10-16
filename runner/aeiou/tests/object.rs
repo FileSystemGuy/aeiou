@@ -645,6 +645,118 @@ fn throttling_proxy(m: &Minio, fail: usize) -> String {
     url
 }
 
+/// A proxy to `m` on a free port that passes what the client sends at `rate` bytes a second
+/// (a slow link to the store: an upload's part takes a while), and the answers as they come.
+/// Its URL.
+fn slow_proxy(m: &Minio, rate: u64) -> String {
+    use std::io::{Read, Write};
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    let upstream = m.url.trim_start_matches("http://").to_string();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(c) = c else { return };
+            let s = std::net::TcpStream::connect(&upstream).unwrap();
+            let (mut c2, mut s2) = (c.try_clone().unwrap(), s.try_clone().unwrap());
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 16384];
+                loop {
+                    let k = c2.read(&mut buf).unwrap_or(0);
+                    if k == 0 || s2.write_all(&buf[..k]).is_err() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_secs_f64(k as f64 / rate as f64));
+                }
+                let _ = s2.shutdown(std::net::Shutdown::Write);
+            });
+            std::thread::spawn(move || {
+                let (mut s, mut c) = (s, c);
+                let _ = std::io::copy(&mut s, &mut c);
+                let _ = c.shutdown(std::net::Shutdown::Write);
+            });
+        }
+    });
+    url
+}
+
+/// The multipart uploads the bucket has begun and neither completed nor aborted for `key`.
+fn open_uploads(m: &Minio, key: &str) -> usize {
+    String::from_utf8_lossy(&curl(m, &format!("/bench?uploads&prefix={key}"), &[]).stdout).matches("<UploadId>").count()
+}
+
+/// A run that fails under `--s3 async` while an upload's part is on its way leaves no
+/// multipart upload on the store: the loop cancels the op and waits for the abort before the
+/// process exits (it once exited first, every time over a slow link). Its error names the
+/// actor instance, as the thread runner's does (RC1 review).
+#[test]
+fn a_failed_run_leaves_no_upload_on_the_store() {
+    let m = minio("a_failed_run_leaves_no_upload_on_the_store");
+    let dir = tmpdir("orphan");
+    let ast = dir.join("orphan.ast.json");
+    // `w` uploads 40 parts of 5 MiB; `x` fails the run (ENOENT) at 150 ms, a part in flight
+    std::fs::write(
+        &ast,
+        r#"{"ast": "0.10", "name": "orphan",
+            "namespaces": {"o": {"pattern": "orph/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
+            "actors": {"w": {"body": [
+              {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
+              {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}},
+              {"loop": {"index": "j", "to": 40, "body": [{"write": {"file": {"ref": "f"}, "len": 5242880}}]}},
+              {"close": {"file": {"ref": "f"}}}]},
+             "x": {"body": [
+              {"compute": {"ns": 150000000}},
+              {"let": {"name": "g", "value": {"object": {"namespace": "o", "fields": {"k": 99}}}}},
+              {"stat": {"file": {"ref": "g"}}}]}}}"#,
+    )
+    .unwrap();
+    let url = slow_proxy(&m, 10 << 20);
+    for i in 0..2 {
+        let prefix = format!("orphan{i}");
+        let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+        c.args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", &format!("o=s3://bench/{prefix}"), "--s3", "async", "--object-part-mib", "5"]);
+        c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", &url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", SECRET).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
+        let o = c.output().unwrap();
+        refused(&o, &format!("actor `x` instance 0: x#0 [] stat orph/f99: s3://bench/{prefix}/f99: no such object (ENOENT)"));
+        assert_eq!(open_uploads(&m, &format!("{prefix}/f0")), 0, "the failed run left its upload on the store");
+    }
+}
+
+/// A path unlinked while a handle has it open for writing makes no object at that handle's
+/// close, as POSIX leaves no file: the bucket and the namespace manifest agree, and an upload
+/// whose parts went out is aborted (RC1 review).
+#[test]
+fn an_object_unlinked_while_open_for_writing_is_never_made() {
+    let m = minio("an_object_unlinked_while_open_for_writing_is_never_made");
+    let dir = tmpdir("unlinked");
+    let ast = dir.join("ul.ast.json");
+    // f0 one PUT's worth, f1 a multipart upload with a part sent before the unlink
+    std::fs::write(
+        &ast,
+        r#"{"ast": "0.10", "name": "ul",
+            "namespaces": {"o": {"pattern": "o/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
+            "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": 2, "body": [
+              {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
+              {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}},
+              {"loop": {"index": "j", "to": {"add": [1, {"mul": [{"index": "i"}, 2]}]}, "body": [{"write": {"file": {"ref": "f"}, "len": 2621440}}]}},
+              {"unlink": {"file": {"ref": "f"}}},
+              {"write": {"file": {"ref": "f"}, "len": 4096}},
+              {"close": {"file": {"ref": "f"}}}]}}]}}}"#,
+    )
+    .unwrap();
+    for s3 in ["blocking", "async"] {
+        let prefix = format!("ul{s3}");
+        let o = aeiou(Some(&m), &["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", &format!("o=s3://bench/{prefix}"), "--s3", s3, "--object-part-mib", "5"]);
+        ok(&o);
+        let listed = String::from_utf8_lossy(&curl(&m, &format!("/bench?list-type=2&prefix={prefix}/"), &[]).stdout).to_string();
+        assert_eq!(listed.matches("<Key>").count(), 1, "{s3}: only the manifest: {listed}");
+        let manifest: serde_json::Value = serde_json::from_slice(&curl(&m, &format!("/bench/{prefix}/.aeiou-namespace.json"), &[]).stdout).unwrap();
+        assert_eq!(manifest["objects"], serde_json::json!([]), "{s3}: {manifest}");
+        for k in [0, 1] {
+            assert_eq!(open_uploads(&m, &format!("{prefix}/f{k}")), 0, "{s3}: f{k}'s upload was left on the store");
+        }
+    }
+}
+
 #[test]
 fn a_store_throttling_is_retried_and_every_retry_reported() {
     let m = minio("a_store_throttling_is_retried_and_every_retry_reported");
