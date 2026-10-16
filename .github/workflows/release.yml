@@ -26,6 +26,11 @@ jobs:
           workspaces: runner
           shared-key: release
       - uses: astral-sh/setup-uv@v5
+        with:
+          # ubuntu-22.04's own Python is 3.10, below requires-python, and uv otherwise takes the
+          # newest it can download, for which h5py may have no wheel yet (3.15 for v0.2.0: built
+          # from source, failing without libhdf5); 3.12 is the Python CI tests with (ubuntu-latest)
+          python-version: '3.12'
 
       - name: The tag is the version
         run: |
