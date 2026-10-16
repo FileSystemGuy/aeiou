@@ -64,8 +64,8 @@ the gate, show what each host resolved.
 ## SIGNALS
 
 Ctrl-C (`SIGINT`) on **aeiou-launch** stops every host: it sends `SIGINT` to the command on
-each host, prints `aeiou-launch: SIGINT: stopping every rank`, waits for every rank, prints
-each rank's exit status, and exits 130; what each command does on `SIGINT` is its own
+each host, prints `aeiou-launch: SIGINT: stopping every rank`, waits for every rank, names
+each rank that exited non-zero or was not started, and exits 130; what each command does on `SIGINT` is its own
 (**aeiou**(1): a `datagen` stops every host and leaves its manifests `stopped`). A second
 Ctrl-C sends a second `SIGINT`, which makes an `aeiou` exit at once. `SIGTERM` is forwarded
 the same way, and the exit status is then 143. A rank not yet started when the signal came
@@ -95,7 +95,8 @@ wanted. If **aeiou-launch** itself is killed (`SIGKILL`), the commands are not s
   Every rank exited 0.
 - **1**
 
-  Some rank failed; the run's verdict is the same on every host, so this is the run's
+  Some rank failed, or was not started; each is named (`aeiou-launch: rank 3 (n4) exited
+  with status 1`). The run's verdict is the same on every host, so this is the run's
   failure.
 - **2**
 

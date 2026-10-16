@@ -24,7 +24,7 @@ cargo test --release
 
 | Command | What it does |
 |---|---|
-| `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
+| `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V27), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. Then each dataset's projection: samples, files, directories, mean file, and total bytes, what `datagen` writes (`project.rs`, 2026-10-13). `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). An option given without the one it narrows (`--steps`, `--limit` without `--gpu`; `--metrics-block`, `--metrics-sample` without `--metrics` or `--metrics-json`) is a usage error that lists what it needs (§15), never ignored. |
 | `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--[no-]ignore-space] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C or `SIGTERM` stops every host, exit 130 (143). Refuses a non-empty root (datasets are read-only, V12), and, on rank 0 before anything is written, bytes to write beyond the free space `statvfs` reports at a directory root (`--ignore-space` writes anyway; §5, *Space*). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--[no-]subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
@@ -48,7 +48,7 @@ dataset that has a format class~~ since 2026-10-12 `aeiou datagen` built with th
 aeiou/src/
   ast.rs       the contract as serde types (externally tagged, deny_unknown_fields)
   canon.rs     canonical form and SHA-256, byte-identical to check.py::canonical
-  validate.rs  rules V1–V13 and the schema's structural constraints, ported from check.py
+  validate.rs  rules V1–V27 and the schema's structural constraints, ported from check.py
   sites.rs     draw sites: the JSON pointer of every draw / pick / choose, hashed
   pattern.rs   path patterns: {id div 1300:05}, {id div files_per_directory:05}, {conv:016x}, {name}
   rng.rs       positional keys, SplitMix64 words, the 4-round Feistel permutation
@@ -74,7 +74,15 @@ aeiou/src/
                the soft limits raised, the refusal that names the limit (§11)
   report.rs    `run --report-json`: the run's identity, results, and verdict as JSON (§12)
   payload.rs   positional content (SFC64 in 4 KiB pieces, `aeiou-positional/4`), the manifest
-  datagen.rs   `aeiou datagen`
+  datagen.rs   `aeiou datagen`: runs of ids from one queue, the manifest's progress, resume, grow,
+               shrink, settle (§5)
+  formats.rs   the container writers of `datagen` (cargo feature `formats`; §5, *Containers*)
+  project.rs   a dataset's projection: what `datagen` writes, printed by `dry-run`, checked by `datagen`
+  endpoint.rs  `--endpoint`: where each dataset and namespace lives (§4, §16)
+  object.rs    the object engine, `object_store` behind the cargo feature `object` (§16)
+  trace.rs     the `trace` node (§13)
+  options.rs   the option layers (§14)
+  usage.rs     the usage-error frame (§15)
   main.rs      the CLI
 aeiou/tests/golden.rs   hash parity with check.py, golden fingerprints, semantics tests, parameter files
 aeiou/tests/layout.rs   contract 0.2: framed layouts by hand, unit/column handles, stream consume, fadvise
@@ -88,6 +96,9 @@ aeiou/tests/metrics.rs  `--metrics` (§10): same op multiset as the inline walk,
 aeiou/tests/limits.rs   the limit checks (§11): the estimate against the counted peak, a truncated walk, the refusals
 aeiou/tests/report.rs   the JSON report (§12) through the binary: against the text, failed runs, two ranks
 aeiou/tests/coord.rs    barriers across hosts, the configuration check, two-rank runs as threads and as processes
+aeiou/tests/trace.rs    the `trace` node (§13); options.rs, usage.rs: the layers (§14) and the frame (§15) through the binary
+aeiou/tests/object.rs   the object engine against a local MinIO (`--features object`, `TEST_MINIO_BIN`; §16)
+aeiou/tests/man.rs      man/aeiou.1.md against every subcommand's `--help`
 aeiou-launch            the ssh loop: one rank per host
 ```
 

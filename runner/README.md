@@ -7,7 +7,8 @@ Nothing here depends on Python. The manual is [aeiou(1)](../man/aeiou.1.md) and
 fixes and every choice made in building it, is [REFERENCE.md](REFERENCE.md).
 
 ```
-cargo build --release --features formats   # formats: the TFRecord and tar writers of datagen
+cargo build --release --features formats   # formats: the TFRecord, tar, HDF5, and Parquet writers of datagen
+cargo build --release --features object,formats   # object: the object engine, for names declared `protocol: s3`
 cargo test --release --features formats
 ./target/release/aeiou check $(find ../workloads -name '*.ast.json')
 ./target/release/aeiou dry-run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
@@ -53,19 +54,33 @@ run (`dryrun.rs`) drives the machines in parallel over instances and sums per-op
 hashes into the fingerprint; `metrics.rs` walks the same stream in the round-robin order of
 an instance's sub-actors for the order-dependent metrics.
 
+**Write the datasets.** `datagen` (`datagen.rs`) writes every dataset from the same names,
+sizes, and dataset seeds, in parallel by id with `O_DIRECT`, in runs of whole directories
+handed out from one queue (rank 0's on several hosts), with the manifest
+`.aeiou-dataset.json` at each root rewritten as it goes, so an interrupted corpus is resumed,
+settled, grown, or shrunk from its manifest alone. Built with the cargo feature `formats`, it
+writes the container formats too (`formats.rs`: TFRecord, tar, HDF5, Parquet). `dry-run`
+prints the same projection of each dataset (`project.rs`), and `datagen` checks it against
+the free space before it writes.
+
 **Execute.** A `Backend` has an issue half and a completion half (`backend.rs`). Under the
 blocking APIs (`sync`, `posix-aio`, `mmap`, under either cache mode) every actor and sub-actor
 is an operating system thread and a blocking call is simply blocking (`run.rs`): this is the
 fidelity reference. Under `io_uring` and `libaio` an event loop per thread parks one machine
 per actor and keeps one operation in flight per actor, so thousands of actors share a few
-rings (`uring.rs`, `aio.rs`). Every result is checked structurally: the computed count, the
+rings (`uring.rs`, `aio.rs`). A dataset or namespace may live elsewhere than under `--root`
+(`--endpoint`, `endpoint.rs`); one declared `protocol: s3` is read and written through the
+object engine (`object.rs`, the cargo feature `object`): Apache `object_store` on a small
+tokio runtime, one request in flight per actor, waited for on the actor's thread under
+`--s3 blocking` or waking the event loop under `--s3 async`. Every result is checked structurally: the computed count, the
 expected errno, the computed entry count of a listing. Writes carry positional content
 (`payload.rs`), the same bytes `datagen` would write for that path and offset.
 
 **Coordinate.** Several hosts run the same command line with their rank; rank 0 serves
 the coordinator in-process over blocking `std::net` (`coord.rs`), compares every host's
 identity document and options block, gates the start, runs two-level barriers, merges the
-reports, and sends one verdict. There is no MPI and no async runtime.
+reports, and sends one verdict. There is no MPI, and no async runtime outside the object
+engine.
 
 **Guard and report.** Before the gate: dataset and namespace manifests compared field by
 field (`payload.rs`), an estimate of open files, threads, and mappings against the host's
@@ -84,7 +99,9 @@ operations, so they cannot deadlock.
 Rust 2021, one workspace, one crate. `clap` (derive, wrapped help) for the command line
 with the `--[no-]x` boolean convention; `serde`/`serde_json`; `toml`; `sha2`; `xxhash-rust`
 (xxh3) for keys and the fingerprint; `libc` for
-the POSIX, AIO, and `mmap` calls; the `io-uring` crate for the rings; `anyhow`. Linux
+the POSIX, AIO, and `mmap` calls; the `io-uring` crate for the rings; `anyhow`. Behind cargo
+features: `object` brings `object_store` (pinned, S3 only), `tokio`, `futures`, and `bytes`;
+`formats` brings `crc32c` (the TFRecord framing). Linux
 interfaces: `io_uring` with `IORING_SETUP_SQPOLL`, `IORING_SETUP_ATTACH_WQ`,
 `IORING_SETUP_SINGLE_ISSUER` with `DEFER_TASKRUN`, `COOP_TASKRUN`, and
 `IORING_REGISTER_IOWQ_MAX_WORKERS`; `io_setup`/`io_submit`/`io_getevents`; glibc
@@ -102,18 +119,20 @@ aeiou-launch        the ssh loop, POSIX sh
 REFERENCE.md        the reference: definitions (§2), run semantics (§4), payload and manifest (§5),
                     the coordinator (§6), loopback NFS (§7), the backends (§8, §9), metrics (§10),
                     limits (§11), the JSON report (§12), the trace node (§13), option layers (§14),
-                    usage errors (§15)
+                    usage errors (§15), the object engine (§16)
 ```
 
 The tests (`cargo test --release`) are golden fingerprints and hash parity with the Python
 checker, container layouts by hand, datagen-and-run round trips over every committed
 abstract under every backend on a temporary directory, the io_uring knobs, the metrics,
 the limit checks, the JSON report through the binary, two-rank runs as threads and as
-processes, the option layers, the usage frame, and the manual page against `--help`.
+processes, the option layers, the usage frame, and the manual page against `--help`. The
+object engine's tests (`--features object`) run against a local MinIO
+(`TEST_MINIO_BIN`), as CI runs them.
 
 ## Pointers
 
-- `../man/aeiou.1.md`, `../man/aeiou-config.5.md`: the manual.
+- `../man/aeiou.1.md`, `../man/aeiou-launch.1.md`, `../man/aeiou-config.5.md`: the manual.
 - `REFERENCE.md`: what the runner fixes on top of the contract; change a definition in §2
   and every fingerprint changes.
 - `../DESIGN_REVIEW.md` §3.22 onward: why each piece is the way it is.

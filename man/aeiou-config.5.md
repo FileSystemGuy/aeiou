@@ -45,17 +45,23 @@ warning, then an empty line. There is no flag to print the configuration: the bl
 
 ```
 options (cli > env > config > default)
-  abstract = ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json   [cli]
-  param = samples=4000 steps=50                              [cli]
-  gpus = 8                                                   [cli]
-  seed = 1                                                   [cli]
-  posix = the abstract's                                     [default]
-  cache = the abstract's                                     [default]
-  s3 = the abstract's                                        [default]
-  root = /mnt/sut                                            [config /etc/aeiou.toml]
-  threads = 8                                                [env AEIOU_THREADS]
-  rank = 2                                                   [env AEIOU_RANK]
-  config = /etc/aeiou.toml (sha256 68468a873b884760...)      [env AEIOU_CONFIG]
+  abstract = workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json  [cli]
+  param = samples=4000 steps=50                                             [cli]
+  params-file = none                                                        [default]
+  gpus = 8                                                                  [cli]
+  seed = 1                                                                  [cli]
+  posix = io_uring                                                          [cli]
+  cache = the abstract's                                                    [default]
+  s3 = the abstract's                                                       [default]
+  …
+  root = /mnt/sut                                                           [config /etc/aeiou.toml]
+  endpoint = none                                                           [default]
+  threads = 8                                                               [env AEIOU_THREADS]
+  buffer-mib = 8                                                            [default]
+  …
+  rank = 2                                                                  [env AEIOU_RANK]
+  …
+  config = /etc/aeiou.toml (sha256 eff295bd3a1ab7e1…)                       [env AEIOU_CONFIG]
   WARNING: AEIOU_BOGUS is set and is no option of any subcommand; ignored
 ```
 
@@ -75,7 +81,8 @@ cluster makes, the value is passed over: it leaves the block, and a warning says
 actor`). So one file can carry the knobs of every backend.
 
 **The defaults in effect.** A default the program resolves is shown as what it comes to:
-`writers = 20 (all cores)`, `threads = one per actor`, `object-threads = 2`. The report's
+`writers = 20 (all cores)`, `threads = one per actor`, `object-threads = 2` (with a name
+in an object store). The report's
 `layers` keeps `null` for it, the default as given.
 
 **Values** (**aeiou**(1)). An empty value (`AEIOU_ROOT=`, `root = ""`), where the command line would refuse
@@ -94,7 +101,8 @@ non-interactive shell does not read the profile an interactive one does.
 ## FILE FORMAT
 
 TOML. One table per subcommand, keys spelled as the long flags, values typed as the flag's
-value: integers, strings, booleans.
+value: integers, numbers (`time-scale`, `max-gap`, `progress-secs`; an integer is taken),
+strings, booleans, and for `endpoint` an array of strings (or one string).
 
 ```toml
 [run]
@@ -117,9 +125,11 @@ that is a fixed option of the table's subcommand; a `no-x` key (a boolean is a v
 its own name, `require-cold = false`, so the double negative cannot be written; the negation
 of a fixed boolean, `no-metrics`, is the command line's alone); a value of the wrong type,
 named as TOML has it (`expected an integer, got the string "3"`); an empty string. A key that
-is another subcommand's option is left to that subcommand. The `[datagen]` table is read by
-both `aeiou datagen` and **aeiou-datagen**(1); its `root` and `endpoint` are passed over, with
-a warning, by `--resume`, `--grow`, `--shrink`, and `--settle`, which take the place from the
+is another subcommand's option is refused in this one's table (`not an option of aeiou
+run`); it belongs in that subcommand's table. The `[datagen]` table is read by both `aeiou
+datagen` and **aeiou-datagen**(1), which refuses the keys it does not have
+(`progress-secs`, `object-threads`); its `root` and `endpoint` are passed over, with a
+warning, by `--resume`, `--grow`, `--shrink`, and `--settle`, which take the place from the
 dataset's manifest, so one file serves the datagen and the changes of what it wrote.
 
 ## ENVIRONMENT
@@ -139,7 +149,8 @@ dataset's manifest, so one file serves the datagen and the changes of what it wr
 
   The family's own, not options: the schema directory for the Python tools, the runner
   binary for the Python test suite, the remote shell for **aeiou-launch**(1). They draw no
-  warning.
+  warning; nor, from **aeiou**(1), do the test hooks `AEIOU_COORD_HEARTBEAT_MS` and
+  `AEIOU_KEEP_TEST_DIRS`.
 
 ## NEGATION
 

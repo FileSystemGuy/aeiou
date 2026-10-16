@@ -314,9 +314,9 @@ turns it off, and the last one on the line wins.
   file. *Layered.*
 - **--endpoint** *NAME=DIR|URI*
 
-  Puts the root directory of the abstract's dataset NAME at DIR instead of under `--root`,
-  or, for a dataset declared `protocol: s3`, at `s3://BUCKET[/PREFIX]` (repeatable); see
-  ENDPOINTS. From the command line, else `$AEIOU_ENDPOINT`, else `endpoint` in the
+  Puts the root directory of the abstract's dataset or namespace NAME at DIR instead of
+  under `--root` (a dataset whose root lies inside a namespace's moves with it), or, for a
+  name declared `protocol: s3`, at `s3://BUCKET[/PREFIX]` (repeatable); see ENDPOINTS. From the command line, else `$AEIOU_ENDPOINT`, else `endpoint` in the
   `[datagen]` table of the config file. *Layered.*
 - **--writers** *N*
 
@@ -686,8 +686,8 @@ key `imagenet/00001/img_000001300.jpg` of the bucket `data`.
 ## OBJECT STORES
 
 A name declared `protocol: s3` is read and written through the object engine, built on Apache
-`object_store` with the cargo feature `object` (a build without it refuses an object
-endpoint). The store is the one the environment names: `AWS_ENDPOINT_URL`,
+`object_store` with the cargo feature `object` (a build without it, the release's binary
+among them, refuses an object endpoint). The store is the one the environment names: `AWS_ENDPOINT_URL`,
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_ALLOW_HTTP=true` for a
 plain-HTTP endpoint; requests are path-style unless `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` is
 set. Operations map as follows; the stream, the fingerprint, and the dataset ids are the
@@ -701,7 +701,7 @@ same as under a directory.
 | `stat`, `fstat` | `HEAD`; for a key that is no object, a `LIST` below it, which succeeds (size 0) when there is a key there; `fstat` of a handle being written is its written size, sent nothing |
 | `readdir` | `LIST` with the delimiter `/`: the objects and common prefixes, not counting names that begin with `.aeiou` |
 | `unlink` | `DELETE` (a missing key is no error, as S3 has it) |
-| `rename` | a copy on the server and a `DELETE` of the source; not atomic |
+| `rename` | a copy on the server and a `DELETE` of the source; not atomic; an object over 5 GiB, which one `CopyObject` cannot copy, fails with `EFBIG` |
 | `lseek`, `fadvise`, `fsync`, `fdatasync`, `ioctl`, `mkdir`, `rmdir` | none (an `ioctl` answers as for a regular file: `TCGETS` is `ENOTTY`; a prefix is no object) |
 | `O_APPEND`, `O_RDWR`, `O_EXCL`, `O_CREAT` or `O_TRUNC` without `O_WRONLY`, `ftruncate`, `fallocate`; an open for writing with no `close` after it | refused by rule V18 at `aeiou check` (**aeiou-abstract**(7)) |
 
@@ -713,7 +713,7 @@ async` the workers do all of it and the loop goes on with its other actors until
 answer wakes it. Two actors writing one object at once (a sub-actor and the actor it was
 forked from) fail the run with `EBUSY`. **aeiou datagen**
 writes each file of an object dataset as one `PUT`, or as a multipart upload in 8 MiB
-parts when it is larger, and the manifest as one `PUT` at the prefix's root; the prefix
+parts when it is larger (larger parts when 10,000 would not hold it), and the manifest as one `PUT` at the prefix's root; the prefix
 must hold no key. An `array` dataset has no object form. An object namespace's root is a
 prefix: rank 0 finds it empty with a `LIST` (`--clean-namespaces` sends a `DELETE` of every
 key below it but those of a dataset placed there), and writes the namespace manifest as one
@@ -766,7 +766,13 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
   `yes`/`no`, `on`/`off`; `AEIOU_NO_X` is refused with the spelling to use. A variable
   naming a fixed option is refused, as is an empty one, or one that is not UTF-8 where the
   option takes text; one naming no option of any subcommand is warned about and ignored;
-  a backend knob the run cannot use is passed over with a warning.
+  a backend knob the run cannot use is passed over with a warning. `AEIOU_ENDPOINT`, the
+  one list, is whitespace-separated (`AEIOU_ENDPOINT="kv=/a sysp=/b"`).
+- **AWS_ENDPOINT_URL**, **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY**, **AWS_REGION**,
+  **AWS_ALLOW_HTTP**, **AWS_VIRTUAL_HOSTED_STYLE_REQUEST**, **AWS_TIMEOUT**
+
+  The object store and its client, for a name placed at `s3://BUCKET[/PREFIX]`; see OBJECT
+  STORES.
 
 ## FILES
 
@@ -780,8 +786,9 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
 
   The manifest `datagen` leaves at a dataset root and `run` compares. Its normative part
   (the resolved dataset definition, the payload block, the format block) hashes to the
-  dataset id; its `state` (`writing`, then `complete`) and, while writing, its `progress`
-  (the ids not yet written) are not hashed.
+  dataset id; its `state` (`writing`, `growing`, or `shrinking`, then `complete`) and, while
+  writing, its `progress` (the ids not yet written, the claim mark, whether its datagen
+  `stopped`) are not hashed.
 - `.aeiou-namespace.json`
 
   The manifest `run` leaves at every namespace root it wrote, and requires at the root of
@@ -885,4 +892,4 @@ aeiou dry-run workloads/model-loading/safetensors-load/safetensors_load.ast.json
 The reference: `runner/REFERENCE.md` (the definitions the runner fixes, §2; `aeiou run`,
 §4; the payload and manifest, §5; the coordinator, §6; the backends, §8 and §9; the
 metrics, §10; the limits, §11; the JSON report, §12; the `trace` node, §13; the option
-layers, §14; usage errors, §15).
+layers, §14; usage errors, §15; the object engine, §16).
