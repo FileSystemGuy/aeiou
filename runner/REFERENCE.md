@@ -81,6 +81,7 @@ aeiou/tests/layout.rs   contract 0.2: framed layouts by hand, unit/column handle
 aeiou/tests/run.rs      datagen + run round trips on a temporary directory, refusals, loader order;
                         the `io_uring` backends over the same abstracts, on one loop and on several;
                         `posix-aio`, `libaio`, and `mmap` over the same (§9)
+aeiou/tests/cov_c2.rs   every POSIX op through every backend alike; an fadvise of 4 GiB or more advised whole
 aeiou/tests/uring_knobs.rs  the ring and io-wq knobs (§8): same fingerprint, the io-wq cap holds, the SQPOLL threads are counted
 aeiou/tests/metrics.rs  `--metrics` (§10): same op multiset as the inline walk, thread-count independence,
                         the DiskANN structure recovered, sampling against exact
@@ -1063,7 +1064,10 @@ and the kernel behaviour found on the way, is `DESIGN_REVIEW.md` §3.29.
   `mkdirat`, `renameat`, `fallocate`, `fadvise`, `ftruncate` (6.9+). What has no opcode
   (`lseek`, `ioctl`, `readdir`/`getdents64`), or what the ring's probe says the kernel lacks,
   runs inline on the loop thread through the blocking backend, as an `io_uring` application
-  has to do; `close` drops the actor's reference as under `sync`.
+  has to do; `close` drops the actor's reference as under `sync`. So does an `fadvise` of
+  4 GiB or more: the SQE carries its length in 32 bits (the 64-bit form is Linux 6.7 and the
+  `io-uring` crate does not write it), and the range was advised at its length modulo 4 GiB
+  (2026-10-15).
 - **Every read and write is issued at its effective offset**, the one the VM computed and
   the fingerprint hashes, never at the kernel's file position (`offset = -1`). Observed on
   Linux 6.18: a `-1` read of an `O_DIRECT` file through the ring returns data but does not

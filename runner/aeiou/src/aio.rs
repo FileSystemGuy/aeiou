@@ -155,15 +155,19 @@ pub(crate) struct AioIo {
 impl AioIo {
     fn new(sh: &Shared) -> Result<Self> {
         let depth = if sh.opts.aio_depth == 0 { DEPTH } else { sh.opts.aio_depth };
+        Self::open(depth, sh.backend(), sh.opts.buffer_bytes)
+    }
+
+    /// A context of `depth` requests, `inline` for the ops AIO cannot carry.
+    fn open(depth: u32, inline: Box<dyn Backend>, buf: usize) -> Result<Self> {
         let mut ctx: libc::c_ulong = 0;
         // SAFETY: `ctx` is zero as io_setup requires and outlives the call
         if unsafe { libc::syscall(libc::SYS_io_setup, depth as libc::c_long, &mut ctx as *mut libc::c_ulong) } < 0 {
             return Err(std::io::Error::last_os_error()).with_context(|| format!("io_setup({depth}) (EAGAIN: the contexts on this host exceed fs.aio-max-nr; lower --aio-depth or --threads, or raise the sysctl)"));
         }
-        let buf = sh.opts.buffer_bytes;
         Ok(AioIo {
             ctx,
-            inline: sh.backend(),
+            inline,
             rbuf: Ring::new(buf),
             wbuf: Ring::new(buf),
             pool: Pool::new(buf),
@@ -353,5 +357,74 @@ impl Engine for AioIo {
             (OpKind::Read | OpKind::Write, _) => Ok(res as i64),
             _ => Ok(0),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Sync;
+
+    fn ctx(depth: u32) -> AioIo {
+        AioIo::open(depth, Box::new(Sync { direct: false }), 1 << 20).unwrap()
+    }
+
+    /// Wait (as the loop does) until nothing is in flight; every completion that came.
+    fn settle(io: &mut AioIo) -> Vec<(u64, i32)> {
+        let mut out = Vec::new();
+        while io.in_flight > 0 {
+            io.wait(Duration::from_millis(50), &mut out).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn a_context_the_kernel_will_not_make_is_an_error_that_says_why() {
+        let e = format!("{:#}", AioIo::open(u32::MAX, Box::new(Sync { direct: false }), 1 << 20).err().unwrap());
+        assert!(e.contains(&format!("io_setup({})", u32::MAX)) && e.contains("fs.aio-max-nr"), "{e}");
+    }
+
+    #[test]
+    fn a_request_io_submit_refuses_completes_with_its_errno_and_the_rest_are_submitted() {
+        let path = std::env::temp_dir().join(format!("aeiou-aio-refused-{}", std::process::id()));
+        std::fs::write(&path, vec![5u8; 8192]).unwrap();
+        let f = std::fs::File::open(&path).unwrap();
+        let mut io = ctx(8);
+        let mut buf = vec![0u8; 4096];
+        // the head names no descriptor (EBADF from io_submit itself); the one behind it reads
+        let bad = Iocb { data: 1, opcode: IOCB_CMD_PREAD, fildes: i32::MAX as u32, buf: buf.as_mut_ptr() as u64, nbytes: 4096, ..Default::default() };
+        let good = Iocb { data: 2, opcode: IOCB_CMD_PREAD, fildes: f.as_raw_fd() as u32, buf: buf.as_mut_ptr() as u64, nbytes: 4096, offset: 4096, ..Default::default() };
+        io.queue.extend([bad, good]);
+        io.in_flight = 2;
+        let mut out = settle(&mut io);
+        out.sort();
+        assert_eq!(out, vec![(1, -libc::EBADF), (2, 4096)]);
+        assert_eq!(buf[0], 5);
+        assert_eq!((io.report.submits, io.report.submitted, io.in_kernel), (2, 1, 0), "one call refused the head, the next carried the read");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_full_context_reaps_a_completion_and_submits_the_rest() {
+        // polls of an eventfd stay in the kernel until it is written: more of them than the
+        // context holds fill it, and io_submit says EAGAIN until a completion frees a slot
+        let efd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+        assert!(efd >= 0);
+        let mut io = ctx(1);
+        let n = 4096u64;
+        io.queue.extend((0..n).map(|i| Iocb { data: i, opcode: IOCB_CMD_POLL, fildes: efd as u32, buf: libc::POLLIN as u64, ..Default::default() }));
+        io.in_flight = n as usize;
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let one = 1u64;
+            unsafe { libc::write(efd, &one as *const u64 as *const libc::c_void, 8) };
+        });
+        let out = settle(&mut io);
+        writer.join().unwrap();
+        assert_eq!(out.len(), n as usize, "every poll completed once");
+        assert!(out.iter().all(|&(_, r)| r & libc::POLLIN as i32 != 0));
+        assert!(io.report.full >= 1, "the context was full at least once: {:?}", io.report.full);
+        assert_eq!((io.report.submitted, io.in_kernel), (n, 0));
+        unsafe { libc::close(efd) };
     }
 }

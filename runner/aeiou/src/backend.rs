@@ -1074,4 +1074,186 @@ mod tests {
         drop(file);
         std::fs::remove_file(&path).unwrap();
     }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("aeiou-backend-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn bits(flags: &[OpenFlag]) -> u64 {
+        flags.iter().fold(0, |b, f| b | 1 << (*f as u8))
+    }
+
+    fn errno<T>(r: io::Result<T>) -> i32 {
+        r.err().expect("an error").raw_os_error().expect("an errno")
+    }
+
+    #[test]
+    fn every_blocking_backend_issues_every_op_with_the_same_results() {
+        // the op is the abstract's whatever the API: each backend, the same calls, the same
+        // returns and errnos (`PROJECT_BRIEF.md` §4)
+        let stats = Arc::new(MmapStats::default());
+        for kind in [BackendKind::Sync, BackendKind::PosixAio, BackendKind::Mmap] {
+            let d = scratch(kind.api.name());
+            let mut be = kind.make(MmapMode::Fault, MmapConsume::Touch, &stats);
+            let what = kind.describe();
+            be.mkdir(&d.join("sub"), 0o755).unwrap();
+            assert_eq!(errno(be.mkdir(&d.join("sub"), 0o755)), libc::EEXIST, "{what}");
+            let p = d.join("sub/f");
+            let f = be.open(&p, bits(&[OpenFlag::RDWR, OpenFlag::CREAT]), 0o644).unwrap();
+            assert_eq!(be.write(&f, &[3u8; 8192], Some(0)).unwrap(), 8192, "{what}");
+            // at the file position: the backend's API has none, the descriptor does
+            assert_eq!(be.lseek(&f, 8192, Whence::SET).unwrap(), 8192, "{what}");
+            assert_eq!(be.write(&f, &[4u8; 4096], None).unwrap(), 4096, "{what}");
+            be.fsync(&f).unwrap();
+            be.fdatasync(&f).unwrap();
+            for advice in [Advice::NORMAL, Advice::RANDOM, Advice::SEQUENTIAL, Advice::WILLNEED, Advice::DONTNEED, Advice::NOREUSE] {
+                be.fadvise(&f, 0, 4096, advice).unwrap();
+            }
+            be.fallocate(&f, 12288, 4096).unwrap();
+            assert_eq!(be.fstat(&f).unwrap(), 16384, "{what}");
+            let mut buf = vec![0u8; 4096];
+            assert_eq!(be.read(&f, &mut buf, Some(8192)).unwrap(), 4096, "{what}");
+            assert_eq!(be.lseek(&f, 0, Whence::SET).unwrap(), 0);
+            assert_eq!(be.read(&f, &mut buf, None).unwrap(), 4096, "{what}");
+            assert_eq!(buf[0], 3);
+            be.ftruncate(&f, 4096).unwrap();
+            assert_eq!(be.lseek(&f, 0, Whence::END).unwrap(), 4096, "{what}");
+            assert_eq!(be.lseek(&f, -96, Whence::CUR).unwrap(), 4000, "{what}");
+            // a regular file is no terminal and no block device; it says how much is unread
+            assert_eq!(errno(be.ioctl(&f, IoctlRequest::TCGETS)), libc::ENOTTY, "{what}");
+            be.ioctl(&f, IoctlRequest::FIONREAD).unwrap();
+            assert_eq!(errno(be.ioctl(&f, IoctlRequest::BLKGETSIZE64)), libc::ENOTTY, "{what}");
+            assert_eq!(errno(be.fadvise(&f, 0, -1, Advice::NORMAL)), libc::EINVAL, "{what}");
+            assert_eq!(errno(be.fallocate(&f, -1, 1)), libc::EINVAL, "{what}");
+            drop(f);
+            assert_eq!(be.stat(&p).unwrap(), 4096, "{what}");
+            std::fs::write(d.join("sub/.aeiou-hidden"), b"").unwrap();
+            let dir = be.open(&d.join("sub"), bits(&[OpenFlag::RDONLY, OpenFlag::DIRECTORY]), 0).unwrap();
+            assert_eq!(be.readdir(&dir).unwrap(), 1, "{what}: `.`, `..`, and `.aeiou*` are not counted");
+            drop(dir);
+            assert_eq!(errno(be.rmdir(&d.join("sub"))), libc::ENOTEMPTY, "{what}");
+            be.rename(&p, &d.join("g")).unwrap();
+            assert_eq!(errno(be.stat(&p)), libc::ENOENT, "{what}");
+            be.unlink(&d.join("g")).unwrap();
+            assert_eq!(errno(be.unlink(&d.join("g"))), libc::ENOENT, "{what}");
+            std::fs::remove_file(d.join("sub/.aeiou-hidden")).unwrap();
+            be.rmdir(&d.join("sub")).unwrap();
+            // the failures of the calls that take a path
+            assert_eq!(errno(be.open(&d.join("none"), bits(&[OpenFlag::RDONLY]), 0)), libc::ENOENT, "{what}");
+            assert_eq!(be.open(Path::new("a\0b"), 0, 0).err().unwrap().kind(), io::ErrorKind::InvalidInput, "{what}");
+            std::fs::remove_dir_all(&d).unwrap();
+        }
+    }
+
+    #[test]
+    fn posix_aio_returns_a_failed_request_s_errno() {
+        // the request is accepted and fails in glibc's thread: `aio_error`, not the submit
+        let d = scratch("aio-errno");
+        let mut be = BackendKind::PosixAio.make(MmapMode::Fault, MmapConsume::Touch, &Arc::new(MmapStats::default()));
+        let f = be.open(&d.join("w"), bits(&[OpenFlag::WRONLY, OpenFlag::CREAT]), 0o644).unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(errno(be.read(&f, &mut buf, Some(0))), libc::EBADF);
+        let r = be.open(&d.join("w"), bits(&[OpenFlag::RDONLY]), 0).unwrap();
+        assert_eq!(errno(be.write(&r, &buf, Some(0))), libc::EBADF);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_mmap_modes_make_the_range_resident_and_count_what_they_did() {
+        let d = scratch("mmap-modes");
+        let p = d.join("f");
+        std::fs::write(&p, (0..3 * 4096 + 100).map(|i| (i / 4096) as u8 + 1).collect::<Vec<u8>>()).unwrap();
+        let rd = bits(&[OpenFlag::RDONLY]);
+        for (mode, consume, advised, touched, copied) in [
+            (MmapMode::Fault, MmapConsume::Touch, 0, 4, 0),
+            (MmapMode::Populate, MmapConsume::Touch, 1, 0, 0),
+            (MmapMode::WillNeed, MmapConsume::Touch, 1, 4, 0),
+            (MmapMode::WillNeed, MmapConsume::Copy, 1, 0, 8388),
+        ] {
+            let stats = Arc::new(MmapStats::default());
+            let mut be = BackendKind::Mmap.make(mode, consume, &stats);
+            let f = be.open(&p, rd, 0).unwrap();
+            let mut buf = vec![0u8; 8388];
+            // from inside page 0 to the end of the file: the end of page 0, pages 1 and 2, and
+            // the 100 bytes of page 3 (four pages touched)
+            assert_eq!(be.read(&f, &mut buf, Some(4000)).unwrap(), 8388);
+            let got = |a: &AtomicU64| a.load(Ordering::Relaxed);
+            assert_eq!((got(&stats.advised), got(&stats.touched_pages), got(&stats.copied_bytes)), (advised, touched, copied), "{mode:?} {consume:?}");
+            if consume == MmapConsume::Copy {
+                assert_eq!((buf[0], buf[96], buf[96 + 4096], buf[8387]), (1, 2, 3, 4));
+            }
+            assert_eq!(MmapMode::parse(mode.name()), Some(mode));
+            assert_eq!(MmapConsume::parse(consume.name()), Some(consume));
+        }
+        assert_eq!((MmapMode::parse("mapped"), MmapConsume::parse("move")), (None, None));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn mmap_maps_nothing_for_an_empty_file_and_a_refused_mapping_is_its_errno() {
+        let d = scratch("mmap-edges");
+        let stats = Arc::new(MmapStats::default());
+        let mut be = BackendKind::Mmap.make(MmapMode::Fault, MmapConsume::Touch, &stats);
+        // an empty file read before its size is asked: the backend asks, maps nothing, reads 0
+        std::fs::write(d.join("empty"), b"").unwrap();
+        let f = be.open(&d.join("empty"), bits(&[OpenFlag::RDONLY]), 0).unwrap();
+        let mut buf = vec![0u8; 4096];
+        assert_eq!(be.read(&f, &mut buf, Some(0)).unwrap(), 0);
+        assert_eq!(be.read(&f, &mut buf, Some(0)).unwrap(), 0);
+        assert_eq!((stats.sized.load(Ordering::Relaxed), stats.maps.load(Ordering::Relaxed)), (1, 0));
+        drop(f);
+        // a read of no bytes inside a mapping touches nothing
+        std::fs::write(d.join("one"), vec![1u8; 4096]).unwrap();
+        let f = be.open(&d.join("one"), bits(&[OpenFlag::RDONLY]), 0).unwrap();
+        assert_eq!(be.read(&f, &mut buf[..0], Some(10)).unwrap(), 0);
+        assert_eq!((stats.maps.load(Ordering::Relaxed), stats.touched_pages.load(Ordering::Relaxed)), (1, 0));
+        drop(f);
+        // a read through a write-only open: no read mapping of it is possible
+        std::fs::write(d.join("w"), vec![1u8; 4096]).unwrap();
+        let f = be.open(&d.join("w"), bits(&[OpenFlag::WRONLY]), 0).unwrap();
+        assert_eq!(errno(be.read(&f, &mut buf, Some(0))), libc::EACCES);
+        drop(f);
+        // a write at the file position, or an allocation past the end, moves the size the
+        // open knows: the next read past the old end maps the file again
+        let f = be.open(&d.join("w"), bits(&[OpenFlag::RDWR]), 0).unwrap();
+        assert_eq!(be.fstat(&f).unwrap(), 4096);
+        assert_eq!(be.read(&f, &mut buf, Some(0)).unwrap(), 4096);
+        assert_eq!(be.lseek(&f, 0, Whence::END).unwrap(), 4096);
+        assert_eq!(be.write(&f, &[2u8; 4096], None).unwrap(), 4096);
+        assert_eq!(be.read(&f, &mut buf, Some(4096)).unwrap(), 4096, "the size was asked again");
+        be.fallocate(&f, 8192, 4096).unwrap();
+        assert_eq!(be.read(&f, &mut buf, Some(8192)).unwrap(), 4096, "fallocate's zeros");
+        assert_eq!(buf[0], 0);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn errno_names_and_backend_names() {
+        for (code, name) in [
+            (libc::ENOENT, "ENOENT"), (libc::EEXIST, "EEXIST"), (libc::ENOTTY, "ENOTTY"), (libc::EISDIR, "EISDIR"), (libc::ENOTDIR, "ENOTDIR"),
+            (libc::ENOTEMPTY, "ENOTEMPTY"), (libc::EACCES, "EACCES"), (libc::EPERM, "EPERM"), (libc::EINVAL, "EINVAL"), (libc::ENOSPC, "ENOSPC"),
+            (libc::EBADF, "EBADF"), (libc::ENAMETOOLONG, "ENAMETOOLONG"), (libc::EIO, "EIO"), (libc::EOPNOTSUPP, "EOPNOTSUPP"), (libc::EXDEV, "EXDEV"),
+            (libc::EBUSY, "EBUSY"), (libc::EMFILE, "EMFILE"), (libc::ENFILE, "ENFILE"), (libc::EFBIG, "EFBIG"), (libc::EAGAIN, "EAGAIN"),
+            (libc::EINTR, "EINTR"), (libc::ESTALE, "ESTALE"), (libc::ECHILD, "E?"),
+        ] {
+            assert_eq!(errno_name(code), name);
+        }
+        for api in [Api::Sync, Api::PosixAio, Api::LibAio, Api::Uring, Api::Mmap] {
+            assert_eq!(Api::parse(api.name()), Some(api));
+        }
+        assert_eq!(BackendKind::of(Api::Mmap, Cache::Direct), None);
+        // what an abstract declares (names `aeiou check` has refused say so here too)
+        let ast = |posix: &str, cache: &str| -> crate::ast::Ast {
+            serde_json::from_str(&format!(r#"{{"ast": "0.10", "name": "t", "actors": {{}}{posix}{cache}}}"#)).unwrap()
+        };
+        assert_eq!(declared(&ast("", "")).unwrap(), BackendKind::Sync);
+        assert_eq!(declared(&ast(r#", "posix": "libaio""#, r#", "cache": "direct""#)).unwrap(), BackendKind::LibAioDirect);
+        assert_eq!(declared(&ast(r#", "posix": "aio""#, "")).unwrap_err().to_string(), format!("posix `aio` is not one of {API_NAMES}"));
+        assert_eq!(declared(&ast("", r#", "cache": "none""#)).unwrap_err().to_string(), format!("cache `none` is not one of {CACHE_NAMES}"));
+        assert_eq!(declared(&ast(r#", "posix": "mmap""#, r#", "cache": "direct""#)).unwrap_err().to_string(), "cache `direct` under posix `mmap`");
+        assert_eq!(BackendKind::PosixAioDirect.describe(), "posix posix-aio  cache direct");
+    }
 }

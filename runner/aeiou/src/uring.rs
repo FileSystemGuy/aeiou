@@ -656,7 +656,11 @@ impl Engine for LoopIo {
                 e
             }
             OpKind::Fadvise => {
-                if !self.supported(opcode::Fadvise::CODE) {
+                // the SQE carries an fadvise's length in 32 bits (`sqe->len`; the 64-bit form
+                // in `sqe->addr` is Linux 6.7 and the crate does not write it), so a range of
+                // 4 GiB or more would be advised at its length modulo 4 GiB (exactly 4 GiB: to
+                // the end of the file): such a range is advised inline, at its whole length
+                if !self.supported(opcode::Fadvise::CODE) || op.len > u32::MAX as i64 {
                     return Ok(self.inline_op(sh, t, op));
                 }
                 let f = try_fd!(t);

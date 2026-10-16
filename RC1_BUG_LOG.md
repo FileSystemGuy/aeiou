@@ -3033,3 +3033,24 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
 - **Evidence:** no deterministic regression test (the wall clock cannot be stepped here without new
   software); the flake's assertion now holds by construction; on HEAD 76cd668 plus the change:
   `--tests --lib --bins` with MinIO pass (all 168, lib 78), builder `test_coord.py`+`test_man.py` 23 passed.
+
+## 151. An io_uring `fadvise` of 4 GiB or more advised its length modulo 4 GiB
+
+- **Where:** `runner/aeiou/src/uring.rs` (the Fadvise arm: a range over `u32::MAX` goes inline through
+  the blocking backend, as an unsupported opcode already does); `runner/REFERENCE.md` §8 (inline
+  ops) and §1 (test files); `runner/aeiou/tests/cov_c2.rs` (new; `mod` line in `tests/all.rs`).
+- **Found by:** RC1 round-4 coverage lane C2 (I/O backends), reading the uncovered io_uring SQE
+  arms: the `io-uring` crate's `Fadvise` writes the length into the 32-bit `sqe->len` and never the
+  kernel's 64-bit form, so `len = 2^32 + 4096` became 4096 and exactly 4 GiB became 0 ("to the end").
+  Repro: write 64 KiB, fsync, DONTNEED over `[0, 4294971392)`, then mincore: `sync` 0/16 pages
+  resident, `libaio` 0/16, `io_uring` 16/16 (control: len 65536 → 0, len 4096 → 16).
+- **Fix:** such a range is advised inline, whole. No fingerprint, dataset id, or contract change.
+- **Evidence:** `cov_c2::an_fadvise_of_4_gib_or_more_advises_its_whole_range_on_every_backend` fails
+  with the fix undone (`Uring …: left: (16, 16) right: (16, 0)`) and passes (it skips with a note
+  where the `sync` control leaves pages resident, e.g. tmpfs). The same lane's coverage tests
+  (aio.rs 82.7→94.9%, backend.rs 82.9→99.3%, cold.rs 87.1→96.0%, uring.rs 90.7→92.6% lines: every
+  POSIX op on all 9 backends to the dry-run fingerprint, EBADF and kernel-refused errnos on every
+  backend, full submission/completion queues and libaio context, trace gaps at time scale 1, aio
+  setup/submit failures, mmap modes and edges) go in with it. On HEAD 2502bef plus the change:
+  `--tests --lib --bins` with MinIO pass (all 174, lib 89), `cargo check --tests` without features
+  clean. Fixed in an isolated worktree and applied.

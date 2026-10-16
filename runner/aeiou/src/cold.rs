@@ -293,4 +293,66 @@ mod tests {
         assert_eq!(file_residency(&f).unwrap(), (0, 0));
         std::fs::remove_file(&f).unwrap();
     }
+
+    #[test]
+    fn a_large_file_is_sampled_in_windows_and_a_file_that_cannot_be_mapped_is_an_error() {
+        // sparse: no data, so nothing resident, and the windows are what is examined
+        let f = std::env::temp_dir().join(format!("aeiou-mincore-large-{}", std::process::id()));
+        let file = std::fs::File::create(&f).unwrap();
+        file.set_len(WHOLE + 3 * WINDOW + 4096).unwrap();
+        std::os::unix::fs::FileExt::write_all_at(&file, &[1u8; 4096], 0).unwrap();
+        drop(file);
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+        let (pages, resident) = file_residency(&f).unwrap();
+        assert_eq!(pages, WINDOWS * WINDOW / page, "{WINDOWS} windows of {WINDOW} bytes");
+        assert!(resident >= 1, "the first window holds the page just written");
+        std::fs::remove_file(&f).unwrap();
+        // a directory opens, and has no pages to map
+        let e = format!("{:#}", file_residency(&std::env::temp_dir()).unwrap_err());
+        assert!(e.contains("residency check: mincore of"), "{e}");
+    }
+
+    #[test]
+    fn the_residency_of_a_chunked_dataset_samples_one_chunk_of_each_file() {
+        let text = r#"{"ast": "0.10", "name": "t",
+            "datasets": {"d": {"layout": "chunked", "access": "indexed", "pattern": "d/{id}/{k}", "count": 3, "chunk": 4096, "size": {"const": 10000}, "seed": 1}},
+            "actors": {"gpu": {"body": []}}}"#;
+        let loaded = crate::load_str(text).unwrap();
+        let cfg = crate::eval::Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![] };
+        let params = crate::eval::Params::new(&loaded.ast, &cfg).unwrap();
+        let model = crate::eval::build_model(&loaded.ast, &cfg, &params).unwrap();
+        let root = std::env::temp_dir().join(format!("aeiou-residency-chunked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // file f's sampled chunk is f mod its 3 chunks
+        for f in 0..3 {
+            std::fs::create_dir_all(root.join(format!("d/{f}"))).unwrap();
+            std::fs::write(root.join(format!("d/{f}/{f}")), vec![1u8; 4096 * (f as usize + 1)]).unwrap();
+        }
+        let r = residency(&model, &root).unwrap();
+        assert_eq!(r, vec![Residency { dataset: "d".into(), files: 3, of: 3, pages: 6, resident: 6 }]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_report_says_what_the_drop_did_and_warns_of_resident_pages() {
+        let sizes = |cached: u64| CacheSizes { cached_bytes: cached << 20, shmem_bytes: 1 << 20, dentries: 10, inodes: 20, ..Default::default() };
+        let c = ColdStart {
+            host: "h".into(),
+            dropped: Some(DropRecord { sync_ns: 1_500_000_000, drop_ns: 250_000_000, before: sizes(9), after: sizes(2) }),
+            residency: vec![Residency { dataset: "d".into(), files: 2, of: 5, pages: 8, resident: 2 }, Residency { dataset: "e".into(), ..Default::default() }],
+        };
+        let mut out = Vec::new();
+        write(&mut out, &c).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = s.lines().collect();
+        assert!(lines[0].starts_with("cold start h: caches dropped (sync 1.500 s, drop 0.250 s, before the start gate): file cache "), "{s}");
+        assert!(lines[0].contains("dentries 10 -> 10  inodes 20 -> 20"), "{s}");
+        assert_eq!(lines[1], "cold start h: dataset d: 2 of 5 files sampled, 2 of 8 pages resident (25.0 %)");
+        assert_eq!(lines[2], "cold start h: dataset e: 0 of 0 files sampled, 0 of 0 pages resident (0.0 %)");
+        assert!(lines[3].starts_with("WARNING: dataset pages were in h's page cache after the drop"), "{s}");
+        // neither flag: one line, and it says how to sample
+        let mut out = Vec::new();
+        write(&mut out, &ColdStart { host: "h".into(), ..Default::default() }).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "cold start h: caches not dropped, dataset residency not sampled (--require-cold or --drop-caches samples it)\n");
+    }
 }

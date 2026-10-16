@@ -3,6 +3,7 @@
 // not twelve (CI, 2026-10-07).
 mod common;
 mod coord;
+mod cov_c2;
 mod golden;
 mod layout;
 mod man;
