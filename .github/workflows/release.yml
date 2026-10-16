@@ -3,7 +3,7 @@ name: release
 # A tag `vX.Y.Z` builds one tarball for x86_64 Linux and attaches it to a GitHub Release:
 # the runner binary, `aeiou-header` beside it (one file carrying Python, numpy, h5py, and
 # libhdf5 at the versions uv.lock pins; DESIGN_REVIEW.md §3.70), and `aeiou-launch`, the manual pages as roff and as Markdown, the
-# committed abstracts under workloads/ with their parameter files, READMEs, and catalog records, the builder's wheel, and
+# committed abstracts under workloads/ with their parameter files, READMEs, descriptions, and catalog records, the builder's wheel, and
 # QUICKSTART.md. Built on ubuntu-22.04 so the binary runs on glibc 2.34 and later (RHEL 9,
 # Ubuntu 22.04, Debian 12 and newer); the runner links nothing but libc. Nothing is
 # published to a registry. The tag must equal the version in runner/Cargo.toml and
@@ -74,7 +74,7 @@ jobs:
               "$p" -o "$d/share/man/man$sec/$page"
           done
           cp man/*.md "$d/man/"
-          git ls-files workloads | grep -E '(\.ast\.json|params\.json|README\.md|CATALOG\.md|\.toml|shape(\.defaults)?\.json)$' | tar -cf - -T - | tar -xf - -C "$d"
+          git ls-files workloads | grep -E '(\.ast\.json|params\.json|README\.md|DESCRIPTION(\.defaults)?\.md|CATALOG\.md|\.toml|shape(\.defaults)?\.json)$' | tar -cf - -T - | tar -xf - -C "$d"
           cp wheel/*.whl "$d/wheel/"
           cp QUICKSTART.md LICENSE "$d/"
           tar czf "$d.tar.gz" "$d"

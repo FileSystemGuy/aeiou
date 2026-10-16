@@ -9,11 +9,12 @@ and, for the runner alone, no Python.
 |---|---|
 | `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 Linux, glibc 2.34 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. |
 | `bin/aeiou-header` | Made by `aeiou datagen`, never by you: the header of an HDF5 file, from libhdf5 (one file carrying Python, numpy, h5py). It must stay beside `bin/aeiou`; only the host of rank 0 runs it, so client hosts need `aeiou` alone. |
-| `bin/aeiou-launch` | One `aeiou run` or `aeiou datagen` rank per host over ssh. A POSIX shell script. |
+| `bin/aeiou-launch` | One `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh. A POSIX shell script. |
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
 | `man/` | The same pages as Markdown. |
-| `workloads/` | The committed abstracts (`*.ast.json`), the only thing the runner executes, one directory per I/O mechanism under its category (`input-pipeline/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …), each with its README, its cases (`cases/<case>/params.json`: a parameter set describing one workload), and test-sized parameter files in `params/`. |
-| `wheel/` | The Python builder, for those who want to author or change workloads, generate container datasets, or compare an `strace` of a real application with an abstract. Python 3.12 or newer. |
+| `workloads/` | The committed abstracts (`*.ast.json`), the only thing the runner executes, one directory per I/O mechanism under its category (`input-pipeline/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …), each with its README and catalog record (`mechanism.toml`), its cases (`cases/<case>/params.json`: a parameter set describing one workload, with its records, its description in prose (`DESCRIPTION.md`), measured `shape.json`, and, where fitted, the parameters fitted to its captures), and, for some, test-sized parameter files in `params/`; the catalog, `CATALOG.md`, and its vocabulary, `attributes.toml`. The authoring scripts, capture kits, and trace metrics stay in the repository. |
+| `wheel/` | The Python builder, for those who want to author workloads, describe one in prose, or compare an `strace` of a real application with an abstract. Python 3.12 or newer. |
+| `QUICKSTART.md`, `LICENSE` | This guide; the Apache License 2.0. |
 
 ## First run
 
@@ -55,15 +56,17 @@ parameter file uses the abstract's defaults, which for the training and checkpoi
 workloads are the sizes of a real job (thousands of files, hundreds of steps); scale them
 down with `--param k=v` or a parameter file. The `tfrecord_stream`, `parquet_stream`, and
 `hdf5_map` workloads read container files (TFRecord, Parquet, HDF5) that `aeiou datagen`
-writes as it writes any other:
+writes as it writes any other. Each abstract's dataset lands under its `--root` (`train/`
+for `file_per_sample` and `parquet_stream` alike), so give each workload a root of its own:
 
 ```
-aeiou datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut/aeiou \
+aeiou datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut/aeiou-parquet \
     --param samples=2048
 ```
 
-The Python builder in `wheel/` is needed only to author or change workloads or to compare a
-trace with an abstract:
+The Python builder in `wheel/` is needed only to author workloads (to change a shipped one,
+clone the repository, which holds the authoring scripts) or to compare a trace with an
+abstract:
 
 ```
 python3 -m venv .venv && .venv/bin/pip install 'aeiou[formats] @ ./wheel/aeiou-0.2.0-py3-none-any.whl'

@@ -38,7 +38,8 @@ An abstract goes through five stages, each a tool of the suite.
    creates), and actors whose bodies are loops, bindings, forks into sub-actors, channels,
    barriers, emulated compute, and the eighteen operations. The calls that look like I/O
    are declarations: Python runs once at build time and generates *structure*. `aeiou-build`
-   runs the script in a hermetic child, twice, and writes the **AST**, one JSON document
+   runs the script (with `--hermetic --twice`, as CI does: in two isolated children whose
+   hashes must agree) and writes the **AST**, one JSON document
    whose canonical SHA-256 is the workload's identity. The AST is the only thing the runner
    executes and the only thing an author publishes. Its slots are filled by **parameter
    files**, so one published shape carries several measured parameter sets.
@@ -50,20 +51,21 @@ An abstract goes through five stages, each a tool of the suite.
    stream's **locality metrics**: reuse distance, sequential runs, popularity skew, request
    sizes, fan-out and depth, read/write mix.
 
-3. **Generate data.** `aeiou datagen` (and `aeiou-datagen` for container formats) writes
-   the datasets the abstract declares: names from the pattern, sizes from the dataset seed,
-   content from a positional generator with controlled dedupe and compression ratios, so
-   any byte is a pure function of (dataset seed, file, offset) and nothing is stored to
-   describe it. A manifest at each dataset root hashes to the **dataset id**, which a run
-   checks before it starts.
+3. **Generate data.** `aeiou datagen` writes the datasets the abstract declares, container
+   formats (TFRecord, tar, HDF5, Parquet) included, to directories or object stores: names
+   from the pattern, sizes from the dataset seed, content from a positional generator with
+   controlled dedupe and compression ratios, so any byte is a pure function of (dataset
+   seed, file, offset) and nothing is stored to describe it. A manifest at each dataset root
+   hashes to the **dataset id**, which a run checks before it starts.
 
 4. **Run.** `aeiou run` executes the abstract against the storage under one of nine I/O
-   backends (buffered and direct POSIX, io_uring, POSIX AIO, libaio, mmap), one host or
-   several through a TCP coordinator with no MPI. It checks every result structurally and
-   never looks at the bytes; it reports latency histograms, per-step stall, host counters
-   (tasks, io-wq workers, CPU, RSS, the mount's NFS RPC deltas), and the fingerprint, which
-   must be the dry run's. A result is the abstract's hash, the parameters in effect, and the
-   dataset ids.
+   backends (POSIX calls, io_uring, POSIX AIO, and libaio, each buffered or direct, and
+   mmap), and the names it places in an object store through Apache `object_store`, blocking
+   or async; one host or several through a TCP coordinator with no MPI. It checks every
+   result structurally and never looks at the bytes; it reports latency histograms, per-step
+   stall, host counters (tasks, io-wq workers, CPU, RSS, the mount's NFS RPC deltas), and
+   the fingerprint, which must be the dry run's. A result is the abstract's hash, the
+   parameters in effect, and the dataset ids.
 
 5. **Calibrate.** `aeiou-trace` computes the same locality metrics from an `strace` of the
    real application and compares the two documents row by row against a tolerance per
@@ -126,10 +128,11 @@ An abstract goes through five stages, each a tool of the suite.
 | `aeiou` | Rust | `check`, `dry-run`, `datagen`, `run` | [aeiou(1)](man/aeiou.1.md) |
 | `aeiou-build` | Python | builder scripts to abstracts, hermetically | [aeiou-build(1)](man/aeiou-build.1.md) |
 | `aeiou-params` | Python | parameter files: defaults, check, from real shards and archives | [aeiou-params(1)](man/aeiou-params.1.md) |
-| `aeiou-datagen` | Python | container datasets through their format classes | [aeiou-datagen(1)](man/aeiou-datagen.1.md) |
+| `aeiou-datagen` | Python | container datasets through their format classes; deprecated, since `aeiou datagen` writes every format | [aeiou-datagen(1)](man/aeiou-datagen.1.md) |
 | `aeiou-trace` | Python | metrics of an strace, comparison, the `trace` node's file | [aeiou-trace(1)](man/aeiou-trace.1.md) |
-| `aeiou-catalog` | Python | the workload catalog: records against their dictionary, each case's shape, `CATALOG.md`, each case's description in prose | [aeiou-catalog(1)](man/aeiou-catalog.1.md) |
-| `aeiou-launch` | sh | one `aeiou run` or `aeiou datagen` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
+| `aeiou-catalog` | Python | the workload catalog: records against their dictionary, each case's shape, `CATALOG.md`, each case's description in prose, and `describe` for any abstract | [aeiou-catalog(1)](man/aeiou-catalog.1.md) |
+| `aeiou-header` | Python | the header bytes of an HDF5 file from libhdf5, run by `aeiou datagen` beside it | [aeiou-header(1)](man/aeiou-header.1.md) |
+| `aeiou-launch` | sh | one `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh | [aeiou-launch(1)](man/aeiou-launch.1.md) |
 
 The option layers and the config file are [aeiou-config(5)](man/aeiou-config.5.md); the
 abstract, its JSON form, its rules, parameter files, and manifests are
@@ -140,25 +143,30 @@ one frame, listing every missing argument at once, and exits 2.
 
 | Path | What |
 |---|---|
-| `builder/` | The Python package `aeiou` and its four tools; `abstracts/` holds the twelve authoring scripts of the fourteen committed workloads; `traces/` the capture kit and trace metrics of each real application traced. [README](builder/README.md), [reference](builder/REFERENCE.md). |
+| `builder/` | The Python package `aeiou` and its six tools (`aeiou/`), and its tests (`tests/`). The workloads it builds live under `workloads/`. [README](builder/README.md), [reference](builder/REFERENCE.md). |
 | `schema/` | The AST contract: the JSON Schema, the reference validator `check.py`, and the parameter-file schema. [README](schema/README.md). |
-| `workloads/` | The committed abstracts, one directory per I/O mechanism under its category (`input-pipeline/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …): the authoring script and the AST generated beside it (never edited by hand), the capture kit, and the cases, each a parameter set describing one workload with the captures of the traced application under it (`DESIGN_REVIEW.md` §3.66). |
+| `workloads/` | The committed abstracts, one directory per I/O mechanism under its category (`input-pipeline/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …): the authoring script and the AST generated beside it (never edited by hand), the capture kit (`kit/`), test-sized parameter sets (`params/`), and the cases, each a parameter set describing one workload with its description in prose and the captures of the traced application under it; the catalog, `CATALOG.md`, generated from the records in the vocabulary of `attributes.toml` (`DESIGN_REVIEW.md` §3.66). [README](workloads/README.md), [catalog](workloads/CATALOG.md). |
 | `runner/` | The Rust workspace: the `aeiou` binary and `aeiou-launch`. [README](runner/README.md), [reference](runner/REFERENCE.md). |
 | `man/` | The manual pages, in Markdown with man-page sections; the test suites hold them to the tools' `--help`. [index](man/README.md). |
 | `QUICKSTART.md` | The guide shipped in the release tarball: first run, first bug report. |
+| `.github/workflows/` | CI (`ci.yml`) and the release tarball (`release.yml`). |
 | `PROJECT_BRIEF.md` | Requirements, decisions, open items (§6), and the one list of what is MLPerf-specific (§8). |
 | `NAPKIN_MATH.md` | Memory and IOPS estimates, the risk register, the spikes. |
 | `GRAMMAR_OPTIONS.md` | The semantic model and the authoring options; Option D, the Python builder over a JSON AST, is what was built. |
 | `ABSTRACTS.md` | The target workloads written on paper first, the constructs they needed, and what each trace later corrected. |
 | `DESIGN_REVIEW.md` | The reasoning log: every design decision with its date, what it replaced, and why. |
+| `RC1_BUG_LOG.md` | The release-candidate review's bug log, append-only: each bug, its fix, and its evidence, replayable from the tag `pre-rc1-review`. |
 
 ## Technologies
 
 **Runner (Rust, edition 2021).** `clap` for the command line, `serde`/`serde_json` for the
 AST and the reports, `toml` for the config file, `sha2` for identities, `xxhash-rust`
 (xxh3) for positional keys and the fingerprint, its own SFC64 for the positional payload,
-`libc` and the `io-uring` crate for the backends, `anyhow` for errors. Blocking `std::net`
-for the coordinator; no tokio, no MPI. Linux interfaces: `io_uring` (with `SQPOLL`,
+`libc` and the `io-uring` crate for the backends, `anyhow` for errors. Behind the cargo
+feature `object`, the object engine: Apache `object_store` (S3), `tokio`, `futures`, `bytes`;
+behind `formats`, the container writers of `aeiou datagen`, with `crc32c` (the release binary
+is built with `formats`). Blocking `std::net` for the coordinator; no tokio in the default
+build, no MPI. Linux interfaces: `io_uring` (with `SQPOLL`,
 `DEFER_TASKRUN`, `COOP_TASKRUN`, io-wq worker caps), the kernel AIO calls, glibc POSIX AIO,
 `mmap` with `madvise`, `O_DIRECT`, `posix_fadvise`, `mincore`, `/proc/sys/vm/drop_caches`,
 `/proc/self/mountstats` for NFS RPC counts, `getrusage`, the rlimits and sysctls a run
@@ -167,27 +175,32 @@ checks before its gate.
 **Builder (Python ≥ 3.12).** `jsonschema` is the only dependency of the package; `hatchling`
 builds it and `uv` locks it. The `formats` extra brings the libraries of the format
 classes, `pyarrow`, `h5py`, `numpy` (whose `SFC64` makes the payload, the Rust writer's
-bytes), `crc32c`, and `xxhash`. PEP 578 audit hooks make the hermetic build.
-`aeiou-trace` and `aeiou-catalog` are standard library only.
+bytes), `crc32c`, and `xxhash`; the `s3` extra brings `obstore`, Python's binding of
+Apache `object_store`, for `aeiou-datagen` into a bucket. PEP 578 audit hooks make the
+hermetic build. `aeiou-trace` and `aeiou-catalog` are standard library only; `aeiou-header`
+needs h5py, and the release ships it as one PyInstaller file carrying Python, numpy, and h5py.
 
 **Contract.** JSON Schema draft 2020-12 for the AST and the parameter file; canonical JSON
 (sorted keys, no whitespace, shortest-round-trip floats) under SHA-256 for identities.
 
-**Calibration.** `strace -f -ttt -T -yy` of the real applications: PyTorch `DataLoader`,
+**Calibration.** `strace -f -ttt -T -yy -v` of the real applications: PyTorch `DataLoader`,
 NumPy, `torch.distributed.checkpoint`, safetensors, DiskANN, FAISS, vLLM with LMCache.
 
-**CI.** GitHub Actions, three jobs: the builder tests with the hermetic rebuild of every
+**CI.** GitHub Actions, four jobs: the builder tests with the hermetic rebuild of every
 abstract against the committed ASTs and every parameter file against its abstract; the
-runner's `cargo test`; and the integration job that diffs the Rust checker against the
-reference checker, runs the container datasets to their fingerprints, and holds the metrics
-of an strace of the runner to its own dry run. A tag `vX.Y.Z` runs a fourth workflow that
-builds the release tarball and attaches it to a GitHub Release (`.github/workflows/release.yml`).
+runner's tests (`cargo nextest`, feature `formats`); the object engine's tests against a
+pinned MinIO, with `aeiou-datagen` into the bucket read back to the dry-run fingerprint; and
+the integration job that diffs the Rust checker against the reference checker, runs every
+Python test against the binary (the container datasets to their fingerprints, the metrics of
+an strace of the runner held to its own dry run), and checks the workload catalog. A test
+skipped for something its job built fails (`AEIOU_REQUIRE`). A tag `vX.Y.Z` runs a second
+workflow that builds the release tarball and attaches it to a GitHub Release (`.github/workflows/release.yml`).
 
 ## Quick start
 
-A release tarball (the runner, `aeiou-launch`, the manual pages, the abstracts, and the
-builder's wheel, for x86_64 Linux) is attached to every tag; [QUICKSTART.md](QUICKSTART.md)
-is the guide for it. From source:
+A release tarball (the runner, `aeiou-header`, `aeiou-launch`, the manual pages, the
+abstracts with their cases and catalog, and the builder's wheel, for x86_64 Linux) is
+attached to every tag; [QUICKSTART.md](QUICKSTART.md) is the guide for it. From source:
 
 ```
 # the runner (`formats`: aeiou datagen writes TFRecord and tar, as the release binary does)
@@ -214,7 +227,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-14)
+## Status (2026-10-16)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -238,7 +251,9 @@ id order from one queue on rank 0, and Ctrl-C stopping every host with the manif
 `compound`, `array`), an `access` (`map`, `stream`, `indexed`), and `format.framing`
 (2026-10-13, `DESIGN_REVIEW.md` §3.72), and contract 0.9, a consumed dataset's `inventory`
 (the same day, §3.73), and contract 0.10, a pattern's divisor named by a parameter
-(`{id div files_per_directory}`) and the layout parameters' standard names (the same day, §3.75), and the step barrier every step by default in the training workloads, its latency measured on up to 32 ranks (2026-10-14, §3.71 point 4), and the abstract in prose: every case's `DESCRIPTION.md`, a paragraph and an account generated from its AST, parameters, records, and shape, each paragraph in `CATALOG.md`, and `aeiou-catalog describe` for any AST (the same day, §3.76). The workload catalog
+(`{id div files_per_directory}`) and the layout parameters' standard names (the same day, §3.75), and the step barrier every step by default in the training workloads, its latency measured on up to 32 ranks (2026-10-14, §3.71 point 4), and the abstract in prose: every case's `DESCRIPTION.md`, a paragraph and an account generated from its AST, parameters, records, and shape, each paragraph in `CATALOG.md`, and `aeiou-catalog describe` for any AST (the same day, §3.76), and the release-candidate
+review (2026-10-14 to 2026-10-16, `RC1_BUG_LOG.md`: 176 bugs, each fixed with its evidence)
+and release 0.2.0 (2026-10-16). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and sixteen cases under
 `workloads/`, each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
