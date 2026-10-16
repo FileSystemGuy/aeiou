@@ -8,7 +8,6 @@ Drops the lists file from the page cache, searches, then compares the file's res
 """
 import argparse, ctypes, mmap, os
 import numpy as np
-import faiss
 
 from search import fvecs
 
@@ -33,10 +32,10 @@ def resident(path):
     return out
 
 
-def nfs_reads(path):
+def nfs_reads(path, stats="/proc/self/mountstats"):
     """(READ ops, bytes read over the wire) of the NFS mount holding `path`, or None."""
     best, cur, ops, wire = "", None, None, None
-    for line in open("/proc/self/mountstats"):
+    for line in open(stats):
         w = line.split()
         if line.startswith("device "):
             cur = w[4] if len(w) > 7 and w[7].startswith("nfs") else None
@@ -68,6 +67,7 @@ def main():
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--k", type=int, default=10)
     a = ap.parse_args()
+    import faiss                             # here, so that the rest needs numpy alone (tests)
     if a.threads:
         faiss.omp_set_num_threads(a.threads)
     xq = fvecs(a.queries_file)[:a.queries]

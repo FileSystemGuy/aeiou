@@ -4,7 +4,7 @@ the files the build left.
 
     python params.py TRACE BASE.fbin INDEX_DIR DOC [--prefix ann]
 """
-import argparse, json, os, re, struct
+import argparse, json, os, re, struct, sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument("trace"); ap.add_argument("base"); ap.add_argument("index"); ap.add_argument("doc")
@@ -22,6 +22,9 @@ for line in open(a.trace, errors="replace"):
     m = merged.search(line)
     if m:
         index_bytes += int(m.group(1))
+if not shard:
+    sys.exit("params.py: the trace reads no shard graph (subshard-N_mem.index): "
+             "diskann_build models a build that partitions its base (lower --build-gb)")
 size = lambda name: os.path.getsize(os.path.join(a.index, a.prefix + name))
 print(json.dumps({"params_version": 1, "abstract": "diskann_build", "doc": a.doc, "params": {
     "dim": dim, "n": n, "shards": len(shard), "pq_code": (size("_pq_compressed.bin") - 8) // n,

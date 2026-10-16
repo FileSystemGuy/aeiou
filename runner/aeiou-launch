@@ -18,6 +18,9 @@
 # Usage errors are printed in the suite's frame (runner/REFERENCE.md §15): the command, what is
 # missing, the usage line, the pointer to the help; exit status 2.
 set -u
+# no pathname expansion: the unquoted expansions below split host names and ranges into words,
+# and `n[1-4]` is a glob that would match a file `n1` in the working directory
+set -f
 USAGE="Usage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen <ARGS>..."
 usage_error() {
     printf '%s\n\n%s\n\nFor more information, try '"'"'aeiou-launch --help'"'"'.\n' "aeiou-launch: $1" "$USAGE" >&2

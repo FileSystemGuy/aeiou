@@ -8,7 +8,6 @@
 """
 import argparse, os
 import numpy as np
-import faiss
 
 
 def fvecs(path):
@@ -27,6 +26,7 @@ def main():
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--k", type=int, default=10)
     a = ap.parse_args()
+    import faiss                         # here, so that fvecs needs numpy alone (faults.py, params.py, tests)
     if a.threads:
         faiss.omp_set_num_threads(a.threads)
     xq = fvecs(a.queries_file)[:a.queries]

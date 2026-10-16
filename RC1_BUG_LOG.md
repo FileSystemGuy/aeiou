@@ -3054,3 +3054,66 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   setup/submit failures, mmap modes and edges) go in with it. On HEAD 2502bef plus the change:
   `--tests --lib --bins` with MinIO pass (all 174, lib 89), `cargo check --tests` without features
   clean. Fixed in an isolated worktree and applied.
+
+## 152. `aeiou-launch` glob-expanded the words of a host file in its working directory
+
+- **Where:** `runner/aeiou-launch` (`set -f` after `set -u`); `builder/tests/test_launch.py`.
+- **Found by:** RC1 round-4 coverage lane C5 (kits and launcher; shell coverage measured by tracing
+  `bash --posix -x` line numbers, nothing installed), reading the host-file parsing: `for w in
+  $line`, `set -- $spec`, `set -- $hosts` apply pathname expansion, so a line `n[1-2]` in a
+  directory holding a file `n1` launched on `n1` alone (`--ranks 2` got `[n1, m3]` for `[n1, n2, m3]`).
+- **Fix:** no globbing in the script (nothing relies on it).
+- **Evidence:** `test_a_host_file_s_ranges_are_never_file_names` (also `n[*]` a bad range) fails on HEAD's
+  script and passes; with the lane's other launcher tests aeiou-launch line coverage 96.7→100%. On
+  HEAD 6af316d plus the change: builder suite with MinIO and
+  `AEIOU_REQUIRE=runner,formats,strace,header,py-formats` 441 passed, `aeiou-catalog check` ok,
+  `sh -n` clean. Fixed in an isolated worktree and applied.
+
+## 153. `replay_agentx.py` could send a request vLLM refuses, losing the rest of that session silently with exit 0
+
+- **Where:** `workloads/kvcache/lmcache-local-disk/kit/replay_agentx.py`; `builder/tests/test_kits.py`.
+- **Found by:** lane C5: the skip rule tested `in > limit`, but a prompt is sent as 64 × its blocks, up
+  to 63 tokens more, so `in ≤ limit ≤ 64·blocks` asked `max(1, limit − len)` tokens and got HTTP 400;
+  the 400 killed the session's thread and the script still exited 0.
+- **Fix:** also skip when `len(hash_ids)*BLOCK >= limit` (counted as a skip); a failed request ends the
+  run with `replay_agentx.py: session S: request I: …` once all threads are done. The committed
+  captures are unaffected (largest prompt 130560 < 131072).
+- **Evidence:** `test_replay_agentx_skips_a_prompt_whose_blocks_exceed_the_context` and
+  `test_replay_agentx_fails_when_the_server_fails_a_request` (an in-test vLLM stand-in refusing
+  over-context requests) fail on HEAD (thread traceback, exit 0) and pass; same suite runs as bug 152.
+
+## 154. `replay_agentx.py --skip K` logged sessions that `agentx.py fit/holds` paired with the wrong corpus lines
+
+- **Where:** `workloads/kvcache/lmcache-local-disk/kit/replay_agentx.py` (`--skip` removed; docstring
+  struck and dated); `builder/tests/test_kits.py`.
+- **Found by:** lane C5: the log numbers sessions from 0 and `agentx.py` reads log session N as corpus
+  line N; with `--skip 1` corpus line 1's prompts were logged as "session 0" and the fit paired them
+  with line 0's requests, silently.
+- **Fix:** the option is removed (no users; no aliases).
+- **Evidence:** the test asserts `--skip` is refused (exit 2), failing on HEAD; scratch evidence of the
+  mispairing kept in the lane's notes; same suite runs as bug 152.
+
+## 155. faiss-ivf-ondisk `kit/params.py` opened a relative trace path after `os.chdir(OUT)`
+
+- **Where:** `workloads/vector-search/faiss-ivf-ondisk/kit/params.py` (trace read before the chdir;
+  split into `main()` and a pure-numpy `params(...)`, same output); `faults.py`, `search.py`
+  (`import faiss` moved into `main()` so their own functions are testable); `builder/tests/test_kits.py`.
+- **Found by:** lane C5: the README's command passes a relative `trace.txt`; the script looked for it
+  under OUT: `FileNotFoundError: 'trace.txt'`, exit 1 (reproduced with a scratch faiss stand-in,
+  never committed).
+- **Fix:** the trace is read first.
+- **Evidence:** with the stand-in the command prints the parameter file, exit 0;
+  `test_faiss_params_fit_list_sizes_popularity_and_the_index_reads` covers `params()`; `main()` needs
+  faiss, which is not installed; same suite runs as bug 152.
+
+## 156. diskann-build `kit/params.py` crashed with ZeroDivisionError on a trace with no shard reads
+
+- **Where:** `workloads/vector-search/diskann-build/kit/params.py`; `builder/tests/test_kits.py`.
+- **Found by:** lane C5: an unpartitioned build reads no `subshard-N_mem.index`.
+- **Fix:** exit 1 with "params.py: the trace reads no shard graph (subshard-N_mem.index): diskann_build
+  models a build that partitions its base (lower --build-gb)".
+- **Evidence:** the test fails on HEAD with the traceback and passes; same suite runs as bug 152.
+  Lane C5's coverage tests go in with these (agentx.py 26→100%, replay.py, replay_agentx.py,
+  chat.py, serve.sh, diskann params, npy mkcorpus 0→100%, hops 97→100%; faiss params/faults/search
+  and dcp-load params ~30–65%, the rest of each being `main()` calls into torch/faiss, absent here;
+  kits that are only library calls stay unmeasured).

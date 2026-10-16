@@ -3,7 +3,7 @@ server under an agentic load and for `keep` (what the engine still holds, from L
 log), which the corpus cannot give.
 
     python replay_agentx.py traces.jsonl [--url http://127.0.0.1:8000] [--model NAME]
-                            [--sessions 8] [--skip 0] [--requests 300] [--max-context 131072]
+                            [--sessions 8] [--requests 300] [--max-context 131072]
                             [--max-reply 4096] [--time-scale 0.0] [--chunk-tokens 256] [--vocab 151643]
 
 The corpus has no text: a request is its prompt's 64-token blocks as hash ids, local to
@@ -23,7 +23,10 @@ reply a request got is not what the next prompt holds (its blocks have their own
 the engine misses on the previous reply's blocks and recomputes them; AIPerf's replay of
 the same corpus has the same property.
 
-`--sessions` sessions are played at once, each on a thread, from `--skip` into the file;
+`--sessions` sessions are played at once, each on a thread, the file's first (~~from
+`--skip` into the file~~ 2026-10-15: the log numbers sessions from 0 and `agentx.py fit` and
+`holds` read session N as the file's line N, so a replay from further in was fitted to the
+wrong sessions);
 a session's requests go in time order, the main agent's and its sub-agents' alike, with
 the corpus's `think_time` before each scaled by `--time-scale` (0: back to back). Each
 session plays its own share of `--requests`, the first of them in its time order (300 over
@@ -31,15 +34,19 @@ session plays its own share of `--requests`, the first of them in its time order
 corpus and the arguments, never of the server's speed; until 2026-10-09 the sessions drew
 on one shared count, and a faster server sent more of the long sessions (232 requests at
 6 GiB, 219 at 2 GiB, `DESIGN_REVIEW.md` §3.64). A request whose prompt exceeds
-`--max-context` is skipped and counts against its session's share. A reply is asked for with
-`max_tokens` = the corpus's `out` (at most `--max-reply`) and `ignore_eos`.
+`--max-context` is skipped and counts against its session's share, and so is one whose
+blocks leave the server no room for a reply (a prompt is sent as its blocks, up to 63 tokens
+more than its `in`, and vLLM refuses a prompt and reply over its context). A reply is asked for with
+`max_tokens` = the corpus's `out` (at most `--max-reply`) and `ignore_eos`. A request the
+server fails ends the replay with an error once the other sessions are done: a log short of
+a session's share is not a replay of the corpus.
 
 Prints one line per request: request (the session's first number plus the index),
 session, the request's index in it, prompt tokens,
 cached tokens when the server reports them, completion tokens, seconds. Run 2026-10-07 and, corrected,
 2026-10-08 on an 8 GB GPU at 128k context (the kit's README, `DESIGN_REVIEW.md` §3.63).
 """
-import argparse, json, random, threading, time, urllib.request
+import argparse, json, random, sys, threading, time, urllib.request
 
 from agentx import BLOCK, flatten, main_blocks, main_prefix, shared_prefix
 
@@ -55,7 +62,6 @@ def main():
     ap.add_argument("--url", default="http://127.0.0.1:8000")
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--sessions", type=int, default=8)
-    ap.add_argument("--skip", type=int, default=0)
     ap.add_argument("--requests", type=int, default=300, help="in all, split evenly over the sessions")
     ap.add_argument("--max-context", type=int, default=131072)
     ap.add_argument("--max-reply", type=int, default=4096)
@@ -74,8 +80,6 @@ def main():
     sessions = []
     with open(a.corpus) as f:
         for i, line in enumerate(f):
-            if i < a.skip:
-                continue
             if len(sessions) == a.sessions:
                 break
             flat = []
@@ -89,28 +93,35 @@ def main():
 
     share = [a.requests // max(1, len(sessions)) + (si < a.requests % max(1, len(sessions))) for si in range(len(sessions))]
 
+    failed = []
+
     def play(si, session):
         reqs, ti, at = session
-        for ri, r in enumerate(reqs[:share[si]]):
-            n = sum(share[:si]) + ri
-            if r["in"] > min(a.max_context, limit):
-                continue
-            if a.time_scale and r.get("think_time"):
-                time.sleep(r["think_time"] * a.time_scale)
-            ids = [t for b in r["hash_ids"] for t in tokens_of(at.get(b, "%d %d" % (ti, b)), vocab)]
-            want = max(1, min(a.max_reply, r["out"], limit - len(ids)))
-            t0 = time.monotonic()
-            out = post("/v1/completions", {"prompt": ids, "max_tokens": want, "ignore_eos": True, "temperature": 0})
-            u = out["usage"]
-            print("req %d session %d index %d prompt %d cached %s completion %d %.2fs" % (
-                n, si, ri, u["prompt_tokens"], (u.get("prompt_tokens_details") or {}).get("cached_tokens"), u["completion_tokens"],
-                time.monotonic() - t0), flush=True)
+        try:
+            for ri, r in enumerate(reqs[:share[si]]):
+                n = sum(share[:si]) + ri
+                if r["in"] > min(a.max_context, limit) or len(r["hash_ids"]) * BLOCK >= limit:
+                    continue                       # over the context, or its blocks leave no room for a reply
+                if a.time_scale and r.get("think_time"):
+                    time.sleep(r["think_time"] * a.time_scale)
+                ids = [t for b in r["hash_ids"] for t in tokens_of(at.get(b, "%d %d" % (ti, b)), vocab)]
+                want = max(1, min(a.max_reply, r["out"], limit - len(ids)))
+                t0 = time.monotonic()
+                out = post("/v1/completions", {"prompt": ids, "max_tokens": want, "ignore_eos": True, "temperature": 0})
+                u = out["usage"]
+                print("req %d session %d index %d prompt %d cached %s completion %d %.2fs" % (
+                    n, si, ri, u["prompt_tokens"], (u.get("prompt_tokens_details") or {}).get("cached_tokens"), u["completion_tokens"],
+                    time.monotonic() - t0), flush=True)
+        except Exception as e:                     # the session's thread ends; the replay fails once all are done
+            failed.append((si, "request %d: %s" % (ri, e)))
 
     threads = [threading.Thread(target=play, args=(si, session)) for si, session in enumerate(sessions)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+    if failed:
+        sys.exit("replay_agentx.py: " + "; ".join("session %d: %s" % f for f in sorted(failed)))
 
 
 if __name__ == "__main__":

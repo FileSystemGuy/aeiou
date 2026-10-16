@@ -50,6 +50,32 @@ def test_hosts_ranges_hostfile_and_the_appended_flags(tmp_path):
     )
 
 
+def test_a_host_file_s_ranges_are_never_file_names(tmp_path):
+    """`n[1-2]` in a host file is a bracket range even where a file `n1` exists: the launcher reads
+    the file's words without pathname expansion (it took the range for a glob and launched on `n1`
+    alone, 2026-10-15); `*` is a bad range, not the directory's files. The last line needs no newline."""
+    (tmp_path / "n1").write_text("")
+    hosts = tmp_path / "hosts"
+    hosts.write_text("n[1-2]   # two\nm[3]")
+    env = {**os.environ, "AEIOU_RSH": str(shim(tmp_path))}
+    r = subprocess.run([str(LAUNCH), "-f", str(hosts), "--", "aeiou", "run", "x"], capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    got = sorted(line.replace(WATCH, "") for line in r.stdout.splitlines())
+    assert got == [f"[{i}] {h}  'aeiou' 'run' 'x' --ranks 3 --rank {i} --coordinator n1:7311".replace(f"[{i}]", f"[{i} {h}]")
+                   for i, h in enumerate(["n1", "n2", "m3"])]
+    hosts.write_text("n[*]\n")
+    r = subprocess.run([str(LAUNCH), "-f", str(hosts), "--", "aeiou", "run", "x"], capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 2 and "bad bracket range '*' in host 'n[*]'" in r.stderr, r.stderr
+
+
+def test_help(tmp_path):
+    r = subprocess.run([str(LAUNCH), "--help"], capture_output=True, text=True)
+    assert r.returncode == 0 and r.stderr == ""
+    assert "\nUsage: aeiou-launch [OPTIONS] [HOSTS]... -- aeiou run|datagen|aeiou-datagen <ARGS>...\n" in r.stdout
+    assert re.findall(r"^  (-\S+)", r.stdout, re.M) == ["-p", "-f", "-h,"]
+    assert subprocess.run([str(LAUNCH), "-h"], capture_output=True, text=True).stdout == r.stdout
+
+
 def test_run_and_the_default_port(tmp_path):
     code, lines, err = launch(tmp_path, "a", "b", "--", "aeiou", "run", "x.ast.json", "--gpus", "8")
     assert code == 0, err
@@ -82,6 +108,10 @@ def test_usage_errors_are_the_frame(tmp_path):
     assert frame("n[4-1]", "--", "aeiou", "run", "x") == "aeiou-launch: bad bracket range '4-1' in host 'n[4-1]': 4 is above 1"
     assert frame("-f", str(tmp_path / "none"), "--", "aeiou", "run", "x").startswith("aeiou-launch: cannot read the host file")
     assert frame("-p") == "aeiou-launch: a value is required for '-p <PORT>' but none was supplied"
+    assert frame("a", "-f") == "aeiou-launch: a value is required for '-f <FILE>' but none was supplied"
+    assert frame("n[]", "--", "aeiou", "run", "x") == "aeiou-launch: empty bracket range in host 'n[]'"
+    assert frame("n[1,,2]", "--", "aeiou", "run", "x") == "aeiou-launch: bad bracket range '' in host 'n[1,,2]': want N or LO-HI, digits only"
+    assert frame("n[1-2-3]", "--", "aeiou", "run", "x") == "aeiou-launch: bad bracket range '1-2-3' in host 'n[1-2-3]': want N or LO-HI, digits only"
     assert frame("--bogus", "a", "--", "aeiou", "run", "x") == "aeiou-launch: unexpected argument '--bogus' found"
 
 
@@ -135,6 +165,35 @@ def test_ctrl_c_stops_every_rank(tmp_path, sig, code):
         assert f"aeiou-launch: rank {r} ({h}) exited with status {code}" in text
     assert "finished" not in text
     assert list(tmpdir.iterdir()) == []
+
+
+def test_ctrl_c_before_every_rank_started(tmp_path):
+    """Ctrl-C while rank 0 has its second to come up: rank 0 is stopped, the later ranks are never
+    started and are reported so, and the exit status is still Ctrl-C's."""
+    rank = tmp_path / "rank"
+    rank.write_text("#!/bin/sh\n"
+                    "trap 'echo stopped by INT; exit 130' INT\n"
+                    f": > {tmp_path}/started.$4; i=0\n"
+                    "while [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done\n")
+    rank.chmod(rank.stat().st_mode | stat.S_IXUSR)
+    out = tmp_path / "out"
+    env = {**os.environ, "AEIOU_RSH": str(sshd_shim(tmp_path))}
+    with open(out, "w") as f:
+        p = subprocess.Popen([str(LAUNCH), "a", "b", "c", "--", str(rank)], stdout=f, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+        try:
+            deadline = time.time() + 20
+            while not (tmp_path / "started.0").exists():
+                assert time.time() < deadline, out.read_text()
+                time.sleep(0.01)
+            os.killpg(p.pid, signal.SIGINT)                   # within the second rank 0 is given
+            assert p.wait(timeout=20) == 130, out.read_text()
+        finally:
+            if p.poll() is None:
+                os.killpg(p.pid, signal.SIGKILL)
+    text = out.read_text()
+    assert [p.name for p in tmp_path.glob("started.*")] == ["started.0"], text
+    assert "[0 a] stopped by INT" in text and "aeiou-launch: rank 0 (a) exited with status 130" in text
+    assert "aeiou-launch: rank 1 (b) was not started" in text and "aeiou-launch: rank 2 (c) was not started" in text
 
 
 def test_lines_stay_whole_in_a_file(tmp_path):
