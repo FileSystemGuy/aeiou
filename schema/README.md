@@ -497,7 +497,9 @@ Reasoning in `DESIGN_REVIEW.md` §3.21.
 - **Atomicity.** ~~Written last, to a temporary name and renamed, so a datagen that did not
   finish leaves no manifest and a run refuses.~~ Since 2026-10-12 (`DESIGN_REVIEW.md` §3.70,
   `manifest_version` 2) written first and rewritten as the corpus is written, each time to a
-  temporary name and renamed: `state` is `writing` before the first file, with `progress`
+  temporary name and renamed (since 2026-10-15, RC1 review R68, the temporary file flushed
+  before the rename and the directory after, as a namespace manifest's): `state` is
+  `writing` before the first file, with `progress`
   (the id ranges not yet written and flushed, the counts, the time), rewritten once a
   progress window, and `complete` with no `progress` once every file is; neither is part of
   the normative content. A grow or shrink (`aeiou datagen --grow N ROOT`, `--shrink N ROOT`)

@@ -907,8 +907,8 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     return ap, subs
 
 
+@usage.tool
 def main(argv=None) -> int:
-    usage.console()
     ap, subs = parser()
     sp = ap
     try:

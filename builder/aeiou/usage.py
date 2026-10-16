@@ -23,7 +23,10 @@ spelling, usage prefix, and help wording as the Rust binary, and its own errors 
 from __future__ import annotations
 
 import argparse
+import functools
+import io
 import math
+import os
 import shutil
 import sys
 import textwrap
@@ -66,12 +69,96 @@ def console() -> None:
     """Make the console tolerate a locale that cannot spell the tools' messages (`…`, `×`
     under `LC_ALL=C` without UTF-8 mode): a character the terminal's encoding lacks is
     printed as its escape instead of failing the tool after its work is done. Files are
-    written in UTF-8 whatever the locale; this is the terminal only."""
+    written in UTF-8 whatever the locale; this is the terminal only. And a reader that goes
+    away is no failure: standard output and error, when they are the process's own, drop
+    what a closed pipe refuses (`_Gone`), so the work goes on to its end and `tool` exits 141."""
+    sys.stdout, sys.stderr = _guarded(sys.stdout, sys.__stdout__), _guarded(sys.stderr, sys.__stderr__)
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError):  # replaced by a non-TextIOWrapper, or closed
             pass
+
+
+EXIT_PIPE = 141   # 128 + SIGPIPE, the runner's (`main.rs`), what the shell shows for a tool that signal stopped
+
+
+class _Gone(io.RawIOBase):
+    """A standard stream's file descriptor that, once its pipe refuses a write (EPIPE: the
+    reader went away, `aeiou-params check ... | head -1`), drops that write and every later
+    one and says nothing (runner/REFERENCE.md §15, "A reader that goes away")."""
+
+    def __init__(self, fd: int):
+        super().__init__()
+        self.fd = fd
+        self.gone = False
+
+    def writable(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        return self.fd
+
+    def isatty(self) -> bool:
+        return os.isatty(self.fd)
+
+    def write(self, b) -> int:
+        n = len(b)
+        if not self.gone:
+            try:
+                return os.write(self.fd, b)
+            except BrokenPipeError:
+                self.gone = True
+        return n
+
+
+def _guarded(stream, own):
+    """`stream` rebuilt over a `_Gone` of its descriptor, when it is the process's own
+    (`sys.__stdout__`; a test's capture, and a stream already guarded, are left alone)."""
+    if stream is None or stream is not own:
+        return stream
+    try:
+        fd = stream.fileno()
+        stream.flush()
+    except (AttributeError, OSError, ValueError):
+        return stream
+    return io.TextIOWrapper(_Buffered(_Gone(fd)), encoding=stream.encoding, errors=stream.errors,
+                            line_buffering=stream.line_buffering, write_through=getattr(stream, "write_through", False))
+
+
+class _Buffered(io.BufferedWriter):
+    """The buffer over a `_Gone`, told apart from any other so a stream is guarded once."""
+
+
+def _gone() -> bool:
+    """Whether a guarded standard stream lost its reader, everything buffered written first."""
+    gone = False
+    for stream in (sys.stdout, sys.stderr):
+        buffer = getattr(stream, "buffer", None)
+        if isinstance(buffer, _Buffered):
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+            gone = gone or buffer.raw.gone
+    return gone
+
+
+def tool(main):
+    """A tool's `main`: the console made ready (`console`), and the exit status 141 when the work
+    succeeded but a reader went away before the output was all written, as the runner's. A
+    failure's status and message stand; nothing is printed about the pipe."""
+    @functools.wraps(main)
+    def run(argv=None) -> int:
+        console()
+        try:
+            status = main(argv)
+        except SystemExit as e:   # argparse's --help and --version
+            if e.code not in (None, 0) or not _gone():
+                raise
+            return EXIT_PIPE
+        return EXIT_PIPE if status in (None, 0) and _gone() else status
+    return run
 
 
 def failed(prog: str, e: BaseException) -> int:

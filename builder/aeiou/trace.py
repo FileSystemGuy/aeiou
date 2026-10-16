@@ -1672,8 +1672,8 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     return ap, {"metrics": mp, "export": ep, "compare": cp}
 
 
+@usage.tool
 def main(argv=None) -> int:
-    usage.console()
     ap, subs = parser()
     sp = ap
     try:

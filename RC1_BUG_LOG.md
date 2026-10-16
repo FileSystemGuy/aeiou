@@ -2885,3 +2885,57 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   deterministic) fail on HEAD (`-49829 == 0`, and the runner's own refusal) and pass; on HEAD
   468511d plus the change: `test_trace.py`+`test_man.py` 113 passed three times, builder suite with
   MinIO 410. Fixed in an isolated worktree and applied.
+
+## 142. The Python tools failed with a BrokenPipeError traceback (exit 1) under `| head` when their output exceeded the pipe buffer
+
+- **Where:** `builder/aeiou/usage.py` (`tool` decorator; `console()` rebuilds the process's own stdout and
+  stderr over `_Gone`, which drops writes after EPIPE), applied to the `main` of `cli.py`,
+  `params.py`, `trace.py`, `catalog.py`, `header.py`; `runner/REFERENCE.md` §15; `builder/tests/test_usage.py`.
+- **Found by:** the RC1 fix of bug 112 (the runner's quiet 141) noted the Python tools were quiet only
+  while their output fit the pipe; confirmed: `aeiou-header --rows 1..100` (200 KB) `| head -c1`
+  and `aeiou-params check` of 3000 files (186 KB) `| head -1` ended with a `BrokenPipeError`
+  traceback, exit 1.
+- **Fix:** as the runner: the work runs to its end, later writes are dropped silently, a success
+  becomes exit 141, a failure keeps its status.
+- **Evidence:** `test_a_reader_that_goes_away_is_exit_141_and_no_traceback` (`| head -c1` with and
+  without `2>&1`) and `test_a_reader_that_goes_away_leaves_a_failures_status` fail on HEAD
+  (`(1, 'Traceback…Broken pipe') == (141, '')`) and pass; merged on HEAD eb75b61: `--tests --lib
+  --bins` with MinIO pass (all 166, lib 76), builder suite with MinIO 415, `aeiou-catalog check`
+  ok, `aeiou-build --hermetic --twice --check` rc 0. Fixed in an isolated worktree and applied.
+
+## 143. Datagen ran a mkdir and a statx for every file it wrote
+
+- **Where:** `runner/aeiou/src/datagen.rs` (`open_for_write` opens first and makes the parent only on
+  ENOENT; `open_once` holds the O_DIRECT EINVAL fallback); `runner/aeiou/tests/layout.rs`.
+- **Found by:** RC1 third-round datagen review (RV3c, plausible), confirmed with `strace -c` on 3,000
+  files in 30 directories: 3,004 mkdir (2,972 EEXIST) and 2,990 statx beside 3,018 openat; on NFS
+  each is a round trip.
+- **Fix:** open, and on ENOENT `create_dir_all(parent)` and open again: no directory cache, so it
+  stays right when another writer makes or prunes a directory. After: 33 mkdir, 19 statx, 3,049
+  openat (30 ENOENT, one per new directory); 12,014 traced calls became 6,103.
+- **Evidence:** `layout::datagen_makes_each_directory_once_not_per_file` (strace; passes with a note
+  where strace cannot run) fails on HEAD ("304 mkdir for 10 directories") and passes; same suite
+  runs as bug 142.
+
+## 144. Dataset and namespace manifests were replaced by rename with no fsync of the file or the directory
+
+- **Where:** `runner/aeiou/src/payload.rs` (`replace_durably`, used by `Manifest::write` and
+  `NamespaceManifest::write`); `schema/README.md` §6 Atomicity; `runner/aeiou/tests/layout.rs`.
+- **Found by:** RV3c (plausible), confirmed with `strace -yy`: open tmp, close, rename; the only fsync
+  of a datagen was `inventory.txt`'s, so a `complete` manifest's durability rested on the file system.
+- **Fix:** write tmp, fsync it, rename, fsync the directory (EINVAL from a directory fsync ignored).
+  About 5 ms per manifest write here; a handful per dataset plus one per progress window, never per file.
+- **Evidence:** `layout::the_dataset_manifest_is_flushed_before_and_after_its_rename` fails on HEAD
+  ("no flush of the temporary file before rename(…)") and passes; same suite runs as bug 142.
+
+## 145. Progress of a chunked dataset counted ids as "files" while its summary counted chunk files
+
+- **Where:** `runner/aeiou/src/datagen.rs` (`Plan.objects` on rank 0 for a chunked dataset written
+  upward, from `project::project(meta).files`; the tick counts chunk files written, found, and kept);
+  `runner/aeiou/tests/layout.rs`.
+- **Found by:** RV3c (plausible), confirmed: lmcache progress ended `2010/2010 files` while the
+  summaries said `subp: 63 file(s)` and `sysp: 13305 file(s)`.
+- **Fix:** progress counts the summary's unit (`586/13368 files`); other datasets print as before, and
+  the ETA still runs on ids.
+- **Evidence:** `layout::a_chunked_datasets_progress_counts_the_files_its_summary_does` fails on HEAD
+  (`0/24 files` against 156) and passes; same suite runs as bug 142.

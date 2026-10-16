@@ -98,8 +98,8 @@ def parser() -> usage.Parser:
     return ap
 
 
+@usage.tool
 def main(argv=None) -> int:
-    usage.console()
     ap = parser()
     try:
         a = ap.parse_args(argv)

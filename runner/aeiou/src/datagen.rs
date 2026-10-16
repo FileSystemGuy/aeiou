@@ -394,11 +394,22 @@ fn create(full: &Path, mode: &Mode) -> Result<(File, bool)> {
     open_for_write(full, mode, true)
 }
 
-/// `create`, or with `truncate` false, open `full` keeping what it holds.
+/// `create`, or with `truncate` false, open `full` keeping what it holds. Its directory is
+/// made only when the open says it is missing (ENOENT), so a file in a directory that is
+/// there costs one `openat`, not a `mkdir` and a `statx` beside it (RC1 review, R67: each a
+/// round trip on NFS).
 fn open_for_write(full: &Path, mode: &Mode, truncate: bool) -> Result<(File, bool)> {
-    if let Some(parent) = full.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    }
+    let opened = match (open_once(full, mode, truncate), full.parent()) {
+        (Err(e), Some(parent)) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+            open_once(full, mode, truncate)
+        }
+        (r, _) => r,
+    };
+    opened.with_context(|| format!("creating {}", full.display()))
+}
+
+fn open_once(full: &Path, mode: &Mode, truncate: bool) -> std::io::Result<(File, bool)> {
     if mode.direct() {
         match OpenOptions::new().write(true).create(true).truncate(truncate).custom_flags(libc::O_DIRECT).open(full) {
             Ok(f) => return Ok((f, true)),
@@ -406,10 +417,10 @@ fn open_for_write(full: &Path, mode: &Mode, truncate: bool) -> Result<(File, boo
                 mode.direct.store(false, Ordering::Relaxed);
                 mode.note(format!("O_DIRECT is not supported under {}: writing through the page cache", full.parent().map(|p| p.display().to_string()).unwrap_or_default()));
             }
-            Err(e) => return Err(e).with_context(|| format!("creating {}", full.display())),
+            Err(e) => return Err(e),
         }
     }
-    Ok((OpenOptions::new().write(true).create(true).truncate(truncate).open(full).with_context(|| format!("creating {}", full.display()))?, false))
+    Ok((OpenOptions::new().write(true).create(true).truncate(truncate).open(full)?, false))
 }
 
 /// Write dataset `p`'s inventory, if it has one, at the count `count` the corpus ends at
@@ -741,6 +752,10 @@ struct Plan<'m, 'a> {
     /// The count whose names may be on storage past this one's (a shrink's old count, a
     /// settle's asked one): an id's names under it that this count lacks are removed.
     remove: Option<DsMeta<'a>>,
+    /// Rank 0, a `chunked` dataset written upward: its files at this count (every id's
+    /// `chunks`), so the progress line counts files as the summary does, not ids (RC1 review,
+    /// R69); otherwise an id is a file.
+    objects: Option<u64>,
     track: Track,
     /// What this dataset's root supports.
     mode: Mode,
@@ -1429,7 +1444,8 @@ impl Ticker<'_, '_, '_> {
         }
         docs.insert(rank, mine);
         let ranks = self.opts.ranks.max(1);
-        let (mut total, mut left, mut bytes) = (0i64, 0i64, 0u64);
+        // the ids left (the rate's unit), and the files done and in all (the line's)
+        let (mut done, mut total, mut left, mut bytes) = (0i64, 0i64, 0i64, 0u64);
         // an array file being written: its bytes so far and the part of it done, which the
         // line shows and the manifest does not count until the file is whole
         let (mut live_bytes, mut part) = (0u64, 0f64);
@@ -1465,11 +1481,18 @@ impl Ticker<'_, '_, '_> {
             let unfinished = merge_ranges(unfinished);
             let (files, b) = (files + p.before.0, b + p.before.1);
             // a shrink's ids reach past its count
-            total += match p.meta {
+            let ids = match p.meta {
                 DsMeta::Files { .. } => p.meta.files().max(p.work.last().map_or(0, |r| r.1)),
                 DsMeta::Array { .. } => 1,
             };
-            left += unfinished.iter().map(|(a, b)| b - a).sum::<i64>();
+            let ids_left = unfinished.iter().map(|(a, b)| b - a).sum::<i64>();
+            left += ids_left;
+            // a chunked dataset's files are its chunks, written and found, as its summary counts them
+            let (d, t) = match p.objects {
+                Some(n) => (files.min(n) as i64, n as i64),
+                None => (ids - ids_left, ids),
+            };
+            (done, total) = (done + d, total + t);
             // the rate's bytes are this datagen's: not a resume's objects found in the store
             bytes += (b - p.before.1).saturating_sub(found_b);
             let mut book = p.book.lock().unwrap();
@@ -1479,7 +1502,6 @@ impl Ticker<'_, '_, '_> {
             book.last = Some(m);
         }
         let secs = self.t0.elapsed().as_secs_f64();
-        let done = total - left;
         // the rate of this datagen alone: a resume starts with the work of the one before
         let now = (self.plans.iter().map(|p| p.work.iter().map(|(a, b)| b - a).sum::<i64>()).sum::<i64>() - left) as f64 + part;
         let rest = left as f64 - part;
@@ -1802,7 +1824,13 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         if let Some(s) = &settle {
             carry.insert("settle".into(), s.clone());
         }
-        plans.push(Plan { meta, name, root, object, container, share, owner, present, work, desc, queue, book: Mutex::new(Book { last: None, mark }), before, from, carry, remove, track: Track::default(), mode: Mode::sharing(&halt) });
+        let objects = match meta {
+            DsMeta::Files { chunk: Some(_), .. } if rank == 0 && !desc => {
+                Some(crate::project::project(meta, std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))?.files)
+            }
+            _ => None,
+        };
+        plans.push(Plan { meta, name, root, object, container, share, owner, present, work, desc, queue, book: Mutex::new(Book { last: None, mark }), before, from, carry, remove, objects, track: Track::default(), mode: Mode::sharing(&halt) });
     }
     for p in &plans {
         let w = p.work.iter().map(|(a, b)| b - a).sum::<i64>();

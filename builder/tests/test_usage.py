@@ -200,6 +200,42 @@ def test_aeiou_params_check_words_a_missing_file_as_the_runner_does(tmp_path):
         assert f"  {missing}: No such file or directory (os error 2)\n" in rs.stdout + rs.stderr, rs.stdout + rs.stderr
 
 
+def _head(*argv, merge=False):
+    """`argv | head -c1` (`2>&1 | head -c1` when `merge`): one byte read, then the reader goes
+    away. The exit status and the stderr left."""
+    full = {k: v for k, v in os.environ.items() if not k.startswith("AEIOU_")}
+    full["PYTHONPATH"] = str(BUILDER)
+    p = subprocess.Popen([sys.executable, *map(str, argv)], stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT if merge else subprocess.PIPE, cwd=str(BUILDER), env=full)
+    assert p.stdout.read(1)
+    p.stdout.close()
+    err = b"" if merge else p.stderr.read()
+    return p.wait(), err.decode()
+
+
+def test_a_reader_that_goes_away_is_exit_141_and_no_traceback(tmp_path):
+    """(RC1 review, R66) `aeiou-params check ... | head -1` with more than a pipe buffer (64 KiB)
+    to print was a BrokenPipeError traceback and exit 1; it is the runner's 141 and nothing said
+    (runner/REFERENCE.md §15, "A reader that goes away"), stdout's pipe or stderr's."""
+    ast = ast_path("hdf5_map")
+    pset = tmp_path / ("p" * 200 + ".params.json")   # a long name: few files fill the pipe
+    assert tool("params", "defaults", "-o", pset, ast).returncode == 0
+    many = [pset] * 300   # ~85 KB of `ok` lines
+    assert _head("-m", "aeiou.params", "check", ast, *many) == (141, "")
+    assert _head("-m", "aeiou.params", "check", ast, *many, merge=True) == (141, "")
+
+
+@pytest.mark.parametrize("status, expect", [(0, 141), (None, 141), (1, 1), (2, 2)])
+def test_a_reader_that_goes_away_leaves_a_failures_status(status, expect):
+    """`usage.tool`: the work goes on to its end with the pipe gone (what follows the broken
+    write still runs), and its failure's status stands; only a success becomes 141."""
+    main = ("import sys\nfrom aeiou import usage\n@usage.tool\ndef main(argv=None):\n"
+            "    sys.stdout.write('x' * 200000)\n    print('after', file=sys.stderr)\n"
+            f"    return {status}\nsys.exit(main())\n")
+    assert _head("-c", main) == (expect, "after\n")
+    assert _head("-c", main, merge=True) == (expect, "")
+
+
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
 def test_the_runner_prints_the_same_list_for_the_same_mistake(tmp_path):
     """`aeiou datagen` and `aeiou-datagen` differ only in the command's name: the message and

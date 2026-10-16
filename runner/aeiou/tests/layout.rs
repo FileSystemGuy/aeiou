@@ -587,3 +587,69 @@ fn container_grow_and_shrink_make_the_corpus_of_the_new_count() {
         assert!(ok && out.contains("the manifest says `complete`; nothing to write"), "{tag}: {out}");
     }
 }
+
+/// `aeiou datagen` of `file_per_sample` (300 files, 30 to a directory, two writers) under
+/// `strace -f -yy -e trace=<calls>`: the scratch directory (its root `root`) and the trace;
+/// None when strace does not work here.
+fn strace_datagen(tag: &str, calls: &str) -> Option<(crate::common::TempDir, String)> {
+    if !std::process::Command::new("strace").args(["-o", "/dev/null", "true"]).status().is_ok_and(|s| s.success()) {
+        eprintln!("skipped: no working strace");
+        return None;
+    }
+    let dir = crate::common::tmpdir("layout", tag);
+    let log = dir.join("strace.log");
+    let o = std::process::Command::new("strace").args(["-f", "-yy", "-e", &format!("trace={calls}"), "-o"]).arg(&log).arg(env!("CARGO_BIN_EXE_aeiou"))
+        .arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(dir.join("root"))
+        .args(["--param", "samples=300", "--param", "files_per_directory=30", "--writers", "2"]).env_remove("AEIOU_CONFIG").output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let text = std::fs::read_to_string(&log).unwrap();
+    Some((dir, text))
+}
+
+/// (RC1 review, R67) A datagen makes a file's directory only when the open says it is missing:
+/// 300 files in 10 directories were 300 `mkdir`s (290 of them EEXIST) and a `statx` each
+/// beside the opens, every one a round trip on NFS.
+#[test]
+fn datagen_makes_each_directory_once_not_per_file() {
+    let Some((dir, text)) = strace_datagen("mkdir-once", "mkdir,mkdirat,statx,newfstatat") else { return };
+    let dirs = std::fs::read_dir(dir.join("root/train")).unwrap().flatten().filter(|e| e.path().is_dir()).count();
+    assert_eq!(dirs, 10);
+    let mkdirs = text.lines().filter(|l| l.contains(" mkdir(")).count();
+    let stats = text.lines().filter(|l| l.contains(" statx(") || l.contains(" newfstatat(")).count();
+    // the root and the dataset's directory, and each of the 10 at most once per writer (two
+    // writers may both find a new one missing)
+    assert!(mkdirs <= 30, "{mkdirs} mkdir for 10 directories:\n{text}");
+    assert!(stats <= 60, "{stats} stat calls for 300 files");
+}
+
+/// (RC1 review, R68) Every write of the dataset manifest flushes its temporary file before the
+/// rename and the directory after it, so a `complete` manifest outlives a crash.
+#[test]
+fn the_dataset_manifest_is_flushed_before_and_after_its_rename() {
+    let Some((_dir, text)) = strace_datagen("manifest-fsync", "openat,fsync,fdatasync,rename,renameat,renameat2") else { return };
+    // in order: the calls on the manifest's temporary file and on its directory
+    let calls: Vec<&str> = text.lines().filter(|l| l.contains(".aeiou-dataset.json") || (l.contains("sync(") && l.contains("/root/train>"))).collect();
+    let renames = calls.iter().filter(|l| l.contains("rename")).count();
+    assert!(renames >= 2, "{renames} manifest writes:\n{text}");
+    for (i, l) in calls.iter().enumerate().filter(|(_, l)| l.contains("rename")) {
+        assert!(calls[..i].last().is_some_and(|p| p.contains("fsync(") && p.contains(".aeiou-dataset.json.tmp")), "no flush of the temporary file before\n{l}\n{}", calls.join("\n"));
+        assert!(calls.get(i + 1).is_some_and(|n| n.contains("fsync(") && n.contains("/root/train>")), "no flush of the directory after\n{l}\n{}", calls.join("\n"));
+    }
+}
+
+/// (RC1 review, R69) A chunked dataset's progress counts its files, the chunks its summary
+/// counts: it said "0/24 files" of 24 ids that were 156 files.
+#[test]
+fn a_chunked_datasets_progress_counts_the_files_its_summary_does() {
+    let dir = crate::common::tmpdir("layout", "chunked-progress");
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("lmcache_local_disk.ast.json")).arg("--root").arg(&*dir)
+        .args(["--param", "chunk_bytes=4096", "--param", "sys_prompts=12", "--param", "sub_prompts=12", "--progress-secs", "0.001"]).env_remove("AEIOU_CONFIG").output().unwrap();
+    let out = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "{out}");
+    // the summary: `dataset NAME: N file(s), ...`, one per dataset
+    let files: u64 = out.lines().filter_map(|l| l.strip_prefix("dataset ")?.split_once(": ")?.1.split_once(" file(s), ")?.0.parse::<u64>().ok()).sum();
+    assert!(files > 24, "{files} files of 24 ids:\n{out}");
+    let progress: Vec<&str> = out.lines().filter(|l| l.starts_with("progress ")).collect();
+    assert!(!progress.is_empty(), "{out}");
+    assert!(progress.iter().all(|l| l.contains(&format!("/{files} files"))), "{out}");
+}

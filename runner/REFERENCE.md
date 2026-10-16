@@ -2065,7 +2065,10 @@ one, says nothing, and goes on to the end of the work, so a run still measures, 
 writes its `--report-json` with no error from the pipe; it then exits 141 (128 + `SIGPIPE`,
 what the shell shows for a tool that signal stopped) unless the work itself failed, whose
 status and message stand. Every subcommand prints through one writer (`Out` in `main.rs`),
-never `println!`, which panics on a closed pipe.
+never `println!`, which panics on a closed pipe. The Python tools do the same (2026-10-15, RC1
+review, R66): `usage.tool`, around every tool's `main`, puts standard output and error over a
+descriptor that drops what a closed pipe refuses, then turns a success into 141; it was a
+`BrokenPipeError` traceback and exit 1.
 
 **Tests.** `tests/usage.rs`: the frame of every subcommand and of the parser's own errors,
 the list shrinking as arguments are given, `--root` from a layer not missing, the conditional

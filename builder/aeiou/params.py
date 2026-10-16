@@ -408,8 +408,8 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     return ap, {"defaults": d, "check": c, "safetensors": s, "npz": n}
 
 
+@usage.tool
 def main(argv=None) -> int:
-    usage.console()
     ap, subs = parser()
     sp = ap
     try:

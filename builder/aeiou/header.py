@@ -48,6 +48,7 @@ def parser() -> usage.Parser:
     return ap
 
 
+@usage.tool
 def main(argv=None) -> int:
     ap = parser()
     try:

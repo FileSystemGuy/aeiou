@@ -402,9 +402,25 @@ impl Manifest {
         let path = dir.join(MANIFEST_NAME);
         let tmp = dir.join(format!("{MANIFEST_NAME}.tmp.{}", std::process::id()));
         let text = serde_json::to_string_pretty(self)?;
-        std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path).with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+        replace_durably(&tmp, &path, text.as_bytes())?;
         Ok(path)
+    }
+}
+
+/// Write `bytes` to `tmp`, flushed to stable storage, rename it to `path`, and flush the
+/// directory, so a manifest that says `complete` is there after a crash, as it was before
+/// (RC1 review, R68: the file system's ordering was all it had). A directory the file
+/// system cannot flush (EINVAL) is left to it.
+fn replace_durably(tmp: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(tmp).with_context(|| format!("writing {}", tmp.display()))?;
+    f.write_all(bytes).and_then(|_| f.sync_all()).with_context(|| format!("writing {}", tmp.display()))?;
+    drop(f);
+    std::fs::rename(tmp, path).with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    match std::fs::File::open(dir).and_then(|d| d.sync_all()) {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        r => r.with_context(|| format!("flushing {}", dir.display())),
     }
 }
 
@@ -493,8 +509,7 @@ impl NamespaceManifest {
     pub fn write(&self, dir: &Path) -> Result<PathBuf> {
         let path = dir.join(NAMESPACE_MANIFEST_NAME);
         let tmp = dir.join(format!("{NAMESPACE_MANIFEST_NAME}.tmp.{}", std::process::id()));
-        std::fs::write(&tmp, serde_json::to_string_pretty(self)?).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path).with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+        replace_durably(&tmp, &path, serde_json::to_string_pretty(self)?.as_bytes())?;
         Ok(path)
     }
 
