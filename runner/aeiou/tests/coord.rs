@@ -1133,19 +1133,20 @@ fn ctrl_c_stops_every_host_and_leaves_a_true_manifest() {
     let files = 20000i64;
     let (_, _, model) = leaked_model("file_per_sample.ast.json", config(1, 1, &[("samples", "20000")]));
     let meta = &model.datasets[0];
-    for (ranks, at) in [(2i64, 1usize), (1, 0)] {
+    // and SIGTERM (Slurm, systemd, docker, timeout) as Ctrl-C: the host it reached exits 143
+    for (ranks, at, sig) in [(2i64, 1usize, libc::SIGINT), (1, 0, libc::SIGINT), (2, 1, libc::SIGTERM)] {
         let root = tmpdir("dg-ctrl-c");
         let mut args = vec![crate::common::workload_ast("file_per_sample.ast.json").to_string_lossy().into_owned(), "--root".into(), root.to_string_lossy().into_owned(), "--param".into(), format!("samples={files}")];
         args.extend(["--writers", "2", "--progress-secs", "0.05"].map(String::from));
         let mut children = spawn_ranks(&args, ranks);
         let rest = windows(&mut children[0], 1, |l| !l.contains(" 0/"));
-        unsafe { libc::kill(children[at].id() as i32, libc::SIGINT) };
+        unsafe { libc::kill(children[at].id() as i32, sig) };
         let tail: Vec<String> = rest.map_while(Result::ok).collect();
-        for c in children.iter_mut() {
+        for (i, c) in children.iter_mut().enumerate() {
             let st = c.wait().unwrap();
             let mut err = String::new();
             std::io::Read::read_to_string(c.stderr.as_mut().unwrap(), &mut err).unwrap();
-            assert_eq!(st.code(), Some(130), "{ranks} rank(s): {err}");
+            assert_eq!(st.code(), Some(if i == at { 128 + sig } else { 130 }), "{ranks} rank(s), signal {sig}, rank {i}: {err}");
         }
         let said = if ranks > 1 { "all 2 ranks stopped" } else { "stopped; the manifest records what is finished" };
         assert!(tail.iter().any(|l| l.starts_with(said)), "{tail:?}");
@@ -1164,6 +1165,72 @@ fn ctrl_c_stops_every_host_and_leaves_a_true_manifest() {
         assert!(o.0, "{o:?}");
         let s = check_settled(&root, &m, files);
         assert_eq!(s, m.progress["claimed"].as_i64().unwrap());
+    }
+}
+
+/// A run stopped by Ctrl-C or SIGTERM (RC1 review, R47) stops promptly, says so on stderr,
+/// writes its `--report-json` with the error as the verdict, and exits 128 + the signal; on
+/// several hosts the others fail with the interrupted rank and the reason, not a connection
+/// closed. Under the thread runner and an event loop alike.
+#[test]
+fn a_signal_stops_a_run_with_its_report_and_tells_the_other_hosts() {
+    let root = tmpdir("run-signal");
+    datagen_one(&root, 256);
+    for (ranks, at, sig, posix) in [(1i64, 0usize, libc::SIGINT, "sync"), (1, 0, libc::SIGTERM, "io_uring"), (2, 1, libc::SIGINT, "sync")] {
+        let port = free_port();
+        let what = format!("{ranks} rank(s), signal {sig} on rank {at}, {posix}");
+        let mut children: Vec<std::process::Child> = (0..ranks).map(|rank| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
+            c.arg("run").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root).args(["--gpus", "2", "--posix", posix]);
+            // 10 ms steps without end: only the signal stops it
+            c.args(["--param", "samples=256", "--param", "batch=4", "--param", "steps=100000", "--param", "step_time=10000000"]);
+            c.arg("--report-json").arg(root.join(format!("signal-{rank}.json")));
+            if ranks > 1 {
+                c.args(["--ranks", &ranks.to_string(), "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
+            }
+            let child = c.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+            if rank == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            child
+        }).collect();
+        // well into the run's steps
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        unsafe { libc::kill(children[at].id() as i32, sig) };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut outs = Vec::new();
+        for c in children.iter_mut() {
+            let st = loop {
+                if let Some(st) = c.try_wait().unwrap() {
+                    break Some(st);
+                }
+                if std::time::Instant::now() > deadline {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            };
+            let mut err = String::new();
+            std::io::Read::read_to_string(c.stderr.as_mut().unwrap(), &mut err).unwrap();
+            outs.push((st.and_then(|s| s.code()), err));
+        }
+        let name = if sig == libc::SIGINT { "SIGINT" } else { "SIGTERM" };
+        let reason = format!("interrupted ({name})");
+        let (code, err) = &outs[at];
+        assert_eq!(*code, Some(128 + sig), "{what}: {err}");
+        assert_eq!(err.trim_end(), format!("aeiou run: {reason}"), "{what}");
+        let d: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join(format!("signal-{at}.json"))).unwrap()).unwrap();
+        assert_eq!((d["verdict"]["ok"].as_bool(), d["verdict"]["error"].as_str()), (Some(false), Some(reason.as_str())), "{what}");
+        assert!(d["seed"].is_number(), "{what}: the run's header is in the report");
+        if ranks > 1 {
+            // rank 0 names the rank and its reason
+            let (code, err) = &outs[0];
+            assert_eq!(*code, Some(1), "{what}: {err}");
+            assert!(err.contains("rank 1 (") && err.contains(&format!("): {reason}")) && !err.contains("connection closed"), "{what}: {err}");
+            let d: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("signal-0.json")).unwrap()).unwrap();
+            assert!(d["verdict"]["error"].as_str().is_some_and(|e| e.ends_with(&format!("): {reason}"))), "{what}: {}", d["verdict"]);
+        }
     }
 }
 

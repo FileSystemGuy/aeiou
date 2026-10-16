@@ -2759,3 +2759,32 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   `two_object_datasets_are_never_placed_at_one_prefix_or_one_inside_the_other`, and
   `usage::two_datasets_in_one_place_are_a_usage_error` fail with `datasets_apart` short-circuited and
   pass; same suite runs as bug 132.
+
+## 134. A run stopped by Ctrl-C or SIGTERM printed nothing, wrote no report, and the other hosts said "connection closed"; datagen ignored SIGTERM
+
+- **Where:** `runner/aeiou/src/run.rs` ("stop signals": `catch_stop_signals`, `stop_signal`,
+  `signal_name`, `Interrupted`), `runner/aeiou/src/main.rs` (`run_cmd` handlers, `stop_watch`
+  thread, `RUN_STOP` coordinator `stop`, exit 128+sig for `Interrupted` and `datagen::Stopped`),
+  `runner/aeiou/src/datagen.rs` (its own SIGINT handler replaced by the shared one);
+  `man/aeiou.1.md` EXIT STATUS, `--report-json`, Stopping; `runner/REFERENCE.md` §1, §5, §6, §12;
+  `runner/aeiou/tests/coord.rs`.
+- **Found by:** RC1 third-round UI review (RV3b): SIGINT on `aeiou run --report-json r.json` → exit 130,
+  no message, report empty (0 bytes since bug 113 creates it first); SIGTERM the same with 143; two
+  ranks, SIGINT on rank 1: rank 1 silent, rank 0 "barrier `global`: rank 1 (…): connection closed";
+  against §12 "written when the run fails too". `aeiou datagen` handled SIGINT only, so SIGTERM
+  (Slurm, systemd, docker, timeout) left the manifest `writing`, refusing `--resume`/`--settle` for
+  two progress windows.
+- **Fix:** run and datagen catch SIGINT and SIGTERM (a signal already ignored at start stays
+  ignored); on a signal a watcher tells the coordinator `stop("interrupted (SIGINT)")` and sets the
+  run's existing abort flag, which actors, loaders, barriers, and the event loops poll; the run
+  prints `aeiou run: interrupted (SIGINT)`, writes the report with that `verdict.error`, and exits
+  130/143; before the run starts the report says "… before the run started"; a second signal exits
+  at once; other hosts fail "rank 1 (HOST): interrupted (SIGINT)". Datagen's SIGTERM writes
+  `stopped` and exits 143 (other hosts 130).
+- **Evidence:** `coord::a_signal_stops_a_run_with_its_report_and_tells_the_other_hosts` (SIGINT sync,
+  SIGTERM io_uring, SIGINT on rank 1 of 2) and the SIGTERM case added to
+  `ctrl_c_stops_every_host_and_leaves_a_true_manifest` fail with the source change reverse-applied
+  and pass; on HEAD 7980136 plus the change: `--tests --lib --bins` with MinIO all pass (all 161,
+  lib 73), builder suite with MinIO 407 (one load-dependent failure in an exported-trace test,
+  traced to a separate pre-existing `aeiou-trace export` bug, queued). Fixed in an isolated worktree
+  and applied.

@@ -43,9 +43,10 @@
 //! cut into 64 MiB pieces for the owner's writers (`pwrite` at disjoint offsets), and in
 //! them only the slots' contents are written: each slot's tail is a hole.
 //!
-//! **Stopping.** Ctrl-C (`SIGINT`) on any host stops every host: each stops claiming, leaves
-//! the file it is writing, notes what it finished, flushes, and reports; rank 0 writes the
-//! manifests once more (`stopped`), and every host exits 130. A second Ctrl-C exits at once.
+//! **Stopping.** Ctrl-C (`SIGINT`) or `SIGTERM` on any host stops every host: each stops
+//! claiming, leaves the file it is writing, notes what it finished, flushes, and reports; rank
+//! 0 writes the manifests once more (`stopped`), and every host exits 130 (143 the host a
+//! `SIGTERM` reached). A second signal exits at once.
 //! A host that fails stops the others the same way, but each reports its error and exits 1.
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
@@ -56,7 +57,7 @@ use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -102,7 +103,8 @@ pub struct DatagenOpts {
     /// `--settle`, begun by this datagen: `resume` then holds `settle_manifest`'s manifest,
     /// which names the settled count.
     pub settle: Option<Resize>,
-    /// Ctrl-C stops every host (`catch_sigint`; the command line's, not a library caller's).
+    /// Ctrl-C or `SIGTERM` stops every host (`run::catch_stop_signals`; the command line's, not a
+    /// library caller's).
     pub sigint: bool,
     /// `--ignore-space`: write a corpus larger than the free space (`check_space`).
     pub ignore_space: bool,
@@ -123,7 +125,8 @@ pub struct Resize {
     pub original: Manifest,
 }
 
-/// A datagen stopped by Ctrl-C (`aeiou` exits 130); what it finished is recorded.
+/// A datagen stopped by Ctrl-C or `SIGTERM` (`aeiou` exits 130, 143 on the host a `SIGTERM`
+/// stopped); what it finished is recorded.
 #[derive(Debug)]
 pub struct Stopped(pub String);
 
@@ -146,25 +149,6 @@ impl std::fmt::Display for Halted {
 }
 
 impl std::error::Error for Halted {}
-
-static SIGINTS: AtomicU32 = AtomicU32::new(0);
-
-extern "C" fn on_sigint(_: libc::c_int) {
-    // the second exits at once: the manifest of the last window is still true
-    if SIGINTS.fetch_add(1, Ordering::SeqCst) > 0 {
-        unsafe { libc::_exit(130) };
-    }
-}
-
-/// Catch `SIGINT` from here on: the first asks every host to stop, the second exits.
-fn catch_sigint() {
-    unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = on_sigint as extern "C" fn(libc::c_int) as usize;
-        libc::sigemptyset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
-    }
-}
 
 /// The coordinator of a datagen on several hosts: this rank's client, and rank 0's server.
 pub struct Hosts<'a> {
@@ -1966,7 +1950,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
     // stable storage, a last note, and (several hosts) this rank's part to rank 0, whose
     // window runs until every part is in
     if opts.sigint {
-        catch_sigint();
+        crate::run::catch_stop_signals();
     }
     let remote = hosts.filter(|_| rank != 0).map(|h| h.tcp);
     let ticker = Ticker { plans: &plans, manifests: &manifests, opts, hosts, t0: Instant::now() };
@@ -1992,7 +1976,7 @@ pub fn datagen(loaded: &crate::Loaded, cfg: &Config, params: &Params, model: &Mo
         s.spawn(move || {
             let mut sent = false;
             while !over.load(Ordering::Relaxed) {
-                if opts.sigint && !sent && SIGINTS.load(Ordering::Relaxed) > 0 {
+                if opts.sigint && !sent && crate::run::stop_signal().is_some() {
                     sent = true;
                     match hosts {
                         Some(h) => {

@@ -26,7 +26,7 @@ cargo test --release
 |---|---|
 | `aeiou check FILES…` | Loads each AST, validates it (structure plus rules V1–V13), prints its canonical SHA-256 and op-kind counts in the same format as `schema/check.py`. CI diffs the two outputs. |
 | `aeiou dry-run AST --gpus G [--seed S] [--params-file FILE]… [--param k=v]…` | Walks every actor instance without I/O: op counts by kind and phase, bytes read and written, emulated compute, barriers, and the **workload fingerprint**. `--ranks R` adds bytes per host against this host's DRAM. Then each dataset's projection: samples, files, directories, mean file, and total bytes, what `datagen` writes (`project.rs`, 2026-10-13). `--gpu g [--steps a..b] [--limit n]` prints one instance's op stream. `--[no-]metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]` adds the locality metrics of the stream (§10). An option given without the one it narrows (`--steps`, `--limit` without `--gpu`; `--metrics-block`, `--metrics-sample` without `--metrics` or `--metrics-json`) is a usage error that lists what it needs (§15), never ignored. |
-| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--[no-]ignore-space] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C stops every host, exit 130. Refuses a non-empty root (datasets are read-only, V12), and, on rank 0 before anything is written, bytes to write beyond the free space `statvfs` reports at a directory root (`--ignore-space` writes anyway; §5, *Space*). Prints each dataset's id. |
+| `aeiou datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--dedupe D] [--compress C] [--writers N] [--dataset NAME]… [--progress-secs S] [--[no-]ignore-space] [--ranks R --rank r --coordinator HOST:PORT]` | Writes every dataset the abstract declares under `DIR`, names, sizes, and chunks from the definition and the dataset seed, content per §5, in parallel by id with `O_DIRECT`, the manifest `.aeiou-dataset.json` at each dataset root first `writing`, rewritten every `--progress-secs` with what is not yet written, and `complete` at the end. On several hosts each rank claims runs of the ids from rank 0's queue and reports its progress, and rank 0 writes the manifests, `complete` once every rank has reported (§5). `--resume ROOT`, `--grow N ROOT`, `--shrink N ROOT`, `--settle ROOT` in place of the abstract finish, change, or settle the dataset at ROOT from its manifest (§5); Ctrl-C or `SIGTERM` stops every host, exit 130 (143). Refuses a non-empty root (datasets are read-only, V12), and, on rank 0 before anything is written, bytes to write beyond the free space `statvfs` reports at a directory root (`--ignore-space` writes anyway; §5, *Space*). Prints each dataset's id. |
 | `aeiou run AST --gpus G --root DIR [--endpoint NAME=DIR]… [--seed S] [--params-file FILE]… [--param k=v]… [--[no-]subset] [--posix sync\|io_uring\|posix-aio\|libaio\|mmap] [--cache per-open\|direct] [--s3 blocking\|async] (default: the abstract's, `sync` and `per-open` when it declares none) [--threads N] [--aio-depth N] [--mmap-mode fault\|populate\|willneed] [--mmap-consume touch\|copy] [--iowq-max-workers N] [--sqpoll IDLE_MS [--[no-]sqpoll-shared]] [--[no-]defer-taskrun] [--[no-]coop-taskrun] [--time-scale X] [--buffer-mib N] [--write-compress C] [--[no-]clean-namespaces] [--expect-fingerprint HEX] [--expect-dataset-id SHA]… [--ranks R --rank r --coordinator HOST:PORT] [--rank-rotate k] [--max-gap SECS] [--[no-]require-cold] [--[no-]drop-caches] [--[no-]ignore-limits] [--report-json FILE [--[no-]report-takes]] [--config FILE]` | Executes the abstract against `DIR` on one host, or on several with the coordinator (§4, §6): checks every dataset against its manifest and every input namespace against the manifest of the run that wrote it, requires empty output namespace roots, runs one OS thread per actor and sub-actor with blocking POSIX calls (`sync`) or multiplexes them over one `io_uring` per event-loop thread (`io_uring`, §8), checks every result structurally, prints latency histograms, per-phase totals, per-step stall and busy fraction, and the fingerprint, and leaves `.aeiou-namespace.json` at every namespace root it wrote. `--report-json FILE` writes the same as JSON (§12). Every option but the workload's identity may also come from the environment (`AEIOU_<FLAG>`) or a TOML config file, command line first (§14); every subcommand prints what it resolved and from where. |
 | `aeiou-launch [-p PORT] HOST… -- aeiou run ARGS…` | Starts rank *i* on the *i*-th host over ssh with `--ranks`, `--rank`, and `--coordinator HOST0:PORT` appended (§6). |
 
@@ -670,22 +670,24 @@ as root). The same runs on the loopback NFS mount are §7.
   finished is marked `settled`. *Live check.* `--resume` and `--settle` refuse a manifest
   updated (`progress.updated`, seconds to the millisecond) less than two windows
   (`progress.progress_secs`, 30 when absent) ago, unless it holds `progress.stopped`.
-  *Ctrl-C.* With `DatagenOpts::sigint` (the command line's) a `sigaction` handler counts
-  `SIGINT`s; a watch thread sends `Halt` to the coordinator, which sends it to every rank (on
+  *Ctrl-C.* With `DatagenOpts::sigint` (the command line's) a `sigaction` handler
+  (`run::catch_stop_signals`) notes the first `SIGINT` or, since 2026-10-15 (RC1 review,
+  R47: Slurm, systemd, docker, and `timeout` send it), `SIGTERM`; a watch thread sends `Halt` to the coordinator, which sends it to every rank (on
   one host it stops the writers itself), and stops this host's writers when a `Halt` or a
   failure comes in. Writers claim nothing more and leave the file in hand (checked between
   blocks; an object upload in progress is finished); each rank flushes, sends its last note
   and `Done`; rank 0 gathers every rank (one whose connection drops counts as stopped),
   writes the manifests once more with `progress.stopped`, prints that every rank stopped, and
-  every rank exits 130 (`datagen::Stopped`). The second `SIGINT` calls `_exit(130)`. The
+  every rank exits 130 (`datagen::Stopped`; 143 the rank a `SIGTERM` reached). The second
+  signal calls `_exit` with the first's status. The
   manifest written on a failure's way out holds `stopped` too. Writers stopped by another
   host's failure (the coordinator's `Stop`) are a failure, not a Ctrl-C: the rank reports
   the failing rank and its error and exits 1 (2026-10-14). Tests: `tests/coord.rs` kills
   a datagen on two hosts and a grow on one and settles each at a directory boundary, to the
   names, sizes, bytes, and totals of that count (`run` accepts it), the live check refusing
   first; kills a shrink and settles it without removing past the run in hand; Ctrl-C on rank
-  1 of two and on a lone rank 0, each host exiting 130 and the manifest true, settled with no
-  wait; rank 2 of three failing mid-write, every rank exiting 1 with its reason; the killed
+  1 of two and on a lone rank 0, each host exiting 130, and `SIGTERM` on rank 1 of two (143
+  there), the manifest true, settled with no wait; rank 2 of three failing mid-write, every rank exiting 1 with its reason; the killed
   datagen's manifest keeps the band below the boundary and nothing past the mark. The
   builder's tests settle an interrupted grow of every container format to a fresh datagen's
   bytes (HDF5 headers included) and an interrupted shrink of a bucket.
@@ -917,7 +919,10 @@ building it is `DESIGN_REVIEW.md` §3.25.
   or the datagen is stopping; grants to one rank go out in the order made, so the client's
   count of runs received matches rank 0's list), and `Halt` (Ctrl-C: a client sends it, the
   server sends it to every client; once halted a host that goes away is no failure and
-  `gathered` counts it as stopped). `Server::wait_connected` waits for every `Hello`. Since
+  `gathered` counts it as stopped). A `run` that Ctrl-C or `SIGTERM` stops sends `Stop`
+  with `interrupted (SIGINT)` (or `SIGTERM`) before its actors stop (2026-10-15, RC1 review,
+  R47), so the other hosts fail with `rank R (HOST): interrupted (SIGINT)`, not a connection
+  closed (§12). `Server::wait_connected` waits for every `Hello`. Since
   2026-10-13 `Welcome` may carry a document from rank 0 (`Server::start_held`, then
   `welcome` or `last_word`): at a dataset root, the manifest that only rank 0 reads (§5).
 
@@ -1667,6 +1672,15 @@ instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_recor
   only when the run itself finished (a fingerprint mismatch has one; an I/O error or a
   refused check has `result: null`). A harness never reads an earlier run's file as this
   run's.
+- **A stopped run writes it too (2026-10-15, RC1 review, R47).** Ctrl-C (`SIGINT`) or
+  `SIGTERM` is caught (`run::catch_stop_signals`, from the start of `aeiou run`): a watch
+  thread tells the coordinator (`Stop` with the reason, §6) and sets the run's abort flag,
+  which every actor, loader, barrier wait, and event loop polls; the run ends, its error is
+  `interrupted (SIGINT)` (or `SIGTERM`), which is `verdict.error` and the one line on
+  stderr, and `aeiou` exits 130 (143). A signal before the coordinator exists (the checks,
+  the connect), when nothing polls, writes the report with only `interrupted (SIGINT) before
+  the run started` and exits the same way. A second signal exits at once, the report
+  unwritten. A signal ignored at start (`nohup`, a script's background job) stays ignored.
 - **Units and number forms.** Times are integer nanoseconds (`_ns`), sizes bytes, rates
   per second of `elapsed`; `started`, `finished`, and `gap_s` are seconds. The fingerprint
   and the hashes are hex strings: a 64-bit value is not exact as a JSON number in most

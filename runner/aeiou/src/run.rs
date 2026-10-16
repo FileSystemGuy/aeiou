@@ -1042,6 +1042,68 @@ pub(crate) fn alloc_failed(size: usize) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("buffer allocation of {size} bytes failed"))
 }
 
+// ---------------------------------------------------------------- stop signals
+
+/// The first `SIGINT` or `SIGTERM` caught (`catch_stop_signals`); 0 before one.
+static STOP_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+extern "C" fn on_stop_signal(sig: libc::c_int) {
+    // the second exits at once, with the first's status
+    if let Err(first) = STOP_SIGNAL.compare_exchange(0, sig, Ordering::SeqCst, Ordering::SeqCst) {
+        // SAFETY: `_exit` is async-signal-safe
+        unsafe { libc::_exit(128 + first) };
+    }
+}
+
+/// Catch `SIGINT` (Ctrl-C) and `SIGTERM` (what Slurm, systemd, docker, and `timeout` send) from
+/// here on: the first is noted for [`stop_signal`], which the command polls to stop its work
+/// and say so (`run` writes its report, `datagen` its manifests), the second exits at once
+/// with 128 + the first's number. A signal ignored when the process started (`nohup`, a
+/// non-interactive shell's background job) stays ignored. The command line's, never a
+/// library caller's (runner/REFERENCE.md §12, aeiou(1) EXIT STATUS).
+pub fn catch_stop_signals() {
+    for sig in [libc::SIGINT, libc::SIGTERM] {
+        // SAFETY: plain sigaction calls on zeroed structs; the handler only touches an atomic
+        unsafe {
+            let mut old: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(sig, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_IGN {
+                continue;
+            }
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = on_stop_signal as extern "C" fn(libc::c_int) as usize;
+            sa.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&mut sa.sa_mask);
+            libc::sigaction(sig, &sa, std::ptr::null_mut());
+        }
+    }
+}
+
+/// The stop signal caught, if one was (`catch_stop_signals`).
+pub fn stop_signal() -> Option<i32> {
+    Some(STOP_SIGNAL.load(Ordering::SeqCst)).filter(|&s| s != 0)
+}
+
+/// `SIGINT`, `SIGTERM`: the name a message gives a stop signal.
+pub fn signal_name(sig: i32) -> String {
+    match sig {
+        libc::SIGINT => "SIGINT".into(),
+        libc::SIGTERM => "SIGTERM".into(),
+        s => format!("signal {s}"),
+    }
+}
+
+/// A command a stop signal ended (`aeiou` exits 128 + the signal's number: 130, 143).
+#[derive(Debug)]
+pub struct Interrupted(pub i32);
+
+impl std::fmt::Display for Interrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "interrupted ({})", signal_name(self.0))
+    }
+}
+
+impl std::error::Error for Interrupted {}
+
 /// Touches every page of a fresh buffer, so its page faults are the runner's, taken when it
 /// is allocated, and never inside the op the kernel first copies into it (RC1 review).
 pub(crate) fn prefault(ptr: *mut u8, len: usize) {

@@ -650,8 +650,13 @@ fn main() {
             usage_exit(&format!("{e:#}"));
         }
         if e.downcast_ref::<datagen::Stopped>().is_some() {
-            // Ctrl-C: what was finished is recorded, said already
-            std::process::exit(130);
+            // Ctrl-C or SIGTERM: what was finished is recorded, said already; a host another
+            // host's signal stopped exits as Ctrl-C's
+            std::process::exit(128 + run::stop_signal().unwrap_or(libc::SIGINT));
+        }
+        if let Some(run::Interrupted(sig)) = e.downcast_ref::<run::Interrupted>() {
+            eprintln!("{prog}: {e:#}");
+            std::process::exit(128 + sig);
         }
         eprintln!("{prog}: {e:#}");
         std::process::exit(1);
@@ -1044,7 +1049,18 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
             aeiou::usage!("--report-json {}: cannot write the report there: {e}{}", path.display(), layers.from(&["report-json"]));
         }
     }
+    // Ctrl-C or SIGTERM: the run is stopped, its report written with the error, and the
+    // other hosts told why (runner/REFERENCE.md §12)
+    run::catch_stop_signals();
+    std::thread::spawn({
+        let report = a.report_json.clone();
+        move || stop_watch(report)
+    });
     let r = run_checked(&mut a, &mut layers, &mut doc);
+    let r = match (r, run::stop_signal()) {
+        (Err(_), Some(sig)) => Err(run::Interrupted(sig).into()),
+        (r, _) => r,
+    };
     if let Some(path) = &a.report_json {
         let error = r.as_ref().err().map(|e| format!("{e:#}"));
         match (doc.write(path, error.as_deref()), &r) {
@@ -1054,6 +1070,43 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
         }
     }
     r
+}
+
+/// What a stop signal stops in a run: its coordinator and abort flag, once it has them.
+#[allow(clippy::type_complexity)]
+static RUN_STOP: std::sync::Mutex<Option<(Arc<dyn Coordinator>, Arc<AtomicBool>)>> = std::sync::Mutex::new(None);
+
+/// A run's watch for a stop signal (`run::catch_stop_signals`). Once the coordinator exists,
+/// the other hosts are told why (a `Stop` with the reason, so theirs fail with "rank R (HOST):
+/// interrupted (SIGINT)") and the run's abort flag is set: every actor, loader, barrier wait,
+/// and event loop polls it, the run ends with an error, and `run_cmd` writes the report.
+/// Before it, nothing polls: the report says so, and the process exits.
+fn stop_watch(report: Option<PathBuf>) {
+    let sig = loop {
+        if let Some(sig) = run::stop_signal() {
+            break sig;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let reason = run::Interrupted(sig).to_string();
+    // held to the end: a run registered after this point would never hear of the signal
+    let g = RUN_STOP.lock().unwrap_or_else(|p| p.into_inner());
+    match &*g {
+        Some((coord, aborted)) => {
+            coord.stop(&reason);
+            aborted.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        None => {
+            let reason = format!("{reason} before the run started");
+            if let Some(path) = &report {
+                if let Err(e) = aeiou::report::Doc::default().write(path, Some(&reason)) {
+                    eprintln!("aeiou run: {e:#}");
+                }
+            }
+            eprintln!("aeiou run: {reason}");
+            std::process::exit(128 + sig);
+        }
+    }
 }
 
 /// What an object-engine option from the environment or the config file is passed over for.
@@ -1496,6 +1549,7 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
         }
         _ => (Arc::new(Local::new(&participants)), None),
     };
+    *RUN_STOP.lock().unwrap_or_else(|p| p.into_inner()) = Some((coord.clone(), aborted.clone()));
     let r = run_connected(a, loaded, cfg, model, opts, coord, aborted, tcp.as_deref(), server.as_ref(), &mut out, doc);
     if let (Err(e), Some(t)) = (&r, &tcp) {
         // the coordinator relays a failure here to every other host (a no-op after a Stop)

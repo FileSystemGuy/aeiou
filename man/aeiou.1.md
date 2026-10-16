@@ -113,11 +113,12 @@ counts at the end; rank 0 writes the manifests, `complete` once every rank has r
 every rank's host and counts in the provenance. The coordinator refuses a host whose
 abstract, parameters, `--gpus`, `--dedupe`, `--compress`, or `--dataset` list differ.
 
-Ctrl-C (`SIGINT`) on any host stops every host: each stops claiming, leaves the file it is
-writing, notes what it finished, flushes, and reports to rank 0, which rewrites the manifests
-once more, marked `stopped` (no datagen is writing the corpus), prints that every rank
-stopped, and every host exits 130. The state is unchanged, so `--resume ROOT` finishes the
-corpus and `--settle ROOT` keeps what it reached. A second Ctrl-C exits at once; the manifest
+Ctrl-C (`SIGINT`) or `SIGTERM` on any host stops every host: each stops claiming, leaves the
+file it is writing, notes what it finished, flushes, and reports to rank 0, which rewrites the
+manifests once more, marked `stopped` (no datagen is writing the corpus), prints that every
+rank stopped, and every host exits 130 (143 the host a `SIGTERM` reached). The state is
+unchanged, so `--resume ROOT` finishes the corpus and `--settle ROOT` keeps what it reached.
+A second signal exits at once; the manifest
 of the last window is still true. A host that fails stops the others the same way, as a
 failure: every host prints the failing host's rank and error and exits 1.
 
@@ -611,7 +612,8 @@ turns it off, and the last one on the line wins.
 
   Write the run's report to *FILE* as JSON (format `aeiou_report: 1`): the configuration,
   the results the text report prints with the latency histograms in full, and the verdict.
-  Written when the run fails too, with the error. The file is created (empty) before the
+  Written when the run fails too, with the error, and when Ctrl-C or `SIGTERM` stops it
+  (`interrupted (SIGINT)`). The file is created (empty) before the
   run starts, so a place it cannot be written is a usage error, not a finding after the
   run. Rank 0 of several hosts writes the merged report, every other rank its own.
   *Layered.*
@@ -803,10 +805,14 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
 
   A usage error. Every missing argument is listed at once, from every layer, in the frame
   every tool of the suite shares.
-- **130**
+- **130**, **143**
 
-  `datagen` stopped by Ctrl-C (on this host or another); the manifest records what is
-  finished.
+  Stopped by Ctrl-C (`SIGINT`, 130) or `SIGTERM` (143, what Slurm, systemd, docker, and
+  `timeout` send) on this host. `run` stops its actors, prints `interrupted (SIGINT)` (or
+  `SIGTERM`), and writes its `--report-json` with that as the error; the other hosts of the
+  run fail with the interrupted rank and the reason and exit 1. `datagen` stops every host,
+  and the manifest records what is finished; a host stopped by another host's signal exits
+  130. A second signal exits at once.
 - **141**
 
   Standard output's reader went away (`| head`) and nothing else failed: the rest of the
