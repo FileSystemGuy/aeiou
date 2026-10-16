@@ -9,17 +9,21 @@ publishes with a hash. Nothing here runs on a client node.
 
 ```
 builder/
-  aeiou/     the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli,
-             params (parameter files, `aeiou-params`), formats (the format classes), datagen
-             (`aeiou-datagen`), trace (`aeiou-trace`, §7), catalog (`aeiou-catalog`, §8), and the ports
-             of the runner's definitions it needs: rng, pattern, framing
+  aeiou/     the package: nodes, dists, units, builder (Workload, Cursor), validate, emit, hermetic,
+             cli, params (parameter files, `aeiou-params`), formats (the format classes), datagen
+             (`aeiou-datagen`, deprecated, §6) and coord (its coordinator protocol), header
+             (`aeiou-header`, §6), trace (`aeiou-trace`, §7), catalog (`aeiou-catalog`, §8) and
+             describe (its descriptions), options and usage (the runner's option layers and
+             usage frame), and the ports of the runner's definitions it needs: rng, pattern, framing
   tests/             pytest: every abstract builds, matches its committed AST, the discipline holds;
-                     the parameter files fit their abstracts; the format classes write files the
-                     libraries read back and the runner executes to the dry-run fingerprint; the
-                     trace metrics against hand-written traces and against the runner under `strace`
-  pyproject.toml     dep: jsonschema; extras `test` and `formats` (pyarrow, h5py, numpy, crc32c,
-                     xxhash); `aeiou-build`, `aeiou-params`, `aeiou-datagen`, `aeiou-trace`, `aeiou-catalog`
-                     entry points
+                     the two checkers refuse alike; the parameter files fit their abstracts; the
+                     format classes write files the libraries read back and the runner executes to
+                     the dry-run fingerprint, and `aeiou datagen` writes the same bytes; the trace
+                     metrics against hand-written traces and against the runner under `strace`; the
+                     kit scripts; the catalog; the manual pages against `--help`
+  pyproject.toml     dep: jsonschema; extras `test`, `formats` (pyarrow, h5py, numpy, crc32c,
+                     xxhash), and `s3` (obstore); `aeiou-build`, `aeiou-params`, `aeiou-datagen`,
+                     `aeiou-trace`, `aeiou-catalog`, `aeiou-header` entry points
 ```
 
 ```
@@ -81,8 +85,8 @@ is gone, an array being `dataset(…, layout="array", access="indexed", slot=…
 file list, refused as V22 refuses; contract 0.10, §3.75: a pattern's divisor may name a
 parameter declared before it with an integer default, `{id div files_per_directory:05}`, refused
 as V23 refuses; the training abstracts' layout parameters are `samples`, `samples_per_file`, and
-`files_per_directory`, `schema/README.md` §2); `namespace(name,
-pattern=, fields=, size=, seed=, input=)`; `actor(name, count=)`. `w.P.x` is the parameter reference;
+`files_per_directory`, `schema/README.md` §2; also `protocol=` and `doc=`); `namespace(name,
+pattern=, fields=, size=, seed=, input=, same_run=, protocol=, doc=)`; `actor(name, count=, doc=)`. `w.P.x` is the parameter reference;
 `P.xs[t]`, `P.xs.len`, `P.xs.sum` index and reduce a parameter array (a table is several
 parallel arrays).
 
@@ -97,9 +101,10 @@ the loop, for `x @ i` chains), `loop(index, to, start=, step=)` yielding the ind
 `parallel(index, width)` and `loader(name, workers=, prefetch=, batches=, ordered=)` yielding a
 sub-cursor with `.index`, `channel`/`put`/`take`, `barrier(scope)`, `compute(ns)`, `when(test)`
 / `otherwise()`, `every(n)`, `choose()` with `.arm(weight)`, `phase(name)`, `trace(file, sha256)`, and the
-seventeen ops: `open(f, "RDONLY|CLOEXEC", mode=, expect=)`, `close fstat stat fsync fdatasync
+eighteen ops: `open(f, "RDONLY|CLOEXEC", mode=, expect=)`, `close fstat stat fsync fdatasync
 unlink`, `read(f, len, offset=, repeat=, expect=)`, `write`, `lseek(f, off, "SET|CUR|END")`,
-`ioctl(f, "TCGETS")`, `ftruncate`, `fallocate`, `mkdir`, `rmdir`, `rename`, `readdir`.
+`ioctl(f, "TCGETS")`, `fadvise(f, "WILLNEED", offset=, len=)`, `ftruncate`, `fallocate`,
+`mkdir`, `rmdir`, `rename`, `readdir`.
 
 **Expressions**: node arithmetic (`+ - * // %`, `ceil_div`, `min_`, `max_`, `-x`), comparisons
 (`== != < <= > >=`), `&`, `|`, `~`, `when(test, a, b)` (arms may be expressions, distributions,
@@ -160,7 +165,7 @@ dict. The Rust validator must reject everything they reject.
   short HEAD with `-dirty` when the script has uncommitted changes; the script's own `sha256`
   is the exact identity.
 - **`--hermetic`.** The script runs in a child `python -s -B` with a scrubbed environment
-  (`PATH`, `PYTHONHASHSEED`, `LANG` only) and PEP 578 audit hooks that deny sockets,
+  (`PATH`, `PYTHONHASHSEED`, and `LANG` and `LC_ALL` set to `C.UTF-8`, only) and PEP 578 audit hooks that deny sockets,
   subprocesses, every write, and reads outside the interpreter, its packages, the schema, and
   the script's directory. Clocks (every `time.*` clock, `clock_gettime` included, `os.times`,
   `resource.getrusage`, `datetime.now`), entropy (`os.urandom`, `uuid`),
@@ -246,8 +251,14 @@ probes write a one-row file in memory with the library; the libraries are the `f
 extra and are pre-imported by the hermetic child. Arrow IPC, MDS, and Megatron are not
 written yet (`DESIGN_REVIEW.md` §3.28 says why).
 
+**Deprecated (2026-10-14, `PROJECT_BRIEF.md` §6 item 32).** `aeiou datagen`, built with the
+cargo feature `formats` as the release is, writes every format class (TFRecord, WebDataset,
+HDF5, and Parquet), to directories and object stores, faster, and alone has `--resume`,
+`--grow`, `--shrink`, and `--settle`. `aeiou-datagen` gets no new features and stays, until it
+is retired, the byte and behaviour reference the tests compare the Rust writer with.
+
 **`aeiou-datagen AST --root DIR [--endpoint NAME=DIR]… [--params-file FILE]… [--param k=v]… [--gpus G] [--dedupe D]
-[--compress C] [--threads N] [--dataset NAME]… [--config FILE]** writes every dataset that has a format class:
+[--compress C] [--writers N] [--dataset NAME]… [--ranks R --rank r --coordinator HOST:PORT] [--config FILE]** writes every dataset that has a format class:
 names from the pattern, sizes from the dataset seed (`rng.py` is the runner's sampler),
 bytes under `aeiou-positional/4` (numpy's `SFC64` in 4 KiB pieces, `payload_block`; each
 sample's bytes the unit's at the sample's file offset, the unit `dedupe_unit`;
@@ -255,7 +266,7 @@ bit-identical to the Rust writer's, `tests/test_payload.py`), each file checked 
 manifest `aeiou run` compares (`schema/README.md` §6; its `format` block names the writer
 library). Datasets without a class are left to `aeiou datagen`, which in turn refuses the
 ones with a class (since 2026-10-12, built with the cargo feature `formats`, it writes TFRecord,
-WebDataset, and HDF5 itself, byte for byte this writer's files, `tests/test_formats.py` and
+WebDataset, HDF5, and Parquet itself, byte for byte this writer's files, `tests/test_formats.py` and
 `tests/test_object.py` comparing them; `runner/REFERENCE.md` §5). For HDF5 it runs
 **`aeiou-header --format JSON --rows N…`** (`aeiou/header.py`, `man/aeiou-header.1.md`),
 `Hdf5.header` for each row count, the headers back to back on stdout and nothing else there,
@@ -333,7 +344,7 @@ name and the manifests' ids, runs the abstracts over the bucket to the dry run's
 under `--s3 blocking` and `async` when the runner is built with `object`, and checks a
 three-part upload, an aborted one, and the placement refusals.
 
-**Usage errors (2026-10-04).** The four Python tools report a wrong command line in the
+**Usage errors (2026-10-04).** The Python tools report a wrong command line in the
 suite's one frame (`aeiou/usage.py`, the mirror of `runner/aeiou/src/usage.rs`;
 `runner/REFERENCE.md` §15): the command as typed, the message, the usage line, the pointer to
 the help, exit status 2; every argument the command still lacks is listed at once, from any
@@ -459,8 +470,8 @@ verdict, and the comparison exits 0 only when at least one row was judged and no
 - **These are the repository's defaults.** Whoever accepts abstracts for a workload class
   can publish a file with other values.
 
-The verdicts of the committed pairs (`tests/test_trace.py`, `KIT_PAIRS`; the reasons are in
-each pair's file):
+The verdicts of the committed pairs (`tests/test_trace.py` reads them from the capture
+records, `capture.toml`, §8; the reasons are in each pair's tolerance file):
 
 | Pair | Verdict | Outside or unseen |
 |---|---|---|
@@ -471,6 +482,9 @@ each pair's file):
 | `diskann_search`, with and without the node cache | accepted | depth not judged (no `--chain-gap-us`) |
 | `diskann_build` | not accepted, 9 rows | run-length histograms (unmodeled small files and headers), write-after-write (a header puts the stream's writes off block boundaries), two reuse distances (cause not isolated) |
 | `lmcache_local_disk` | accepted | fan-out unseen (a thread pool); the reuse distance of the reads was outside until `keep` was drawn once per round of conversations (`DESIGN_REVIEW.md` §3.57; 1 row before, 6 before the ShareGPT replay, §3.56) |
+| `lmcache_local_disk`, AgentX replay at 2 GiB of engine KV | not accepted, 4 rows | each with its reason in the capture's tolerance file (`DESIGN_REVIEW.md` §3.63) |
+| `lmcache_local_disk`, AgentX replay at 6 GiB | accepted | (§3.64) |
+| `lmcache_local_disk`, AgentX replay with LMCache's `use_odirect` | not accepted | the read-after-write distance (the server's admission order) |
 | `lmcache_shared_fs`, writer | not accepted, 1 row | the distance from a file's header write to its chunk write (two store threads); run length and fan-out unseen (a thread pool); 2 rows before §3.57, 7 before the replay |
 | `lmcache_shared_fs`, reader | accepted | run length and fan-out unseen; 1 row before §3.57, 4 before the replay |
 | `safetensors_load`, `faiss_ivf_ondisk` | nothing judged | the application reads through a mapping: every row is unseen. The exact call counts of their tests and `faults.py` are the evidence for these two. |
@@ -484,33 +498,36 @@ reuse distances differ by the order alone (CDF distance 0.07 to 0.20 on these sm
 configurations). Fan-out and depth are `none` on the trace side, as said above: the
 runner's sub-actors are threads.
 
-**Checked against a real application (2026-10-01).** `traces/file_per_sample` holds the
+**Checked against a real application (2026-10-01).** A traced application's kit is its
+mechanism's `kit/` under `workloads/`, and each capture's metrics document, tolerance file,
+and fitted parameters are under the mechanism's `cases/<case>/captures/` (`traces/<name>/`
+held both until 2026-10-10, `DESIGN_REVIEW.md` §3.66). `file_per_sample`'s kit holds the
 first row of the capture plan (`ABSTRACTS.md` §11): PyTorch `DataLoader` + `ImageFolder`
-on NFS, the script that was traced, the corpus writer, the fitted parameter file, and the
-trace's metrics document. The trace corrected the abstract (a second `lseek` per file,
+on NFS, the script that was traced and the corpus writer, and its capture the fitted
+parameter file and the trace's metrics document. The trace corrected the abstract (a second `lseek` per file,
 `stat` and `fstat` per directory in the walk); `tests/test_trace.py` now holds the abstract
 at the fitted parameters to that document. Findings in `ABSTRACTS.md` §1, reasoning in
-`DESIGN_REVIEW.md` §3.43 (decided 2026-10-01). `traces/npy_per_sample` is row 2,
+`DESIGN_REVIEW.md` §3.43 (decided 2026-10-01). `npy_per_sample`'s kit is row 2,
 `np.load(...)["x"]` as upstream DLIO and any NumPy user issues it: that abstract was rewritten from its trace
 (`ABSTRACTS.md` §2, `DESIGN_REVIEW.md` §3.44; explicit seeks decided 2026-10-01; reviewed 2026-10-02, §3.53 and §3.54, all choices decided: the script's `glob` is the phase `enumerate`, on by default, and `tests/test_formats.py` checks `framing` against the installed NumPy).
-`traces/dcp_save` is row 3, `torch.distributed.checkpoint.save` on two ranks
+`dcp_save`'s kit is row 3, `torch.distributed.checkpoint.save` on two ranks
 (`ABSTRACTS.md` §3, `DESIGN_REVIEW.md` §3.45, decided 2026-10-02).
-`traces/dcp_load` and `traces/safetensors_load` are row 4: `torch.distributed.checkpoint.load`
+`dcp_load`'s kit and `safetensors_load`'s kit are row 4: `torch.distributed.checkpoint.load`
 on two ranks, whose trace rewrote the restore's item loop, and safetensors `from_pretrained`,
 which maps the shards and issues no `read` (`ABSTRACTS.md` §4, `DESIGN_REVIEW.md` §3.47, not
 yet confirmed). A third `dcp.load` trace (`name-order`) showed that the reader takes the
 items in the sorted order of their names and that an item's cost depends on where the
 buffer was left; the restore carries the buffer's start as a chain since (§3.48, decided
-2026-10-01), and `traces/dcp_load/params.py` makes the parameter file from a real
+2026-10-01), and `dcp_load`'s `kit/params.py` makes the parameter file from a real
 checkpoint's `.metadata`.
-`traces/faiss_ivf_ondisk` is row 6: FAISS `IndexIVFPQ` over `OnDiskInvertedLists`, which maps
+`faiss_ivf_ondisk`'s kit is row 6: FAISS `IndexIVFPQ` over `OnDiskInvertedLists`, which maps
 the lists file and issues no call on it; its `faults.py` measures with `mincore` what the
 trace cannot show (`ABSTRACTS.md` §6, `DESIGN_REVIEW.md` §3.49, decided 2026-10-01).
-`traces/diskann_build` and `traces/diskann_search` are rows 7 and 5: DiskANN through
+`diskann_build`'s kit and `diskann_search`'s kit are rows 7 and 5: DiskANN through
 `diskannpy`, one index built in 13 shards and then searched; `hops.py` reads the beam search
 (rounds, batch sizes, sector spread) off the `io_submit` lines (`ABSTRACTS.md` §5 and §7,
 `DESIGN_REVIEW.md` §3.50, decided 2026-10-02).
-`traces/lmcache_local_disk` is row 8: vLLM with LMCache's local-disk backend on a GPU. A
+`lmcache_local_disk`'s kit is row 8: vLLM with LMCache's local-disk backend on a GPU. A
 synthetic chat load (`chat.py`) fixed the call sequence (`ABSTRACTS.md` §8,
 `DESIGN_REVIEW.md` §3.51, decided 2026-10-02); the committed trace is a replay of ShareGPT
 (`replay.py`: the dataset's turns and reply lengths, eight conversations open and served
@@ -527,9 +544,9 @@ and 2026-10-08, §3.63, at 2 GiB and 6 GiB of engine KV, §3.64). A fit of what 
 holds records the engine it was fitted at (pool, model, CPU tier, slots) as its parameter
 file's `provenance`; `agentx.py holds` checks a replay's holds against a simulation of the
 engine's prefix cache, and `agentx.py log` writes the reduced server log the kit keeps.
-`traces/lmcache_shared_fs` is the same load on LMCache's `fs://` backend, twice: an engine on
+`lmcache_shared_fs`'s kit is the same load on LMCache's `fs://` backend, twice: an engine on
 an empty store, then a restarted engine on the filled one, sent the same requests
-(`replay.py --save`, `--replay`). `workloads/kvcache/lmcache-shared-fs/lmcache_shared_fs.py` emits both abstracts,
+(`lmcache_local_disk`'s `kit/replay.py --save`, `--replay`). `workloads/kvcache/lmcache-shared-fs/lmcache_shared_fs.py` emits both abstracts,
 `lmcache_shared_fs` and `lmcache_shared_fs_reader`; the reader takes the writer's namespace as
 `input` and `same_run` (contract 0.4: `w.namespace(..., input=True, same_run=True)`), so a run
 without the writer's `--seed`, `--gpus`, and parameters is refused before the gate
@@ -597,7 +614,7 @@ them at the reap, so the reuse-distance histogram of that pair differs within a 
 and a parameter set, the unit a user asks for and the catalog's row (`DESIGN_REVIEW.md`
 §3.66). Building is a compiler's job, a script to an AST; the catalog is data management:
 curated records, the vocabulary they are written in, and their consistency with the
-abstracts. `aeiou/catalog.py` is that tool, standard library only (`tomllib`), never writing
+abstracts. `aeiou/catalog.py` is that tool, no extra needed (`tomllib` for the records, the schema's `jsonschema` for the ASTs), never writing
 an AST or a parameter file.
 
 **The records.** TOML, written by a person:

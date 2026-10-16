@@ -23,7 +23,7 @@ client node.
 
 Each emitted document is validated against the published schema and the semantic rules of
 **aeiou-abstract**(7) before it is written, and carries a `provenance` block: the script's
-path and SHA-256, the git revision (`-dirty` when the script has uncommitted changes), the
+file name and SHA-256, the git revision (`-dirty` when the script has uncommitted changes), the
 builder and Python versions, the lock file's hash when one is present, whether the build
 was done twice identically, and the document's canonical hash. The canonical hash, the
 identity of the abstract, is the SHA-256 of the JSON with keys sorted, no whitespace, and the
@@ -46,7 +46,7 @@ three or more identical statements in a row (a hand-unrolled iteration);
 - **--hermetic**
 
   Build each script in a fresh, isolated child: `python -s -B` with a scrubbed environment
-  (`PATH`, `PYTHONHASHSEED`, `LANG` only) and audit hooks that deny sockets, subprocesses,
+  (`PATH`, `PYTHONHASHSEED`, and `LANG` and `LC_ALL` set to `C.UTF-8`, only) and audit hooks that deny sockets, subprocesses,
   every write, and reads outside the interpreter, its packages, the schema, and the script's
   directory. Clocks, entropy, and the unseeded `random` and `numpy.random` entry points
   raise `HermeticViolation`. The child returns the document on stdout; the parent validates
@@ -58,8 +58,9 @@ three or more identical statements in a row (a hand-unrolled iteration);
   without anticipating them.
 - **--check**
 
-  Do not write. Rebuild, compare the canonical hash with the existing file's, print `ok` or
-  `FAIL` per workload, and exit 1 on any difference. CI runs it on every push so the
+  Do not write. Rebuild, compare the canonical hash with the existing file's, print `ok`,
+  `DRIFT` (both hashes' prefixes), or `MISSING` (no committed file) per workload on standard
+  output, and exit 1 on any but `ok`. CI runs it on every push so the
   committed abstracts cannot drift from their scripts.
 - **--no-provenance**
 
@@ -97,9 +98,10 @@ three or more identical statements in a row (a hand-unrolled iteration);
 - **1**
 
   A script failed to build, a hermetic violation, two builds whose hashes differ under
-  `--twice`, or a hash that differs from the committed file under `--check`. Each failure
-  is one line on standard error, `FAIL <script>: <reason>`, and the other scripts are still
-  built: the reason is the builder's error, the validator's rule and JSON pointer, or, for
+  `--twice`, two scripts authoring a `Workload` of one name, an abstract (`.ast.json`) given
+  as a script, or, under `--check`, a hash that differs from the committed file or no
+  committed file. Each failure to build is one line on standard error,
+  `FAIL <script>: <reason>`, and the other scripts are still built: the reason is the builder's error, the validator's rule and JSON pointer, or, for
   an exception the script raised, its type, the script's line it came from, and its
   message (no traceback); a script that does not exist is `no such file`.
 - **2**

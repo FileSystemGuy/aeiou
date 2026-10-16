@@ -97,9 +97,9 @@ A body is an array of statements: thirteen control forms and eighteen operations
 | `lseek {file, offset, whence}` | `SET`, `CUR`, `END`. |
 | `ioctl {file, request, expect}` | `TCGETS`, `FIONREAD`, `BLKGETSIZE64`. |
 | `fadvise {file, advice, offset, len, expect}` | `posix_fadvise`: `NORMAL RANDOM SEQUENTIAL WILLNEED DONTNEED NOREUSE`. |
-| `ftruncate {file, len}`, `fallocate {file, offset, len}` | |
-| `mkdir {dir, mode, expect}`, `rmdir {dir}`, `rename {from, to}` | |
-| `readdir {dir, repeat: until_end}` | One listing, `getdents64` until exhausted. |
+| `ftruncate {file, len, expect}`, `fallocate {file, offset, len, expect}` | |
+| `mkdir {dir, mode, expect}`, `rmdir {dir, expect}`, `rename {from, to, expect}` | |
+| `readdir {dir, repeat: until_end, expect}` | One listing, `getdents64` until exhausted. |
 
 `expect` on an operation lists the errno names that count as success (`ENOENT` on a `stat`
 that probes for a file); any other failure aborts the run.
@@ -129,7 +129,7 @@ ids of `zipf` and `hotset` are fixed by the dataset seed, not the run seed.
 ## DATASETS, NAMESPACES, ACTORS
 
 **Datasets**: `{pattern, layout, access, count, size, seed, samples_per_file, chunk, slot,
-format, inventory, protocol}` (contract 0.10). `layout` is how a file or object holds the items: `whole`
+format, inventory, protocol, doc}` (contract 0.10). `layout` is how a file or object holds the items: `whole`
 (one item), `chunked` (part of one: `chunk` bytes each, named by `{k}`), `compound`
 (`samples_per_file` variably sized items, framed by `format`), or `array` (`count` fixed
 slots of `slot` bytes in one file, a pattern without fields). `count` is items. Patterns use
@@ -149,7 +149,7 @@ written by `aeiou datagen` and read through the `inventory` handle in place of a
 large corpus; under `aeiou run --subset` its reads are issued no further than its size at the
 run's count.
 
-**Namespaces**: `{pattern, fields, size, seed, input, same_run, protocol}`. `size` is an expression or
+**Namespaces**: `{pattern, fields, size, seed, input, same_run, protocol, doc}`. `size` is an expression or
 `as_written`, the sum of the writes that created the object. `input` marks objects a previous
 run wrote, read-only here; `same_run` marks a namespace read under names the writing run
 drew, so a run without the writer's seed, instance count, and common parameters is refused.
@@ -163,7 +163,7 @@ an `s3` dataset or namespace through its object engine (**aeiou**(1) OBJECT STOR
 where an object is written once, in order from 0, by one upload that its `close` completes
 (V18).
 
-**Actors**: `{count, body}`; `count` defaults to `--gpus` (the reserved `gpus`, which no
+**Actors**: `{count, body, doc}`; `count` defaults to `--gpus` (the reserved `gpus`, which no
 expression reads; `{actor: count}` is the count). Instances have global ids `0..count`.
 
 **Parameters**: `params` maps each name to a default (a scalar, a distribution, or an
@@ -191,7 +191,8 @@ these, and the builder enforces most of them at construction:
 - **V13** No path component begins with `.aeiou`; dataset roots are distinct and not nested.
 - **V14** Input namespaces are read-only and come with the writer's manifest.
 - **V15** `same_run` needs `input`.
-- **V16** (runner) A `trace` that creates files runs in one instance only.
+- **V16** (`aeiou run`, with the resolved counts) A `trace` that creates files runs in one
+  instance only.
 - **V17** Namespaces sharing a root declare one `protocol`.
 - **V18** An object of a namespace declared `protocol: s3` is written once, in order from
   0: no `open` with `APPEND`, `RDWR`, or `EXCL`, or with `CREAT` or `TRUNC` without
@@ -233,8 +234,10 @@ then *A*, then *B*, then `--param`. **aeiou-params**(1) writes, checks, and buil
 
 ## MANIFESTS
 
-**`.aeiou-dataset.json`**, at each dataset root, written by `aeiou datagen` or
-**aeiou-datagen**(1), last and atomically. Its normative part, compared by `aeiou run` for
+**`.aeiou-dataset.json`**, at each dataset root, written atomically by `aeiou datagen`
+first and rewritten as the corpus is written (its `state` `writing`, `growing`, or
+`shrinking` until `complete`; a run refuses any state but `complete`), or by
+**aeiou-datagen**(1) once, last, `complete`. Its normative part, compared by `aeiou run` for
 exact equality with what it resolves: `dataset` (the entry with every parameter reference
 substituted, in canonical form), `payload` (generator, version, dedupe and compression
 ratios, block size, wrapper version), `format` when the dataset has a format class, and

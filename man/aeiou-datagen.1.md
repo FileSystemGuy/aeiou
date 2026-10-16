@@ -2,7 +2,7 @@
 
 ## NAME
 
-aeiou-datagen - write the container datasets an abstract declares, through their format classes
+aeiou-datagen - write the container datasets an abstract declares, through their format classes (deprecated: `aeiou datagen` writes them)
 
 ## SYNOPSIS
 
@@ -13,24 +13,31 @@ aeiou-datagen --help | --version
 
 ## DESCRIPTION
 
-**aeiou-datagen** is the Python twin of `aeiou datagen` (**aeiou**(1)). It writes every
+**Deprecated.** `aeiou datagen` (**aeiou**(1)), built with the cargo feature `formats` as
+the release is, writes every format class itself (TFRecord, tar, HDF5, and Parquet), byte
+for byte the files this tool writes, to directories and object stores, faster, and alone
+has `--resume`, `--grow`, `--shrink`, and `--settle`. Use it. This tool gets no new
+features and stays, until it is retired, as the byte and behaviour reference the tests
+compare the Rust writer with.
+
+**aeiou-datagen** is the Python twin of `aeiou datagen`. It writes every
 dataset of the abstract that declares a container **format class**: real Parquet, HDF5,
 TFRecord, or tar (WebDataset) files, written with the format's own library, uncompressed
 and plainly encoded, so that the real reader library issues against them the operation
-protocol the abstract models. Datasets without a format class are left to `aeiou datagen`,
-which refuses the ones with a class unless built with the cargo feature `formats`, under
-which it writes TFRecord, tar, and HDF5 files byte for byte as this tool does (HDF5's
-header through **aeiou-header**(1)); a corpus with both
-kinds is written by both tools, each dataset by one of them.
+protocol the abstract models. Datasets without a format class are left to `aeiou datagen`
+(this tool says so and skips them), which writes the ones with a class too when built with
+`formats` (HDF5's header through **aeiou-header**(1)) and refuses them otherwise; a corpus
+with both kinds and a runner without `formats` is written by both tools, each dataset by
+one of them.
 
 Names come from the dataset's pattern, sizes from the dataset seed (the Python port of the
 runner's sampler), and bytes from the same positional payload generator as the Rust writer:
 1 MiB blocks of an SFC64 stream (numpy's bit generator) keyed by dataset seed, unit, and
 block and laid out in 4 KiB pieces, bit-identical to the Rust writer's, with the dedupe and
 compression ratios given. Every file is checked
-against the geometry its declared layout predicts (file and unit headers and footers,
+against the geometry its declared framing predicts (file and unit headers and footers,
 column chunks, row framing, alignment), since the runner computes every offset from that
-layout and never reads a container's metadata. The manifest `.aeiou-dataset.json` is
+framing and never reads a container's metadata. The manifest `.aeiou-dataset.json` is
 written last at each dataset root, its state `complete`, with the same normative content as the Rust writer's
 plus a `format` block naming the class and the writer library; `aeiou run` compares it
 before the gate.
@@ -168,11 +175,11 @@ every missing argument listed at once.
 
 - **0**
 
-  Every selected dataset was written and checked against its layout.
+  Every selected dataset was written and checked against its framing.
 - **1**
 
-  A failure during the work: an invalid abstract, a dataset with no format class, a
-  non-empty root or prefix, a file whose geometry differs from its layout, a library that
+  A failure during the work: an invalid abstract, a dataset named by `--dataset` that has
+  no format class, a non-empty root or prefix, a file whose geometry differs from its layout, a library that
   is not installed, a request the store refused, a host the coordinator refused or lost
   (on every host).
 - **2**
@@ -182,7 +189,7 @@ every missing argument listed at once.
 ## EXAMPLES
 
 ```
-aeiou-datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut --param shards=64
+aeiou-datagen workloads/input-pipeline/stream/parquet/parquet_stream.ast.json --root /mnt/sut --param samples=65536
 AEIOU_ROOT=/mnt/sut aeiou-datagen workloads/input-pipeline/map/hdf5/hdf5_map.ast.json --dataset train
 AWS_ENDPOINT_URL=http://store:9000 aeiou-datagen my_s3_variant.ast.json --root /unused --endpoint shards=s3://bench/train
 aeiou-launch -f hosts -- aeiou-datagen workloads/input-pipeline/stream/tfrecord/tfrecord_stream.ast.json --root /mnt/sut

@@ -1,10 +1,13 @@
 # The builder
 
 The Python half of aeiou: the package `aeiou`, with which a workload is *authored*, and its
-four tools: `aeiou-build` (scripts to abstracts), `aeiou-params` (parameter files),
-`aeiou-datagen` (container datasets), and `aeiou-trace` (the metrics of a real
-application's trace, their comparison with an abstract's, and the trace file of the
-runner's `trace` node). Nothing here runs on a client node during a benchmark. The manual
+six tools: `aeiou-build` (scripts to abstracts), `aeiou-params` (parameter files),
+`aeiou-trace` (the metrics of a real application's trace, their comparison with an
+abstract's, and the trace file of the runner's `trace` node), `aeiou-catalog` (the
+workload catalog under `../workloads/`), `aeiou-header` (an HDF5 file's header from
+libhdf5, which `aeiou datagen` runs), and `aeiou-datagen` (container datasets; deprecated,
+since `aeiou datagen` writes every format class). Nothing here runs on a client node
+during a benchmark. The manual
 pages are in [`../man/`](../man/README.md); the reference, the authoring API and every
 choice made in building it, is [REFERENCE.md](REFERENCE.md).
 
@@ -58,12 +61,16 @@ table of a safetensors checkpoint, the archive framing of a NumPy corpus (`param
 
 **Format classes.** A dataset in a container format declares its class (`formats.py`:
 `tfrecord`, `parquet`, `hdf5`, `webdataset`), and the class supplies what the two-contract
-split assigns to the format: the *layout*, a generic framing formula the runner computes
-every offset from; the reader library's *protocol*, traced once and emitted as ordinary
+split assigns to the format: the *framing*, a generic formula the runner computes every
+offset from; the reader library's *protocol*, traced once and emitted as ordinary
 operations on a cursor; and the *writer* `aeiou-datagen` uses to produce real files with
-the same positional payload as the Rust writer (`datagen.py`, `layout.py`, `rng.py` are the
-ports of the runner's definitions it needs). Layout constants are probed from the installed
-library at build time and recorded in the document.
+the same positional payload as the Rust writer (`rng.py`, `pattern.py`, `framing.py` are the
+ports of the runner's definitions it needs). Framing constants are probed from the installed
+library at build time and recorded in the document. `aeiou datagen`, built with the cargo
+feature `formats`, writes the same files byte for byte; the Python writer stays as the
+reference the tests compare it with until it is retired, and gets no new features. For
+HDF5, whose header only libhdf5 can lay out, `aeiou datagen` runs `aeiou-header`
+(`header.py`) for the header bytes and writes the rows itself.
 
 **Calibration.** `aeiou-trace` (`trace.py`, standard library only) resolves an `strace`
 of the real application, descriptor tables through `clone`, `fork`, and `dup`, positions
@@ -71,14 +78,22 @@ through `lseek` and the bytes moved, paths under the storage root, and computes 
 locality metrics the runner's dry run computes for the abstract, in the same document
 format. `compare` holds the two to a tolerance per class of metric, raised by what the
 abstract differs from itself by at another seed. `export` writes the same resolved trace as
-the JSON Lines file a `trace` node executes literally. `traces/` holds the capture kit of
-every real application traced so far: the script that was traced, the corpus writer, the
-fitted parameter file, the trace's metrics document, and its tolerance file.
+the JSON Lines file a `trace` node executes literally. The capture kit of every real
+application traced so far lives with its mechanism under `../workloads/`: the traced
+script, the corpus writer, and the fitting scripts in `kit/`, and each capture's metrics
+document, tolerance file, logs, and fitted parameters under `cases/<case>/captures/`.
 
-**One error frame.** The four tools report a wrong command line as the runner does
+**The catalog.** `aeiou-catalog` (`catalog.py`, no extra needed) holds the records of
+`../workloads/` (`mechanism.toml`, `case.toml`, `capture.toml`) to their dictionary,
+`attributes.toml`; measures each case's shape with the runner's dry run; and renders
+`CATALOG.md`, the category and class READMEs, and each case's `DESCRIPTION.md`, the abstract
+put in English by a deterministic walk of the AST at the case's parameters (`describe.py`).
+`check` fails on any drift, as `aeiou-build --check` does for the abstracts.
+
+**One error frame.** The six tools report a wrong command line as the runner does
 (`usage.py`): the command as typed, every missing argument at once, the usage line, the
 pointer to the help, exit status 2. `options.py` is the Python mirror of the runner's
-option layers, used by `aeiou-datagen`.
+option layers, and `coord.py` of its coordinator protocol, both used by `aeiou-datagen`.
 
 ## Technologies
 
@@ -86,31 +101,33 @@ Python 3.12 or later. The package depends on `jsonschema` alone; `hatchling` bui
 `uv` locks it (`uv.lock`), `pytest` with `pytest-xdist` tests it. The `formats` extra
 installs the libraries of the format classes: `pyarrow` (Parquet), `h5py` (HDF5), `numpy`,
 `crc32c` (TFRecord framing), and `xxhash`; numpy's `SFC64` makes the payload, the Rust
-writer's bytes. PEP 578 (`sys.addaudithook`) for the hermetic build;
-`tarfile`, `zipfile`, and `re` from the standard library for WebDataset, `.npz`, and the
-strace parser.
+writer's bytes. The `s3` extra installs `obstore`, the Python bindings of the runner's
+`object_store`, for `aeiou-datagen`'s uploads. PEP 578 (`sys.addaudithook`) for the hermetic
+build; `tarfile`, `zipfile`, `re`, and `tomllib` from the standard library for WebDataset,
+`.npz`, the strace parser, and the catalog's records. The release ships `aeiou-header` as one
+PyInstaller file beside the `aeiou` binary.
 
 ## Layout
 
 ```
-aeiou/           the package: nodes, dists, builder (Workload, Cursor), validate, emit, hermetic, cli,
-                 params, formats, layout, rng, pattern, datagen, trace, options, usage
-abstracts/       the workloads as authoring scripts: small-file and large-sample training, checkpoint
-                 write and restore, model load, DiskANN search and build, IVF search, KV-cache serving
-                 and the shared store (writer and reader), streaming training over TFRecord and
-                 Parquet shards, map-style training over HDF5
-traces/          one directory per real application traced: the kit, the fitted parameters, the
-                 trace's metrics and tolerances
+aeiou/           the package: nodes, dists, units, builder (Workload, Cursor), validate, emit,
+                 hermetic, cli, params, formats, framing, rng, pattern, datagen, header, coord,
+                 trace, catalog, describe, options, usage
 tests/           pytest: every abstract builds and matches its committed AST; the discipline holds;
-                 parameter files fit; the format classes write files the libraries read back and
-                 the runner executes to the dry-run fingerprint; the trace metrics against
-                 hand-written traces and against the runner under strace; the option layers; the
-                 usage frame; the manual pages against --help
-pyproject.toml   the package, its extras, and the four entry points
+                 the two checkers refuse alike; parameter files fit; the format classes write files
+                 the libraries read back and the runner executes to the dry-run fingerprint, and
+                 `aeiou datagen` writes the same bytes; the payload; the trace metrics against
+                 hand-written traces and against the runner under strace; the kit scripts; the
+                 catalog and the descriptions; several-host datagen; object stores (MinIO);
+                 aeiou-launch; the option layers; the usage frame; the manual pages against --help
+pyproject.toml   the package, its extras (test, formats, s3), and the six entry points
 REFERENCE.md     the reference: writing an abstract (§1), the discipline (§2), what fails where (§3),
                  reproducible builds (§4), parameter files (§5), format classes and aeiou-datagen (§6),
-                 aeiou-trace (§7), not yet (§8)
+                 aeiou-trace (§7), aeiou-catalog (§8), not yet (§9)
 ```
+
+The workloads themselves, the authoring scripts and the ASTs generated beside them, live in
+[`../workloads/`](../workloads/README.md), one directory per I/O mechanism.
 
 Tests that drive the runner use `../runner/target/release/aeiou` (or `$AEIOU_RUNNER`) and
 skip when it is not built; rebuild it after runner changes. `AEIOU_REQUIRE` names, comma-separated,
@@ -122,10 +139,11 @@ built cannot be skipped there unseen, and every skip in the suite must name one
 
 ## Pointers
 
-- `../man/aeiou-build.1.md`, `aeiou-params.1.md`, `aeiou-datagen.1.md`, `aeiou-trace.1.md`,
-  `aeiou-abstract.7.md`: the manual.
+- `../man/aeiou-build.1.md`, `aeiou-params.1.md`, `aeiou-trace.1.md`, `aeiou-catalog.1.md`,
+  `aeiou-header.1.md`, `aeiou-datagen.1.md`, `aeiou-abstract.7.md`: the manual.
 - `REFERENCE.md` §1: the authoring API in one page.
 - `../schema/README.md`: the contract the builder emits.
 - `../ABSTRACTS.md`: the workloads on paper, and what each trace corrected.
 - `../DESIGN_REVIEW.md` §3.19, §3.27, §3.28, §3.42 onward: why the builder, the parameter
-  split, the format classes, and the trace tooling are the way they are.
+  split, the format classes, and the trace tooling are the way they are; §3.66 and §3.76, the
+  catalog and the descriptions.

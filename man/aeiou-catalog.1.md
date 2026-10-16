@@ -211,4 +211,4 @@ aeiou-catalog describe --params-file cases/npy-8mib/params.json --no-shapes npy_
 
 The layout and the reasoning: `workloads/README.md`, `DESIGN_REVIEW.md` §3.66 (the
 descriptions: §3.76); the tool:
-`builder/REFERENCE.md`. `python -m aeiou.catalog` is the same program.
+`builder/REFERENCE.md` §8. `python -m aeiou.catalog` is the same program.

@@ -26,10 +26,10 @@ release ships both in `bin/`, this one as a single file carrying Python, numpy, 
 libhdf5. Only the host running rank 0 runs it: rank 0 makes the headers before the start gate
 and the coordinator sends them to every other rank, so client hosts need `aeiou` alone. Each
 dataset takes one run, for the row counts its files have (the full files and a short last
-one); the headers come back to back, each the layout's `file_header` bytes long.
+one); the headers come back to back, each the framing's `file_header` bytes long.
 
 The tool refuses when its h5py and libhdf5 differ from the version the abstract records in
-its `format` entry, the one the layout's data offset was probed with when the abstract was
+its `format` entry, the one the framing's data offset was probed with when the abstract was
 built: another library could lay the header out otherwise.
 
 ## OPTIONS
@@ -56,7 +56,7 @@ built: another library could lay the header out otherwise.
 - **1**
 
   A format class with no header, a library version other than the abstract's, or a header
-  whose length is not the layout's `file_header`; the reason on standard error.
+  whose length is not the framing's `file_header`; the reason on standard error.
 - **2**
 
   A usage error, in the frame every tool of the suite shares: an argument missing, a

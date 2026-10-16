@@ -4,8 +4,8 @@ schema/README.md, print each AST's canonical hash and op-kind counts.
 
 Usage: python3 schema/check.py [file.ast.json ...]   (default: workloads/**/*.ast.json)
 
-This is the reference for the rules until the Rust validator exists; the Rust validator must
-reject everything this rejects. It needs only jsonschema.
+The reference checker: the Rust validator (`aeiou check`) must refuse what this refuses, at the
+same path with the same message, and CI diffs the two over the committed ASTs. It needs only jsonschema.
 """
 import hashlib
 import re

@@ -13,7 +13,7 @@ block of what was resolved, with each value's source, is printed as `aeiou datag
 
 Datasets without a format class are `aeiou datagen`'s (the Rust writer); this tool skips
 them, and `aeiou datagen` refuses the ones with a class (built with the cargo feature
-`formats`, it writes TFRecord, WebDataset, and HDF5 too, these bytes), so a corpus is written by both, each
+`formats`, it writes TFRecord, WebDataset, HDF5, and Parquet too, these bytes), so a corpus is written by both, each
 dataset by exactly one of them. Names, sizes, offsets, and bytes follow the runner's
 definitions bit for bit (`rng.py`, `pattern.py`, `framing.py`); every file is checked against
 the geometry its framing predicts before the manifest is written.
@@ -503,7 +503,7 @@ def write_manifest(dir_, m: dict):
 
 
 def parser() -> usage.Parser:
-    ap = usage.Parser(prog="aeiou-datagen", description="Write the container datasets an abstract declares under --root, through their format classes, with a manifest per dataset root (the Python twin of `aeiou datagen`)",
+    ap = usage.Parser(prog="aeiou-datagen", description="Write the container datasets an abstract declares under --root, through their format classes, with a manifest per dataset root (the Python twin of `aeiou datagen`; deprecated: `aeiou datagen` writes every format class)",
                       usage="aeiou-datagen [OPTIONS] --root <DIR> <ABSTRACT_PATH>\n       (--root may also come from $AEIOU_ROOT or `root` in the [datagen] table of the config file)")
     ap.add_argument("ast", nargs="?", type=pathlib.Path, metavar="ABSTRACT_PATH", help="The abstract (`.ast.json`)")
     ap.add_argument("--params-file", action="append", default=[], type=pathlib.Path, metavar="FILE", help="A parameter file (`.params.json`, schema/README.md §8), applied over the defaults and under --param; repeatable, in order")

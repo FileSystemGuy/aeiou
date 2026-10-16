@@ -49,7 +49,10 @@ descriptor are `fstat`, on a path `stat`; `getdents64` is `readdir`, once per li
 `ftruncate`, `fallocate`, `mkdir`, `rename`, `fadvise64`, and `close` by name. A failed call
 counts as its op. The position of a sequential `read` or `write` is tracked per open file
 description from `open`, `lseek`, and the bytes each call moved, shared by `dup`ed
-descriptors, by threads, and across `fork`. The requests of one `io_submit` are a fan-out,
+descriptors, by threads, and across `fork`. An `O_APPEND` write goes to the end of the file
+wherever the trace knows the file's size (from an open that truncated or created it, kept
+through every call that changes it); where it cannot, the write is counted from 0 and noted
+(`append_to_unknown_size`). The requests of one `io_submit` are a fan-out,
 reaped by the matching `io_getevents`. Not visible to `strace`: `io_uring` submissions and
 page faults on a mapping; an application that reads through a mapping leaves every row
 unseen.
@@ -69,7 +72,8 @@ the context and the file as one instance; the header is sniffed.
 Writes the runner's trace file for a `trace` node: JSON Lines, a header, then one op per
 line in the order the calls returned, a lane per traced task, opens by id, paths relative
 to the one `--root`. A sequential read or write on an open that more than one lane used is
-written positioned at the offset the trace shows it used; an `mmap` of a file range is one
+written positioned at the offset the trace shows it used, as is every read and write on an
+open whose `O_APPEND` write went to a known end of the file; an `mmap` of a file range is one
 positioned `read` of the range; a call the schema has no op for is dropped and counted by
 name in the header's `notes`. The file's sha256 is printed, for the abstract's
 `w.trace("app.jsonl", sha256)`; the runner refuses the file when it differs.
