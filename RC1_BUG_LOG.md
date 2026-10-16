@@ -3018,3 +3018,18 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   each part, checked against the layout part by part), as `aeiou-datagen` does; `man/aeiou.1.md`
   already said so.
 - **Evidence:** read against `write_container`; `test_man.py`/`man.rs` pass; same suite runs as bug 147.
+
+## 150. A run report's `finished` came from the wall clock and could precede `started` (a clock step, or another host's gate time)
+
+- **Where:** `runner/aeiou/src/main.rs` (`run_cmd`: an `Instant` taken with `started`, reset at the start
+  gate; `finished = started + elapsed`); `runner/REFERENCE.md` §12 Units.
+- **Found by:** `report::one_host_report_matches_the_text_and_failures_are_written` failed once
+  (`finished >= started`) during the R71–R73 fixer's suite run; both values were `run::unix_now()`
+  (`SystemTime`), which steps under NTP or a WSL resume, and with several hosts `started` is rank
+  0's gate time while `finished` was each host's own wall clock, so a host whose clock is behind
+  rank 0's by more than the run reported `finished < started`.
+- **Fix:** `finished` is `started` plus the time this host measured on its monotonic clock since the
+  gate, so it is never before `started`.
+- **Evidence:** no deterministic regression test (the wall clock cannot be stepped here without new
+  software); the flake's assertion now holds by construction; on HEAD 76cd668 plus the change:
+  `--tests --lib --bins` with MinIO pass (all 168, lib 78), builder `test_coord.py`+`test_man.py` 23 passed.

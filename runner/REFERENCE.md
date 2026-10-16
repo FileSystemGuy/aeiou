@@ -1700,7 +1700,9 @@ instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_recor
   the run started` and exits the same way. A second signal exits at once, the report
   unwritten. A signal ignored at start (`nohup`, a script's background job) stays ignored.
 - **Units and number forms.** Times are integer nanoseconds (`_ns`), sizes bytes, rates
-  per second of `elapsed`; `started`, `finished`, and `gap_s` are seconds. The fingerprint
+  per second of `elapsed`; `started`, `finished`, and `gap_s` are seconds (`finished` is
+  `started` plus the time the host measured on its monotonic clock, 2026-10-15: never before
+  `started`, whatever the wall clock or another host's does). The fingerprint
   and the hashes are hex strings: a 64-bit value is not exact as a JSON number in most
   readers. The nanosecond sums and an unlimited `RLIMIT` (2^64 − 1) are plain integers;
   Python reads them exactly, `jq` before 1.7 and JavaScript round above 2^53.

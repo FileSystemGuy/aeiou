@@ -1643,10 +1643,15 @@ fn run_connected(
     // (printed with the report, this host's and the merged one)
     let cold = aeiou::cold::start(model, &opts)?;
 
+    // `finished` is `started` plus the time this host measured on its monotonic clock: the wall
+    // clock may step (NTP, a WSL resume), and with several hosts `started` is rank 0's gate time,
+    // so this host's own wall clock could read `finished < started` (RC1 review)
     let mut started = run::unix_now();
+    let mut since = std::time::Instant::now();
     if let Some(t) = tcp {
         let (t0, hosts) = t.ready().map_err(|e| anyhow!("start gate: {e:#}"))?;
         started = t0;
+        since = std::time::Instant::now();
         writeln!(out, "start gate: {} host(s) ready: {}", hosts.len(), hosts.join(", "))?;
         if let Some(s) = server {
             // every host's options block came with its Hello: the report records them all,
@@ -1665,7 +1670,7 @@ fn run_connected(
     }
     let mut report = run::run_with(model, opts.clone(), input_objects, coord, aborted)?;
     report.cold = vec![cold];
-    let finished = run::unix_now();
+    let finished = started + since.elapsed().as_secs_f64();
     doc.started = Some(started);
     doc.finished = Some(finished);
     doc.host = Some(aeiou::report::result(&report, doc.full_takes)?);
