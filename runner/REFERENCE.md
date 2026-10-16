@@ -1740,8 +1740,9 @@ Lines: a header, then one op per line in the order the calls returned.
 ```
 
 - **A lane is a traced task** (a thread or a process under `strace -f`), numbered in order
-  of first op; a task with no op under the root is not a lane. `t` is nanoseconds from the
-  first exported call, `dur` the call's duration.
+  of first op; a task with no op under the root is not a lane. `t` is the call's start in
+  nanoseconds from the earliest start of an exported call (the lines are in the order the
+  calls returned, so the first line need not have started first), `dur` the call's duration.
 - **`fd` is an open id**: the ordinal of the `open` line, through every `dup` and every
   inheritance the exporter resolved. A lane may use an open another lane made.
 - **The ops are §2's**, with the schema's field names and enum words (`flags`, `whence`,

@@ -205,10 +205,10 @@ class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
 
   JSON Lines: a header `{"aeiou_trace": 1, "source", "root", "lanes", "lines", "opens",
   "creates", "notes"}`, then lines `{"lane", "t", "dur", "op", "fd", "path", ...}` with the
-  schema's field names and enum words, `t` in nanoseconds from the first exported call,
-  `fd` an open id (the ordinal of the `open` line), `ret` the traced result (a count, or an
-  errno name that becomes the op's `expect`), and `submit` lines holding the members of one
-  `io_submit`. Defined in `runner/REFERENCE.md` §13.
+  schema's field names and enum words, `t` the call's start in nanoseconds from the
+  earliest start of an exported call, `fd` an open id (the ordinal of the `open` line),
+  `ret` the traced result (a count, or an errno name that becomes the op's `expect`), and
+  `submit` lines holding the members of one `io_submit`. Defined in `runner/REFERENCE.md` §13.
 - `workloads/<category>/…/<mechanism>/kit/`, `…/cases/<case>/captures/<capture>/`
 
   The capture kit of each real application traced so far (the traced script, the corpus

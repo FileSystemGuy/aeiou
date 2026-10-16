@@ -2867,3 +2867,21 @@ the fix, the evidence, and the commit, so the work can be replayed from the tag.
   (MinIO) still renames.
 - **Evidence:** unit test `a_rename_of_an_object_over_5_gib_names_the_copy_limit` passes; same suite
   runs as bug 135.
+
+## 141. `aeiou-trace export` could write a negative `t`, which the runner refuses, when a call that started first returned after another
+
+- **Where:** `builder/aeiou/trace.py` (`Exporter._event` keeps the raw start and `t0` as the minimum
+  start; `Exporter.finish` converts); `runner/REFERENCE.md` §13 and `man/aeiou-trace.1.md` FILES (the
+  trace file's `t`); doc comments in `runner/aeiou/src/trace.rs`; `builder/tests/test_trace.py`.
+- **Found by:** a load-dependent failure of `test_trace_of_the_runner_matches_its_dry_run[diskann_search-9-params2]`
+  while verifying bug 134: the dry-run refused "line 7: `t` -122385979 … not negative". `t0` was
+  the start of the first exported call seen, but strace lines come in return order and an
+  `<unfinished …>` call keeps its earlier real start, so a call on another thread that started
+  first and returned later got `t < 0`.
+- **Fix:** `t` is measured from the earliest start of any exported call (calls outside `--root` do not
+  set it); `metrics_of` has no origin (chain gaps compare within a thread) and needed nothing.
+- **Evidence:** `test_export_time_is_from_the_earliest_start_of_an_exported_call` and
+  `test_the_runner_loads_an_export_whose_first_line_did_not_start_first` (synthetic strace,
+  deterministic) fail on HEAD (`-49829 == 0`, and the runner's own refusal) and pass; on HEAD
+  468511d plus the change: `test_trace.py`+`test_man.py` 113 passed three times, builder suite with
+  MinIO 410. Fixed in an isolated worktree and applied.

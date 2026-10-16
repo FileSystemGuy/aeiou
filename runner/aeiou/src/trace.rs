@@ -4,7 +4,7 @@
 //! a traced task (a thread or a process); an op names its open by id (`fd`), so lanes share
 //! descriptors the way the application's tasks did; a sequential read or write on an open
 //! that several lanes used was written positioned by the exporter, so a position here is
-//! lane-local. `t` and `dur` are nanoseconds from the first exported call and the call's
+//! lane-local. `t` and `dur` are nanoseconds from the earliest start of an exported call and the call's
 //! duration: the **gap** before a line is `t − (t_prev + dur_prev)` of its lane (its `t` for
 //! the lane's first line) and is issued as `compute`, scaled by `--time-scale`.
 //!
@@ -663,7 +663,7 @@ fn check_paths(name: &str, line: usize, op: &LineOp) -> Result<()> {
 /// reads and writes (an `io_submit` of `IOCB_CMD_PREAD`/`PWRITE`, all the exporter writes;
 /// the members run together and leave the lane's positions alone, so nothing else has a
 /// meaning there, and `build` never sees a group); a read or write has a length that is a
-/// `size_t` (never negative); and `t` and `dur` are nanoseconds from the first call, never
+/// `size_t` (never negative); and `t` and `dur` are nanoseconds from the earliest start, never
 /// negative, whose sum (the line's end, what the next gap is taken from) fits.
 fn check_shape(name: &str, line: usize, l: &Line) -> Result<()> {
     if l.t < 0 || l.dur < 0 || l.t.checked_add(l.dur).is_none() {

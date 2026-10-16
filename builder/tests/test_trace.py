@@ -871,7 +871,39 @@ def test_a_descriptor_reused_while_its_close_resumes_closes_the_first_file():
     assert trace.metrics_of(REUSED_FD.strip().splitlines(), ["/d"])["total"]["counts"]["close"] == 2
 
 
-@pytest.mark.parametrize("text", [SEQUENTIAL, WORKERS, REUSED_FD])
+# a thread's open starts first and returns last: its line is written after the other thread's
+# calls, and the time of a line is its call's start (seen as a negative `t` under load, R70);
+# a call outside the root that starts earlier still is not an exported call
+STARTED_FIRST = """
+400 1700000004.000000 openat(AT_FDCWD</d>, "/elsewhere/x", O_RDONLY) = 5</elsewhere/x> <0.000010>
+401 1700000004.000050 openat(AT_FDCWD</d>, "/d/b", O_RDONLY <unfinished ...>
+400 1700000004.000100 openat(AT_FDCWD</d>, "/d/a", O_RDONLY) = 3</d/a> <0.000010>
+400 1700000004.000300 read(3</d/a>, "a"..., 4096) = 4096 <0.000050>
+401 1700000004.000400 <... openat resumed>) = 4</d/b> <0.000350>
+"""
+
+
+def test_export_time_is_from_the_earliest_start_of_an_exported_call():
+    h, ev = _export(STARTED_FIRST)
+    assert [(e["lane"], e["op"], e.get("path")) for e in ev] == [(0, "open", "a"), (0, "read", None), (1, "open", "b")]
+    assert min(e["t"] for e in ev) == 0 and ev[2]["t"] == 0
+    # (to the precision of a float of epoch seconds, a quarter of a microsecond)
+    assert abs(ev[0]["t"] - 50000) < 500 and abs(ev[1]["t"] - 250000) < 500 and abs(ev[2]["dur"] - 350000) < 500
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_the_runner_loads_an_export_whose_first_line_did_not_start_first(tmp_path):
+    h, ev = _export(STARTED_FIRST)
+    out = tmp_path / "app.jsonl"
+    sha = trace.write_export(str(out), h, ev)
+    node_ast = tmp_path / "node.ast.json"
+    node_ast.write_text(json.dumps({"ast": "0.10", "name": "trace_started_first", "doc": "a call that returned last started first", "params": {}, "datasets": {},
+                                    "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
+    r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("text", [SEQUENTIAL, WORKERS, REUSED_FD, STARTED_FIRST])
 def test_exported_file_measures_as_the_strace(tmp_path, text):
     h, ev = _export(text)
     out = tmp_path / "t.jsonl"

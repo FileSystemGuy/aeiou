@@ -1066,13 +1066,15 @@ class Exporter:
         tid, issued, done = when
         if issued is None:
             self.notes["lines_without_timestamps"] += 1
-            t = dur = 0
+            dur = 0
         else:
-            if self.t0 is None:
+            # `t` is set in `finish`, from the earliest start: the lines are in the order the
+            # calls returned, and a call (an `<unfinished ...>` one) may have started before
+            # the call that returned first
+            if self.t0 is None or issued < self.t0:
                 self.t0 = issued
-            t = int(round((issued - self.t0) * 1e9))
             dur = int(round((done - issued) * 1e9)) if done is not None else 0
-        e = {"lane": self._lane(tid), "t": t, "dur": max(dur, 0), "op": op}
+        e = {"lane": self._lane(tid), "t": issued, "dur": max(dur, 0), "op": op}
         for k, v in fields.items():
             if v is None:
                 continue
@@ -1203,6 +1205,7 @@ class Exporter:
         """The header and the lines: positions of shared opens resolved, `creates` collected."""
         shared = 0
         for e in self.events:
+            e["t"] = 0 if e["t"] is None else int(round((e["t"] - self.t0) * 1e9))
             if e["op"] in KINDS and "_off" in e:
                 off = e.pop("_off")
                 o = self.opens[e["fd"]]
