@@ -14,6 +14,104 @@ in it is named for MLPerf, and what is specific to the working group's process i
 one place (`PROJECT_BRIEF.md` §8) so that any other user, a storage vendor's QA, a
 filesystem developer, a researcher, can ignore it.
 
+## Where to start
+
+Pick the row that matches what you have; each path is spelled out below.
+
+| You have | You want | Path | Needs |
+|---|---|---|---|
+| A storage system | To measure it with a workload already written | **A** | the runner |
+| A job like a shipped workload, at other sizes | The shipped workload at your job's sizes | **B** | the runner, `aeiou-params` |
+| An application not yet modeled | An abstract of it that scales and compares | **C** | `strace`, the builder, analysis (a person, or Claude) |
+| An application and one capture of it | That capture played back exactly, as soon as possible | **D** | `strace`, `aeiou-trace` |
+
+**What the tools do and do not do.** `aeiou-build` does not read traces: it compiles a Python
+builder script, which someone wrote, into an abstract. `aeiou-trace` measures an `strace`
+(`metrics`), judges an abstract against it (`compare --judge`), and exports it for literal
+playback (`export`). Nothing in the suite turns a trace into a builder script: recognizing
+the application's loops, its datasets and how it reads them, what it draws at random, and
+which calls depend on which is analysis, done by a person or by asking Claude (Claude Code)
+in this repository, which has the tools, the existing workloads, and the rules at hand.
+Fitting the parameters of a script to a trace is a script per capture kit today
+(`workloads/<category>/<mechanism>/kit/`); a general `aeiou-fit` is not built.
+
+**A. Run a shipped workload.** Start with [QUICKSTART.md](QUICKSTART.md) (the release tarball)
+or [Quick start](#quick-start) below (from source). Choose a workload from
+[`workloads/CATALOG.md`](workloads/CATALOG.md), where every case has a description in prose,
+then `aeiou check`, `aeiou dry-run` (op counts and the fingerprint, no I/O), `aeiou datagen`
+(the dataset, once per root), `aeiou run`. The fingerprint `dry-run` prints must equal the one
+`run` prints.
+
+**B. A shipped workload at your job's sizes.** Write the abstract's defaults as a parameter
+file, edit it to your job's values, check it, and run with it; for model loads and `.npz`
+datasets, `aeiou-params safetensors` and `aeiou-params npz` read the values from your real
+files:
+
+```
+aeiou-params defaults -o mine.params.json ABSTRACT
+aeiou-params check ABSTRACT mine.params.json
+aeiou dry-run ABSTRACT --gpus 8 --seed 1 --params-file mine.params.json
+```
+
+If the trace of your job would differ from the shipped one in *sequence* (other calls, another
+order, another reader), not just in sizes, it is path C.
+
+**C. Model a new application (the recommended sequence).**
+
+1. **Read the application first.** Its source and vendor documentation say what it does and
+   why; a trace only shows what it did once. Note its I/O API: an `strace` sees POSIX calls
+   and the kernel AIO calls, but not `io_uring` submissions or reads through a mapping (for
+   those, exact call counts and a page-residency probe stand in, as for the model-load and
+   IVF-search workloads).
+2. **Capture an strace** of the real application, at a size small enough to trace, on the
+   storage you will name with `--root`:
+
+   ```
+   strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy \
+       -o trace.txt <command>
+   aeiou-trace metrics trace.txt --root /mnt/data -o trace.metrics.json
+   ```
+
+   Keep the command, the application's versions, and its logs: they go in the capture's
+   record.
+3. **Ask Claude to analyze the trace and write the abstract**: give it `trace.txt`,
+   `trace.metrics.json`, the application's source or name and version, and the command line.
+   Ask for a builder script under the right `workloads/<category>/<mechanism>/` directory, built
+   with `aeiou-build --hermetic --twice`, and a parameter file fitted to the capture, then judged
+   against the trace. (A person can do the same by hand: the builder's language is
+   [aeiou-abstract(7)](man/aeiou-abstract.7.md), the shipped scripts are the examples.)
+4. **Judge the abstract against the trace**, at its fitted parameters and against other seeds
+   of itself, so it is not asked to be nearer the trace than it is to itself:
+
+   ```
+   aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed 1 --metrics-json abstract.metrics.json
+   for s in 2 3 4; do aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --seed $s --metrics-json self$s.json; done
+   aeiou-trace compare trace.metrics.json abstract.metrics.json --judge --self self2.json --self self3.json --self self4.json
+   ```
+
+   A row outside its tolerance means the script, not just a parameter, is wrong more often
+   than not: back to step 3 with the rows.
+5. **Commit it as a case** with its capture (`cases/<case>/captures/<capture>/`, the verdict
+   in `capture.toml`), and regenerate the catalog: [workloads/README.md](workloads/README.md),
+   "Adding one". Traces you may not publish stay out of the tree; the metrics document and
+   the verdict are what is committed.
+6. **Scale it.** The abstract is now a shape: a parameter file at a real job's sizes is a
+   new case (path B), with no new trace.
+
+**D. Play back one capture exactly.** `aeiou-trace export` writes the trace as the file the
+runner's `trace` node executes literally, one lane per traced task, with no analysis:
+
+```
+aeiou-trace export trace.txt --root /mnt/data -o app.jsonl       # prints the sha256
+```
+
+then a builder script with one actor of `count=1` whose body is `w.trace("app.jsonl",
+sha256)`, and `aeiou run` with `--gpus 1` ([runner/REFERENCE.md](runner/REFERENCE.md) §13).
+It is that one capture and nothing more: one process on one host, at the sizes it was
+traced at, in the order that day's timing produced, and never CLOSED, so it is not a
+result to compare across systems. It is a quick check of a storage system against an
+application, and a reference to run beside path C's abstract; it does not replace it.
+
 ## Why another benchmark
 
 Most storage benchmarks describe a workload as a probability per operation: so many percent

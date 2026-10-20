@@ -3,6 +3,11 @@
 This is the fastest way to a first run and a first bug report. It needs no Rust toolchain
 and, for the runner alone, no Python.
 
+Not sure which path is yours (run a shipped workload, run one at your job's sizes, model a
+new application from an `strace`, or play one capture back)? The repository README's
+[Where to start](https://github.com/FileSystemGuy/aeiou#where-to-start) lays out each,
+with the recommended sequence of tools.
+
 ## What is in the tarball
 
 | Path | What |
