@@ -78,7 +78,7 @@ order, another reader), not just in sizes, it is path C.
    `trace.metrics.json`, the application's source or name and version, and the command line.
    Ask for a builder script under the right `workloads/<category>/<mechanism>/` directory, built
    with `aeiou-build --hermetic --twice`, and a parameter file fitted to the capture, then judged
-   against the trace. (A person can do the same by hand: the builder's language is
+   against the trace. Use Claude Opus 5.5 or a more capable model for this step. (A person can do the same by hand: the builder's language is
    [aeiou-abstract(7)](man/aeiou-abstract.7.md), the shipped scripts are the examples.)
 4. **Judge the abstract against the trace**, at its fitted parameters and against other seeds
    of itself, so it is not asked to be nearer the trace than it is to itself:
