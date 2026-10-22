@@ -343,6 +343,16 @@ fn a_locks_constraints_are_judged_when_their_names_are_known() {
     assert_eq!(doc["verdict"]["error"], Value::Null, "a valid run that did not pass: no error");
     let verdicts = doc["constraints"].as_array().unwrap();
     assert_eq!(verdicts.iter().map(|v| (v["when"].as_str().unwrap(), v["passed"].as_bool().unwrap())).collect::<Vec<_>>(), [("resolve", true), ("the gate", true), ("after the run", false)]);
+    // the step times (DESIGN_REVIEW §3.78 point 15): 2 GPUs × 3 steps of compute, 2 × 2 delays
+    // (an instance's last step has none), the slowest first, each with its instance and step
+    let steps = &doc["result"]["steps"];
+    assert_eq!((steps["compute"]["count"].as_u64(), steps["delay"]["count"].as_u64()), (Some(6), Some(4)), "{steps}");
+    assert!(steps["compute"]["p50_ns"].as_u64().unwrap() >= 500_000, "1 ms of compute slept, a bucket's lower bound: {steps}");
+    let slow = steps["slowest_delays"].as_array().unwrap();
+    assert_eq!(slow.len(), 4);
+    assert!(slow.windows(2).all(|w| w[0]["delay_ns"].as_u64() >= w[1]["delay_ns"].as_u64()));
+    assert!(slow.iter().all(|d| d["template"] == "gpu" && d["step"].as_u64().unwrap() < 2 && d["instance"].as_u64().unwrap() < 2));
+    assert!(out.contains("step compute (6 steps): p50 ") && out.contains("  slowest delays: "), "{out}");
     assert_eq!(doc["case"]["name"], "toy/job");
     assert_eq!(doc["case"]["lock"]["name"], "toy/job", "the lock embedded");
     assert_eq!(doc["case"]["params"]["k"], json!({"value": 3, "state": "default", "source": "cat/toy/cases/job/job.params.json"}));

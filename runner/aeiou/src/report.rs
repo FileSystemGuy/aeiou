@@ -137,6 +137,15 @@ fn stats(s: &Stats, secs: f64) -> Map<String, Value> {
         .collect();
     m.insert("phases".into(), Value::Object(phases));
     m.insert("compute_ns".into(), json!(s.compute_ns));
+    // every step's compute and delay, fixed-size (DESIGN_REVIEW §3.78 point 15)
+    m.insert(
+        "steps".into(),
+        json!({
+            "compute": hist(&s.steps.compute),
+            "delay": hist(&s.steps.delay),
+            "slowest_delays": s.steps.slowest.iter().map(|(ns, t, a, k)| json!({"delay_ns": ns, "template": t, "instance": a, "step": k})).collect::<Vec<_>>(),
+        }),
+    );
     m.insert("io_ns".into(), json!(s.io_ns));
     m.insert("barriers".into(), json!(s.barriers));
     m.insert("barrier_wait_ns".into(), json!(s.barrier_wait_ns));

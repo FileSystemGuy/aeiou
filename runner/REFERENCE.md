@@ -1697,7 +1697,8 @@ host, ranks [{rank, host, gpus}], templates {name: instances}, elapsed_ns, finge
 ops, bytes_read, bytes_written, rates {ops_per_s, read_bytes_per_s, written_bytes_per_s},
 by_kind {open: n, …}, phases {name: {ops, bytes_read, bytes_written, io_ns}},
 latency {kind: {count, sum_ns, mean_ns, p50_ns, p90_ns, p99_ns, p999_ns, max_ns, buckets [[lower_ns, count], …]}},
-compute_ns, io_ns, barriers, barrier_wait_ns, takes, puts, expected_errors, threads, threads_peak,
+compute_ns, steps {compute, delay: hist, slowest_delays [{delay_ns, template, instance, step}]},
+io_ns, barriers, barrier_wait_ns, takes, puts, expected_errors, threads, threads_peak,
 input_opens, warm_opens, objects_created, departure_releases {scope: n}, warnings [text],
 counters {…§4…}, io_uring, libaio, mmap (null unless that backend ran), cold [{host, dropped, residency}],
 object {retries, retries_by_cause {cause: n}} (null without an object endpoint; §16, 2026-10-15),
@@ -2391,4 +2392,26 @@ run**, on the merged report. Each verdict is printed (`constraint at the gate: p
 invalid run (exit 1); a failure after the run is a valid run that **did not pass**: the
 report is written with every verdict and no error, and the exit status is 3 (rank 0 alone;
 the other hosts exit 0, and `aeiou-launch` exits 3 when no rank failed otherwise).
+
+**Step times** (2026-10-22, `DESIGN_REVIEW.md` §3.78 point 15; `run::StepTimes`). A step of
+an instance that takes is what follows a `take`, to its next: its **compute** is the time its
+`compute` sleeps took (the emulated compute as slept, so its spread is the timer's overshoot
+and shows an overloaded client), and its **delay** is from the end of its last compute (its
+start when it computed nothing) to the return of the next `take` (the wait for data, and a
+barrier where the abstract has one: the storage's signal). An instance's last step has a
+compute and no delay. Two histograms in the report's latency buckets, over every step of every
+instance, and the ten slowest delays with each one's instance and step (`step compute (N
+steps): p50 … p99 … max …`, `step delay …`, `slowest delays: 6.5ms gpu#0 step 0, …`; the
+report's `steps`). Each instance's thread keeps its own, fixed-size, with two clock reads per
+step; they are merged bucket by bucket with the statistics (`Stats::merge`), per host and on
+rank 0, so nothing is stored per step and nothing is written during the run.
+
+**No I/O of aeiou's own during the run** (a rule, §3.78 point 16). Between the gate and the end
+of a run, nothing the runner writes for its own records touches a file system: the report,
+the step times, and the counters are held in memory and written after the end (the
+`--report-json` file is made empty before the gate, so a place it cannot be written is found
+then). `builder/tests/test_no_io.py` holds a run to it under `strace -f -y`: between its first
+and last op on a dataset file, every path a call names and every file a write goes to is under
+`--root`, `/proc`, `/sys`, or `/dev`. Outside the runner's reach: a shell redirect of its
+output, and the `--report-json` path, belong off the system under test.
 

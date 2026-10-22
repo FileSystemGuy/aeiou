@@ -6901,6 +6901,22 @@ judged at resolve, at the gate (rank 0, before its `ready`), and after the run; 
   before broadcasting, so a host heard "connection closed" in place of the reason under load;
   rank 0 now stops through its server, under the state lock, before it returns.
 
+**Built: step times and the no-I/O rule** (2026-10-22, `runner/REFERENCE.md` §17). Choices
+made in the build, open to revision:
+
+- **A step is what follows a `take`**, to the next one, so steps exist for the instances that
+  take (a training GPU); the compute is the measured sleep of its `compute`s, the delay runs
+  from the end of the last one to the next take's return, and an instance's last step has no
+  delay (its counts are the steps less one per instance).
+- **The accumulator lives in the statistics** (`Stats::steps`) and merges with them, so it
+  reaches rank 0 with the report each host already sends; the ten slowest are kept sorted,
+  ties by template, instance, and step, so a merge is order-free.
+- **The no-I/O test runs under `strace`** in the Python suite (CI's integration job has it),
+  on the `sync` backend, whose ops are calls strace sees; the event loops' reporting is the
+  same code. Reads of `/proc`, `/sys`, and `/dev` are allowed during the run (the counters'
+  sampler reads `/proc`): they are no storage. The build confirmed no path of `aeiou run`
+  wrote during a run before the test was written; the test keeps it so.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

@@ -494,6 +494,57 @@ impl LatHist {
     }
 }
 
+/// The slowest step delays kept, with where each happened (`DESIGN_REVIEW.md` §3.78 point 15).
+pub const SLOWEST: usize = 10;
+
+/// Step times (§3.78 point 15): over every step of every instance that takes, the **compute**
+/// time of the step (the emulated compute as slept, so its spread is the timer's overshoot and
+/// shows an overloaded client) and the **delay** from the end of a step's compute to the start
+/// of the next (the wait for data, and a barrier where the abstract has one: the storage's
+/// signal), with the slowest delays and each one's instance and step. A step is what follows a
+/// `take`, to the next; the last step of an instance has a compute and no delay. Fixed-size, kept
+/// by each instance's own thread with two clock reads per step and merged bucket by bucket
+/// (`Stats::merge`), so nothing is stored per step and nothing is written during the run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StepTimes {
+    pub compute: LatHist,
+    pub delay: LatHist,
+    /// The slowest delays, slowest first: (delay ns, template, instance, step).
+    pub slowest: Vec<(u64, String, i64, u64)>,
+}
+
+impl StepTimes {
+    fn keep(&mut self) {
+        self.slowest.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
+        self.slowest.truncate(SLOWEST);
+    }
+
+    pub(crate) fn delay(&mut self, ns: u64, template: &str, actor: i64, step: u64) {
+        self.delay.add(ns);
+        if self.slowest.len() < SLOWEST || self.slowest.last().is_some_and(|l| ns > l.0) {
+            self.slowest.push((ns, template.to_string(), actor, step));
+            self.keep();
+        }
+    }
+
+    pub fn merge(&mut self, o: &StepTimes) {
+        self.compute.merge(&o.compute);
+        self.delay.merge(&o.delay);
+        self.slowest.extend(o.slowest.iter().cloned());
+        self.keep();
+    }
+}
+
+/// The step an instance is in (`StepTimes`): when its take returned, its compute so far, when
+/// the last compute ended, and its ordinal.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OpenStep {
+    start: Instant,
+    compute_ns: u64,
+    compute_end: Option<Instant>,
+    index: u64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PhaseStats {
     pub ops: u64,
@@ -522,6 +573,8 @@ pub struct Stats {
     /// Opens of objects of input namespaces, and of those the ones written on this host.
     pub input_opens: u64,
     pub warm_opens: u64,
+    #[serde(default)]
+    pub steps: StepTimes,
 }
 
 impl Stats {
@@ -553,6 +606,7 @@ impl Stats {
         self.threads += o.threads;
         self.input_opens += o.input_opens;
         self.warm_opens += o.warm_opens;
+        self.steps.merge(&o.steps);
     }
 }
 
@@ -1218,6 +1272,10 @@ pub(crate) struct ActorState {
     /// next one is paced from it, not from when the sleep returned, so oversleeping does not
     /// add up over a run of consecutive computes (`pace`). Cleared by every other step.
     pub(crate) pace: Option<Instant>,
+    /// The step this instance is in, once it has taken (`StepTimes`), and when the compute it
+    /// is sleeping began.
+    pub(crate) step: Option<OpenStep>,
+    pub(crate) compute_from: Option<Instant>,
 }
 
 impl ActorState {
@@ -1236,6 +1294,8 @@ impl ActorState {
             actor,
             started: Instant::now(),
             pace: None,
+            step: None,
+            compute_from: None,
         }
     }
 
@@ -1402,6 +1462,35 @@ impl ActorState {
     pub(crate) fn took(&mut self, stall_ns: u64) {
         self.st.takes += 1;
         self.takes.push(TakeRec { stall_ns, compute_ns: 0 });
+        // the step before ends where this one begins: its compute, and its delay from the end of
+        // that compute (its start when it computed nothing) to now
+        let now = Instant::now();
+        let index = match self.step.take() {
+            Some(s) => {
+                self.st.steps.compute.add(s.compute_ns);
+                let from = s.compute_end.unwrap_or(s.start);
+                self.st.steps.delay(now.saturating_duration_since(from).as_nanos() as u64, self.template, self.actor, s.index);
+                s.index + 1
+            }
+            None => 0,
+        };
+        self.step = Some(OpenStep { start: now, compute_ns: 0, compute_end: None, index });
+    }
+
+    /// A `compute` sleep begins (`StepTimes`); counted only inside a step.
+    pub(crate) fn compute_begin(&mut self) {
+        if self.step.is_some() {
+            self.compute_from = Some(Instant::now());
+        }
+    }
+
+    /// The `compute` sleep that `compute_begin` began has ended.
+    pub(crate) fn compute_end(&mut self) {
+        if let (Some(s), Some(t0)) = (self.step.as_mut(), self.compute_from.take()) {
+            let now = Instant::now();
+            s.compute_ns += now.saturating_duration_since(t0).as_nanos() as u64;
+            s.compute_end = Some(now);
+        }
     }
 
     /// When an actor ends: an object it opened for writing and never closed. Its upload is
@@ -1426,6 +1515,10 @@ impl ActorState {
             sh.removed.lock().unwrap().append(&mut self.removed);
         }
         if self.main {
+            // the last step has its compute and no next step to be delayed
+            if let Some(s) = self.step.take() {
+                self.st.steps.compute.add(s.compute_ns);
+            }
             if let Some(scopes) = sh.scopes.get(self.template) {
                 for s in scopes {
                     sh.coord.leave(s);
@@ -1885,7 +1978,9 @@ impl Sink<'static, 'static> for Runner {
                 let ns = ns.max(0) as u64;
                 let scaled = (ns as f64 * self.sh.opts.time_scale) as u64;
                 if scaled > 0 {
+                    self.a.compute_begin();
                     sleep_until(self.a.pace(scaled));
+                    self.a.compute_end();
                 }
                 self.a.computed(ns);
             }
@@ -3066,6 +3161,18 @@ pub fn write_report(out: &mut impl Write, r: &Report) -> std::io::Result<()> {
             }
             let busy = crate::report::busy(compute, h.sum, r.time_scale);
             writeln!(out, "  {:<12} {:>10} {:>10} {:>10} {:>8.3}", format!("{lo}..{hi}"), us(h.mean()), us(h.quantile(0.99)), us(h.max), busy)?;
+        }
+    }
+    // step times (DESIGN_REVIEW §3.78 point 15): every step's compute and delay, and where the
+    // slowest delays were
+    let st = &s.steps;
+    if st.compute.count > 0 {
+        let q = |h: &LatHist| format!("p50 {} p99 {} max {}", us(h.quantile(0.5)), us(h.quantile(0.99)), us(h.max));
+        writeln!(out, "step compute ({} steps): {}", st.compute.count, q(&st.compute))?;
+        if st.delay.count > 0 {
+            writeln!(out, "step delay ({} steps): {}", st.delay.count, q(&st.delay))?;
+            let slow: Vec<String> = st.slowest.iter().map(|(ns, t, a, k)| format!("{} {t}#{a} step {k}", us(*ns))).collect();
+            writeln!(out, "  slowest delays: {}", slow.join(", "))?;
         }
     }
     writeln!(out, "fingerprint {:016x}", s.fingerprint)?;

@@ -1271,6 +1271,7 @@ impl<E: Engine> Loop<E> {
                 let id = *id;
                 self.timers.pop();
                 self.tasks[id].wait = Wait::None;
+                self.tasks[id].io.a.compute_end();
                 self.ready(id);
             }
             if !self.barrier_waiters.is_empty() {
@@ -1457,6 +1458,7 @@ impl<E: Engine> Loop<E> {
                             let scaled = (ns as f64 * sh.opts.time_scale) as u64;
                             if scaled > 0 {
                                 t.wait = Wait::Timer;
+                                t.io.a.compute_begin();
                                 let d = t.io.a.pace(scaled);
                                 self.timers.push(Reverse((d, id)));
                                 return Ok(());
