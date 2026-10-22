@@ -45,8 +45,10 @@ from aeiou import *
 
 w = Workload("file_per_sample", doc="…")
 P = w.P
-w.param("batch", 32, unit="count")
-w.param("step_time", 105 * ms, unit="ns", doc="[measure]")
+w.param("batch", kind=int, unit="count")                 # required: each use case gives it
+w.param("step_time", kind=int, unit="ns", doc="[measure]")
+w.param("samples", 50_000_000, unit="count", scale=True)   # sized per site by a submission
+w.param("hdr_read", st_blksize(of="train", fallback=1 * MiB), unit="bytes")   # what the storage reports
 w.param("reuse", mixture((0.55, none), (0.45, lognormal(median=40, sigma=1.2, min=1))))
 
 train = w.dataset("train", pattern="train/{id div 1300:05}/img_{id:09}.jpg", layout="whole", access="map",
@@ -73,6 +75,16 @@ with w.actor("gpu") as gpu:                              # count defaults to the
 if __name__ == "__main__":
     w.write()                                            # <name>.ast.json, validated, with provenance
 ```
+
+A parameter (contract 0.11, `schema/README.md` §1, `DESIGN_REVIEW.md` §3.78) has a default,
+the value of a real fact of the layer that sets it (a library's chunk size), or is
+**required**: `kind=int`, `float`, `bool`, `str`, `Dist`, or `list[int]` and the like, and no
+default, for a value that varies with every use case (the job's batch and step time), so a run
+that forgets it is refused instead of running another job. `scale=True` marks what a
+submission sizes per site. `st_blksize(of=DATASET, fallback=BYTES)` is a default the storage
+reports: `aeiou run` reads it by `stat` of the dataset's first file, `aeiou dry-run` takes it
+with `--st-blksize`, `fallback` where the storage reports none. A parameter's name never
+has a dot (an identifier), so it never takes a runner fact's or result's name.
 
 **Declarations** on the `Workload`: `param(name, default, unit=, doc=, cli=)` or
 `params(**defaults)`; `dataset(name, pattern=, layout=, access=, count=, size=, seed=,

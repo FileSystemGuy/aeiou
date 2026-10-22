@@ -8,7 +8,7 @@ use aeiou::metrics::{self, Opts};
 
 fn dry(name: &str, gpus: i64, params: &[(&str, &str)], threads: usize, opts: Option<Opts>) -> dryrun::Report {
     let text = std::fs::read_to_string(crate::common::workload_ast(name)).unwrap();
-    let cfg = Config { seed: 1, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] };
+    let cfg = Config { seed: 1, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![], st_blksize: Default::default() };
     let loaded = aeiou::load_str(&text).expect("valid abstract");
     let params = Params::new(&loaded.ast, &cfg).unwrap();
     let model = build_model(&loaded.ast, &cfg, &params).unwrap();

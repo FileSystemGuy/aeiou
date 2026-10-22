@@ -354,7 +354,7 @@ def every_kind() -> dict:
             {"mkdir": {"dir": r("h")}}, {"readdir": {"dir": r("h"), "repeat": "until_end"}}, {"rmdir": {"dir": r("h")}},
             {"rename": {"from": r("o"), "to": r("o")}}]}},
     ]
-    return {"ast": "0.10", "name": "every_kind", "doc": "Every kind.",
+    return {"ast": "0.11", "name": "every_kind", "doc": "Every kind.",
             "params": {"n": {"default": 8, "unit": "bytes"}, "on": {"default": False}, "arr": {"default": [1, 2, 3]}},
             "datasets": {"ds": {"pattern": "d/{id div 4}/f{id}", "layout": "compound", "access": "map", "count": 100,
                                 "samples_per_file": 5, "size": {"const": 4096}, "seed": 1,

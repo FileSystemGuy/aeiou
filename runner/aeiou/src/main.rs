@@ -560,6 +560,9 @@ struct DryRunArgs {
     /// Hosts the run would be spread over, for the bytes-per-host estimate.
     #[arg(long, help_heading = "Output")]
     ranks: Option<i64>,
+    /// The st_blksize the storage reports, for the parameters that read it (contract 0.11): BYTES for every dataset they name, DATASET=BYTES for one; repeatable [default: each one's fallback].
+    #[arg(long = "st-blksize", value_name = "[DATASET=]BYTES", help_heading = "Workload")]
+    st_blksize: Vec<String>,
     /// Worker threads (default: all cores).
     #[arg(long, help_heading = "Output")]
     threads: Option<usize>,
@@ -1344,6 +1347,8 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     } else {
         Vec::new()
     };
+    // the values the storage reports (contract 0.11), read before the model is built
+    cfg.st_blksize = run::st_blksize(loaded, &cfg, &(a.root.as_path(), &endpoints))?;
     let layers: &Layers = layers;
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
@@ -1359,6 +1364,7 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     doc.set("seed", serde_json::json!(cfg.seed));
     doc.set("gpus", serde_json::json!(cfg.gpus));
     doc.set("params", payload::params_json(&loaded.doc, cfg, params)?);
+    doc.set("storage_reported", storage_reported(&loaded.ast, cfg));
     // each protocol's API, null for a protocol the abstract has no names on
     doc.set("posix", serde_json::json!(used.posix.then(|| backend.api.name())));
     doc.set("cache", serde_json::json!(used.posix.then(|| backend.cache.name())));
@@ -1376,6 +1382,9 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
     layers.print(&mut out)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
+    if let Some(line) = storage_line(&loaded.ast, cfg, "stat of its first file") {
+        writeln!(out, "{line}")?;
+    }
     let apis = |b: BackendKind, s: S3Api| -> String {
         let mut parts = Vec::new();
         if used.posix {
@@ -1790,6 +1799,62 @@ fn check(files: Vec<PathBuf>, config: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// Each storage-reported parameter (contract 0.11) with its rule and the number it came to:
+/// what the workload id leaves out and the report carries (`DESIGN_REVIEW.md` §3.78 point 11).
+fn storage_reported(ast: &aeiou::ast::Ast, cfg: &Config) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for (name, p) in &ast.params {
+        if let Some(src) = &p.source {
+            let given = cfg.st_blksize.get(&src.of);
+            out.insert(name.clone(), serde_json::json!({"from": "st_blksize", "of": src.of, "value": given.copied().unwrap_or(src.fallback), "reported": given.is_some()}));
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+/// The storage-reported parameters (contract 0.11) as the header prints them, each with its
+/// number and where it came from; `None` when the abstract has none.
+fn storage_line(ast: &aeiou::ast::Ast, cfg: &Config, by: &str) -> Option<String> {
+    let parts: Vec<String> = ast
+        .params
+        .iter()
+        .filter_map(|(name, p)| {
+            let src = p.source.as_ref()?;
+            Some(match cfg.st_blksize.get(&src.of) {
+                Some(n) => format!("{name}={n} (st_blksize of `{}`, {by})", src.of),
+                None => format!("{name}={} (st_blksize of `{}`: the fallback, none reported)", src.fallback, src.of),
+            })
+        })
+        .collect();
+    (!parts.is_empty()).then(|| format!("storage-reported: {}", parts.join("  ")))
+}
+
+/// `--st-blksize N` for every dataset a storage-reported parameter names, `--st-blksize
+/// DATASET=N` for one: what `aeiou dry-run` takes in place of the storage (contract 0.11).
+fn st_blksize_given(ast: &aeiou::ast::Ast, given: &[String]) -> Result<std::collections::BTreeMap<String, i64>> {
+    let named: std::collections::BTreeSet<&str> = ast.params.values().filter_map(|p| p.source.as_ref()).map(|s| s.of.as_str()).collect();
+    let mut out = std::collections::BTreeMap::new();
+    for g in given {
+        let (ds, n) = match g.split_once('=') {
+            Some((d, n)) => (Some(d), n),
+            None => (None, g.as_str()),
+        };
+        let n: i64 = n.parse().ok().filter(|n| *n > 0).ok_or_else(|| usage::err(format!("--st-blksize {g}: expected a positive byte count, or DATASET=BYTES")))?;
+        match ds {
+            Some(d) if !named.contains(d) => aeiou::usage!("--st-blksize {g}: no storage-reported parameter reads dataset `{d}`"),
+            Some(d) => {
+                out.insert(d.to_string(), n);
+            }
+            None => {
+                for d in &named {
+                    out.insert(d.to_string(), n);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn parse_config(a: &ShapeArgs, gpus: i64, seed: u64) -> Result<Config> {
     if gpus < 1 {
         aeiou::usage!("--gpus {gpus}: must be at least 1");
@@ -1803,7 +1868,7 @@ fn parse_config(a: &ShapeArgs, gpus: i64, seed: u64) -> Result<Config> {
     for p in &a.param_files {
         sets.push(ParamSet::load(p)?);
     }
-    Ok(Config { seed, gpus, overrides, sets })
+    Ok(Config { seed, gpus, overrides, sets, st_blksize: Default::default() })
 }
 
 /// The parameters in effect, as the header line prints them: the files (with their hashes)
@@ -1826,6 +1891,7 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     fix_shape(&mut l, &a.run.shape)?;
     l.fixed("gpus", &a.run.gpus, a.run.gpus.is_some())?;
     l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
+    l.fixed("st-blksize", &a.st_blksize, !a.st_blksize.is_empty())?;
     l.fixed("gpu", &a.gpu, a.gpu.is_some())?;
     l.fixed("steps", &a.steps, a.steps.is_some())?;
     l.fixed("limit", &a.limit, a.limit.is_some())?;
@@ -1880,9 +1946,10 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         aeiou::usage!("--metrics-sample 0: N is at least 1 (1 keeps every block)");
     }
     let (abstract_path, gpus) = (abstract_path.expect("checked"), gpus.expect("checked"));
-    let cfg = parse_config(&a.run.shape, gpus, a.run.seed)?;
+    let mut cfg = parse_config(&a.run.shape, gpus, a.run.seed)?;
     let loaded = aeiou::load(&abstract_path)?;
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
+    cfg.st_blksize = st_blksize_given(&loaded.ast, &a.st_blksize)?;
     let params = Params::new(&loaded.ast, &cfg)?;
     let mut model = build_model(&loaded.ast, &cfg, &params)?;
     model.traces = loaded.traces.clone();
@@ -1937,6 +2004,9 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         writeln!(out, "declared s3 {}", aeiou::backend::declared_s3(&loaded.ast)?.name())?;
     }
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(&cfg))?;
+    if let Some(line) = storage_line(&loaded.ast, &cfg, "--st-blksize") {
+        writeln!(out, "{line}")?;
+    }
     for line in report.total.take_lines() {
         writeln!(out, "{line}")?;
     }

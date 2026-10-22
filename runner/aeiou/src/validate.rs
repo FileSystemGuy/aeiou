@@ -585,7 +585,19 @@ impl<'a> Checker<'a> {
                 }
             }
             // on a run, the value in effect: a given distribution is checked as the default is
-            self.pvalue(self.given.and_then(|g| g.get(pname.as_str())).unwrap_or(&param.default), &path);
+            if let Some(v) = self.given.and_then(|g| g.get(pname.as_str())).or(param.default.as_ref()) {
+                self.pvalue(v, &path);
+            }
+            // V28 (contract 0.11): a storage-reported value is read from a declared dataset's
+            // storage, and its fallback is a request size
+            if let Some(src) = &param.source {
+                if !ast.datasets.contains_key(&src.of) {
+                    self.err(&p(&path, &["default", "of"]), format!("`{}` is not a declared dataset (V28)", src.of));
+                }
+                if src.fallback < 1 {
+                    self.err(&p(&path, &["default", "fallback"]), format!("{} is not a positive byte count (V28)", src.fallback));
+                }
+            }
         }
         // every rule after this one follows a `param` to its value; through a cycle it would
         // never return, so a document with one is judged no further
@@ -853,16 +865,17 @@ impl<'a> Checker<'a> {
     }
 
     /// V23 (contract 0.10, `DESIGN_REVIEW.md` §3.75): a divisor named in a pattern
-    /// (`{id div files_per_directory}`) is a declared parameter whose default is an integer.
+    /// (`{id div files_per_directory}`) is a declared parameter whose kind is an integer (its
+    /// default's, or, required, its `kind`; contract 0.11).
     fn divisors(&mut self, pattern: &str, path: &P) {
         let pt = match crate::pattern::Pattern::parse(pattern) {
             Ok(pt) => pt,
             Err(e) => return self.err(path, e.to_string()),
         };
         for name in pt.params() {
-            match self.ast.params.get(name).map(|p| &p.default) {
-                Some(PValue::Scalar(Literal::Int(_))) => {}
-                Some(_) => self.err(path, format!("divisor `{name}` is a parameter whose default is not an integer (V23)")),
+            match self.ast.params.get(name).map(|p| p.kind) {
+                Some(Kind::Int) => {}
+                Some(_) => self.err(path, format!("divisor `{name}` is a parameter whose kind is not an integer (V23)")),
                 None => self.err(path, format!("divisor `{name}` is not a declared parameter (V23)")),
             }
         }
@@ -1358,7 +1371,7 @@ impl<'a> Checker<'a> {
 
     /// The value in effect of parameter `name`: given, else the default.
     fn param_value(&self, name: &str) -> Option<&PValue> {
-        self.given.and_then(|g| g.get(name)).or_else(|| self.ast.params.get(name).map(|p| &p.default))
+        self.given.and_then(|g| g.get(name)).or_else(|| self.ast.params.get(name).and_then(|p| p.default.as_ref()))
     }
 
     /// V1: a parameter whose value in effect names, through `param`s, the parameter itself is
@@ -1424,12 +1437,14 @@ impl<'a> Checker<'a> {
             ExprNode::Ref(name) | ExprNode::Index(name) if scope.fields.contains(name.as_str()) => None,
             ExprNode::Ref(name) => scope.kind_of(name),
             ExprNode::At { name, .. } => if scope.forward.contains(name.as_str()) { None } else { scope.kind_of(name) },
-            ExprNode::Param(name) => self.param_value(name).map(pvalue_kind),
+            // a required parameter (contract 0.11) with no value yet: its declared kind
+            ExprNode::Param(name) => self.param_value(name).map(pvalue_kind).or_else(|| self.ast.params.get(name).map(|p| p.kind.name())),
             ExprNode::Elem { array, .. } => match self.param_value(array) {
                 Some(PValue::Array(a)) if !a.is_empty() => {
                     let k = pvalue_kind(&a[0]);
                     a.iter().all(|x| pvalue_kind(x) == k).then_some(k)
                 }
+                None => self.ast.params.get(array).and_then(|p| p.items).map(Kind::name),
                 _ => None,
             },
             ExprNode::Index(_) | ExprNode::Actor(_) | ExprNode::Count(_) | ExprNode::Dirs(_) | ExprNode::Len(_) | ExprNode::Size(_)
@@ -1545,7 +1560,16 @@ impl<'a> Checker<'a> {
     /// reads it.
     fn array(&mut self, name: &str, op: &str, path: &P, numbers: bool) {
         match self.param_value(name) {
-            None => self.err(path, format!("unknown parameter array `{name}`")),
+            // a required parameter (contract 0.11) with no value yet: its declared kind
+            None => match self.ast.params.get(name) {
+                None => self.err(path, format!("unknown parameter array `{name}`")),
+                Some(p) if p.kind != Kind::Array => self.err(path, format!("{op}: parameter `{name}` is not an array (V27)")),
+                Some(p) => {
+                    if let Some(k) = p.items.filter(|k| numbers && !matches!(k, Kind::Int | Kind::Float)) {
+                        self.err(path, format!("{op}: an element of `{name}` is {} (V27)", kind_name(k.name())));
+                    }
+                }
+            },
             Some(PValue::Array(a)) => {
                 if numbers {
                     if let Some(k) = a.iter().map(pvalue_kind).find(|k| !matches!(*k, "int" | "float")) {
@@ -1794,7 +1818,7 @@ impl<'a> Checker<'a> {
                     _ => false,
                 },
                 ExprNode::Param(name) => {
-                    let value = self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).map(|p| &p.default));
+                    let value = self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).and_then(|p| p.default.as_ref()));
                     match value {
                         Some(PValue::Dist(d)) => self.dist_at_least(d, k, scope),
                         _ => false,
@@ -1856,7 +1880,7 @@ impl<'a> Checker<'a> {
         let l = match e {
             Expr::Lit(l) => l,
             Expr::Node(n) => match n.as_ref() {
-                ExprNode::Param(name) => match self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).map(|p| &p.default)) {
+                ExprNode::Param(name) => match self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).and_then(|p| p.default.as_ref())) {
                     Some(PValue::Scalar(l)) => l,
                     _ => return None,
                 },
@@ -1925,7 +1949,7 @@ impl<'a> Checker<'a> {
     fn least_expr(&self, e: &Expr) -> Option<Least> {
         if let Expr::Node(n) = e {
             if let ExprNode::Param(name) = n.as_ref() {
-                if let Some(PValue::Dist(d)) = self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).map(|p| &p.default)) {
+                if let Some(PValue::Dist(d)) = self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).and_then(|p| p.default.as_ref())) {
                     return self.least_dist(d);
                 }
             }

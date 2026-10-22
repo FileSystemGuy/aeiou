@@ -943,7 +943,7 @@ mod tests {
     /// The model of `text` (one dataset), handed to `f` with its first dataset and its `format`.
     fn with_meta<R>(text: &str, f: impl FnOnce(&DsMeta<'_>, &Value) -> R) -> R {
         let loaded = crate::load_str(text).unwrap();
-        let cfg = crate::eval::Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![] };
+        let cfg = crate::eval::Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![], st_blksize: Default::default() };
         let params = crate::eval::Params::new(&loaded.ast, &cfg).unwrap();
         let model = crate::eval::build_model(&loaded.ast, &cfg, &params).unwrap();
         let doc: Value = serde_json::from_str(text).unwrap();
@@ -952,7 +952,7 @@ mod tests {
     }
 
     fn abstract_of(dataset: &str) -> String {
-        format!(r#"{{"ast": "0.10", "name": "fmt_unit", "datasets": {{"d": {{{dataset}}}}}, "actors": {{"gpu": {{"body": []}}}}}}"#)
+        format!(r#"{{"ast": "0.11", "name": "fmt_unit", "datasets": {{"d": {{{dataset}}}}}, "actors": {{"gpu": {{"body": []}}}}}}"#)
     }
 
     fn seed_of(b: u64) -> u64 {

@@ -1,5 +1,5 @@
 {
-  "ast": "0.10",
+  "ast": "0.11",
   "name": "lmcache_shared_fs",
   "doc": "One engine per actor in front of a store with no index (LMCache fs://): stat lookups, chunks written to a temporary name and renamed.",
   "params": {
@@ -2392,11 +2392,10 @@
     "generator": {
       "script": "lmcache_shared_fs.py",
       "sha256": "f89595129f279c27cadaaf7b062fe37ae90885d9d015beae4fad7f4b441c6711",
-      "builder_version": "0.1.0",
-      "git": "4e84ba6615ad"
+      "builder_version": "0.2.1",
+      "git": "52bf0ab3f273"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "aa2846afa5058390c20218ebd3d01d9b6b52b4e79c1457abdd00ee4b6c3e23c7"
+    "ast_sha256": "f2b32e8022488a1906dc23599c522783aeffe9b7eb857ab51cd2987c0f9b0426"
   }
 }

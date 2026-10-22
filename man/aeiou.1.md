@@ -247,6 +247,14 @@ turns it off, and the last one on the line wins.
 - **--seed** *SEED*
 
   The run seed, default 0. The dataset seed is separate and lives in the abstract.
+- **--st-blksize** *[DATASET=]BYTES*
+
+  The `st_blksize` the storage reports, for the parameters whose default is
+  `{"from": "st_blksize"}` (contract 0.11): *BYTES* for every dataset they read, or
+  *DATASET*`=`*BYTES* for one. Repeatable. Without it each such parameter takes its
+  `fallback`; `aeiou run` reads the number from the storage itself, by `stat` of the
+  dataset's first file, and prints and reports it, so a dry run of another run's ops takes
+  the number that run's report gives.
 
 **Output**
 

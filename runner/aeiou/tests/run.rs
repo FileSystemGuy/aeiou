@@ -19,7 +19,7 @@ fn tmpdir(tag: &str) -> crate::common::TempDir {
 }
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
-    Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
+    Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![], st_blksize: Default::default() }
 }
 
 /// A run is the process: the model is leaked so the actor threads can borrow it.
@@ -225,7 +225,7 @@ fn an_input_namespace_inside_an_output_root_is_not_emptied() {
     let ast = base.join("r.ast.json");
     std::fs::write(
         &ast,
-        r#"{"ast": "0.10", "name": "r",
+        r#"{"ast": "0.11", "name": "r",
             "namespaces": {"o": {"pattern": "o/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "input": true},
                            "q": {"pattern": "q/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1}},
             "actors": {"gpu": {"body": [{"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
@@ -811,7 +811,7 @@ fn a_corpus_larger_than_the_free_space_is_refused_before_anything_is_written() {
     let root = tmpdir("space");
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(
         aeiou::load_str(
-            r#"{"ast": "0.10", "name": "t",
+            r#"{"ast": "0.11", "name": "t",
                 "datasets": {"big": {"layout": "whole", "access": "map", "pattern": "big/{id div 1000:04}/f_{id}", "count": 1000000, "size": {"const": 1099511627776}, "seed": 1}},
                 "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "big", "id": 0}}}}]}}}"#,
         )
@@ -867,7 +867,7 @@ fn a_local_barrier_releases_without_waiting_out_its_poll() {
 /// sub-actors would share the descriptor's position, and the offsets would depend on timing.
 #[test]
 fn a_fork_leaves_the_parents_file_positions_as_run_does() {
-    const AST: &str = r#"{"ast":"0.10","name":"fork_positions",
+    const AST: &str = r#"{"ast":"0.11","name":"fork_positions",
       "datasets":{"d":{"pattern":"d/f{id:04}","layout":"whole","access":"indexed","count":1,"size":{"const":8192},"seed":7}},
       "actors":{"gpu":{"body":[
         {"open":{"file":{"file":{"dataset":"d","id":0}},"flags":["RDONLY"]}},
@@ -952,7 +952,7 @@ fn a_failed_run_reports_its_cause_not_the_abort_it_raised() {
     let mut wrong = Vec::new();
     for (what, gpus, body) in bodies {
         let ast = format!(
-            r#"{{"ast":"0.10","name":"cause",
+            r#"{{"ast":"0.11","name":"cause",
               "datasets":{{"d":{{"pattern":"d/f{{id:04}}","layout":"whole","access":"indexed","count":1,"size":{{"const":8192}},"seed":7}}}},
               "actors":{{"gpu":{{"body":[{body}]}}}}}}"#
         );
@@ -1098,7 +1098,7 @@ fn a_loader_in_a_loop_runs_once_per_iteration() {
 fn consecutive_computes_take_their_sum_on_every_backend() {
     let root = tmpdir("computes");
     for (n, ns) in [(5000u64, 20_000u64), (40_000, 2000)] {
-        let ast = serde_json::json!({"ast": "0.10", "name": "computes", "params": {}, "datasets": {},
+        let ast = serde_json::json!({"ast": "0.11", "name": "computes", "params": {}, "datasets": {},
             "actors": {"gpu": {"body": [{"loop": {"index": "s", "to": n, "body": [{"compute": {"ns": ns}}]}}]}}});
         let path = root.join(format!("computes-{ns}.ast.json"));
         std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
@@ -1133,7 +1133,7 @@ fn consecutive_computes_take_their_sum_on_every_backend() {
 fn libaio_teardown_is_not_in_the_elapsed_time() {
     let root = tmpdir("aio-teardown");
     let ns = 100_000_000u64;
-    let ast = serde_json::json!({"ast": "0.10", "name": "teardown", "params": {}, "datasets": {},
+    let ast = serde_json::json!({"ast": "0.11", "name": "teardown", "params": {}, "datasets": {},
         "actors": {"gpu": {"body": [{"compute": {"ns": ns}}]}}});
     let path = root.join("teardown.ast.json");
     std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
@@ -1184,7 +1184,7 @@ fn least_over(limit: std::time::Duration, mut measure: impl FnMut() -> std::time
 fn the_first_large_read_is_not_charged_the_rings_growth() {
     let root = tmpdir("ring-growth");
     let mb16 = 16u64 << 20;
-    let ast = serde_json::json!({"ast": "0.10", "name": "ring", "params": {}, "datasets": {},
+    let ast = serde_json::json!({"ast": "0.11", "name": "ring", "params": {}, "datasets": {},
         "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1}},
         "actors": {"gpu": {"body": [
             {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
@@ -1223,7 +1223,7 @@ fn the_first_large_read_is_not_charged_the_rings_growth() {
 /// read whose buffer cannot be allocated, and never arrives.
 #[test]
 fn a_failed_io_uring_loop_drains_its_ring_before_it_ends() {
-    let ast = r#"{"ast":"0.10","name":"drain",
+    let ast = r#"{"ast":"0.11","name":"drain",
       "datasets":{"d":{"pattern":"d/f{id:04}","layout":"whole","access":"indexed","count":2,"size":{"const":8192},"seed":7}},
       "actors":{"gpu":{"body":[
         {"compute":{"ns":{"mul":[{"actor":"id"},100000000]}}},
@@ -1286,7 +1286,7 @@ fn stream_abstracts_take_every_shard_for_any_batch() {
 /// the timing.
 #[test]
 fn a_channel_declared_inside_a_fork_is_refused_whatever_the_timing() {
-    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"ch_fork","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |body: &str| format!(r#"{{"ast":"0.11","name":"ch_fork","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     let sub = |decl: &str| {
         format!(
             r#"{{"parallel":{{"index":"p","width":2,"body":[
@@ -1325,7 +1325,7 @@ fn a_channel_declared_inside_a_fork_is_refused_whatever_the_timing() {
 /// declared once or beside the loader in each iteration, run alike under both engines.
 #[test]
 fn a_channel_a_loaders_workers_use_is_not_declared_again_under_them() {
-    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"ch_loader","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |body: &str| format!(r#"{{"ast":"0.11","name":"ch_loader","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     let chan = r#"{"channel":{"name":"c","capacity":8}}"#;
     let lput = r#"{"loader":{"name":"q","index":"b","workers":2,"prefetch":2,"batches":4,"body":[
         {"compute":{"ns":{"mul":[{"index":"b"},10000000]}}},
@@ -1384,7 +1384,7 @@ fn run_within(model: &'static Model<'static>, o: RunOpts) -> Result<run::Report,
 /// every time, under both engines.
 #[test]
 fn a_put_waits_for_its_position_so_no_run_hangs_by_timing() {
-    let doc = |name: &str, body: &str| format!(r#"{{"ast":"0.10","name":"{name}","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |name: &str, body: &str| format!(r#"{{"ast":"0.11","name":"{name}","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     let loader = |cap: i64, ordered: bool, epochs: i64, seq: &str| doc("r12", &format!(r#"
         {{"channel":{{"name":"c","capacity":{cap},"ordered":{ordered}}}}},
         {{"loop":{{"index":"e","to":{epochs},"body":[
@@ -1422,7 +1422,7 @@ fn a_put_waits_for_its_position_so_no_run_hangs_by_timing() {
 /// under the thread runner as it was under the event loop: it had hung.
 #[test]
 fn a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs() {
-    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"r13","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |body: &str| format!(r#"{{"ast":"0.11","name":"r13","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     let repeated = doc(r#"{"channel":{"name":"c","capacity":4}},
         {"loop":{"index":"e","to":2,"body":[
           {"loader":{"name":"q","index":"b","workers":2,"prefetch":1,"batches":4,"body":[{"put":{"channel":"c","seq":{"index":"b"}}}]}},
@@ -1475,7 +1475,7 @@ fn a_repeated_seq_and_a_wait_nothing_ends_are_errors_not_hangs() {
 /// as it was under the thread runner (2026-10-15).
 #[test]
 fn an_instance_stuck_on_its_channels_is_an_error_while_a_sibling_waits_at_a_barrier() {
-    let doc = r#"{"ast":"0.10","name":"r14","actors":{"gpu":{"body":[{"channel":{"name":"c","capacity":1}},
+    let doc = r#"{"ast":"0.11","name":"r14","actors":{"gpu":{"body":[{"channel":{"name":"c","capacity":1}},
         {"cond":{"if":{"eq":[{"actor":"id"},1]},"then":[{"take":{"channel":"c"}}]}},{"barrier":{"scope":"global"}}]}}}"#;
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(doc).unwrap()));
     let cfg: &'static Config = Box::leak(Box::new(config(2, 0, &[])));
@@ -1504,7 +1504,7 @@ fn an_instance_stuck_on_its_channels_is_an_error_while_a_sibling_waits_at_a_barr
 /// abort or a closed channel.
 #[test]
 fn a_loader_workers_failure_is_the_cause_whatever_the_main_line_waits_on() {
-    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"r15","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |body: &str| format!(r#"{{"ast":"0.11","name":"r15","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     // R6: the main line takes `c` while batch 2 puts -1 on it
     let worker = doc(r#"{"channel":{"name":"c","capacity":4,"ordered":true}},
         {"loader":{"name":"q","index":"b","workers":2,"prefetch":2,"batches":4,"body":[
@@ -1558,7 +1558,7 @@ fn a_loader_workers_failure_is_the_cause_whatever_the_main_line_waits_on() {
 /// taker), and the main line before and after a fork, take in turn and are not refused.
 #[test]
 fn two_takers_in_one_fork_are_an_error_in_every_run() {
-    let doc = |body: &str| format!(r#"{{"ast":"0.10","name":"r16","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |body: &str| format!(r#"{{"ast":"0.11","name":"r16","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     let take = r#"{"take":{"channel":"c"}}"#;
     let put = |seq: &str| format!(r#"{{"put":{{"channel":"c","seq":{seq}}}}}"#);
     let when = |index: &str, k: i64, then: &str, otherwise: &str| format!(r#"{{"cond":{{"if":{{"eq":[{{"index":"{index}"}},{k}]}},"then":[{then}],"else":[{otherwise}]}}}}"#);
@@ -1617,7 +1617,7 @@ fn two_takers_in_one_fork_are_an_error_in_every_run() {
 /// whose error says which seq it waits for, under both engines.
 #[test]
 fn an_unordered_channels_missing_seq_is_a_wait_nothing_ends() {
-    let d = r#"{"ast":"0.10","name":"r17","actors":{"gpu":{"body":[{"channel":{"name":"c","capacity":2,"ordered":false}},
+    let d = r#"{"ast":"0.11","name":"r17","actors":{"gpu":{"body":[{"channel":{"name":"c","capacity":2,"ordered":false}},
         {"loop":{"index":"s","to":1000,"body":[{"put":{"channel":"c","seq":{"add":[{"index":"s"},1]}}},{"take":{"channel":"c"}}]}}]}}}"#;
     let model = model_of(d);
     let root = tmpdir("r17-gap");

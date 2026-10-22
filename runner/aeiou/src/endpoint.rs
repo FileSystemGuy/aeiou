@@ -318,7 +318,7 @@ mod tests {
     fn ast_with(object: bool) -> Ast {
         let obj = if object { r#", "obj": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 5, "protocol": "s3"}"# } else { "" };
         crate::load_str(&format!(
-            r#"{{"ast": "0.10", "name": "t",
+            r#"{{"ast": "0.11", "name": "t",
                 "datasets": {{"sysp": {{"layout": "whole", "access": "map", "pattern": "kv/sys/{{id:04}}/blk", "count": 2, "size": {{"const": 1}}, "seed": 1}},
                              "flat": {{"layout": "whole", "access": "map", "pattern": "flat/f_{{id}}", "count": 2, "size": {{"const": 1}}, "seed": 2}}}},
                 "namespaces": {{"kv": {{"pattern": "kv/{{c}}.pt", "fields": {{"c": "int"}}, "size": 1, "seed": 3}},
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn two_object_datasets_are_never_placed_at_one_prefix_or_one_inside_the_other() {
         let a = crate::load_str(
-            r#"{"ast": "0.10", "name": "t",
+            r#"{"ast": "0.11", "name": "t",
                 "datasets": {"x": {"layout": "whole", "access": "map", "pattern": "x/f_{id}", "count": 2, "size": {"const": 1}, "seed": 1, "protocol": "s3"},
                              "y": {"layout": "whole", "access": "map", "pattern": "y/f_{id}", "count": 2, "size": {"const": 1}, "seed": 2, "protocol": "s3"}},
                 "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "x", "id": 0}}}}]}}}"#,
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn a_posix_name_never_falls_under_an_object_root_and_a_key_keeps_its_rest() {
         let a = crate::load_str(
-            r#"{"ast": "0.10", "name": "t",
+            r#"{"ast": "0.11", "name": "t",
                 "datasets": {"inner": {"layout": "whole", "access": "map", "pattern": "o/in/f_{id}", "count": 2, "size": {"const": 1}, "seed": 1}},
                 "namespaces": {"outer": {"pattern": "o/{c}", "fields": {"c": "int"}, "size": 1, "seed": 2, "protocol": "s3"}},
                 "actors": {"a": {"body": [{"stat": {"file": {"file": {"dataset": "inner", "id": 0}}}}]}}}"#,

@@ -5,6 +5,7 @@ mod common;
 mod coord;
 mod cov_c2;
 mod cov_c3;
+mod cases;
 mod cov_c1;
 mod golden;
 mod layout;

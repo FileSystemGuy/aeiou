@@ -617,9 +617,30 @@ pub fn param_values(doc: &Value, cfg: &Config) -> Result<BTreeMap<String, Value>
     let mut defaults = BTreeMap::new();
     if let Some(params) = doc.get("params").and_then(|p| p.as_object()) {
         for (k, p) in params {
-            let d = p.get("default").cloned().unwrap_or(Value::Null);
-            defaults.insert(k.as_str(), d.clone());
-            out.insert(k.clone(), d);
+            // the value a given one is held to (`keep_int_json`), and the default, if any
+            let (exemplar, value) = match p.get("default") {
+                // a storage-reported value (contract 0.11): the number the storage gave
+                Some(d) if d.get("from").is_some() => {
+                    let fallback = d.get("fallback").cloned().unwrap_or(Value::Null);
+                    let of = d.get("of").and_then(|v| v.as_str()).unwrap_or("");
+                    let v = cfg.st_blksize.get(of).map_or_else(|| fallback.clone(), |n| json!(n));
+                    (fallback, Some(v))
+                }
+                Some(d) => (d.clone(), Some(d.clone())),
+                // a required parameter (contract 0.11): its declared kind
+                None => (
+                    match (p.get("kind").and_then(|v| v.as_str()), p.get("items").and_then(|v| v.as_str())) {
+                        (Some("int"), _) => json!(0),
+                        (Some("array"), Some("int")) => json!([0]),
+                        _ => Value::Null,
+                    },
+                    None,
+                ),
+            };
+            defaults.insert(k.as_str(), exemplar);
+            if let Some(v) = value {
+                out.insert(k.clone(), v);
+            }
         }
     }
     // an integral float where the default is an integer is that integer, as `Params::new`

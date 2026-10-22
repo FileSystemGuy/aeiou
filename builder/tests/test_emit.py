@@ -67,7 +67,7 @@ def test_without_git_the_provenance_has_no_git(tmp_path, monkeypatch):
         raise FileNotFoundError(2, "No such file or directory", "git")
     monkeypatch.setattr(subprocess, "run", no_git)
     assert emit.git_describe(BUILDER / "aeiou" / "emit.py") is None
-    prov = emit.provenance(BUILDER / "aeiou" / "emit.py", {"ast": "0.10"})
+    prov = emit.provenance(BUILDER / "aeiou" / "emit.py", {"ast": "0.11"})
     assert "git" not in prov["generator"]
 
 
@@ -78,7 +78,7 @@ def test_a_precomputed_lock_of_none_is_kept(pre, has_lock):
     script = BUILDER / "aeiou" / "emit.py"
     emit.PRECOMPUTED[str(script.resolve())] = {"git": None, **pre}
     try:
-        prov = emit.provenance(script, {"ast": "0.10"})
+        prov = emit.provenance(script, {"ast": "0.11"})
     finally:
         del emit.PRECOMPUTED[str(script.resolve())]
     assert ("lock" in prov) is has_lock and "git" not in prov["generator"]

@@ -22,7 +22,7 @@ fn tmpdir(tag: &str) -> crate::common::TempDir {
 }
 
 fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
-    Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] }
+    Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![], st_blksize: Default::default() }
 }
 
 fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {

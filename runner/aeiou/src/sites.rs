@@ -9,7 +9,9 @@ use crate::rng::site_hash;
 pub fn annotate(ast: &Ast) {
     let mut p = Path::default();
     for (name, param) in &ast.params {
-        p.with(&["params", name, "default"], |p| pvalue(&param.default, p));
+        if let Some(d) = &param.default {
+            p.with(&["params", name, "default"], |p| pvalue(d, p));
+        }
     }
     for (name, ds) in &ast.datasets {
         p.with(&["datasets", name], |p| {

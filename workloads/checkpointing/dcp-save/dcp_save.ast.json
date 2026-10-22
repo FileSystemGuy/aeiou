@@ -1,5 +1,5 @@
 {
-  "ast": "0.10",
+  "ast": "0.11",
   "name": "dcp_save",
   "doc": "Every rank writes its shard file per checkpoint step; rank 0 writes .metadata through a temp file and rename.",
   "params": {
@@ -594,11 +594,10 @@
     "generator": {
       "script": "dcp_save.py",
       "sha256": "9ce92720fcaad20f37c4adf77e249093f0faffb4f06bef838c5d2f954ab6a410",
-      "builder_version": "0.1.0",
-      "git": "4e84ba6615ad"
+      "builder_version": "0.2.1",
+      "git": "52bf0ab3f273"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "2462d2ce607cf9a6ff4cf435467fb75e6c73b0bc614f185a2448cd924093fccd"
+    "ast_sha256": "24d03dec648c90566f82fe3da1912744edbf20998b7130d29034811ff3934d18"
   }
 }

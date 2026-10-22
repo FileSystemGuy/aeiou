@@ -1288,7 +1288,7 @@ mod tests {
         assert_eq!(BackendKind::of(Api::Mmap, Cache::Direct), None);
         // what an abstract declares (names `aeiou check` has refused say so here too)
         let ast = |posix: &str, cache: &str| -> crate::ast::Ast {
-            serde_json::from_str(&format!(r#"{{"ast": "0.10", "name": "t", "actors": {{}}{posix}{cache}}}"#)).unwrap()
+            serde_json::from_str(&format!(r#"{{"ast": "0.11", "name": "t", "actors": {{}}{posix}{cache}}}"#)).unwrap()
         };
         assert_eq!(declared(&ast("", "")).unwrap(), BackendKind::Sync);
         assert_eq!(declared(&ast(r#", "posix": "libaio""#, r#", "cache": "direct""#)).unwrap(), BackendKind::LibAioDirect);

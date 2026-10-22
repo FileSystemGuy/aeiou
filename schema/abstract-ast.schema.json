@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.10",
+      "const": "0.11",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -64,7 +64,7 @@
     },
     "params": {
       "type": "object",
-      "description": "Named parameters, overridable from the CLI. `gpus` is reserved: the runner sets it from --gpus.",
+      "description": "Named parameters, overridable from the CLI. `gpus` is reserved: the runner sets it from --gpus. A name has no dot (`ident`), so no parameter takes the name of a runner fact or result (`fact.…`, `result.…`; contract 0.11).",
       "propertyNames": {
         "$ref": "#/$defs/ident"
       },
@@ -143,13 +143,44 @@
     },
     "param": {
       "type": "object",
-      "required": [
-        "default"
-      ],
+      "description": "A parameter (contract 0.11: a `default`, or, required, a `kind` and no default). A required parameter has no value until a use case, a submission, or the command line gives one; the runner refuses a run without it.",
       "additionalProperties": false,
       "properties": {
         "default": {
-          "$ref": "#/$defs/value"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/value"
+            },
+            {
+              "$ref": "#/$defs/source"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "int",
+            "float",
+            "bool",
+            "str",
+            "dist",
+            "array"
+          ],
+          "description": "A required parameter's kind (contract 0.11): what a value given for it must be; an `int` takes an integral number. A parameter with a default takes the default's kind."
+        },
+        "items": {
+          "enum": [
+            "int",
+            "float",
+            "bool",
+            "str",
+            "dist"
+          ],
+          "description": "With `kind: array`, the element kind."
+        },
+        "scale": {
+          "type": "boolean",
+          "default": false,
+          "description": "What a submission sizes per site (`samples`; contract 0.11): a benchmark's rules file freezes every `scale` parameter to required."
         },
         "doc": {
           "type": "string"
@@ -171,7 +202,55 @@
           ],
           "description": "Documentation only; values are already in canonical units."
         }
-      }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "default"
+          ],
+          "not": {
+            "required": [
+              "kind"
+            ]
+          }
+        },
+        {
+          "required": [
+            "kind"
+          ],
+          "not": {
+            "required": [
+              "default"
+            ]
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "const": "array"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "items"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "items"
+              ]
+            }
+          }
+        }
+      ]
     },
     "value": {
       "description": "A parameter value: a scalar, a distribution, or an array of these (a parameter array, indexed by a loop index).",
@@ -668,7 +747,7 @@
         },
         "inventory": {
           "$ref": "#/$defs/ident",
-          "description": "The inventory of the named dataset (contract 0.9): the one file its `inventory` declares in its root, of size `count \u00d7 entry`."
+          "description": "The inventory of the named dataset (contract 0.9): the one file its `inventory` declares in its root, of size `count × entry`."
         },
         "consume": {
           "$ref": "#/$defs/ident",
@@ -810,7 +889,7 @@
             "framing": {
               "type": "object",
               "additionalProperties": false,
-              "description": "The container framing (v0.2; `layout` until 0.8): file = file_header \u2016 units \u2016 file_footer, aligned; unit = unit_header \u2016 column chunks \u2016 unit_footer, aligned; column chunk = header \u2016 rows, aligned; row = row_header \u2016 fixed \u2016 share of the sample \u2016 row_footer, aligned. Every field is an expression over parameters; absent means 0 (alignments 1). No framing is the packed framing: samples back to back.",
+              "description": "The container framing (v0.2; `layout` until 0.8): file = file_header ‖ units ‖ file_footer, aligned; unit = unit_header ‖ column chunks ‖ unit_footer, aligned; column chunk = header ‖ rows, aligned; row = row_header ‖ fixed ‖ share of the sample ‖ row_footer, aligned. Every field is an expression over parameters; absent means 0 (alignments 1). No framing is the packed framing: samples back to back.",
               "properties": {
                 "unit": {
                   "$ref": "#/$defs/expr",
@@ -915,7 +994,7 @@
             },
             "entry": {
               "$ref": "#/$defs/expr",
-              "description": "Bytes per item of `count`: the inventory's size is `count \u00d7 entry`."
+              "description": "Bytes per item of `count`: the inventory's size is `count × entry`."
             }
           },
           "description": "A file list of the dataset (contract 0.9), written by datagen as payload and read through the `inventory` handle in place of a walk. Only a consumed dataset (`map` or `stream`) has one (V22). Under `run --subset` its reads are issued no further than its size at the run's count."
@@ -1828,6 +1907,28 @@
         "s3"
       ],
       "description": "Where a dataset or namespace lives (contract 0.6; `s3` was `object` until 0.7): a file system (`posix`, absent) or an S3 store (`s3`), each run giving it an endpoint (`--endpoint NAME=DIR`, default under `--root`, or `--endpoint NAME=s3://BUCKET[/PREFIX]`, required for `s3`). Not part of the dataset id or the namespace's resolved definition; datasets and namespaces sharing a root declare the same protocol (V17). The runner reaches an `s3` name through its object engine (cargo feature `object`); an `s3` namespace is written once, in order, per object (V18)."
+    },
+    "source": {
+      "type": "object",
+      "description": "A value the storage reports (contract 0.11, DESIGN_REVIEW.md §3.78 point 11): `st_blksize`, read by `stat` of the first file of dataset `of` at the gate (`aeiou dry-run --st-blksize` in place of the storage), `fallback` where the storage reports none (an object store). The system under test's by the interposition test: the workload id covers the rule, the report the number. Rule V28.",
+      "required": [
+        "from",
+        "of",
+        "fallback"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "const": "st_blksize"
+        },
+        "of": {
+          "$ref": "#/$defs/ident"
+        },
+        "fallback": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
     }
   }
 }

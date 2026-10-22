@@ -11,6 +11,7 @@ import contextlib
 import math
 import re
 import sys
+import typing
 from typing import Any
 
 from .pattern import Pattern
@@ -221,7 +222,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.10"
+    AST_VERSION = "0.11"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -263,8 +264,14 @@ class Workload:
         Workload._registry.append(self)
 
     # ---- parameters ----
-    def param(self, name: str, default, *, unit: str | None = None, doc: str | None = None,
-              cli: bool | None = None) -> Param:
+    def param(self, name: str, default=None, *, kind=None, scale: bool = False, unit: str | None = None,
+              doc: str | None = None, cli: bool | None = None) -> Param:
+        """A parameter: its `default`, or, required (contract 0.11, `DESIGN_REVIEW.md` §3.78),
+        no default and its `kind` (`int`, `float`, `bool`, `str`, `Dist`, or `list[int]` and
+        the like for an array), which a use case, a submission, or the command line must give.
+        `scale=True` marks what a submission sizes per site (`samples`), which a benchmark's
+        rules make required. `default=st_blksize(of=…, fallback=…)` is a value the storage
+        reports."""
         check_ident(name, "parameter")
         if name == "gpus":
             raise BuildError("`gpus` is reserved; the runner sets it from --gpus")
@@ -272,8 +279,23 @@ class Workload:
             raise BuildError(f"parameter {name!r} declared twice")
         if unit is not None and unit not in ("bytes", "ns", "count", "ratio", "tokens", "none"):
             raise BuildError(f"parameter {name}: unknown unit {unit!r}")
-        default = _param_value(default, name)
-        spec = {"default": default, "unit": unit, "doc": doc, "cli": cli}
+        source, items = None, None
+        if default is None:
+            if kind is None:
+                raise BuildError(f"parameter {name}: a default, or, for a required parameter, its kind "
+                                 f"(kind=int, float, bool, str, Dist, or list[int] for an array)")
+            kind, items = _kind(kind, name)
+        else:
+            if kind is not None:
+                raise BuildError(f"parameter {name}: a parameter with a default takes its kind from it; "
+                                 f"`kind` is for a required one")
+            if isinstance(default, StBlksize):
+                source, default, kind = default, default.fallback, "int"
+            else:
+                default = _param_value(default, name)
+                kind = _kind_of(default)
+        spec = {"default": default, "kind": kind, "items": items, "scale": True if scale else None, "unit": unit,
+                "doc": doc, "cli": cli, "source": source}
         self._param_specs[name] = spec
         self._params[name] = p = Param(name, default)
         return p
@@ -285,7 +307,7 @@ class Workload:
 
     def _divisors(self, pattern: str, what: str) -> None:
         """V23 (contract 0.10, DESIGN_REVIEW.md §3.75): a divisor named in a pattern
-        (`{id div files_per_directory}`) is a parameter declared before it, its default an integer."""
+        (`{id div files_per_directory}`) is a parameter declared before it, of kind `int`."""
         try:
             names = Pattern(pattern).params()
         except ValueError as e:
@@ -295,9 +317,9 @@ class Workload:
             if spec is None:
                 raise BuildError(f"{what}: divisor `{n}` is not a declared parameter (V23)")
             d = spec["default"]
-            if not isinstance(d, int) or isinstance(d, bool):
-                raise BuildError(f"{what}: divisor `{n}` is a parameter whose default is not an integer (V23)")
-            if d <= 0:
+            if spec["kind"] != "int":
+                raise BuildError(f"{what}: divisor `{n}` is a parameter whose kind is not an integer (V23)")
+            if d is not None and d <= 0:
                 raise BuildError(f"{what}: divisor `{n}` is a parameter whose default {d} is not positive (V23)")
 
     # ---- datasets ----
@@ -455,8 +477,7 @@ class Workload:
         if self.s3:
             ast["s3"] = self.s3
         if self._param_specs:
-            ast["params"] = {k: _strip_none({**v, "default": _ast_value(v["default"])})
-                             for k, v in self._param_specs.items()}
+            ast["params"] = {k: _param_ast(k, v, self._datasets) for k, v in self._param_specs.items()}
         if self._datasets:
             ast["datasets"] = {k: _ast_deep(v.ast()) for k, v in self._datasets.items()}
         if self._namespaces:
@@ -527,6 +548,66 @@ def _seed(seed, name):
     if not isinstance(seed, int) or isinstance(seed, bool) or not (0 <= seed < 2 ** 64):
         raise BuildError(f"{name}: seed must be an integer in [0, 2^64)")
     return seed
+
+
+class StBlksize:
+    """A value the storage reports (contract 0.11): `st_blksize`, by `stat` of the first file of
+    dataset `of` at the gate, `fallback` where the storage reports none (an object store)."""
+
+    def __init__(self, of, fallback: int):
+        self.of = of.name if isinstance(of, Dataset) else of
+        check_ident(self.of, "dataset")
+        if not isinstance(fallback, int) or isinstance(fallback, bool) or fallback < 1:
+            raise BuildError(f"st_blksize(of={self.of!r}): the fallback is a positive byte count, got {fallback!r} (V28)")
+        self.fallback = fallback
+
+
+def st_blksize(*, of, fallback: int) -> StBlksize:
+    """The `st_blksize` the storage of dataset `of` reports (Python's `BufferedReader` asks
+    for it), a parameter's default: `w.param("hdr_read", st_blksize(of="train", fallback=1 * MiB))`."""
+    return StBlksize(of, fallback)
+
+
+_KINDS = {int: "int", float: "float", bool: "bool", str: "str", Dist: "dist",
+          "int": "int", "float": "float", "bool": "bool", "str": "str", "dist": "dist"}
+
+
+def _kind(kind, name):
+    """A required parameter's declared kind, and an array's element kind (`list[int]`)."""
+    if typing.get_origin(kind) is list:
+        args = typing.get_args(kind)
+        if len(args) != 1 or args[0] not in _KINDS:
+            raise BuildError(f"parameter {name}: an array's kind is list[int], list[float], list[bool], list[str], or list[Dist]")
+        return "array", _KINDS[args[0]]
+    if kind not in _KINDS:
+        raise BuildError(f"parameter {name}: kind is int, float, bool, str, Dist, or list[…] for an array, got {kind!r}")
+    return _KINDS[kind], None
+
+
+def _kind_of(v):
+    if isinstance(v, list):
+        return "array"
+    if isinstance(v, Dist):
+        return "dist"
+    if isinstance(v, bool):
+        return "bool"
+    return "int" if isinstance(v, int) else "float" if isinstance(v, float) else "str"
+
+
+def _param_ast(name, spec, datasets):
+    """A parameter as the AST holds it (contract 0.11): `default`, or `kind` (and `items`) for a
+    required one; a storage-reported default as its source."""
+    src = spec["source"]
+    if src is not None:
+        if src.of not in datasets:
+            raise BuildError(f"parameter {name}: st_blksize(of={src.of!r}) names no declared dataset (V28)")
+        default = {"from": "st_blksize", "of": src.of, "fallback": src.fallback}
+    else:
+        default = None if spec["default"] is None else _ast_value(spec["default"])
+    out = {"default": default, "unit": spec["unit"], "doc": spec["doc"], "cli": spec["cli"], "scale": spec["scale"]}
+    if default is None:
+        out["kind"], out["items"] = spec["kind"], spec["items"]
+    return _strip_none(out)
 
 
 def _param_value(v, name):
@@ -818,7 +899,7 @@ class Cursor:
         """Emulated compute of `ns` nanoseconds (an expression, or draw(dist))."""
         if isinstance(ns, Dist):
             ns = Draw(ns)
-        elif isinstance(ns, Param) and isinstance(ns._default, Dist):
+        elif isinstance(ns, Param) and self.wl._param_specs.get(ns.name, {}).get("kind") == "dist":
             ns = Draw(ns)
         self._emit({"compute": {"ns": ast_of(lift(ns, "compute"))}})
 

@@ -58,7 +58,7 @@ fn op_codes_come_back_as_the_values_they_were_made_from() {
 #[test]
 fn an_ast_of_another_contract_version_is_refused() {
     let e = aeiou::ast::parse(r#"{"ast": "0.9", "name": "t", "actors": {}}"#).unwrap_err();
-    assert_eq!(e.to_string(), "ast version `0.9` is not `0.10`");
+    assert_eq!(e.to_string(), "ast version `0.9` is not `0.11`");
 }
 
 /// A cloned draw keeps the site `sites::annotate` gave it, so a clone draws what the original does.
@@ -97,7 +97,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(params: Value, datasets: Value, namespaces: Value, body: Value) -> String {
-    json!({"ast": "0.10", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
+    json!({"ast": "0.11", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
 }
 
 /// One plain dataset `d` of ten one-byte files.
@@ -107,7 +107,7 @@ fn d() -> Value {
 
 fn with_model<T>(text: &str, gpus: i64, seed: u64, overrides: &[(&str, &str)], f: impl FnOnce(&Model) -> Result<T, String>) -> Result<T, String> {
     let loaded = aeiou::load_str(text).map_err(|e| format!("{e:#}"))?;
-    let cfg = Config { seed, gpus, overrides: overrides.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![] };
+    let cfg = Config { seed, gpus, overrides: overrides.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![], st_blksize: Default::default() };
     let params = Params::new(&loaded.ast, &cfg).map_err(|e| format!("{e:#}"))?;
     let model = build_model(&loaded.ast, &cfg, &params).map_err(|e| format!("{e:#}"))?;
     f(&model)
@@ -543,7 +543,7 @@ fn parameters_given_are_held_to_their_declarations() {
     let text = doc(json!({"n": {"default": 3}, "fixed": {"default": 1, "cli": false}, "arr": {"default": [1, 2]}}), d(), json!({}), json!([]));
     let given = |overrides: &[(&str, &str)], sets: Vec<ParamSet>| {
         let loaded = aeiou::load_str(&text).unwrap();
-        let cfg = Config { seed: 1, gpus: 1, overrides: overrides.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets };
+        let cfg = Config { seed: 1, gpus: 1, overrides: overrides.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets, st_blksize: Default::default() };
         Params::new(&loaded.ast, &cfg).map(|_| ()).map_err(|e| format!("{e:#}"))
     };
     assert_eq!(given(&[("gpus", "2")], vec![]).unwrap_err(), "`gpus` is set with --gpus, not --param");

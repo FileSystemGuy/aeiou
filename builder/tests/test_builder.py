@@ -3,6 +3,7 @@ errors fire; the hermetic harness denies what it should; build-twice agrees."""
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -305,7 +306,7 @@ def test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root():
             g.write(inv, 1)
         g.close(inv)
     ast = w.build()
-    assert ast["ast"] == "0.10"
+    assert ast["ast"] == "0.11"
     assert ast["datasets"]["train"]["inventory"] == {"name": "inventory.txt", "entry": {"param": "entry"}}
     assert ast["actors"]["gpu"]["body"][0]["let"]["value"] == {"inventory": "train"}
     _, check = _load()
@@ -322,6 +323,58 @@ def test_an_inventory_is_a_constant_name_in_a_consumed_datasets_root():
         assert any(needle in e for e in check.Check(bad, "x").run()), needle
 
 
+def test_a_parameter_is_required_scale_or_storage_reported():
+    """Contract 0.11 (DESIGN_REVIEW.md §3.78): a required parameter declares its kind and has no
+    default; `scale` marks what a submission sizes; `st_blksize(of=…)` is a value the storage
+    reports, its fallback the default the checks judge. The emitted AST passes check.py and the
+    JSON Schema, and both refuse a source of no declared dataset (V28)."""
+    import copy
+    import jsonschema
+    from aeiou.validate import _load
+    w = Workload("t")
+    w.param("batch", kind=int, unit="count")
+    w.param("step_time", kind=Dist, unit="ns")
+    w.param("sizes", kind=list[int])
+    w.param("samples", 1000, scale=True)
+    w.param("files_per_directory", kind=int)
+    w.param("hdr_read", st_blksize(of="train", fallback=1 * MiB), unit="bytes")
+    for bad, needle in [(dict(), "a default, or, for a required parameter, its kind"),
+                        (dict(default=3, kind=int), "takes its kind from it"),
+                        (dict(kind=dict), "kind is int, float, bool, str, Dist"),
+                        (dict(kind=list[list]), "an array's kind is list[int]")]:
+        with pytest.raises(BuildError, match=re.escape(needle)):
+            w.param("x_" + str(len(needle)), **bad)
+    with pytest.raises(BuildError, match="the fallback is a positive byte count"):
+        st_blksize(of="train", fallback=0)
+    train = w.dataset("train", pattern="train/{id div files_per_directory:05}/f_{id:09}", layout="whole", access="map",
+                      count=w.P.samples, size=const(4096), seed=1)
+    with w.actor("gpu") as g:
+        with g.loop("s", w.P.batch):
+            f = g.let("f", train.consume())
+            g.open(f, "RDONLY"); g.read(f, w.P.hdr_read, repeat="until_eof"); g.close(f)
+        g.compute(w.P.step_time)
+    ast = w.build()
+    assert ast["ast"] == "0.11"
+    assert ast["params"]["batch"] == {"kind": "int", "unit": "count"}
+    assert ast["params"]["step_time"] == {"kind": "dist", "unit": "ns"}
+    assert ast["params"]["sizes"] == {"kind": "array", "items": "int"}
+    assert ast["params"]["samples"] == {"default": 1000, "scale": True}
+    assert ast["params"]["hdr_read"]["default"] == {"from": "st_blksize", "of": "train", "fallback": 1 * MiB}
+    assert ast["actors"]["gpu"]["body"][-1] == {"compute": {"ns": {"draw": {"param": "step_time"}}}}, "a required dist is drawn"
+    schema, check = _load()
+    jsonschema.Draft202012Validator(schema).validate(ast)
+    assert not check.Check(copy.deepcopy(ast), "x").run()
+    bad = copy.deepcopy(ast)
+    bad["params"]["hdr_read"]["default"]["of"] = "nope"
+    assert check.Check(bad, "x").run() == ["x: params/hdr_read/default/of: `nope` is not a declared dataset (V28)"]
+    w2 = Workload("t2")
+    w2.param("b", st_blksize(of="nope", fallback=4096))
+    with w2.actor("gpu") as g:
+        g.compute(1)
+    with pytest.raises(BuildError, match=re.escape("st_blksize(of='nope') names no declared dataset (V28)")):
+        w2.build()
+
+
 def test_a_divisor_is_a_declared_integer_parameter():
     """Contract 0.10 (DESIGN_REVIEW.md §3.75): V23 in the builder and in check.py alike, and the
     Python port binds a divisor as the runner does, so the resolved definition names the width."""
@@ -333,7 +386,7 @@ def test_a_divisor_is_a_declared_integer_parameter():
     P = w.params(files_per_directory=1300, ratio=0.5)
     with pytest.raises(BuildError, match="divisor `width` is not a declared parameter"):
         w.dataset("a", pattern="a/{id div width}/f_{id}", layout="whole", access="map", count=10, size=const(1), seed=1)
-    with pytest.raises(BuildError, match="whose default is not an integer"):
+    with pytest.raises(BuildError, match="whose kind is not an integer"):
         w.dataset("b", pattern="b/{id div ratio}/f_{id}", layout="whole", access="map", count=10, size=const(1), seed=1)
     train = w.dataset("train", pattern="train/{id div files_per_directory:05}/img_{id:09}.jpg", layout="whole",
                       access="map", count=5000, size=const(1), seed=1)
@@ -346,7 +399,7 @@ def test_a_divisor_is_a_declared_integer_parameter():
     assert not check.Check(copy.deepcopy(ast), "x").run()
     for mutate, needle in [
         (lambda a: a["params"].pop("files_per_directory"), "divisor `files_per_directory` is not a declared parameter (V23)"),
-        (lambda a: a["params"]["files_per_directory"].__setitem__("default", 2.5), "whose default is not an integer (V23)"),
+        (lambda a: a["params"]["files_per_directory"].__setitem__("default", 2.5), "whose kind is not an integer (V23)"),
     ]:
         bad = copy.deepcopy(ast)
         mutate(bad)
@@ -368,7 +421,7 @@ def test_a_sub_actor_positions_its_ops_on_an_inherited_handle():
     from aeiou.validate import _load
     _, check = _load()
     f = {"file": {"dataset": "d", "id": 0}}
-    ast = {"ast": "0.10", "name": "t",
+    ast = {"ast": "0.11", "name": "t",
            "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 1,
                               "size": {"const": 4096}, "seed": 1}},
            "actors": {"gpu": {"body": [
@@ -752,7 +805,7 @@ def test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory():
     import copy
     from aeiou.validate import _load
     _, check = _load()
-    base = {"ast": "0.10", "name": "m", "params": {},
+    base = {"ast": "0.11", "name": "m", "params": {},
             "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "map",
                                "count": 8, "size": {"const": 4096}, "seed": 1}},
             "actors": {"gpu": {"count": 1, "body": []}}}
@@ -767,7 +820,7 @@ def test_check_py_v12_refuses_mkdir_and_rmdir_on_a_dataset_directory():
 def _v3_chain(dist, params=None):
     """The `x @ i - d` loop of the rule V3 review (RC1, bug 30), `d` drawn from `dist`."""
     return {
-        "ast": "0.10", "name": "v3_chain", "params": params or {},
+        "ast": "0.11", "name": "v3_chain", "params": params or {},
         "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 4,
                            "size": {"const": 4096}, "seed": 1}},
         "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "i", "to": 4, "body": [
@@ -874,7 +927,7 @@ def test_a_dataset_size_is_never_below_zero():
         d = {"layout": layout, "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": size, "seed": 1}
         if layout == "array":
             d.update(pattern="d/all", slot=64)
-        ast = {"ast": "0.10", "name": "t", "params": params or {}, "datasets": {"d": d},
+        ast = {"ast": "0.11", "name": "t", "params": params or {}, "datasets": {"d": d},
                "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
         return check.Check(ast, "t").run()
 
@@ -971,7 +1024,7 @@ def test_at_names_the_binding_its_body_shadows():
 
     def doc(inner):
         return {
-            "ast": "0.10", "name": "shadow",
+            "ast": "0.11", "name": "shadow",
             "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
             "actors": {"gpu": {"count": 1, "body": [{"loop": {"index": "i", "to": 3, "body": [
                 {"let": {"name": "x", "value": {"mul": [{"index": "i"}, 1000]}}},
@@ -1074,7 +1127,7 @@ def test_a_consume_is_under_loops_of_fixed_count(tmp_path):
 def _size_errs(size):
     from aeiou.validate import _load
     _, check = _load()
-    ast = {"ast": "0.10", "name": "t",
+    ast = {"ast": "0.11", "name": "t",
            "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4,
                               "size": size, "seed": 1}},
            "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": 0}}}}]}}}
@@ -1148,7 +1201,7 @@ def test_a_channel_or_loader_inside_a_fork_is_refused():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.10", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.11", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 2}}
 
@@ -1240,7 +1293,7 @@ def test_a_channel_a_loaders_workers_use_is_declared_once_or_beside_it():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.10", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.11", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 2}}
 
@@ -1290,7 +1343,7 @@ def test_a_value_of_a_kind_the_runner_refuses_is_refused_at_check():
         if count is not None:
             actor["count"] = count
         return check.Check({
-            "ast": "0.10", "name": "v27",
+            "ast": "0.11", "name": "v27",
             "params": {"s": {"default": "x"}, "n": {"default": 2}, "d": {"default": {"uniform": {"lo": 1, "hi": 4}}},
                        "a": {"default": [1, 2]}},
             "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 10, "seed": 1}},
@@ -1343,7 +1396,7 @@ def test_a_take_inside_a_loader_body_is_refused():
     _, check = _load()
 
     def errs(*body):
-        return check.Check({"ast": "0.10", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
+        return check.Check({"ast": "0.11", "name": "v26", "actors": {"gpu": {"body": list(body)}}}, "v26").run()
 
     chan = {"channel": {"name": "c", "capacity": 4}}
 
@@ -1407,7 +1460,7 @@ def test_a_parameter_defined_through_itself_is_refused_with_its_cycle(tmp_path):
     returned. Both checkers refuse every parameter on a cycle, with the cycle, the same path
     and message, and judge the document no further; a parameter naming another is accepted."""
     def doc(params):
-        return json.dumps({"ast": "0.10", "name": "cyc", "params": params,
+        return json.dumps({"ast": "0.11", "name": "cyc", "params": params,
                            "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4,
                                               "size": {"param": "pa"}, "seed": 1}},
                            "actors": {"gpu": {"body": [{"stat": {"file": {"file": {"dataset": "d", "id": {"draw": {"param": "pa"}}}}}}]}}})
@@ -1447,7 +1500,7 @@ def test_a_draw_of_a_kind_the_runner_refuses_is_refused_at_check(tmp_path):
     U = {"uniform": {"lo": 1, "hi": 4}}
 
     def doc(size, *body):
-        return {"ast": "0.10", "name": "v27",
+        return {"ast": "0.11", "name": "v27",
                 "params": {"n": {"default": 3}, "d": {"default": U}, "cd": {"default": {"const": {"param": "d"}}},
                            "cn": {"default": {"const": {"param": "n"}}}, "cs": {"default": {"const": "x"}}},
                 "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": size, "seed": 1}},
@@ -1528,7 +1581,7 @@ def test_a_comparison_or_array_read_the_runner_refuses_is_refused_at_check(tmp_p
     _, check = _load()
 
     def doc(body):
-        return {"ast": "0.10", "name": "v27",
+        return {"ast": "0.11", "name": "v27",
                 "params": {"n": {"default": 3}, "s": {"default": "x"}, "z": {"default": None}, "arr": {"default": [1, 2.5]},
                            "sarr": {"default": ["a", "b"]}, "d": {"default": {"uniform": {"lo": 1, "hi": 4}}}},
                 "datasets": {"ds": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 10, "seed": 1}},

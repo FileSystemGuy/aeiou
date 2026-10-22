@@ -2135,6 +2135,34 @@ fn dataset_manifest(loaded: &crate::Loaded, name: &str, root: &(impl Place + ?Si
     Ok((rel, dir, m))
 }
 
+/// The `st_blksize` the storage of each dataset a storage-reported parameter names reports
+/// (contract 0.11, `DESIGN_REVIEW.md` §3.78 point 11): `stat` of the dataset's first file,
+/// what the application's `fstat` of a file it opens sees. A directory's is no guide: Linux's
+/// NFS client reports its READDIR size there, not the file's. A dataset in an object store
+/// reports none, and its parameters take their fallback.
+pub fn st_blksize(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized)) -> Result<BTreeMap<String, i64>> {
+    use std::os::unix::fs::MetadataExt;
+    let names: BTreeSet<&str> = loaded.ast.params.values().filter_map(|p| p.source.as_ref()).map(|s| s.of.as_str()).collect();
+    let mut out = BTreeMap::new();
+    if names.is_empty() {
+        return Ok(out);
+    }
+    let params = Params::new(&loaded.ast, cfg)?;
+    let model = crate::eval::build_model(&loaded.ast, cfg, &params)?;
+    for name in names {
+        let ds = &model.datasets[*model.ds_index.get(name).ok_or_else(|| anyhow!("no dataset `{name}`"))?];
+        let k = matches!(ds, crate::eval::DsMeta::Files { chunk: Some(_), .. }).then_some(0);
+        let rel = ds.file_path(0, k)?;
+        if root.object(&rel).is_some() {
+            continue;
+        }
+        let path = root.at(&rel);
+        let md = std::fs::metadata(&path).with_context(|| format!("dataset `{name}`: its first file {}, whose st_blksize a parameter reads: run `aeiou datagen` first", path.display()))?;
+        out.insert(name.to_string(), md.blksize() as i64);
+    }
+    Ok(out)
+}
+
 /// The definition with another count, to compare a subset's with its corpus's.
 fn with_count(def: &serde_json::Value, count: i64) -> serde_json::Value {
     let mut d = def.clone();

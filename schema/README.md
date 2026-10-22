@@ -46,6 +46,26 @@ python3 schema/check.py path/to/x.ast.json   # one file
   file 0 overflows the 64-bit integers of the contract (2^63-1)``), where until then the
   release build wrapped them silently into a wrong op stream.
 - **Identifiers** are `[a-z_][a-z0-9_]*`. `gpus` is a reserved parameter set by `--gpus`.
+  A parameter's name has no dot, so none takes the name of a fact or a result of the runner
+  (`fact.sum_host_mem`, `result.min_gpu_busy_fraction`, `DESIGN_REVIEW.md` §3.78 point 8),
+  now or when that vocabulary grows.
+- **Parameters** (contract 0.11, `DESIGN_REVIEW.md` §3.78). A parameter is
+  `{default, doc?, cli?, unit?, scale?}`, or, **required**, `{kind, items?, doc?, cli?,
+  unit?, scale?}` with no default: a value that varies with every use case (a job's `batch`
+  and `step_time`), which a use case, a submission, or the command line must give, so a run
+  that forgets one is refused with the names missing instead of running another job's
+  numbers. `kind` is `int`, `float`, `bool`, `str`, `dist`, or `array` (with `items`, the
+  element kind); a parameter with a default takes the default's kind, and never declares
+  one. A value given for either keeps that kind (§8). `scale: true` marks what a submission
+  sizes per site (`samples`): a benchmark's rules freeze every `scale` parameter to
+  required. A default may be **storage-reported**, `{"from": "st_blksize", "of": DATASET,
+  "fallback": BYTES}`: the `st_blksize` the storage of the dataset reports (Python's
+  `BufferedReader` asks for it), which the interposition test makes the system under test's,
+  read by `aeiou run` with `stat` of the dataset's first file before the model is built and
+  given to `aeiou dry-run` with `--st-blksize`, `fallback` where the storage reports none
+  (an object store). It is an `int` default like any other, which a later layer may
+  replace; the rules judge its fallback (V28). The workload id covers the rule, the report
+  the number.
 - **One format: JSON.** The on-disk form is JSON, pretty-printed with two-space indentation
   and the builder's key order (`ast`, `name`, `doc`, `posix`, `cache`, `s3`, `params`, `datasets`, `namespaces`,
   `actors`, `provenance`), file suffix `.ast.json`. The identity of an AST is the SHA-256 of
@@ -382,7 +402,8 @@ checkers enforce.
   dataset that declares one, and V12 holds for it: it is read-only (`DESIGN_REVIEW.md` §3.73).
 
 - **V23 divisor** (added 2026-10-13, contract 0.10). A name after `div` or `mod` in a dataset's
-  or namespace's pattern is a declared parameter whose default is an integer (`gpus` is not
+  or namespace's pattern is a declared parameter of kind `int` (its default an integer, or,
+  required, `kind: int`; contract 0.11) (`gpus` is not
   declared, so it is never one); a value of zero or less is refused when the model is built
   (`DESIGN_REVIEW.md` §3.75).
 - **V24 a sub-actor positions its ops on an inherited handle** (added 2026-10-14, contract
@@ -457,6 +478,16 @@ checkers enforce.
   with "eq: cannot compare int with str". A handle position (`file`, `dir`, `from`, `to`, a
   handle's `of`) names a binding to a handle (2026-10-15): `let x = 1` then a `write` on
   `{"ref": "x"}` had passed both checkers and failed the run with "`x` is a int, not a handle".
+
+- **V28 a storage-reported value is read from a declared dataset** (added 2026-10-22, contract
+  0.11). The `of` of a `{"from": "st_blksize"}` default names a dataset of the abstract, and
+  its `fallback` is a positive byte count.
+
+Contract 0.11 also states what V3, V23, and V27 make of a **required** parameter: its declared
+`kind` is the kind V23 and V27 judge (an `elem` of a required array its `items`), and V3,
+which needs a distribution's minimum, cannot prove anything of one until a value is given, so
+a required parameter in an `at` offset is refused at check and the runner judges the value
+given again, as for any other parameter.
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -675,3 +706,8 @@ the committed sets; the reasoning is `DESIGN_REVIEW.md` §3.27.
   binding* (2026-10-14), V12's `mkdir` and `rmdir` (2026-10-14), integers held to 64 bits
   (§1, 2026-10-14), and rules V26 and V27, V6's fixed counts, V12's `cond` arms, and V18's
   `WRONLY` and `close` (2026-10-15).
+- **0.11** (2026-10-22): required parameters (`kind`, `items`, no `default`), the `scale` tag,
+  storage-reported defaults (`{"from": "st_blksize", "of", "fallback"}`) and rule V28, and V3,
+  V23, and V27 on a required parameter (§1, §4). A 0.10 document is
+  a 0.11 document with the version changed. Every committed AST was regenerated; no
+  fingerprint and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.78.

@@ -4,7 +4,7 @@
   "runs": [
     {
       "ast": "parquet_stream",
-      "ast_sha256": "4dbcae4d855501994d6a195087bc4d10f3c4e5c464562778826aaec672eadd63",
+      "ast_sha256": "9f40188ee81872d4f936aa8f3e485e74aa0395b67cb71d353e8e9ac00b4235ec",
       "params": null,
       "params_sha256": null,
       "gpus": 1,

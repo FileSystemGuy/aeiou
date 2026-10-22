@@ -6794,6 +6794,53 @@ proposed that day was decided, as the notes in points 8, 9, 11, and 12 say, and 
   the docs part done that day (the brief's §5 row and item 33, §8's rows, CLAUDE.md, the
   README); the rest is item 33.
 
+**Decided at the start of the build (2026-10-22, the user's answers to four questions the
+points above leave open).**
+
+- *A required parameter declares its kind and has no default* (`{"kind": "int"}`; `items` for
+  an array's elements), never a default kept as an example, which is the placeholder point 4
+  rules out. The key is `kind`, not `type`: the user asked whether `type` was better and kept
+  `kind` on the answer that the contract already calls scalar, distribution, and array a
+  value's *kind* (`schema/README.md` §8, the runner's messages), that `type` beside JSON
+  Schema's own `type` keyword in the schema file misreads, and that `type=` in the builder
+  shadows a Python builtin.
+- *Every entry of a `params_version` 2 fragment and of a lock names its state*:
+  `{"default": v}`, `{"locked": v}`, or `{"required": true}`, never a bare value, which
+  beside a distribution's object would leave the parser to tell a wrapper from a value by its
+  keys.
+- *A rules file's constraint is infix text* (`fact.dataset_bytes >= 5 * fact.sum_host_mem`),
+  parsed by `aeiou-params lock` into the AST's expression form, which the lock holds beside
+  the text; the runner evaluates the JSON alone, so there is one parser, in Python.
+- *A lock of several runs is run one at a time with `--case-run NAME`* (the run's abstract),
+  required when the lock has more than one run and refused when it has one; one lock per run
+  would revise point 12.
+
+**Built: contract 0.11** (2026-10-22). The schema, both checkers, the builder
+(`w.param(name, kind=int)`, `scale=True`, `st_blksize(of=…, fallback=…)`), and the runner
+(`Params::new` refuses the required names with no value, a value is held to the declared
+kind, `aeiou run` reads `st_blksize` before the model is built, `aeiou dry-run
+--st-blksize [DATASET=]BYTES`, the `storage-reported:` header line, and `storage_reported`
+in the report). Every committed AST regenerated for the version, no fingerprint and no
+dataset id changed; no abstract declares a required, `scale`, or storage-reported parameter
+yet (the abstracts move with the lock, below). Choices made in the build, open to revision:
+
+- A storage-reported value names its dataset (`"of"`), since an abstract may read several
+  roots and a parameter is tied to none; its root is the dataset's, wherever its endpoint
+  puts it. It is read from the dataset's **first file**, not the root directory: Linux's NFS
+  client reports a directory's `st_blksize` as its READDIR size, not the file's (from the
+  kernel's `nfs_getattr`, which sets a directory's to `dtsize`; recalled from the source, not
+  measured here). An output namespace has no file at the gate, so `of` names a dataset only:
+  the write-side counterparts (`buf`) stay values for now.
+- A fragment cannot hold a `{"from": …}` value; a use case that wants a fixed number gives the
+  number, which replaces the default as any value does. The source lives in the abstract.
+- The kind rule keeps its coarse form for every parameter (scalar, distribution, array, and an
+  integer's number rule): a required `float`, `bool`, or `str` takes any scalar, as a default
+  of those kinds always has; V27 judges the finer kind where the document uses it.
+- `aeiou dry-run --st-blksize BYTES` applies to every dataset a storage-reported parameter
+  reads, `DATASET=BYTES` to one; a name no such parameter reads is a usage error.
+- V28 is the rule's number; check.py and the runner give the same messages, held by
+  `runner/aeiou/tests/refusals.json`.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

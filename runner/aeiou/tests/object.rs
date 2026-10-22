@@ -316,7 +316,7 @@ fn a_namespace_is_written_as_objects_and_read_back_by_another_run() {
     let skip = dir.join("skip.ast.json");
     std::fs::write(
         &skip,
-        r#"{"ast": "0.10", "name": "skip",
+        r#"{"ast": "0.11", "name": "skip",
             "namespaces": {"o": {"pattern": "o/{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": 1, "body": [
                 {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
@@ -490,7 +490,7 @@ fn object_keys_are_the_names_as_written() {
     let m = minio("object_keys_are_the_names_as_written");
     let dir = tmpdir("keys");
     let ast = |to: i64, pattern: &str, protocol: bool| {
-        let mut d = serde_json::json!({"ast": "0.10", "name": "sp",
+        let mut d = serde_json::json!({"ast": "0.11", "name": "sp",
             "namespaces": {"o": {"pattern": pattern, "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": to, "body": [
                 {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
@@ -554,7 +554,7 @@ fn endpoints_in_one_bucket_share_its_keys() {
     let root = root.to_str().unwrap();
     let write = |name: &str, more: &str, namespaces: &str, body: &str| {
         let p = dir.join(format!("{name}.ast.json"));
-        let ast = format!(r#"{{"ast": "0.10", "name": "{name}", {more} "namespaces": {{{namespaces}}}, "actors": {{"gpu": {{"body": [{body}]}}}}}}"#);
+        let ast = format!(r#"{{"ast": "0.11", "name": "{name}", {more} "namespaces": {{{namespaces}}}, "actors": {{"gpu": {{"body": [{body}]}}}}}}"#);
         std::fs::write(&p, ast).unwrap();
         p
     };
@@ -732,7 +732,7 @@ fn a_failed_run_leaves_no_upload_on_the_store() {
     // `w` uploads 40 parts of 5 MiB; `x` fails the run (ENOENT) at 150 ms, a part in flight
     std::fs::write(
         &ast,
-        r#"{"ast": "0.10", "name": "orphan",
+        r#"{"ast": "0.11", "name": "orphan",
             "namespaces": {"o": {"pattern": "orph/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"w": {"body": [
               {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
@@ -772,7 +772,7 @@ fn a_failed_run_leaves_no_upload_whose_beginning_was_unanswered() {
     // answer to the begin held for 1.5 s
     std::fs::write(
         &ast,
-        r#"{"ast": "0.10", "name": "unanswered",
+        r#"{"ast": "0.11", "name": "unanswered",
             "namespaces": {"o": {"pattern": "f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"w": {"body": [
               {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
@@ -805,7 +805,7 @@ fn an_object_unlinked_while_open_for_writing_is_never_made() {
     // f0 one PUT's worth, f1 a multipart upload with a part sent before the unlink
     std::fs::write(
         &ast,
-        r#"{"ast": "0.10", "name": "ul",
+        r#"{"ast": "0.11", "name": "ul",
             "namespaces": {"o": {"pattern": "o/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"gpu": {"body": [{"loop": {"index": "i", "to": 2, "body": [
               {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": {"index": "i"}}}}}},
@@ -847,7 +847,7 @@ fn a_rename_and_the_handles_open_for_writing_on_its_paths() {
     let rename = r#"{"rename": {"from": {"ref": "s"}, "to": {"ref": "t"}}}"#;
     let write = |name: &str, body: String| {
         let p = dir.join(format!("{name}.ast.json"));
-        std::fs::write(&p, format!(r#"{{"ast": "0.10", "name": "{name}", {ns}, "actors": {{"gpu": {{"body": [{bind}, {body}]}}}}}}"#)).unwrap();
+        std::fs::write(&p, format!(r#"{{"ast": "0.11", "name": "{name}", {ns}, "actors": {{"gpu": {{"body": [{bind}, {body}]}}}}}}"#)).unwrap();
         p
     };
     // the target open for writing: t holds s's 8192 bytes, and t's handle closes unnamed
@@ -881,7 +881,7 @@ fn a_store_throttling_is_retried_and_every_retry_reported() {
     let ast = dir.join("put.ast.json");
     std::fs::write(
         &ast,
-        r#"{"ast": "0.10", "name": "put",
+        r#"{"ast": "0.11", "name": "put",
             "namespaces": {"o": {"pattern": "put/f{k}", "fields": {"k": "int"}, "size": "as_written", "seed": 1, "protocol": "s3"}},
             "actors": {"gpu": {"body": [
               {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"k": 0}}}}},
@@ -975,7 +975,7 @@ fn trace_on_objects(dir: &Path, lines: &str) -> PathBuf {
     std::fs::write(
         &ast,
         format!(
-            r#"{{"ast": "0.10", "name": "trace_s3", "doc": "t", "params": {{}},
+            r#"{{"ast": "0.11", "name": "trace_s3", "doc": "t", "params": {{}},
              "datasets": {{"d": {{"layout": "whole", "pattern": "d/f{{id}}", "count": 1, "size": {{"const": 100}}, "seed": 3, "access": "map", "protocol": "s3"}}}},
              "namespaces": {{"o": {{"pattern": "o/f{{k}}", "fields": {{"k": "int"}}, "size": "as_written", "seed": 1, "protocol": "s3"}}}},
              "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{sha}"}}}}]}}}}}}"#

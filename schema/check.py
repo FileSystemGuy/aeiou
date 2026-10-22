@@ -28,6 +28,21 @@ WRITE_FLAGS = {"WRONLY", "RDWR", "CREAT", "TRUNC", "APPEND"}
 RESERVED_PREFIX = ".aeiou"                                            # V13: the manifest and sidecars
 
 
+def param_kind(p: dict):
+    """A parameter's kind (contract 0.11): its declared `kind` when required, else its
+    default's (`int`, `float`, `bool`, `str`, `dist`, `array`), as the runner's `Kind::of`."""
+    if "kind" in p:
+        return p["kind"]
+    d = p.get("default")
+    if isinstance(d, dict):
+        return "int" if "from" in d else "dist"
+    if isinstance(d, list):
+        return "array"
+    if isinstance(d, bool):
+        return "bool"
+    return "int" if isinstance(d, int) else "float" if isinstance(d, float) else "str"
+
+
 def dataset_root(d: dict) -> str:
     """Constant directory prefix of a dataset's pattern (an array's: its file's directory)."""
     prefix = d["pattern"].split("{", 1)[0]
@@ -262,8 +277,13 @@ class Check:
     def param_value(self, name):
         """The value in effect of parameter `name` (None when it is not declared): its default
         when the document is judged; `aeiou-params check` overrides this with the value a
-        parameter file gives, as the runner's `check_given` judges a run (`DESIGN_REVIEW.md` §3.57)."""
-        return self.ast.get("params", {}).get(name, {}).get("default")
+        parameter file gives, as the runner's `check_given` judges a run (`DESIGN_REVIEW.md` §3.57).
+        None too for a required parameter (contract 0.11), and a storage-reported one's is its
+        fallback."""
+        d = self.ast.get("params", {}).get(name, {}).get("default")
+        if isinstance(d, dict) and "from" in d:
+            return d.get("fallback")
+        return d
 
     def param_cycles(self) -> bool:
         """V1: a parameter whose value in effect names, through `param`s, the parameter itself
@@ -360,8 +380,15 @@ class Check:
             self.err(list(path), msg)
         if "gpus" in self.params:
             self.err(["params"], "`gpus` is reserved and set by the runner")
-        for pname in self.ast.get("params", {}):
+        for pname, p in self.ast.get("params", {}).items():
             self.value(self.param_value(pname), ["params", pname])
+            # V28 (contract 0.11): a storage-reported value is read from a declared dataset's storage
+            src = p.get("default") if isinstance(p, dict) else None
+            if isinstance(src, dict) and "from" in src:
+                if src.get("of") not in self.datasets:
+                    self.err(["params", pname, "default", "of"], f"`{src.get('of')}` is not a declared dataset (V28)")
+                if not (isinstance(src.get("fallback"), int) and src["fallback"] >= 1):
+                    self.err(["params", pname, "default", "fallback"], f"{src.get('fallback')} is not a positive byte count (V28)")
         # every rule after this one follows a `param` to its value; through a cycle it would
         # never return, so a document with one is judged no further
         if self.param_cycles():
@@ -498,13 +525,13 @@ class Check:
         except ValueError as e:
             return self.err(path + ["pattern"], str(e))
         # V23 (contract 0.10, DESIGN_REVIEW.md §3.75): a divisor named in a pattern is a declared
-        # parameter whose default is an integer
+        # parameter whose kind is an integer (its default's, or, required, its `kind`; 0.11)
         for name in [f[2] for f in fields if f[2] is not None]:
             p = self.ast.get("params", {}).get(name)
             if p is None:
                 self.err(path + ["pattern"], f"divisor `{name}` is not a declared parameter (V23)")
-            elif not (isinstance(p.get("default"), int) and not isinstance(p.get("default"), bool)):
-                self.err(path + ["pattern"], f"divisor `{name}` is a parameter whose default is not an integer (V23)")
+            elif param_kind(p) != "int":
+                self.err(path + ["pattern"], f"divisor `{name}` is a parameter whose kind is not an integer (V23)")
 
     # ---- V27: the kind a value is known to have ----
     KINDS = {"int": "an integer", "float": "a float", "bool": "a bool", "str": "a string", "none": "null",
@@ -549,9 +576,13 @@ class Check:
         if k == "at":
             return None if a["ref"] in scope.forward else scope.kind_of(a["ref"])
         if k == "param":
+            if a in self.params and "default" not in self.ast["params"][a] and self.param_value(a) is None:
+                return self.ast["params"][a].get("kind")       # required, no value yet (contract 0.11)
             return self.pkind(self.param_value(a)) if a in self.params else None
         if k == "elem":
             v = self.param_value(a["array"]) if a["array"] in self.params else None
+            if v is None and a["array"] in self.params and "default" not in self.ast["params"][a["array"]]:
+                return self.ast["params"][a["array"]].get("items")
             kinds = {self.pkind(x) for x in v} if isinstance(v, list) else set()
             return kinds.pop() if len(kinds) == 1 else None
         if k in ("index", "actor", "count", "dirs", "len", "size", "offset", "unit_index", "units", "chunks"):
@@ -1078,7 +1109,13 @@ class Check:
         """V27: the parameter `elem`, `len`, or `sum` reads is an array by its value in effect,
         and for `sum` (`numbers`) of integers and floats only, as the runner reads it."""
         v = self.param_value(name)
-        if not isinstance(v, list):
+        decl = self.ast["params"][name]
+        if v is None and "default" not in decl:                 # required, no value yet (contract 0.11)
+            if decl.get("kind") != "array":
+                self.err(p, f"{op}: parameter `{name}` is not an array (V27)")
+            elif numbers and decl.get("items") not in ("int", "float"):
+                self.err(p, f"{op}: an element of `{name}` is {self.KINDS[decl.get('items')]} (V27)")
+        elif not isinstance(v, list):
             self.err(p, f"{op}: parameter `{name}` is not an array (V27)")
         elif numbers:
             k = next((k for k in map(self.pkind, v) if k not in ("int", "float")), None)

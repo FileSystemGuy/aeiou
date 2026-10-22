@@ -1,4 +1,4 @@
-//! The AST contract (`schema/abstract-ast.schema.json`, v0.10) as Rust types.
+//! The AST contract (`schema/abstract-ast.schema.json`, v0.11) as Rust types.
 //!
 //! Every node, expression, distribution, and handle is externally tagged: a JSON object with
 //! exactly one key naming its kind. `deny_unknown_fields` on every struct and serde's enum
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.10";
+pub const AST_VERSION: &str = "0.11";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,15 +47,155 @@ pub struct Ast {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawParam")]
 pub struct Param {
-    pub default: PValue,
-    #[serde(default)]
+    /// The value a run takes when no later layer gives one; `None` for a **required**
+    /// parameter (contract 0.11), which a use case, a submission, or the command line must
+    /// give. A storage-reported parameter's default is its `fallback`.
+    pub default: Option<PValue>,
+    /// `{"from": "st_blksize", "of": DATASET, "fallback": N}` (contract 0.11): the value the
+    /// storage reports, read at the gate, `fallback` where it reports none.
+    pub source: Option<Source>,
+    /// The kind a value must have: declared with `kind` on a required parameter, the
+    /// default's otherwise.
+    pub kind: Kind,
+    /// An array's element kind; `None` for an empty array default, whose elements are any.
+    pub items: Option<Kind>,
+    /// What a submission sizes per site (`samples`, contract 0.11): a rules file's `freeze`
+    /// makes every `scale` parameter required.
+    pub scale: bool,
     pub doc: Option<String>,
-    #[serde(default)]
     pub cli: Option<bool>,
-    #[serde(default)]
     pub unit: Option<String>,
+}
+
+impl Param {
+    pub fn required(&self) -> bool {
+        self.default.is_none()
+    }
+}
+
+/// The kind of a parameter's value (contract 0.11): what a value given for it must be. An
+/// `int` takes an integral number (`3e3` is `3000`), a `float` any number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Int,
+    Float,
+    Bool,
+    Str,
+    Dist,
+    Array,
+}
+
+impl Kind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Int => "int",
+            Kind::Float => "float",
+            Kind::Bool => "bool",
+            Kind::Str => "str",
+            Kind::Dist => "dist",
+            Kind::Array => "array",
+        }
+    }
+
+    /// The kind of `v`, and of its first element when it is an array. `null`, the `none`
+    /// outcome of a mixture, is taken as a `str` (no committed abstract has a `null` default).
+    pub fn of(v: &PValue) -> (Kind, Option<Kind>) {
+        match v {
+            PValue::Dist(_) => (Kind::Dist, None),
+            PValue::Array(a) => (Kind::Array, a.first().map(|x| Kind::of(x).0)),
+            PValue::Scalar(Literal::Int(_)) => (Kind::Int, None),
+            PValue::Scalar(Literal::Float(_)) => (Kind::Float, None),
+            PValue::Scalar(Literal::Bool(_)) => (Kind::Bool, None),
+            PValue::Scalar(Literal::Str(_) | Literal::Null) => (Kind::Str, None),
+        }
+    }
+}
+
+/// A value the storage reports (contract 0.11, `DESIGN_REVIEW.md` §3.78 point 11): what the
+/// application reads from the file system it runs on, the system under test's by the
+/// interposition test, so never a value of the workload.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    pub from: SourceName,
+    /// The dataset whose storage reports it: `fstat` of its first file at the gate.
+    pub of: String,
+    /// The value where the storage reports none (an object store).
+    pub fallback: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum SourceName {
+    /// `st_blksize`, the request size of Python's `BufferedReader`.
+    #[serde(rename = "st_blksize")]
+    StBlksize,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawDefault {
+    From(Source),
+    Value(PValue),
+}
+
+/// A key that is present is `Some`, `null` included (`"default": null`, the `none` outcome).
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawParam {
+    #[serde(default, deserialize_with = "present")]
+    default: Option<RawDefault>,
+    #[serde(default)]
+    kind: Option<Kind>,
+    #[serde(default)]
+    items: Option<Kind>,
+    #[serde(default)]
+    scale: Option<bool>,
+    #[serde(default)]
+    doc: Option<String>,
+    #[serde(default)]
+    cli: Option<bool>,
+    #[serde(default)]
+    unit: Option<String>,
+}
+
+impl TryFrom<RawParam> for Param {
+    type Error = String;
+
+    fn try_from(r: RawParam) -> Result<Param, String> {
+        let (default, source, kind, items) = match (r.default, r.kind) {
+            (Some(_), Some(_)) => return Err("a parameter with a default takes its kind from it; `kind` is for a required one (no default)".into()),
+            (None, None) => return Err("a parameter needs a `default` or, required, a `kind`".into()),
+            (None, Some(k)) => {
+                if (k == Kind::Array) != r.items.is_some() {
+                    return Err("`items`, the element kind, goes with `kind: array` and only with it".into());
+                }
+                if r.items == Some(Kind::Array) {
+                    return Err("`items` may not be `array`".into());
+                }
+                (None, None, k, r.items)
+            }
+            (Some(d), None) => {
+                if r.items.is_some() {
+                    return Err("`items` goes with `kind: array` on a required parameter".into());
+                }
+                match d {
+                    RawDefault::From(s) => (Some(PValue::Scalar(Literal::Int(s.fallback))), Some(s), Kind::Int, None),
+                    RawDefault::Value(v) => {
+                        let (k, i) = Kind::of(&v);
+                        (Some(v), None, k, i)
+                    }
+                }
+            }
+        };
+        Ok(Param { default, source, kind, items, scale: r.scale.unwrap_or(false), doc: r.doc, cli: r.cli, unit: r.unit })
+    }
 }
 
 /// A parameter value: a scalar, a distribution, or an array of these.

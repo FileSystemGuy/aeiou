@@ -345,7 +345,7 @@ fn a_silent_coordinator_is_declared_gone() {
 fn dg(text: &str, root: &std::path::Path) -> (&'static aeiou::Loaded, &'static aeiou::eval::Config, &'static aeiou::eval::Params, &'static aeiou::eval::Model<'static>, aeiou::datagen::DatagenOpts) {
     use aeiou::eval::{build_model, Config, Model, Params};
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load_str(text).unwrap()));
-    let cfg: &'static Config = Box::leak(Box::new(Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![] }));
+    let cfg: &'static Config = Box::leak(Box::new(Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![], st_blksize: Default::default() }));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, params).unwrap()));
     let opts = aeiou::datagen::DatagenOpts { root: root.to_path_buf(), endpoints: Default::default(), writers: 2, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: true };
@@ -357,7 +357,7 @@ fn whole(name: &str, n: i64) -> String {
 }
 
 fn doc(datasets: &[String]) -> String {
-    format!(r#"{{"ast": "0.10", "name": "dg", "params": {{}}, "datasets": {{{}}}, "actors": {{"a": {{"body": []}}}}}}"#, datasets.join(", "))
+    format!(r#"{{"ast": "0.11", "name": "dg", "params": {{}}, "datasets": {{{}}}, "actors": {{"a": {{"body": []}}}}}}"#, datasets.join(", "))
 }
 
 /// What a datagen is refused before it writes anything: a rank outside its ranks, several
@@ -427,7 +427,7 @@ fn rank_0s_headers_reach_every_rank_and_a_resume_must_make_the_same() {
     let ast = d.join("h5.ast.json");
     std::fs::write(
         &ast,
-        r#"{"ast": "0.10", "name": "h5", "params": {},
+        r#"{"ast": "0.11", "name": "h5", "params": {},
   "datasets": {"d": {"layout": "compound", "pattern": "h/{id:04}.h5", "count": 10, "samples_per_file": 4,
      "size": {"const": 300}, "seed": 11, "access": "stream", "format": {"class": "hdf5", "reader": "h5py", "version": "test", "framing": {"file_header": 2048, "writer": {"dataset": "records", "shape": [300], "dtype": "u1"}}}}},
   "actors": {"gpu": {"body": []}}}"#,

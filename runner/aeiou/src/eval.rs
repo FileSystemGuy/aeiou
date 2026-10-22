@@ -21,6 +21,10 @@ pub struct Config {
     pub overrides: Vec<(String, String)>,
     /// `--params-file FILE`, in command-line order: applied over the defaults, under `overrides`.
     pub sets: Vec<ParamSet>,
+    /// The `st_blksize` each dataset's storage reported (contract 0.11): `fstat` of its first
+    /// file at the gate under `aeiou run`, `--st-blksize` under `aeiou dry-run`. A dataset not
+    /// here takes each storage-reported parameter's `fallback`.
+    pub st_blksize: BTreeMap<String, i64>,
 }
 
 impl Config {
@@ -124,24 +128,47 @@ fn pvalue_kind(v: &PValue) -> &'static str {
     }
 }
 
+fn kind_desc(k: Kind) -> &'static str {
+    match k {
+        Kind::Dist => "a distribution",
+        Kind::Array => "an array",
+        _ => "a scalar",
+    }
+}
+
+fn same_kind(k: Kind, v: &PValue) -> bool {
+    match v {
+        PValue::Dist(_) => k == Kind::Dist,
+        PValue::Array(_) => k == Kind::Array,
+        PValue::Scalar(_) => !matches!(k, Kind::Dist | Kind::Array),
+    }
+}
+
 /// A value may replace a default of the same kind: a scalar for a scalar, an array for an
 /// array (any length, elements of the default's element kind), a distribution for a
 /// distribution. The builder decided at build time how each slot is consumed (a distribution
-/// is drawn, an array is indexed), so a change of kind would not be a change of value.
-fn check_kind(name: &str, default: &PValue, v: &PValue, source: &str) -> Result<()> {
-    if std::mem::discriminant(default) != std::mem::discriminant(v) {
-        bail!("{source} {name}: the default is {}, the value is {}", pvalue_kind(default), pvalue_kind(v));
+/// is drawn, an array is indexed), so a change of kind would not be a change of value. A
+/// required parameter (contract 0.11) has no default and declares its kind.
+fn check_kind(name: &str, param: &Param, v: &PValue, source: &str) -> Result<()> {
+    let what = if param.required() { "the kind" } else { "the default" };
+    if !same_kind(param.kind, v) {
+        bail!("{source} {name}: {what} is {}, the value is {}", kind_desc(param.kind), pvalue_kind(v));
     }
-    if let (PValue::Array(d), PValue::Array(a)) = (default, v) {
-        if let Some(first) = d.first() {
-            for (i, x) in a.iter().enumerate() {
-                if std::mem::discriminant(first) != std::mem::discriminant(x) {
-                    bail!("{source} {name}[{i}]: the default's elements are {}, this one is {}", pvalue_kind(first), pvalue_kind(x));
-                }
+    if let (Some(k), PValue::Array(a)) = (param.items, v) {
+        let what = if param.required() { "the kind's" } else { "the default's" };
+        for (i, x) in a.iter().enumerate() {
+            if !same_kind(k, x) {
+                bail!("{source} {name}[{i}]: {what} elements are {}, this one is {}", kind_desc(k), pvalue_kind(x));
             }
         }
     }
     Ok(())
+}
+
+/// The value of a storage-reported parameter under `cfg`: what the storage of its dataset
+/// reported, else its fallback.
+pub fn reported(src: &Source, cfg: &Config) -> i64 {
+    cfg.st_blksize.get(&src.of).copied().unwrap_or(src.fallback)
 }
 
 /// `f` as an integer when it is one (`3e3`, `3000.0`) within 64 bits.
@@ -152,18 +179,22 @@ pub fn integral(f: f64) -> Option<i64> {
 /// A value keeps its default's kind down to the number (`schema/README.md` §8): where the
 /// default is an integer (an array's elements are), an integral float is that integer, so
 /// `samples=3e3` resolves, and makes the dataset id, as `samples=3000` does, and a fractional
-/// one is refused, never rounded. `payload::param_values` judges the JSON the same way.
-fn keep_int(name: &str, default: &PValue, v: &mut PValue, source: &str) -> Result<()> {
-    match (default, v) {
-        (PValue::Scalar(Literal::Int(_)), PValue::Scalar(l)) => {
-            if let Literal::Float(f) = *l {
-                *l = Literal::Int(integral(f).ok_or_else(|| anyhow!("{source} {name}: the default is an integer, the value {f} is not"))?);
-            }
+/// one is refused, never rounded. A required parameter's declared `int` is held the same way.
+/// `payload::param_values` judges the JSON the same way.
+fn keep_int(name: &str, param: &Param, v: &mut PValue, source: &str) -> Result<()> {
+    let what = if param.required() { "the kind" } else { "the default" };
+    let int = |name: &str, l: &mut Literal| -> Result<()> {
+        if let Literal::Float(f) = *l {
+            *l = Literal::Int(integral(f).ok_or_else(|| anyhow!("{source} {name}: {what} is an integer, the value {f} is not"))?);
         }
-        (PValue::Array(d), PValue::Array(a)) => {
-            if let Some(first) = d.first() {
-                for (i, x) in a.iter_mut().enumerate() {
-                    keep_int(&format!("{name}[{i}]"), first, x, source)?;
+        Ok(())
+    };
+    match (param.kind, param.items, v) {
+        (Kind::Int, _, PValue::Scalar(l)) => int(name, l)?,
+        (Kind::Array, Some(Kind::Int), PValue::Array(a)) => {
+            for (i, x) in a.iter_mut().enumerate() {
+                if let PValue::Scalar(l) = x {
+                    int(&format!("{name}[{i}]"), l)?;
                 }
             }
         }
@@ -187,7 +218,13 @@ pub fn keep_int_json(name: &str, default: &serde_json::Value, v: serde_json::Val
 
 impl Params {
     pub fn new(ast: &Ast, cfg: &Config) -> Result<Params> {
-        let mut values: BTreeMap<String, PValue> = ast.params.iter().map(|(k, p)| (k.clone(), p.default.clone())).collect();
+        let mut values: BTreeMap<String, PValue> = ast.params.iter().filter_map(|(k, p)| Some((k.clone(), p.default.clone()?))).collect();
+        // a storage-reported default (contract 0.11): the number the storage gave, else its fallback
+        for (k, p) in &ast.params {
+            if let Some(src) = &p.source {
+                values.insert(k.clone(), PValue::Scalar(Literal::Int(reported(src, cfg))));
+            }
+        }
         for set in &cfg.sets {
             if set.abstract_name != ast.name {
                 bail!("parameter file {} is for abstract `{}`, not `{}`", set.path, set.abstract_name, ast.name);
@@ -199,8 +236,8 @@ impl Params {
                 }
                 let param = ast.params.get(name).ok_or_else(|| anyhow!("{source} no parameter `{name}` in `{}`", ast.name))?;
                 let mut pv: PValue = serde_json::from_value(v.clone()).map_err(|e| anyhow!("{source} {name}: not a parameter value (a scalar, a distribution, or an array of these): {e}"))?;
-                check_kind(name, &param.default, &pv, &source)?;
-                keep_int(name, &param.default, &mut pv, &source)?;
+                check_kind(name, param, &pv, &source)?;
+                keep_int(name, param, &mut pv, &source)?;
                 values.insert(name.clone(), pv);
             }
         }
@@ -221,9 +258,14 @@ impl Params {
                 }
                 Err(_) => PValue::Scalar(Literal::Str(text.clone())),
             };
-            check_kind(name, &param.default, &v, "--param")?;
-            keep_int(name, &param.default, &mut v, "--param")?;
+            check_kind(name, param, &v, "--param")?;
+            keep_int(name, param, &mut v, "--param")?;
             values.insert(name.clone(), v);
+        }
+        // a required parameter (contract 0.11) has no value until a later layer gives one
+        let missing: Vec<&str> = ast.params.keys().filter(|k| !values.contains_key(*k)).map(String::as_str).collect();
+        if !missing.is_empty() {
+            bail!("required parameters with no value: {} (give each in a parameter file or with --param NAME=VALUE)", missing.join(", "));
         }
         // rule V3 again on what was given: a distribution whose minimum is below the default's
         // can turn an `at` offset into zero (§3.57)
@@ -1453,7 +1495,7 @@ pub(crate) mod tests {
     fn dataset(n: i64, spf: i64, format: &str) -> String {
         format!(
             r#"{{
-  "ast": "0.10", "name": "geom_test",
+  "ast": "0.11", "name": "geom_test",
   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": {n}, "samples_per_file": {spf},
      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
   "actors": {{"gpu": {{"body": [
@@ -1477,7 +1519,7 @@ pub(crate) mod tests {
 
     fn with_model(text: &str, f: impl FnOnce(&Model)) {
         let loaded = crate::load_str(text).expect("valid abstract");
-        let cfg = Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![] };
+        let cfg = Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![], st_blksize: Default::default() };
         let params = Params::new(&loaded.ast, &cfg).unwrap();
         f(&build_model(&loaded.ast, &cfg, &params).unwrap())
     }

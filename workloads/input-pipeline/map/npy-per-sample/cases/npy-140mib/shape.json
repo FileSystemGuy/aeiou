@@ -4,7 +4,7 @@
   "runs": [
     {
       "ast": "npy_per_sample",
-      "ast_sha256": "871bea36633c6d1981561fcc7e0628c60884211314fda78f99bdcb8842299d4e",
+      "ast_sha256": "58bef775074757efa9da47b7f88181697b39e686c791df8f1f423db7655a7314",
       "params": "params.json",
       "params_sha256": "37b85a342280e3d11ad8f7ad1ca8ea8df1ccd02cca641b67149fb5cefb125189",
       "gpus": 1,

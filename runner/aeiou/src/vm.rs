@@ -2029,13 +2029,13 @@ mod tests {
         for format in [String::new(), tfrecord.to_string(), units(1), units(3), units(7), units(40)] {
             // files of 100, 100, and 20 samples: two past the bound, one under it
             let text = format!(
-                r#"{{"ast": "0.10", "name": "t",
+                r#"{{"ast": "0.11", "name": "t",
                   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": 220, "samples_per_file": 100,
                      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
                   "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
             );
             let loaded = crate::load_str(&text).unwrap_or_else(|e| panic!("{e:#}"));
-            let cfg = Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![] };
+            let cfg = Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![], st_blksize: Default::default() };
             let params = Params::new(&loaded.ast, &cfg).unwrap();
             let model = build_model(&loaded.ast, &cfg, &params).unwrap();
             let meta = &model.datasets[0];
