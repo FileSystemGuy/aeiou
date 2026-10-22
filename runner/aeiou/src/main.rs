@@ -72,6 +72,10 @@ static STDOUT_GONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// The exit status of a command whose reader went away and nothing else failed: 128 + SIGPIPE,
 /// the status the shell shows for a tool the signal stopped (runner/REFERENCE.md §15).
 const EXIT_PIPE: i32 = 141;
+/// A valid run that did not pass a lock's constraint known after it (`run::DidNotPass`,
+/// `DESIGN_REVIEW.md` §3.78 point 9): unused beside 0, 1, 2, 130, 141, 143, and below the 126
+/// and up the shell reserves.
+const EXIT_DID_NOT_PASS: i32 = 3;
 
 /// Standard output that outlives its reader (runner/REFERENCE.md §15): once the pipe refuses a
 /// write (EPIPE), that write and every later one is dropped, so the work goes on to its end, a
@@ -122,6 +126,226 @@ struct ShapeArgs {
     /// A parameter file (`.params.json`, schema/README.md §8), applied over the defaults and under --param; repeatable, in order.
     #[arg(long = "params-file", value_name = "FILE", help_heading = "Workload")]
     param_files: Vec<PathBuf>,
+    /// A use case by its lock's name (`mechanism/case`, or the case alone when one matches), found under aeiou's workloads/ (DESIGN_REVIEW.md §3.78); in place of ABSTRACT.
+    #[arg(long, value_name = "NAME", help_heading = "Workload", conflicts_with_all = ["abstract_path", "case_file"])]
+    case: Option<String>,
+    /// A use case by its lock's path (`case.lock.json`, aeiou-params lock), no search; in place of ABSTRACT.
+    #[arg(long = "case-file", value_name = "PATH", help_heading = "Workload", conflicts_with = "abstract_path")]
+    case_file: Option<PathBuf>,
+    /// The run of a lock of several runs, by its abstract's name.
+    #[arg(long = "case-run", value_name = "NAME", help_heading = "Workload")]
+    case_run: Option<String>,
+    /// aeiou's workloads/ directory, where a lock's abstract is [default: bin/../workloads beside the executable].
+    #[arg(long, value_name = "DIR", help_heading = "Workload")]
+    workloads: Option<PathBuf>,
+    /// Refuse a lock whose file SHA-256 is not this one, before anything else.
+    #[arg(long = "expect-case-sha", value_name = "SHA256", help_heading = "Checks")]
+    expect_case_sha: Option<String>,
+    /// Refuse a run whose workload id is not this one, before anything else.
+    #[arg(long = "expect-workload-id", value_name = "SHA256", help_heading = "Checks")]
+    expect_workload_id: Option<String>,
+}
+
+/// A use case's lock and the run of it a command executes (contract 0.11).
+struct Case {
+    lock: aeiou::case::Lock,
+    run: aeiou::case::LockRun,
+}
+
+/// `--case`/`--case-file`: the lock and its run, the abstract's path put where ABSTRACT goes
+/// (the lock's path below aeiou's workloads/), and the checks that need nothing but the file.
+fn resolve_case(shape: &mut ShapeArgs) -> Result<Option<Case>> {
+    let path = match (&shape.case, &shape.case_file) {
+        (None, None) => {
+            let stray: Vec<&str> = [
+                ("--case-run", shape.case_run.is_some()),
+                ("--workloads", shape.workloads.is_some()),
+                ("--expect-case-sha", shape.expect_case_sha.is_some()),
+                ("--expect-workload-id", shape.expect_workload_id.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(n, g)| g.then_some(n))
+            .collect();
+            if !stray.is_empty() {
+                aeiou::usage!("{}: options of a use case's lock, and no --case or --case-file names one", stray.join(", "));
+            }
+            return Ok(None);
+        }
+        (Some(name), _) => aeiou::case::find(&aeiou::case::workloads_dir(shape.workloads.as_deref())?, name)?,
+        (None, Some(p)) => p.clone(),
+    };
+    for (flag, h) in [("--expect-case-sha", &shape.expect_case_sha), ("--expect-workload-id", &shape.expect_workload_id)] {
+        if let Some(x) = h.as_deref().filter(|x| x.len() != 64 || !x.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
+            aeiou::usage!("{flag} {x}: not a SHA-256 (64 lowercase hex digits, as the header prints it)");
+        }
+    }
+    let lock = aeiou::case::Lock::load(&path)?;
+    if let Some(want) = &shape.expect_case_sha {
+        if *want != lock.sha256 {
+            bail!("lock {} ({}): its file SHA-256 is {}, not the expected {want}", lock.name, path.display(), lock.sha256);
+        }
+    }
+    let run = lock.run(shape.case_run.as_deref())?.clone();
+    let workloads = aeiou::case::workloads_dir(shape.workloads.as_deref())?;
+    shape.abstract_path = Some(workloads.join(&run.abstract_rel));
+    Ok(Some(Case { lock, run }))
+}
+
+/// An identity option of a lock's run (§3.78 point 3): the value a run gives (`given`), else
+/// the lock's, else `default` (`None`: the abstract's declaration, for `posix`, `cache`, `s3`);
+/// a given value is refused where the lock's entry is locked, or the rules froze every identity
+/// option, and it differs from the value locked (the lock's, else the default).
+fn case_option<T>(case: Option<&Case>, name: &str, given: Option<T>, default: Option<T>) -> Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned + PartialEq + std::fmt::Display + Clone,
+{
+    let Some(c) = case else { return Ok(given.or(default)) };
+    let (state, value) = match c.run.run.get(name) {
+        Some((state, v)) => (Some(*state), v.clone().map(serde_json::from_value::<T>).transpose().with_context(|| format!("lock {}: run.{name}", c.lock.name))?),
+        None => (None, None),
+    };
+    let locked = state == Some(aeiou::eval::State::Locked) || c.lock.identity_frozen;
+    let want = value.clone().or(default.clone());
+    if let (Some(g), true, Some(w)) = (&given, locked, &want) {
+        if g != w {
+            let flag = name.replace('_', "-");
+            aeiou::usage!("--{flag} {g}: the lock {} locks {name} at {w}{}", c.lock.name, if state.is_none() { " (its rules freeze every identity option at its default)" } else { "" });
+        }
+    }
+    Ok(given.or(value).or(default))
+}
+
+/// What the header and the report say of a use case's run (§3.78 point 12): the lock with its
+/// file hash, the workload id, and every parameter's value with its state and source.
+struct CaseView {
+    lines: Vec<String>,
+    json: serde_json::Value,
+    id: String,
+}
+
+fn case_view(c: &Case, ast: &aeiou::ast::Ast, cfg: &Config, values: &serde_json::Value, options: serde_json::Value) -> CaseView {
+    // what the command line gives over the lock: the files after it, then --param
+    let mut given: std::collections::BTreeMap<String, String> = Default::default();
+    for set in cfg.sets.iter().skip(1) {
+        for k in set.states.keys() {
+            given.insert(k.clone(), set.path.clone());
+        }
+    }
+    for (k, _) in &cfg.overrides {
+        given.insert(k.clone(), "--param".into());
+    }
+    let vals: std::collections::BTreeMap<String, serde_json::Value> = values.as_object().map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+    let id = aeiou::case::workload_id(&c.lock, &c.run, ast, &vals, &given.keys().cloned().collect(), &options);
+    let mut lines = vec![
+        format!("case {}  run {}  lock {} sha256 {}", c.lock.name, c.run.name, c.lock.path, c.lock.sha256),
+        format!("workload id {id}"),
+    ];
+    let mut params = serde_json::Map::new();
+    for (name, p) in &ast.params {
+        let (state, source) = match (given.get(name), c.run.params.get(name)) {
+            (Some(by), _) => ("given".to_string(), by.clone()),
+            (None, Some((st, _))) => (st.name().to_string(), c.run.sources.get(name).cloned().unwrap_or_default()),
+            (None, None) => ((if p.required() { "required" } else { "default" }).to_string(), "abstract".into()),
+        };
+        let v = vals.get(name).cloned().unwrap_or(serde_json::Value::Null);
+        let shown = match (&p.source, given.contains_key(name)) {
+            (Some(src), false) => format!("{v} (st_blksize of `{}`)", src.of),
+            _ => {
+                let t = v.to_string();
+                if t.chars().count() > 72 { format!("{}…", t.chars().take(72).collect::<String>()) } else { t }
+            }
+        };
+        lines.push(format!("  {name} = {shown}  {state}  {source}"));
+        params.insert(name.clone(), serde_json::json!({"value": v, "state": state, "source": source}));
+    }
+    let json = serde_json::json!({
+        "name": c.lock.name,
+        "file": c.lock.path,
+        "file_sha256": c.lock.sha256,
+        "run": c.run.name,
+        "workload_id": id,
+        "params": params,
+        "options": options,
+        "lock": c.lock.doc,
+    });
+    CaseView { lines, json, id }
+}
+
+/// The facts known at resolve a lock's constraints read; the projection, which walks every
+/// file's size, only when one reads `fact.dataset_bytes` or `fact.min_samples_per_gpu`.
+fn resolve_facts_of(c: &Case, model: &aeiou::eval::Model<'_>, cfg: &Config) -> Result<std::collections::BTreeMap<String, aeiou::case::Num>> {
+    let needs = c.lock.constraints.iter().any(|k| k.names.iter().any(|n| matches!(n.as_str(), "fact.dataset_bytes" | "fact.min_samples_per_gpu")));
+    let projections = if needs { aeiou::project::project_all(model, std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))? } else { Vec::new() };
+    let mut f = aeiou::case::resolve_facts(model.ast, &projections, cfg.gpus);
+    if !needs {
+        f.retain(|k, _| k == "fact.gpus");
+    }
+    Ok(f)
+}
+
+/// A lock's constraints known at `when`, judged and printed, their verdicts added to the
+/// report; at resolve, the ones judged later are listed with their time. A failure at resolve
+/// or the gate is an invalid run, refused before any I/O; after the run, a run that did not
+/// pass (exit 3).
+fn judge_case(c: &Case, when: aeiou::case::When, known: &std::collections::BTreeMap<String, aeiou::case::Num>, out: &mut dyn Write, doc: &mut aeiou::report::Doc) -> Result<()> {
+    use aeiou::case::When;
+    if c.lock.constraints.is_empty() {
+        return Ok(());
+    }
+    if when == When::Resolve {
+        for k in &c.lock.constraints {
+            let w = k.when()?;
+            if w != When::Resolve {
+                writeln!(out, "constraint checked at {}: {}", w.name(), k.text)?;
+            }
+        }
+    }
+    let verdicts = aeiou::case::judge(&c.lock, when, &|n| known.get(n).copied())?;
+    if verdicts.is_empty() {
+        return Ok(());
+    }
+    for v in &verdicts {
+        writeln!(out, "constraint at {}: {}", when.name(), v.line())?;
+    }
+    let list = doc.header.entry("constraints").or_insert_with(|| serde_json::json!([]));
+    if let Some(a) = list.as_array_mut() {
+        a.extend(verdicts.iter().map(|v| v.json()));
+    }
+    let failed: Vec<String> = verdicts.iter().filter(|v| !v.passed).map(|v| v.text.clone()).collect();
+    if failed.is_empty() {
+        return Ok(());
+    }
+    if when == When::After {
+        return Err(run::DidNotPass(failed.join("; ")).into());
+    }
+    bail!("lock {}: constraint(s) not met at {}, an invalid run, refused before any I/O: {}", c.lock.name, when.name(), failed.join("; "))
+}
+
+/// `--expect-workload-id`: refused before anything is done.
+fn expect_id(shape: &ShapeArgs, view: &CaseView) -> Result<()> {
+    if let Some(want) = &shape.expect_workload_id {
+        if *want != view.id {
+            bail!("workload id {} does not match the expected {want}", view.id);
+        }
+    }
+    Ok(())
+}
+
+/// The lock's run as the bottom layer of the parameters, its abstract checked against the
+/// hash the lock pins (§3.78 point 12).
+fn case_layer(case: &Case, cfg: &mut Config, loaded: &aeiou::Loaded) -> Result<()> {
+    if loaded.sha256 != case.run.ast_sha256 {
+        bail!(
+            "lock {}: run `{}` pins {} at {}…, and the file there is {}…: the abstract changed since the lock was made (aeiou-params lock remakes it; aeiou-build does for a committed case)",
+            case.lock.name,
+            case.run.name,
+            case.run.abstract_rel,
+            &case.run.ast_sha256[..16],
+            &loaded.sha256[..16]
+        );
+    }
+    cfg.sets.insert(0, case.run.param_set(&case.lock));
+    Ok(())
 }
 
 /// A `--coordinator` that cannot be an address, a usage error before anything is done: a host
@@ -142,9 +366,9 @@ struct RunArgs {
     /// Required: number of instances of every actor template whose count is `gpus` (global ids 0..G).
     #[arg(long, help_heading = "Workload")]
     gpus: Option<i64>,
-    /// The run seed. The dataset seed is separate and lives in the abstract.
-    #[arg(long, default_value_t = 0, help_heading = "Workload")]
-    seed: u64,
+    /// The run seed [default: 0, or the lock's]. The dataset seed is separate and lives in the abstract.
+    #[arg(long, help_heading = "Workload")]
+    seed: Option<u64>,
 }
 
 #[derive(Args)]
@@ -440,24 +664,40 @@ struct RunOptions {
     ignore_limits: bool,
     report_json: Option<PathBuf>,
     report_takes: bool,
+    /// The use case's lock, when the run names one (`--case`, `--case-file`).
+    case: Option<Case>,
 }
 
 /// The identity of the run as the command line fixes it: the abstract, its parameters, and
 /// the run's `--gpus`, in every subcommand's block first.
 fn fix_shape(l: &mut Layers, shape: &ShapeArgs) -> Result<()> {
     l.fixed("abstract", &shape.abstract_path, shape.abstract_path.is_some())?;
+    l.fixed("case", &shape.case, shape.case.is_some())?;
+    l.fixed("case-file", &shape.case_file, shape.case_file.is_some())?;
+    l.fixed("case-run", &shape.case_run, shape.case_run.is_some())?;
+    l.fixed("workloads", &shape.workloads, shape.workloads.is_some())?;
+    l.fixed("expect-case-sha", &shape.expect_case_sha, shape.expect_case_sha.is_some())?;
+    l.fixed("expect-workload-id", &shape.expect_workload_id, shape.expect_workload_id.is_some())?;
     l.fixed("param", &shape.params, !shape.params.is_empty())?;
     l.fixed("params-file", &shape.param_files, !shape.param_files.is_empty())
 }
 
-fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)> {
+fn resolve_run(mut a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)> {
     let mut l = Layers::new("run", config)?;
     let mut miss = Missing::new();
+    let case = resolve_case(&mut a.run.shape)?;
     let abstract_path = miss.want(a.run.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None);
     let gpus = miss.want(a.run.gpus, usage::GPUS.0, usage::GPUS.1, None);
     fix_shape(&mut l, &a.run.shape)?;
     l.fixed("gpus", &a.run.gpus, a.run.gpus.is_some())?;
-    l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
+    // the identity options a lock sets (§3.78 point 3): its value where the run gives none, and
+    // a refusal where it gives another of a value the lock, or the rules' freeze, locks
+    let c = case.as_ref();
+    a.run.seed = Some(case_option(c, "seed", a.run.seed, Some(0))?.unwrap_or(0));
+    a.posix = case_option(c, "posix", a.posix.take(), None)?;
+    a.cache = case_option(c, "cache", a.cache.take(), None)?;
+    a.s3 = case_option(c, "s3", a.s3.take(), None)?;
+    l.fixed("seed", &a.run.seed.unwrap_or(0), a.run.seed != Some(0))?;
     l.fixed("posix", &a.posix.clone().unwrap_or_else(|| "the abstract's".into()), a.posix.is_some())?;
     l.fixed("cache", &a.cache.clone().unwrap_or_else(|| "the abstract's".into()), a.cache.is_some())?;
     l.fixed("s3", &a.s3.clone().unwrap_or_else(|| "the abstract's".into()), a.s3.is_some())?;
@@ -476,8 +716,14 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         gpus: gpus.unwrap_or(0),
         threads: l.layered("threads", a.threads, None)?,
         buffer_mib: l.layered("buffer-mib", a.buffer_mib, Some(8))?.unwrap_or(8),
-        write_compress: l.layered("write-compress", a.write_compress, Some(1))?.unwrap_or(1),
-        time_scale: l.layered("time-scale", a.time_scale, Some(1.0))?.unwrap_or(1.0),
+        write_compress: {
+            let given = l.layered("write-compress", a.write_compress, None)?;
+            case_option(c, "write_compress", given, Some(1))?.unwrap_or(1)
+        },
+        time_scale: {
+            let given = l.layered("time-scale", a.time_scale, None)?;
+            case_option(c, "time_scale", given, Some(1.0))?.unwrap_or(1.0)
+        },
         iowq_max_workers: l.layered("iowq-max-workers", a.iowq_max_workers, None)?,
         sqpoll: l.layered("sqpoll", a.sqpoll, None)?,
         sqpoll_shared: l.flag("sqpoll-shared", neg(a.sqpoll_shared, a.no_sqpoll_shared), false)?,
@@ -491,7 +737,10 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         rank: l.layered("rank", a.rank, Some(0))?.unwrap_or(0),
         ranks: l.layered("ranks", a.ranks, Some(1))?.unwrap_or(1),
         coordinator: l.layered("coordinator", a.coordinator, None)?,
-        rank_rotate: l.layered("rank-rotate", a.rank_rotate, Some(0))?.unwrap_or(0),
+        rank_rotate: {
+            let given = l.layered("rank-rotate", a.rank_rotate, None)?;
+            case_option(c, "rank_rotate", given, Some(0))?.unwrap_or(0)
+        },
         max_gap: l.layered("max-gap", a.max_gap, None)?,
         require_cold: l.flag("require-cold", neg(a.require_cold, a.no_require_cold), false)?,
         drop_caches: l.flag("drop-caches", neg(a.drop_caches, a.no_drop_caches), false)?,
@@ -506,7 +755,11 @@ fn resolve_run(a: RunCmd, config: Option<&Path>) -> Result<(RunOptions, Layers)>
         expect_dataset_ids: a.expect_dataset_ids,
         clean_namespaces: a.clean_namespaces,
         ignore_limits: a.ignore_limits,
+        case,
     };
+    for (name, v) in [("write-compress", o.write_compress.to_string()), ("time-scale", o.time_scale.to_string()), ("rank-rotate", o.rank_rotate.to_string())] {
+        l.show_default(name, v);
+    }
     // what the options in effect make required, listed with what is missing outright
     let because = |what: &str, names: &[&str]| -> String {
         let from = l.from_plain(names);
@@ -663,6 +916,10 @@ fn main() {
             eprintln!("{prog}: {e:#}");
             std::process::exit(128 + sig);
         }
+        if e.downcast_ref::<run::DidNotPass>().is_some() {
+            eprintln!("{prog}: {e:#}");
+            std::process::exit(EXIT_DID_NOT_PASS);
+        }
         eprintln!("{prog}: {e:#}");
         std::process::exit(1);
     }
@@ -682,9 +939,14 @@ fn real_main(cli: Cli) -> Result<()> {
     }
 }
 
-fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
+fn datagen_cmd(mut a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     let mut l = Layers::new("datagen", config)?;
     let mut miss = Missing::new();
+    // a use case's lock: the corpus written from the values a run of it checks against
+    if a.shape.expect_workload_id.is_some() {
+        aeiou::usage!("--expect-workload-id: a run's check (a dry run prints the id); datagen writes the corpus, whose ids --expect-dataset-id of the run checks");
+    }
+    let case = if a.resume.is_some() || a.settle.is_some() || a.grow.is_some() || a.shrink.is_some() { None } else { resolve_case(&mut a.shape)? };
     // --resume, --grow, --shrink: the dataset at ROOT, from its manifest
     let mut ops: Vec<(&str, Option<i64>, String)> = Vec::new();
     if let Some(r) = &a.resume {
@@ -711,6 +973,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
         // what the manifest fixes is not taken from anywhere else
         let given: Vec<&str> = [
             (a.shape.abstract_path.is_some(), "an abstract"),
+            (a.shape.case.is_some() || a.shape.case_file.is_some(), "a lock (--case, --case-file)"),
             (!a.shape.params.is_empty(), "--param"),
             (!a.shape.param_files.is_empty(), "--params-file"),
             (a.gpus != 1, "--gpus"),
@@ -793,7 +1056,7 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
     if a.compress > aeiou::payload::MAX_COMPRESS {
         aeiou::usage!("--compress {}: the compression ratio is at most {} (one random byte in each 4 KiB piece)", a.compress, aeiou::payload::MAX_COMPRESS);
     }
-    let cfg = parse_config(&a.shape, a.gpus, 0)?;
+    let mut cfg = parse_config(&a.shape, a.gpus, 0)?;
     // at a dataset root, rank 0 alone reads the manifest (DESIGN_REVIEW.md §3.70): with several
     // hosts it listens first, decides, and gives every rank the manifest with `Welcome`, so a
     // refusal reaches them all and no host reads a manifest another is replacing
@@ -856,6 +1119,10 @@ fn datagen_cmd(a: DatagenArgs, config: Option<&Path>) -> Result<()> {
         }
         _ => {
             let loaded = aeiou::load(&abstract_path.expect("checked"))?;
+            if let Some(c) = &case {
+                case_layer(c, &mut cfg, &loaded)?;
+                writeln!(stdout(), "case {}  run {}  lock {} sha256 {}", c.lock.name, c.run.name, c.lock.path, c.lock.sha256)?;
+            }
             cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
             // a --dataset that names none of the abstract's datasets would write nothing and
             // exit 0: a typo in a tuning loop would look like success
@@ -1067,7 +1334,8 @@ fn run_cmd(a: RunCmd, config: Option<&Path>) -> Result<()> {
         (r, _) => r,
     };
     if let Some(path) = &a.report_json {
-        let error = r.as_ref().err().map(|e| format!("{e:#}"));
+        // a run that did not pass is a valid run: its report has the verdicts, and no error
+        let error = r.as_ref().err().filter(|e| e.downcast_ref::<run::DidNotPass>().is_none()).map(|e| format!("{e:#}"));
         match (doc.write(path, error.as_deref()), &r) {
             (Ok(()), _) => writeln!(stdout(), "report {}", path.display())?,
             (Err(e), Ok(())) => return Err(e),
@@ -1197,9 +1465,12 @@ fn pass_over_flag(layers: &mut Layers, name: &str, value: &mut bool, usable: boo
 }
 
 fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report::Doc) -> Result<()> {
-    let mut cfg = parse_config(&a.run.shape, a.gpus, a.run.seed)?;
+    let mut cfg = parse_config(&a.run.shape, a.gpus, a.run.seed.unwrap_or(0))?;
     // the run is the process: the abstract and the model live for the threads' lifetime
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&a.abstract_path)?));
+    if let Some(c) = &a.case {
+        case_layer(c, &mut cfg, loaded)?;
+    }
     let endpoints = aeiou::endpoint::Endpoints::parse(&loaded.ast, &a.endpoints)?;
     endpoints.datasets_apart(&loaded.ast, Some(&a.root))?;
     let used = aeiou::validate::protocols(&loaded.ast, !loaded.traces.is_empty());
@@ -1251,6 +1522,14 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
         );
     }
     let event_loop = backend.event_loop() || s3.event_loop();
+    // the rules froze every identity option: an API the lock does not name is the abstract's
+    if let Some(c) = a.case.as_ref().filter(|c| c.lock.identity_frozen) {
+        for (name, got, want, on) in [("posix", backend.api.name(), declared.api.name(), used.posix), ("cache", backend.cache.name(), declared.cache.name(), used.posix), ("s3", s3.name(), declared_s3.name(), used.s3)] {
+            if on && !c.run.run.contains_key(name) && got != want {
+                aeiou::usage!("--{name} {got}: the lock {} freezes every identity option, {name} at the abstract's {want}", c.lock.name);
+            }
+        }
+    }
     {
         let api = backend.api.name();
         let no_ring = format!("--posix {api} has no ring");
@@ -1377,6 +1656,24 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     doc.set("ranks", serde_json::json!(a.ranks));
     doc.set("layers", layers.json());
     doc.expected_fingerprint = expect_fingerprint;
+    let view = match &a.case {
+        Some(c) => {
+            let options = serde_json::json!({
+                "seed": cfg.seed,
+                "posix": used.posix.then(|| backend.api.name()),
+                "cache": used.posix.then(|| backend.cache.name()),
+                "s3": used.s3.then(|| s3.name()),
+                "time_scale": a.time_scale,
+                "rank_rotate": a.rank_rotate,
+                "write_compress": a.write_compress,
+            });
+            let view = case_view(c, &loaded.ast, cfg, &payload::params_json(&loaded.doc, cfg, params)?, options);
+            doc.set("case", view.json.clone());
+            expect_id(&a.run.shape, &view)?;
+            Some(view)
+        }
+        None => None,
+    };
 
     let mut out = stdout();
     writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
@@ -1384,6 +1681,15 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
     if let Some(line) = storage_line(&loaded.ast, cfg, "stat of its first file") {
         writeln!(out, "{line}")?;
+    }
+    let mut known = std::collections::BTreeMap::new();
+    if let (Some(c), Some(view)) = (&a.case, &view) {
+        for line in &view.lines {
+            writeln!(out, "{line}")?;
+        }
+        // the constraints known at resolve, before anything else: one that fails is an invalid run
+        known = resolve_facts_of(c, model, cfg)?;
+        judge_case(c, aeiou::case::When::Resolve, &known, &mut out, doc)?;
     }
     let apis = |b: BackendKind, s: S3Api| -> String {
         let mut parts = Vec::new();
@@ -1561,10 +1867,18 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
         _ => (Arc::new(Local::new(&participants)), None),
     };
     *RUN_STOP.lock().unwrap_or_else(|p| p.into_inner()) = Some((coord.clone(), aborted.clone()));
-    let r = run_connected(a, loaded, cfg, model, opts, coord, aborted, tcp.as_deref(), server.as_ref(), &mut out, doc);
-    if let (Err(e), Some(t)) = (&r, &tcp) {
-        // the coordinator relays a failure here to every other host (a no-op after a Stop)
-        t.stop(&format!("{e:#}"));
+    let r = run_connected(a, loaded, cfg, model, opts, coord, aborted, tcp.as_deref(), server.as_ref(), &mut out, doc, known);
+    if let Err(e) = &r {
+        // rank 0's own failure goes to every host from its server, under the state lock, before
+        // this process can exit (a `Stop` its client sent might not be read in time; a gate
+        // constraint is refused here); another host's goes through the coordinator (a no-op
+        // after a Stop)
+        if let Some(s) = &server {
+            s.stop(&format!("{e:#}"));
+        }
+        if let Some(t) = &tcp {
+            t.stop(&format!("{e:#}"));
+        }
     }
     r
 }
@@ -1582,6 +1896,7 @@ fn run_connected(
     server: Option<&Server>,
     out: &mut impl Write,
     doc: &mut aeiou::report::Doc,
+    mut known: std::collections::BTreeMap<String, aeiou::case::Num>,
 ) -> Result<()> {
     let (ns_checks, input_objects) = run::check_input_namespaces(loaded, cfg, &opts, &opts)?;
     let inputs: Vec<serde_json::Value> = ns_checks
@@ -1655,6 +1970,20 @@ fn run_connected(
     // `finished` is `started` plus the time this host measured on its monotonic clock: the wall
     // clock may step (NTP, a WSL resume), and with several hosts `started` is rank 0's gate time,
     // so this host's own wall clock could read `finished < started` (RC1 review)
+    // a lock's constraints known at the gate, on every host's facts: rank 0 judges them once
+    // every Hello is in and before its own `ready`, so the gate cannot open on a failure (the
+    // coordinator tells every host why); the other hosts judge nothing
+    if let Some(c) = &a.case {
+        let hosts: Option<Vec<serde_json::Value>> = match (tcp, server) {
+            (None, _) => Some(vec![run::host_facts()]),
+            (Some(_), Some(s)) => Some(s.all_facts()?.into_values().collect()),
+            (Some(_), None) => None,
+        };
+        if let Some(hosts) = hosts {
+            known.extend(aeiou::case::gate_facts(&hosts, cfg.gpus));
+            judge_case(c, aeiou::case::When::Gate, &known, out, doc)?;
+        }
+    }
     let mut started = run::unix_now();
     let mut since = std::time::Instant::now();
     if let Some(t) = tcp {
@@ -1716,10 +2045,18 @@ fn run_connected(
         doc.set("memory", block);
         Ok(())
     };
+    // the constraints known after the run, on the whole run's report
+    let after = |out: &mut dyn Write, doc: &mut aeiou::report::Doc, report: &Report| -> Result<()> {
+        let Some(c) = &a.case else { return Ok(()) };
+        let mut all = known.clone();
+        all.extend(aeiou::case::results(report));
+        judge_case(c, aeiou::case::When::After, &all, out, doc)
+    };
     match (tcp, server) {
         (None, _) => {
             memory(out, doc, vec![run::host_facts()])?;
-            verdict(out, &report)
+            verdict(out, &report)?;
+            after(out, doc, &report)
         }
         (Some(t), None) => {
             t.report(&report)?;
@@ -1755,8 +2092,9 @@ fn run_connected(
             memory(out, doc, s.facts().into_values().collect())?;
             match verdict(out, &merged) {
                 Ok(()) => {
+                    // a run that did not pass is a valid run: the other hosts pass, rank 0 says why
                     s.finish(true, merged.stats.fingerprint, None);
-                    Ok(())
+                    after(out, doc, &merged)
                 }
                 Err(e) => {
                     s.finish(false, merged.stats.fingerprint, Some(format!("{e:#}")));
@@ -1883,14 +2221,16 @@ fn params_line(cfg: &Config) -> String {
     }
 }
 
-fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
+fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     let mut l = Layers::new("dry-run", config)?;
     let mut miss = Missing::new();
+    let case = resolve_case(&mut a.run.shape)?;
     let abstract_path = miss.want(a.run.shape.abstract_path.clone(), usage::ABSTRACT.0, usage::ABSTRACT.1, None);
     let gpus = miss.want(a.run.gpus, usage::GPUS.0, usage::GPUS.1, None);
     fix_shape(&mut l, &a.run.shape)?;
     l.fixed("gpus", &a.run.gpus, a.run.gpus.is_some())?;
-    l.fixed("seed", &a.run.seed, a.run.seed != 0)?;
+    let seed = case_option(case.as_ref(), "seed", a.run.seed, Some(0))?.unwrap_or(0);
+    l.fixed("seed", &seed, seed != 0)?;
     l.fixed("st-blksize", &a.st_blksize, !a.st_blksize.is_empty())?;
     l.fixed("gpu", &a.gpu, a.gpu.is_some())?;
     l.fixed("steps", &a.steps, a.steps.is_some())?;
@@ -1946,8 +2286,11 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
         aeiou::usage!("--metrics-sample 0: N is at least 1 (1 keeps every block)");
     }
     let (abstract_path, gpus) = (abstract_path.expect("checked"), gpus.expect("checked"));
-    let mut cfg = parse_config(&a.run.shape, gpus, a.run.seed)?;
+    let mut cfg = parse_config(&a.run.shape, gpus, seed)?;
     let loaded = aeiou::load(&abstract_path)?;
+    if let Some(c) = &case {
+        case_layer(c, &mut cfg, &loaded)?;
+    }
     cfg.check_sets(&loaded.ast.name, &loaded.sha256)?;
     cfg.st_blksize = st_blksize_given(&loaded.ast, &a.st_blksize)?;
     let params = Params::new(&loaded.ast, &cfg)?;
@@ -2006,6 +2349,30 @@ fn dry_run(a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(&cfg))?;
     if let Some(line) = storage_line(&loaded.ast, &cfg, "--st-blksize") {
         writeln!(out, "{line}")?;
+    }
+    let mut verdicts = aeiou::report::Doc::default();
+    if let Some(c) = &case {
+        // the identity options as a run under no option of its own would take them: the lock's,
+        // else the abstract's declaration and the runner's defaults
+        let used = aeiou::validate::protocols(&loaded.ast, !loaded.traces.is_empty());
+        let (declared, declared_s3) = (aeiou::backend::declared(&loaded.ast)?, aeiou::backend::declared_s3(&loaded.ast)?);
+        let opt = |name: &str, default: serde_json::Value| -> serde_json::Value { c.run.run.get(name).and_then(|(_, v)| v.clone()).unwrap_or(default) };
+        let options = serde_json::json!({
+            "seed": cfg.seed,
+            "posix": if used.posix { opt("posix", serde_json::json!(declared.api.name())) } else { serde_json::Value::Null },
+            "cache": if used.posix { opt("cache", serde_json::json!(declared.cache.name())) } else { serde_json::Value::Null },
+            "s3": if used.s3 { opt("s3", serde_json::json!(declared_s3.name())) } else { serde_json::Value::Null },
+            "time_scale": opt("time_scale", serde_json::json!(1.0)),
+            "rank_rotate": opt("rank_rotate", serde_json::json!(0)),
+            "write_compress": opt("write_compress", serde_json::json!(1)),
+        });
+        let view = case_view(c, &loaded.ast, &cfg, &payload::params_json(&loaded.doc, &cfg, &params)?, options);
+        for line in &view.lines {
+            writeln!(out, "{line}")?;
+        }
+        expect_id(&a.run.shape, &view)?;
+        let known = aeiou::case::resolve_facts(&loaded.ast, &projections, cfg.gpus);
+        judge_case(c, aeiou::case::When::Resolve, &known, &mut out, &mut verdicts)?;
     }
     for line in report.total.take_lines() {
         writeln!(out, "{line}")?;

@@ -8,13 +8,13 @@ aeiou - Author Execute I/O workload runner: validate, dry-run, generate datasets
 
 ```
 aeiou [--config FILE] check FILES...
-aeiou [--config FILE] dry-run [OPTIONS] --gpus GPUS ABSTRACT
-aeiou [--config FILE] datagen [OPTIONS] --root DIR ABSTRACT
+aeiou [--config FILE] dry-run [OPTIONS] --gpus GPUS ABSTRACT | --case NAME | --case-file PATH
+aeiou [--config FILE] datagen [OPTIONS] --root DIR ABSTRACT | --case NAME | --case-file PATH
 aeiou [--config FILE] datagen [OPTIONS] --resume ROOT
 aeiou [--config FILE] datagen [OPTIONS] --grow N ROOT
 aeiou [--config FILE] datagen [OPTIONS] --shrink N ROOT
 aeiou [--config FILE] datagen [OPTIONS] --settle ROOT
-aeiou [--config FILE] run [OPTIONS] --gpus GPUS --root DIR ABSTRACT
+aeiou [--config FILE] run [OPTIONS] --gpus GPUS --root DIR ABSTRACT | --case NAME | --case-file PATH
 aeiou --help | --version
 ```
 
@@ -44,6 +44,21 @@ The four subcommands are the stages of a benchmark:
 A result is identified by three things the run prints together: the abstract's SHA-256,
 the parameters in effect, and the dataset ids. The run seed selects one of many equivalent
 streams and is not part of the identity.
+
+A **use case** names everything that goes into a run in one file, its **lock**
+(`case.lock.json`, made by **aeiou-params**(1) `lock`; contract 0.11): `--case NAME` finds it
+under aeiou's `workloads/`, `--case-file PATH` reads it where it is, and the lock pins its
+abstract by its path and SHA-256 and holds every parameter with its state, **locked**,
+**default**, or **required**, and where it came from. A run of a lock prints those values and
+two hashes, the lock's **file hash** (is this the exact file published?) and its **workload
+id** (does this run do the same thing?), which results are compared by; it covers the values
+in effect, the command line's replacements of a default included, and the identity options
+(`--seed`, `--posix`, `--cache`, `--s3`, `--time-scale`, `--rank-rotate`, `--write-compress`),
+and leaves out the values the lock requires the submission to give and the numbers the
+storage reports. A lock made with a benchmark's rules may hold **constraints** over the
+runner's `fact.` and `result.` names (FACTS AND RESULTS), each judged when its names are
+known: at resolve, at the start gate (before any I/O; one that fails refuses the run), or
+after the run (one that fails is a valid run that did not pass: exit status 3).
 
 Every subcommand prints, after the `abstract` line, a block listing every option with its
 value in effect and the layer it came from: the command line, the environment, the config
@@ -246,7 +261,34 @@ turns it off, and the last one on the line wins.
   parameter `gpus`; instances have global ids `0..GPUS`.
 - **--seed** *SEED*
 
-  The run seed, default 0. The dataset seed is separate and lives in the abstract.
+  The run seed, default 0 (a lock's, when it sets one). The dataset seed is separate and lives in the abstract.
+- **--case** *NAME*
+
+  A use case by its lock's name, in place of *ABSTRACT*: `mechanism/case`, or the case alone
+  when one lock matches. The lock is found by a walk of aeiou's `workloads/` for every
+  `case.lock.json`; none or several are refused with every match listed. The lock's run
+  becomes the bottom layer of the parameters: a parameter file or `--param` may replace a
+  default and must give a required value, and never replaces a locked one. Its identity
+  options are the run's where the command line gives none, and one the lock locks (or its
+  rules freeze) is refused when given otherwise.
+- **--case-file** *PATH*
+
+  A use case by its lock's path, no search: what a driver that keeps its own locks passes.
+- **--case-run** *NAME*
+
+  The run of a lock of several runs (a writer and its reader), by its abstract's name;
+  required for such a lock and refused for a lock of one run.
+- **--workloads** *DIR*
+
+  aeiou's `workloads/` directory, where `--case` searches and a lock's abstract path is
+  resolved. Default: `../workloads` beside the executable (the release's `bin/`), else the
+  source checkout's.
+- **--expect-case-sha** *SHA256*
+
+  Refuse a lock whose file SHA-256 is not this one, before anything is done.
+- **--expect-workload-id** *SHA256*
+
+  Refuse a run whose workload id is not this one, before anything is done.
 - **--st-blksize** *[DATASET=]BYTES*
 
   The `st_blksize` the storage reports, for the parameters whose default is
@@ -309,6 +351,25 @@ turns it off, and the last one on the line wins.
 - **--params-file** *FILE*
 
   As for `dry-run`.
+- **--case** *NAME*
+
+  As for `dry-run`: the corpus is written from the values the lock's run checks against.
+- **--case-file** *PATH*
+
+  As for `dry-run`.
+- **--case-run** *NAME*
+
+  As for `dry-run`.
+- **--workloads** *DIR*
+
+  As for `dry-run`.
+- **--expect-case-sha** *SHA256*
+
+  As for `dry-run`.
+- **--expect-workload-id** *SHA256*
+
+  Refused: a run's check (a dry run prints the id); `--expect-dataset-id` of the run checks
+  the corpus.
 - **--gpus** *GPUS*
 
   Instance count, for dataset definitions that reference `gpus`. Default 1.
@@ -439,6 +500,26 @@ turns it off, and the last one on the line wins.
 
   Required. As for `dry-run`.
 - **--seed** *SEED*
+
+  As for `dry-run`.
+- **--case** *NAME*
+
+  As for `dry-run`. The report holds the lock itself, its file hash, the workload id, every
+  parameter with its value, state, and source (`case`), and every constraint's verdict
+  (`constraints`).
+- **--case-file** *PATH*
+
+  As for `dry-run`.
+- **--case-run** *NAME*
+
+  As for `dry-run`.
+- **--workloads** *DIR*
+
+  As for `dry-run`.
+- **--expect-case-sha** *SHA256*
+
+  As for `dry-run`.
+- **--expect-workload-id** *SHA256*
 
   As for `dry-run`.
 - **--[no-]subset**
@@ -825,6 +906,12 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
 
   A usage error. Every missing argument is listed at once, from every layer, in the frame
   every tool of the suite shares.
+- **3**
+
+  `run` of a lock: a valid run that did not pass a constraint known after it (a `result.`
+  name). The run completed and its report is written with every verdict and no error; on
+  several hosts rank 0 exits 3 and the others 0. A constraint that fails at resolve or at
+  the gate is an invalid run, refused before any I/O, and exits 1.
 - **130**, **143**
 
   Stopped by Ctrl-C (`SIGINT`, 130) or `SIGTERM` (143, what Slurm, systemd, docker, and
@@ -839,6 +926,25 @@ empties namespace roots: `--root` is the storage under test, shared by every hos
   output is dropped, silently, and the work goes on to its end (a run measures and writes
   its `--report-json` as it would have), as 128 + `SIGPIPE`, the status the shell shows for
   a tool that signal stopped.
+
+## FACTS AND RESULTS
+
+The names a lock's constraints read (contract 0.11), each defined here and in
+`runner/REFERENCE.md` §17, with the time it is known:
+
+- **fact.gpus** (resolve): *G*, the GPU instances of the run.
+- **fact.dataset_bytes** (resolve): every dataset's bytes as `datagen` writes them.
+- **fact.min_samples_per_gpu** (resolve): the least, over the consumed datasets, of
+  floor(count / *G*).
+- **fact.hosts** (gate): the hosts of the run.
+- **fact.sum_host_mem**, **fact.min_host_mem** (gate): the hosts' memory summed and its
+  least, each host's `MemTotal` or cgroup `memory.max`, whichever is less.
+- **fact.max_gpus_per_host** (gate): ceil(*G* / hosts).
+- **result.elapsed_s** (after): the run's seconds from the start gate to its end.
+- **result.busy_fraction** (after): compute × time-scale / (compute × time-scale + stall)
+  over every take of every instance but each instance's first.
+- **result.min_gpu_busy_fraction** (after): the least, over the instances that take, of
+  that busy fraction.
 
 ## EXAMPLES
 

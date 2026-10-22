@@ -1104,6 +1104,20 @@ impl std::fmt::Display for Interrupted {
 
 impl std::error::Error for Interrupted {}
 
+/// A run that completed and failed a constraint known after it (a lock's rules, contract 0.11):
+/// a valid run that did not pass, its report written with every verdict, exit status 3
+/// (`DESIGN_REVIEW.md` §3.78 point 9).
+#[derive(Debug)]
+pub struct DidNotPass(pub String);
+
+impl std::fmt::Display for DidNotPass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "did not pass: {}", self.0)
+    }
+}
+
+impl std::error::Error for DidNotPass {}
+
 /// Touches every page of a fresh buffer, so its page faults are the runner's, taken when it
 /// is allocated, and never inside the op the kernel first copies into it (RC1 review).
 pub(crate) fn prefault(ptr: *mut u8, len: usize) {

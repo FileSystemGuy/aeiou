@@ -101,6 +101,10 @@ wanted. If **aeiou-launch** itself is killed (`SIGKILL`), the commands are not s
 - **2**
 
   A usage error, in the frame every tool of the suite shares.
+- **3**
+
+  The run of a use case's lock completed and did not pass a constraint known after it:
+  rank 0 exited 3 and no rank failed otherwise (**aeiou**(1), EXIT STATUS).
 - **130**, **143**
 
   Stopped by `SIGINT` (Ctrl-C) or `SIGTERM`, forwarded to every rank (SIGNALS).

@@ -6868,6 +6868,39 @@ cases of what it wrote. Choices made in the build, open to revision:
 - **A later layer may replace a default and may require a value; only a lock is final.** A
   `scale` parameter a use case locked is refused by a rules file that makes `scale` required.
 
+**Built: the runner's side of the lock** (2026-10-22; `runner/REFERENCE.md` §17,
+`runner/aeiou/src/case.rs`). `--case`, `--case-file`, `--case-run`, `--workloads`,
+`--expect-case-sha`, `--expect-workload-id`; the lock's run as the bottom parameter layer and
+its identity options set and enforced; the workload id; the header's case block and the
+report's `case` (the lock embedded) and `constraints`; the facts and results and constraints
+judged at resolve, at the gate (rank 0, before its `ready`), and after the run; exit status
+3, kept by `aeiou-launch`. Choices made in the build, open to revision:
+
+- **`dry-run` takes a lock too**, not only `run` and `datagen` (item 33 named those two): the
+  WG's validation (point 14) is a dry run of the lock, and the dry run is where an author
+  reads the workload id and finds a misspelled constraint name before a long run.
+- **The first vocabulary** is ten names (`fact.gpus`, `fact.dataset_bytes`,
+  `fact.min_samples_per_gpu`, `fact.hosts`, `fact.sum_host_mem`, `fact.min_host_mem`,
+  `fact.max_gpus_per_host`, `result.elapsed_s`, `result.busy_fraction`,
+  `result.min_gpu_busy_fraction`), each from what the runner already computes. Point 8 spoke
+  of "the steady state the runner already selects"; the runner selects none, so the busy
+  fractions leave out each instance's first take, which waits on the pipeline filling, and a
+  steadier window is a later, recorded change of the definition.
+- **A host's memory is its `MemTotal` or its cgroup `memory.max`, whichever is less**, so a
+  container's limit counts as the memory a cache could use.
+- **The workload id covers the lock's other runs by their entries** (a reader's id moves when
+  its writer's values do), and never `--gpus`, the submission's scale.
+- **`datagen` judges no constraint and refuses `--expect-workload-id`**: its `--gpus` is not
+  the run's, so a per-GPU fact would be judged on the wrong count; the run judges them all.
+- **A run that did not pass exits 3 on rank 0 alone**; the other hosts' verdict is the run's
+  (valid), so they exit 0, and `aeiou-launch` exits 3 when the only non-zero status is 3.
+- **`--seed` has no default in the parser** (0 is applied after it), so a lock's seed is the
+  run's where the command line gives none and a `--seed 0` given against a lock's 7 is seen.
+- **Found in the build**: rank 0's own failure before the gate (a gate constraint) reached the
+  other hosts only as a `Stop` its client sent its own server, which the process could exit
+  before broadcasting, so a host heard "connection closed" in place of the reason under load;
+  rank 0 now stops through its server, under the state lock, before it returns.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

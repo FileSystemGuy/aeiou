@@ -850,6 +850,22 @@ impl Server {
         self.st.m.lock().unwrap().facts.clone()
     }
 
+    /// Every host's facts once every host's `Hello` is in: rank 0 calls it before its own
+    /// `ready`, so what it judges of them (a lock's constraints at the gate, contract 0.11) is
+    /// judged before the gate can open. An error when the run failed meanwhile.
+    pub fn all_facts(&self) -> Result<BTreeMap<i64, Value>> {
+        let mut s = self.st.m.lock().unwrap();
+        loop {
+            if let Some(f) = &s.failed {
+                bail!("{f}");
+            }
+            if s.facts.len() as i64 >= self.st.ranks {
+                return Ok(s.facts.clone());
+            }
+            s = self.st.cv.wait_timeout(s, Duration::from_millis(100)).unwrap().0;
+        }
+    }
+
     /// Host-level departure releases (a host whose participants all left completed a
     /// generation), per scope.
     pub fn departure_releases(&self) -> Vec<(String, u64)> {

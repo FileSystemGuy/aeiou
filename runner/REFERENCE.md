@@ -1675,6 +1675,10 @@ the same day (decided 2026-10-01).**
   "memory": {hosts, memory, datasets_bytes, datasets_per_memory,
              datasets: [{name, samples, files, directories, bytes, inventory_bytes, mean_file}]},
                                               one host, and rank 0 of several (2026-10-13)
+  "storage_reported": {param: {from, of, value, reported}},   contract 0.11 (§4)
+  "case": {name, file, file_sha256, run, workload_id, params: {name: {value, state, source}},
+           options: {seed, posix, cache, s3, time_scale, rank_rotate, write_compress}, lock: {…the file…}},
+  "constraints": [{expr, doc, when, passed, numbers: {name: value}}],   a run of a lock (§17)
   "started", "finished",                      Unix seconds, the gate and the end of the run
   "scope": "run" | "host", "result": {…}, "this_host": {…},
   "verdict": {"ok", "error", "fingerprint", "fingerprint_scope", "expected_fingerprint"} }
@@ -2314,3 +2318,77 @@ namespace's prefix through their own endpoints kept by `--clean-namespaces`, and
 between two endpoints' prefixes done, one into another bucket `EXDEV`. A store that throttles:
 a proxy answering two requests `503 SlowDown`, the run succeeding with `object retries 2
 (503 ×2)`, its warning, and `result.object` in the JSON report.
+
+## 17. Use cases and the lock (2026-10-22)
+
+The reasoning is `DESIGN_REVIEW.md` §3.78, the forms `schema/README.md` §8 and
+`schema/lock.schema.json`; `case.rs` holds the code. A **lock** (`case.lock.json`, written by
+`aeiou-params lock`, never edited) is the one file that names everything a run of a use case
+takes. `run`, `dry-run`, and `datagen` take one in place of the abstract:
+
+- `--case NAME` walks aeiou's `workloads/` (`--workloads DIR`; by default `../workloads` beside
+  the executable, the release tarball's `bin/`, else the source checkout's) for every
+  `case.lock.json` and takes the one whose `name` is `NAME` (`mechanism/case`) or whose case is;
+  none or several are a usage error listing every match. `--case-file PATH` reads the lock at
+  `PATH`, no search. A lock of several runs (a writer and its reader) is run one at a time,
+  `--case-run NAME` naming the run by its abstract; the flag is refused for a lock of one run.
+- The run's abstract is `workloads/` joined with the run's `abstract`, and its canonical hash
+  must be the lock's `ast_sha256`: a changed abstract is refused, naming both hashes, until the
+  lock is remade. `--expect-case-sha` (the lock file's SHA-256) and `--expect-workload-id`
+  refuse a mismatch before anything is done.
+- The run's entries are the bottom layer of the parameters (`eval::ParamSet`, path `lock
+  NAME`): a `--params-file` or `--param` may replace a default and must give a required value,
+  and never replaces a locked one (`--param b: locked by lock toy/job`). An entry whose value is
+  a storage-reported rule keeps the abstract's source (§4, *Storage-reported values*).
+- **Identity options.** A lock's `run` table sets `seed`, `posix`, `cache`, `s3`,
+  `time_scale`, `rank_rotate`, `write_compress`: the value where no layer gives one, and a
+  locked one refuses another (`--posix io_uring: the lock toy/job locks posix at sync`). A
+  lock whose rules froze the identity options (`freeze.identity_options`) locks every one,
+  those it does not name at their defaults (the abstract's API and cache mode, seed 0,
+  time-scale 1, rank-rotate 0, write-compress 1).
+- **The header** prints `case NAME  run R  lock PATH sha256 HASH`, `workload id ID`, and every
+  parameter with its value, its state (`locked`, `default`, `required`, or `given` by the
+  command line), and its source (`abstract`, `rules`, a fragment's path, a parameter file, or
+  `--param`); the report's `case` block holds the same and the lock itself (§12).
+
+**The workload id** is the SHA-256 of the canonical form (`canon.rs`) of
+`{"lock_version": 1, "run": {"ast_sha256", "params", "options"}, "with": [...]}`: for the
+run executed, every declared parameter's value in effect (a default the command line
+replaced is its new value), `{"required": true}` for one the lock leaves required (the
+submission's) and the abstract's storage-reported rule for one no layer replaced (the
+storage's number is the report's), and the identity options in effect (`null` for a protocol
+the abstract has no names on); for each other run of the lock, its `ast_sha256` and its
+entries' values (`{"required": true}` for a required one), sorted by `ast_sha256`. The lock's
+name, docs, sources, constraints, freeze, and provenance are not in it, so a corrected `doc`
+does not split results. `--gpus` is not in it: the scale is the submission's.
+
+**Facts and results.** A constraint (a rules file's, copied into the lock in the AST's
+expression form with `{"fact": n}` and `{"result": n}` leaves) reads these names, and each is
+defined once here; a change of a definition is a recorded decision:
+
+| Name | Known at | Definition |
+|---|---|---|
+| `fact.gpus` | resolve | *G*, the GPU instances (`--gpus`) |
+| `fact.dataset_bytes` | resolve | every dataset's bytes as `datagen` writes them (`project.rs`) |
+| `fact.min_samples_per_gpu` | resolve | the least, over the consumed (`map`, `stream`) datasets, of floor(`count` / *G*) |
+| `fact.hosts` | gate | the hosts of the run |
+| `fact.sum_host_mem` | gate | the hosts' memory summed, each host's `MemTotal` or its cgroup `memory.max`, whichever is less |
+| `fact.min_host_mem` | gate | the least of those |
+| `fact.max_gpus_per_host` | gate | ceil(*G* / hosts) |
+| `result.elapsed_s` | after | seconds from the start gate to the end of the run |
+| `result.busy_fraction` | after | compute × time-scale / (compute × time-scale + stall) over every take of every instance but each instance's first, which waits on the pipeline filling |
+| `result.min_gpu_busy_fraction` | after | the least, over the instances that take, of that busy fraction |
+
+A constraint is checked at the latest time of the names it reads, with integer arithmetic
+where both operands are integers (`div` and `mod` Euclidean) and a float otherwise. Every
+name is resolved when the lock is read, so a misspelled one fails at `dry-run`, never after a
+long run; `dry-run` judges the constraints known at resolve and lists the others with their
+time. A run judges them at resolve, before the model's first op; at the **gate**, on rank 0
+once every host's `Hello` (and so its facts) is in and before its own `ready`, so a failure
+refuses the run on every host before any I/O (one host judges its own facts); and **after the
+run**, on the merged report. Each verdict is printed (`constraint at the gate: pass … (fact.x
+= …)`) and recorded in the report's `constraints`. A failure at resolve or the gate is an
+invalid run (exit 1); a failure after the run is a valid run that **did not pass**: the
+report is written with every verdict and no error, and the exit status is 3 (rank 0 alone;
+the other hosts exit 0, and `aeiou-launch` exits 3 when no rank failed otherwise).
+

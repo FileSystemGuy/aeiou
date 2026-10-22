@@ -3,7 +3,7 @@
 //! pure function of the AST, the CLI parameters, and the seeds; the VM (`vm.rs`) evaluates
 //! expressions against it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -89,6 +89,9 @@ pub struct ParamSet {
     pub values: BTreeMap<String, serde_json::Value>,
     /// Every entry's state, a `required` one's included.
     pub states: BTreeMap<String, State>,
+    /// The entries that keep the abstract's value with their state: a lock's storage-reported
+    /// rule (`{"locked": {"from": "st_blksize", …}}`), never a file's.
+    pub keep: BTreeSet<String>,
 }
 
 impl ParamSet {
@@ -138,7 +141,7 @@ impl ParamSet {
                 values.insert(k.clone(), value);
             }
         }
-        Ok(ParamSet { path: path.to_string(), sha256, abstract_name, ast_sha256, doc: doc_text, values, states })
+        Ok(ParamSet { path: path.to_string(), sha256, abstract_name, ast_sha256, doc: doc_text, values, states, keep: BTreeSet::new() })
     }
 
     pub fn check_identity(&self, abstract_name: &str, ast_sha256: &str) -> Result<()> {
@@ -281,6 +284,7 @@ impl Params {
                     bail!("{source} {name}: locked by {by}");
                 }
                 match set.values.get(name) {
+                    _ if set.keep.contains(name) => {}
                     Some(v) => {
                         let mut pv: PValue = serde_json::from_value(v.clone()).map_err(|e| anyhow!("{source} {name}: not a parameter value (a scalar, a distribution, or an array of these): {e}"))?;
                         check_kind(name, param, &pv, &source)?;

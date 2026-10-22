@@ -10,7 +10,8 @@
 # script runs). The i-th host is rank i; HOST0:PORT (default 7311) is the coordinator address
 # rank 0 listens on and every rank connects to, so HOST0 must be reachable from the others
 # under that name. Each host's output is prefixed with its rank, a whole line at a time; the
-# exit status is non-zero if any rank's is. Ctrl-C (SIGINT) or SIGTERM here is sent to every
+# exit status is non-zero if any rank's is (3 when the only one is a run that did not pass,
+# rank 0's verdict on a lock's constraint). Ctrl-C (SIGINT) or SIGTERM here is sent to every
 # rank's command over its ssh session's stdin (below); then the ranks are waited for and the
 # exit status is 130 or 143. AEIOU_RSH replaces `ssh` (it is called as
 # `$AEIOU_RSH HOST COMMAND`, and must pass its stdin to COMMAND).
@@ -45,7 +46,7 @@ Options:
   -f <FILE>   Hosts from a file too, one or more per line, # comments, bracket ranges as above
   -h, --help  Print help
 
-Each host's output is prefixed with its rank; the exit status is non-zero if any rank's is. Ctrl-C (SIGINT) or
+Each host's output is prefixed with its rank; the exit status is non-zero if any rank's is (3: the run did not pass). Ctrl-C (SIGINT) or
 SIGTERM is sent to every rank, which are then waited for; the exit status is 130 or 143. AEIOU_RSH replaces
 \`ssh\` (it is called as \$AEIOU_RSH HOST COMMAND and must pass its stdin to COMMAND, which is how the signal
 travels).
@@ -212,6 +213,7 @@ for hp in $holders; do
     kill -s HUP "$hp" 2>/dev/null
 done
 status=0
+passed=yes
 rank=0
 for h in "$@"; do
     if [ $rank -ge $started ]; then
@@ -219,13 +221,20 @@ for h in "$@"; do
         status=1
     else
         s=$(cat "$tmp/$rank" 2>/dev/null || echo 1)
-        if [ "$s" != 0 ]; then
+        if [ "$s" = 3 ]; then
+            # a valid run that did not pass a lock's constraint (rank 0's verdict): its own status
+            echo "aeiou-launch: rank $rank ($h): the run did not pass (status 3)" >&2
+            passed=no
+        elif [ "$s" != 0 ]; then
             echo "aeiou-launch: rank $rank ($h) exited with status $s" >&2
             status=1
         fi
     fi
     rank=$((rank + 1))
 done
+if [ $status = 0 ] && [ $passed = no ]; then
+    status=3
+fi
 rm -rf "$tmp"
 case $stopping in
 INT) exit 130 ;;

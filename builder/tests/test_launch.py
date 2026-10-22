@@ -86,10 +86,20 @@ def test_run_and_the_default_port(tmp_path):
 
 
 def test_a_failing_rank_fails_the_launch(tmp_path):
-    code, lines, err = launch(tmp_path, "a", "b", "--", "aeiou", "run", "x", body='case $1 in b) echo "$1 fails"; exit 3;; esac\necho "$1 ok"\n')
+    code, lines, err = launch(tmp_path, "a", "b", "--", "aeiou", "run", "x", body='case $1 in b) echo "$1 fails"; exit 4;; esac\necho "$1 ok"\n')
     assert code == 1
     assert lines == ["[0 a] a ok", "[1 b] b fails"]
-    assert "aeiou-launch: rank 1 (b) exited with status 3" in err
+    assert "aeiou-launch: rank 1 (b) exited with status 4" in err
+
+
+def test_a_run_that_did_not_pass_keeps_its_status(tmp_path):
+    """Status 3, a valid run of a lock that did not pass a constraint (rank 0's verdict,
+    contract 0.11), is the launch's when no rank failed otherwise, so a driver tells it from an
+    error; beside a failure the failure wins."""
+    code, _, err = launch(tmp_path, "a", "b", "--", "aeiou", "run", "x", body='case $1 in a) exit 3;; esac\n')
+    assert code == 3 and "aeiou-launch: rank 0 (a): the run did not pass (status 3)" in err
+    code, _, err = launch(tmp_path, "a", "b", "--", "aeiou", "run", "x", body='case $1 in a) exit 3;; b) exit 1;; esac\n')
+    assert code == 1 and "rank 1 (b) exited with status 1" in err
 
 
 def test_usage_errors_are_the_frame(tmp_path):
