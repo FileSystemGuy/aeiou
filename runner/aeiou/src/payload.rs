@@ -650,8 +650,11 @@ pub fn param_values(doc: &Value, cfg: &Config) -> Result<BTreeMap<String, Value>
         None => Ok(v),
     };
     for set in &cfg.sets {
-        for (name, v) in &set.values {
-            out.insert(name.clone(), keep(name, v.clone())?);
+        for name in set.states.keys() {
+            match set.values.get(name) {
+                Some(v) => out.insert(name.clone(), keep(name, v.clone())?),
+                None => out.remove(name),
+            };
         }
     }
     for (name, text) in &cfg.overrides {

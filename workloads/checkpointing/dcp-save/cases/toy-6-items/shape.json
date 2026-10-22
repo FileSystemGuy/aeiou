@@ -6,7 +6,7 @@
       "ast": "dcp_save",
       "ast_sha256": "62b6d1cb08d0138e3d845eedb4ed93454773e99d18f52642e2fa48cb2ad0c9a2",
       "params": "params.json",
-      "params_sha256": "fd648680eb8e72ef1e27cb89063fb5e02840dcf0382413852c4a83f5f9c7825c",
+      "params_sha256": "7ad1391be64627a07e8037f3123b737c12b55ce6a7e7d82174f4c303a404a8d9",
       "gpus": 2,
       "block": 4096,
       "seeds": [

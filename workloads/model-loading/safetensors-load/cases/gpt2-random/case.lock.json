@@ -1,0 +1,44 @@
+{
+  "lock_version": 1,
+  "name": "safetensors-load/gpt2-random",
+  "runs": [
+    {
+      "name": "safetensors_load",
+      "abstract": "model-loading/safetensors-load/safetensors_load.ast.json",
+      "ast_sha256": "a7d78ac110f00a95713707a3c8d73690494941aec714c4d02c9a38792562e92e",
+      "params": {
+        "bytes": {"default": [131072000, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4096, 16777216, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4194304, 4096, 16777216, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4096, 16777216, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4096, 16777216, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4096, 16777216, 12288, 12582912, 4096, 4096, 4096, 4194304, 4096, 4096, 16384, 16777216, 4096, 16777216, 4096, 4096]},
+        "config_bytes": {"default": 4096},
+        "configs": {"default": 3},
+        "hdr_len": {"default": [128, 2328, 2232, 2040, 1000]},
+        "off": {"default": [136, 2336, 14624, 12597536, 12601632, 16795936, 16800032, 16804128, 16808224, 16812320, 16828704, 33605920, 33610016, 50387232, 50399520, 62982432, 62986528, 67180832, 67184928, 67189024, 67193120, 67197216, 67213600, 83990816, 2240, 6336, 16783552, 16795840, 29378752, 29382848, 33577152, 33581248, 33585344, 33589440, 33593536, 33609920, 50387136, 50391232, 67168448, 67180736, 79763648, 79767744, 83962048, 83966144, 83970240, 83974336, 2048, 18432, 16795648, 16799744, 33576960, 33589248, 46172160, 46176256, 50370560, 50374656, 50378752, 50382848, 50386944, 50403328, 67180544, 67184640, 83961856, 83974144, 96557056, 96561152, 1008, 5104, 4199408, 4203504, 4207600, 4223984, 21001200, 21005296, 37782512, 37786608]},
+        "row_bytes": {"default": [131072000, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4096, 16777216, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4194304, 4096, 16777216, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4096, 16777216, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4096, 16777216, 12288, 12582912, 4096, 4194304, 4096, 4096, 4096, 4096, 16384, 16777216, 4096, 16777216, 12288, 12582912, 4096, 4096, 4096, 4194304, 4096, 4096, 16384, 16777216, 4096, 16777216, 4096, 4096]},
+        "rows": {"default": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]},
+        "shard": {"default": [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]},
+        "shard_bytes": {"default": 131072136},
+        "shards": {"default": 5},
+        "split": {"default": ["full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full", "full"]},
+        "tp": {"default": 1}
+      },
+      "sources": {
+        "bytes": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "config_bytes": "abstract",
+        "configs": "abstract",
+        "hdr_len": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "off": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "row_bytes": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "rows": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "shard": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "shard_bytes": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "shards": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "split": "model-loading/safetensors-load/cases/gpt2-random/params.json",
+        "tp": "model-loading/safetensors-load/cases/gpt2-random/params.json"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "model-loading/safetensors-load/cases/gpt2-random/case.toml",
+    "fragments": [{"path": "model-loading/safetensors-load/cases/gpt2-random/params.json", "sha256": "ac4e868a5c7f62c57d4a713441616b677ed6ffdbaad63df29be75fbd4795b2d1"}]
+  }
+}

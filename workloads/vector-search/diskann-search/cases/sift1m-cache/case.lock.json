@@ -1,0 +1,50 @@
+{
+  "lock_version": 1,
+  "name": "diskann-search/sift1m-cache",
+  "runs": [
+    {
+      "name": "diskann_search",
+      "abstract": "vector-search/diskann-search/diskann_search.ast.json",
+      "ast_sha256": "80642e20f54cf97933604cfd8acd766f46d5f4e16f1caf504ac2b74a2b036d1e",
+      "params": {
+        "beam": {"default": 4},
+        "cache_batch": {"default": 8},
+        "entry": {"default": {"hotset": {"fraction": 6.249968750156249e-05, "weight": 1.0}}},
+        "hops": {"default": {"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [4, 159, 519, 264, 43, 9, 2]}}},
+        "near": {"default": {"hotset": {"fraction": 1e-05, "weight": 1}}},
+        "node_cache": {"default": 10765},
+        "nodes": {"default": 200001},
+        "per_sector": {"default": 5},
+        "pq_code": {"default": 32},
+        "pq_read": {"default": 2147479552},
+        "queries": {"default": 1000},
+        "rerank": {"default": 500000},
+        "sector": {"default": 4096},
+        "stream": {"default": 8191},
+        "threads": {"default": 1}
+      },
+      "sources": {
+        "beam": "vector-search/diskann-search/cases/sift1m-cache/params.json",
+        "cache_batch": "abstract",
+        "entry": "vector-search/diskann-search/cases/sift1m-cache/params.json",
+        "hops": "vector-search/diskann-search/cases/sift1m-cache/params.json",
+        "near": "abstract",
+        "node_cache": "vector-search/diskann-search/cases/sift1m-cache/params.json",
+        "nodes": "vector-search/diskann-search/cases/sift1m-cache/params.json",
+        "per_sector": "vector-search/diskann-search/cases/sift1m-cache/params.json",
+        "pq_code": "abstract",
+        "pq_read": "abstract",
+        "queries": "vector-search/diskann-search/cases/sift1m-cache/params.json",
+        "rerank": "abstract",
+        "sector": "abstract",
+        "stream": "abstract",
+        "threads": "vector-search/diskann-search/cases/sift1m-cache/params.json"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "vector-search/diskann-search/cases/sift1m-cache/case.toml",
+    "fragments": [{"path": "vector-search/diskann-search/cases/sift1m-cache/params.json", "sha256": "07f6a962a8895075101973c7fd4675b0cf4dd772ccf55cca3738fd9b7e087b38"}]
+  }
+}

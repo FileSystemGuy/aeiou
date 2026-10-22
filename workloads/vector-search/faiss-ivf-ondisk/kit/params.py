@@ -22,14 +22,14 @@ def params(a, size, probes, code_size, prefetch_nthread, trace, index_bytes):
     top = slice(0, nlist // 2)                       # the tail of rarely probed lists falls off faster than any Zipf
     s = -np.polyfit(np.log(rank[top]), np.log(count[top]), 1)[0]
     reads = [int(m.group(1)) for m in map(READ.search, trace) if m]
-    return {"params_version": 1, "abstract": "faiss_ivf_ondisk", "doc": a.doc, "params": {
+    return {"params_version": 2, "abstract": "faiss_ivf_ondisk", "doc": a.doc, "params": {k: {"default": v} for k, v in {
         "threads": a.threads, "calls": a.calls, "batch": a.batch, "nprobe": a.nprobe,
         "prefetch": min(prefetch_nthread, a.batch * a.nprobe),
         "lists": nlist, "code_size": code_size,
         "list_bytes": {"lognormal": {"median": round(float(np.exp(ln.mean()))), "sigma": round(float(ln.std()), 2),
                                      "min": int(size.min()), "max": int(size.max())}},
         "list_pop": {"zipf": {"s": round(float(s), 2)}},
-        "index_bytes": index_bytes, "index_reads": reads}}
+        "index_bytes": index_bytes, "index_reads": reads}.items()}}
 
 
 def main():

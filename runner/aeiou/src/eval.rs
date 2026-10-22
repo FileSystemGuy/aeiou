@@ -38,8 +38,41 @@ impl Config {
     }
 }
 
-/// The `params_version` this runner reads (`schema/README.md` §8).
-pub const PARAMS_VERSION: u64 = 1;
+/// The `params_version` this runner reads (`schema/README.md` §8): 2 since contract 0.11, every
+/// entry with its state.
+pub const PARAMS_VERSION: u64 = 2;
+
+/// The state of a value (contract 0.11, `DESIGN_REVIEW.md` §3.78 point 4): `Locked` is final,
+/// `Default` a value a later layer may replace, `Required` no value, which a later layer must
+/// give.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Locked,
+    Default,
+    Required,
+}
+
+impl State {
+    pub fn name(self) -> &'static str {
+        match self {
+            State::Locked => "locked",
+            State::Default => "default",
+            State::Required => "required",
+        }
+    }
+}
+
+/// An entry of a fragment or a lock: `{"default": v}`, `{"locked": v}`, or `{"required": true}`.
+pub fn entry(v: &serde_json::Value) -> Result<(State, Option<serde_json::Value>)> {
+    let o = v.as_object().filter(|o| o.len() == 1).ok_or_else(|| anyhow!("not an entry: {{\"default\": v}}, {{\"locked\": v}}, or {{\"required\": true}}, got {v}"))?;
+    let (k, x) = o.iter().next().expect("one key");
+    Ok(match k.as_str() {
+        "default" => (State::Default, Some(x.clone())),
+        "locked" => (State::Locked, Some(x.clone())),
+        "required" if x == &serde_json::Value::Bool(true) => (State::Required, None),
+        _ => bail!("not an entry: {{\"default\": v}}, {{\"locked\": v}}, or {{\"required\": true}}, got {v}"),
+    })
+}
 
 /// A parameter file: a named set of values for the slots of one abstract (`schema/README.md`
 /// §8, the "three sources" split of `GRAMMAR_OPTIONS.md` Option D). Loaded as JSON; the
@@ -52,7 +85,10 @@ pub struct ParamSet {
     pub abstract_name: String,
     pub ast_sha256: Option<String>,
     pub doc: Option<String>,
+    /// The values of the `default` and `locked` entries.
     pub values: BTreeMap<String, serde_json::Value>,
+    /// Every entry's state, a `required` one's included.
+    pub states: BTreeMap<String, State>,
 }
 
 impl ParamSet {
@@ -72,6 +108,9 @@ impl ParamSet {
         }
         let obj = doc.as_object().ok_or_else(|| anyhow!("not a JSON object"))?;
         for k in obj.keys() {
+            if k == "run" {
+                bail!("a `run` table sets the runner's identity options, which only a lock's runs apply: run it as a use case's lock (--case, --case-file)");
+            }
             if !matches!(k.as_str(), "params_version" | "abstract" | "ast_sha256" | "doc" | "params" | "provenance") {
                 bail!("unknown key `{k}` (expected params_version, abstract, ast_sha256, doc, params, provenance)");
             }
@@ -91,14 +130,15 @@ impl ParamSet {
             Some(serde_json::Value::String(s)) => Some(s.clone()),
             Some(v) => bail!("`doc` is not a string: {v}"),
         };
-        let values = obj
-            .get("params")
-            .and_then(|v| v.as_object())
-            .ok_or_else(|| anyhow!("`params` missing or not an object"))?
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        Ok(ParamSet { path: path.to_string(), sha256, abstract_name, ast_sha256, doc: doc_text, values })
+        let (mut values, mut states) = (BTreeMap::new(), BTreeMap::new());
+        for (k, v) in obj.get("params").and_then(|v| v.as_object()).ok_or_else(|| anyhow!("`params` missing or not an object"))? {
+            let (state, value) = entry(v).with_context(|| format!("params: {k}"))?;
+            states.insert(k.clone(), state);
+            if let Some(value) = value {
+                values.insert(k.clone(), value);
+            }
+        }
+        Ok(ParamSet { path: path.to_string(), sha256, abstract_name, ast_sha256, doc: doc_text, values, states })
     }
 
     pub fn check_identity(&self, abstract_name: &str, ast_sha256: &str) -> Result<()> {
@@ -225,20 +265,35 @@ impl Params {
                 values.insert(k.clone(), PValue::Scalar(Literal::Int(reported(src, cfg))));
             }
         }
+        // a value locked by a file is final (contract 0.11): the file that locked it
+        let mut locked: BTreeMap<&str, &str> = BTreeMap::new();
         for set in &cfg.sets {
             if set.abstract_name != ast.name {
                 bail!("parameter file {} is for abstract `{}`, not `{}`", set.path, set.abstract_name, ast.name);
             }
-            for (name, v) in &set.values {
+            for (name, state) in &set.states {
                 let source = format!("{}:", set.path);
                 if name == "gpus" {
                     bail!("{source} `gpus` is set with --gpus, not by a parameter file");
                 }
                 let param = ast.params.get(name).ok_or_else(|| anyhow!("{source} no parameter `{name}` in `{}`", ast.name))?;
-                let mut pv: PValue = serde_json::from_value(v.clone()).map_err(|e| anyhow!("{source} {name}: not a parameter value (a scalar, a distribution, or an array of these): {e}"))?;
-                check_kind(name, param, &pv, &source)?;
-                keep_int(name, param, &mut pv, &source)?;
-                values.insert(name.clone(), pv);
+                if let Some(by) = locked.get(name.as_str()) {
+                    bail!("{source} {name}: locked by {by}");
+                }
+                match set.values.get(name) {
+                    Some(v) => {
+                        let mut pv: PValue = serde_json::from_value(v.clone()).map_err(|e| anyhow!("{source} {name}: not a parameter value (a scalar, a distribution, or an array of these): {e}"))?;
+                        check_kind(name, param, &pv, &source)?;
+                        keep_int(name, param, &mut pv, &source)?;
+                        values.insert(name.clone(), pv);
+                    }
+                    None => {
+                        values.remove(name);
+                    }
+                }
+                if *state == State::Locked {
+                    locked.insert(name, &set.path);
+                }
             }
         }
         for (name, text) in &cfg.overrides {
@@ -248,6 +303,9 @@ impl Params {
             let param = ast.params.get(name).ok_or_else(|| anyhow!("--param {name}: no such parameter"))?;
             if param.cli == Some(false) {
                 bail!("--param {name}: not overridable (cli: false)");
+            }
+            if let Some(by) = locked.get(name.as_str()) {
+                bail!("--param {name}: locked by {by}");
             }
             let mut v: PValue = match serde_json::from_str(text) {
                 Ok(v) => {

@@ -6841,6 +6841,33 @@ yet (the abstracts move with the lock, below). Choices made in the build, open t
 - V28 is the rule's number; check.py and the runner give the same messages, held by
   `runner/aeiou/tests/refusals.json`.
 
+**Built: `params_version` 2 and the lock** (2026-10-22). The parameter-file schema and both
+readers (the runner's `ParamSet`, `aeiou-params`), every committed set converted in place
+(each value a `default`, the hand formatting kept) and the kits that write sets with them;
+`aeiou-params lock` (`builder/aeiou/lock.py`), `schema/rules.schema.json` and
+`schema/lock.schema.json`, a lock for every committed case, and `aeiou-build` re-locking the
+cases of what it wrote. Choices made in the build, open to revision:
+
+- **The workload id is the runner's alone.** It must cover every identity option in effect,
+  and only the runner knows their defaults; a Python copy would be a second definition to keep
+  equal. The lock holds no id; `aeiou dry-run` on a lock prints it.
+- **A freeze of the identity options is carried as the freeze**, not as one entry per option:
+  the lock's `run` table holds what a fragment set, and the runner holds every other identity
+  option at its default when the lock's `freeze` locks them.
+- **The identity options a `run` table may set** are `seed`, `posix`, `cache`, `s3`,
+  `time_scale`, `rank_rotate`, and `write_compress` (§3.60's fixed list and what the
+  coordinator's identity hash covers); `aeiou run --params-file` refuses a file with one.
+- **A lock's entries are the fragments' form** (`{"locked": 7}`), each run's sources in a table
+  beside them (`sources`, `run_sources`); one value to a line when rendered.
+- **Paths in a lock are relative to `workloads/`**, a file outside it (a WG rules file) by its
+  name, and the lock records the case's `case.toml` by path alone (it holds the catalog's
+  attributes too, so its hash would make an attribute edit stale every lock) and no tool
+  version (a release would make every lock stale).
+- **Agreement is on the whole entry**: `{"default": 7}` and `{"locked": 7}` from two fragments
+  of one run are refused like two values, so no rule has to decide which state wins.
+- **A later layer may replace a default and may require a value; only a lock is final.** A
+  `scale` parameter a use case locked is refused by a rules file that makes `scale` required.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

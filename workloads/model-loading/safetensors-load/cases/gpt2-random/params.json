@@ -1,19 +1,19 @@
 {
-  "params_version": 1,
+  "params_version": 2,
   "abstract": "safetensors_load",
   "doc": "Fitted to the 2026-10-01 trace of from_pretrained: the tensor table of the kit's five shards (GPT-2 shape, 6 layers, random weights); tp 1, every tensor whole.",
   "params": {
-    "shards": 5,
-    "shard_bytes": 131072136,
-    "hdr_len": [
+    "shards": {"default": 5},
+    "shard_bytes": {"default": 131072136},
+    "hdr_len": {"default": [
       128,
       2328,
       2232,
       2040,
       1000
-    ],
-    "tp": 1,
-    "shard": [
+    ]},
+    "tp": {"default": 1},
+    "shard": {"default": [
       0,
       1,
       1,
@@ -90,8 +90,8 @@
       4,
       4,
       4
-    ],
-    "off": [
+    ]},
+    "off": {"default": [
       136,
       2336,
       14624,
@@ -168,8 +168,8 @@
       21005296,
       37782512,
       37786608
-    ],
-    "bytes": [
+    ]},
+    "bytes": {"default": [
       131072000,
       12288,
       12582912,
@@ -246,8 +246,8 @@
       16777216,
       4096,
       4096
-    ],
-    "split": [
+    ]},
+    "split": {"default": [
       "full",
       "full",
       "full",
@@ -324,8 +324,8 @@
       "full",
       "full",
       "full"
-    ],
-    "rows": [
+    ]},
+    "rows": {"default": [
       1,
       1,
       1,
@@ -402,8 +402,8 @@
       1,
       1,
       1
-    ],
-    "row_bytes": [
+    ]},
+    "row_bytes": {"default": [
       131072000,
       12288,
       12582912,
@@ -480,7 +480,7 @@
       16777216,
       4096,
       4096
-    ]
+    ]}
   },
   "provenance": {
     "tool": "aeiou-params 0.1.0",

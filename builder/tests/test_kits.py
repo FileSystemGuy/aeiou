@@ -16,6 +16,8 @@ import threading
 
 import pytest
 
+from aeiou.params import values_of
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 HOPS = ROOT / "workloads" / "vector-search" / "diskann-search" / "kit" / "hops.py"
 
@@ -87,8 +89,8 @@ def test_hops_reads_a_trace_with_and_without_v_alike(tmp_path, index):
     assert (report["bulk_submits"], report["bulk_requests"], report["bulk_largest"]) == (1, 40, 40)
     assert report["before_first_query"] == {"submits": 3, "requests": 19}
     assert report["rounds_per_query"] == {"2": 1, "3": 1, "4": 1}
-    assert params["params"]["node_cache"] == 59
-    assert params["params"]["hops"]["empirical"] == {"values": [2, 3, 4], "weights": [1, 1, 1]}
+    assert values_of(params)["node_cache"] == 59
+    assert values_of(params)["hops"]["empirical"] == {"values": [2, 3, 4], "weights": [1, 1, 1]}
 
 
 def test_hops_refuses_a_query_round_over_the_bulk_size(tmp_path, index):
@@ -121,7 +123,7 @@ def test_hops_without_marks_starts_a_query_at_a_medoid_read(tmp_path, index):
     assert rep["rounds_per_query"] == {"2": 2, "3": 2} and rep["first_batch"] == {"1": 4}
     assert rep["second_round"] == {"reads": 16, "distinct_sectors": 14}
     assert (rep["sector_reads"], rep["share_of_reads_on_medoid_sectors"]) == (26, round(4 / 26, 4))
-    p = json.loads(_hops(trace, index, "--params", "doc").stdout)["params"]
+    p = values_of(json.loads(_hops(trace, index, "--params", "doc").stdout))
     assert p["hops"]["empirical"] == {"values": [0, 1], "weights": [2, 2]} and p["node_cache"] == 0
     assert (p["threads"], p["queries"], p["beam"], p["nodes"], p["per_sector"]) == (2, 2, 4, 200, 5)
     assert p["entry"]["hotset"]["fraction"] == 2.5 / 200 and p["near"]["hotset"]["fraction"] == 13.5 / 200
@@ -153,7 +155,7 @@ def test_diskann_build_params_from_a_trace_and_the_files_the_build_left(tmp_path
     assert r.returncode == 0, r.stderr
     f = json.loads(r.stdout)
     assert (f["abstract"], f["doc"]) == ("diskann_build", "a doc")
-    assert f["params"] == {"dim": 16, "n": 1000, "shards": 3, "pq_code": 32, "shard_index_bytes": 2200 // 3, "index_bytes": 4204,
+    assert values_of(f) == {"dim": 16, "n": 1000, "shards": 3, "pq_code": 32, "shard_index_bytes": 2200 // 3, "index_bytes": 4204,
                            "sectors": 30, "sample_rows": 77}
     trace.write_text("")
     r = _run(DISKANN_BUILD / "params.py", trace, base, index, "a doc")
@@ -277,7 +279,7 @@ def test_agentx_fit_of_the_corpus(tmp_path, corpus):
     assert (f["abstract"], "provenance" in f) == ("lmcache_local_disk", False)
     assert f["doc"].startswith("Fitted by agentx.py to traces.jsonl (2 sessions): 8 requests in 5 chains; 33.3% of continuing "
                                "requests cut their chain (trim) and the chain grows by 100% of the corpus's prompt growth")
-    p = f["params"]
+    p = values_of(f)
     assert (p["requests"], p["context"], p["chunk_tokens"], p["sys_prompts"], p["sub_prompts"], p["chunk_bytes"]) == (8, 4096, 128, 2, 2, 1024)
     assert (p["sys_tokens"], p["sub_tokens"], p["concurrency"], p["retain"]) == (256, 128, 1, 8)
     assert p["kind"]["empirical"]["weights"] == [2, 1, 2]
@@ -389,7 +391,7 @@ def test_agentx_fit_of_a_replay_takes_keep_from_the_engine_and_records_its_condi
         outs.append(json.loads(out.read_text()))
     assert outs[0] == outs[1]
     f = outs[0]
-    p = f["params"]
+    p = values_of(f)
     assert (p["concurrency"], p["requests"], p["sys_prompts"], p["sub_prompts"], p["think"]) == (2, 4, 1, 1, {"const": 0})
     # continuing: (64 held past 256, held whole), (256 - 128, not whole), (128 held of 256 kept, under the 256 prefix: 0)
     assert p["keep"]["empirical"]["values"] == [43, 128]
@@ -404,7 +406,7 @@ def test_agentx_fit_of_a_replay_takes_keep_from_the_engine_and_records_its_condi
                 "--doc", "mine", "-o", out)
     assert r.returncode == 0, r.stderr
     f = json.loads(out.read_text())
-    assert f["doc"] == "mine" and f["params"]["think"]["empirical"]["values"] == [1000000000, 2333333333]
+    assert f["doc"] == "mine" and values_of(f)["think"]["empirical"]["values"] == [1000000000, 2333333333]
 
 
 def test_agentx_holds_simulates_the_engine_s_prefix_cache_under_the_replay(tmp_path, corpus):
@@ -635,7 +637,7 @@ def test_replay_serves_open_conversations_in_turn_and_fit_takes_its_log(monkeypa
     out = tmp_path / "fit.json"
     f = _run(KV / "fit.py", tmp_path / "replay.log", tmp_path / "lmcache.log", "--chunk-tokens", 16, "--bins", 2, "-o", out)
     assert f.returncode == 0, f.stderr
-    p = json.loads(out.read_text())["params"]
+    p = values_of(json.loads(out.read_text()))
     began, before = 0, ""                                # conversations begun where one had ended (not cut)
     for l in lines[1:]:
         m = REQ_LINE.match(l)
@@ -711,11 +713,11 @@ def test_faiss_params_fit_list_sizes_popularity_and_the_index_reads(monkeypatch,
              '9 1.2 read(6</mnt/nfs/out/merged_index.ivfdata>, ""..., 4096) = 4096 <0.000010>\n']
     a = argparse.Namespace(doc="d", threads=1, calls=20, batch=2, nprobe=64)
     f = fp.params(a, size, probes, 32, 32, trace, 680212)
-    p = f["params"]
+    p = values_of(f)
     assert (f["abstract"], f["doc"], p["lists"], p["code_size"], p["prefetch"], p["index_bytes"]) == ("faiss_ivf_ondisk", "d", 8, 32, 32, 680212)
     assert p["list_bytes"] == {"lognormal": {"median": 2000, "sigma": 0.52, "min": 0, "max": 4000}}
     assert p["list_pop"] == {"zipf": {"s": 2.0}} and p["index_reads"] == [8192, 516096]
-    assert fp.params(argparse.Namespace(doc="d", threads=1, calls=20, batch=1, nprobe=16), size, probes, 32, 32, [], 1)["params"]["prefetch"] == 16
+    assert values_of(fp.params(argparse.Namespace(doc="d", threads=1, calls=20, batch=1, nprobe=16), size, probes, 32, 32, [], 1))["prefetch"] == 16
     v = np.array([[3, 0, 0, 0], [3, 0, 0, 0]], dtype="int32")
     v[:, 1:] = np.array([[1.5, 2, 3], [4, 5, 6.25]], dtype="float32").view("int32")
     v.tofile(tmp_path / "q.fvecs")
@@ -761,8 +763,8 @@ def test_dcp_load_params_from_a_checkpoint_s_metadata(monkeypatch):
          Index("layer10.weight", (0,)): Storage("__0_0.distcp", 100, 24), Index("layer2.weight", (0,)): Storage("__0_0.distcp", 50, 16)},
         {"layer0.weight": Tensor(f32, [Chunk((8,), (8,)), Chunk((0,), (8,))]), "layer10.weight": Tensor(f32, [Chunk((0,), (4,))]),
          "layer2.weight": Tensor(f32, [Chunk((0,), (2,))])})
-    assert dp.params(m, 777, 200, "d") == {"params_version": 1, "abstract": "dcp_load", "doc": "d", "params": {
-        "items": 3, "item_bytes": [32, 8, 16], "item_off": [0, 50, 100], "read_order": [0, 2, 1], "meta_bytes": 777, "restore_step": 200}}
+    assert dp.params(m, 777, 200, "d") == {"params_version": 2, "abstract": "dcp_load", "doc": "d", "params": {k: {"default": v} for k, v in {
+        "items": 3, "item_bytes": [32, 8, 16], "item_off": [0, 50, 100], "read_order": [0, 2, 1], "meta_bytes": 777, "restore_step": 200}.items()}}
 
 
 # --- kit scripts run whole against the stand-ins of builder/tests/standins/ (test fakes) ---------
@@ -810,7 +812,7 @@ def test_dcp_save_kit_saves_each_rank_s_half_of_the_case_s_items_at_its_steps(tm
     """`dcp-save/kit/save.py ROOT 2 2` (its README): two gloo ranks on one rendezvous, each item
     a DTensor sharded on dimension 0, saved at the case's checkpoint steps, each rank's share of an
     item the case's `item_bytes`; `--torch-save` writes the same full tensors in one archive."""
-    case = _case("checkpointing/dcp-save/cases/toy-6-items")["params"]
+    case = values_of(_case("checkpointing/dcp-save/cases/toy-6-items"))
     out = tmp_path / "out"
     r, calls = _standin_run(tmp_path, WL / "checkpointing/dcp-save/kit/save.py", out, 2, 2)
     assert r.returncode == 0, r.stderr
@@ -843,7 +845,7 @@ def test_dcp_load_kit_loads_each_rank_s_shard_of_the_case_s_checkpoint(tmp_path,
     """`dcp-load/kit/load.py [--save] ROOT 2 STEP ITEMS` (its README): `--save` saves random
     tensors (seed 1) and a load restores into zeros in place, from `ckpt/step_STEP`; each rank's
     share of item `i` is the case's `item_bytes[i]`, and the step its `restore_step`."""
-    p = _case(f"checkpointing/dcp-load/cases/{case}")["params"]
+    p = values_of(_case(f"checkpointing/dcp-load/cases/{case}"))
     out, step = tmp_path / "out", p["restore_step"]
     path = os.path.join(out, "ckpt", f"step_{step:06}")
     for mode in (["--save"], []):
@@ -889,9 +891,9 @@ def test_dcp_load_params_reads_the_metadata_in_the_checkpoint_it_is_given(tmp_pa
     assert r.returncode == 0, r.stderr
     r, _ = _standin_run(tmp_path, WL / "checkpointing/dcp-load/kit/params.py", "ckpt/step_000200", 200, "a doc", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout) == {"params_version": 1, "abstract": "dcp_load", "doc": "a doc", "params": {
+    assert json.loads(r.stdout) == {"params_version": 2, "abstract": "dcp_load", "doc": "a doc", "params": {k: {"default": v} for k, v in {
         "items": 2, "item_bytes": [24, 8], "item_off": [0, 30], "read_order": [0, 1],
-        "meta_bytes": (ckpt / ".metadata").stat().st_size, "restore_step": 200}}
+        "meta_bytes": (ckpt / ".metadata").stat().st_size, "restore_step": 200}.items()}}
 
 
 def test_safetensors_kit_saves_the_case_s_model_and_loads_it(tmp_path):
@@ -899,7 +901,7 @@ def test_safetensors_kit_saves_the_case_s_model_and_loads_it(tmp_path):
     table is the case's (12 tensors a layer and 4 more; the embedding vocab x width fp32, the
     positions table positions x width), in 100MB shards unless told; `loadmodel.py` loads the
     directory last on its line and copies every parameter only with `--touch`."""
-    case = _case("model-loading/safetensors-load/cases/gpt2-random")["params"]
+    case = values_of(_case("model-loading/safetensors-load/cases/gpt2-random"))
     r, calls = _standin_run(tmp_path, WL / "model-loading/safetensors-load/kit/mkmodel.py", tmp_path / "model")
     assert r.returncode == 0, r.stderr
     assert [c["call"] for c in calls] == ["manual_seed", "save_pretrained"] and calls[0]["seed"] == 1
@@ -920,7 +922,7 @@ def test_safetensors_touch_copies_every_tensor_of_every_shard_in_file_order(tmp_
     """`safetensors-load/kit/touch.py DIR`: the shards in name order, each opened for torch, its
     tensors taken by their data offsets (the order of the case's `off` within a shard), never the
     header's key order; `ONE=1` first sets one thread."""
-    case = _case("model-loading/safetensors-load/cases/gpt2-random")["params"]
+    case = values_of(_case("model-loading/safetensors-load/cases/gpt2-random"))
     for s in set(case["shard"]):
         offs = [o for o, k in zip(case["off"], case["shard"]) if k == s]
         assert offs == sorted(offs)
@@ -951,7 +953,7 @@ def test_imagefolder_kit_writes_the_corpus_and_trains_over_it_as_the_case_says(t
     transforms, a seeded shuffling DataLoader with the case's batch and workers, dropping the
     last batch, so the steps are the case's samples // batch x epochs."""
     np = pytest.importorskip("numpy")
-    case = _case("input-pipeline/map/file-per-sample/cases/imagefolder-jpeg")["params"]
+    case = values_of(_case("input-pipeline/map/file-per-sample/cases/imagefolder-jpeg"))
     n = 40
     r, calls = _standin_run(tmp_path, WL / "input-pipeline/map/file-per-sample/kit/mkcorpus.py", tmp_path / "c", n)
     assert r.returncode == 0, r.stderr
@@ -979,7 +981,7 @@ def test_npy_kit_trains_over_the_corpus_as_the_case_says(tmp_path, case):
     shuffling DataLoader with the case's batch and workers, dropping the last batch, so the steps
     are the case's samples // batch x epochs."""
     pytest.importorskip("numpy")
-    p = _case(f"input-pipeline/map/npy-per-sample/cases/{case}")["params"]
+    p = values_of(_case(f"input-pipeline/map/npy-per-sample/cases/{case}"))
     n = 2 * p["batch"] + 1
     r = _run(WL / "input-pipeline/map/npy-per-sample/kit/mkcorpus.py", tmp_path / "c", n, 1 << 20, 0)
     assert r.returncode == 0, r.stderr
@@ -1012,7 +1014,7 @@ def test_faiss_kit_builds_searches_fits_and_faults_the_case_s_index(tmp_path):
     of one query at nprobe 64; `params.py` records those parameters and the trace's reads of the
     index file; `faults.py` probes as the search did."""
     np = pytest.importorskip("numpy")
-    case = _case("vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32")["params"]
+    case = values_of(_case("vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32"))
     rng = np.random.default_rng(1)
     (tmp_path / "sift").mkdir()
     _fvecs(tmp_path / "sift/sift_learn.fvecs", rng.random((50, 128)))
@@ -1045,7 +1047,7 @@ def test_faiss_kit_builds_searches_fits_and_faults_the_case_s_index(tmp_path):
     r, calls = _standin_run(tmp_path, kit / "params.py", "out", "sift/sift_query.fvecs", "trace.txt", "a doc", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     f = json.loads(r.stdout)
-    p = f["params"]
+    p = values_of(f)
     assert (f["abstract"], f["doc"], set(p)) == ("faiss_ivf_ondisk", "a doc", set(case))
     same = ("threads", "calls", "batch", "nprobe", "prefetch", "lists", "code_size")
     assert {k: p[k] for k in same} == {k: case[k] for k in same}
@@ -1110,7 +1112,7 @@ def test_diskann_search_kit_marks_every_query_and_searches_as_the_case_says(monk
     np = pytest.importorskip("numpy")
     import standin
     case = _case("vector-search/diskann-search/cases/sift1m-cache")
-    assert "search list 100, beam 4," in case["doc"] and case["params"]["beam"] == 4
+    assert "search list 100, beam 4," in case["doc"] and values_of(case)["beam"] == 4
     q = tmp_path / "query.fbin"
     q.write_bytes(struct.pack("<II", 5, 4) + np.arange(20, dtype="float32").tobytes())
     stat = os.stat

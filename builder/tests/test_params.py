@@ -24,6 +24,11 @@ from aeiou import emit, params  # noqa: E402
 from aeiou.nodes import BuildError  # noqa: E402
 
 
+def v2(values: dict) -> dict:
+    """Values as the entries of a params_version 2 set, each a default (contract 0.11)."""
+    return {k: {"default": v} for k, v in values.items()}
+
+
 def _run(args, cwd=BUILDER):
     env = {**os.environ, "PYTHONPATH": str(BUILDER)}
     return subprocess.run([sys.executable, "-m", "aeiou.params", *map(str, args)], capture_output=True, text=True, cwd=str(cwd), env=env)
@@ -57,7 +62,7 @@ def test_defaults_round_trip(tmp_path):
     assert r.returncode == 0, r.stderr
     pset = params.load(out)
     assert pset["ast_sha256"] == sha
-    assert pset["params"] == {k: p["default"] for k, p in ast["params"].items()}
+    assert pset["params"] == {k: {"default": p["default"]} for k, p in ast["params"].items()}
     assert params.check(ast, pset, ast_sha256=sha) == []
     r = _run(["check", ast_path("file_per_sample"), out, ast_path("file_per_sample").parent / "params" / "smoke.params.json"])
     assert r.returncode == 0, r.stdout + r.stderr
@@ -66,17 +71,17 @@ def test_defaults_round_trip(tmp_path):
 
 def test_value_rules():
     ast, sha = _ast("file_per_sample")
-    base = {"params_version": 1, "abstract": "file_per_sample", "params": {}}
+    base = {"params_version": 2, "abstract": "file_per_sample", "params": {}}
     assert params.check(ast, {**base, "abstract": "other"}) == ["params: for abstract `other`, not `file_per_sample`"]
     assert params.check(ast, {**base, "ast_sha256": "0" * 64}, ast_sha256=sha)[0].startswith("params: for AST 0000")
-    assert params.check(ast, {**base, "params": {"nope": 1}}) == ["params: no parameter `nope` in `file_per_sample`"]
-    assert params.check(ast, {**base, "params": {"gpus": 4}})[0].endswith("--gpus, not by a parameter file")
-    assert "the default is a scalar, the value is an array" in params.check(ast, {**base, "params": {"steps": [1]}})[0]
-    assert "the default is a scalar, the value is a distribution" in params.check(ast, {**base, "params": {"steps": {"const": 1}}})[0]
-    assert params.check(ast, {**base, "params": {"steps": 7, "walk": True, "hdr_read": 4096}}) == []
+    assert params.check(ast, {**base, "params": v2({"nope": 1})}) == ["params: no parameter `nope` in `file_per_sample`"]
+    assert params.check(ast, {**base, "params": v2({"gpus": 4})})[0].endswith("--gpus, not by a parameter file")
+    assert "the default is a scalar, the value is an array" in params.check(ast, {**base, "params": v2({"steps": [1]})})[0]
+    assert "the default is a scalar, the value is a distribution" in params.check(ast, {**base, "params": v2({"steps": {"const": 1}})})[0]
+    assert params.check(ast, {**base, "params": v2({"steps": 7, "walk": True, "hdr_read": 4096})}) == []
     ast, _ = _ast("safetensors_load")
-    assert params.check(ast, {**base, "abstract": "safetensors_load", "params": {"off": [1, 2, 3]}}) == []      # arrays may change length
-    assert "elements are a scalar" in params.check(ast, {**base, "abstract": "safetensors_load", "params": {"off": [1, [2]]}})[0]
+    assert params.check(ast, {**base, "abstract": "safetensors_load", "params": v2({"off": [1, 2, 3]})}) == []      # arrays may change length
+    assert "elements are a scalar" in params.check(ast, {**base, "abstract": "safetensors_load", "params": v2({"off": [1, [2]]})})[0]
 
 
 def test_an_integral_float_is_the_integer_its_default_is(tmp_path):
@@ -85,20 +90,20 @@ def test_an_integral_float_is_the_integer_its_default_is(tmp_path):
     1300.0 was refused "not an integer" while `samples` 3000.0 went into the manifest as
     3000.0) and 20.7 is refused (the runner rounded it); an array's integer elements alike."""
     ast, _ = _ast("file_per_sample")
-    base = {"params_version": 1, "abstract": "file_per_sample", "params": {}}
-    assert params.check(ast, {**base, "params": {"samples": 3000.0, "files_per_directory": 1.3e3}}) == []
-    assert params.check(ast, {**base, "params": {"samples": 20.7}}) == ["params: samples: the default is an integer, the value 20.7 is not"]
+    base = {"params_version": 2, "abstract": "file_per_sample", "params": {}}
+    assert params.check(ast, {**base, "params": v2({"samples": 3000.0, "files_per_directory": 1.3e3})}) == []
+    assert params.check(ast, {**base, "params": v2({"samples": 20.7})}) == ["params: samples: the default is an integer, the value 20.7 is not"]
     sast, _ = _ast("safetensors_load")
     sbase = {**base, "abstract": "safetensors_load"}
-    assert params.check(sast, {**sbase, "params": {"off": [1, 2.0]}}) == []
-    assert params.check(sast, {**sbase, "params": {"off": [1, 2.5]}}) == ["params: off[1]: the default is an integer, the value 2.5 is not"]
+    assert params.check(sast, {**sbase, "params": v2({"off": [1, 2.0]})}) == []
+    assert params.check(sast, {**sbase, "params": v2({"off": [1, 2.5]})}) == ["params: off[1]: the default is an integer, the value 2.5 is not"]
     # the runner takes and refuses the same files
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
     if not runner.exists():
         pytest.skip("runner binary not built")
     for value, ok in ((3000.0, True), (20.7, False)):
         f = tmp_path / "f.params.json"
-        f.write_text(json.dumps({**base, "params": {"samples": value, "files_per_directory": 1300.0}}))
+        f.write_text(json.dumps({**base, "params": v2({"samples": value, "files_per_directory": 1300.0})}))
         r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(ast_path("file_per_sample")), "--params-file", str(f), "--param", "steps=1"],
                            capture_output=True, text=True, cwd=str(tmp_path))
         assert (r.returncode == 0) == ok, r.stderr
@@ -109,39 +114,39 @@ def test_given_values_are_judged_as_the_runner_judges_them(tmp_path):
     """Past their kinds, the runner judges given values again (V3, `validate::check_given`; V23,
     `eval::bind_pattern`): `check` refuses what `aeiou dry-run --params-file` refuses."""
     ast, sha = _ast("file_per_sample")
-    base = {"params_version": 1, "abstract": "file_per_sample", "params": {}}
+    base = {"params_version": 2, "abstract": "file_per_sample", "params": {}}
     # a fractional value for an integer default is refused before the pattern sees it (RC1 review)
-    errs = params.check(ast, {**base, "params": {"files_per_directory": 2.5}})
+    errs = params.check(ast, {**base, "params": v2({"files_per_directory": 2.5})})
     assert errs == ["params: files_per_directory: the default is an integer, the value 2.5 is not"]
-    assert params.check(ast, {**base, "params": {"files_per_directory": True}}) == [
+    assert params.check(ast, {**base, "params": v2({"files_per_directory": True})}) == [
         "params: dataset `train`: pattern `train/{id div files_per_directory:05}/img_{id:09}.jpg`: "
         "divisor `files_per_directory`: parameter `files_per_directory` is not an integer"]
-    assert params.check(ast, {**base, "params": {"files_per_directory": 0}})[0].endswith(
+    assert params.check(ast, {**base, "params": v2({"files_per_directory": 0})})[0].endswith(
         "`div files_per_directory` is 0: it needs a positive divisor")
-    assert params.check(ast, {**base, "params": {"files_per_directory": 7}}) == []
+    assert params.check(ast, {**base, "params": v2({"files_per_directory": 7})}) == []
     # V3: a reuse distance whose given arm reaches 0 makes `x @ r - reuse` name the binding being defined
     ast, sha = _ast("lmcache_local_disk")
     reuse = {"mixture": [{"weight": 0.15, "dist": None}, {"weight": 0.85, "dist": {"const": 0}}]}
-    errs = params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": {"reuse": reuse}})
+    errs = params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": reuse})})
     assert errs and all(e.startswith("params: invalid with the parameters given: lmcache_local_disk: actors/") for e in errs)
     assert any("`kind @` names a binding of this loop body, so its index must be" in e and "provably >= 1" in e for e in errs)
-    assert params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": {"reuse": ast["params"]["reuse"]["default"]}}) == []
+    assert params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": ast["params"]["reuse"]["default"]})}) == []
     # and the command says so, exit 1
     f = tmp_path / "reuse.params.json"
-    f.write_text(json.dumps({**base, "abstract": "lmcache_local_disk", "params": {"reuse": reuse}}))
+    f.write_text(json.dumps({**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": reuse})}))
     r = _run(["check", ast_path("lmcache_local_disk"), f])
     assert r.returncode == 1 and r.stdout.startswith("FAIL reuse.params.json") and "`kind @`" in r.stdout
 
 
 def test_schema_rejects_malformed_files(tmp_path):
     f = tmp_path / "x.params.json"
-    f.write_text(json.dumps({"params_version": 1, "abstract": "a", "params": {}, "extra": 1}))
+    f.write_text(json.dumps({"params_version": 2, "abstract": "a", "params": v2({}), "extra": 1}))
     with pytest.raises(BuildError, match="extra"):
         params.load(f)
-    f.write_text(json.dumps({"params_version": 2, "abstract": "a", "params": {}}))
+    f.write_text(json.dumps({"params_version": 3, "abstract": "a", "params": v2({})}))
     with pytest.raises(BuildError):
         params.load(f)
-    f.write_text(json.dumps({"params_version": 1, "abstract": "a", "params": {"Bad-Name": 1}}))
+    f.write_text(json.dumps({"params_version": 2, "abstract": "a", "params": v2({"Bad-Name": 1})}))
     with pytest.raises(BuildError):
         params.load(f)
     f.write_text("{not json")
@@ -196,7 +201,7 @@ def test_safetensors_table_matches_committed(tmp_path):
     committed = params.load(ast_path("safetensors_load").parent / "params" / "synthetic.params.json")
     assert made["params"] == committed["params"], \
         "regenerate with: aeiou-params safetensors ../workloads/model-loading/safetensors-load/safetensors_load.ast.json <the fixture's shards> -o ../workloads/model-loading/safetensors-load/params/synthetic.params.json"
-    t = made["params"]
+    t = params.values_of(made)
     assert t["shards"] == 2 and len(t["hdr_len"]) == 2 and t["tp"] == 8
     assert len(t["shard"]) == 21 and set(t["split"]) == {"column", "row", "full"}
     # a row-parallel tensor is one piece per row of the input dimension; a replicated one is read whole
@@ -235,7 +240,7 @@ def test_npz_framing_is_read_from_real_archives_and_compared_with_the_abstract(t
     out = tmp_path / "c.params.json"
     r = _run(["npz", ast, c, "-o", out])
     assert r.returncode == 0, r.stdout + r.stderr
-    assert params.load(out)["params"] == {"framing": got["framing"], "cd_len": got["cd_len"]}
+    assert params.values_of(params.load(out)) == {"framing": got["framing"], "cd_len": got["cd_len"]}
     assert _run(["check", ast, out]).returncode == 0
 
     r = _run(["npz", ast, a, c])
@@ -265,7 +270,7 @@ def test_json_that_is_no_abstract_is_rejected_in_one_line(tmp_path, cmd, text):
     ast = tmp_path / "x.ast.json"
     ast.write_text(text)
     pset = tmp_path / "p.params.json"
-    pset.write_text('{"params_version": 1, "abstract": "x", "params": {}}')
+    pset.write_text('{"params_version": 2, "abstract": "x", "params": {}}')
     args = {"defaults": [ast, "-o", tmp_path / "o.json"], "check": [ast, pset],
             "safetensors": [ast, pset, "-o", tmp_path / "o.json"], "npz": [ast, pset]}[cmd]
     r = _run([cmd, *args])
@@ -346,7 +351,7 @@ def test_given_scalars_are_judged_by_every_rule_that_reads_them(tmp_path, which,
     file `run --params-file` refuses (RC1 review). Same verdict and words as the runner's."""
     v3, v25 = _given_abstracts()
     ast = {"v3": v3, "v25": v25}[which]
-    pset = {"params_version": 1, "abstract": "t", "params": given}
+    pset = {"params_version": 2, "abstract": "t", "params": v2(given)}
     errs = params.check(ast, pset)
     assert sorted(errs) == sorted(f"params: invalid with the parameters given: {e}" for e in want), errs
     a, f = tmp_path / "t.ast.json", tmp_path / "t.params.json"
@@ -376,7 +381,7 @@ def test_non_json_numbers_in_a_parameter_file_are_refused(tmp_path, lit):
     ast = ast_path("file_per_sample")
     for i, value in enumerate([lit, f"[1, {lit}]", f'{{"x": {lit}}}']):
         f = tmp_path / f"t{i}.params.json"
-        f.write_text(f'{{"params_version": 1, "abstract": "file_per_sample", "params": {{"step_time": {value}}}}}\n')
+        f.write_text(f'{{"params_version": 2, "abstract": "file_per_sample", "params": {{"step_time": {{"default": {value}}}}}}}\n')
         with pytest.raises(BuildError, match=f"{f.name}: .*(is not JSON|is out of range)"):
             params.load(f)
         r = _run(["check", ast, f])
@@ -397,7 +402,7 @@ def test_a_file_pinned_to_the_builders_hash_is_taken_by_the_runner(tmp_path):
     a.write_text('{"ast": "0.11", "name": "h", "params": {"sz": {"default": 123456789.12345679}}, '
                  '"datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 4096, "seed": 1}}, '
                  '"actors": {"gpu": {"body": [{"compute": {"ns": {"param": "sz"}}}]}}}')
-    f.write_text(json.dumps({"params_version": 1, "abstract": "h", "ast_sha256": emit.sha256(emit.load(a)), "params": {}}))
+    f.write_text(json.dumps({"params_version": 2, "abstract": "h", "ast_sha256": emit.sha256(emit.load(a)), "params": v2({})}))
     r = _run(["check", a, f])
     assert r.returncode == 0, r.stdout + r.stderr
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
@@ -419,12 +424,12 @@ def test_duplicate_keys_and_lone_surrogates_in_a_parameter_file_are_refused(tmp_
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
     for i, (body, said) in enumerate([
         ('"doc": "a\\ud800", "params": {}', "lone surrogate in hex escape (\\ud800)"),
-        ('"params": {"step_time\\udfff": 1}', "lone surrogate in hex escape (\\udfff)"),
-        ('"params": {"step_time": 1, "step_time": 2}', "duplicate field `step_time`"),
-        ('"params": {}, "params": {"step_time": 1}', "duplicate field `params`"),
+        ('"params": {"step_time\\udfff": {"default": 1}}', "lone surrogate in hex escape (\\udfff)"),
+        ('"params": {"step_time": {"default": 1}, "step_time": {"default": 2}}', "duplicate field `step_time`"),
+        ('"params": {}, "params": {"step_time": {"default": 1}}', "duplicate field `params`"),
     ]):
         f = tmp_path / f"t{i}.params.json"
-        f.write_text(f'{{"params_version": 1, "abstract": "file_per_sample", {body}}}\n')
+        f.write_text(f'{{"params_version": 2, "abstract": "file_per_sample", {body}}}\n')
         with pytest.raises(BuildError, match=re.escape(f"{f.name}: {said}")):
             params.load(f)
         r = _run(["check", ast, f])
@@ -442,7 +447,7 @@ def test_a_parameter_file_closing_a_cycle_is_refused_as_the_runner_refuses_it(tm
     a, f = tmp_path / "g.ast.json", tmp_path / "g.params.json"
     a.write_text(json.dumps({"ast": "0.11", "name": "g", "params": {"pa": {"default": {"mixture": [{"weight": 1, "dist": {"param": "pb"}}]}}, "pb": {"default": {"const": 3}}},
                              "actors": {"gpu": {"body": [{"compute": {"ns": {"draw": {"param": "pa"}}}}]}}}))
-    f.write_text(json.dumps({"params_version": 1, "abstract": "g", "params": {"pb": {"const": {"param": "pa"}}}}))
+    f.write_text(json.dumps({"params_version": 2, "abstract": "g", "params": v2({"pb": {"const": {"param": "pa"}}})}))
     want = ["g: params/pa: parameter `pa` is defined through itself (pa -> pb -> pa) (V1)",
             "g: params/pb: parameter `pb` is defined through itself (pb -> pa -> pb) (V1)"]
     r = _run(["check", a, f])

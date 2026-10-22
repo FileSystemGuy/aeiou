@@ -361,6 +361,10 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   `.params.json` set over the defaults; several apply in order and `--param` applies last.
   The file must name this abstract (and this AST's hash, if it names one); every value must
   be a declared parameter of the same kind as its default (`--param` is held to the kind too).
+  Its entries carry a state (`params_version` 2, contract 0.11): a later file or `--param`
+  never replaces a value an earlier file locked (`--param steps: locked by A.params.json`),
+  a `{"required": true}` entry leaves the parameter without a value until a later one gives
+  it, and a file with a `run` table is refused (the identity options come from a lock).
   The header line prints each file with its SHA-256, and the datagen manifest records them as
   provenance; the identity of a run is still the resolved values. A **required** parameter
   (contract 0.11) has no default: a run, a dry run, or a datagen without a value for it is

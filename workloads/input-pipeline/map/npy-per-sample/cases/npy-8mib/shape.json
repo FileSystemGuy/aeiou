@@ -6,7 +6,7 @@
       "ast": "npy_per_sample",
       "ast_sha256": "58bef775074757efa9da47b7f88181697b39e686c791df8f1f423db7655a7314",
       "params": "params.json",
-      "params_sha256": "cabad11155c1fcb9b0e5f5bf8648ec5eedcf81e3c26ef209b5e3843b532d28ec",
+      "params_sha256": "d57d4ffb9f5b82a5aaf436c4185b51776525e6fdfc222a5ba75d1baaa480d0cb",
       "gpus": 1,
       "block": 4096,
       "seeds": [

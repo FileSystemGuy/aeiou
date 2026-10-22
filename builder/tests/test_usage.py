@@ -91,7 +91,7 @@ def test_every_tool_and_subcommand_lists_what_it_lacks():
     assert message == f"{MISSING}\n  <SCRIPTS>...  builder scripts (`.py`), each constructing one or more Workloads"
     assert usage == "Usage: aeiou-build [OPTIONS] <SCRIPTS>..."
     message, _ = frame(tool("params"), "aeiou-params")
-    assert message == f"{MISSING}\n  <COMMAND>  one of defaults, check, safetensors, npz"
+    assert message == f"{MISSING}\n  <COMMAND>  one of defaults, check, safetensors, npz, lock"
     message, usage = frame(tool("params", "safetensors"), "aeiou-params safetensors")
     assert message == (
         f"{MISSING}\n"

@@ -2,21 +2,45 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/FileSystemGuy/aeiou/schema/params.schema.json",
   "title": "aeiou parameter file",
-  "description": "A named set of values for the parameter slots of one abstract (schema/README.md §8): the second artifact of the shape/parameters split. Values have the form of the AST's parameter defaults (a scalar, a distribution, or an array of these) and must have the same kind as the default they replace. `aeiou run --params-file FILE` applies it over the defaults and under `--param`; several files apply in order.",
+  "description": "A fragment (params_version 2, contract 0.11, DESIGN_REVIEW.md §3.78): values for the parameter slots of one abstract, each with its state, `locked` (final), `default` (a value a later layer may replace), or `required` (no value; a later layer must give one), and the runner's identity options in a `run` table. A value has the form of the AST's parameter defaults (a scalar, a distribution, or an array of these) and the kind of the parameter it is for. A use case lists its fragments and `aeiou-params lock` resolves them, by agreement, into a lock; `aeiou run --params-file FILE` applies one over the defaults and under `--param`, several in order, a locked value never replaced.",
   "type": "object",
   "required": ["params_version", "abstract", "params"],
   "additionalProperties": false,
   "properties": {
-    "params_version": { "const": 1 },
+    "params_version": { "const": 2 },
     "abstract": { "$ref": "abstract-ast.schema.json#/$defs/ident", "description": "Name of the abstract this set is for." },
     "ast_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "When present, the exact AST this set was fitted for; the runner refuses any other." },
     "doc": { "type": "string" },
     "params": {
       "type": "object",
       "propertyNames": { "$ref": "abstract-ast.schema.json#/$defs/ident" },
-      "additionalProperties": { "$ref": "abstract-ast.schema.json#/$defs/value" },
-      "description": "Parameter name to value. `gpus` may not appear."
+      "additionalProperties": { "$ref": "#/$defs/entry" },
+      "description": "Parameter name to its entry. `gpus` may not appear."
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The runner's identity options a use case or a benchmark may set (DESIGN_REVIEW.md §3.78 point 3): never a solution option, which is always the submitter's. Only a lock's runs apply it; `aeiou run --params-file` refuses a file with one.",
+      "properties": {
+        "seed": { "$ref": "#/$defs/entry" },
+        "posix": { "$ref": "#/$defs/entry" },
+        "cache": { "$ref": "#/$defs/entry" },
+        "s3": { "$ref": "#/$defs/entry" },
+        "time_scale": { "$ref": "#/$defs/entry" },
+        "rank_rotate": { "$ref": "#/$defs/entry" },
+        "write_compress": { "$ref": "#/$defs/entry" }
+      }
     },
     "provenance": { "type": "object", "description": "How the set was made (tool, source, dates). Never compared." }
+  },
+  "$defs": {
+    "entry": {
+      "description": "A value with its state: {\"default\": v}, {\"locked\": v}, or {\"required\": true}.",
+      "oneOf": [
+        { "type": "object", "required": ["default"], "additionalProperties": false, "properties": { "default": { "$ref": "abstract-ast.schema.json#/$defs/value" } } },
+        { "type": "object", "required": ["locked"], "additionalProperties": false, "properties": { "locked": { "$ref": "abstract-ast.schema.json#/$defs/value" } } },
+        { "type": "object", "required": ["required"], "additionalProperties": false, "properties": { "required": { "const": true } } }
+      ]
+    }
   }
 }

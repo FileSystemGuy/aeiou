@@ -70,9 +70,15 @@ _M64 = (1 << 64) - 1
 # ---- parameters and the resolved definition (payload.rs: param_values, substitute, resolved_dataset) ----
 
 def param_values(ast: dict, sets: list, overrides: list, gpus: int) -> dict:
-    values = {k: p["default"] for k, p in ast.get("params", {}).items()}
+    from .params import default_value, entry
+    values = {k: default_value(p) for k, p in ast.get("params", {}).items() if "default" in p}
     for pset in sets:
-        values.update(pset["params"])
+        for k, e in pset["params"].items():
+            state, v = entry(e)
+            if state == "required":
+                values.pop(k, None)
+            else:
+                values[k] = v
     for name, text in overrides:
         try:
             values[name] = json.loads(text)

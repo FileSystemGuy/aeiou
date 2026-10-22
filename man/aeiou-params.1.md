@@ -2,7 +2,7 @@
 
 ## NAME
 
-aeiou-params - parameter files of an abstract: write its defaults as a set, validate sets, build a set from real files
+aeiou-params - parameter files of an abstract: write its defaults as a set, validate sets, build a set from real files, lock a use case
 
 ## SYNOPSIS
 
@@ -11,6 +11,7 @@ aeiou-params defaults [-o FILE] [--doc TEXT] [--pin] ABSTRACT
 aeiou-params check ABSTRACT FILES...
 aeiou-params safetensors [--tp TP] [--column REGEX] [--row REGEX] [--doc TEXT] [--pin] -o FILE ABSTRACT SHARDS...
 aeiou-params npz [-o FILE] [--member NAME] [--doc TEXT] [--pin] ABSTRACT ARCHIVES...
+aeiou-params lock [--rules FILE] [-o FILE] [--workloads DIR] CASE
 aeiou-params --help | --version
 ```
 
@@ -23,15 +24,26 @@ parameter sets, and a fitted set is reviewed, hashed, and published on its own. 
 applies a file with `aeiou run --params-file FILE` (repeatable, in order; `--param` applies
 last), and so do `aeiou dry-run`, `aeiou datagen`, and **aeiou-datagen**(1).
 
-The file is `{"params_version": 1, "abstract": NAME, "ast_sha256"?: HEX, "doc"?: TEXT,
-"params": {name: value, ...}, "provenance"?: {...}}`. A value has the form of a parameter
-default: a scalar, a distribution, or an array of these, and it must keep the **kind** of
-the default it replaces, because the script fixed at build time how each slot is consumed
-(a distribution is drawn, an array is indexed). `abstract` must be the document's name;
-`ast_sha256`, when present, must be its hash; every name must be declared; `gpus` may not
-appear.
+The file is `{"params_version": 2, "abstract": NAME, "ast_sha256"?: HEX, "doc"?: TEXT,
+"params": {name: entry, ...}, "run"?: {option: entry, ...}, "provenance"?: {...}}`, each
+entry a value with its **state** (contract 0.11): `{"default": v}`, a value a later layer
+may replace; `{"locked": v}`, final; or `{"required": true}`, no value, which a later layer
+must give. A value has the form of a parameter default: a scalar, a distribution, or an
+array of these, and it must keep the **kind** of the parameter it is for (its default's, or
+a required parameter's declared `kind`), because the script fixed at build time how each
+slot is consumed (a distribution is drawn, an array is indexed). `abstract` must be the
+document's name; `ast_sha256`, when present, must be its hash; every name must be declared;
+`gpus` may not appear. Under `aeiou run --params-file` a file never replaces what an earlier
+one locked, and `--param` neither; a `run` table, the runner's identity options (`seed`,
+`posix`, `cache`, `s3`, `time_scale`, `rank_rotate`, `write_compress`), is applied only from
+a lock.
 
-**aeiou-params** is the helper for these files. Four subcommands:
+A **use case** is a case directory under `workloads/` (`cases/<case>/`) whose `case.toml`
+lists each run's abstract and the fragments (parameter files) that set the job and the
+accelerator; a **lock** (`case.lock.json`) is the use case resolved, the one file a run of
+the use case names (`DESIGN_REVIEW.md` §3.78).
+
+**aeiou-params** is the helper for these files. Five subcommands:
 
 - **defaults** writes every default of an abstract as a set, to edit or to fit.
 - **check** validates files against an abstract with the runner's rules.
@@ -39,6 +51,7 @@ appear.
   `safetensors_load` abstract takes as parameters.
 - **npz** reads the archive framing the `npy_per_sample` abstract takes as parameters
   from real `.npz` files and compares it with the abstract's defaults.
+- **lock** resolves a use case, and a benchmark's rules, into its lock.
 
 ## OPTIONS
 
@@ -124,6 +137,40 @@ values and the abstract's defaults, and refuses archives that disagree with each
 compressed member, a member that is not first in the archive, and a zip64 end record, since
 the abstract reads none of those shapes.
 
+### aeiou-params lock
+
+- *CASE*
+
+  The case directory, with its `case.toml`. Each `[[run]]` names its abstract (`ast`, in the
+  mechanism's directory two levels up) and its fragments (`params`, one file or a list,
+  relative to the case). The fragments of one run combine by **agreement**, in any order:
+  two that set a name to different entries are refused, both named. A fragment may replace
+  the abstract's default or require a value; nothing replaces a lock.
+- **--rules** *FILE*
+
+  A benchmark's rules file (`schema/rules.schema.json`): it names no parameter. Its
+  `freeze` makes every default locked (`"defaults": "locked"`), every `scale` parameter
+  required (`"scale": "required"`; one the use case locked is refused), and every identity
+  option locked (`"identity_options": "locked"`); its `constraints`, infix expressions over
+  the runner's `fact.` and `result.` names, are parsed into the abstract's expression form
+  and copied into the lock with their text. A lock made with rules is a benchmark entry's,
+  kept outside aeiou's tree.
+- **-o**, **--out** *FILE*
+
+  The lock to write. Default *CASE*`/case.lock.json`.
+- **--workloads** *DIR*
+
+  The `workloads/` directory the lock's paths are relative to. Default: the one above
+  *CASE*.
+
+The lock pins each run's abstract by its path below `workloads/` and its `ast_sha256`,
+holds every parameter with its state and where it came from (`abstract`, `rules`, or a
+fragment's path), and records the case, the fragments, and the rules file with their
+hashes as provenance (a file outside `workloads/` by its name), so it is byte-identical on
+every site. It is generated and never edited; **aeiou-build**(1) remakes the lock of every
+committed case of an abstract it rebuilt, and `aeiou-catalog check` refuses a committed case
+whose lock is missing or stale.
+
 ### Common
 
 - **-h**, **--help**
@@ -146,6 +193,10 @@ the abstract reads none of those shapes.
   A parameter file. The schema is `schema/params.schema.json`; the committed ones are under
   `workloads/` (a mechanism's `params/`, a case's `params.json`, a capture's
   `fitted.params.json`), each checked against its abstract in CI.
+- `cases/<case>/case.lock.json`
+
+  A use case's lock. The schema is `schema/lock.schema.json`; a rules file's is
+  `schema/rules.schema.json`.
 
 ## EXIT STATUS
 
@@ -171,6 +222,8 @@ aeiou-params safetensors workloads/model-loading/safetensors-load/safetensors_lo
     -o llama.params.json --tp 8
 aeiou-params npz workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_0000000?.npz
 aeiou run workloads/model-loading/safetensors-load/safetensors_load.ast.json --gpus 8 --root /mnt/sut --params-file llama.params.json
+aeiou-params lock workloads/input-pipeline/map/npy-per-sample/cases/unet3d-h100
+aeiou-params lock workloads/input-pipeline/map/npy-per-sample/cases/unet3d-h100 --rules bench.rules.json -o bench-unet3d-h100.lock.json
 ```
 
 ## SEE ALSO

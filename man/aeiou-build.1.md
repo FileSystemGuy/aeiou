@@ -29,6 +29,12 @@ was done twice identically, and the document's canonical hash. The canonical has
 identity of the abstract, is the SHA-256 of the JSON with keys sorted, no whitespace, and the
 `provenance` block removed; it is what an author publishes.
 
+After a script's abstracts are written, the build re-locks every committed use case of each
+of them that has a lock (`cases/<case>/case.lock.json`, **aeiou-params**(1) `lock`): the
+abstract's hash, which the lock pins, has changed. It prints `relocked <file>` for a lock
+that changed, and fails, after writing the abstract, when a case no longer resolves against
+it. A case with no lock is left to its author; `--check` writes nothing and re-locks nothing.
+
 The builder enforces one discipline: a symbolic value has no truth value, cannot be
 iterated, and cannot be converted to an int. `for j in P.batch`, `if step % 500 == 0`, and
 `range(P.steps)` raise a `TypeError` naming `cursor.loop` or `cursor.when`. A lint refuses
@@ -85,6 +91,9 @@ three or more identical statements in a row (a hand-unrolled iteration);
 
   The written abstract, pretty-printed with two-space indentation in the builder's key
   order; **aeiou-abstract**(7).
+- `cases/<case>/case.lock.json`
+
+  A use case's lock, remade when the abstract it pins is rebuilt.
 - `schema/abstract-ast.schema.json`, `schema/check.py`
 
   The schema and the reference validator the builder loads; it keeps no second copy of the
@@ -99,7 +108,7 @@ three or more identical statements in a row (a hand-unrolled iteration);
 
   A script failed to build, a hermetic violation, two builds whose hashes differ under
   `--twice`, two scripts authoring a `Workload` of one name, an abstract (`.ast.json`) given
-  as a script, or, under `--check`, a hash that differs from the committed file or no
+  as a script, a committed case of a rebuilt abstract whose lock no longer resolves, or, under `--check`, a hash that differs from the committed file or no
   committed file. Each failure to build is one line on standard error,
   `FAIL <script>: <reason>`, and the other scripts are still built: the reason is the builder's error, the validator's rule and JSON pointer, or, for
   an exception the script raised, its type, the script's line it came from, and its

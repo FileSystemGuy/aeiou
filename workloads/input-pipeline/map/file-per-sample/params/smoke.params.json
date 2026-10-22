@@ -1,9 +1,9 @@
 {
-  "params_version": 1,
+  "params_version": 2,
   "abstract": "file_per_sample",
   "doc": "A laptop-sized run of the shape: the smoke parameters of runner/REFERENCE.md (4000 files, 50 steps). Not a reference set.",
   "params": {
-    "samples": 4000,
-    "steps": 50
+    "samples": {"default": 4000},
+    "steps": {"default": 50}
   }
 }

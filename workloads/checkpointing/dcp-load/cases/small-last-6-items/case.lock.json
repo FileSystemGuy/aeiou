@@ -1,0 +1,46 @@
+{
+  "lock_version": 1,
+  "name": "dcp-load/small-last-6-items",
+  "runs": [
+    {
+      "name": "dcp_load",
+      "abstract": "checkpointing/dcp-load/dcp_load.ast.json",
+      "ast_sha256": "5c1cd53c7571c0d35315a8054714ba167a5fd44281be3047308f1914a4e4007b",
+      "params": {
+        "buf": {"default": 1048576},
+        "eocd_scan": {"default": 4096},
+        "hdr": {"default": 704},
+        "item_bytes": {"default": [16777216, 33554432, 16777216, 8388608, 524288, 2096]},
+        "item_off": {"default": [0, 16778793, 50334802, 67113595, 75503780, 76029645]},
+        "items": {"default": 6},
+        "meta_bytes": {"default": 2606},
+        "read_order": {"default": [0, 1, 2, 3, 4, 5]},
+        "rec2": {"default": 236},
+        "replicas": {"default": 1},
+        "restore_step": {"default": 100},
+        "tail_back": {"default": [22, 42, 98, 561, 727, 857]},
+        "trailer": {"default": 873}
+      },
+      "sources": {
+        "buf": "abstract",
+        "eocd_scan": "abstract",
+        "hdr": "abstract",
+        "item_bytes": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
+        "item_off": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
+        "items": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
+        "meta_bytes": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
+        "read_order": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
+        "rec2": "abstract",
+        "replicas": "abstract",
+        "restore_step": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
+        "tail_back": "abstract",
+        "trailer": "abstract"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "checkpointing/dcp-load/cases/small-last-6-items/case.toml",
+    "fragments": [{"path": "checkpointing/dcp-load/cases/small-last-6-items/params.json", "sha256": "01b1620ab352f90f213ec7beb11e08e5ac0fff6278101cfb22c97ffab0160755"}]
+  }
+}

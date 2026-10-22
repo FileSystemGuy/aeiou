@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/FileSystemGuy/aeiou/schema/rules.schema.json",
+  "title": "aeiou benchmark rules",
+  "description": "A benchmark's rules (contract 0.11, DESIGN_REVIEW.md §3.78 points 6 and 9): one file for many use cases, naming no parameter. `freeze` acts on states as a whole; `constraints` are expressions over the runner's `fact.` and `result.` names, each checked at the latest time a name it reads is known (resolve, the gate, or after the run). `aeiou-params lock CASE --rules FILE` copies both into a use case's lock. aeiou ships the mechanism and no WG rules file (PROJECT_BRIEF.md §8).",
+  "type": "object",
+  "required": ["rules_version"],
+  "additionalProperties": false,
+  "properties": {
+    "rules_version": { "const": 1 },
+    "name": { "type": "string" },
+    "doc": { "type": "string" },
+    "freeze": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaults": { "const": "locked", "description": "Every default becomes locked." },
+        "scale": { "const": "required", "description": "Every `scale` parameter becomes required: the submission sizes it." },
+        "identity_options": { "const": "locked", "description": "Every identity option of the runner (seed, posix, cache, s3, time_scale, rank_rotate, write_compress) is locked at the value the lock gives, else its default: a run that gives another is refused." }
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["expr"],
+        "additionalProperties": false,
+        "properties": {
+          "expr": { "type": "string", "description": "Infix: `or`, `and`, `not`, one comparison, `+ - * div mod`, unary `-`, `min(a, b)`, `max(a, b)`, numbers, parentheses, and `fact.NAME` and `result.NAME` (runner/REFERENCE.md lists them)." },
+          "doc": { "type": "string" }
+        }
+      }
+    }
+  }
+}

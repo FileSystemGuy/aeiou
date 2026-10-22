@@ -1005,8 +1005,8 @@ def test_integers_outside_64_bits_are_refused_by_builder_checker_and_runner(tmp_
     out = subprocess.run([sys.executable, str(ROOT / "schema" / "check.py"), str(f)], capture_output=True, text=True)
     assert out.returncode == 1 and [l.strip() for l in out.stdout.splitlines()[1:]] == [w.replace("t:", "t.ast.json:", 1) for w in want]
     # a parameter file
-    pset = {"params_version": 1, "abstract": "t", "params": {"n": [1, 2 ** 64]}}
-    assert params_mod.check(ast, pset, name="x") == [f"x: params/n/1: integer {2 ** 64} {rng}"]
+    pset = {"params_version": 2, "abstract": "t", "params": {"n": {"default": [1, 2 ** 64]}}}
+    assert params_mod.check(ast, pset, name="x") == [f"x: params/n/default/1: integer {2 ** 64} {rng}"]
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
     if not runner.exists():
         pytest.skip("runner binary not built")
@@ -1560,7 +1560,7 @@ def test_a_draw_of_a_kind_the_runner_refuses_is_refused_at_check(tmp_path):
             assert got == [f"v27: {w}" for w in want] and r.returncode == (1 if want else 0), r.stdout + r.stderr
     a, f = tmp_path / "v27.ast.json", tmp_path / "v27.params.json"
     a.write_text(json.dumps(doc(10, compute({"draw": {"param": "cn"}}))), encoding="utf-8")
-    f.write_text(json.dumps({"params_version": 1, "abstract": "v27", "params": {"cn": {"const": {"param": "d"}}}}), encoding="utf-8")
+    f.write_text(json.dumps({"params_version": 2, "abstract": "v27", "params": {"cn": {"default": {"const": {"param": "d"}}}}}), encoding="utf-8")
     want = "v27: actors/gpu/body/0/compute/ns: expected an integer, got a distribution (V27)"
     r = subprocess.run([sys.executable, "-m", "aeiou.params", "check", str(a), str(f)], capture_output=True, text=True,
                        cwd=str(BUILDER), env={**os.environ, "PYTHONPATH": str(BUILDER)})
@@ -1631,7 +1631,7 @@ def test_a_comparison_or_array_read_the_runner_refuses_is_refused_at_check(tmp_p
             assert got == [f"v27: {w}" for w in want] and r.returncode == (1 if want else 0), r.stdout + r.stderr
     a, f = tmp_path / "v27.ast.json", tmp_path / "v27.params.json"
     a.write_text(json.dumps(doc(compute({"sum": "arr"}))), encoding="utf-8")
-    f.write_text(json.dumps({"params_version": 1, "abstract": "v27", "params": {"arr": [4, "a"]}}), encoding="utf-8")
+    f.write_text(json.dumps({"params_version": 2, "abstract": "v27", "params": {"arr": {"default": [4, "a"]}}}), encoding="utf-8")
     want = "v27: actors/gpu/body/1/compute/ns: sum: an element of `arr` is a string (V27)"
     r = subprocess.run([sys.executable, "-m", "aeiou.params", "check", str(a), str(f)], capture_output=True, text=True,
                        cwd=str(BUILDER), env={**os.environ, "PYTHONPATH": str(BUILDER)})

@@ -64,8 +64,8 @@ def conditions(server_log, slots, given=()):
 def write(path, abstract, doc, params, conds=None):
     """A parameter to a line; the fit's conditions, when known, as the file's provenance."""
     with open(path, "w") as f:
-        f.write('{"params_version": 1, "abstract": %s,\n "doc": %s,\n "params": {\n%s}%s}\n' % (
-            json.dumps(abstract), json.dumps(doc), ",\n".join("  %s: %s" % (json.dumps(k), json.dumps(v)) for k, v in params.items()),
+        f.write('{"params_version": 2, "abstract": %s,\n "doc": %s,\n "params": {\n%s}%s}\n' % (
+            json.dumps(abstract), json.dumps(doc), ",\n".join("  %s: {\"default\": %s}" % (json.dumps(k), json.dumps(v)) for k, v in params.items()),
             ',\n "provenance": {"conditions": %s}' % json.dumps(conds) if conds else ""))
 
 

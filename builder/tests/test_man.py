@@ -20,7 +20,7 @@ MAN = ROOT / "man"
 # tool -> (module, subcommands); a flat tool has the one section `### <tool>`
 TOOLS = {
     "aeiou-build": ("cli", []),
-    "aeiou-params": ("params", ["defaults", "check", "safetensors", "npz"]),
+    "aeiou-params": ("params", ["defaults", "check", "safetensors", "npz", "lock"]),
     "aeiou-datagen": ("datagen", []),
     "aeiou-trace": ("trace", ["metrics", "export", "compare"]),
     "aeiou-catalog": ("catalog", ["check", "write", "describe"]),

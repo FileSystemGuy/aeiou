@@ -6,7 +6,7 @@
       "ast": "faiss_ivf_ondisk",
       "ast_sha256": "52d01418c480794914d80609c959488f3738f579fc59770e50526f6493b0927c",
       "params": "params.json",
-      "params_sha256": "95d10a9abfd2a16ead39bc0a5ac5f35108445561c45aea3e11db0cac31c9ba21",
+      "params_sha256": "46bc63a7d5162fb2096c63e3b1f08ccf8dca77ff552c289c9ceec2bfed4684e4",
       "gpus": 1,
       "block": 4096,
       "seeds": [

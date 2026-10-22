@@ -56,7 +56,8 @@ import sys
 import tempfile
 import tomllib
 
-from . import __version__, emit, params, usage
+from .params import values_of
+from . import __version__, emit, lock, params, usage
 from .describe import Describer
 from .nodes import BuildError
 from .validate import validate
@@ -330,6 +331,14 @@ def load(root: pathlib.Path, attrs: dict) -> tuple[list[dict], Problems]:
             if name in names:
                 problems.add(a["path"], root, f"the AST name {name} is also {_rel(names[name], root)}")
             names[name] = a["path"]
+    # one lock to a name, so `aeiou run --case NAME` finds one (§3.78 point 13)
+    locks = {}
+    for m in mechanisms:
+        for case in m["cases"]:
+            name = f"{m['dir'].name}/{case['name']}"
+            if name in locks:
+                problems.add(case["dir"] / lock.LOCK_FILE, root, f"the lock name {name} is also {_rel(locks[name], root)}'s")
+            locks[name] = case["dir"]
     return mechanisms, problems
 
 
@@ -393,6 +402,9 @@ def _load_case(c: pathlib.Path, m: dict, attrs: dict, root, problems: Problems) 
     for p in sorted(c.glob("*params.json")):
         if p.name not in named:
             problems.add(p, root, "a parameter file no [[run]] of case.toml names")
+    # the use case's lock (DESIGN_REVIEW.md §3.78 point 17): there, and the one its inputs make now
+    if case["runs"] and (why := lock.stale(c, workloads=root)):
+        problems.add(c / lock.LOCK_FILE, root, why)
     caps = c / "captures"
     for cap in sorted(caps.glob("*/")) if caps.is_dir() else ():
         capture = _load_capture(cap, case, attrs, root, problems)
@@ -507,7 +519,7 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
     smallest length (halving down to 1/64) whose numbers are still the case's, where `check`
     re-measures them. A shorter run is never taken for the case: a reuse share grows with the
     run on a fixed dataset, and a fixed load is amortized only over a long one."""
-    pset = emit.loads(run["params"].read_text(encoding="utf-8"))["params"] if run["params"] else {}
+    pset = values_of(emit.loads(run["params"].read_text(encoding="utf-8"))) if run["params"] else {}
     full = pset.get(length_param, _params_of(run["abstract"]["doc"])[length_param]["default"]) if length_param else None
     with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
         tmp = pathlib.Path(tmp)
@@ -653,7 +665,7 @@ def _description_path(m: dict, case: dict | None) -> pathlib.Path:
 
 
 def _values(run: dict) -> dict:
-    return emit.loads(run["params"].read_text(encoding="utf-8"))["params"] if run["params"] else {}
+    return values_of(emit.loads(run["params"].read_text(encoding="utf-8"))) if run["params"] else {}
 
 
 def context(m: dict, case: dict | None, run: dict, gpus: int, attrs: dict) -> list[str]:

@@ -157,20 +157,38 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
             Err(e) => format!("{e:#}"),
         }
     };
-    assert!(outcome(r#"{"params_version":1,"abstract":"other","params":{}}"#).contains("for abstract `other`"));
-    assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"nope":1}}"#).contains("no parameter `nope`"));
-    assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"steps":[1]}}"#).contains("the default is a scalar, the value is an array"));
-    assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"step_time":{"const":5}}}"#).contains("the value is a distribution"));
-    assert!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"gpus":2}}"#).contains("--gpus"));
-    assert_eq!(outcome(r#"{"params_version":1,"abstract":"file_per_sample","params":{"walk":true,"hdr_read":4096}}"#), "accepted");
-    assert!(ParamSet::parse(r#"{"params_version":2,"abstract":"a","params":{}}"#, "x").is_err());
-    assert!(ParamSet::parse(r#"{"params_version":1,"abstract":"a","params":{},"extra":1}"#, "x").is_err());
-    assert!(ParamSet::parse(r#"{"params_version":1,"abstract":"a"}"#, "x").is_err());
+    assert!(outcome(r#"{"params_version":2,"abstract":"other","params":{}}"#).contains("for abstract `other`"));
+    assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"nope":{"default":1}}}"#).contains("no parameter `nope`"));
+    assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"steps":{"default":[1]}}}"#).contains("the default is a scalar, the value is an array"));
+    assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"step_time":{"locked":{"const":5}}}}"#).contains("the value is a distribution"));
+    assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"gpus":{"default":2}}}"#).contains("--gpus"));
+    assert_eq!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"walk":{"default":true},"hdr_read":{"locked":4096}}}"#), "accepted");
+    // contract 0.11: a required entry leaves the parameter without a value; a locked one is final
+    assert_eq!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"steps":{"required":true},"batch":{"required":true}}}"#), "required parameters with no value: batch, steps (give each in a parameter file or with --param NAME=VALUE)");
+    let two = |a: &str, b: &str, cli: &[(&str, &str)]| {
+        let sets = [a, b].iter().enumerate().map(|(i, j)| ParamSet::parse(&format!(r#"{{"params_version":2,"abstract":"file_per_sample","params":{j}}}"#), &format!("{i}.params.json")).unwrap()).collect();
+        Params::new(&loaded.ast, &Config { sets, ..config(2, 1, cli) }).map(|_| ()).map_err(|e| format!("{e:#}"))
+    };
+    assert_eq!(two(r#"{"steps":{"locked":5}}"#, r#"{"steps":{"default":6}}"#, &[]), Err("1.params.json: steps: locked by 0.params.json".into()));
+    assert_eq!(two(r#"{"steps":{"locked":5}}"#, r#"{}"#, &[("steps", "6")]), Err("--param steps: locked by 0.params.json".into()));
+    assert_eq!(two(r#"{"steps":{"default":5}}"#, r#"{"steps":{"required":true}}"#, &[("steps", "6")]), Ok(()), "a later layer gives what an earlier one requires");
+    for (bad, want) in [
+        (r#"{"params_version":2,"abstract":"a","params":{"n":4}}"#, "params: n: not an entry"),
+        (r#"{"params_version":2,"abstract":"a","params":{"n":{"required":false}}}"#, "params: n: not an entry"),
+        (r#"{"params_version":2,"abstract":"a","params":{"n":{"default":1,"locked":1}}}"#, "params: n: not an entry"),
+        (r#"{"params_version":2,"abstract":"a","params":{},"run":{"posix":{"locked":"sync"}}}"#, "a `run` table sets the runner's identity options"),
+        (r#"{"params_version":1,"abstract":"a","params":{}}"#, "params_version 1 (this runner reads 2)"),
+    ] {
+        let e = ParamSet::parse(bad, "x").err().map(|e| format!("{e:#}")).unwrap_or_default();
+        assert!(e.contains(want), "{bad}: {e}");
+    }
+    assert!(ParamSet::parse(r#"{"params_version":2,"abstract":"a","params":{},"extra":1}"#, "x").is_err());
+    assert!(ParamSet::parse(r#"{"params_version":2,"abstract":"a"}"#, "x").is_err());
     // an AST hash pins a set to one shape
-    let pinned = ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"file_per_sample","ast_sha256":"{}","params":{{}}}}"#, "0".repeat(64)), "x").unwrap();
+    let pinned = ParamSet::parse(&format!(r#"{{"params_version":2,"abstract":"file_per_sample","ast_sha256":"{}","params":{{}}}}"#, "0".repeat(64)), "x").unwrap();
     let cfg = Config { sets: vec![pinned], ..config(2, 1, &[]) };
     assert!(format!("{:#}", cfg.check_sets("file_per_sample", &loaded.sha256).unwrap_err()).contains("is for AST"));
-    let pinned = ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"file_per_sample","ast_sha256":"{}","params":{{}}}}"#, loaded.sha256), "x").unwrap();
+    let pinned = ParamSet::parse(&format!(r#"{{"params_version":2,"abstract":"file_per_sample","ast_sha256":"{}","params":{{}}}}"#, loaded.sha256), "x").unwrap();
     assert!(Config { sets: vec![pinned], ..config(2, 1, &[]) }.check_sets("file_per_sample", &loaded.sha256).is_ok());
     // --param keeps the kind too
     assert!(Params::new(&loaded.ast, &config(2, 1, &[("steps", "[1]")])).is_err());
@@ -596,11 +614,11 @@ fn an_integral_float_is_the_integer_its_default_is() {
     let text = std::fs::read_to_string(&path).unwrap();
     let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
     let loaded = aeiou::load_str(&text).unwrap();
-    let file = |json: &str| Config { sets: vec![ParamSet::parse(&format!(r#"{{"params_version":1,"abstract":"file_per_sample","params":{json}}}"#), "x.params.json").unwrap()], ..config(1, 0, &[]) };
+    let file = |json: &str| Config { sets: vec![ParamSet::parse(&format!(r#"{{"params_version":2,"abstract":"file_per_sample","params":{json}}}"#), "x.params.json").unwrap()], ..config(1, 0, &[]) };
     let resolved = |cfg: &Config| aeiou::payload::resolved_dataset(&doc, "train", cfg).unwrap();
     let want = resolved(&config(1, 0, &[("samples", "3000"), ("files_per_directory", "1300")]));
     assert_eq!(want["count"], serde_json::json!(3000));
-    for cfg in [config(1, 0, &[("samples", "3e3"), ("files_per_directory", "1300.0")]), config(1, 0, &[("samples", "3000.0")]), file(r#"{"samples":3000.0,"files_per_directory":1.3e3}"#)] {
+    for cfg in [config(1, 0, &[("samples", "3e3"), ("files_per_directory", "1300.0")]), config(1, 0, &[("samples", "3000.0")]), file(r#"{"samples":{"default":3000.0},"files_per_directory":{"locked":1.3e3}}"#)] {
         assert_eq!(resolved(&cfg), want, "{:?} {:?}", cfg.overrides, cfg.sets.first().map(|s| &s.values));
         let params = Params::new(&loaded.ast, &cfg).unwrap();
         assert!(matches!(params.values["samples"], aeiou::ast::PValue::Scalar(aeiou::ast::Literal::Int(3000))), "{:?}", params.values["samples"]);
@@ -608,7 +626,7 @@ fn an_integral_float_is_the_integer_its_default_is() {
     }
     let refused = |cfg: &Config| Params::new(&loaded.ast, cfg).err().map(|e| format!("{e:#}")).unwrap_or_default();
     assert_eq!(refused(&config(1, 0, &[("samples", "20.7")])), "--param samples: the default is an integer, the value 20.7 is not");
-    assert_eq!(refused(&file(r#"{"samples":1.5}"#)), "x.params.json: samples: the default is an integer, the value 1.5 is not");
+    assert_eq!(refused(&file(r#"{"samples":{"default":1.5}}"#)), "x.params.json: samples: the default is an integer, the value 1.5 is not");
     assert!(aeiou::payload::resolved_dataset(&doc, "train", &config(1, 0, &[("samples", "20.7")])).is_err());
 }
 
@@ -914,8 +932,8 @@ fn integers_outside_64_bits_are_refused_as_check_py_refuses_them() {
     rejects(&doc("1", "1").replace("[1, 1.5e30]", "[1, 36893488147419103232]"), "t: actors/gpu/body/0/compute/ns/add/1: integer 36893488147419103232 is outside");
     // a parameter file and --param: the same rule on the values a run is given
     use aeiou::eval::ParamSet;
-    let e = ParamSet::parse(r#"{"params_version":1,"abstract":"t","params":{"n":18446744073709551616}}"#, "x").err().map(|e| format!("{e:#}")).unwrap();
-    assert!(e.contains(&format!("params/n: integer 18446744073709551616 {range}")), "{e}");
+    let e = ParamSet::parse(r#"{"params_version":2,"abstract":"t","params":{"n":{"default":18446744073709551616}}}"#, "x").err().map(|e| format!("{e:#}")).unwrap();
+    assert!(e.contains(&format!("params/n/default: integer 18446744073709551616 {range}")), "{e}");
     let loaded = aeiou::load_str(&doc("1", "1")).unwrap();
     let e = Params::new(&loaded.ast, &config(1, 1, &[("n", "9223372036854775808")])).err().map(|e| format!("{e:#}")).expect("accepted");
     assert_eq!(e, format!("--param n: integer 9223372036854775808 {range}"));

@@ -551,11 +551,11 @@ fn parameters_given_are_held_to_their_declarations() {
     assert_eq!(given(&[("arr", r#"[1, {"const": 2}]"#)], vec![]).unwrap_err(), "--param arr[1]: the default's elements are a scalar, this one is a distribution");
     assert_eq!(given(&[("arr", "[1, 2.5]")], vec![]).unwrap_err(), "--param arr[1]: the default is an integer, the value 2.5 is not");
     let set = |text: &str| ParamSet::parse(text, "p.json").map_err(|e| format!("{e:#}"));
-    assert_eq!(set(r#"{"params_version": 1, "abstract": "t", "ast_sha256": "xyz", "params": {}}"#).unwrap_err(), r#"`ast_sha256` is not 64 hex digits: "xyz""#);
-    assert_eq!(set(r#"{"params_version": 1, "abstract": "t", "doc": 4, "params": {}}"#).unwrap_err(), "`doc` is not a string: 4");
-    let other = set(r#"{"params_version": 1, "abstract": "u", "params": {}}"#).unwrap();
+    assert_eq!(set(r#"{"params_version": 2, "abstract": "t", "ast_sha256": "xyz", "params": {}}"#).unwrap_err(), r#"`ast_sha256` is not 64 hex digits: "xyz""#);
+    assert_eq!(set(r#"{"params_version": 2, "abstract": "t", "doc": 4, "params": {}}"#).unwrap_err(), "`doc` is not a string: 4");
+    let other = set(r#"{"params_version": 2, "abstract": "u", "params": {}}"#).unwrap();
     assert_eq!(other.check_identity("t", &"0".repeat(64)).unwrap_err().to_string(), "parameter file p.json is for abstract `u`, not `t`");
-    let pinned = set(&format!(r#"{{"params_version": 1, "abstract": "t", "ast_sha256": "{}", "params": {{"n": 4}}}}"#, "A".repeat(64))).unwrap();
+    let pinned = set(&format!(r#"{{"params_version": 2, "abstract": "t", "ast_sha256": "{}", "params": {{"n": {{"default": 4}}}}}}"#, "A".repeat(64))).unwrap();
     assert_eq!(pinned.check_identity("t", &"a".repeat(64)).map_err(|e| e.to_string()), Ok(()), "hex digits of either case");
     assert_eq!(given(&[], vec![pinned]), Ok(()));
 }

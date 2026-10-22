@@ -12,9 +12,9 @@ def params(m, meta_bytes, step, doc):
         c = next(c for c in t.chunks if tuple(c.offsets) == off)
         return math.prod(c.sizes) * t.properties.dtype.itemsize
     by_name = sorted(range(len(items)), key=lambda i: items[i][1])
-    return {"params_version": 1, "abstract": "dcp_load", "doc": doc, "params": {
+    return {"params_version": 2, "abstract": "dcp_load", "doc": doc, "params": {k: {"default": v} for k, v in {
         "items": len(items), "item_bytes": [nbytes(f, o) for _, f, o in items], "item_off": [o for o, _, _ in items],
-        "read_order": by_name, "meta_bytes": meta_bytes, "restore_step": step}}
+        "read_order": by_name, "meta_bytes": meta_bytes, "restore_step": step}.items()}}
 
 
 def main():

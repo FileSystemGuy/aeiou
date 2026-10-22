@@ -1,0 +1,46 @@
+{
+  "lock_version": 1,
+  "name": "dcp-load/mixed-9-items",
+  "runs": [
+    {
+      "name": "dcp_load",
+      "abstract": "checkpointing/dcp-load/dcp_load.ast.json",
+      "ast_sha256": "5c1cd53c7571c0d35315a8054714ba167a5fd44281be3047308f1914a4e4007b",
+      "params": {
+        "buf": {"default": 1048576},
+        "eocd_scan": {"default": 4096},
+        "hdr": {"default": 704},
+        "item_bytes": {"default": [16777216, 524288, 33554432, 2096, 2096, 524288, 16777216, 2096, 8388608]},
+        "item_off": {"default": [0, 16778793, 17304658, 50860667, 50864292, 50867917, 51393782, 68172575, 68176200]},
+        "items": {"default": 9},
+        "meta_bytes": {"default": 3952},
+        "read_order": {"default": [0, 1, 2, 3, 4, 5, 6, 7, 8]},
+        "rec2": {"default": 236},
+        "replicas": {"default": 1},
+        "restore_step": {"default": 200},
+        "tail_back": {"default": [22, 42, 98, 561, 727, 857]},
+        "trailer": {"default": 873}
+      },
+      "sources": {
+        "buf": "abstract",
+        "eocd_scan": "abstract",
+        "hdr": "abstract",
+        "item_bytes": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
+        "item_off": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
+        "items": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
+        "meta_bytes": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
+        "read_order": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
+        "rec2": "abstract",
+        "replicas": "abstract",
+        "restore_step": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
+        "tail_back": "abstract",
+        "trailer": "abstract"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "checkpointing/dcp-load/cases/mixed-9-items/case.toml",
+    "fragments": [{"path": "checkpointing/dcp-load/cases/mixed-9-items/params.json", "sha256": "743936137a9371dd8202010d4885bfe21ccd7038c209c9506ba0d4fcf9d50640"}]
+  }
+}

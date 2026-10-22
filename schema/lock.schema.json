@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/FileSystemGuy/aeiou/schema/lock.schema.json",
+  "title": "aeiou lock",
+  "description": "A resolved use case (contract 0.11, DESIGN_REVIEW.md §3.78 point 12), written by `aeiou-params lock` and never edited: the one file `aeiou run --case`/`--case-file` reads. Each run pins its abstract by its path below aeiou's workloads/ and its ast_sha256 and holds every parameter with its state and where it came from; the freeze and the constraints of a rules file are copied in. Its SHA-256 answers whether it is the exact file published; the runner computes its workload id, which results are compared by.",
+  "type": "object",
+  "required": ["lock_version", "name", "runs", "provenance"],
+  "additionalProperties": false,
+  "properties": {
+    "lock_version": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$", "description": "`<mechanism>/<case>`: a mutable pointer, like a git tag." },
+    "doc": { "type": "string" },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "abstract", "ast_sha256", "params", "sources"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "$ref": "abstract-ast.schema.json#/$defs/ident", "description": "The abstract's name: what `--case-run` names." },
+          "abstract": { "type": "string", "description": "The abstract's path below workloads/." },
+          "ast_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "params": { "type": "object", "additionalProperties": { "$ref": "#/$defs/entry" } },
+          "sources": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Where each value came from: `abstract`, `rules`, or a fragment's path." },
+          "run": { "type": "object", "additionalProperties": { "$ref": "#/$defs/entry" } },
+          "run_sources": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      }
+    },
+    "freeze": { "$ref": "rules.schema.json#/properties/freeze" },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "expr", "names"],
+        "additionalProperties": false,
+        "properties": {
+          "text": { "type": "string" },
+          "expr": { "description": "The text in the AST's expression form, with `{\"fact\": NAME}` and `{\"result\": NAME}` leaves." },
+          "names": { "type": "array", "items": { "type": "string" } },
+          "doc": { "type": "string" }
+        }
+      }
+    },
+    "provenance": { "type": "object", "description": "The case, its fragments, and the rules file, with their hashes: recorded, never compared." }
+  },
+  "$defs": {
+    "entry": {
+      "oneOf": [
+        { "type": "object", "required": ["default"], "additionalProperties": false, "properties": { "default": { "anyOf": [{ "$ref": "abstract-ast.schema.json#/$defs/value" }, { "$ref": "abstract-ast.schema.json#/$defs/source" }] } } },
+        { "type": "object", "required": ["locked"], "additionalProperties": false, "properties": { "locked": { "anyOf": [{ "$ref": "abstract-ast.schema.json#/$defs/value" }, { "$ref": "abstract-ast.schema.json#/$defs/source" }] } } },
+        { "type": "object", "required": ["required"], "additionalProperties": false, "properties": { "required": { "const": true } } }
+      ]
+    }
+  }
+}

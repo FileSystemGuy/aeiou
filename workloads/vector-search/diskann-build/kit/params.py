@@ -26,7 +26,7 @@ if not shard:
     sys.exit("params.py: the trace reads no shard graph (subshard-N_mem.index): "
              "diskann_build models a build that partitions its base (lower --build-gb)")
 size = lambda name: os.path.getsize(os.path.join(a.index, a.prefix + name))
-print(json.dumps({"params_version": 1, "abstract": "diskann_build", "doc": a.doc, "params": {
+print(json.dumps({"params_version": 2, "abstract": "diskann_build", "doc": a.doc, "params": {k: {"default": v} for k, v in {
     "dim": dim, "n": n, "shards": len(shard), "pq_code": (size("_pq_compressed.bin") - 8) // n,
     "shard_index_bytes": sum(shard.values()) // len(shard), "index_bytes": index_bytes + 8,
-    "sectors": size("_disk.index") // 4096, "sample_rows": (size("_sample_ids.bin") - 8) // 4}}))
+    "sectors": size("_disk.index") // 4096, "sample_rows": (size("_sample_ids.bin") - 8) // 4}.items()}}))

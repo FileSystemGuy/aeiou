@@ -1,0 +1,42 @@
+{
+  "lock_version": 1,
+  "name": "dcp-save/toy-6-items",
+  "runs": [
+    {
+      "name": "dcp_save",
+      "abstract": "checkpointing/dcp-save/dcp_save.ast.json",
+      "ast_sha256": "24d03dec648c90566f82fe3da1912744edbf20998b7130d29034811ff3934d18",
+      "params": {
+        "buf": {"default": 1048576},
+        "ckpt_every": {"default": 100},
+        "hdr": {"default": 704},
+        "item_bytes": {"default": [16777216, 33554432, 16777216, 8388608, 524288, 2096]},
+        "items": {"default": 6},
+        "meta_bytes": {"default": 2602},
+        "readback": {"default": false},
+        "step_time": {"default": 323000000},
+        "steps": {"default": 200},
+        "trailer": {"default": 873},
+        "xfer": {"default": 1048576}
+      },
+      "sources": {
+        "buf": "abstract",
+        "ckpt_every": "checkpointing/dcp-save/cases/toy-6-items/params.json",
+        "hdr": "abstract",
+        "item_bytes": "checkpointing/dcp-save/cases/toy-6-items/params.json",
+        "items": "checkpointing/dcp-save/cases/toy-6-items/params.json",
+        "meta_bytes": "checkpointing/dcp-save/cases/toy-6-items/params.json",
+        "readback": "abstract",
+        "step_time": "abstract",
+        "steps": "checkpointing/dcp-save/cases/toy-6-items/params.json",
+        "trailer": "abstract",
+        "xfer": "abstract"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "checkpointing/dcp-save/cases/toy-6-items/case.toml",
+    "fragments": [{"path": "checkpointing/dcp-save/cases/toy-6-items/params.json", "sha256": "7ad1391be64627a07e8037f3123b737c12b55ce6a7e7d82174f4c303a404a8d9"}]
+  }
+}

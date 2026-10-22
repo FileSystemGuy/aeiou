@@ -187,6 +187,12 @@ def test_a_category_with_classes_takes_its_mechanisms_inside_them(tree):
     assert any("say workloads/input-pipeline/map/<mechanism>" in p for p in problems(tree))
     assert any("input-pipeline/dcp-save: not a class of input-pipeline" in p for p in problems(tree))
     shutil.move(tree / "input-pipeline" / "dcp-save", tree / "input-pipeline" / "map" / "dcp-save")
+    # a lock names its abstract by its path below workloads/: a mechanism moved re-locks its cases
+    found = problems(tree)
+    assert len(found) == 1 and "toy-6-items/case.lock.json: case.lock.json is stale" in found[0], found
+    from aeiou import lock
+    case = tree / "input-pipeline" / "map" / "dcp-save" / "cases" / "toy-6-items"
+    (case / lock.LOCK_FILE).write_text(lock.render(lock.make_lock(case, workloads=tree)))
     assert problems(tree) == []
 
 

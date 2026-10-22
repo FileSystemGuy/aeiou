@@ -225,6 +225,33 @@ Llama-shaped defaults) and marking the rest replicated. The runner takes the fil
 `aeiou run --params-file FILE` (repeatable; `--param` still wins). `python -m aeiou.params` is the
 same program.
 
+**`params_version` 2 and the lock** (contract 0.11, `DESIGN_REVIEW.md` §3.78, 2026-10-22).
+Every entry of a file carries its state, `{"default": v}`, `{"locked": v}`, or `{"required":
+true}`, and a file may hold a `run` table of the runner's identity options; `values_of(pset)`
+is a set's values, `entry(e)` one entry's state and value. A **use case** is a case directory
+whose `case.toml` lists, for each `[[run]]`, the abstract (`ast`) and its fragments (`params`,
+a file or a list of them); `aeiou-params lock CASE [--rules FILE]` (`aeiou/lock.py`)
+resolves it into `CASE/case.lock.json`:
+
+```
+uv run aeiou-params lock ../workloads/input-pipeline/map/npy-per-sample/cases/npy-8mib
+uv run aeiou-params lock ../workloads/…/cases/unet3d-h100 --rules bench.rules.json -o bench-unet3d-h100.lock.json
+```
+
+The abstract gives each parameter its first state (its default, or required); the fragments
+of one run combine by agreement, in any order (two that set a name to different entries are
+refused, both files named); a rules file freezes by state (`defaults: locked`, `scale:
+required`, `identity_options: locked`) and its constraints, infix text over `fact.` and
+`result.` names (`lock.parse_constraint`), are copied in with their expression form. The lock
+pins each run's abstract by its path below `workloads/` and its `ast_sha256`, keeps every
+value's source, and records the fragments and the rules file with their hashes; it is
+rendered one value to a line so its diff is a line per change, and it never carries a
+version of the tool, so a release does not make every lock stale. `lock.stale(case)` says why
+a committed lock is not the one its inputs make now; `aeiou-build` re-locks the committed cases
+of every abstract it writes (`cli._relock`), and leaves a case without a lock to its author.
+The runner computes a lock's workload id (`runner/REFERENCE.md`); the Python side never does,
+so the id has one definition.
+
 ## 6. Format classes and `aeiou-datagen` (2026-09-30)
 
 A dataset stored in a container format declares its class (`aeiou.formats`, `GRAMMAR_OPTIONS.md`

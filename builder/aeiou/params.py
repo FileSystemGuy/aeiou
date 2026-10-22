@@ -11,6 +11,7 @@ sets and a fitted set can be reviewed and hashed on its own. The runner applies 
     aeiou-params check     AST.json FILE...                          validate sets against an abstract
     aeiou-params safetensors AST.json SHARD... [-o FILE] [--tp N]    safetensors_load's tensor table from real shards
     aeiou-params npz       AST.json ARCHIVE... [-o FILE] [--member x] npy_per_sample' framing from real .npz files
+    aeiou-params lock      CASE [--rules FILE] [-o FILE]           a use case's lock (lock.py)
 
 The value rules are the runner's (`runner/aeiou/src/eval.rs`): a name must be declared, `gpus`
 may not appear, and a value replaces a default of the same kind (scalar, array, distribution;
@@ -32,9 +33,12 @@ import sys
 from . import __version__, usage
 from .nodes import BuildError
 
-PARAMS_VERSION = 1
-KEYS = ("params_version", "abstract", "ast_sha256", "doc", "params", "provenance")
+PARAMS_VERSION = 2
+KEYS = ("params_version", "abstract", "ast_sha256", "doc", "params", "run", "provenance")
 IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
+STATES = ("default", "locked", "required")
+# the runner's identity options a fragment's `run` table may set (DESIGN_REVIEW.md §3.78 point 3)
+RUN_OPTIONS = ("seed", "posix", "cache", "s3", "time_scale", "rank_rotate", "write_compress")
 
 
 def kind_of(v) -> str:
@@ -45,27 +49,72 @@ def kind_of(v) -> str:
     return "a scalar"
 
 
+def entry(e) -> tuple[str, object]:
+    """(state, value) of an entry, `{"default": v}`, `{"locked": v}`, or `{"required": true}`
+    (contract 0.11); the value of a required one is None."""
+    if isinstance(e, dict) and len(e) == 1:
+        (k, v), = e.items()
+        if k in ("default", "locked"):
+            return k, v
+        if k == "required" and v is True:
+            return k, None
+    raise BuildError(f"not an entry: {{\"default\": v}}, {{\"locked\": v}}, or {{\"required\": true}}, got {json.dumps(e)}")
+
+
+def values_of(pset: dict) -> dict:
+    """The values of a set's `default` and `locked` entries, by name."""
+    return {k: entry(e)[1] for k, e in pset.get("params", {}).items() if entry(e)[0] != "required"}
+
+
 def _is_int(v) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
-def keep_int(pname: str, default, v):
-    """A value keeps its default's kind down to the number, as the runner has it
-    (`eval::keep_int`): where the default is an integer (an array's elements are), an integral
+def declared_kind(decl: dict) -> tuple[str, bool, bool]:
+    """A declaration's (coarse kind, whether an integer, whether an array of integers), as the
+    runner's `Param` has it: the default's, or, required, its `kind` and `items` (contract
+    0.11); a storage-reported default is an integer."""
+    if "default" not in decl:
+        k = decl.get("kind")
+        coarse = {"dist": "a distribution", "array": "an array"}.get(k, "a scalar")
+        return coarse, k == "int", k == "array" and decl.get("items") == "int"
+    d = decl["default"]
+    if isinstance(d, dict) and "from" in d:
+        return "a scalar", True, False
+    return kind_of(d), _is_int(d), isinstance(d, list) and bool(d) and _is_int(d[0])
+
+
+def keep_int(pname: str, decl: dict, v):
+    """A value keeps its parameter's kind down to the number, as the runner has it
+    (`eval::keep_int`): where the kind is an integer (an array's elements are), an integral
     float is that integer (`3e3`, `3000.0`), so the dataset id is the integer's, and a
     fractional one is refused, never rounded. Returns (value, errors)."""
-    if _is_int(default) and isinstance(v, float):
+    _, is_int, ints = declared_kind(decl)
+    what = "the default" if "default" in decl else "the kind"
+    if is_int and isinstance(v, float):
         if v.is_integer() and -2**63 <= v < 2**63:
             return int(v), []
-        return v, [f"{pname}: the default is an integer, the value {v!r} is not"]
-    if isinstance(default, list) and default and isinstance(v, list):
+        return v, [f"{pname}: {what} is an integer, the value {v!r} is not"]
+    if ints and isinstance(v, list):
         out, errors = [], []
         for i, x in enumerate(v):
-            y, e = keep_int(f"{pname}[{i}]", default[0], x)
-            out.append(y)
-            errors += e
+            if isinstance(x, float):
+                if x.is_integer() and -2**63 <= x < 2**63:
+                    x = int(x)
+                else:
+                    errors.append(f"{pname}[{i}]: {what} is an integer, the value {x!r} is not")
+            out.append(x)
         return out, errors[:1]
     return v, []
+
+
+def default_value(decl: dict):
+    """The value a declaration gives before any layer: its default, a storage-reported one's
+    fallback, None for a required one."""
+    d = decl.get("default")
+    if isinstance(d, dict) and "from" in d:
+        return d.get("fallback")
+    return d
 
 
 def load(path) -> dict:
@@ -95,6 +144,8 @@ def load(path) -> dict:
                   for e in sorted(v.iter_errors(doc), key=lambda e: list(e.absolute_path))]
         if errors:
             raise BuildError("parameter file rejected:\n  " + "\n  ".join(errors))
+    if isinstance(doc, dict) and doc.get("params_version") == 1:
+        raise BuildError(f"{path.name}: params_version 1, whose values have no state; params_version 2 (contract 0.11) wraps each: {{\"default\": v}}, {{\"locked\": v}}, or {{\"required\": true}}")
     if not isinstance(doc, dict) or doc.get("params_version") != PARAMS_VERSION or not isinstance(doc.get("params"), dict):
         raise BuildError(f"{path.name}: not a parameter file (params_version {PARAMS_VERSION} with a `params` object)")
     for k in doc:
@@ -118,23 +169,35 @@ def check(ast: dict, pset: dict, *, ast_sha256: str | None = None, name: str = "
         errors.append(f"{name}: for AST {want[:16]}…, not {ast_sha256[:16]}…")
     declared = ast.get("params", {})
     given = {}
-    for pname, v in pset.get("params", {}).items():
+    for pname, e in pset.get("params", {}).items():
         if pname == "gpus":
             errors.append(f"{name}: `gpus` is set with --gpus, not by a parameter file")
             continue
         if pname not in declared:
             errors.append(f"{name}: no parameter `{pname}` in `{ast['name']}`")
             continue
-        default = declared[pname]["default"]
-        if kind_of(default) != kind_of(v):
-            errors.append(f"{name}: {pname}: the default is {kind_of(default)}, the value is {kind_of(v)}")
-        elif isinstance(default, list) and default:
+        try:
+            state, v = entry(e)
+        except BuildError as x:
+            errors.append(f"{name}: params: {pname}: {x}")
+            continue
+        if state == "required":
+            continue
+        decl = declared[pname]
+        coarse, _, _ = declared_kind(decl)
+        what = "the default" if "default" in decl else "the kind"
+        if coarse != kind_of(v):
+            errors.append(f"{name}: {pname}: {what} is {coarse}, the value is {kind_of(v)}")
+        elif coarse == "an array":
+            items = decl.get("items") if "default" not in decl else None
+            first = kind_of(decl["default"][0]) if "default" in decl and decl["default"] else \
+                ({"dist": "a distribution"}.get(items, "a scalar") if items else None)
             for i, x in enumerate(v):
-                if kind_of(x) != kind_of(default[0]):
-                    errors.append(f"{name}: {pname}[{i}]: the default's elements are {kind_of(default[0])}, this one is {kind_of(x)}")
+                if first is not None and kind_of(x) != first:
+                    errors.append(f"{name}: {pname}[{i}]: {what}'s elements are {first}, this one is {kind_of(x)}")
                     break
-        v, e = keep_int(pname, default, v)
-        errors += [f"{name}: {x}" for x in e]
+        v, x = keep_int(pname, decl, v)
+        errors += [f"{name}: {m}" for m in x]
         given[pname] = v
     if not errors:
         errors += given_rules(ast, given, name=name)
@@ -158,7 +221,7 @@ def given_rules(ast: dict, given: dict, *, name: str = "params") -> list[str]:
             return given[pname] if pname in given else super().param_value(pname)
 
     errors = [f"{name}: invalid with the parameters given: {e}" for e in Given(ast, ast["name"]).run()]
-    values = {k: p["default"] for k, p in ast.get("params", {}).items()} | given
+    values = {k: default_value(p) for k, p in ast.get("params", {}).items()} | given
     patterns = [(f"dataset `{n}`", d["pattern"]) for n, d in ast.get("datasets", {}).items() if d.get("layout") != "array"]
     patterns += [(f"namespace `{n}`", s["pattern"]) for n, s in ast.get("namespaces", {}).items()]
     for where, src in patterns:
@@ -181,7 +244,10 @@ def defaults(ast: dict, *, doc: str | None = None, pin: bool = False) -> dict:
     if pin:
         out["ast_sha256"] = sha256(ast)
     out["doc"] = doc or f"the defaults of `{ast['name']}` as declared in the abstract"
-    out["params"] = {k: p["default"] for k, p in ast.get("params", {}).items()}
+    # a required parameter stays required; a storage-reported one is left to the storage
+    out["params"] = {k: ({"required": True} if "default" not in p else {"default": p["default"]})
+                     for k, p in ast.get("params", {}).items()
+                     if not (isinstance(p.get("default"), dict) and "from" in p["default"])}
     return out
 
 
@@ -405,7 +471,12 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     n.add_argument("--member", default="x", metavar="NAME", help="The member the application reads [default: x]")
     n.add_argument("--doc", metavar="TEXT", help="The set's `doc` line")
     n.add_argument("--pin", action="store_true", help="Record the AST hash so the set is for this exact shape")
-    return ap, {"defaults": d, "check": c, "safetensors": s, "npz": n}
+    k = sub.add_parser("lock", help="Resolve a use case (and a benchmark's rules) into the lock a run names", usage="aeiou-params lock [OPTIONS] <CASE>")
+    k.add_argument("case", nargs="?", type=pathlib.Path, metavar="CASE", help="The case directory (`workloads/…/cases/<case>`, with its case.toml)")
+    k.add_argument("--rules", type=pathlib.Path, metavar="FILE", help="A benchmark's rules file: its freeze and constraints go into the lock")
+    k.add_argument("-o", "--out", type=pathlib.Path, metavar="FILE", help="Output file (default: CASE/case.lock.json)")
+    k.add_argument("--workloads", type=pathlib.Path, metavar="DIR", help="The workloads/ directory the lock's paths are relative to (default: the one above CASE)")
+    return ap, {"defaults": d, "check": c, "safetensors": s, "npz": n, "lock": k}
 
 
 @usage.tool
@@ -415,10 +486,14 @@ def main(argv=None) -> int:
     try:
         a = ap.parse_args(argv)
         missing = usage.Missing(ap)
-        missing.want(a.cmd, "<COMMAND>", "one of defaults, check, safetensors, npz")
+        missing.want(a.cmd, "<COMMAND>", "one of defaults, check, safetensors, npz, lock")
         missing.check()
         sp = subs[a.cmd]
         missing = usage.Missing(sp)
+        if a.cmd == "lock":
+            missing.want(a.case, "<CASE>", "the case directory, with its case.toml")
+            missing.check()
+            return _lock(a)
         missing.want(a.ast, *usage.ABSTRACT)
         if a.cmd == "check":
             missing.want(a.files, "<FILES>...", "the parameter files (`.params.json`) to validate against the abstract")
@@ -433,6 +508,19 @@ def main(argv=None) -> int:
         return usage.fail(e, sp)
     except BuildError as e:
         return usage.failed(sp.prog, e)
+
+
+def _lock(a) -> int:
+    """`aeiou-params lock`: the use case's lock, beside its case.toml unless -o says elsewhere."""
+    from . import lock
+    workloads = a.workloads or lock.workloads_of(a.case)
+    out = a.out or a.case / lock.LOCK_FILE
+    doc = lock.make_lock(a.case, workloads=workloads, rules=a.rules)
+    _write(out, lock.render(doc))
+    required = sorted({k for r in doc["runs"] for k, e in r["params"].items() if "required" in e})
+    print(f"wrote {out}  {doc['name']}  {len(doc['runs'])} run(s)  sha256={file_sha256(out)[:16]}…"
+          + (f"  required: {', '.join(required)}" if required else ""))
+    return 0
 
 
 def _main(a) -> int:
@@ -465,7 +553,7 @@ def _main(a) -> int:
         if a.pin:
             pset["ast_sha256"] = sha
         pset["doc"] = a.doc or f"tensor table of {len(a.shards)} safetensors shard(s), tp={a.tp}"
-        pset["params"] = values
+        pset["params"] = {k: {"default": v} for k, v in values.items()}
         errors = check(ast, pset, ast_sha256=sha, name=a.out.name)
         if errors:
             raise BuildError("\n  ".join(errors))
@@ -477,7 +565,7 @@ def _main(a) -> int:
         return 0
     if a.cmd == "npz":
         values, recs = npz_params(a.archives, a.member)
-        defaults_ = {k: ast["params"][k]["default"] for k in values if k in ast.get("params", {})}
+        defaults_ = {k: default_value(ast["params"][k]) for k in values if k in ast.get("params", {})}
         print(f"{len(recs)} archive(s), members {', '.join(recs[0]['members'])}: framing {values['framing']}, cd_len {values['cd_len']}")
         differs = {k: (defaults_.get(k), v) for k, v in values.items() if defaults_.get(k) != v}
         for k, (was, now) in differs.items():
@@ -489,7 +577,7 @@ def _main(a) -> int:
             if a.pin:
                 pset["ast_sha256"] = sha
             pset["doc"] = a.doc or f"archive framing of {len(recs)} .npz file(s), member {a.member}"
-            pset["params"] = values
+            pset["params"] = {k: {"default": v} for k, v in values.items()}
             errors = check(ast, pset, ast_sha256=sha, name=a.out.name)
             if errors:
                 raise BuildError("\n  ".join(errors))

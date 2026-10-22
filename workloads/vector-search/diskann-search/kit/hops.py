@@ -81,13 +81,13 @@ def main():
         k = 0 if cached else 2
         hops = collections.Counter(len(x) - k for x in queries)
         load = sum(bulk) + (loadinfo["requests"] if loadinfo else 0)
-        print(json.dumps({"params_version": 1, "abstract": "diskann_search", "doc": a.params, "params": {
+        print(json.dumps({"params_version": 2, "abstract": "diskann_search", "doc": a.params, "params": {k: {"default": v} for k, v in {
             "threads": len(q), "queries": len(queries) // len(q), "beam": max(batch),
             "hops": {"empirical": {"values": sorted(hops), "weights": [hops[h] for h in sorted(hops)]}},
             "entry": {"hotset": {"fraction": (len(med_off) - 0.5) / sectors, "weight": 1.0}},
             **({} if cached else {"near": {"hotset": {"fraction": (len(set(second)) - 0.5) / sectors, "weight": 1.0}}}),
             "node_cache": load if cached else 0,
-            "nodes": sectors, "per_sector": per_sector}}))
+            "nodes": sectors, "per_sector": per_sector}.items()}}))
         return
     out = {
         "second_round": {"reads": len(second), "distinct_sectors": len(set(second))},

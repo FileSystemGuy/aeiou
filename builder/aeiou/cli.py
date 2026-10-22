@@ -168,6 +168,30 @@ def main(argv=None) -> int:
             from .validate import op_counts
             ops = " ".join(f"{k}={v}" for k, v in op_counts(ast).items())
             print(f"wrote {path}  sha256={digest[:16]}…  ops: {ops}")
+        if not a.check:
+            status = max(status, _relock([out_dir / f"{n}.ast.json" for n in asts]))
+    return status
+
+
+def _relock(paths) -> int:
+    """The last step of a build (DESIGN_REVIEW.md §3.78 point 17): every committed case of an
+    abstract just written that has a lock is locked again, since the abstract's hash, which every
+    lock built on it pins, has changed. A case without a lock is its author's to lock."""
+    from . import lock
+    status = 0
+    cases = sorted({c for p in paths for c in lock.cases_of(p)})
+    for case in cases:
+        try:
+            workloads = lock.workloads_of(case)
+            text = lock.render(lock.make_lock(case, workloads=workloads))
+        except BuildError as e:
+            print(f"FAIL {case / lock.LOCK_FILE}: the abstract was written, the lock of its case is not: {e}", file=sys.stderr)
+            status = 1
+            continue
+        f = case / lock.LOCK_FILE
+        if f.read_text(encoding="utf-8") != text:
+            f.write_text(text, encoding="utf-8")
+            print(f"relocked {f}")
     return status
 
 

@@ -14,6 +14,8 @@ import sys
 
 import pytest
 
+from aeiou.params import values_of
+
 HERE = pathlib.Path(__file__).resolve().parent
 BUILDER = HERE.parent
 ROOT = BUILDER.parent
@@ -557,7 +559,7 @@ def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path
                                                 for x in ("--condition", f"{k}={json.dumps(v)}")], "-o", str(out)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(out.read_text()) == have
-    p = have["params"]
+    p = values_of(have)
     assert p["reuse"]["mixture"][1]["dist"] == {"const": 8} and p["requests"] == 300 and p["context"] == 4096
     keep = p["keep"]["empirical"]["values"]
     assert keep == sorted(keep) and keep[-1] == p["context"] and keep.count(208) == 13      # 208: the system prompt's tokens past its whole chunk, all the engine kept
@@ -589,7 +591,7 @@ def test_kv_cache_abstract_at_the_agentx_fit_matches_the_corpus_accounting(tmp_p
     assert ref["chunks_stored"]["mean"] == 14.46 and ref["chunks_hit"]["mean"] == 840.08 and ref["requests"] == 98827
     assert 0.95 * ref["chunks_stored"]["mean"] < stored < 1.2 * ref["chunks_stored"]["mean"], stored
     assert 0.8 * ref["chunks_hit"]["mean"] < loaded / 0.91 < 1.2 * ref["chunks_hit"]["mean"], loaded
-    p = json.loads((case / "params.json").read_text())["params"]
+    p = values_of(json.loads((case / "params.json").read_text()))
     assert p["reuse"]["mixture"][0]["weight"] == 0 and p["turns"]["empirical"]["values"][0] == 1 and len(p["turns"]["empirical"]["values"]) == 100
     assert p["trim"]["mixture"][0]["dist"] == {"const": 0} and 0.03 < p["trim"]["mixture"][1]["weight"] < 0.05
 
@@ -608,7 +610,7 @@ def test_agentx_replay_logs_give_each_request_what_the_engine_held_when_admitted
     sessions, sent = agentx.replayed(cap / "replay.log", cap / "lmcache.log")
     assert sessions == 8 and len(sent) == 219
     assert sum(1 for _, held in sent.values() if held == 0) == 46           # the engine held nothing, not even a shared prefix
-    p = json.loads((cap / "fitted.params.json").read_text())["params"]
+    p = values_of(json.loads((cap / "fitted.params.json").read_text()))
     assert (p["concurrency"], p["requests"], p["context"], p["sys_local"], p["sys_prompts"], p["sub_prompts"]) == (8, 27, 131072, False, 1, 1)
     assert p["kind"]["empirical"]["weights"] == [8, 10, 27]                 # chains opening with the main agent's prefix, a sub-agent's, neither
     assert p["keep"]["empirical"]["values"].count(0) == 7                   # of 20 shares: nothing held past the prefix
@@ -699,9 +701,9 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     assert (tr["stat"], dr["stat"]) == (1564, 1499)       # every chunk of every prompt, and the directory once in the trace
     # the same parameter values in both files: the reader is run with the writer's; and they are the local-disk
     # mechanism's ShareGPT case (the same requests, and the engine held the same of each) with the header and the buffer
-    pw, pr = (json.loads((case / f).read_text())["params"] for f in ("writer.params.json", "reader.params.json"))
+    pw, pr = (values_of(json.loads((case / f).read_text())) for f in ("writer.params.json", "reader.params.json"))
     assert pw == pr
-    assert pw == {**json.loads((case_dir("lmcache_local_disk", "sharegpt-chat") / "params.json").read_text())["params"], "meta_bytes": 28, "buf": 1048576}
+    assert pw == {**values_of(json.loads((case_dir("lmcache_local_disk", "sharegpt-chat") / "params.json").read_text())), "meta_bytes": 28, "buf": 1048576}
 
 
 

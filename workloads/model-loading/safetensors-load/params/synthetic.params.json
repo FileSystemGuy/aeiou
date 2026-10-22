@@ -1,16 +1,16 @@
 {
-  "params_version": 1,
+  "params_version": 2,
   "abstract": "safetensors_load",
   "doc": "The tensor table of a two-layer Llama-shaped model (hidden 64, intermediate 128, vocab 256, F16) in two shards, made by `aeiou-params safetensors` from synthetic shards with real headers (builder/tests/test_params.py::make_synthetic_model). An example of the mechanism, not a reference set: a real model's set is made the same way from its shards.",
   "params": {
-    "shards": 2,
-    "shard_bytes": 103896,
-    "hdr_len": [
+    "shards": {"default": 2},
+    "shard_bytes": {"default": 103896},
+    "hdr_len": {"default": [
       1032,
       1104
-    ],
-    "tp": 8,
-    "shard": [
+    ]},
+    "tp": {"default": 8},
+    "shard": {"default": [
       0,
       0,
       0,
@@ -32,8 +32,8 @@
       1,
       1,
       1
-    ],
-    "off": [
+    ]},
+    "off": {"default": [
       1040,
       33808,
       33936,
@@ -55,8 +55,8 @@
       93528,
       101720,
       103768
-    ],
-    "bytes": [
+    ]},
+    "bytes": {"default": [
       32768,
       128,
       16384,
@@ -78,8 +78,8 @@
       8192,
       2048,
       128
-    ],
-    "split": [
+    ]},
+    "split": {"default": [
       "column",
       "full",
       "row",
@@ -101,8 +101,8 @@
       "column",
       "column",
       "full"
-    ],
-    "rows": [
+    ]},
+    "rows": {"default": [
       1,
       1,
       64,
@@ -124,8 +124,8 @@
       1,
       1,
       1
-    ],
-    "row_bytes": [
+    ]},
+    "row_bytes": {"default": [
       32768,
       128,
       256,
@@ -147,7 +147,7 @@
       8192,
       2048,
       128
-    ]
+    ]}
   },
   "provenance": {
     "tool": "aeiou-params 0.1.0",
