@@ -76,8 +76,13 @@ order, another reader), not just in sizes, it is path C.
    record.
 3. **Ask Claude to analyze the trace and write the abstract**: give it `trace.txt`,
    `trace.metrics.json`, the application's source or name and version, and the command line.
-   Ask for a builder script under the right `workloads/<category>/<mechanism>/` directory, built
-   with `aeiou-build --hermetic --twice`, and a parameter file fitted to the capture, then judged
+   Ask for a builder script under the right `workloads/<category>/<mechanism>/` directory.
+   Claude chooses that directory: the category from the seventeen in
+   [workloads/attributes.toml](workloads/attributes.toml), and the mechanism's name for the I/O
+   mechanism, never the use case. Have it say which it chose and why, and confirm before it
+   builds: every case built on the abstract names it by that path, so a later rename touches
+   them all. You need to agree with the reasoning, not to know the vocabulary. Ask for the script
+   built with `aeiou-build --hermetic --twice`, and a parameter file fitted to the capture, then judged
    against the trace. Use Claude Opus 5.5 or a more capable model for this step. (A person can do the same by hand: the builder's language is
    [aeiou-abstract(7)](man/aeiou-abstract.7.md), the shipped scripts are the examples.)
 4. **Judge the abstract against the trace**, at its fitted parameters and against other seeds

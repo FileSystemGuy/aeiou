@@ -6433,7 +6433,7 @@ would no longer be the ratio. A projected ratio printed by datagen: exact for fi
 sample (the sets are known), not for containers without walking every framing, and the
 table above tells a submitter what to expect.
 
-### 3.78 Use cases, benchmark rules, and one id per run: layers that only narrow (discussed with the user 2026-10-21; the points marked *agreed* decided that day, the rest proposed)
+### 3.78 Use cases, benchmark rules, and one id per run: layers that only narrow (discussed with the user 2026-10-21 and 2026-10-22; the points marked *agreed* decided 2026-10-21, the rest 2026-10-22)
 
 **The question (the user's).** Unet3D on an H100 and Unet3D on a B300 are the same I/O
 mechanism with a different batch and a different compute time per step: the GPU's memory sets
@@ -6461,7 +6461,9 @@ hashed parameter files that handle, and what hierarchy does it need?
   (`runner/REFERENCE.md` §2), so `--expect-fingerprint` accepts a run with the wrong step time.
 
 **The design.** Each point says whether the user agreed to it in the discussion (*agreed*:
-decided 2026-10-21) or it is mine and still open (*proposed*).
+decided 2026-10-21) or it is mine and still open (*proposed*). *2026-10-22:* every point
+proposed that day was decided, as the notes in points 8, 9, 11, and 12 say, and points 17 and
+18 were added and decided the same day.
 
 1. *A value in a fragment is one the application decides* (agreed). How storage carries a
    request out (an NFS client's rsize split, the block layer's `max_sectors`) is the system
@@ -6552,7 +6554,7 @@ decided 2026-10-21) or it is mine and still open (*proposed*).
    named for their aggregation and window (`fact.min_samples_per_gpu`, `fact.sum_host_mem`,
    `result.min_gpu_busy_fraction` over the steady state the runner already selects), each
    defined once in `runner/REFERENCE.md`; changing a definition is a recorded decision. The
-   `fact.` and `result.` prefixes (proposed) keep them from colliding with a parameter now or
+   `fact.` and `result.` prefixes (proposed 2026-10-21, decided 2026-10-22) keep them from colliding with a parameter now or
    when the vocabulary grows (the user asked that no parameter take a fact's or result's name):
    a dot is refused in parameter names, so the check holds by construction and `gpus` (V2)
    stays the only reserved name.
@@ -6577,7 +6579,8 @@ decided 2026-10-21) or it is mine and still open (*proposed*).
    numbers), so a rules file stays data, never code. A failed resolve or gate constraint is an
    invalid run, refused before any I/O. A failed result constraint is a valid run that did not
    pass: the run completes, the report is written with each constraint passed or failed, and the
-   exit status is its own (agreed; 3 proposed, unused today beside 0, 1, 2, 130, 141, 143), so a
+   exit status is its own (agreed; 3, decided 2026-10-22: unused today beside 0, 1, 2, 130,
+   141, 143, and below the 126 and up the shell reserves), so a
    driver searching for the largest passing GPU count tells "did not pass" from an error. Rules
    across runs (repeats, medians, the search itself) are the driver's (`mlpstorage`, §3.74);
    a rules file judges one run.
@@ -6604,10 +6607,10 @@ decided 2026-10-21) or it is mine and still open (*proposed*).
     keeps the sizing step, writing the submission.
 
 11. *Values the storage reports* (agreed that `st_blksize` is the system under test's; the
-    mechanism proposed). Python's `BufferedReader` asks for `st_blksize`: 1 MiB on NFS at rsize
+    mechanism proposed 2026-10-21 and decided, as written, 2026-10-22). Python's `BufferedReader` asks for `st_blksize`: 1 MiB on NFS at rsize
     1 MiB, 4 KiB on a local disk. By the interposition test the file system's report is the
     solution's, and pinning it would charge a file system that reports 4 MiB for reads the real
-    application would not issue against it. Proposed: a value source `{"from": "st_blksize"}`
+    application would not issue against it. Decided: a value source `{"from": "st_blksize"}`
     for `hdr_read`, `xfer`, `inv_read`, read by `fstat` on the dataset's root at the gate,
     printed, and reported; the id covers the rule, the report the number. This refines CLOSED
     (§3.48): every system under test sees the same op sequence *as a function of what it
@@ -6622,7 +6625,8 @@ decided 2026-10-21) or it is mine and still open (*proposed*).
     abstract's path relative to aeiou's `workloads/` directory and its `ast_sha256` (the hash of
     the AST's canonical form, `schema/README.md` §1, never of the authoring script), and the
     fragments' and rules file's paths and hashes as provenance. It is generated (by
-    `aeiou-params lock CASE [--rules FILE]`, proposed) and never edited, and it is the file a
+    `aeiou-params lock CASE [--rules FILE]`, proposed 2026-10-21 and decided 2026-10-22 with
+    when it runs, point 17) and never edited, and it is the file a
     run names: at run time it depends on the abstract alone, and the runner refuses an
     abstract whose hash is not the lock's. A lock may hold several runs (a writer and its
     reader), each pinning its own abstract; `aeiou datagen` takes the same lock, so the corpus
@@ -6714,7 +6718,60 @@ decided 2026-10-21) or it is mine and still open (*proposed*).
     and adds a test. Outside aeiou's reach, and for `mlpstorage`'s documentation: a shell
     redirect of the output, and the `--report-json` file, belong off the system under test.
 
-**What changes, if decided.**
+17. *When a lock is made, and by what* (decided 2026-10-22). The user asked why locking is not
+    an unavoidable step at the end of `aeiou-build`, since it fixes every value of a use case
+    and should not be optional. The goal is kept, and the trigger is not the build alone,
+    because a lock's inputs arrive at different times from different owners: the build sees
+    one authoring script, while a lock also needs a use case (written after its abstract,
+    since it sets the abstract's parameters; several per abstract) and, for a benchmark
+    entry, a rules file (the WG's, per round, outside aeiou's tree, where no build can find
+    it). The submission is not in the way: a lock is byte-identical on every site and the
+    required values arrive at run time (point 12). Locking is made unavoidable by what
+    refuses a run or a commit without one:
+
+    | When | What makes or remakes the lock |
+    |---|---|
+    | a new use case is written | its author runs `aeiou-params lock CASE`; CI refuses a committed case without a lock |
+    | the abstract's script is edited and rebuilt | `aeiou-build` re-locks every committed case of that abstract that has a lock, as its last step |
+    | a use case's fragments are edited | its author re-locks; CI refuses a stale lock |
+    | the WG publishes a round's rules | the WG runs `aeiou-params lock CASE --rules FILE` |
+    | a run | the runner refuses an abstract whose hash is not its lock's (point 12) |
+
+    On an abstract's first build there is nothing to re-lock; the build's step matters on a
+    rebuild, when the abstract's hash changes and every lock pinned to the old one goes stale.
+    `aeiou-catalog check` refuses a committed case with no lock, and one whose `ast_sha256` or
+    fragment hashes do not match the files on disk. `aeiou run --case`/`--case-file` reads
+    only a lock, so a use case never locked has nothing a run can name; the raw
+    `AST --params-file` path stays and reports no case (point 12).
+
+    The lock is Python, in the builder, because the build calls it: merging fragments by state
+    and agreement and hashing them is what `aeiou-params` already half does, and a builder
+    that called the runner binary would depend on it. The runner still owns the names of
+    facts and results: `aeiou dry-run` on a lock resolves every constraint's names (point 9),
+    before datagen, so a misspelled one still fails before a long run. A lock carries a
+    `lock_version` and the runner refuses one it does not know.
+
+    *Where an abstract lives.* The lock names its abstract by its path relative to aeiou's
+    `workloads/` (point 13), so a use case lock exists only for an abstract in that tree; a
+    workload kept outside it runs by the raw path and reports no case, which fits use cases
+    being shared and comparable. Because that path is in every lock built on it, the
+    mechanism's directory name is effectively permanent once a case is locked (renaming it
+    re-locks every case). The user's point: an abstract fitted from a trace is placed by
+    Claude, not by a person who knows the vocabulary. The README's path C gains a step: Claude
+    states the category it chose (one of the seventeen in `workloads/attributes.toml`, each
+    with its directory already) and the mechanism's name (named for the I/O mechanism, never
+    the use case, §3.68), with its reasons, and the person confirms before it builds. The
+    person needs to agree with the reasoning, not to know the vocabulary. `aeiou-build`
+    itself creates no directory but an `-o` that does not exist.
+
+18. *Accelerator names* (decided 2026-10-22). A use case directory is named for its job and
+    its accelerator (`unet3d-h100`, `unet3d-b300`); the accelerator names are a vocabulary,
+    an `accelerator` attribute in `workloads/attributes.toml`, each case's record naming one, and
+    `aeiou-catalog check` refuses a name not in it, as it does every other attribute, so
+    `h100` and `H100-80G` cannot both appear. The directory name stays a label; code reads
+    the record.
+
+**What changes, if decided.** *(Decided 2026-10-22; not yet built.)*
 
 - Contract 0.11: the `scale` tag, the dot refused in parameter names, `{"from": …}` values;
   `params_version` 2 with states and a `run` table; a rules schema; both checkers.
@@ -6725,15 +6782,22 @@ decided 2026-10-21) or it is mine and still open (*proposed*).
 - The runner: the lock and the id; `--case-file`, `--case`, `--workloads`,
   `--expect-case-sha`, `--expect-workload-id`, in `run` and `datagen`; facts and results as
   names; constraint evaluation at three times; the new exit status; the header block; the lock
-  embedded in the report; the step-time histograms; the no-I/O test. The builder: `scale`, the
-  name rule, `aeiou-params lock`. `aeiou-catalog check`: one lock per name. Every man page whose
-  flags change.
+  embedded in the report; the step-time histograms; the no-I/O test; a lock's names resolved by
+  `dry-run`; `lock_version`. The builder: `scale`, the name rule, `aeiou-params lock`, and
+  `aeiou-build` re-locking the committed cases of what it built (point 17). `aeiou-catalog
+  check`: one lock per name, no case without a lock, no stale lock, the `accelerator`
+  attribute (point 18). Every man page whose flags change, and the exit status 3 in each
+  page that lists exit statuses.
 - The docs: `PROJECT_BRIEF.md` §5 and §8 (a rules file is WG process: aeiou ships the mechanism
-  and no WG rules file), §6 a new item, CLAUDE.md's invariants (fingerprint and id), §3.74.
+  and no WG rules file), §6 a new item, CLAUDE.md's invariants (fingerprint and id), §3.74;
+  the README's path C, the confirmation of the category and mechanism (point 17). *2026-10-22:*
+  the docs part done that day (the brief's §5 row and item 33, §8's rows, CLAUDE.md, the
+  README); the rest is item 33.
 
-**Open.** The exit status's number (3 proposed); whether accelerator names in use case
+~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
-points (8's prefixes, 11's mechanism, 12's tool name).
+points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points
+8, 9, 11, 12, 17, 18).
 
 **Considered and not done.** Inheritance resolved at run time (editing a parent silently changes
 every child; a flat lock with its own id does not); "last one wins" between fragments (which
@@ -6750,7 +6814,13 @@ the results written into the report (the user's idea, dropped by the user: anyon
 report recomputes it, and a key in a binary the submitter runs can be extracted); hashing the
 run's output data (a read-back pass over the system under test; `aeiou-verify`'s job);
 signatures on locks (the clean `mlpstorage` checkout is the trust anchor; worth it only if
-entries are ever fetched from elsewhere); a full per-GPU step table by default (point 15).
+entries are ever fetched from elsewhere); a full per-GPU step table by default (point 15);
+the lock made only at the end of `aeiou-build` (the user's question, 2026-10-22: the build sees
+neither a use case written after it nor a rules file outside the tree; point 17 keeps the build
+re-locking what it can see); `aeiou lock`, a runner subcommand (proposed 2026-10-22 so the lock
+and its check came from one binary, and withdrawn the same day: once the build calls the lock
+code, a Python builder calling the runner would depend on it, and the runner's `dry-run` checks
+the names anyway).
 
 ## 4. Plan changes
 
