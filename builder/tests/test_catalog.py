@@ -75,15 +75,16 @@ def test_tolerances_relative_absolute_or_either():
 
 def test_measures_of_a_dry_runs_totals():
     hist = lambda *b: {"n": sum(n for _, n in b), "buckets": [list(x) for x in b]}
-    reuse = {"first_touch": {"read": 60, "write": 20}, "read_after_read": hist((4096, 30)), "read_after_write": hist((4096, 10)),
-             "write_after_read": hist(), "write_after_write": hist()}
+    # bytes (DESIGN_REVIEW.md §3.79): 6,000 read first, 3,000 read again, 1,000 read after a write
+    reuse = {"first_touch": {"read": 6000, "write": 2000}, "read_after_read": hist((4096, 3000)), "read_after_write": hist((4096, 1000)),
+             "write_after_read": hist(), "write_after_write": hist(), "whole": 0, "partial": 4000}
     total = {"bytes_read": 300, "bytes_written": 100, "counts": {"open": 4, "close": 4, "lseek": 50, "read": 6, "write": 2},
              "run_length": {"read": {"bytes": hist((65536, 3))}, "write": {"bytes": hist()}},
              "request_size": {"read": hist((4096, 6)), "write": hist((8192, 2))},
-             "reuse_distance_bytes": reuse, "popularity_blocks": {"accesses": 120, "top_1_pct": 0.125}}
+             "reuse_extents": reuse, "popularity_bytes": {"accesses": 12000, "top_1_pct": 0.125}}
     m = catalog.measure(total)
     assert m["read_share"] == 0.75 and m["metadata"] == 1.0          # lseek is neither metadata nor data
-    assert m["reread"] == 0.3 and m["reads_own_writes"] == 1.0       # 30 of 100 block reads read a block again
+    assert m["reread"] == 0.3 and m["reads_own_writes"] == 1.0       # 3,000 of 10,000 bytes read had been read
     assert m["run_length_read"] == 65536 and m["run_length_write"] is None and m["request_size_write"] == 8192
     assert m["skew"] == 0.125
 
@@ -129,6 +130,7 @@ CASE = "checkpointing/dcp-save/cases/toy-6-items"
     ('ast = "dcp_save"', 'ast = "dcp_load"', "is not an abstract of checkpointing/dcp-save"),
     ('params = "params.json"', 'params = "other.json"', "is not a file of the case"),
     ('kind = "example"', 'kind = "example"\nlength = "items_total"', "not an integer parameter of dcp_save"),
+    ('kind = "example"', 'kind = "example"\nmetrics_block = 4096', "`metrics_block` is not an attribute"),     # gone with blocks, DESIGN_REVIEW.md §3.79
 ])
 def test_case_records_are_refused(tree, old, new, message):
     edit(tree / CASE / "case.toml", old, new)
@@ -288,10 +290,10 @@ def test_counts_are_the_cases_length_when_the_check_length_is_shorter():
     length["check"] = 10
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(len(catalog.SEEDS)) as pool:
-        differ = catalog.recheck(str(RUNNER), run, case["gpus"][0], case["block"], recorded, ATTRS, pool)
+        differ = catalog.recheck(str(RUNNER), run, case["gpus"][0], recorded, ATTRS, pool)
         assert not set(differ) & set(catalog.COUNTED), differ
         recorded["datasets"][0]["directories"] += 7
-        differ = catalog.recheck(str(RUNNER), run, case["gpus"][0], case["block"], recorded, ATTRS, pool)
+        differ = catalog.recheck(str(RUNNER), run, case["gpus"][0], recorded, ATTRS, pool)
         assert "datasets" in differ and "ops" not in differ, differ
 
 
@@ -567,7 +569,6 @@ def _rewrite(path, text):
     (lambda t: edit(t / MECH, 'domain = ["ai"]', 'domain = ["ai"]\n[defaults]\nast = "dcp_save"'),
      "[defaults] is for a mechanism with no case; this one has cases"),
     # case.toml
-    (lambda t: edit(t / CASE / "case.toml", 'gpus = [2]', 'gpus = [2]\nmetrics_block = 0'), "metrics_block must be a positive integer (bytes)"),
     (lambda t: edit(t / CASE / "case.toml", '[[run]]\nast = "dcp_save"\nparams = "params.json"', ''),
      "a case runs at least one AST: a [[run]] with ast and params"),
     (lambda t: edit(t / CASE / "case.toml", 'params = "params.json"', 'params = "params.json"\nseed = 3'),
@@ -612,8 +613,8 @@ def test_the_defaults_of_a_mechanism_without_cases(tree, defaults, message):
 
 def test_a_dry_run_that_fails_names_its_command(tmp_path):
     run = {"abstract": {"path": tmp_path / "x.ast.json", "doc": {"name": "x"}}, "params": None}
-    with pytest.raises(catalog.BuildError, match=r"^false dry-run .*x\.ast\.json --gpus 2 --seed 1 --metrics-block 4096 --metrics-json .*: exit 1"):
-        catalog._dry_run("false", run, 2, 4096, 1, None, tmp_path)
+    with pytest.raises(catalog.BuildError, match=r"^false dry-run .*x\.ast\.json --gpus 2 --seed 1 --metrics-json .*: exit 1"):
+        catalog._dry_run("false", run, 2, 1, None, tmp_path)
 
 
 @pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
@@ -626,5 +627,5 @@ def test_a_case_with_a_length_is_measured_down_to_its_check_length():
     m = next(m for m in mechanisms if m["rel"] == str(pathlib.Path(FAISS).parent.parent))
     case = next(c for c in m["cases"] if c["name"] == pathlib.Path(FAISS).name)
     with concurrent.futures.ThreadPoolExecutor(len(catalog.SEEDS)) as pool:
-        s = catalog.shape(str(RUNNER), case["runs"][0], case["gpus"][0], case["block"], case["length"], ATTRS, pool)
+        s = catalog.shape(str(RUNNER), case["runs"][0], case["gpus"][0], case["length"], ATTRS, pool)
     assert s == json.loads((WORKLOADS / FAISS / "shape.json").read_text())["runs"][0]

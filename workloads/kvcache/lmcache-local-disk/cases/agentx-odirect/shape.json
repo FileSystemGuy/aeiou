@@ -1,5 +1,5 @@
 {
-  "shape_version": 2,
+  "shape_version": 3,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -8,7 +8,6 @@
       "params": "case.lock.json",
       "params_sha256": "25fdb0fe20a2783a5a6d58b51cdb58425b0f88db5423e1ed03265cf5c277a42b",
       "gpus": 1,
-      "block": 3145728,
       "seeds": [
         1,
         2,

@@ -23,7 +23,7 @@ sys.path.insert(0, str(BUILDER))
 
 from aeiou import catalog, trace  # noqa: E402
 from aeiou.nodes import BuildError  # noqa: E402
-from aeiou.trace import Instance, LogHist, compare, metrics_of, split_args  # noqa: E402
+from aeiou.trace import Bytes, Extents, Instance, LogHist, compare, metrics_of, split_args  # noqa: E402
 
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 WORKLOADS = ROOT / "workloads"
@@ -37,6 +37,11 @@ def ast_path(name):
 def case_dir(name, case):
     """A case of the mechanism whose AST is `name`: its parameter set and its captures."""
     return ast_path(name).parent / "cases" / case
+
+
+# the dry run's block metrics, which the captures taken before 2026-10-22 (aeiou_metrics 1, 4 KiB
+# blocks) are compared on: they have no extents (DESIGN_REVIEW.md §3.79)
+V1_BLOCKS = ["--metrics-block", "4096"]
 
 
 def total(text, **kw):
@@ -70,6 +75,108 @@ def test_stack_distance_matches_brute_force():
         history.append(key)
 
 
+def _brute(last, t, path, start, end, kind):
+    """One op of the definition (DESIGN_REVIEW.md §3.79): the groups `(distance, bytes, previous
+    kind)` of the bytes it touches again, contiguous bytes last touched by one earlier op in
+    ascending order, each byte taking this op's time as it is passed; and its first touches."""
+    groups, first, at = [], 0, start
+    while at < end:
+        hit = last.get((path, at))
+        if hit is None:
+            first += 1
+            last[(path, at)] = (t, kind)
+            at += 1
+            continue
+        op, prev = hit
+        after = sum(1 for o, _ in last.values() if o > op)
+        n = 0
+        while at < end and last.get((path, at), (None,))[0] == op:
+            last[(path, at)] = (t, kind)
+            at += 1
+            n += 1
+        groups.append((after + n, n, prev))
+    return groups, first
+
+
+def test_extent_distance_matches_brute_force():
+    """As `metrics::tests::extent_distance_matches_brute_force` of the runner."""
+    rnd = random.Random(7)
+    ext, last, owner = Extents(), {}, {}
+    for t in range(1500):
+        path, start = rnd.randrange(3), rnd.randrange(800)
+        end, kind, run = start + 1 + rnd.randrange(200), int(rnd.random() < 0.3), rnd.randrange(30)
+        want = _brute(last, t, path, start, end, kind)
+        hits = []
+        first = ext.touch(path, start, end, kind, run, hits)
+        assert ([(h[0], h[1], h[2]) for h in hits], first) == want, (t, path, start, end)
+        for b in range(start, end):
+            owner[(path, b)] = run
+        if t % 53 == 0:
+            for r in range(30):
+                assert ext.live_of(r) == sum(1 for o in owner.values() if o == r), (t, r)
+    assert ext.compactions > 0
+
+
+def test_popularity_of_bytes():
+    b = Bytes()
+    b.add(1, 0, 100, 3)
+    b.add(1, 50, 150, 1)
+    b.add(2, 0, 10, 2)
+    other = Bytes()
+    other.add(1, 140, 160, 2)
+    b.merge(other)
+    p = b.popularity()
+    assert p["counts"] == [[4, 50], [3, 60], [2, 20], [1, 40]]
+    assert (p["distinct"], p["accesses"], p["max"]) == (170, 460, 4)
+    assert p["top_10_pct"] == pytest.approx(68 / 460)
+    # a gap between pieces and a piece's right part: [100, 140) splits at 120, [205, 300) is new,
+    # [300, 310) splits at 305
+    b.add(1, 120, 200, 1)
+    b.add(1, 300, 310, 1)
+    b.add(1, 205, 305, 2)
+    p = b.popularity()
+    assert p["counts"] == [[4, 60], [3, 65], [2, 125], [1, 65]] and (p["distinct"], p["accesses"]) == (315, 750)
+    assert p["top_10_pct"] == pytest.approx(126 / 750)
+
+
+def test_metrics_refusals(tmp_path, capsys):
+    """`--metrics-block 0` and a document that is no metrics document, each in the frame."""
+    f = tmp_path / "t.txt"
+    f.write_text(SEQUENTIAL)
+    assert trace.main(["metrics", str(f), "--root", "/d", "--metrics-block", "0"]) == 2
+    assert "--metrics-block must be at least 1" in capsys.readouterr().err
+    bad, good = tmp_path / "bad.json", tmp_path / "good.json"
+    bad.write_text('{"aeiou_metrics": 3}')
+    good.write_text(json.dumps(total(SEQUENTIAL)))
+    assert trace.main(["compare", str(bad), str(good)]) == 1
+    assert "not an aeiou_metrics: 2 document (or version 1, a capture's from before 2026-10-22)" in capsys.readouterr().err
+
+
+# DESIGN_REVIEW.md §3.79, as `tests/metrics.rs`'s `extents_by_hand`: a 1 MiB file read in four
+# fills, its first fill alone, then all of it again
+BY_HAND = "\n".join(
+    [f'1 openat(AT_FDCWD, "/d/f", O_RDONLY) = 3</d/f>'] + [f'1 read(3</d/f>, ""..., 262144) = 262144'] * 4 + ['1 close(3</d/f>) = 0']
+    + [f'1 openat(AT_FDCWD, "/d/f", O_RDONLY) = 3</d/f>', '1 read(3</d/f>, ""..., 262144) = 262144', '1 close(3</d/f>) = 0']
+    + [f'1 openat(AT_FDCWD, "/d/f", O_RDONLY) = 3</d/f>'] + [f'1 read(3</d/f>, ""..., 262144) = 262144'] * 4 + ['1 close(3</d/f>) = 0'])
+
+
+def test_extents_by_hand():
+    k, m = 1 << 10, 1 << 20
+    d = total(BY_HAND)
+    assert (d["aeiou_metrics"], d["block"]) == (2, None)
+    t = d["total"]
+    assert "reuse_distance_bytes" not in t and "popularity_blocks" not in t
+    r = t["reuse_extents"]
+    assert r["first_touch"] == {"read": m, "write": 0}
+    assert r["read_after_read"]["n"] == m + 256 * k and r["read_after_read"]["buckets"] == [[256 * k, 256 * k], [m, m]]
+    assert (r["whole"], r["partial"]) == (m, 256 * k)
+    p = t["popularity_bytes"]
+    assert p["counts"] == [[3, 256 * k], [2, 768 * k]] and (p["distinct"], p["accesses"], p["max"]) == (m, 3 * 256 * k + 2 * 768 * k, 3)
+    b = total(BY_HAND, block=4096)
+    assert b["block"] == 4096 and b["total"]["popularity_blocks"]["counts"] == [[3, 64], [2, 192]]
+    assert b["total"]["reuse_extents"] == r
+
+
 def test_split_args():
     assert split_args('3</d/a, b>, "x, \\"y\\"", 10') == ["3</d/a, b>", '"x, \\"y\\""', "10"]
     assert split_args('AT_FDCWD</cwd>, "p", O_RDONLY|O_CLOEXEC') == ["AT_FDCWD</cwd>", '"p"', "O_RDONLY|O_CLOEXEC"]
@@ -100,7 +207,7 @@ SEQUENTIAL = """
 def test_positions_runs_and_reuse():
     d = total(SEQUENTIAL)
     t = d["total"]
-    assert d["aeiou_metrics"] == 1 and d["source"] == "strace" and d["order"] == "completion"
+    assert d["aeiou_metrics"] == 2 and d["source"] == "strace" and d["order"] == "completion"
     # only /d counts; the failed stat is an op, as an expected error is in the abstract
     assert t["counts"] == {"close": 1, "fstat": 1, "lseek": 1, "open": 1, "read": 6, "stat": 1}
     assert t["ops"] == 11 and t["bytes_read"] == 4096 + 4096 + 1808 + 100 + 200
@@ -110,11 +217,19 @@ def test_positions_runs_and_reuse():
     assert sorted(map(tuple, t["run_length"]["read"]["bytes"]["buckets"])) == [(96, 1), (192, 1), (8192, 1)]
     assert t["run_length"]["read"]["ops"]["buckets"] == [[1, 2], [3, 1]]
     assert t["run_length"]["read"]["multi_op_bytes"] == 10000
+    # extents: 10,000 bytes first; the 100 at 0 again after the two fills since (5,904 bytes)
+    # plus their own, the 200 at 8192 after those 100 plus their own; both re-read part of
+    # the first pass, which is left with 9,700 bytes
+    r = t["reuse_extents"]
+    assert r["first_touch"] == {"read": 10000, "write": 0}
+    assert r["read_after_read"]["buckets"] == [[LogHist.lower(300), 200], [LogHist.lower(6004), 100]]
+    assert (r["whole"], r["partial"]) == (0, 300)
+    assert t["popularity_bytes"]["counts"] == [[2, 300], [1, 9700]] and t["popularity_objects"]["counts"] == [[6, 1]]
     # blocks 0, 1, 2 first; block 0 again after three distinct blocks, block 2 after two
-    r = t["reuse_distance_bytes"]
-    assert r["first_touch"] == {"read": 3, "write": 0}
-    assert r["read_after_read"]["buckets"] == [[2 * 4096, 1], [3 * 4096, 1]]
-    assert t["popularity_blocks"]["counts"] == [[2, 2], [1, 1]] and t["popularity_objects"]["counts"] == [[6, 1]]
+    b = total(SEQUENTIAL, block=4096)["total"]
+    assert b["reuse_distance_bytes"]["first_touch"] == {"read": 3, "write": 0}
+    assert b["reuse_distance_bytes"]["read_after_read"]["buckets"] == [[2 * 4096, 1], [3 * 4096, 1]]
+    assert b["popularity_blocks"]["counts"] == [[2, 2], [1, 1]]
     # tid 101 appears with no clone in the trace: noted, and harmless here
     assert d["notes"] == {"threads_without_clone": 1}
 
@@ -145,11 +260,12 @@ def test_threads_share_positions_and_contexts_own_runs():
     t = d["total"]
     assert t["counts"] == {"close": 1, "fsync": 1, "mkdir": 1, "open": 2, "read": 1, "readdir": 1, "unlink": 1, "write": 4}
     assert t["bytes_written"] == 4 * 4096 and d["contexts"] == 2
-    # one shared position: the four writes are blocks 0..3, each a first touch
-    r = t["reuse_distance_bytes"]
-    assert r["first_touch"] == {"read": 0, "write": 4}
-    # the read of block 0 comes four distinct blocks after its write
-    assert r["read_after_write"]["buckets"] == [[4 * 4096, 1]]
+    # one shared position: the four writes are 16 KiB first touched
+    r = t["reuse_extents"]
+    assert r["first_touch"] == {"read": 0, "write": 4 * 4096}
+    # the read of the first 4 KiB comes 12 KiB after its write, plus its own; it re-reads all of
+    # thread 201's first run
+    assert r["read_after_write"]["buckets"] == [[4 * 4096, 4096]] and (r["whole"], r["partial"]) == (4096, 0)
     # a run belongs to the thread that issues it: 201 wrote 0 and 2 (two runs), 200 wrote 1 and 3
     assert t["run_length"]["write"]["ops"]["buckets"] == [[1, 4]]
 
@@ -207,28 +323,28 @@ FORKED = """
 
 def test_instances_are_process_trees():
     one = total(FORKED)["total"]
-    # one instance: 402's read of block 0 re-reads 401's
-    assert one["reuse_distance_bytes"]["first_touch"]["read"] == 2 and one["reuse_distance_bytes"]["read_after_read"]["n"] == 1
+    # one instance: 402's read of the first 4 KiB re-reads 401's, part of 401's run
+    r = one["reuse_extents"]
+    assert r["first_touch"]["read"] == 2 * 4096 and r["read_after_read"]["n"] == 4096 and (r["whole"], r["partial"]) == (0, 4096)
     d = total(FORKED, instance_roots=[401, 402])
     two = d["total"]
     # two instances: no reuse within either; the sharing shows as popularity; the parent is outside
     assert d["instances"] == 2 and two["counts"] == {"open": 2, "read": 3}
-    assert two["reuse_distance_bytes"]["first_touch"]["read"] == 3 and two["reuse_distance_bytes"]["read_after_read"]["n"] == 0
-    assert two["popularity_blocks"]["counts"] == [[2, 1], [1, 1]]
+    assert two["reuse_extents"]["first_touch"]["read"] == 3 * 4096 and two["reuse_extents"]["read_after_read"]["n"] == 0
+    assert two["popularity_bytes"]["counts"] == [[2, 4096], [1, 4096]]
     assert d["notes"]["calls_outside_instances"] == 1
 
 
-def test_exclude_sampling_and_other_roots():
+def test_exclude_and_other_roots():
     lines = ["1 openat(AT_FDCWD, \"/d/.aeiou-dataset.json\", O_RDONLY) = 3</d/.aeiou-dataset.json>", "1 read(3</d/.aeiou-dataset.json>, \"\"..., 100) = 100"]
     for i in range(400):
         lines.append(f'1 pread64(4</d/big>, ""..., 4096, {4096 * (i % 100)}) = 4096')
     d = metrics_of(lines, ["/d"], exclude=[".aeiou*"])
     assert d["total"]["counts"] == {"read": 400} and d["notes"] == {"descriptors_without_open": 1}
-    exact = d["total"]["reuse_distance_bytes"]
-    assert exact["first_touch"]["read"] == 100 and exact["read_after_read"]["buckets"] == [[LogHist.lower(100 * 4096), 300]]
-    s = metrics_of(lines, ["/d"], sample=4, exclude=[".aeiou*"])["total"]["reuse_distance_bytes"]
-    # one block in four by hash, scaled: about the same counts, distances within a bucket or two
-    assert 40 <= s["first_touch"]["read"] <= 180 and s["read_after_read"]["n"] == 3 * s["first_touch"]["read"]
+    # four passes over 400 KiB, each a run that re-reads the one before whole
+    r = d["total"]["reuse_extents"]
+    assert r["first_touch"]["read"] == 100 * 4096 and r["read_after_read"]["buckets"] == [[LogHist.lower(100 * 4096), 300 * 4096]]
+    assert (r["whole"], r["partial"]) == (300 * 4096, 0)
     assert metrics_of(lines, ["/elsewhere"])["total"]["ops"] == 0
 
 
@@ -248,6 +364,33 @@ def test_compare_distances(tmp_path, capsys):
     assert trace.main(["compare", str(pa), str(pb)]) == 0
     assert trace.main(["compare", str(pa), str(pb), "--max-distance", "0.1", "--only", "request size"]) == 1
     assert "largest distance 0.333" in capsys.readouterr().out
+
+
+def test_compare_takes_the_sections_both_documents_have(tmp_path, capsys):
+    """Extent rows where both documents have extents, block rows where both have blocks
+    (a capture taken before 2026-10-22 has only those), and a pair with neither refused
+    (DESIGN_REVIEW.md §3.79)."""
+    ext, blk = total(BY_HAND), total(BY_HAND, block=4096)
+    old = {**blk, "aeiou_metrics": 1, "total": {k: v for k, v in blk["total"].items() if k not in ("reuse_extents", "popularity_bytes")}}
+    names = lambda a, b: [r[0] for r in compare(a["total"], b["total"])]
+    both = names(ext, blk)
+    assert "extent reuse: partial re-reads / bytes read again" in both and "popularity, bytes: accesses to the top 1 %" in both
+    assert "extent reuse distance, read after read (p50 / p90 / p99)" in both
+    assert not any(n.startswith(("reuse", "popularity, blocks")) for n in both)
+    legacy = names(old, blk)
+    assert "reuse: read after read / block reads" in legacy and not any(n.startswith("extent") or n.startswith("popularity, bytes") for n in legacy)
+    assert trace.tolerance_class("extent reuse distance, read after read (p50 / p90 / p99)") == "extent reuse distance"
+    assert trace.tolerance_class("extent reuse: partial re-reads / bytes read again") == "extent reuse"
+    with pytest.raises(BuildError, match="no locality metrics in common"):
+        compare(old["total"], ext["total"])
+    # two block sizes are refused where only the blocks are in common
+    pa, pb, pc = tmp_path / "a.json", tmp_path / "b.json", tmp_path / "c.json"
+    pa.write_text(json.dumps(old))
+    pb.write_text(json.dumps(total(BY_HAND, block=8192)))
+    pc.write_text(json.dumps({**total(BY_HAND, block=8192), "block": 8192}))
+    assert trace.main(["compare", str(pa), str(pb)]) == 1
+    assert "block sizes differ (4096 and 8192)" in capsys.readouterr().err
+    assert trace.main(["compare", str(pb), str(pc)]) == 0
 
 
 def _strace_works():
@@ -294,9 +437,9 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
         assert t["counts"].get(kind, 0) == d["counts"].get(kind, 0), kind
     assert (t["bytes_read"], t["bytes_written"]) == (d["bytes_read"], d["bytes_written"])
     assert t["request_size"] == d["request_size"]
-    for unit in ("popularity_blocks", "popularity_objects"):
+    for unit in ("popularity_bytes", "popularity_objects"):
         assert t[unit]["counts"] == [list(c) for c in d[unit]["counts"]], unit
-    first = lambda m: sum(m["reuse_distance_bytes"]["first_touch"].values())
+    first = lambda m: sum(m["reuse_extents"]["first_touch"].values())
     assert first(t) == first(d)
     # runs belong to a context: a thread there, a sub-actor here, the same ops either way. A pool
     # thread runs sub-actor k of every fork in turn (runner/REFERENCE.md §4), so when a fork's last
@@ -312,7 +455,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     # round-robin): the shares are close, not equal. The distance histograms are not bounded
     # here: on these configurations a kind has a few dozen samples, and on a host with two
     # cores the real interleaving of three sub-actors put one of them at 0.6 (CI, 2026-10-01).
-    rows = [r for r in compare(t, d) if r[0].startswith("reuse") and not r[0].startswith("reuse distance")]
+    rows = [r for r in compare(t, d) if r[0].startswith("extent reuse:")]
     assert rows and all(r[3] is None or r[3] <= 0.5 for r in rows), rows
 
     # the `trace` node (DESIGN_REVIEW.md §3.58): the strace exported as a trace file, an
@@ -336,7 +479,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     assert trace.main(["metrics", str(exported), "-o", str(tmp_path / "ex.json")]) == 0
     ex = json.loads((tmp_path / "ex.json").read_text())["total"]
     assert nd == ex, "the runner's walk of the file and the Python reader's disagree"
-    strip = lambda m: {k: v for k, v in m.items() if k not in ("reuse_distance_bytes", "run_length")} if name == "diskann_search" else m
+    strip = lambda m: {k: v for k, v in m.items() if k not in ("reuse_extents", "run_length")} if name == "diskann_search" else m
     assert strip(t) == strip(nd), "the trace node's dry run is not the strace's metrics"
     fp = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("fingerprint "))
     # one thread per lane under sync; one task per lane on an event loop, a group's members
@@ -357,7 +500,7 @@ def test_small_file_abstract_matches_the_trace_of_the_real_loader(tmp_path):
     case = case_dir("file_per_sample", "imagefolder-jpeg")
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("file_per_sample")), "--gpus", "1",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry), *V1_BLOCKS], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     root_listing = {"open": 1, "fstat": 1, "readdir": 1, "close": 1}
@@ -380,7 +523,7 @@ def test_large_sample_abstract_matches_the_trace_of_np_load(tmp_path, which, reu
     case = case_dir("npy_per_sample", f"npy-{which.lower()}")
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("npy_per_sample")), "--gpus", "1",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry), *V1_BLOCKS], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     listing = {"open": 1, "fstat": 1, "readdir": 1, "close": 1}       # glob lists the root too; the abstract lists the sample directories (one here)
@@ -400,7 +543,7 @@ def test_checkpoint_write_abstract_matches_the_trace_of_dcp_save(tmp_path):
     case = case_dir("dcp_save", "toy-6-items")
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("dcp_save")), "--gpus", "2",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry), *V1_BLOCKS], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     not_modeled = {
@@ -425,7 +568,7 @@ def test_checkpoint_restore_abstract_matches_the_trace_of_dcp_load(tmp_path, whi
     case = case_dir("dcp_load", which)
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("dcp_load")), "--gpus", "2",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry), *V1_BLOCKS], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((case / "captures/2026-10-01/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     not_modeled = {"stat": 2}   # per rank, the parent of the checkpoint directory (and an `access`, which the trace metrics do not count)
@@ -480,7 +623,7 @@ def test_diskann_search_abstract_matches_the_trace(tmp_path, which, reads_off):
     case = case_dir("diskann_search", f"sift1m-{which}")
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("diskann_search")), "--gpus", "1",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry), *V1_BLOCKS], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((case / "captures/2026-10-02/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
@@ -503,7 +646,7 @@ def test_diskann_build_abstract_matches_the_trace(tmp_path):
     case = case_dir("diskann_build", "sift1m-13-shards")
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("diskann_build")), "--gpus", "1",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry), *V1_BLOCKS], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((case / "captures/2026-10-02/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     for k in ("read", "write", "lseek"):
@@ -543,7 +686,7 @@ def test_kv_cache_abstract_matches_the_trace_of_vllm_with_lmcache(tmp_path):
     assert d["request_size"]["read"]["buckets"][0][0] == d["request_size"]["write"]["buckets"][0][0] == 3145728
     assert set(tc) - set(dc) == {"mkdir", "stat"}         # of the cache directory, once at start
     # no chunk is written twice, in either: a request has one continuation (one `reuse` distance)
-    assert t["reuse_distance_bytes"]["write_after_write"]["n"] == d["reuse_distance_bytes"]["write_after_write"]["n"] == 0
+    assert t["reuse_distance_bytes"]["write_after_write"]["n"] == d["reuse_extents"]["write_after_write"]["n"] == 0
 
 
 def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path):
@@ -660,8 +803,7 @@ def test_kv_cache_direct_path_is_the_calls_of_lmcaches_odirect_trace(tmp_path):
     case = case_dir("lmcache_local_disk", "agentx-odirect")
     dry = tmp_path / "dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(ast_path("lmcache_local_disk")), "--gpus", "1", "--seed", "1",
-                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry),
-                        "--metrics-sample", "64"], capture_output=True, text=True)       # the counts only, which sampling leaves exact
+                        "--params-file", str(case / "params.json"), "--metrics-json", str(dry)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     t, d = json.loads((case / "captures/replay-2gib-pool/trace.metrics.json").read_text())["total"], json.loads(dry.read_text())["total"]
     tc, dc = t["counts"], d["counts"]
@@ -1033,8 +1175,8 @@ def test_an_append_to_a_file_the_trace_made_starts_at_its_end():
     d = metrics_of(lines, ["/d"])
     t = d["total"]
     assert d["notes"] == {}
-    assert t["reuse_distance_bytes"]["first_touch"] == {"read": 0, "write": 4}
-    assert t["popularity_blocks"]["counts"] == [[1, 4]]
+    assert t["reuse_extents"]["first_touch"] == {"read": 0, "write": 4 * 4096}
+    assert t["popularity_bytes"]["counts"] == [[1, 4 * 4096]]
     header, events = trace.export_of(lines, "/d")
     assert [e["offset"] for e in events if e["op"] == "write"] == [0, 4096, 8192, 12288]
     assert header["notes"] == {"append_positions_resolved": 4}

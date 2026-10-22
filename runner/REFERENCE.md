@@ -1506,8 +1506,12 @@ application yet. The JSON form carries `"source": "dry-run"` here and `"strace"`
 while building and confirmed by the user the same day (decided 2026-10-01).**
 
 ```
-aeiou dry-run AST --gpus G --metrics [--metrics-block BYTES] [--metrics-sample N] [--metrics-json FILE]
+aeiou dry-run AST --gpus G --metrics [--metrics-block BYTES] [--metrics-json FILE]
 ```
+
+*Revised 2026-10-22 (`DESIGN_REVIEW.md` §3.79): reuse and popularity are taken over extents,
+byte ranges, not blocks; the block rows below are computed only when `--metrics-block` asks,
+for the captures taken before; `--metrics-sample` is gone.*
 
 Nothing here touches the op stream or the fingerprint: counts, bytes, controls, and the
 fingerprint are the same with and without the flag (`tests/metrics.rs`).
@@ -1516,8 +1520,8 @@ fingerprint are the same with and without the flag (`tests/metrics.rs`).
 metrics have something to stand on:
 
 - *Order-free*, sums over the op multiset, the same under every interleaving and summed
-  over all instances: the read/write mix, request sizes, popularity of blocks and of
-  objects, `parallel` fan-out.
+  over all instances: the read/write mix, request sizes, popularity of bytes (of blocks
+  under `--metrics-block`) and of objects, `parallel` fan-out.
 - *Order-dependent*: reuse distance, sequential runs, dependency depth. These are taken
   over **one actor instance at a time**, in the **round-robin order** of its concurrent
   sub-actors, and their histograms are then summed over instances. Reuse *between*
@@ -1541,10 +1545,15 @@ alone it is in the inline order (found 2026-10-08).
 |---|---|
 | mix | data ops (`read` + `write`) as a share of all ops; reads as a share of data ops and of data bytes |
 | request size | the requested `len` of every `read` and `write`, per kind (an EOF read counts with its `len`) |
-| block | `--metrics-block` bytes (default 4096) of one path; an op touches every block its transferred bytes overlap (a read's expected count, a write's `len`) |
-| reuse distance | per block access: the distinct blocks the instance has touched since its last access to this block, this block included, times the block size. It is the smallest LRU cache, in bytes, in which the access is a hit (Mattson stack distance). Four histograms by (previous access, this access): read after read, read after write (the write-then-read lag), write after read, write after write. An access with no earlier one is a *first touch*, counted per kind |
+| transferred bytes | an op touches the bytes it transfers, `[offset, offset + n)` of its path, `n` a read's expected count or a write's `len` |
+| piece | per instance, a byte range of one path last touched by one op, with that op's time and kind; an op splits the pieces it overlaps at its bounds, and its bytes take its time |
+| reuse distance (extents) | the bytes an op touches again are taken in ascending offset order, in groups of contiguous bytes last touched by one earlier op; a group's distance is the distinct bytes the instance touched after that op, this op's earlier groups included, plus the group's own bytes: the smallest LRU cache, in bytes, in which the group hits (Mattson stack distance at byte granularity). Four histograms by (previous access, this access), read after read, read after write (the write-then-read lag), write after read, write after write, **weighted by bytes**; bytes with no earlier access are *first touches*, per kind, in bytes |
+| whole and partial re-reads | an *extent* is the bytes one run (below) last touched; when a run ends, each earlier extent its reads touched again is *whole* if none of its bytes is left untouched since and *partial* otherwise, and the bytes the run read from it are added to `whole` or `partial` |
+| popularity of bytes | accesses per byte over all instances, as counts of counts in bytes; the text report gives the share of accessed bytes going to the most accessed 0.1 %, 1 %, and 10 % of the bytes |
+| block (`--metrics-block`) | `--metrics-block` bytes of one path; an op touches every block its transferred bytes overlap |
+| reuse distance (blocks, `--metrics-block`) | per block access: the distinct blocks the instance has touched since its last access to this block, this block included, times the block size. It is the smallest LRU cache, in bytes, in which the access is a hit (Mattson stack distance). Four histograms by (previous access, this access): read after read, read after write (the write-then-read lag), write after read, write after write. An access with no earlier one is a *first touch*, counted per kind |
 | run length | a run is the consecutive ops of one kind by one sequential context (a main line or one sub-actor) on one path, each starting at the offset where the previous ended; it ends at a gap, at `close` of the path, or with the context. Histograms of bytes per run and ops per run, and the bytes in runs of two or more ops |
-| popularity | accesses per block (block accesses) and per object (data ops), over all instances, as counts of counts; the text report gives the share of accesses going to the most popular 0.1 %, 1 %, and 10 % |
+| popularity (blocks, `--metrics-block`; objects) | accesses per block (block accesses) and per object (data ops), over all instances, as counts of counts; the text report gives the share of accesses going to the most popular 0.1 %, 1 %, and 10 % |
 | fan-out | the width of every `parallel` |
 | depth | consecutive `parallel`s issued by one context with no op and no control (`compute`, `barrier`, `put`, `take`) of its own between them: the dependent rounds of a beam search |
 
@@ -1552,14 +1561,21 @@ Histograms of bytes use quarter-octave buckets (a bucket's lower bound keeps the
 top three bits, so powers of two are exact and a bound is at most 25 % low); the quantiles
 printed are bucket lower bounds. Fan-out and depth are exact.
 
-**Memory and sampling.** The pass keeps one entry per distinct block an instance touches
+**Memory.** ~~The pass keeps one entry per distinct block an instance touches
 (its last access time, in a Fenwick tree for the distance) and one count per distinct block
 and object overall. That is per-block state, which the runner never keeps; this is an
 analysis pass and does not run with I/O. `--metrics-sample N` keeps the blocks and objects
 whose hash is 0 mod `N` and scales distances and counts by `N` (SHARDS); the pass stops
 with a message naming the flag at 2^26 entries. On `lmcache_local_disk` (18.0M block
 accesses) one in 16 gave the same percentiles as exact in 0.25 s against 5.8 s. Sampling
-cannot resolve distances under `N` blocks.
+cannot resolve distances under `N` blocks.~~ *(2026-10-22)* The pass keeps the instance's
+pieces (an ordered map per path) and a Fenwick tree over op times weighted by the bytes last
+touched at each, so the bytes touched after a time are a suffix sum; and the accessed bytes
+of all instances with their access counts, as pieces too. That is per-range state, which the
+runner never keeps; this is an analysis pass and does not run with I/O. The pieces grow with
+how fragmented the accesses are, not with the bytes: `unet3d-h100` (about 490 GB read by one
+instance in 1 MiB fills) is about half a million. The pass stops at 2^26 pieces, or 2^26
+blocks under `--metrics-block`.
 
 **What it shows on the committed abstracts** (small configurations, seed 1):
 
@@ -1583,7 +1599,8 @@ trace has a real order; the comparison is between distributions, and the per-thr
 unordered here; a server-side cache sees all instances, so its distances are larger than
 these by about the instance count for disjoint work, and smaller for shared hot blocks.
 (3) A run is tracked per path, not per open handle. (4) `--metrics-json` writes format
-`aeiou_metrics: 1` (the histograms in full, per template and in total, and, since
+~~`aeiou_metrics: 1`~~ `aeiou_metrics: 2` since 2026-10-22 (`reuse_extents`, `popularity_bytes`;
+`block` null and no block sections without `--metrics-block`) (the histograms in full, per template and in total, and, since
 2026-10-14, `datasets`: each dataset's projection as `dry-run` prints it, which
 `aeiou-catalog` records in a case's shape and its description quotes); ~~the JSON report of
 a run is a separate, later item and may absorb it.~~ the JSON report of a run (§12, built

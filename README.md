@@ -339,7 +339,7 @@ A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 m
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
 LMCache (item 21: `keep` measured, buffered and `O_DIRECT` both traced; the buffered replay corrected 2026-10-08 and the main agent's and sub-agents' prompts modelled apart, its pair not yet accepted; run again at three times the engine's KV pool, that pair accepted, the engine and CPU tier a fixed reference, item 24). Built and tested: everything described above, the nine backends, the
 multi-host coordinator (two ranks on `localhost`), the limit checks, the cold-start
-controls, the JSON report, the locality metrics on both sides with tolerances, the `trace`
+controls, the JSON report, the locality metrics on both sides with tolerances (over extents, byte ranges, since 2026-10-22, `DESIGN_REVIEW.md` §3.79), the `trace`
 node under every backend, the option layers, the usage-error frame, and `datagen` across
 hosts with `O_DIRECT` (each host its slice of the ids, one manifest once every host has
 reported; the launcher takes host files and `pdsh`-style ranges), and `aeiou-datagen`, the
@@ -414,6 +414,9 @@ Not built, in rough order of interest:
 - Retiring `aeiou-datagen`, the Python writer, now that `aeiou datagen` writes every format
   class (item 32, decided 2026-10-14): deprecated meanwhile, no new features, the byte
   reference in tests until then.
+- Recapturing the seventeen committed traces as extent metrics (item 34, 2026-10-22), until
+  which they are judged on the block metrics `--metrics-block` keeps; and the extent metrics
+  split by byte role, a format's framing against its payload (item 35).
 
 ## License
 

@@ -300,24 +300,24 @@ classes = [
 ]
 
 [attribute.reread]
-meaning = "Block reads that read a block again, over all block reads. A training job's value is its epoch count's, a parameter."
+meaning = "Bytes read that the instance had read before, over all bytes read (extents, DESIGN_REVIEW.md §3.79). A training job's value is its epoch count's, a parameter."
 source = "measured"
 level = "case"
 unit = "share"
 tolerance = { absolute = 0.02 }
 classes = [
-  { name = "repeated", min = 0.5, meaning = "Half the reads or more read a block again." },
+  { name = "repeated", min = 0.5, meaning = "Half the bytes read or more had been read before." },
   { name = "some", min = 0.05, meaning = "5 % to 50 %." },
   { name = "none", meaning = "Under 5 %." },
 ]
 
 [attribute.skew]
-meaning = "The share of block accesses on the busiest 1 % of blocks."
+meaning = "The share of the accessed bytes that go to the most accessed 1 % of the bytes (extents, DESIGN_REVIEW.md §3.79)."
 source = "measured"
 level = "case"
 unit = "share"
 tolerance = { absolute = 0.02 }
 classes = [
-  { name = "skewed", min = 0.1, meaning = "10 % or more of the accesses on 1 % of the blocks." },
+  { name = "skewed", min = 0.1, meaning = "10 % or more of the accessed bytes on 1 % of the bytes." },
   { name = "uniform", meaning = "Under 10 %." },
 ]

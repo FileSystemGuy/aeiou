@@ -1,5 +1,5 @@
 {
-  "shape_version": 2,
+  "shape_version": 3,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -8,7 +8,6 @@
       "params": "case.lock.json",
       "params_sha256": "f4f24bc5d50606a0f591241408933cab3fb4028d07369d7862e48e6bc4d931ac",
       "gpus": 2,
-      "block": 4096,
       "seeds": [
         1,
         2,
@@ -66,12 +65,12 @@
           "class": "no"
         },
         "reread": {
-          "value": 0.177346,
+          "value": 0.176277,
           "spread": 0.0,
           "class": "some"
         },
         "skew": {
-          "value": 0.0414861,
+          "value": 0.0412104,
           "spread": 0.0,
           "class": "uniform"
         }

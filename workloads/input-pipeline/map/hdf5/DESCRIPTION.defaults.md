@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-DataLoader over HDF5 containers of fixed-size rows: open, metadata reads, one positioned row read, close per sample. In the catalog it is `input-pipeline/map/hdf5`: application `h5py`, format `hdf5`, phase training, domain ai. No case yet: the abstract at its defaults, at 1 GPU. `train` holds 1,000,000 samples, 512 a file (183.1 GiB in 1,954 files), consumed in a keyed shuffle without replacement; sizes always 192 KiB. The one `gpu` actor (one per GPU): 8 loader workers build 500 batches, up to 2 ahead each; per batch, 32 times: on the file holding the next sample of `train`, open, fstat, read 8 bytes at an offset, read 48 bytes at an offset twice, read 512 bytes at an offset twice, read 544 bytes at an offset, read 328 bytes at an offset, read 512 bytes at an offset, read `size(s)` at an offset, close; in phase `train`, 500 times: take a batch from `batches`; compute for 105 ms; a barrier with every GPU. Measured by dry run at 1 GPU (192,000 ops: 144,000 read, 16,000 close, 16,000 fstat, 16,000 open; 3.0 GiB read, nothing written): read runs: small (192 KiB); read requests: small (192 KiB); share of bytes read: read-only (100%); metadata ops per data op: low (0.333); reads its own writes: no; share of block reads that are re-reads: some (13.9%); share of accesses to the hottest 1% of blocks: skewed (14.7%).
+DataLoader over HDF5 containers of fixed-size rows: open, metadata reads, one positioned row read, close per sample. In the catalog it is `input-pipeline/map/hdf5`: application `h5py`, format `hdf5`, phase training, domain ai. No case yet: the abstract at its defaults, at 1 GPU. `train` holds 1,000,000 samples, 512 a file (183.1 GiB in 1,954 files), consumed in a keyed shuffle without replacement; sizes always 192 KiB. The one `gpu` actor (one per GPU): 8 loader workers build 500 batches, up to 2 ahead each; per batch, 32 times: on the file holding the next sample of `train`, open, fstat, read 8 bytes at an offset, read 48 bytes at an offset twice, read 512 bytes at an offset twice, read 544 bytes at an offset, read 328 bytes at an offset, read 512 bytes at an offset, read `size(s)` at an offset, close; in phase `train`, 500 times: take a batch from `batches`; compute for 105 ms; a barrier with every GPU. Measured by dry run at 1 GPU (192,000 ops: 144,000 read, 16,000 close, 16,000 fstat, 16,000 open; 3.0 GiB read, nothing written): read runs: small (192 KiB); read requests: small (192 KiB); share of bytes read: read-only (100%); metadata ops per data op: low (0.333); reads its own writes: no; share of bytes read that are re-reads: none (1.18%); share of accessed bytes on the most accessed 1% of bytes: uniform (2.16%).
 
 ## The account
 
@@ -69,5 +69,5 @@ Ops in all (seed 1): 192,000: 144,000 `read`, 16,000 `close`, 16,000 `fstat`, 16
 | `read_share` (share of bytes read) | read-only | 100% |
 | `metadata` (metadata ops per data op) | low | 0.333 |
 | `reads_own_writes` (reads its own writes) | no | no |
-| `reread` (share of block reads that are re-reads) | some | 13.9% |
-| `skew` (share of accesses to the hottest 1% of blocks) | skewed | 14.7% |
+| `reread` (share of bytes read that are re-reads) | none | 1.18% |
+| `skew` (share of accessed bytes on the most accessed 1% of bytes) | uniform | 2.16% |

@@ -113,10 +113,8 @@ class tolerances built in are the repository's defaults: 0.05 for `mix`, `ops`,
   Resolve relative paths against *DIR* when the trace does not say (no `-y`).
 - **--metrics-block** *BYTES*
 
-  The block size of the reuse-distance and popularity units. Default 4096.
-- **--metrics-sample** *N*
-
-  Keep one block and one object in *N*, chosen by hash, and scale. Default 1, exact.
+  The block metrics too, reuse and popularity in blocks of *BYTES*, as captures taken
+  before 2026-10-22 have them; the extent metrics, over byte ranges, are always there.
 - **--instance-root** *PID*
 
   The process tree under *PID* is one instance; what is under none is left out.

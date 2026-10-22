@@ -44,8 +44,8 @@ MEASURE_WORDS = {
     "run_length_read": "read runs", "run_length_write": "write runs",
     "request_size_read": "read requests", "request_size_write": "write requests",
     "read_share": "share of bytes read", "metadata": "metadata ops per data op",
-    "reads_own_writes": "reads its own writes", "reread": "share of block reads that are re-reads",
-    "skew": "share of accesses to the hottest 1% of blocks",
+    "reads_own_writes": "reads its own writes", "reread": "share of bytes read that are re-reads",
+    "skew": "share of accessed bytes on the most accessed 1% of bytes",
 }
 
 _ARITH = {"add": "+", "sub": "−", "mul": "×", "div": "div", "mod": "mod"}

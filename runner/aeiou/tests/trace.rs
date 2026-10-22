@@ -155,7 +155,7 @@ fn dry_run_walks_in_line_order_with_lane_and_ordinal_as_indices() {
     assert!(r.total.compute_ns > 0);
 
     // the metrics walk sees the same ops, one group of three as a fan-out, a lane as a context
-    let m = dryrun::run_with(model, 1, None, Some(aeiou::metrics::Opts { block: 4096, sample: 1 })).unwrap();
+    let m = dryrun::run_with(model, 1, None, Some(aeiou::metrics::Opts::default())).unwrap();
     assert_eq!(m.total.fingerprint, r.total.fingerprint);
     let mm = m.total.metrics.as_ref().unwrap();
     assert_eq!(mm.fan_out.get(&3), Some(&1));

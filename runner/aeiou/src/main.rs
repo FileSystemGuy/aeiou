@@ -834,12 +834,10 @@ struct DryRunArgs {
     metrics: bool,
     #[arg(long = "no-metrics", hide = true, overrides_with_all = ["no_metrics", "metrics"])]
     no_metrics: bool,
-    /// With --metrics: the block size of the reuse-distance and popularity units [default: 4096].
+    /// With --metrics: the block metrics too, reuse and popularity in blocks of BYTES, as the
+    /// captures taken before 2026-10-22 have them (the extent metrics are always there).
     #[arg(long, value_name = "BYTES", help_heading = "Metrics")]
     metrics_block: Option<u64>,
-    /// With --metrics: keep one block and one object in N, chosen by hash, and scale [default: 1, exact].
-    #[arg(long, value_name = "N", help_heading = "Metrics")]
-    metrics_sample: Option<u64>,
     /// Write the metrics, with their histograms, to FILE as JSON (implies --metrics).
     #[arg(long, value_name = "FILE", help_heading = "Metrics")]
     metrics_json: Option<PathBuf>,
@@ -2236,9 +2234,7 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     l.fixed("steps", &a.steps, a.steps.is_some())?;
     l.fixed("limit", &a.limit, a.limit.is_some())?;
     l.fixed("metrics", &(a.metrics || a.metrics_json.is_some()), a.metrics || a.no_metrics)?;
-    let (metrics_block, metrics_sample) = (a.metrics_block.unwrap_or(4096), a.metrics_sample.unwrap_or(1));
-    l.fixed("metrics-block", &metrics_block, a.metrics_block.is_some())?;
-    l.fixed("metrics-sample", &metrics_sample, a.metrics_sample.is_some())?;
+    l.fixed("metrics-block", &a.metrics_block, a.metrics_block.is_some())?;
     l.fixed("metrics-json", &a.metrics_json, a.metrics_json.is_some())?;
     let ranks = l.layered::<i64>("ranks", a.ranks, None)?;
     let threads = l.layered::<usize>("threads", a.threads, None)?;
@@ -2251,7 +2247,7 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     if let Some(why) = needed_by(&[("steps", a.steps.is_some()), ("limit", a.limit.is_some())]) {
         miss.need(a.gpu.is_some(), "--gpu <G>", "the actor instance whose op stream is printed", Some(&why));
     }
-    if let Some(why) = needed_by(&[("metrics-block", a.metrics_block.is_some()), ("metrics-sample", a.metrics_sample.is_some())]) {
+    if let Some(why) = needed_by(&[("metrics-block", a.metrics_block.is_some())]) {
         miss.need(a.metrics || a.metrics_json.is_some(), "--metrics", "compute the locality metrics of the op stream (or --metrics-json <FILE>)", Some(&why));
     }
     miss.check()?;
@@ -2279,11 +2275,8 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     if a.limit == Some(0) {
         aeiou::usage!("--limit 0: nothing would be printed");
     }
-    if metrics_block == 0 {
+    if a.metrics_block == Some(0) {
         aeiou::usage!("--metrics-block 0: the block size is at least 1 byte");
-    }
-    if metrics_sample == 0 {
-        aeiou::usage!("--metrics-sample 0: N is at least 1 (1 keeps every block)");
     }
     let (abstract_path, gpus) = (abstract_path.expect("checked"), gpus.expect("checked"));
     let mut cfg = parse_config(&a.run.shape, gpus, seed)?;
@@ -2313,22 +2306,21 @@ fn dry_run(mut a: DryRunArgs, config: Option<&Path>) -> Result<()> {
     l.show_default("threads", format!("{threads} (all cores)"));
 
     let started = std::time::Instant::now();
-    let metrics = (a.metrics || a.metrics_json.is_some()).then_some(aeiou::metrics::Opts { block: metrics_block, sample: metrics_sample });
+    let metrics = (a.metrics || a.metrics_json.is_some()).then_some(aeiou::metrics::Opts { block: a.metrics_block });
     let mut report = dryrun::run_with(&model, threads, filter, metrics)?;
     let projections = aeiou::project::project_all(&model, threads)?;
     let elapsed = started.elapsed();
     if let Some(path) = &a.metrics_json {
         let templates: std::collections::BTreeMap<&str, _> = report.templates.iter().filter_map(|t| aeiou::metrics::to_json(&t.run).map(|m| (t.name.as_str(), m))).collect();
         let doc = serde_json::json!({
-            "aeiou_metrics": 1,
+            "aeiou_metrics": 2,
             "source": "dry-run",
             "abstract": loaded.ast.name,
             "sha256": loaded.sha256,
             "seed": cfg.seed,
             "gpus": cfg.gpus,
             "fingerprint": format!("{:016x}", report.total.fingerprint),
-            "block": metrics_block,
-            "sample": metrics_sample,
+            "block": a.metrics_block,
             "order": "round-robin",
             "templates": templates,
             "total": aeiou::metrics::to_json(&report.total),

@@ -1,5 +1,5 @@
 {
-  "shape_version": 2,
+  "shape_version": 3,
   "tool": "aeiou-catalog",
   "runs": [
     {
@@ -8,7 +8,6 @@
       "params": "case.lock.json",
       "params_sha256": "860c43f6891dda4000dc6deabc13af54f3aec70d53672fe846525fa8b5e4960d",
       "gpus": 1,
-      "block": 3145728,
       "seeds": [
         1,
         2,
@@ -95,13 +94,13 @@
           "class": "no"
         },
         "reread": {
-          "value": 0.746504,
-          "spread": 0.0547599,
+          "value": 0.619756,
+          "spread": 0.0821399,
           "class": "repeated"
         },
         "skew": {
-          "value": 0.0499317,
-          "spread": 0.00656661,
+          "value": 0.038791,
+          "spread": 0.0070952,
           "class": "uniform"
         }
       }
@@ -112,7 +111,6 @@
       "params": "case.lock.json",
       "params_sha256": "860c43f6891dda4000dc6deabc13af54f3aec70d53672fe846525fa8b5e4960d",
       "gpus": 1,
-      "block": 3145728,
       "seeds": [
         1,
         2,
@@ -197,13 +195,13 @@
           "class": "no"
         },
         "reread": {
-          "value": 0.769396,
-          "spread": 0.0534754,
+          "value": 0.654094,
+          "spread": 0.0802131,
           "class": "repeated"
         },
         "skew": {
-          "value": 0.0352698,
-          "spread": 0.00302669,
+          "value": 0.0276275,
+          "spread": 0.00224853,
           "class": "uniform"
         }
       }

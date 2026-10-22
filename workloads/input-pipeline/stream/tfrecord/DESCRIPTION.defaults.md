@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-tf.data over TFRecord shards: cycle shards streamed concurrently, positioned reads of the buffer size to EOF. In the catalog it is `input-pipeline/stream/tfrecord`: application `tf-data`, format `tfrecord`, phase training, domain ai. No case yet: the abstract at its defaults, at 1 GPU. `shards` holds 1,281,167 samples, 1,024 a file (148.8 GiB in 1,252 files), consumed shard by shard in a keyed shuffle; sizes lognormal, median 110 KiB, σ 0.45 (5th–95th percentile 52.5 KiB to 230.6 KiB). The one `gpu` actor (one per GPU): 4 loader workers build 125 batches, up to 1 ahead each; per batch, on the next shard of `shards`, open, read in 256 KiB requests at an offset to end of file, close; in phase `train`, 500 times: for each `k` below `⌈(step + 1) × batch / samples_per_file⌉ − ⌈step × batch / samples_per_file⌉`: take a batch from `shards`; compute for 105 ms; a barrier with every GPU. Measured by dry run at 1 GPU (61,308 ops: 61,058 read, 125 close, 125 open; 14.9 GiB read, nothing written): read runs: large (112 MiB); read requests: small (256 KiB); share of bytes read: read-only (100%); metadata ops per data op: none (0.00409); reads its own writes: no; share of block reads that are re-reads: none (0%); share of accesses to the hottest 1% of blocks: uniform (1%).
+tf.data over TFRecord shards: cycle shards streamed concurrently, positioned reads of the buffer size to EOF. In the catalog it is `input-pipeline/stream/tfrecord`: application `tf-data`, format `tfrecord`, phase training, domain ai. No case yet: the abstract at its defaults, at 1 GPU. `shards` holds 1,281,167 samples, 1,024 a file (148.8 GiB in 1,252 files), consumed shard by shard in a keyed shuffle; sizes lognormal, median 110 KiB, σ 0.45 (5th–95th percentile 52.5 KiB to 230.6 KiB). The one `gpu` actor (one per GPU): 4 loader workers build 125 batches, up to 1 ahead each; per batch, on the next shard of `shards`, open, read in 256 KiB requests at an offset to end of file, close; in phase `train`, 500 times: for each `k` below `⌈(step + 1) × batch / samples_per_file⌉ − ⌈step × batch / samples_per_file⌉`: take a batch from `shards`; compute for 105 ms; a barrier with every GPU. Measured by dry run at 1 GPU (61,308 ops: 61,058 read, 125 close, 125 open; 14.9 GiB read, nothing written): read runs: large (112 MiB); read requests: small (256 KiB); share of bytes read: read-only (100%); metadata ops per data op: none (0.00409); reads its own writes: no; share of bytes read that are re-reads: none (0%); share of accessed bytes on the most accessed 1% of bytes: uniform (1%).
 
 ## The account
 
@@ -63,5 +63,5 @@ Ops in all (seed 1): 61,308: 61,058 `read`, 125 `close`, 125 `open`; 14.9 GiB re
 | `read_share` (share of bytes read) | read-only | 100% |
 | `metadata` (metadata ops per data op) | none | 0.00409 |
 | `reads_own_writes` (reads its own writes) | no | no |
-| `reread` (share of block reads that are re-reads) | none | 0% |
-| `skew` (share of accesses to the hottest 1% of blocks) | uniform | 1% |
+| `reread` (share of bytes read that are re-reads) | none | 0% |
+| `skew` (share of accessed bytes on the most accessed 1% of bytes) | uniform | 1% |

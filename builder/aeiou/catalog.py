@@ -18,8 +18,8 @@ The records, each a TOML file:
   case yet, so the catalog still shows it, at the abstract's defaults.
 - `cases/<case>/case.toml`: the case's curated attributes (`kind`, `modality`), the GPU counts
   its parameters hold at (`gpus`), its `length` parameter (the one that only makes the run
-  longer) when it has one, `metrics_block` (the unit of the locality metrics, 4 KiB unless
-  the case says), and one `[[run]]` per AST it runs (`ast`, `params`, a file of the case).
+  longer) when it has one, and one `[[run]]` per AST it runs (`ast`, `params`, a file of the
+  case or a list of the case's and its mechanism's).
 - `captures/<capture>/capture.toml`: `raw_trace` (a pointer or "not retained") and one
   `[[pair]]` per trace of the capture: `trace` (the stem of its `.metrics.json`), `ast`
   (one of the case's runs), `params` (a file of the capture, when its fit differs from the
@@ -62,15 +62,15 @@ from .describe import Describer
 from .nodes import BuildError
 from .validate import validate
 
-SHAPE_VERSION = 2               # 2 (2026-10-14): the op counts, bytes, and each dataset's projection, which the description quotes
+SHAPE_VERSION = 3               # 2 (2026-10-14): the op counts, bytes, and each dataset's projection, which the description quotes;
+                                # 3 (2026-10-22): reread and skew over extents, no block (DESIGN_REVIEW.md §3.79)
 SEEDS = (1, 2, 3)
 START = 64                      # the shortest check length tried is the case's over this
-BLOCK = 4096                    # the dry run's own default unit of the locality metrics
 METADATA = ("open", "close", "stat", "fstat", "readdir", "mkdir", "rmdir", "unlink", "rename", "ftruncate", "fallocate")
 DATA = ("read", "write")
 MECHANISM_KEYS = {"defaults"}
 DEFAULTS_KEYS = {"ast", "gpus", "length"}
-CASE_KEYS = {"gpus", "length", "metrics_block", "run"}
+CASE_KEYS = {"gpus", "length", "run"}
 RUN_KEYS = {"ast", "params"}
 CAPTURE_KEYS = {"raw_trace", "pair"}
 PAIR_KEYS = {"trace", "ast", "params", "verdict"}
@@ -166,9 +166,9 @@ MEASURES = {
     "request_size_write": lambda t: _weighted_median(t["request_size"]["write"]),
     "read_share": lambda t: _share(t["bytes_read"], t["bytes_read"] + t["bytes_written"]),
     "metadata": lambda t: _share(sum(t["counts"].get(k, 0) for k in METADATA), _data_ops(t)),
-    "reads_own_writes": lambda t: 1.0 if t["reuse_distance_bytes"]["read_after_write"]["n"] else 0.0,
-    "reread": lambda t: _share(t["reuse_distance_bytes"]["read_after_read"]["n"], _accesses(t["reuse_distance_bytes"], "read")),
-    "skew": lambda t: t["popularity_blocks"]["top_1_pct"] if t["popularity_blocks"]["accesses"] else None,
+    "reads_own_writes": lambda t: 1.0 if t["reuse_extents"]["read_after_write"]["n"] else 0.0,
+    "reread": lambda t: _share(t["reuse_extents"]["read_after_read"]["n"], _accesses(t["reuse_extents"], "read")),
+    "skew": lambda t: t["popularity_bytes"]["top_1_pct"] if t["popularity_bytes"]["accesses"] else None,
 }
 
 
@@ -363,14 +363,11 @@ def _load_case(c: pathlib.Path, m: dict, attrs: dict, root, problems: Problems) 
         return None
     case = {"dir": c, "rel": _rel(c, root), "name": c.name, "mechanism": m,
             "attributes": _attributes(rec, "case", CASE_KEYS, attrs, path, root, problems),
-            "gpus": rec.get("gpus"), "length": rec.get("length"), "block": rec.get("metrics_block", BLOCK),
+            "gpus": rec.get("gpus"), "length": rec.get("length"),
             "runs": [], "captures": []}
     if not isinstance(case["gpus"], list) or not case["gpus"] or not all(_gpus_ok(g) for g in case["gpus"]):
         problems.add(path, root, "gpus must be a non-empty list of positive integers: the GPU counts its parameters hold at")
         case["gpus"] = [1]
-    if not _gpus_ok(case["block"]):
-        problems.add(path, root, "metrics_block must be a positive integer (bytes)")
-        case["block"] = BLOCK
     runs = rec.get("run") or []
     if not runs:
         problems.add(path, root, "a case runs at least one AST: a [[run]] with ast and params")
@@ -505,10 +502,10 @@ def runner_args(ast: pathlib.Path, name: str, params: pathlib.Path | None) -> li
     return out
 
 
-def _dry_run(runner: str, run: dict, gpus: int, block: int, seed: int, length: tuple | None, tmp: pathlib.Path) -> dict:
+def _dry_run(runner: str, run: dict, gpus: int, seed: int, length: tuple | None, tmp: pathlib.Path) -> dict:
     out = tmp / f"{run['abstract']['doc']['name']}.{seed}.{length[1] if length else 'case'}.json"
     cmd = [runner, "dry-run", *runner_args(run["abstract"]["path"], run.get("ast"), run["params"]), "--gpus", str(gpus), "--seed", str(seed),
-           "--metrics-block", str(block), "--metrics-json", str(out)]
+           "--metrics-json", str(out)]
     if length:
         cmd += ["--param", f"{length[0]}={length[1]}"]
     p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
@@ -525,9 +522,9 @@ def _median(xs: list):
     return xs[len(xs) // 2]
 
 
-def _at(runner: str, run: dict, gpus: int, block: int, length: tuple | None, pool, tmp) -> tuple[dict, list[dict], dict]:
+def _at(runner: str, run: dict, gpus: int, length: tuple | None, pool, tmp) -> tuple[dict, list[dict], dict]:
     """The median of each measure over the seeds, each seed's numbers, and the first seed's dry run."""
-    docs = list(pool.map(lambda seed: _dry_run(runner, run, gpus, block, seed, length, tmp), SEEDS))
+    docs = list(pool.map(lambda seed: _dry_run(runner, run, gpus, seed, length, tmp), SEEDS))
     values = [measure(d["total"]) for d in docs]
     return {n: _median([v[n] for v in values]) for n in MEASURES}, values, docs[0]
 
@@ -537,7 +534,7 @@ def _agrees(attrs: dict, a: dict, b: dict) -> list[str]:
     return [n for n in MEASURES if not agree(attrs[n], a[n], b[n])]
 
 
-def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | None, attrs: dict, pool) -> dict:
+def shape(runner: str, run: dict, gpus: int, length_param: str | None, attrs: dict, pool) -> dict:
     """One run's shape (`shape.json`'s entry): the measures at the case's own parameters, the
     median over the seeds and its spread; and, for a case with a length parameter, the
     smallest length (halving down to 1/64) whose numbers are still the case's, where `check`
@@ -547,12 +544,12 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
     full = pset.get(length_param, _params_of(run["abstract"]["doc"])[length_param].get("default")) if length_param else None
     with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
         tmp = pathlib.Path(tmp)
-        med, seeds, first = _at(runner, run, gpus, block, (length_param, full) if full else None, pool, tmp)
+        med, seeds, first = _at(runner, run, gpus, (length_param, full) if full else None, pool, tmp)
         check = full
         if full:
             n = full // 2
             while n >= max(1, math.ceil(full / START)):
-                if _agrees(attrs, _at(runner, run, gpus, block, (length_param, n), pool, tmp)[0], med):
+                if _agrees(attrs, _at(runner, run, gpus, (length_param, n), pool, tmp)[0], med):
                     break
                 check, n = n, n // 2
     # the numbers the seeds disagree on: the case's own statistical error is larger than the tolerance
@@ -560,7 +557,7 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
     spread = {n: None if med[n] is None else max(v[n] for v in seeds) - min(v[n] for v in seeds) for n in MEASURES}
     out = {"ast": run["abstract"]["doc"]["name"], "ast_sha256": run["abstract"]["sha256"],
            "params": run["params"].name if run["params"] else None, "params_sha256": _sha256(run["params"]) if run["params"] else None,
-           "gpus": gpus, "block": block, "seeds": list(SEEDS),
+           "gpus": gpus, "seeds": list(SEEDS),
            "length": None if full is None else {"param": length_param, "case": full, "check": check},
            "stable": not moving, "moving": moving, "ops": first["total"]["ops"],
            "counts": dict(sorted(first["total"]["counts"].items())), "bytes_read": first["total"]["bytes_read"],
@@ -584,13 +581,13 @@ def _short(recorded: dict) -> bool:
     return recorded["length"] is not None and recorded["length"]["check"] != recorded["length"]["case"]
 
 
-def _case_run(runner: str, run: dict, gpus: int, block: int, recorded: dict, tmp: pathlib.Path) -> dict:
+def _case_run(runner: str, run: dict, gpus: int, recorded: dict, tmp: pathlib.Path) -> dict:
     """The first seed's dry run at the case's own length, the one a shape's counts come from."""
     length = recorded["length"]
-    return _dry_run(runner, run, gpus, block, SEEDS[0], (length["param"], length["case"]) if length else None, tmp)
+    return _dry_run(runner, run, gpus, SEEDS[0], (length["param"], length["case"]) if length else None, tmp)
 
 
-def recheck(runner: str, run: dict, gpus: int, block: int, recorded: dict, attrs: dict, pool, full=None) -> list[str]:
+def recheck(runner: str, run: dict, gpus: int, recorded: dict, attrs: dict, pool, full=None) -> list[str]:
     """`check` with the runner: the run re-measured at its recorded check length, against
     the recorded numbers, and the first seed's op counts, bytes, and datasets' projection
     against the recorded ones exactly (the description and CATALOG.md print them); the
@@ -601,8 +598,8 @@ def recheck(runner: str, run: dict, gpus: int, block: int, recorded: dict, attrs
     with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
         tmp = pathlib.Path(tmp)
         if _short(recorded) and full is None:
-            full = pool.submit(_case_run, runner, run, gpus, block, recorded, tmp)
-        med, _, first = _at(runner, run, gpus, block, (length["param"], length["check"]) if length else None, pool, tmp)
+            full = pool.submit(_case_run, runner, run, gpus, recorded, tmp)
+        med, _, first = _at(runner, run, gpus, (length["param"], length["check"]) if length else None, pool, tmp)
         if full is not None:
             first = full.result()
     counted = _counted(first)
@@ -623,13 +620,13 @@ def _shape_path(m: dict, case: dict | None) -> pathlib.Path:
 
 
 def _targets(mechanisms: list[dict]):
-    """(mechanism, case or None, [(run, gpus, block, length)]) for every shape file."""
+    """(mechanism, case or None, [(run, gpus, length)]) for every shape file."""
     for m in mechanisms:
         for case in m["cases"]:
-            yield m, case, [(r, case["gpus"][0], case["block"], case["length"]) for r in case["runs"]]
+            yield m, case, [(r, case["gpus"][0], case["length"]) for r in case["runs"]]
         if m["defaults"]:
             d = m["defaults"]
-            yield m, None, [({"ast": d["ast"], "params": None, "abstract": m["asts"][d["ast"]]}, d["gpus"], BLOCK, d["length"])]
+            yield m, None, [({"ast": d["ast"], "params": None, "abstract": m["asts"][d["ast"]]}, d["gpus"], d["length"])]
 
 
 def measure_all(mechanisms: list[dict], attrs: dict, runner: str) -> dict[pathlib.Path, str]:
@@ -637,7 +634,7 @@ def measure_all(mechanisms: list[dict], attrs: dict, runner: str) -> dict[pathli
     out = {}
     with concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool:
         for m, case, runs in _targets(mechanisms):
-            out[_shape_path(m, case)] = render_shape([shape(runner, run, gpus, block, length, attrs, pool) for run, gpus, block, length in runs])
+            out[_shape_path(m, case)] = render_shape([shape(runner, run, gpus, length, attrs, pool) for run, gpus, length in runs])
     return out
 
 
@@ -661,22 +658,22 @@ def stale_shapes(mechanisms: list[dict], root: pathlib.Path, attrs: dict, runner
         if set(have) != {run["ast"] for run, *_ in runs}:
             problems.append(f"{_rel(path, root)}: its runs are not the case's (aeiou-catalog write)")
             continue
-        for run, gpus, block, length in runs:
+        for run, gpus, length in runs:
             s = have[run["ast"]]
             if (s["ast_sha256"] != run["abstract"]["sha256"] or (run["params"] and s["params_sha256"] != _sha256(run["params"]))
-                    or s["gpus"] != gpus or s["block"] != block or (s["length"] or {}).get("param") != length):
+                    or s["gpus"] != gpus or (s["length"] or {}).get("param") != length):
                 problems.append(f"{_rel(path, root)}: measured on another {run['ast']}, parameter file, or case.toml than the one committed (aeiou-catalog write)")
             else:
-                current.append((path, run, gpus, block, s))
+                current.append((path, run, gpus, s))
     if not runner:
         return problems
-    long = [c for c in current if _short(c[4])]
+    long = [c for c in current if _short(c[3])]
     with (tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp,
           concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool,
           concurrent.futures.ThreadPoolExecutor(max(1, len(long))) as ahead):
-        full = {id(s): ahead.submit(_case_run, runner, run, gpus, block, s, pathlib.Path(tmp)) for _, run, gpus, block, s in long}
-        for path, run, gpus, block, s in current:
-            differ = recheck(runner, run, gpus, block, s, attrs, pool, full.get(id(s)))
+        full = {id(s): ahead.submit(_case_run, runner, run, gpus, s, pathlib.Path(tmp)) for _, run, gpus, s in long}
+        for path, run, gpus, s in current:
+            differ = recheck(runner, run, gpus, s, attrs, pool, full.get(id(s)))
             if differ:
                 problems.append(f"{_rel(path, root)}: {run['ast']}: the dry run no longer gives the recorded {', '.join(differ)} (aeiou-catalog write)")
     return problems
@@ -995,7 +992,7 @@ def _describe(a) -> int:
         if not (a.workloads / "attributes.toml").is_file():
             raise BuildError(f"{a.workloads}: not a workload tree (no attributes.toml), whose dictionary classes the shape (--workloads DIR; --no-shapes)")
         with concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool:
-            measured = shape(a.runner, run, a.gpus, BLOCK, None, load_dictionary(a.workloads), pool)
+            measured = shape(a.runner, run, a.gpus, None, load_dictionary(a.workloads), pool)
     para, account = describe_run(None, None, run, a.gpus, None, measured)
     sources = "the AST" + (f", `{a.params_file.name}`" if a.params_file else " at its defaults") + (", and its shape by dry run" if measured else "")
     text = render_description(f"`{doc.get('name')}`", sources, [(doc.get("name"), para, account)])

@@ -6945,6 +6945,67 @@ and its check came from one binary, and withdrawn the same day: once the build c
 code, a Python builder calling the runner would depend on it, and the runner's `dry-run` checks
 the names anyway).
 
+### 3.79 Locality metrics by extent, not by block (discussed with the user 2026-10-22; decided the same day)
+
+**The problem.** The first use case at a real job's size, `unet3d-h100` (500 steps of 7 samples
+of about 140 MiB, ~490 GB read per GPU), passed the metrics pass's guard of 2^26 entries:
+`--metrics` keeps one entry per distinct 4 KiB block an instance touches (§3.39). The guard is
+a memory bound, not a field width (times and counters are 32 bits); at 4 KiB the case needs
+on the order of 20 GB. Sampling (`--metrics-sample`) fits it, but the user asked why we count
+4 KiB units at all when almost every access is larger: a sample, a buffer fill, a KV chunk.
+
+**The discussion.** A per-mechanism block (the application's own unit: 1 MiB for
+`npy_per_sample`, the chunk for the KV mechanisms) fixed the size (1.2 s and 115 MB, exact)
+but over-counted a 22-byte tail read as a whole block touched (`reread` 0.0072 at 4 KiB,
+0.0277 at 1 MiB, the same class). The user proposed extents instead: byte ranges read through
+sequentially, where a re-read of a whole extent is the boring case (an epoch, which `consume`
+already says) and a re-read of a sub-range the interesting one (format overhead, a buffered
+reader's overlap). The two kinds of byte a format has (framing and payload) are a separate,
+later split (backlog).
+
+**Decided (2026-10-22): extents are the locality unit; block metrics remain for the committed
+captures until they are recaptured** (the user's choice of three: recapturing all seventeen now,
+or judging them on less, were the others). No capture kept its raw trace, so the block sections
+of `aeiou_metrics` stay, computed only when `--metrics-block` asks, and `aeiou-trace compare`
+judges a pair on the sections both documents have. `--metrics-sample` is dropped: sampling at a
+fixed granule would cut extents back into blocks; the guard stays, on pieces.
+
+The definitions, chosen in the discussion and confirmed by the user:
+
+1. **Pieces.** Per instance, the bytes it has touched, per path, as pieces: byte ranges each
+   last touched by one op, with that op's time and kind. An op splits the pieces it overlaps
+   at its own bounds; its bytes take its time. Memory grows with how fragmented the accesses
+   are, never with the bytes touched.
+2. **Reuse distance.** The bytes an op touches again are taken in ascending offset order, in
+   groups: contiguous bytes last touched by one earlier op. A group's distance is the distinct
+   bytes the instance touched after that op (this op's earlier groups included) plus the
+   group's own bytes: Mattson's stack distance at byte granularity, the smallest LRU cache in
+   bytes in which the group hits. The four histograms (by previous and this access's kind) and
+   the first touches are **weighted by bytes**.
+3. **Whole and partial re-reads.** An *extent* is the bytes one sequential run (§10's run) last
+   touched. When a run ends, each earlier extent its reads touched again counts as **whole** if
+   nothing of it is left untouched since, **partial** otherwise; its bytes so touched are added
+   to `whole` or `partial`. On `npy_per_sample` a second epoch's pass over the payload is whole,
+   its header and zip-tail reads partial; in the first epoch the payload pass re-reads the
+   header reads before it whole, at a short distance, which the distances tell apart.
+4. **Popularity** per byte: the accesses of each byte over all instances; `skew` is the share of
+   the accessed bytes that go to the most accessed 1 % of the bytes. Object popularity is as
+   before.
+
+**What changes.** `aeiou_metrics: 2`: `reuse_extents` (the four histograms, first touches,
+`whole`, `partial`, all in bytes) and `popularity_bytes`; `block` is null unless
+`--metrics-block` gives one, and then `reuse_distance_bytes` and `popularity_blocks` are
+there as in version 1. The same in `aeiou-trace metrics`. `aeiou-trace compare` adds the
+extent rows (`extent reuse …`, `popularity, bytes …`) when both sides have them, the block rows
+when both have them at one block size, and refuses a pair with neither. The catalog measures
+`reread` and `skew` from the extent sections (a shape version), with no block. A backlog item
+recaptures the seventeen captures with their kits; the block sections go once nothing compares
+against them.
+
+**Considered and not done.** Sampling by object (a single large file, as DiskANN's index, is all
+or nothing); a per-mechanism block (a knob that extents make unnecessary); a larger guard (20 GB
+for a unit no application reads in).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

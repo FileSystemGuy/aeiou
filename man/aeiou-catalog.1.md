@@ -33,7 +33,7 @@ The records are TOML files a person writes:
   hold at (the shape is measured at the first); `length`, the parameter that only makes the
   run longer (`requests`, `queries`, `calls`), absent when none does (a training job's `steps`
   is not one: fewer steps than an epoch drop the next epoch's re-reads);
-  `metrics_block`, the unit of the locality metrics (default 4096); and one `[[run]]`
+  and one `[[run]]`
   (`ast`, `params`) per abstract it runs, a writer and its reader being two.
 - `captures/<capture>/capture.toml`: `raw_trace` (where the trace is, or `"not retained"`)
   and one `[[pair]]` per trace: `trace` (the stem of its `.metrics.json`), `ast`, `params`

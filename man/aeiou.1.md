@@ -326,16 +326,13 @@ turns it off, and the last one on the line wins.
   stream or the fingerprint.
 - **--metrics-block** *BYTES*
 
-  With `--metrics`: the block size of the reuse-distance and popularity units. Default 4096.
-- **--metrics-sample** *N*
-
-  With `--metrics`: keep one block and one object in *N*, chosen by hash, and scale the
-  counts and distances. Default 1, exact. `--metrics-block` or `--metrics-sample` without
-  `--metrics` or `--metrics-json` is a usage error.
+  With `--metrics`: the block metrics too, reuse and popularity in blocks of *BYTES*, as the
+  captures taken before 2026-10-22 have them; the extent metrics, over byte ranges, are
+  always there. `--metrics-block` without `--metrics` or `--metrics-json` is a usage error.
 - **--metrics-json** *FILE*
 
   Write the metrics, with their histograms in full, to *FILE* as JSON (format
-  `aeiou_metrics: 1`). Implies `--metrics`.
+  `aeiou_metrics: 2`). Implies `--metrics`.
 
 ### aeiou datagen
 

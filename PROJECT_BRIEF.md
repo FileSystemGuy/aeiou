@@ -710,6 +710,20 @@ numbers; the order is this note's.
     `accelerator` attribute. The abstracts: job and accelerator values become required
     (`npy_per_sample`'s H100 set moves to a `unet3d-h100` use case), `[config]` becomes
     `scale`, the block-size reads become storage-reported; every AST hash changes.
+34. **Recapture the committed traces (backlog, 2026-10-22, `DESIGN_REVIEW.md` §3.79).** The
+    locality metrics are taken over extents since 2026-10-22; the seventeen committed captures
+    were taken before, kept no raw trace, and are judged on the block metrics that
+    `--metrics-block` still computes. Each is retaken with its kit (the commands are in its
+    mechanism's README; the traces whose read sizes follow `st_blksize` on an NFS mount), its
+    metrics taken as `aeiou_metrics: 2` and its tolerances re-derived; when none is left at
+    version 1, the block metrics, `--metrics-block`, and version 1 in `aeiou-trace compare` go.
+35. **Locality by byte role (backlog, raised by the user 2026-10-22, `DESIGN_REVIEW.md` §3.79).**
+    The extent metrics split by the role of each byte: a format's framing (headers, footers,
+    directories, indexes) against its samples' payload, from the layout formula of
+    `format.framing`, in the dry run and, from the same layout, in `aeiou-trace`. Payload
+    reuse under `consume` is the epoch count; framing reuse is what rewards a footer or
+    metadata cache, and a fit that matches the total re-read with the wrong mix would show.
+    To design with the HDF5, Parquet, and TFRecord example cases (item 33, part 5b).
 
 ## 7. Environment
 

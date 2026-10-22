@@ -37,7 +37,7 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
 fn the_round_robin_walk_issues_the_same_ops() {
     for (name, gpus, params) in CASES {
         let plain = dry(name, *gpus, params, 1, None);
-        for (threads, opts) in [(1, Opts::default()), (4, Opts { block: 65536, sample: 3 })] {
+        for (threads, opts) in [(1, Opts::default()), (4, Opts { block: Some(65536) })] {
             let m = dry(name, *gpus, params, threads, Some(opts));
             assert_eq!(m.total.fingerprint, plain.total.fingerprint, "{name}: fingerprint");
             assert_eq!(m.total.total.counts, plain.total.total.counts, "{name}: counts");
@@ -51,6 +51,13 @@ fn the_round_robin_walk_issues_the_same_ops() {
             // run lengths account for every byte transferred
             let run_bytes = (met.runs[0].bytes.sum + met.runs[1].bytes.sum) as u64;
             assert_eq!(run_bytes, plain.total.total.bytes_read + plain.total.total.bytes_written, "{name}: bytes in runs");
+            // every byte transferred is a first touch or in one group of the extent reuse; every
+            // byte read again is in a whole or a partial re-read
+            let ext = &met.extents;
+            let again: u64 = ext.reuse.iter().flatten().map(|h| h.n).sum();
+            assert_eq!(ext.first[0] + ext.first[1] + again, run_bytes, "{name}: bytes in extents");
+            assert_eq!(ext.whole + ext.partial, ext.reuse[0][0].n + ext.reuse[1][0].n, "{name}: re-read bytes");
+            assert_eq!(met.popularity_bytes().accesses, run_bytes, "{name}: byte accesses");
             assert!(metrics::to_json(&m.total).is_some());
         }
     }
@@ -59,7 +66,7 @@ fn the_round_robin_walk_issues_the_same_ops() {
 #[test]
 fn metrics_do_not_depend_on_the_thread_count() {
     for (name, gpus, params) in CASES {
-        let opts = Opts { block: 65536, sample: 1 };
+        let opts = Opts { block: Some(65536) };
         let a = serde_json::to_string(&metrics::to_json(&dry(name, *gpus, params, 1, Some(opts)).total)).unwrap();
         let b = serde_json::to_string(&metrics::to_json(&dry(name, *gpus, params, 4, Some(opts)).total)).unwrap();
         assert_eq!(a, b, "{name}");
@@ -86,9 +93,9 @@ fn diskann_structure_is_recovered() {
     // the first round of every query reads an entry point's sector and the second lands on the entry
     // points' neighbours: at 20,000 sectors both sets are one sector, which takes over 4 %
     // of the accesses, where the uniform rounds alone would give the top 1 % about 1.5 %
-    let p = m.popularity_blocks();
-    assert!(p.top_1_pct > 0.05, "top 1% of blocks: {}", p.top_1_pct);
-    assert!(m.reuse[0][0].n > 0);
+    let p = m.popularity_bytes();
+    assert!(p.top_1_pct > 0.05, "top 1% of bytes: {}", p.top_1_pct);
+    assert!(m.extents.reuse[0][0].n > 0);
 }
 
 /// Small-file training: every file is read whole, front to back, and once per epoch.
@@ -98,22 +105,67 @@ fn small_file_training_is_sequential_and_flat() {
     let m = r.total.metrics.as_ref().unwrap();
     let p = m.popularity_objects();
     assert_eq!(p.max, p.counts.last().unwrap().0, "every file has the same number of data ops");
-    assert_eq!(m.reuse.iter().flatten().map(|h| h.n).sum::<u64>(), 0, "no block is touched twice within an epoch");
+    assert_eq!(m.extents.reuse.iter().flatten().map(|h| h.n).sum::<u64>(), 0, "no byte is touched twice within an epoch");
     assert!(m.fan_out.is_empty());
 }
 
-/// Sampling scales back to the exact totals within sampling error.
+/// Extents (DESIGN_REVIEW §3.79): one file of 1 MiB read in four fills of 256 KiB, its first
+/// fill read again alone, then all of it again. Every number is the definition's, by hand:
+/// the alone read re-reads part of the first pass at a distance of the three fills after it
+/// plus its own (1 MiB), a partial re-read; the last pass re-reads that read at 256 KiB and the
+/// first pass's other three fills at 1 MiB each, both extents whole.
 #[test]
-fn sampling_estimates_the_exact_counts() {
-    let params: &[(&str, &str)] = &[("queries", "2000"), ("threads", "2"), ("nodes", "1000000")];
-    let exact = dry("diskann_search", 1, params, 2, Some(Opts::default()));
-    let sampled = dry("diskann_search", 1, params, 2, Some(Opts { block: 4096, sample: 8 }));
-    let (e, s) = (exact.total.metrics.as_ref().unwrap(), sampled.total.metrics.as_ref().unwrap());
-    let (pe, ps) = (e.popularity_blocks(), s.popularity_blocks());
-    let close = |a: u64, b: u64| (a as f64 - b as f64).abs() / (b as f64) < 0.10;
-    assert!(close(ps.accesses, pe.accesses), "accesses {} vs {}", ps.accesses, pe.accesses);
-    assert!(close(ps.distinct, pe.distinct), "distinct {} vs {}", ps.distinct, pe.distinct);
-    assert!(close(s.first[0], e.first[0]), "first touches {} vs {}", s.first[0], e.first[0]);
-    let (qe, qs) = (e.reuse[0][0].quantile(0.5) as f64, s.reuse[0][0].quantile(0.5) as f64);
-    assert!((qs / qe - 1.0).abs() < 0.5, "median reuse distance {qs} vs {qe}");
+fn extents_by_hand() {
+    use serde_json::{json, Value};
+    let ast = json!({
+        "ast": "0.11", "name": "t",
+        "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id}", "count": 1, "size": {"const": 1048576}, "seed": 1}},
+        "actors": {"gpu": {"body": [
+            {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},
+            {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+            {"read": {"file": {"ref": "f"}, "len": 262144, "repeat": 4}},
+            {"close": {"file": {"ref": "f"}}},
+            {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+            {"read": {"file": {"ref": "f"}, "len": 262144}},
+            {"close": {"file": {"ref": "f"}}},
+            {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+            {"read": {"file": {"ref": "f"}, "len": 262144, "repeat": 4}},
+            {"close": {"file": {"ref": "f"}}}]}}
+    });
+    let dir = crate::common::tmpdir("metrics", "hand");
+    let (path, out) = (dir.join("t.ast.json"), dir.join("m.json"));
+    std::fs::write(&path, ast.to_string()).unwrap();
+    let run = |more: &[&str]| -> Value {
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou"))
+            .args(["dry-run", path.to_str().unwrap(), "--gpus", "1", "--metrics-json", out.to_str().unwrap()])
+            .args(more)
+            .env_remove("AEIOU_CONFIG")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap()
+    };
+    let d = run(&[]);
+    assert_eq!((&d["aeiou_metrics"], &d["block"]), (&json!(2), &Value::Null));
+    let t = &d["total"];
+    assert!(t.get("reuse_distance_bytes").is_none() && t.get("popularity_blocks").is_none(), "no block sections unasked: {t}");
+    let r = &t["reuse_extents"];
+    let (k, m) = (1u64 << 10, 1u64 << 20);
+    assert_eq!(r["first_touch"], json!({"read": m, "write": 0}));
+    assert_eq!(r["read_after_read"]["n"], json!(m + 256 * k));
+    assert_eq!(r["read_after_read"]["buckets"], json!([[256 * k, 256 * k], [m, m]]));
+    assert_eq!((&r["read_after_write"]["n"], &r["write_after_read"]["n"], &r["write_after_write"]["n"]), (&json!(0), &json!(0), &json!(0)));
+    assert_eq!((&r["whole"], &r["partial"]), (&json!(m), &json!(256 * k)));
+    let p = &t["popularity_bytes"];
+    assert_eq!(p["counts"], json!([[3, 256 * k], [2, 768 * k]]));
+    assert_eq!((&p["distinct"], &p["accesses"], &p["max"]), (&json!(m), &json!(3 * 256 * k + 2 * 768 * k), &json!(3)));
+    // the block sections when asked, as version 1 had them: 256 blocks touched three times, 768 twice
+    let b = run(&["--metrics-block", "4096"]);
+    assert_eq!(b["block"], json!(4096));
+    assert_eq!(b["total"]["popularity_blocks"]["counts"], json!([[3, 64], [2, 192]]));
+    assert_eq!(b["total"]["reuse_distance_bytes"]["first_touch"]["read"], json!(256));
+    assert_eq!(b["total"]["reuse_extents"], d["total"]["reuse_extents"], "the extents do not depend on the block");
+    // --metrics-sample is gone
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["dry-run", path.to_str().unwrap(), "--gpus", "1", "--metrics", "--metrics-sample", "4"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
 }

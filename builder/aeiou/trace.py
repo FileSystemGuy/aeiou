@@ -3,8 +3,9 @@
 `aeiou dry-run --metrics` computes reuse distance, sequential runs, popularity, request
 sizes, fan-out, depth, and the read/write mix on an abstract's op stream
 (`runner/REFERENCE.md` §10). This computes the same numbers, with the same definitions and in
-the same JSON form (`aeiou_metrics: 1`), from a trace of the application the abstract
-models, so the two can be compared (`GRAMMAR_OPTIONS.md` §5.4):
+the same JSON form (`aeiou_metrics: 2`; reuse and popularity over extents, byte ranges, and
+over blocks too under `--metrics-block`, `DESIGN_REVIEW.md` §3.79), from a trace of the
+application the abstract models, so the two can be compared (`GRAMMAR_OPTIONS.md` §5.4):
 
     strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy \
         -o trace.txt <command>
@@ -54,6 +55,7 @@ from __future__ import annotations
 
 import fnmatch
 import io
+import bisect
 import itertools
 import json
 import os
@@ -64,20 +66,13 @@ from collections import Counter
 from . import __version__, usage
 from .nodes import BuildError
 
-FORMAT = 1
-MASK = (1 << 64) - 1
+FORMAT = 2
+FORMATS_READ = (1, 2)    # version 1: a capture taken before 2026-10-22, its locality in blocks only (DESIGN_REVIEW.md §3.79)
 MAX_ENTRIES = 1 << 26
 KINDS = ("read", "write")
 R, W = 0, 1
 
 # ---------------------------------------------------------------- histograms
-
-
-def mix64(z: int) -> int:
-    """`rng::mix64` of the runner (SplitMix64's finalizer)."""
-    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK
-    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK
-    return z ^ (z >> 31)
 
 
 class LogHist:
@@ -172,9 +167,167 @@ class Instance:
         return out
 
 
-def popularity(counts: dict[int, int], sample: int) -> dict:
-    """The rank-frequency curve as counts of counts, as `metrics::Popularity`."""
-    cc = Counter(counts.values())
+class Extents:
+    """One instance's history by byte range, as `metrics::Extents` (`DESIGN_REVIEW.md` §3.79):
+    pieces `[start, end)` of a path, each last touched by one op (`[end, time, kind, count,
+    run]`), and a Fenwick tree over op times holding the bytes last touched at each."""
+
+    def __init__(self):
+        self.starts: dict[int, list[int]] = {}         # path -> sorted piece starts
+        self.pieces: dict[tuple[int, int], list] = {}   # (path, start) -> [end, time, kind, count, run]
+        self.tree: list[int] = []
+        self.live = 0
+        self.now = 0
+        self.runs: dict[int, int] = {}                  # run -> live bytes
+        self.compactions = 0
+
+    def _add(self, i: int, d: int):
+        tree, n = self.tree, len(self.tree)
+        i += 1
+        while i <= n:
+            tree[i - 1] += d
+            i += i & -i
+
+    def _prefix(self, i: int) -> int:
+        tree, s = self.tree, 0
+        i += 1
+        while i > 0:
+            s += tree[i - 1]
+            i -= i & -i
+        return s
+
+    def _compact(self):
+        times = sorted({p[1] for p in self.pieces.values()})
+        rank = {t: i for i, t in enumerate(times)}
+        cap = 1024
+        while cap < 2 * len(times):
+            cap *= 2
+        self.tree = [0] * cap
+        for (_, start), p in self.pieces.items():
+            p[1] = rank[p[1]]
+            self._add(p[1], p[0] - start)
+        self.now = len(times)
+        self.compactions += 1
+
+    def _put(self, path: int, start: int, piece: list):
+        n = piece[0] - start
+        self._add(piece[1], n)
+        self.runs[piece[4]] = self.runs.get(piece[4], 0) + n
+        self.pieces[(path, start)] = piece
+        bisect.insort(self.starts.setdefault(path, []), start)
+
+    def _take(self, path: int, start: int) -> list:
+        piece = self.pieces.pop((path, start))
+        n = piece[0] - start
+        self._add(piece[1], -n)
+        left = self.runs[piece[4]] - n
+        if left:
+            self.runs[piece[4]] = left
+        else:
+            del self.runs[piece[4]]
+        starts = self.starts[path]
+        del starts[bisect.bisect_left(starts, start)]
+        return piece
+
+    def live_of(self, run: int) -> int:
+        return self.runs.get(run, 0)
+
+    def touch(self, path: int, start: int, end: int, kind: int, run: int, hits: list) -> int:
+        """One op touching `[start, end)`: the groups `(distance, bytes, previous kind, run)` of
+        the bytes it touches again appended to `hits`, ascending; returns its first touches."""
+        if self.now == len(self.tree):
+            self._compact()
+        now = self.now
+        starts = self.starts.get(path, [])
+        i = bisect.bisect_left(starts, start)
+        over = starts[i - 1:i] if i and self.pieces[(path, starts[i - 1])][0] > start else []
+        over += starts[i:bisect.bisect_left(starts, end)]
+        at, first, group, group_end = start, 0, None, start
+        for s0 in over:
+            old = self.pieces[(path, s0)]
+            lo, hi = max(s0, start), min(old[0], end)
+            if lo > at:
+                # bytes no op of the instance touched before
+                if group is not None:
+                    hits.append((group[4] + group[3], group[3], group[1], group[2]))
+                    group = None
+                self._put(path, at, [lo, now, kind, 1, run])
+                self.live += lo - at
+                first += lo - at
+            if not (group is not None and group[0] == old[1] and group_end == lo):
+                if group is not None:
+                    hits.append((group[4] + group[3], group[3], group[1], group[2]))
+                # [old time, kind, run, bytes, bytes touched after the old op, this op's so far
+                # included (the old piece is still at its time)]
+                group = [old[1], old[2], old[4], 0, self.live - self._prefix(old[1])]
+            group[3] += hi - lo
+            group_end = hi
+            self._take(path, s0)
+            if s0 < lo:
+                self._put(path, s0, [lo, *old[1:]])
+            if old[0] > hi:
+                self._put(path, hi, old[:])
+            self._put(path, lo, [hi, now, kind, old[3] + 1, run])
+            at = hi
+        if group is not None:
+            hits.append((group[4] + group[3], group[3], group[1], group[2]))
+        if end > at:
+            self._put(path, at, [end, now, kind, 1, run])
+            self.live += end - at
+            first += end - at
+        self.now += 1
+        return first
+
+
+class Bytes:
+    """Accesses per byte, as `metrics::Bytes`: pieces `(path, start) -> [end, accesses]`."""
+
+    def __init__(self):
+        self.starts: dict[int, list[int]] = {}
+        self.pieces: dict[tuple[int, int], list] = {}
+
+    def _put(self, path, start, end, count):
+        self.pieces[(path, start)] = [end, count]
+        bisect.insort(self.starts.setdefault(path, []), start)
+
+    def add(self, path: int, start: int, end: int, count: int):
+        """`count` more accesses of `[start, end)` of `path`."""
+        starts = self.starts.setdefault(path, [])
+        i = bisect.bisect_left(starts, start)
+        over = starts[i - 1:i] if i and self.pieces[(path, starts[i - 1])][0] > start else []
+        over += starts[i:bisect.bisect_left(starts, end)]
+        at = start
+        for s0 in over:
+            e, c = self.pieces.pop((path, s0))
+            del starts[bisect.bisect_left(starts, s0)]
+            lo, hi = max(s0, start), min(e, end)
+            if lo > at:
+                self._put(path, at, lo, count)
+            if s0 < lo:
+                self._put(path, s0, lo, c)
+            if e > hi:
+                self._put(path, hi, e, c)
+            self._put(path, lo, hi, c + count)
+            at = hi
+        if end > at:
+            self._put(path, at, end, count)
+
+    def merge(self, other: "Bytes"):
+        for (path, start), (end, c) in other.pieces.items():
+            self.add(path, start, end, c)
+
+    def popularity(self) -> dict:
+        return popularity((c, e - s) for (_, s), (e, c) in self.pieces.items())
+
+
+def popularity(items) -> dict:
+    """The rank-frequency curve as counts of counts, as `metrics::Popularity`: from
+    `(accesses, items)` pairs, or from a dict of accesses per item."""
+    if isinstance(items, dict):
+        items = ((c, 1) for c in items.values())
+    cc: Counter = Counter()
+    for c, n in items:
+        cc[c] += n
     rows = sorted(cc.items(), reverse=True)
     items = sum(n for _, n in rows)
     total = sum(c * n for c, n in rows)
@@ -192,8 +345,8 @@ def popularity(counts: dict[int, int], sample: int) -> dict:
         return got / total
 
     return {
-        "distinct": items * sample,
-        "accesses": total * sample,
+        "distinct": items,
+        "accesses": total,
         "max": rows[0][0] if rows else 0,
         "top_0_1_pct": share(0.001),
         "top_1_pct": share(0.01),
@@ -205,16 +358,22 @@ def popularity(counts: dict[int, int], sample: int) -> dict:
 class Metrics:
     """The accumulated metrics of a trace; the definitions are `runner/REFERENCE.md` §10's."""
 
-    def __init__(self, block: int = 4096, sample: int = 1):
-        self.block = max(block, 1)
-        self.sample = max(sample, 1)
+    def __init__(self, block: int | None = None):
+        self.block = None if block is None else max(block, 1)
         self.counts: Counter = Counter()
         self.bytes = [0, 0]
         self.request = [LogHist(), LogHist()]
         self.run_bytes = [LogHist(), LogHist()]
         self.run_ops = [LogHist(), LogHist()]
         self.multi_op_bytes = [0, 0]
-        self.reuse = [[LogHist(), LogHist()], [LogHist(), LogHist()]]  # [previous][this]
+        self.ext_reuse = [[LogHist(), LogHist()], [LogHist(), LogHist()]]  # extents, in bytes: [previous][this]
+        self.ext_first = [0, 0]
+        self.whole = self.partial = 0
+        self.extents: dict[int, Extents] = {}
+        self.instance_ids: set = set()
+        self.byte_counts = Bytes()
+        self.next_run = 0
+        self.reuse = [[LogHist(), LogHist()], [LogHist(), LogHist()]]  # blocks, under --metrics-block
         self.first = [0, 0]
         self.fan_out: Counter = Counter()
         self.depth: Counter = Counter()
@@ -222,7 +381,7 @@ class Metrics:
         self.objects: dict[int, int] = {}
         self.instances: dict[int, Instance] = {}
         self.path_ids: dict[str, int] = {}
-        # open runs: context -> {(path id, kind): [end, bytes, ops]}
+        # open runs: context -> {(path id, kind): [end, bytes, ops, id, {extent: bytes read again}, instance]}
         self.runs: dict[int, dict] = {}
 
     def path_id(self, path: str) -> int:
@@ -239,36 +398,45 @@ class Metrics:
         self.counts[KINDS[kind]] += 1
         self.request[kind].add(max(length, 0))
         pid = self.path_id(path)
-        n = self.sample
-        if n == 1 or mix64(pid) % n == 0:
-            self.objects[pid] = self.objects.get(pid, 0) + 1
+        self.objects[pid] = self.objects.get(pid, 0) + 1
         self.bytes[kind] += max(nbytes, 0)
         if nbytes <= 0 or offset < 0:
             return
-        b = self.block
-        inst = self.instances.get(instance)
-        if inst is None:
-            inst = self.instances[instance] = Instance()
-        for blk in range(offset // b, (offset + nbytes - 1) // b + 1):
-            key = (pid << 44) | blk
-            if n != 1:
-                key = mix64(key & MASK)
-                if key % n:
-                    continue
-            hit = inst.touch(key, kind)
-            if hit is None:
-                self.first[kind] += n
-            else:
-                self.reuse[hit[1]][kind].add(hit[0] * n * b, n)
-        if len(inst.last) > MAX_ENTRIES:
-            raise BuildError(f"more than {MAX_ENTRIES} distinct blocks in one instance; use --metrics-sample N or a larger --metrics-block")
+        # a run ends before the op that does not continue it
         runs = self.runs.setdefault(context, {})
         run = runs.get((pid, kind))
         if run is not None and run[0] != offset:
             self._run_done(kind, run)
             run = None
         if run is None:
-            run = runs[(pid, kind)] = [offset, 0, 0]
+            self.next_run += 1
+            run = runs[(pid, kind)] = [offset, 0, 0, self.next_run, {}, instance]
+        ext = self.extents.get(instance)
+        if ext is None:
+            ext = self.extents[instance] = Extents()
+            self.instance_ids.add(instance)
+        hits = []
+        self.ext_first[kind] += ext.touch(pid, offset, offset + nbytes, kind, run[3], hits)
+        again = run[4]
+        for dist, n, prev, x in hits:
+            self.ext_reuse[prev][kind].add(dist, n)
+            if kind == R:
+                again[x] = again.get(x, 0) + n
+        if len(ext.pieces) > MAX_ENTRIES:
+            raise BuildError(f"more than {MAX_ENTRIES} pieces in one instance (byte ranges touched, as fragmented as the accesses)")
+        b = self.block
+        if b is not None:
+            inst = self.instances.get(instance)
+            if inst is None:
+                inst = self.instances[instance] = Instance()
+            for blk in range(offset // b, (offset + nbytes - 1) // b + 1):
+                hit = inst.touch((pid << 44) | blk, kind)
+                if hit is None:
+                    self.first[kind] += 1
+                else:
+                    self.reuse[hit[1]][kind].add(hit[0] * b)
+            if len(inst.last) > MAX_ENTRIES:
+                raise BuildError(f"more than {MAX_ENTRIES} distinct blocks in one instance; give a larger --metrics-block")
         run[0] = offset + nbytes
         run[1] += nbytes
         run[2] += 1
@@ -278,6 +446,12 @@ class Metrics:
         self.run_ops[kind].add(run[2])
         if run[2] >= 2:
             self.multi_op_bytes[kind] += run[1]
+        ext = self.extents[run[5]]
+        for x, n in run[4].items():
+            if ext.live_of(x) == 0:
+                self.whole += n
+            else:
+                self.partial += n
 
     def close(self, context: int, path: str):
         """A `close` of `path` by `context` ends that context's runs on it."""
@@ -300,29 +474,38 @@ class Metrics:
             for key, slot in inst.last.items():
                 self.blocks[key] = self.blocks.get(key, 0) + slot[2]
             inst.last = {}
+        for ext in self.extents.values():
+            for (pid, start), piece in ext.pieces.items():
+                self.byte_counts.add(pid, start, piece[0], piece[3])
+        self.extents = {}
 
     def out(self) -> dict:
-        """The `total` of an `aeiou_metrics: 1` document (`metrics::MetricsOut`)."""
+        """The `total` of an `aeiou_metrics: 2` document (`metrics::MetricsOut`)."""
         runs = lambda k: {"bytes": self.run_bytes[k].out(), "ops": self.run_ops[k].out(), "multi_op_bytes": self.multi_op_bytes[k]}
-        return {
+        reuse = lambda first, h: {
+            "first_touch": {"read": first[R], "write": first[W]},
+            "read_after_read": h[R][R].out(),
+            "read_after_write": h[W][R].out(),
+            "write_after_read": h[R][W].out(),
+            "write_after_write": h[W][W].out(),
+        }
+        out = {
             "ops": sum(self.counts.values()),
             "counts": dict(sorted(self.counts.items())),
             "bytes_read": self.bytes[R],
             "bytes_written": self.bytes[W],
             "request_size": {"read": self.request[R].out(), "write": self.request[W].out()},
             "run_length": {"read": runs(R), "write": runs(W)},
-            "reuse_distance_bytes": {
-                "first_touch": {"read": self.first[R], "write": self.first[W]},
-                "read_after_read": self.reuse[R][R].out(),
-                "read_after_write": self.reuse[W][R].out(),
-                "write_after_read": self.reuse[R][W].out(),
-                "write_after_write": self.reuse[W][W].out(),
-            },
-            "popularity_blocks": popularity(self.blocks, self.sample),
-            "popularity_objects": popularity(self.objects, self.sample),
-            "fan_out": {str(k): v for k, v in sorted(self.fan_out.items())},
-            "depth": {str(k): v for k, v in sorted(self.depth.items())},
+            "reuse_extents": {**reuse(self.ext_first, self.ext_reuse), "whole": self.whole, "partial": self.partial},
+            "popularity_bytes": self.byte_counts.popularity(),
         }
+        if self.block is not None:
+            out["reuse_distance_bytes"] = reuse(self.first, self.reuse)
+            out["popularity_blocks"] = popularity(self.blocks)
+        out["popularity_objects"] = popularity(self.objects)
+        out["fan_out"] = {str(k): v for k, v in sorted(self.fan_out.items())}
+        out["depth"] = {str(k): v for k, v in sorted(self.depth.items())}
+        return out
 
 
 # ---------------------------------------------------------------- strace lines
@@ -1338,8 +1521,8 @@ class TraceReader:
         self.m.finish()
 
 
-def metrics_of_export(lines, block=4096, sample=1) -> dict:
-    m = Metrics(block, sample)
+def metrics_of_export(lines, block=None) -> dict:
+    m = Metrics(block)
     r = TraceReader(m)
     r.feed(lines)
     r.finish()
@@ -1351,7 +1534,6 @@ def metrics_of_export(lines, block=4096, sample=1) -> dict:
         "source": "trace",
         "roots": [h.get("root", "")],
         "block": m.block,
-        "sample": m.sample,
         "order": "completion",
         "instances": 1,
         "contexts": len(r.lanes),
@@ -1361,10 +1543,10 @@ def metrics_of_export(lines, block=4096, sample=1) -> dict:
     }
 
 
-def metrics_of(lines, roots, block=4096, sample=1, seen: dict | None = None, **kw) -> dict:
-    """The `aeiou_metrics: 1` document of a trace given as an iterable of lines; `seen`, when
+def metrics_of(lines, roots, block=None, seen: dict | None = None, **kw) -> dict:
+    """The `aeiou_metrics: 2` document of a trace given as an iterable of lines; `seen`, when
     given, gets the lines read and those parsed as calls (`nothing_counted`)."""
-    m = Metrics(block, sample)
+    m = Metrics(block)
     t = Tracer(m, roots, **kw)
     t.feed(lines)
     t.finish()
@@ -1383,9 +1565,8 @@ def metrics_of(lines, roots, block=4096, sample=1, seen: dict | None = None, **k
         "source": "strace",
         "roots": t.roots,
         "block": m.block,
-        "sample": m.sample,
         "order": "completion",
-        "instances": max(len(m.instances), 1 if not t.instance_roots else 0),
+        "instances": max(len(m.instance_ids), 1 if not t.instance_roots else 0),
         "contexts": len(t.tids),
         "chain_gap_us": None if t.chain_gap is None else t.chain_gap * 1e6,
         "notes": notes,
@@ -1482,18 +1663,29 @@ def compare(a: dict, b: dict) -> list[tuple[str, str, str, float | None]]:
         hist(f"run length, {k}, ops", a["run_length"][k]["ops"], b["run_length"][k]["ops"], plain)
         if a[total] or b[total]:
             pct(f"run length, {k}: bytes in multi-op runs", share(a["run_length"][k]["multi_op_bytes"], a[total]), share(b["run_length"][k]["multi_op_bytes"], b[total]))
-    ra, rb = a["reuse_distance_bytes"], b["reuse_distance_bytes"]
-    for this in KINDS:
-        def accesses(r):
-            return r["first_touch"][this] + sum(r[f"{this}_after_{prev}"]["n"] for prev in KINDS)
-        if accesses(ra) or accesses(rb):
-            pct(f"reuse: first touches / block {this}s", share(ra["first_touch"][this], accesses(ra)), share(rb["first_touch"][this], accesses(rb)))
-        for prev in KINDS:
-            key = f"{this}_after_{prev}"
-            if ra[key]["n"] or rb[key]["n"]:
-                pct(f"reuse: {this} after {prev} / block {this}s", share(ra[key]["n"], accesses(ra)), share(rb[key]["n"], accesses(rb)))
-            hist(f"reuse distance, {this} after {prev}", ra[key], rb[key])
-    for unit in ("blocks", "objects"):
+    # the locality sections both have (DESIGN_REVIEW.md §3.79): extents, and blocks, which a
+    # capture taken before 2026-10-22 has alone
+    sections = [(key, prefix, unit) for key, prefix, unit in (("reuse_extents", "extent reuse", None), ("reuse_distance_bytes", "reuse", "block"))
+                if key in a and key in b]
+    if not sections:
+        raise BuildError("no locality metrics in common: one document has extents only and the other blocks only "
+                         "(take the dry run with --metrics-block, the capture's block size)")
+    for key, prefix, unit in sections:
+        ra, rb = a[key], b[key]
+        for this in KINDS:
+            per = f"block {this}s" if unit else f"bytes {'read' if this == 'read' else 'written'}"
+            def accesses(r):
+                return r["first_touch"][this] + sum(r[f"{this}_after_{prev}"]["n"] for prev in KINDS)
+            if accesses(ra) or accesses(rb):
+                pct(f"{prefix}: first touches / {per}", share(ra["first_touch"][this], accesses(ra)), share(rb["first_touch"][this], accesses(rb)))
+            for prev in KINDS:
+                k = f"{this}_after_{prev}"
+                if ra[k]["n"] or rb[k]["n"]:
+                    pct(f"{prefix}: {this} after {prev} / {per}", share(ra[k]["n"], accesses(ra)), share(rb[k]["n"], accesses(rb)))
+                hist(f"{prefix} distance, {this} after {prev}", ra[k], rb[k])
+        if not unit and (ra["whole"] + ra["partial"] or rb["whole"] + rb["partial"]):
+            pct(f"{prefix}: partial re-reads / bytes read again", share(ra["partial"], ra["whole"] + ra["partial"]), share(rb["partial"], rb["whole"] + rb["partial"]))
+    for unit in [u for u in ("bytes", "blocks") if f"popularity_{u}" in a and f"popularity_{u}" in b] + ["objects"]:
         pa, pb = a[f"popularity_{unit}"], b[f"popularity_{unit}"]
         for top, label in (("top_0_1_pct", "0.1 %"), ("top_1_pct", "1 %"), ("top_10_pct", "10 %")):
             pct(f"popularity, {unit}: accesses to the top {label}", pa[top], pb[top])
@@ -1519,6 +1711,8 @@ TOLERANCES = {
     "run length": 0.10,
     "reuse": 0.10,
     "reuse distance": 0.10,
+    "extent reuse": 0.10,
+    "extent reuse distance": 0.10,
     "popularity": 0.05,
     "fan-out": 0.10,
     "depth": 0.10,
@@ -1647,11 +1841,10 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     mp.add_argument("--root", action="append", default=[], metavar="DIR", help="Count only calls on paths under DIR (repeatable; required for an strace, not for an exported trace file)")
     mp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
     mp.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
-    mp.add_argument("--metrics-block", type=int, default=4096, metavar="BYTES", help="The block size of the reuse-distance and popularity units [default: 4096]")
-    mp.add_argument("--metrics-sample", type=int, default=1, metavar="N", help="Keep one block and one object in N, chosen by hash, and scale [default: 1, exact]")
+    mp.add_argument("--metrics-block", type=int, metavar="BYTES", help="The block metrics too, reuse and popularity in blocks of BYTES, as captures taken before 2026-10-22 have them (the extent metrics are always there)")
     mp.add_argument("--instance-root", action="append", type=int, default=[], metavar="PID", help="The process tree under PID is one instance (repeatable; needs clone in the trace); default: the whole trace is one instance")
     mp.add_argument("--chain-gap-us", type=usage.non_negative, metavar="US", help="Report depth: consecutive io_submit rounds of a thread form a chain until more than US microseconds pass between a round's end and the next submit")
-    mp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_metrics: 1) to FILE instead of stdout")
+    mp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_metrics: 2) to FILE instead of stdout")
     ep = sub.add_parser("export", help="Write the runner's trace file for a `trace` node from an strace (DESIGN_REVIEW.md §3.58): JSON Lines, one lane per traced task, opens by id, paths relative to --root", usage="aeiou-trace export [OPTIONS] --root <DIR> -o <FILE> <TRACE>")
     ep.add_argument("trace", nargs="?", help="The strace output file, or - for stdin")
     ep.add_argument("--root", metavar="DIR", help="Required: export only calls on paths under DIR, written relative to it")
@@ -1659,7 +1852,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     ep.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
     ep.add_argument("-o", "--out", metavar="FILE", help="Required: the trace file to write; its sha256 is printed, for the abstract's `trace` node")
     cp = sub.add_parser("compare", help="Compare two metrics documents, from a trace or from aeiou dry-run --metrics-json", usage="aeiou-trace compare [OPTIONS] <A> <B>")
-    cp.add_argument("a", nargs="?", help="A metrics document (aeiou_metrics: 1), the trace's")
+    cp.add_argument("a", nargs="?", help="A metrics document (aeiou_metrics: 2, or 1 from before 2026-10-22), the trace's")
     cp.add_argument("b", nargs="?", help="The metrics document A is compared with, the abstract's")
     cp.add_argument("--template-a", metavar="NAME", help="Use this actor template's metrics of A instead of its total")
     cp.add_argument("--template-b", metavar="NAME", help="Use this actor template's metrics of B instead of its total")
@@ -1689,7 +1882,7 @@ def main(argv=None) -> int:
             missing.want(args.root, "--root <DIR>", "the directory the traced application's paths are under; the export is relative to it")
             missing.want(args.out, "-o <FILE>", "the trace file to write")
         if args.cmd == "compare":
-            missing.want(args.a, "<A>", "a metrics document (aeiou_metrics: 1), the trace's")
+            missing.want(args.a, "<A>", "a metrics document (aeiou_metrics: 2, or 1 from before 2026-10-22), the trace's")
             missing.want(args.b, "<B>", "the metrics document A is compared with, the abstract's")
         missing.check()
         if args.cmd == "compare" and args.max_distance is not None and (args.judge or args.tolerances or args.selfs):
@@ -1705,15 +1898,15 @@ def main(argv=None) -> int:
 def _main(args, subs: dict[str, usage.Parser]) -> int:
     mp = subs["metrics"]
     if args.cmd == "metrics":
-        if args.metrics_block < 1 or args.metrics_sample < 1:
-            mp.error("--metrics-block and --metrics-sample must be at least 1")
+        if args.metrics_block is not None and args.metrics_block < 1:
+            mp.error("--metrics-block must be at least 1")
         f = _open_trace(args.trace)
         with f:
             first = f.readline()
             lines = itertools.chain([first], f)
             if first.startswith('{"aeiou_trace"'):
                 try:
-                    doc = metrics_of_export(lines, args.metrics_block, args.metrics_sample)
+                    doc = metrics_of_export(lines, args.metrics_block)
                 except BuildError as e:
                     raise BuildError(f"{args.trace}: {e}") from None
                 if not doc["total"]["ops"]:
@@ -1724,7 +1917,7 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
                 missing.check()
             else:
                 seen = {}
-                doc = metrics_of(lines, [os.path.abspath(r) for r in args.root], args.metrics_block, args.metrics_sample, seen=seen,
+                doc = metrics_of(lines, [os.path.abspath(r) for r in args.root], args.metrics_block, seen=seen,
                                  exclude=args.exclude, cwd=args.cwd, instance_roots=args.instance_root, chain_gap_us=args.chain_gap_us)
                 if not doc["total"]["ops"]:
                     raise BuildError(f"{args.trace}: {nothing_counted(doc['roots'], seen)}")
@@ -1768,12 +1961,13 @@ def _main(args, subs: dict[str, usage.Parser]) -> int:
                 d = json.load(f)
         except (OSError, ValueError) as e:
             raise BuildError(f"{path}: {_cause(e)}")
-        if not isinstance(d, dict) or d.get("aeiou_metrics") != FORMAT:
-            raise BuildError(f"{path}: not an aeiou_metrics: {FORMAT} document")
+        if not isinstance(d, dict) or d.get("aeiou_metrics") not in FORMATS_READ:
+            raise BuildError(f"{path}: not an aeiou_metrics: {FORMAT} document (or version 1, a capture's from before 2026-10-22)")
         docs.append(d)
-    if docs[0]["block"] != docs[1]["block"]:
-        raise BuildError(f"block sizes differ ({docs[0]['block']} and {docs[1]['block']}): reuse distance and block popularity are not comparable")
     a, b = select(docs[0], args.template_a), select(docs[1], args.template_b)
+    # where only the blocks are in common, they are in common only at one size
+    if not ("reuse_extents" in a and "reuse_extents" in b) and docs[0].get("block") != docs[1].get("block"):
+        raise BuildError(f"block sizes differ ({docs[0].get('block')} and {docs[1].get('block')}): reuse distance and block popularity are not comparable")
     rows = compare(a, b)
     if args.only:
         rows = [r for r in rows if any(r[0].startswith(p) for p in args.only)]
@@ -1815,9 +2009,9 @@ def _judged(args, rows, a, b, docs) -> int:
                 d = json.load(f)
         except (OSError, ValueError) as e:
             raise BuildError(f"{path}: {_cause(e)}")
-        if not isinstance(d, dict) or d.get("aeiou_metrics") != FORMAT:
-            raise BuildError(f"{path}: not an aeiou_metrics: {FORMAT} document")
-        for key in ("source", "sha256", "gpus", "block", "sample"):
+        if not isinstance(d, dict) or d.get("aeiou_metrics") != docs[1].get("aeiou_metrics"):
+            raise BuildError(f"{path}: --self is B's abstract at another seed, and its aeiou_metrics is not B's ({d.get('aeiou_metrics') if isinstance(d, dict) else None} and {docs[1].get('aeiou_metrics')})")
+        for key in ("source", "sha256", "gpus", "block"):
             if d.get(key) != docs[1].get(key):
                 raise BuildError(f"{path}: --self is B's abstract at another seed, and its `{key}` is not B's ({d.get(key)} and {docs[1].get(key)})")
         if d.get("seed") == docs[1].get("seed"):

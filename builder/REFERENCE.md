@@ -397,14 +397,15 @@ built, that `aeiou datagen` and `aeiou-datagen` print the same bytes for the sam
 The trace side of the locality-metrics check (`GRAMMAR_OPTIONS.md` §5.4, `PROJECT_BRIEF.md`
 §6 item 14). `aeiou dry-run --metrics-json` gives an abstract's numbers; this gives the same
 numbers, by the definitions of `runner/REFERENCE.md` §10 and in the same document
-(`aeiou_metrics: 1`, with `"source": "strace"`), from an `strace` of the application the
+(~~`aeiou_metrics: 1`~~ `aeiou_metrics: 2` since 2026-10-22, reuse and popularity over extents
+and, under `--metrics-block`, blocks, `DESIGN_REVIEW.md` §3.79; with `"source": "strace"`), from an `strace` of the application the
 abstract models, and compares two such documents. Standard library only (`aeiou/trace.py`);
 the reasoning is in `DESIGN_REVIEW.md` §3.42. **The choices below were made while building
 and confirmed by the user the same day (decided 2026-10-01).**
 
 ```
 strace -f -ttt -T -yy -v -e trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt <command>
-aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--metrics-block BYTES] [--metrics-sample N]
+aeiou-trace metrics trace.txt --root /mnt/data [--exclude GLOB]… [--metrics-block BYTES]
             [--instance-root PID]… [--chain-gap-us US] [--cwd DIR] -o trace.metrics.json
 aeiou dry-run x.ast.json --gpus 1 --params-file fitted.params.json --metrics-json abstract.metrics.json
 aeiou-trace compare trace.metrics.json abstract.metrics.json [--template-b NAME] [--only PREFIX]… [--max-distance X]
@@ -484,8 +485,13 @@ verdict, and the comparison exits 0 only when at least one row was judged and no
   between B and each `--self` document. A `--self` document is the same abstract, same
   parameters and `--gpus`, at another seed (`aeiou dry-run --seed N --metrics-json`): an
   abstract is not asked to be nearer the trace than it is to itself. Three other seeds is
-  what the tests use. The tool checks the abstract's hash, `--gpus`, block, and sample of a
+  what the tests use. The tool checks the abstract's hash, `--gpus`, ~~block, and sample~~ and block of a
   `--self` document; it cannot check the parameters, which the document does not carry.
+- **Which rows (2026-10-22, `DESIGN_REVIEW.md` §3.79).** The extent rows when both documents
+  have extents; the block rows when both have blocks, which a capture taken before then
+  (`aeiou_metrics: 1`) has alone, so its abstract's dry run is taken with `--metrics-block`
+  at the capture's size; block sizes that differ are refused where only the blocks are in
+  common, and a pair with neither in common is refused.
 
   | Class (prefix of the row's name) | Tolerance |
   |---|---|
@@ -494,6 +500,8 @@ verdict, and the comparison exits 0 only when at least one row was judged and no
   | `run length` (the two histograms and the share of bytes in multi-op runs) | 0.10 |
   | `reuse` (first touches, and what a block's previous access was) | 0.10 |
   | `reuse distance` | 0.10 |
+  | `extent reuse` (first touches, what a byte's previous access was, the share of partial re-reads; 2026-10-22) | 0.10 |
+  | `extent reuse distance` (2026-10-22) | 0.10 |
   | `popularity` | 0.05 |
   | `fan-out`, `depth` | 0.10 |
 
@@ -661,7 +669,7 @@ an AST or a parameter file.
 | File | Holds |
 |---|---|
 | `<category>/[<class>/]<mechanism>/mechanism.toml` | `category`, `class` (where the category has classes), `application`, `format`, `phase` and `domain` (one value or a list); a `[defaults]` table (`ast`, `gpus`, `length`) while the mechanism has no case, so its row is the abstract at its defaults |
-| `cases/<case>/case.toml` | `kind`, `modality`, `model-family`; `gpus` (the counts its parameters hold at; the shape uses the first); `length` (the parameter that only lengthens the run: `requests`, `queries`, `calls`); `metrics_block` (a KV chunk for the KV cases, so every access is one block); one `[[run]]` (`ast`, `params`) per AST |
+| `cases/<case>/case.toml` | `kind`, `modality`, `model-family`; `gpus` (the counts its parameters hold at; the shape uses the first); `length` (the parameter that only lengthens the run: `requests`, `queries`, `calls`); ~~`metrics_block` (a KV chunk for the KV cases, so every access is one block)~~ (gone 2026-10-22 with blocks, `DESIGN_REVIEW.md` §3.79); one `[[run]]` (`ast`, `params`, one fragment or a list) per AST |
 | `captures/<capture>/capture.toml` | `raw_trace` (a pointer, or `"not retained"`); one `[[pair]]` per trace (`trace` stem, `ast`, `params` when the capture's fit differs, `verdict`) |
 
 `test_trace.py` reads its pairs from the capture records (`catalog.capture_pairs`), so a
@@ -700,8 +708,8 @@ run: accepted, then not accepted, then nothing judged; untraced without one).
 | `read_share` | `bytes_read / (bytes_read + bytes_written)` |
 | `metadata` | open, close, stat, fstat, readdir, mkdir, rmdir, unlink, rename, ftruncate, fallocate per read and write (lseek, ioctl, fsync, fadvise are neither) |
 | `reads_own_writes` | 1 when `read_after_write.n` > 0 |
-| `reread` | `read_after_read.n` over the block reads (first touches and both reuse kinds) |
-| `skew` | `popularity_blocks.top_1_pct` |
+| `reread` | `reuse_extents.read_after_read.n` over the bytes read (first touches and both reuse kinds), in bytes; ~~over the block reads~~ until 2026-10-22 (`DESIGN_REVIEW.md` §3.79) |
+| `skew` | `popularity_bytes.top_1_pct`; ~~`popularity_blocks.top_1_pct`~~ until 2026-10-22 |
 
 A byte-weighted median is the bucket at or above which half the bytes lie, so a size is a
 quarter-octave bucket's lower bound; a count median is wrong here (the header reads of
@@ -725,7 +733,7 @@ requests three times, once a seed, when its shape is written; CI re-measures it 
 of that, and runs it once more at its full length, the first seed's, for the counts (below).
 
 `shape.json` (`shape.defaults.json` for a defaults row): per run the AST and parameter
-file with their SHA-256, the GPU count, the block, the seeds, the length (`param`, `case`,
+file with their SHA-256, the GPU count, ~~the block,~~ the seeds, the length (`param`, `case`,
 `check`), `stable` and `moving`, one seed's op count, its counts by kind and bytes read and
 written, each dataset's projection as `dry-run --metrics-json` gives it (`datasets`), and per
 attribute `value`, `spread`, `class`. `shape_version` 2 since 2026-10-14 (the counts, bytes, and
@@ -750,7 +758,7 @@ by kind, bytes, and `datasets` exactly to the first seed's dry run at the case's
 (the run they came from; one more dry run when the check length is shorter, started first
 beside the rest: the descriptions and `CATALOG.md` print these numbers, 2026-10-14), renders
 `CATALOG.md`, and fails on any difference; with `--no-shapes` (the builder's tests, no runner) it checks instead that
-each shape is there and was measured on the AST, parameter file, GPU count, block, and length
+each shape is there and was measured on the AST, parameter file, GPU count, and length
 parameter committed now. `write` measures and writes the shapes, the descriptions, and
 `CATALOG.md`. CI runs
 `check` with the runner in the job that builds it.
@@ -760,7 +768,7 @@ at a shorter one (above); KV cases measured in chunk-sized blocks (the shares ar
 4 KiB, the work far less); a training job's `steps` is never a `length`; a tolerance may give
 both a relative and an absolute bound, either enough (`metadata`: 5 % or 0.005, since a ratio
 near zero moves by more than 5 % with no class seeing it); a case with two runs is two rows;
-the derived attributes per run; `metrics_block`, `gpus`, and the length in `case.toml`
+the derived attributes per run; ~~`metrics_block`,~~ `gpus` and the length in `case.toml`
 rather than the dictionary, being what the case runs rather than what it is.
 
 ## 9. Not yet
