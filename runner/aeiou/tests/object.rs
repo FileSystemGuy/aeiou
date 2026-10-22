@@ -18,7 +18,9 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const USER: &str = "aeiou";
-const SECRET: &str = "aeiou-secret";
+/// Each server's secret is its own, so a request that reaches another test's server is refused
+/// (403), never answered for it.
+static SERVERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn tmpdir(tag: &str) -> crate::common::TempDir {
     crate::common::tmpdir("object", tag)
@@ -51,6 +53,7 @@ fn object_variant(example: &str, names: &[&str], dir: &Path) -> PathBuf {
 struct Minio {
     child: Child,
     url: String,
+    secret: String,
     _dir: crate::common::TempDir,
 }
 
@@ -66,23 +69,32 @@ fn minio(test: &str) -> Minio {
         panic!("{test}: TEST_MINIO_BIN is not set: it names a MinIO server binary, the pinned release .github/workflows/ci.yml downloads (runner/REFERENCE.md §16)");
     };
     // the free port is released before MinIO binds it, so a test starting beside this one can
-    // take it first; MinIO then exits, and the server is started again on another port
+    // take it first: MinIO then exits, and is started again on another port. A PUT that the
+    // server carried out but whose answer was lost under load is answered 409 when retried:
+    // the bucket is there, and with a secret of its own the server can only be this one
     let mut exits = Vec::new();
     for _ in 0..5 {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let dir = tmpdir("minio");
+        let secret = format!("aeiou-secret-{}-{}", std::process::id(), SERVERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let child = Command::new(&bin)
             .args(["server", dir.to_str().unwrap(), "--address", &format!("127.0.0.1:{port}"), "--console-address", "127.0.0.1:0", "--quiet"])
             .env("MINIO_ROOT_USER", USER)
-            .env("MINIO_ROOT_PASSWORD", SECRET)
+            .env("MINIO_ROOT_PASSWORD", &secret)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .expect("starting MinIO");
-        let mut m = Minio { child, url: format!("http://127.0.0.1:{port}"), _dir: dir };
+        let mut m = Minio { child, url: format!("http://127.0.0.1:{port}"), secret, _dir: dir };
         let t0 = Instant::now();
         loop {
-            if curl(&m, "/bench", &["-X", "PUT"]).status.success() {
+            let code = Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", &format!("{USER}:{}", m.secret), "-X", "PUT"])
+                .arg(format!("{}/bench", m.url))
+                .env_remove("http_proxy")
+                .output()
+                .unwrap();
+            if matches!(String::from_utf8_lossy(&code.stdout).as_ref(), "200" | "409") {
                 return m;
             }
             if let Some(status) = m.child.try_wait().unwrap() {
@@ -98,7 +110,7 @@ fn minio(test: &str) -> Minio {
 
 /// A request for `path` on the server, signed with the test's credentials; fails on an HTTP error.
 fn curl(m: &Minio, path: &str, args: &[&str]) -> Output {
-    Command::new("curl").args(["-sf", "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", &format!("{USER}:{SECRET}")]).args(args).arg(format!("{}{path}", m.url)).env_remove("http_proxy").output().unwrap()
+    Command::new("curl").args(["-sf", "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", &format!("{USER}:{}", m.secret)]).args(args).arg(format!("{}{path}", m.url)).env_remove("http_proxy").output().unwrap()
 }
 
 /// `aeiou` with the store of `m` in its environment (none when `m` is `None`).
@@ -109,7 +121,7 @@ fn aeiou(m: Option<&Minio>, args: &[&str]) -> Output {
         c.env_remove(k);
     }
     if let Some(m) = m {
-        c.env("AWS_ENDPOINT_URL", &m.url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", SECRET).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
+        c.env("AWS_ENDPOINT_URL", &m.url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", &m.secret).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
     }
     c.output().unwrap()
 }
@@ -750,7 +762,7 @@ fn a_failed_run_leaves_no_upload_on_the_store() {
         let prefix = format!("orphan{i}");
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
         c.args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", &format!("o=s3://bench/{prefix}"), "--s3", "async", "--object-part-mib", "5"]);
-        c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", &url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", SECRET).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
+        c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", &url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", &m.secret).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
         let o = c.output().unwrap();
         refused(&o, &format!("actor `x` instance 0: x#0 [] stat orph/f99: s3://bench/{prefix}/f99: no such object (ENOENT)"));
         assert_eq!(open_uploads(&m, &format!("{prefix}/f0")), 0, "the failed run left its upload on the store");
@@ -788,7 +800,7 @@ fn a_failed_run_leaves_no_upload_whose_beginning_was_unanswered() {
     let url = slow_proxy(&m, 1 << 30, Duration::from_millis(1500));
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
     c.args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", "o=s3://bench/unanswered", "--s3", "async", "--object-part-mib", "5"]);
-    c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", &url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", SECRET).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
+    c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", &url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", &m.secret).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
     let o = c.output().unwrap();
     refused(&o, "actor `x` instance 0: x#0 [] stat f99: s3://bench/unanswered/f99: no such object (ENOENT)");
     assert_eq!(open_uploads(&m, "unanswered/f0"), 0, "the failed run left the upload it began on the store");
@@ -894,7 +906,7 @@ fn a_store_throttling_is_retried_and_every_retry_reported() {
     let run = |url: &str, prefix: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
         c.args(["run", ast.to_str().unwrap(), "--gpus", "1", "--root", dir.join("root").to_str().unwrap(), "--endpoint", &format!("o=s3://bench/{prefix}"), "--report-json", json.to_str().unwrap()]);
-        c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", SECRET).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
+        c.env_remove("AEIOU_CONFIG").env("AWS_ENDPOINT_URL", url).env("AWS_ACCESS_KEY_ID", USER).env("AWS_SECRET_ACCESS_KEY", &m.secret).env("AWS_REGION", "us-east-1").env("AWS_ALLOW_HTTP", "true");
         let out = ok(&c.output().unwrap());
         let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
         (out, report)
