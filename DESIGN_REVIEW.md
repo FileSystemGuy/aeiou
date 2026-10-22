@@ -6164,8 +6164,9 @@ each phase as its own `aeiou` process (`PROJECT_BRIEF.md` §8, *Driver integrati
    directory width of 4,096 or 10,000, the class cap) are the WG's to answer in `mlpstorage`.
 2. *The host facts in the report* (`PROJECT_BRIEF.md` §6 item 29): every rank's memory, CPUs,
    kernel, and the GPU ids it emulated, sent to rank 0 with its Hello and listed in the merged
-   report, with the datasets' bytes beside the hosts' total memory. Reported, never judged:
-   the 5× check is `mlpstorage`'s, read from `run --report-json`.
+   report, with the datasets' bytes beside the hosts' total memory. ~~Reported, never judged:
+   the 5× check is `mlpstorage`'s, read from `run --report-json`.~~ Judged by aeiou since
+   2026-10-21 (§3.78 point 10), by the rule a WG rules file carries; aeiou hard-codes none.
 3. *A projection in `aeiou dry-run`:* each dataset's samples, files, directories, mean file
    size, and total bytes, summed exactly from the size expressions (the same evaluation
    `datagen` does, without the payload), so a user sees whether a corpus fits before writing
@@ -6431,6 +6432,325 @@ within a compressor's window is compressed away (zstd's window is megabytes), so
 would no longer be the ratio. A projected ratio printed by datagen: exact for files of one
 sample (the sets are known), not for containers without walking every framing, and the
 table above tells a submitter what to expect.
+
+### 3.78 Use cases, benchmark rules, and one id per run: layers that only narrow (discussed with the user 2026-10-21; the points marked *agreed* decided that day, the rest proposed)
+
+**The question (the user's).** Unet3D on an H100 and Unet3D on a B300 are the same I/O
+mechanism with a different batch and a different compute time per step: the GPU's memory sets
+the batch (convergence second), and the batch and the GPU set the step time. A benchmark needs
+one handle that names *everything* that goes into an `aeiou run`, so that results submitted by
+several people are directly comparable, while a developer keeps the freedom to vary what a
+benchmark would lock (say `--posix io_uring` against the traced `sync`). Is a library of named,
+hashed parameter files that handle, and what hierarchy does it need?
+
+**What exists, and what is missing.**
+
+- The abstract's defaults are one reference set. `npy_per_sample`'s are the brief's Unet3D
+  numbers (`batch` 7, `step_time` 323 ms, `sample_mean` 140 MiB, `steps` 500, `samples`
+  50,000), so a run that forgets a value runs the H100 job.
+- Parameter files (§3.27, `schema/README.md` §8) stack over the defaults, last one wins, and
+  `--param` applies last. A file may pin its abstract's hash (`ast_sha256`, `aeiou-params --pin`).
+- A case's `case.toml` binds an abstract to a parameter file and the GPU counts it holds at
+  (§3.66), but it is a catalog record: the runner never reads it and nothing routes a run
+  through it.
+- A run's identity is the resolved values (`schema/README.md` §8), but nothing names that set
+  or checks it before the gate.
+- **The fingerprint does not cover compute** (checked 2026-10-21): `aeiou dry-run
+  npy_per_sample.ast.json --gpus 1 --param steps=4 --param samples=64` prints `2af23f1b741599ad`
+  with `step_time` 323 ms and with 100 ms. It is the multiset of positioned ops by definition
+  (`runner/REFERENCE.md` §2), so `--expect-fingerprint` accepts a run with the wrong step time.
+
+**The design.** Each point says whether the user agreed to it in the discussion (*agreed*:
+decided 2026-10-21) or it is mine and still open (*proposed*).
+
+1. *A value in a fragment is one the application decides* (agreed). How storage carries a
+   request out (an NFS client's rsize split, the block layer's `max_sectors`) is the system
+   under test's and is never a parameter: the interposition test (`PROJECT_BRIEF.md` §5). The
+   user's correction of an earlier conflation: the largest transfer an API or a file system
+   takes is an implementation question for the file system, not a value of the API layer.
+   What sets each value, which is what decides where it is written:
+
+   | Set by | Examples (`npy_per_sample`) | Written in |
+   |---|---|---|
+   | the application's structure | the calls, their order, the loops | the abstract (its AST) |
+   | the library | `np_chunk` 256 KiB, `framing` 498, `cd_len` 102 | the abstract, as defaults |
+   | the job | `sample_mean`, `sample_sd`, `steps`, `workers`, `prefetch` | the use case |
+   | the model on a GPU (the user's point) | `batch`, `step_time` | the use case |
+   | the API the application uses | `posix`, `cache`, `s3` | the abstract, as a default (point 4) |
+   | the storage, as the application reads it | `hdr_read` = `st_blksize` | the storage, at the gate (point 11) |
+   | the scale of a submission | `gpus`, hosts, `samples` | the submission |
+   | the system under test | `--root`, `--threads`, io_uring knobs | the submission |
+
+2. *Four layers, the last never shipped* (agreed):
+
+   | Layer | What it does | Written by | Reuse |
+   |---|---|---|---|
+   | abstract | declares the parameters, their kinds, and the library's values | whoever modeled the application | one per mechanism |
+   | use case | the job on a GPU (`unet3d-h100`, `unet3d-b300`); permissive | anyone | one per job × GPU |
+   | benchmark rules | locks for comparability and the constraints a run must meet | the WG, for its benchmark | one file for many use cases |
+   | submission | the required values and the system under test's settings | the submitter, per site | none; never shipped |
+
+   A benchmark entry is a use case and a rules file. A plain use case runs without rules, for
+   development and research.
+
+3. *Two declarers* (agreed; the user's correction of "the abstract declares every input"). The
+   abstract declares the parameters of the op stream; the runner declares its options (seed,
+   `--posix`/`--cache`/`--s3`, `--time-scale`, `--threads`, …) and classifies each as an
+   *identity* option, which a use case or rules file may lock (§3.60's fixed list is the
+   start), or a *solution* option, which is always the submitter's. A fragment sets `params`
+   (the abstract's names) and `run` (the runner's identity options).
+
+4. *Three states, narrowing only* (agreed). Every value is **locked** (final), **default** (a
+   value a later layer may replace), or **required** (no value; a later layer must supply one).
+   The abstract gives each parameter its first state; each later layer may only narrow it
+   (required to default or locked, default to locked) and never reopens what an earlier one
+   locked. A default is for a real fact of the layer that sets it (NumPy's chunk); a value that
+   varies with every use case is required, never a placeholder, so a B300 use case that forgets
+   `batch` is refused with the names missing instead of running the H100 job. The user weighed
+   defaults against requiring every unlocked value and kept defaults for this reason. *Lock
+   where the reason for locking lives* (agreed): the abstract records the traced API as a
+   default; `unet3d-h100` leaves it a default, so a developer compares `--posix io_uring` (and
+   the report already says the run used another backend); the benchmark's rules lock it,
+   because comparability is the benchmark's reason.
+
+5. *Composition by agreement, one level* (agreed). A fragment is a parameter file. Layers are
+   ordered (abstract, use case, rules, submission, command line), and a later layer may replace
+   an earlier one's default. Within one layer the fragments are order-free: two that set the
+   same name to the same value agree, two that set different values are refused, the refusal
+   naming both files (CUE's and the Nix module system's rule, not "last one wins"). A use case
+   lists its fragments and a fragment imports nothing: the reuse is at the job level (one job
+   fragment, several GPU fragments) and in the shared rules file, not deep enough to pay for an
+   import graph (the user's conclusion: collapse layers that bring no reuse). Today's
+   `--params-file A --params-file B` is the same mechanism with last-wins semantics.
+
+6. *The rules file names no parameter* (agreed; the user's point that names are per abstract
+   and a shared dictionary of them is too much complexity). It acts on states as a whole:
+
+   - `freeze`: every default becomes locked, every `scale` parameter required, every identity
+     option locked;
+   - `constraints`: point 9, over facts, results, and nothing named by an abstract.
+
+   A **`scale`** role tag on an abstract parameter (`w.param("samples", …, scale=True)`) marks
+   what is sized per site; it makes formal the `[config]` convention the docs already use, and
+   it is the only new per-parameter attribute. A rule that must name a parameter belongs in
+   that use case, never in the shared file.
+
+7. *Equations between parameters* (agreed). Already valid: a parameter's value may name others
+   (V1, cycles refused on the defaults and again on the values given). Composition by agreement
+   leaves one consistent meaning: equations are evaluated once, after every layer has merged,
+   so `step_time = 46 ms × batch` follows whatever `batch` ends up being. A derived parameter
+   is locked by construction (overriding it while its inputs still drive it would contradict
+   them). One that reads a required parameter varies per submission: the id covers its
+   expression, the report its number.
+
+8. *Known-at times, and two runner vocabularies* (agreed). Every name is known at **resolve**
+   (parameters: before any host is looked at), the **gate** (facts, point 11's
+   storage-reported values: on the hosts, before any I/O), or **after the run** (results). A
+   value may read only names known no later than itself: a parameter never reads a fact, so a
+   run's identity never depends on what its hardware reported (`MemTotal` moves by megabytes
+   across kernels and boots). Facts and results are declared by the runner, born locked, and
+   named for their aggregation and window (`fact.min_samples_per_gpu`, `fact.sum_host_mem`,
+   `result.min_gpu_busy_fraction` over the steady state the runner already selects), each
+   defined once in `runner/REFERENCE.md`; changing a definition is a recorded decision. The
+   `fact.` and `result.` prefixes (proposed) keep them from colliding with a parameter now or
+   when the vocabulary grows (the user asked that no parameter take a fact's or result's name):
+   a dot is refused in parameter names, so the check holds by construction and `gpus` (V2)
+   stays the only reserved name.
+
+9. *Constraints and verdicts* (agreed). A constraint is an expression in the abstract's
+   expression language with a `doc`:
+
+   ```json
+   {"rules_version": 1, "name": "…",
+    "freeze": {"defaults": "locked", "scale": "required", "identity_options": "locked"},
+    "constraints": [
+      {"expr": "fact.dataset_bytes >= 5 * fact.sum_host_mem", "doc": "dataset at least 5x the clients' total DRAM"},
+      {"expr": "fact.min_samples_per_gpu >= 2000",           "doc": "minimum distinct samples read per GPU"},
+      {"expr": "result.min_gpu_busy_fraction >= 0.90",       "doc": "every GPU busy at least 90% of steady state"}]}
+   ```
+
+   It is checked at the latest known-at of the names it reads, with no `when` field (the user
+   agreed it is not needed): at resolve (`aeiou dry-run`, before datagen), at the gate, or after
+   the run. Every name must resolve at resolve time, so a misspelled result fails before a
+   two-hour run, and the header lists each constraint with its time. The test and the message
+   are the runner's, once, for every constraint (the constraint, its `doc`, its file, the
+   numbers), so a rules file stays data, never code. A failed resolve or gate constraint is an
+   invalid run, refused before any I/O. A failed result constraint is a valid run that did not
+   pass: the run completes, the report is written with each constraint passed or failed, and the
+   exit status is its own (agreed; 3 proposed, unused today beside 0, 1, 2, 130, 141, 143), so a
+   driver searching for the largest passing GPU count tells "did not pass" from an error. Rules
+   across runs (repeats, medians, the search itself) are the driver's (`mlpstorage`, §3.74);
+   a rules file judges one run.
+
+10. *`samples` is checked, never derived* (agreed). `--subset` (§3.70 item 6) makes the
+    samples a run reads a run-time choice up to the corpus's count, so it is not fixed at
+    datagen. Its floor is per GPU (the user's point): work is split by global GPU id with
+    `drop_last`, so each GPU's distinct samples per epoch is `floor(samples / G)`, whatever the
+    GPUs per host, and the GPUs per host are the submitter's choice (simulated GPUs have no
+    hardware's packing). That layout leaves the op multiset unchanged but not how the ops
+    arrive: fewer, fuller clients mean fewer mounts and connections, more GPUs sharing a page
+    cache across epochs, more streams merged by one client's readahead, and a client that may
+    become the bottleneck (the per-step stall and busy fraction show it). The 5× rule guards the
+    cache effect, so the count's floor is per GPU and the cache's per summed host memory. The
+    submitter supplies `samples`; a dry-run helper prints the smallest value meeting every
+    constraint for a planned cluster; the runner checks it at the gate. Deriving it from
+    measured memory would let the run's values and its subset move with `MemTotal`.
+
+    *This revises §3.74 item 2* ("reported, never judged: the 5× check is `mlpstorage`'s";
+    agreed). The user's reason: aeiou is the only part that knows every client host's memory
+    (each rank's `MemTotal` and cgroup `memory.max` reach rank 0 in its Hello, §3.74), so
+    `mlpstorage` need not collect them a second time, and aeiou enforces the rule when the
+    WG's file carries it. The equation is the WG's, aeiou hard-codes none, and `mlpstorage`
+    keeps the sizing step, writing the submission.
+
+11. *Values the storage reports* (agreed that `st_blksize` is the system under test's; the
+    mechanism proposed). Python's `BufferedReader` asks for `st_blksize`: 1 MiB on NFS at rsize
+    1 MiB, 4 KiB on a local disk. By the interposition test the file system's report is the
+    solution's, and pinning it would charge a file system that reports 4 MiB for reads the real
+    application would not issue against it. Proposed: a value source `{"from": "st_blksize"}`
+    for `hdr_read`, `xfer`, `inv_read`, read by `fstat` on the dataset's root at the gate,
+    printed, and reported; the id covers the rule, the report the number. This refines CLOSED
+    (§3.48): every system under test sees the same op sequence *as a function of what it
+    reports*, and two fingerprints differ only through reported values, which the report shows.
+    An object store reports none, so the source declares a fallback. A rules file may lock the
+    value anyway if the WG prefers strict sameness to fidelity.
+
+12. *The lock, the id, and the handle* (agreed). Resolving a use case (and a rules file, for a
+    benchmark entry) writes a **lock**, a JSON file (JSON or TOML as everywhere in the repo,
+    never YAML, whose implicit typing makes a canonical form fragile; agreed): every value with
+    its state and the file it came from, the freeze and the constraints copied in, the
+    abstract's path relative to aeiou's `workloads/` directory and its `ast_sha256` (the hash of
+    the AST's canonical form, `schema/README.md` §1, never of the authoring script), and the
+    fragments' and rules file's paths and hashes as provenance. It is generated (by
+    `aeiou-params lock CASE [--rules FILE]`, proposed) and never edited, and it is the file a
+    run names: at run time it depends on the abstract alone, and the runner refuses an
+    abstract whose hash is not the lock's. A lock may hold several runs (a writer and its
+    reader), each pinning its own abstract; `aeiou datagen` takes the same lock, so the corpus
+    is written from the values the run checks against. Two hashes answer two questions:
+
+    | Hash | Of | Answers | Changes when |
+    |---|---|---|---|
+    | **file hash** (SHA-256 of the bytes) | the lock | is this the exact file published? | any edit, a `doc` typo included |
+    | **workload id** | the lock's canonical resolved values, without the required values and the storage-reported numbers the report carries | does this run do the same thing? | a value that changes the workload |
+
+    The **name** (`npy-per-sample/unet3d-h100`) is a mutable pointer, like a git tag; the id is
+    what results are compared by, so a corrected `doc` does not split them. A changed abstract
+    changes its hash and so every id built on it; re-resolving rewrites every lock, and the
+    lock diffs are what a reviewer reads. Two compositions that resolve alike are the same
+    workload; the fragment graph is provenance, recorded, never compared. Every run prints
+    every resolved value with its state and source in its header and report (the user's point:
+    necessary, though not sufficient without a check before the gate); `--expect-case-sha` and
+    `--expect-workload-id` refuse a mismatch before the gate, as `--expect-dataset-id` does.
+    The raw `AST --params-file` path stays for authors and researchers; its runs report no case.
+
+13. *Finding the lock* (agreed). Two paths, resolved by two parties:
+
+    | Path | Known to | Resolved by |
+    |---|---|---|
+    | the lock's own location | the caller: `mlpstorage` its install image, a developer the case's name | the command line |
+    | the abstract's, inside the lock (relative to `workloads/`) | aeiou, which knows where it is installed | aeiou, from the lock |
+
+    Only the lock's author cannot know where aeiou will be installed; aeiou always knows (its
+    own executable's path; `workloads/` beside `bin/` in the release, `--workloads DIR` for
+    another layout such as a source checkout). So nobody types or builds the abstract's path:
+    aeiou reads every value, the path included, from the lock itself, and a lock is
+    byte-identical on every site, which its file hash needs. Two mutually exclusive options,
+    each named for what it does:
+
+    - `--case-file PATH`: the lock at that path, no search. `mlpstorage` finds its entry in its
+      own install image (its business, by its own index or walk) and passes the absolute path;
+      a developer's lock outside aeiou's tree is run the same way.
+    - `--case NAME`: for a developer running without `mlpstorage`; aeiou walks its own
+      `workloads/` (hundreds of files, milliseconds) for the lock of that name, refusing none
+      or several and listing every match; `mechanism/name` narrows a short name.
+      `aeiou-catalog check` refuses two committed locks of one name, so every shipped name is
+      unique. A walk, not a generated index: one less generated file to keep current.
+
+    WG entries (`mlperf-unet3d-h100.lock.json`; their names are the WG's) live in
+    `mlpstorage`'s install image, not in aeiou's tree, which keeps WG content out of the repo
+    (`PROJECT_BRIEF.md` §8); a WG lock pins an aeiou abstract by its relative path and hash.
+
+14. *Validation after upload* (agreed). The submitter uploads the report to the WG's store,
+    and the WG runs a clean checkout of `mlpstorage`, which holds the published file hash and
+    workload id of every entry, against it. The report is the submitter's file, so nothing
+    printed in it proves anything by itself; the checker recomputes:
+
+    1. the file hash, from the lock the report **embeds** (the file itself, not only its hash);
+    2. the id, from that lock and the submission's required values;
+    3. the op counts by kind, bytes read and written, and the fingerprint, by `aeiou dry-run`
+       on that lock with the submission's GPU count and storage-reported values, in a pristine
+       image of **the aeiou version the report names**. The fingerprint and dataset ids
+       depend on the runner's definitions, so the WG keeps every release it accepts (agreed).
+       No storage is needed, and no dry-run before the run: at 150–350 ns per op, a job of
+       10⁹ ops is minutes.
+
+    What hashes cannot prove is that the results came from that run. What makes forging hard
+    is numbers that must agree exactly: the report's totals, histogram counts, and per-phase
+    sums against the dry-run's; the kernel's NFS counters (mountstats, §3.30) against the op
+    stream; `started`, `finished`, and the step times (point 15) against `steps × step_time`
+    and the busy fraction; and the upload store's object times, the one clock the submitter
+    does not keep. Reproduction (same lock, same id) remains the WG's.
+
+15. *Step times* (agreed; the user's request). Beside today's per-step stall and busy fraction,
+    the report holds two histograms over every GPU's every step (50,000 entries each at 100
+    GPUs × 500 steps), in the report's latency buckets: the **compute** time of each step (the
+    emulated compute, so its spread is the timer's overshoot and shows an overloaded client)
+    and the **delay** before the next step could start (the wait for data, and the barrier
+    where the abstract has one: the storage's signal). Minimum, median, and maximum alone are
+    too coarse to see oddities; a table per GPU and step is more than a reviewer needs.
+    With them, the slowest N delays (N = 10; agreed) with each one's GPU and step index, so a
+    tail can be traced to where it happened. Each is a fixed-size accumulator (a few hundred
+    counters, or N entries), kept by each GPU's own thread with two clock reads and one
+    increment per step, merged per host and on rank 0 bucket by bucket at the end
+    (`Report::merge_all`, as the latencies), so it keeps point 16: no per-entry storage, no
+    file, no network during the measured run. The user's caution: a naive implementation that
+    wrote each entry as it happened would break point 16.
+
+16. *No I/O of aeiou's own during the measured run* (agreed; a rule). Nothing aeiou writes for
+    its own records touches any file system between the gate and the end of the run: the
+    report, the step times, and the counters are held in memory and written after the end.
+    The user's reason: submitters have kept log files on the system under test, and the
+    logging perturbed the measurement. The build confirms every path of `aeiou run` keeps it
+    and adds a test. Outside aeiou's reach, and for `mlpstorage`'s documentation: a shell
+    redirect of the output, and the `--report-json` file, belong off the system under test.
+
+**What changes, if decided.**
+
+- Contract 0.11: the `scale` tag, the dot refused in parameter names, `{"from": …}` values;
+  `params_version` 2 with states and a `run` table; a rules schema; both checkers.
+- The abstracts: job and GPU values that are defaults today become required (`npy_per_sample`'s
+  H100 set moves to a `unet3d-h100` use case), `[config]` becomes `scale`, `hdr_read`/`xfer`/
+  `inv_read` and their counterparts in other abstracts (`buf`) become storage-reported. Every AST hash, and the
+  fingerprints of runs on storage that does not report 1 MiB, change.
+- The runner: the lock and the id; `--case-file`, `--case`, `--workloads`,
+  `--expect-case-sha`, `--expect-workload-id`, in `run` and `datagen`; facts and results as
+  names; constraint evaluation at three times; the new exit status; the header block; the lock
+  embedded in the report; the step-time histograms; the no-I/O test. The builder: `scale`, the
+  name rule, `aeiou-params lock`. `aeiou-catalog check`: one lock per name. Every man page whose
+  flags change.
+- The docs: `PROJECT_BRIEF.md` §5 and §8 (a rules file is WG process: aeiou ships the mechanism
+  and no WG rules file), §6 a new item, CLAUDE.md's invariants (fingerprint and id), §3.74.
+
+**Open.** The exit status's number (3 proposed); whether accelerator names in use case
+directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
+points (8's prefixes, 11's mechanism, 12's tool name).
+
+**Considered and not done.** Inheritance resolved at run time (editing a parent silently changes
+every child; a flat lock with its own id does not); "last one wins" between fragments (which
+file wins is the question users get wrong; agreement makes order irrelevant and conflicts
+visible); a shared dictionary of parameter names so a rules file could name them (the
+complexity the user ruled out; freeze by state needs none); `samples` derived from measured
+memory (point 10); rules files holding code (constraints are data, checked by the runner); a
+`when` field on constraints (the names already say); a reserved-word list for facts and
+results (it breaks committed abstracts when the vocabulary grows; the prefix cannot); an
+absolute path to the abstract in the lock (the lock would differ per site, and so its file
+hash); `mlpstorage` building the abstract's path (the dependency would pass through a command
+line again); one `--case` guessing a path from a slash (two options say what they do); a hash of
+the results written into the report (the user's idea, dropped by the user: anyone who edits the
+report recomputes it, and a key in a binary the submitter runs can be extracted); hashing the
+run's output data (a read-back pass over the system under test; `aeiou-verify`'s job);
+signatures on locks (the clean `mlpstorage` checkout is the trust anchor; worth it only if
+entries are ever fetched from elsewhere); a full per-GPU step table by default (point 15).
 
 ## 4. Plan changes
 
