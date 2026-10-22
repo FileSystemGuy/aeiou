@@ -5,8 +5,8 @@
     {
       "ast": "file_per_sample",
       "ast_sha256": "b503633cda06fb170877cf755f512c5bc48e4273f7635a85196632528605819c",
-      "params": "params.json",
-      "params_sha256": "e9897b286ca566e87c5868f0668efc99110e2d28586ca21180531a4effad31ad",
+      "params": "case.lock.json",
+      "params_sha256": "8308a9b373d830574496df799e4298796c40c685168ea779c8cfef0e13411172",
       "gpus": 1,
       "block": 4096,
       "seeds": [

@@ -5,8 +5,8 @@
     {
       "ast": "lmcache_local_disk",
       "ast_sha256": "f8fbdf21709e42f4d73d3141dffc8784ac7e5960731581584b7f0d83e6c57812",
-      "params": "params.json",
-      "params_sha256": "28863c1fe6dbb751361af15ed8257802764471efbb14b7e70c2a2ddcd49a7537",
+      "params": "case.lock.json",
+      "params_sha256": "25fdb0fe20a2783a5a6d58b51cdb58425b0f88db5423e1ed03265cf5c277a42b",
       "gpus": 1,
       "block": 3145728,
       "seeds": [

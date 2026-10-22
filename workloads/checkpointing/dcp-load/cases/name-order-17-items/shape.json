@@ -5,8 +5,8 @@
     {
       "ast": "dcp_load",
       "ast_sha256": "45646d7beb404e59e68ba7aa6befb6a189f2ee3855833f85fc4459d0612b8759",
-      "params": "params.json",
-      "params_sha256": "9282abee542b4296cba4602251698f77f76d0b002ce0904f16ccad6094964fd4",
+      "params": "case.lock.json",
+      "params_sha256": "fcc006bed7fe94683dc2df5086fbf20c7db85b4a8931a46f5e9702a1cde2c627",
       "gpus": 2,
       "block": 4096,
       "seeds": [

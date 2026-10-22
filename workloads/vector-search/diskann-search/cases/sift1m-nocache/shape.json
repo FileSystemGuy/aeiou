@@ -5,8 +5,8 @@
     {
       "ast": "diskann_search",
       "ast_sha256": "ba8159b63fb29879238d695eb8381de01ed56499e1fd358f9b45fb1abe8d67fb",
-      "params": "params.json",
-      "params_sha256": "56d30985c1b92371c9097fc88c73812f3c8913cbaddea2e2289d852b389a35ef",
+      "params": "case.lock.json",
+      "params_sha256": "73e6545c780aee3b67cce05f54ecebd5dc8e9031acb2cfe57c11573e890e7c81",
       "gpus": 1,
       "block": 4096,
       "seeds": [

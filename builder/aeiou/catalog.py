@@ -381,24 +381,35 @@ def _load_case(c: pathlib.Path, m: dict, attrs: dict, root, problems: Problems) 
         if ast is None:
             problems.add(path, root, f"[[run]] ast {r.get('ast')!r} is not an abstract of {m['rel']}")
             continue
-        params = c / str(r.get("params"))
-        if not params.is_file() or params.parent != c:
-            problems.add(path, root, f"[[run]] params {r.get('params')!r} is not a file of the case")
+        # its fragments (contract 0.11): one file or a list, each the case's or its mechanism's
+        frags = r.get("params")
+        frags = [frags] if isinstance(frags, str) else frags if isinstance(frags, list) else [None]
+        files = [c / str(f) for f in frags]
+        bad = [f for f, p in zip(frags, files) if not isinstance(f, str) or not p.is_file() or m["dir"].resolve() not in p.resolve().parents]
+        if bad:
+            problems.add(path, root, f"[[run]] params {bad[0]!r} is not a file of the case or its mechanism")
             continue
-        try:
-            pset = emit.loads(params.read_text(encoding="utf-8"))
-        except ValueError as e:
-            problems.add(params, root, str(e))
+        wrong = False
+        for f in files:
+            try:
+                pset = emit.loads(f.read_text(encoding="utf-8"))
+            except ValueError as e:
+                problems.add(f, root, str(e))
+                wrong = True
+                continue
+            if pset.get("abstract") != r["ast"]:
+                problems.add(f, root, f"its abstract is {pset.get('abstract')!r}, the case runs it as {r['ast']}")
+        if wrong:
             continue
-        if pset.get("abstract") != r["ast"]:
-            problems.add(params, root, f"its abstract is {pset.get('abstract')!r}, the case runs it as {r['ast']}")
+        # what a run of the case reads, and what its shape is measured through: the lock
+        params = c / lock.LOCK_FILE
         if case["length"] is not None and not _length_ok(ast["doc"], case["length"]):
             problems.add(path, root, f"length {case['length']!r} is not an integer parameter of {r['ast']}")
             case["length"] = None
-        case["runs"].append({"ast": r["ast"], "params": params, "abstract": ast})
+        case["runs"].append({"ast": r["ast"], "params": params if params.is_file() else None, "fragments": files, "abstract": ast})
     if len({r["ast"] for r in case["runs"]}) != len(case["runs"]):
         problems.add(path, root, "two runs of one AST: a case runs each abstract once")
-    named = {r["params"].name for r in case["runs"]}
+    named = {f.name for r in case["runs"] for f in r["fragments"] if f.parent == c}
     for p in sorted(c.glob("*params.json")):
         if p.name not in named:
             problems.add(p, root, "a parameter file no [[run]] of case.toml names")
@@ -436,7 +447,9 @@ def _load_capture(cap: pathlib.Path, case: dict, attrs: dict, root, problems: Pr
         if p.get("ast") not in runs:
             problems.add(path, root, f"[[pair]] ast {p.get('ast')!r} is not one of the case's runs ({', '.join(runs)})")
             continue
-        params = cap / p["params"] if "params" in p else runs[p["ast"]]["params"]
+        params = cap / p["params"] if "params" in p else runs[p["ast"]]["params"]      # the case's lock
+        if params is None:
+            continue                # a case with no lock, refused where its runs are read
         if not params.is_file():
             problems.add(path, root, f"[[pair]] params {p['params']!r} is not a file of the capture")
             continue
@@ -479,12 +492,23 @@ def derived(abstract: dict, verdicts: list[str]) -> dict:
 
 # ---------------------------------------------------------------- measured: the shape
 
+def runner_args(ast: pathlib.Path, name: str, params: pathlib.Path | None) -> list[str]:
+    """What names the workload to a dry run: the AST, with a parameter file, or a case's lock,
+    as a run of the case reads it (`--case-run` when the lock has several runs)."""
+    if params is None:
+        return [str(ast)]
+    if params.name != lock.LOCK_FILE:
+        return [str(ast), "--params-file", str(params)]
+    out = ["--case-file", str(params), "--workloads", str(lock.workloads_of(params))]
+    if len(json.loads(params.read_text(encoding="utf-8")).get("runs", [])) > 1:
+        out += ["--case-run", name]
+    return out
+
+
 def _dry_run(runner: str, run: dict, gpus: int, block: int, seed: int, length: tuple | None, tmp: pathlib.Path) -> dict:
     out = tmp / f"{run['abstract']['doc']['name']}.{seed}.{length[1] if length else 'case'}.json"
-    cmd = [runner, "dry-run", str(run["abstract"]["path"]), "--gpus", str(gpus), "--seed", str(seed),
+    cmd = [runner, "dry-run", *runner_args(run["abstract"]["path"], run.get("ast"), run["params"]), "--gpus", str(gpus), "--seed", str(seed),
            "--metrics-block", str(block), "--metrics-json", str(out)]
-    if run["params"]:
-        cmd += ["--params-file", str(run["params"])]
     if length:
         cmd += ["--param", f"{length[0]}={length[1]}"]
     p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
@@ -519,8 +543,8 @@ def shape(runner: str, run: dict, gpus: int, block: int, length_param: str | Non
     smallest length (halving down to 1/64) whose numbers are still the case's, where `check`
     re-measures them. A shorter run is never taken for the case: a reuse share grows with the
     run on a fixed dataset, and a fixed load is amortized only over a long one."""
-    pset = values_of(emit.loads(run["params"].read_text(encoding="utf-8"))) if run["params"] else {}
-    full = pset.get(length_param, _params_of(run["abstract"]["doc"])[length_param]["default"]) if length_param else None
+    pset = _values(run)
+    full = pset.get(length_param, _params_of(run["abstract"]["doc"])[length_param].get("default")) if length_param else None
     with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
         tmp = pathlib.Path(tmp)
         med, seeds, first = _at(runner, run, gpus, block, (length_param, full) if full else None, pool, tmp)
@@ -665,7 +689,16 @@ def _description_path(m: dict, case: dict | None) -> pathlib.Path:
 
 
 def _values(run: dict) -> dict:
-    return values_of(emit.loads(run["params"].read_text(encoding="utf-8"))) if run["params"] else {}
+    """The values a run takes: its parameter file's, or a case's lock's for this run (none for
+    a required one)."""
+    if not run["params"]:
+        return {}
+    if run["params"].name != lock.LOCK_FILE:
+        return values_of(emit.loads(run["params"].read_text(encoding="utf-8")))
+    doc = json.loads(run["params"].read_text(encoding="utf-8"))
+    entries = next((r["params"] for r in doc.get("runs", []) if r.get("name") == run["ast"]), {})
+    # a storage-reported value, at its fallback, as a dry run without --st-blksize takes it
+    return {k: v.get("fallback") if isinstance(v, dict) and "from" in v else v for k, v in values_of({"params": entries}).items()}
 
 
 def context(m: dict, case: dict | None, run: dict, gpus: int, attrs: dict) -> list[str]:

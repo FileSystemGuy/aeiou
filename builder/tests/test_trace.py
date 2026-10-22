@@ -775,8 +775,8 @@ def test_capture_pair_against_the_tolerances(tmp_path, capsys, capture, which, a
     # shares and distances are those at 4 KiB, the counts 768 times fewer, and so the work)
     block = json.loads((capture / f"{which}.metrics.json").read_text())["block"]
     docs = [tmp_path / f"dry.{seed}.json" for seed in (1, 2, 3, 4)]
-    runs = [subprocess.Popen([str(RUNNER), "dry-run", str(ast_path(ast)), "--gpus", str(gpus), "--seed", str(seed),
-                              "--params-file", str(params), "--metrics-json", str(doc), "--metrics-block", str(block)],
+    runs = [subprocess.Popen([str(RUNNER), "dry-run", *catalog.runner_args(ast_path(ast), ast, params), "--gpus", str(gpus), "--seed", str(seed),
+                              "--metrics-json", str(doc), "--metrics-block", str(block)],
                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             for seed, doc in zip((1, 2, 3, 4), docs)]               # the seeds at once: a dry run's metrics take one core
     for p in runs:

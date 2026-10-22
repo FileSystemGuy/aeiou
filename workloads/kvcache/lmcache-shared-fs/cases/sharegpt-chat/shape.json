@@ -5,8 +5,8 @@
     {
       "ast": "lmcache_shared_fs",
       "ast_sha256": "1d80bf56853ca18ad62d16e850519f4ffa85a179cf9c667088804e9611441d26",
-      "params": "writer.params.json",
-      "params_sha256": "9da1bf12c857e61a8c388f09a3302d46dd750bf3fc1650b3c470373a4a28c033",
+      "params": "case.lock.json",
+      "params_sha256": "860c43f6891dda4000dc6deabc13af54f3aec70d53672fe846525fa8b5e4960d",
       "gpus": 1,
       "block": 3145728,
       "seeds": [
@@ -109,8 +109,8 @@
     {
       "ast": "lmcache_shared_fs_reader",
       "ast_sha256": "1d063beac71211d7cc4f01f867504812052425ce3fe0006971eb4638053354b3",
-      "params": "reader.params.json",
-      "params_sha256": "403d13251fd405834ba1bf9fc4fa6cce77be2bc6af4dc468761b4956cac8a549",
+      "params": "case.lock.json",
+      "params_sha256": "860c43f6891dda4000dc6deabc13af54f3aec70d53672fe846525fa8b5e4960d",
       "gpus": 1,
       "block": 3145728,
       "seeds": [

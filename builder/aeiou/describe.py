@@ -25,6 +25,7 @@ from __future__ import annotations
 import math
 import statistics
 
+from .params import default_value
 from .pattern import Pattern
 
 # The kinds the schema defines (`schema/abstract-ast.schema.json`); a test holds these to it.
@@ -134,7 +135,7 @@ class Describer:
     def __init__(self, ast: dict, values: dict, gpus: int, *, shape: dict | None = None):
         self.ast = ast
         self.params = ast.get("params") or {}
-        self.values = {**{k: p["default"] for k, p in self.params.items()}, **values, "gpus": gpus}
+        self.values = {**{k: default_value(p) for k, p in self.params.items()}, **values, "gpus": gpus}
         self.gpus = gpus
         self.shape = shape
         self.datasets = ast.get("datasets") or {}
@@ -924,7 +925,7 @@ class Describer:
         out = ["| Parameter | Value | Default | Unit | What it is |", "|---|---|---|---|---|"]
         for name, p in self.params.items():
             unit = self.unit_of_param(name)
-            v, dflt = self.values.get(name), p["default"]
+            v, dflt = self.values.get(name), default_value(p)
             shown = lambda x: (self.dist(x, unit) if isinstance(x, dict) else _array(x, unit) if isinstance(x, list) else amount(x, unit)).replace("|", "\\|")
             doc = (p.get("doc") or "").replace("|", "\\|").replace("\n", " ")
             out.append(f"| `{name}` | {shown(v)} | {'same' if v == dflt else shown(dflt)} | {p.get('unit', '—')} | {doc} |")
