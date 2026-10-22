@@ -5,15 +5,15 @@
     {
       "name": "npy_per_sample",
       "abstract": "input-pipeline/map/npy-per-sample/npy_per_sample.ast.json",
-      "ast_sha256": "f1c4446c71f967be381ebf0f90d2eca23138bef1a545f15d751d518151890fa1",
+      "ast_sha256": "55b72b04751401f05c6f865bf0ba670af4eed47723ec32e603537bbadd2976bc",
       "params": {
         "batch": {"default": 2},
         "cd_len": {"default": 102},
         "files_per_directory": {"default": 10000},
         "framing": {"default": 498},
-        "hdr_read": {"default": 1048576},
+        "hdr_read": {"default": {"from": "st_blksize", "of": "train", "fallback": 1048576}},
         "inv_entry": {"default": 27},
-        "inv_read": {"default": 1048576},
+        "inv_read": {"default": {"from": "st_blksize", "of": "train", "fallback": 1048576}},
         "inventory": {"default": false},
         "np_chunk": {"default": 262144},
         "prefetch": {"default": 2},
@@ -25,7 +25,7 @@
         "sync_every": {"default": 1},
         "walk": {"default": true},
         "workers": {"default": 2},
-        "xfer": {"default": 1048576}
+        "xfer": {"default": {"from": "st_blksize", "of": "train", "fallback": 1048576}}
       },
       "sources": {
         "batch": "input-pipeline/map/npy-per-sample/cases/npy-140mib/params.json",
@@ -41,7 +41,7 @@
         "sample_mean": "input-pipeline/map/npy-per-sample/cases/npy-140mib/params.json",
         "sample_sd": "input-pipeline/map/npy-per-sample/cases/npy-140mib/params.json",
         "samples": "input-pipeline/map/npy-per-sample/cases/npy-140mib/params.json",
-        "step_time": "abstract",
+        "step_time": "input-pipeline/map/npy-per-sample/cases/npy-140mib/params.json",
         "steps": "input-pipeline/map/npy-per-sample/cases/npy-140mib/params.json",
         "sync_every": "abstract",
         "walk": "abstract",
@@ -53,6 +53,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "input-pipeline/map/npy-per-sample/cases/npy-140mib/case.toml",
-    "fragments": [{"path": "input-pipeline/map/npy-per-sample/cases/npy-140mib/params.json", "sha256": "9e933ec10a7652ad664153d833417318a17df08875ea7235f2f8afbe4b95b4d4"}]
+    "fragments": [{"path": "input-pipeline/map/npy-per-sample/cases/npy-140mib/params.json", "sha256": "5c80aaf500feef4adcf56bb680addf5cafd6621f2f37149ceae04df394cf28eb"}]
   }
 }

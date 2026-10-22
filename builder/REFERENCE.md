@@ -679,7 +679,8 @@ verdict lives beside the trace it is about; the list kept in the test is gone.
 (`curated`, `derived`, `measured`), level (`mechanism`, `case`), and values, or for a measured
 one its unit, tolerance, and classes (first match, bounds inclusive). A record may state only
 curated attributes of its level, with defined values, and the tool refuses the rest: an
-unknown key or value, a derived or measured attribute stated by hand, a missing required one,
+unknown key or value, a derived or measured attribute stated by hand, a missing required one
+(`required = true`, or `required = { kind = "use" }`: required when the record's `kind` is `use`),
 a list where the dictionary does not mark the attribute `multiple`, a category or class
 other than the directory's, a directory of the first level that is not a category (or a
 category without its directory, or a class directory its category does not define), a run

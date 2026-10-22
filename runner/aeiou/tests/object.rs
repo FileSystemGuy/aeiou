@@ -126,6 +126,10 @@ fn aeiou(m: Option<&Minio>, args: &[&str]) -> Output {
     c.output().unwrap()
 }
 
+/// `npy_per_sample`'s job and GPU values, required since 2026-10-22 (DESIGN_REVIEW §3.78), which
+/// a datagen of its corpus is given as a run is.
+const NPY_RUN: &[&str] = &["--param", "batch=2", "--param", "workers=1", "--param", "prefetch=2", "--param", "steps=2", "--param", "step_time=0"];
+
 fn ok(o: &Output) -> String {
     let out = String::from_utf8_lossy(&o.stdout).to_string();
     assert!(o.status.success(), "failed:\n{out}\n{}", String::from_utf8_lossy(&o.stderr));
@@ -149,7 +153,7 @@ fn an_object_dataset_is_written_byte_for_byte_and_read_back_to_the_fingerprint()
     let ast = object_variant("npy_per_sample", &["train"], &dir);
     let ast = ast.to_str().unwrap();
     // 20 MiB samples: three parts each (8 + 8 + 4 MiB), read in 1 MiB requests across the seams
-    let params = ["--param", "samples=12", "--param", "sample_mean=20971520", "--param", "sample_sd=0", "--param", "steps=2", "--param", "batch=2", "--param", "workers=1", "--param", "step_time=0"];
+    let params = ["--param", "samples=12", "--param", "sample_mean=20971520", "--param", "sample_sd=0", "--param", "steps=2", "--param", "batch=2", "--param", "workers=1", "--param", "prefetch=2", "--param", "step_time=0"];
     let root = dir.join("root");
     let gen = |root: &Path, endpoint: &str| {
         let mut a = vec!["datagen", ast, "--root", root.to_str().unwrap(), "--endpoint", endpoint];
@@ -461,6 +465,7 @@ fn a_resumed_object_dataset_counts_the_objects_it_finds() {
     let root = dir.join("root");
     let mut a = vec!["datagen", ast.to_str().unwrap(), "--root", root.to_str().unwrap(), "--endpoint", "train=s3://bench/res"];
     a.extend(["--param", "samples=10", "--param", "sample_mean=1000", "--param", "sample_sd=0"]);
+    a.extend(NPY_RUN);
     ok(&aeiou(Some(&m), &a));
     let get = || -> serde_json::Value { serde_json::from_slice(&curl(&m, "/bench/res/.aeiou-dataset.json", &[]).stdout).unwrap() };
     let full = get();
@@ -958,7 +963,8 @@ fn an_object_dataset_grows_and_shrinks_to_the_corpus_of_the_new_count() {
     let gen = |prefix: &str, n: i64| {
         let n = format!("samples={n}");
         let e = format!("train=s3://bench/{prefix}");
-        ok(&aeiou(Some(&m), &["datagen", ast.to_str().unwrap(), "--root", root.to_str().unwrap(), "--endpoint", &e, "--param", &n, "--param", "sample_mean=3000", "--param", "sample_sd=0", "--param", "files_per_directory=8", "--writers", "3"]));
+        let a = ["datagen", ast.to_str().unwrap(), "--root", root.to_str().unwrap(), "--endpoint", &e, "--param", &n, "--param", "sample_mean=3000", "--param", "sample_sd=0", "--param", "files_per_directory=8", "--writers", "3"];
+        ok(&aeiou(Some(&m), &[&a[..], NPY_RUN].concat()));
     };
     let id = |prefix: &str| -> String {
         let v: serde_json::Value = serde_json::from_slice(&curl(&m, &format!("/bench/{prefix}/.aeiou-dataset.json"), &[]).stdout).unwrap();

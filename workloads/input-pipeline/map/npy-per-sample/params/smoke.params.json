@@ -3,6 +3,10 @@
   "abstract": "npy_per_sample",
   "doc": "A laptop-sized run of the shape: 100 samples of about 2 MiB, 10 steps. Not a reference set.",
   "params": {
+    "batch": {"default": 7},
+    "workers": {"default": 4},
+    "prefetch": {"default": 2},
+    "step_time": {"default": 323000000},
     "samples": {"default": 100},
     "steps": {"default": 10},
     "sample_mean": {"default": 2097152},

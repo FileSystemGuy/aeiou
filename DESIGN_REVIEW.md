@@ -6917,6 +6917,29 @@ made in the build, open to revision:
   sampler reads `/proc`): they are no storage. The build confirmed no path of `aeiou run`
   wrote during a run before the test was written; the test keeps it so.
 
+**Built: the catalog through the lock, and the first use case** (2026-10-22, part 5a). Choices
+made in the build, open to revision:
+
+- **A case's shape is measured through its lock** (`dry-run --case-file`), as a run of the case
+  reads it, and a capture pair with no parameter file of its own is judged at the lock; a
+  `[[run]]`'s `params` is one fragment or a list, each the case's or its mechanism's.
+- **`npy_per_sample`'s job and GPU values are required**, `samples` is `scale` and required,
+  and `hdr_read`, `xfer`, and `inv_read` are `st_blksize` (fallback 1 MiB). The values the
+  defaults held are the use case `unet3d-h100` (`job.params.json`, `h100.params.json`), whose
+  lock runs the fingerprints the defaults did (`tests/golden.rs` and `tests/cases.rs` hold
+  them). The two traced examples carry the old `step_time`, 323 ms, said to be not fitted (the
+  user's answer). Both fragments sit in the case's directory until a second accelerator shares
+  the job fragment; where a shared fragment lives is decided then.
+- **Its shape is the first at a real job's size**: about 490 GB read by one instance, which
+  overflowed the metrics pass at 4 KiB blocks and led to the extent metrics (§3.79), built
+  before this part was committed; it is measured exactly, in about two seconds a seed.
+- **Point 18 read as: a use case names its accelerator; an example may.** The examples were
+  traced on stand-ins with no accelerator, so `accelerator` is `required = { kind = "use" }`
+  in `attributes.toml`, a conditional requirement any curated attribute may now declare
+  (`aeiou-catalog` checks that the condition names a curated attribute of the same level and
+  one of its values). The vocabulary starts with `h100` alone; each accelerator is added with
+  its first case.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

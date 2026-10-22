@@ -1,0 +1,91 @@
+{
+  "shape_version": 3,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "npy_per_sample",
+      "ast_sha256": "695aa607cebf811246628f2107b6044400eb185eeabf202964dd9ec2dfd03f31",
+      "params": "case.lock.json",
+      "params_sha256": "d2b0614686d2f247b83f2521c54b7fc2e6e2066035412ab33c4bbf337f51dee3",
+      "gpus": 1,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": true,
+      "moving": [],
+      "ops": 2519734,
+      "counts": {
+        "close": 3505,
+        "fstat": 3505,
+        "ioctl": 3500,
+        "lseek": 2000009,
+        "open": 3505,
+        "read": 505705,
+        "readdir": 5
+      },
+      "bytes_read": 517410915705,
+      "bytes_written": 0,
+      "datasets": [
+        {
+          "bytes": 7342541540433,
+          "directories": 5,
+          "files": 50000,
+          "inventory_bytes": 1350000,
+          "mean_file": 146850803,
+          "name": "train",
+          "samples": 50000
+        }
+      ],
+      "attributes": {
+        "run_length_read": {
+          "value": 134217728,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 1048576,
+          "spread": 0,
+          "class": "medium"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 0.0208026,
+          "spread": 1.76472e-05,
+          "class": "low"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.00709431,
+          "spread": 6.71027e-06,
+          "class": "none"
+        },
+        "skew": {
+          "value": 0.0170234,
+          "spread": 6.64317e-06,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

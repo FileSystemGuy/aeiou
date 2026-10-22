@@ -291,6 +291,12 @@ workload train_large_samples {
 }
 ```
 
+*2026-10-22* (`DESIGN_REVIEW.md` §3.78): the job's values (`workers`, `prefetch`, `steps`, the sample
+sizes), the model's on its GPU (`batch`, `step_time`), and the corpus size `samples` (the
+submission's scale) have no default in the abstract; the values above are the use case
+`unet3d-h100`'s. `hdr_read`, `xfer`, and `inv_read` are `st_blksize` as the storage reports it,
+1 MiB where it reports none.
+
 `per_fill = $xfer / $np_chunk` and `chunks(f) = ceil((size(f) − $framing) / $np_chunk)` are
 builder-side helpers over `size(f)` (§9.4). The counts are exact per file: `4 + ⌈size/xfer⌉`
 reads and `11 + chunks(f)` seeks, checked against every file of both traced corpora.

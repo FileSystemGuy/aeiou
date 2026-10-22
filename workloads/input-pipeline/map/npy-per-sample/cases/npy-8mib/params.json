@@ -1,3 +1,3 @@
 {"params_version": 2, "abstract": "npy_per_sample",
- "doc": "Fitted to the 2026-10-01 trace of np.load(...)[\"x\"] through a DataLoader: 256 .npz files of about 8 MiB, batch 4, 2 workers, 2 epochs.",
- "params": {"batch": {"default": 4}, "workers": {"default": 2}, "prefetch": {"default": 2}, "steps": {"default": 128}, "samples": {"default": 256}, "sample_mean": {"default": 8388608}, "sample_sd": {"default": 262144}}}
+ "doc": "Fitted to the 2026-10-01 trace of np.load(...)[\"x\"] through a DataLoader: 256 .npz files of about 8 MiB, batch 4, 2 workers, 2 epochs. step_time is the abstract's default until 2026-10-22, 323 ms, not fitted to the trace.",
+ "params": {"batch": {"default": 4}, "workers": {"default": 2}, "prefetch": {"default": 2}, "steps": {"default": 128}, "samples": {"default": 256}, "sample_mean": {"default": 8388608}, "sample_sd": {"default": 262144}, "step_time": {"default": 323000000}}}

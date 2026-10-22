@@ -1,0 +1,3 @@
+{"params_version": 2, "abstract": "npy_per_sample",
+ "doc": "The Unet3D job as npy_per_sample's defaults held it until 2026-10-22 (DESIGN_REVIEW.md §3.78; ABSTRACTS.md §2): .npz samples of about 140 MiB, 4 DataLoader workers per GPU each 2 batches ahead, 500 steps. `samples` is the submission's to size.",
+ "params": {"sample_mean": {"default": 146800640}, "sample_sd": {"default": 4194304}, "steps": {"default": 500}, "workers": {"default": 4}, "prefetch": {"default": 2}, "samples": {"default": 50000}}}

@@ -18,7 +18,7 @@ fn dry(name: &str, gpus: i64, params: &[(&str, &str)], threads: usize, opts: Opt
 /// The golden configurations of `tests/golden.rs`.
 const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("file_per_sample", 2, &[("steps", "10")]),
-    ("npy_per_sample", 2, &[("steps", "5")]),
+    ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5")]),
     ("dcp_save", 2, &[("steps", "200")]),
     ("dcp_load", 2, &[]),
     ("safetensors_load", 2, &[]),

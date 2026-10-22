@@ -98,6 +98,13 @@ def load_dictionary(root: pathlib.Path) -> dict:
             raise BuildError(f"{path}: attribute {name}: needs values")
         if a.get("multiple") and a["source"] != "curated":
             raise BuildError(f"{path}: attribute {name}: only a curated attribute takes several values")
+    for name, a in attrs.items():
+        # required: always, never, or when another curated attribute of the record has a value
+        r = a.get("required", False)
+        if not isinstance(r, bool) and not (
+                isinstance(r, dict) and len(r) == 1 and (k := next(iter(r))) in attrs and attrs[k]["source"] == "curated"
+                and attrs[k]["level"] == a["level"] and r[k] in attrs[k].get("values", {})):
+            raise BuildError(f"{path}: attribute {name}: required is true, false, or a table of one curated attribute of its level and a value of it")
     cats = attrs.get("category", {}).get("values", {})
     for v, d in attrs.get("class", {}).get("values", {}).items():
         if d.get("category") not in cats:
@@ -223,8 +230,13 @@ def _attributes(rec: dict, level: str, structural: set, attrs: dict, path, root,
         else:
             out[key] = [value] if a.get("multiple") else value
     for key, a in attrs.items():
-        if a["source"] == "curated" and a["level"] == level and a.get("required") and key not in rec:
+        if a["source"] != "curated" or a["level"] != level or key in rec:
+            continue
+        r = a.get("required")
+        if r is True:
             problems.add(path, root, f"`{key}` is required")
+        elif isinstance(r, dict) and rec.get(k := next(iter(r))) == r[k]:
+            problems.add(path, root, f"`{key}` is required when `{k}` is {r[k]}")
     return out
 
 
@@ -860,7 +872,9 @@ def render_catalog(mechanisms: list[dict], attrs: dict, shapes: dict[pathlib.Pat
            "Every attribute and value a record may use (`attributes.toml`). Curated attributes are written in the",
            "records, derived ones read from the AST and the captures, measured ones computed from the dry run.", ""]
     for name, a in attrs.items():
-        req = (", required" if a.get("required") else "") + (", several values" if a.get("multiple") else "")
+        r = a.get("required")
+        req = (", required" if r is True else "".join(f", required when `{k}` is {v}" for k, v in r.items()) if isinstance(r, dict) else "") + \
+            (", several values" if a.get("multiple") else "")
         out += [f"### `{name}`", "", f"{a['meaning']} *({a['source']}, {a['level']}{req})*", ""]
         if a["source"] == "measured":
             tol = a.get("tolerance")

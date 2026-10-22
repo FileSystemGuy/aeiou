@@ -4,20 +4,24 @@
   "doc": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
   "params": {
     "batch": {
-      "default": 7,
-      "unit": "count"
+      "unit": "count",
+      "doc": "samples per step: the model's on its accelerator, whose memory sets it",
+      "kind": "int"
     },
     "workers": {
-      "default": 4,
-      "unit": "count"
+      "unit": "count",
+      "doc": "DataLoader worker processes per GPU: the job's",
+      "kind": "int"
     },
     "prefetch": {
-      "default": 2,
-      "unit": "count"
+      "unit": "count",
+      "doc": "batches each worker keeps ahead (prefetch_factor): the job's",
+      "kind": "int"
     },
     "steps": {
-      "default": 500,
-      "unit": "count"
+      "unit": "count",
+      "doc": "steps of the run: the job's",
+      "kind": "int"
     },
     "sync_every": {
       "default": 1,
@@ -25,17 +29,25 @@
       "doc": "synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)"
     },
     "step_time": {
-      "default": 323000000,
       "unit": "ns",
-      "doc": "[measure]"
+      "doc": "compute per step: the model's on its accelerator",
+      "kind": "int"
     },
     "hdr_read": {
-      "default": 1048576,
+      "default": {
+        "from": "st_blksize",
+        "of": "train",
+        "fallback": 1048576
+      },
       "unit": "bytes",
       "doc": "Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01)"
     },
     "xfer": {
-      "default": 1048576,
+      "default": {
+        "from": "st_blksize",
+        "of": "train",
+        "fallback": 1048576
+      },
       "unit": "bytes",
       "doc": "buffer fill under the member read: the same BufferedReader, so st_blksize (traced 2026-10-01)"
     },
@@ -68,14 +80,19 @@
       "doc": "[measure] inventory bytes per file: the name below the root (`00000/sample_000000000.npz`) and a newline"
     },
     "inv_read": {
-      "default": 1048576,
+      "default": {
+        "from": "st_blksize",
+        "of": "train",
+        "fallback": 1048576
+      },
       "unit": "bytes",
       "doc": "[measure] the inventory reader's request; Python's BufferedReader asks st_blksize"
     },
     "samples": {
-      "default": 50000,
       "unit": "count",
-      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+      "doc": "corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5)",
+      "scale": true,
+      "kind": "int"
     },
     "files_per_directory": {
       "default": 10000,
@@ -83,14 +100,14 @@
       "doc": "[config] files a directory holds, {id div files_per_directory} (contract 0.10); 10,000 as kit/mkcorpus.py writes them"
     },
     "sample_mean": {
-      "default": 146800640,
       "unit": "bytes",
-      "doc": "[measure]"
+      "doc": "mean sample file size: the job's",
+      "kind": "int"
     },
     "sample_sd": {
-      "default": 4194304,
       "unit": "bytes",
-      "doc": "[measure]"
+      "doc": "standard deviation of the sample file size: the job's",
+      "kind": "int"
     }
   },
   "datasets": {
@@ -739,11 +756,12 @@
   "provenance": {
     "generator": {
       "script": "npy_per_sample.py",
-      "sha256": "f414083ddc6f3330cfe11b1aa6d0d78b71eefb958fe0bb3682665c10dc461ff6",
+      "sha256": "524dfceffa3454397bddea291acf71ce15b05a0a82b3b96bf4decaa59c2176f7",
       "builder_version": "0.2.1",
-      "git": "52bf0ab3f273"
+      "git": "34d43d6b976a-dirty"
     },
     "python": "3.12.13",
-    "ast_sha256": "f1c4446c71f967be381ebf0f90d2eca23138bef1a545f15d751d518151890fa1"
+    "built_twice_identical": true,
+    "ast_sha256": "55b72b04751401f05c6f865bf0ba670af4eed47723ec32e603537bbadd2976bc"
   }
 }

@@ -15,6 +15,7 @@ Versions: Python 3.12.3, NumPy 2.5.2, torch 2.14.1+cpu, Linux 6.18.
 | `kit/train.py` | the traced application |
 | `cases/npy-140mib/`: `params.json`, `captures/2026-10-01/trace.metrics.json` | 16 files of about 140 MiB, batch 2, 2 epochs: the reference shape |
 | `cases/npy-8mib/`: `params.json`, `captures/2026-10-01/trace.metrics.json` | 256 files of about 8 MiB, batch 4, 2 epochs: enough files for the reuse distance to mean something |
+| `cases/unet3d-h100/`: `job.params.json`, `h100.params.json` | a use case: the Unet3D job on an H100, the values the abstract's defaults held until 2026-10-22 (`DESIGN_REVIEW.md` §3.78); `aeiou run --case unet3d-h100` |
 
 ```
 C=cases/npy-140mib                                            # or: cases/npy-8mib; from this directory

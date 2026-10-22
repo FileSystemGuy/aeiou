@@ -131,10 +131,21 @@ CASE = "checkpointing/dcp-save/cases/toy-6-items"
     ('params = "params.json"', 'params = "other.json"', "is not a file of the case"),
     ('kind = "example"', 'kind = "example"\nlength = "items_total"', "not an integer parameter of dcp_save"),
     ('kind = "example"', 'kind = "example"\nmetrics_block = 4096', "`metrics_block` is not an attribute"),     # gone with blocks, DESIGN_REVIEW.md §3.79
+    ('kind = "example"', 'kind = "use"', "`accelerator` is required when `kind` is use"),
+    ('kind = "example"', 'kind = "example"\naccelerator = "H100-80G"', "`accelerator` = 'H100-80G': not one of h100"),
 ])
 def test_case_records_are_refused(tree, old, new, message):
     edit(tree / CASE / "case.toml", old, new)
     assert any(message in p for p in problems(tree)), problems(tree)
+
+
+def test_a_case_names_its_accelerator(tree):
+    """DESIGN_REVIEW.md §3.78 point 18: a use case names the accelerator its batch and step time
+    are for; an example, traced on a stand-in, may."""
+    original = (tree / CASE / "case.toml").read_text()
+    for kind in ("use", "example"):
+        (tree / CASE / "case.toml").write_text(original.replace('kind = "example"', f'kind = "{kind}"\naccelerator = "h100"'))
+        assert [p for p in problems(tree) if "case.lock.json" not in p] == [], kind
 
 
 def test_a_parameter_file_no_run_names(tree):
@@ -528,6 +539,10 @@ def test_check_write_and_describe_under_an_ascii_locale(tree):
     ("[attribute.bogus]\nlevel = 'case'\nsource = 'derived'\nmultiple = true\nvalues = {a = {}}\n", None, "attribute bogus: only a curated attribute takes several values"),
     ("[attribute.class.values.zzz]\ncategory = 'nowhere'\n", None, "class zzz: its category 'nowhere' is not a value of category"),
     ("", {"unheard"}, "aeiou-catalog measures unheard, which the dictionary does not define"),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'curated'\nvalues = {a = {}}\nrequired = 'yes'\n", None, "attribute bogus: required is true, false, or a table of one curated attribute of its level and a value of it"),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'curated'\nvalues = {a = {}}\nrequired = {kind = 'nope'}\n", None, "attribute bogus: required is true, false, or a table of one curated attribute of its level and a value of it"),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'curated'\nvalues = {a = {}}\nrequired = {category = 'hpc'}\n", None, "attribute bogus: required is true, false, or a table of one curated attribute of its level and a value of it"),
+    ("[attribute.bogus]\nlevel = 'case'\nsource = 'curated'\nvalues = {a = {}}\nrequired = {kind = 'use', modality = 'volume'}\n", None, "attribute bogus: required is true, false, or a table of one curated attribute of its level and a value of it"),
 ])
 def test_the_dictionary_is_refused_by_name(tmp_path, monkeypatch, extra, measures, message):
     text = (WORKLOADS / "attributes.toml").read_text()

@@ -191,3 +191,50 @@ def test_every_lock_fits_its_schema():
     v = jsonschema.Draft202012Validator(json.loads((ROOT / "schema" / "lock.schema.json").read_text()), registry=reg)
     for f in sorted(WORKLOADS.rglob(lock.LOCK_FILE)):
         assert not list(v.iter_errors(json.loads(f.read_text()))), f
+
+
+# ---------------------------------------------------------------- npy_per_sample and its use case
+
+NPY = WORKLOADS / "input-pipeline/map/npy-per-sample"
+# what npy_per_sample's defaults held until 2026-10-22: the brief's Unet3D on an H100
+UNET3D_H100 = {"batch": 7, "workers": 4, "prefetch": 2, "steps": 500, "step_time": 323_000_000,
+               "samples": 50_000, "sample_mean": 140 << 20, "sample_sd": 4 << 20}
+
+
+def test_npy_per_sample_leaves_the_job_and_the_gpu_to_its_use_case():
+    """DESIGN_REVIEW.md §3.78 points 1, 4, and 11: what the job and the model on a GPU set has no
+    default (a use case gives it), `samples` is the submission's scale, and the reads Python's
+    BufferedReader sizes are st_blksize, which the storage reports."""
+    p = json.loads((NPY / "npy_per_sample.ast.json").read_text())["params"]
+    for k in UNET3D_H100:
+        assert "default" not in p[k] and p[k]["kind"] == "int", k
+    assert p["samples"].get("scale") is True
+    for k in ("hdr_read", "xfer", "inv_read"):
+        assert p[k]["default"] == {"from": "st_blksize", "of": "train", "fallback": 1 << 20}, k
+
+
+def test_unet3d_h100_is_a_use_case_of_the_values_the_defaults_held():
+    """The use case `unet3d-h100`: a job fragment and an H100 fragment, whose lock holds the
+    values npy_per_sample's defaults held until 2026-10-22, each a default."""
+    import tomllib
+    case = NPY / "cases/unet3d-h100"
+    rec = tomllib.loads((case / "case.toml").read_text())
+    assert (rec["kind"], rec["accelerator"]) == ("use", "h100")
+    assert rec["run"] == [{"ast": "npy_per_sample", "params": ["job.params.json", "h100.params.json"]}]
+    job = json.loads((case / "job.params.json").read_text())["params"]
+    gpu = json.loads((case / "h100.params.json").read_text())["params"]
+    assert set(gpu) == {"batch", "step_time"}, "the model on a GPU (§3.78 point 1)"
+    assert set(job) == set(UNET3D_H100) - set(gpu)
+    (run,) = json.loads((case / lock.LOCK_FILE).read_text())["runs"]
+    assert {k: run["params"][k] for k in UNET3D_H100} == {k: {"default": v} for k, v in UNET3D_H100.items()}
+    assert lock.stale(case, workloads=WORKLOADS) is None
+
+
+def test_the_example_cases_of_npy_per_sample_give_every_required_value():
+    """The traced examples give every value the abstract requires, `step_time` the old default
+    and said so (never fitted: the trace's compute is the stand-in's)."""
+    required = {k for k, p in json.loads((NPY / "npy_per_sample.ast.json").read_text())["params"].items() if "default" not in p}
+    for case in ("npy-8mib", "npy-140mib"):
+        doc = json.loads((NPY / "cases" / case / "params.json").read_text())
+        assert required <= set(doc["params"]), case
+        assert doc["params"]["step_time"] == {"default": 323_000_000} and "not fitted" in doc["doc"], case

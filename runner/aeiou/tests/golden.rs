@@ -46,7 +46,9 @@ fn hashes_match_check_py() {
         ("dcp_save", "24d03dec648c90566f82fe3da1912744edbf20998b7130d29034811ff3934d18"),
         ("lmcache_local_disk", "0e28eff7f149b1e5e811730bae9093f282ac848f0caec611d8b385d0ee5ac2f1"),
         ("safetensors_load", "a7d78ac110f00a95713707a3c8d73690494941aec714c4d02c9a38792562e92e"),
-        ("npy_per_sample", "f1c4446c71f967be381ebf0f90d2eca23138bef1a545f15d751d518151890fa1"),   // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13)
+        // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13); 2026-10-22: the job's and the
+        // GPU's values required (the use case unet3d-h100), the read sizes st_blksize, DESIGN_REVIEW §3.78
+        ("npy_per_sample", "55b72b04751401f05c6f865bf0ba670af4eed47723ec32e603537bbadd2976bc"),
         ("file_per_sample", "c23a6656eb966f92f0836168f70c3779329d4956646133d699bfa26d727ac2f4"),   // 2026-10-02: `enumerate` on by default
         ("diskann_build", "31adfa55583b5750ac70cf6b5af20669b116337935676f9693ba6d1f6175d752"),
         ("diskann_search", "80642e20f54cf97933604cfd8acd766f46d5f4e16f1caf504ac2b74a2b036d1e"),
@@ -92,11 +94,12 @@ fn golden_fingerprints() {
     let cases: &[(&str, i64, &[(&str, &str)], u64, u64)] = &[
         // the directory walk is on by default since 2026-10-02 (DESIGN_REVIEW §3.54): five ops per class directory and
         // actor in file_per_sample (38,462 directories), four per directory in npy_per_sample; with
-        // `enumerate=false` both are what they were
+        // `enumerate=false` both are what they were; npy_per_sample at the values its defaults held until 2026-10-22, its
+        // job and GPU values required since (the use case unet3d-h100, DESIGN_REVIEW §3.78)
         ("file_per_sample", 2, &[("steps", "10")], 0xfb3215e5607b32ae, 389740),
         ("file_per_sample", 2, &[("steps", "10"), ("walk", "false")], 0x71628bdb4289c4c8, 5120),
-        ("npy_per_sample", 2, &[("steps", "5")], 0xf755bd4187b75b78, 50491),
-        ("npy_per_sample", 2, &[("steps", "5"), ("walk", "false")], 0xa2c284c6137f9639, 50451),
+        ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5")], 0xf755bd4187b75b78, 50491),
+        ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5"), ("walk", "false")], 0xa2c284c6137f9639, 50451),
         ("dcp_save", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
         ("dcp_load", 2, &[], 0x22990a88db4e6d4f, 368),
         ("safetensors_load", 2, &[], 0x2668387c7aa4126b, 24682),

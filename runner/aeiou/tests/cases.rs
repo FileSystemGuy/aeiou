@@ -568,3 +568,19 @@ fn the_workload_id_holds_the_locks_other_runs() {
     let (_, other, _) = t.aeiou("dry-run", &["--gpus", "1", "--case-run", "t"]);
     assert_ne!(id_of(&other), id_of(&out), "another run of the lock changed: another workload");
 }
+
+/// The brief's Unet3D on an H100 is a use case (DESIGN_REVIEW §3.78 points 1 and 18): its lock
+/// runs exactly what `npy_per_sample`'s defaults ran until 2026-10-22 (tests/golden.rs's
+/// fingerprint), and the abstract alone, whose job and GPU values are now required, is refused.
+#[test]
+fn the_unet3d_h100_use_case_is_the_run_the_old_defaults_made() {
+    let w = crate::common::workloads().display().to_string();
+    let (code, out, err) = aeiou(&["dry-run", "--case", "unet3d-h100", "--workloads", &w, "--gpus", "2", "--seed", "1", "--param", "steps=5"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&out, "case ").starts_with("case npy-per-sample/unet3d-h100  run npy_per_sample"), "{out}");
+    assert_eq!(line(&out, "fingerprint "), "fingerprint f755bd4187b75b78");
+    assert!(line(&out, "  ops ").starts_with("  ops 50491 "), "{out}");
+    let ast = crate::common::workload_ast("npy_per_sample.ast.json").display().to_string();
+    let (code, _, err) = aeiou(&["dry-run", &ast, "--gpus", "1"]);
+    assert!(code == 1 && err.contains("required parameters with no value: batch, prefetch, sample_mean, sample_sd, samples, step_time, steps, workers"), "{err}");
+}

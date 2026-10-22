@@ -14,12 +14,12 @@ np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `batch` | 4 | 7 | count |  |
-| `workers` | 2 | 4 | count |  |
-| `prefetch` | 2 | same | count |  |
-| `steps` | 128 | 500 | count |  |
+| `batch` | 4 | none | count | samples per step: the model's on its accelerator, whose memory sets it |
+| `workers` | 2 | none | count | DataLoader worker processes per GPU: the job's |
+| `prefetch` | 2 | none | count | batches each worker keeps ahead (prefetch_factor): the job's |
+| `steps` | 128 | none | count | steps of the run: the job's |
 | `sync_every` | 1 | same | count | synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14) |
-| `step_time` | 323 ms | same | ns | [measure] |
+| `step_time` | 323 ms | none | ns | compute per step: the model's on its accelerator |
 | `hdr_read` | 1 MiB | same | bytes | Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01) |
 | `xfer` | 1 MiB | same | bytes | buffer fill under the member read: the same BufferedReader, so st_blksize (traced 2026-10-01) |
 | `np_chunk` | 256 KiB | same | bytes | NumPy's read chunk from a zip member (numpy.lib.format BUFFER_SIZE); one tell per chunk |
@@ -29,10 +29,10 @@ np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip
 | `inventory` | false | same | — | the startup read of the corpus's inventory, every process, in place of the glob at scale (DESIGN_REVIEW.md §3.73) |
 | `inv_entry` | 27 bytes | same | bytes | [measure] inventory bytes per file: the name below the root (`00000/sample_000000000.npz`) and a newline |
 | `inv_read` | 1 MiB | same | bytes | [measure] the inventory reader's request; Python's BufferedReader asks st_blksize |
-| `samples` | 256 | 50,000 | count | [config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5) |
+| `samples` | 256 | none | count | corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5) |
 | `files_per_directory` | 10,000 | same | count | [config] files a directory holds, {id div files_per_directory} (contract 0.10); 10,000 as kit/mkcorpus.py writes them |
-| `sample_mean` | 8 MiB | 140 MiB | bytes | [measure] |
-| `sample_sd` | 256 KiB | 4 MiB | bytes | [measure] |
+| `sample_mean` | 8 MiB | none | bytes | mean sample file size: the job's |
+| `sample_sd` | 256 KiB | none | bytes | standard deviation of the sample file size: the job's |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.
 

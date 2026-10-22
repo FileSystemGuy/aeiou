@@ -15,7 +15,9 @@
 # `absolute`, or both, either bound being enough); a flag has none and must be equal. `search` lists
 # words a reader may look for; they change nothing any tool accepts. An attribute marked
 # `multiple = true` takes a list of distinct values in a record; every other takes one. A value of
-# `class` names the category it belongs to.
+# `class` names the category it belongs to. `required = true` makes a curated attribute required in
+# every record of its level, and `required = { kind = "use" }` in those where another curated
+# attribute of the level has that value.
 
 attributes_version = 1
 
@@ -168,6 +170,14 @@ vision = { meaning = "An image or video model: classification, detection, segmen
 speech = { meaning = "A speech or audio model." }
 recommender = { meaning = "A recommender model with embedding tables.", search = ["dlrm"] }
 discriminative = { meaning = "A model returning typed decisions with their probabilities rather than generated text.", search = ["classifier", "decision model"] }
+
+[attribute.accelerator]
+meaning = "The accelerator a use case's batch and step time are for: its memory sets the batch, and the batch and the accelerator set a step's compute (DESIGN_REVIEW.md §3.78 points 1 and 18). A use case's directory is named for its job and this value (`unet3d-h100`); code reads the record. An example case, traced on a stand-in, names one only if its trace ran on it."
+source = "curated"
+level = "case"
+required = { kind = "use" }
+[attribute.accelerator.values]
+h100 = { meaning = "NVIDIA H100 (Hopper).", search = ["nvidia", "hopper", "gpu"] }
 
 # ---- derived ----
 
