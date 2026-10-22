@@ -65,23 +65,35 @@ fn minio(test: &str) -> Minio {
     let Some(bin) = std::env::var_os("TEST_MINIO_BIN") else {
         panic!("{test}: TEST_MINIO_BIN is not set: it names a MinIO server binary, the pinned release .github/workflows/ci.yml downloads (runner/REFERENCE.md §16)");
     };
-    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let dir = tmpdir("minio");
-    let child = Command::new(bin)
-        .args(["server", dir.to_str().unwrap(), "--address", &format!("127.0.0.1:{port}"), "--console-address", "127.0.0.1:0", "--quiet"])
-        .env("MINIO_ROOT_USER", USER)
-        .env("MINIO_ROOT_PASSWORD", SECRET)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("starting MinIO");
-    let m = Minio { child, url: format!("http://127.0.0.1:{port}"), _dir: dir };
-    let t0 = Instant::now();
-    while !curl(&m, "/bench", &["-X", "PUT"]).status.success() {
-        assert!(t0.elapsed() < Duration::from_secs(30), "MinIO did not come up at {}", m.url);
-        std::thread::sleep(Duration::from_millis(200));
+    // the free port is released before MinIO binds it, so a test starting beside this one can
+    // take it first; MinIO then exits, and the server is started again on another port
+    let mut exits = Vec::new();
+    for _ in 0..5 {
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let dir = tmpdir("minio");
+        let child = Command::new(&bin)
+            .args(["server", dir.to_str().unwrap(), "--address", &format!("127.0.0.1:{port}"), "--console-address", "127.0.0.1:0", "--quiet"])
+            .env("MINIO_ROOT_USER", USER)
+            .env("MINIO_ROOT_PASSWORD", SECRET)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("starting MinIO");
+        let mut m = Minio { child, url: format!("http://127.0.0.1:{port}"), _dir: dir };
+        let t0 = Instant::now();
+        loop {
+            if curl(&m, "/bench", &["-X", "PUT"]).status.success() {
+                return m;
+            }
+            if let Some(status) = m.child.try_wait().unwrap() {
+                exits.push(format!("{}: {status}", m.url));
+                break;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(30), "MinIO did not come up at {}", m.url);
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
-    m
+    panic!("{test}: MinIO exited at every start: {}", exits.join("; "));
 }
 
 /// A request for `path` on the server, signed with the test's credentials; fails on an HTTP error.
