@@ -180,9 +180,10 @@ pub fn workloads_dir(given: Option<&Path>) -> Result<PathBuf> {
 }
 
 /// The lock of `name` under `workloads`: a walk for every `case.lock.json`, matched by its
-/// `name` (`mechanism/case`) or by its case alone; none or several refused, every match listed.
+/// `name` (`mechanism/case`) or by its case alone; none or several refused, every match listed,
+/// and with none every lock that could not be read, which may be the one named.
 pub fn find(workloads: &Path, name: &str) -> Result<PathBuf> {
-    let mut found = Vec::new();
+    let (mut found, mut unread) = (Vec::new(), Vec::new());
     let mut stack = vec![workloads.to_path_buf()];
     while let Some(d) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&d) else { continue };
@@ -191,18 +192,23 @@ pub fn find(workloads: &Path, name: &str) -> Result<PathBuf> {
             if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 stack.push(p);
             } else if p.file_name().and_then(|n| n.to_str()) == Some(LOCK_FILE) {
-                if let Ok(l) = Lock::load(&p) {
-                    if l.name == name || l.name.split_once('/').map(|(_, c)| c) == Some(name) {
-                        found.push((l.name, p));
-                    }
+                match Lock::load(&p) {
+                    Ok(l) if l.name == name || l.name.split_once('/').map(|(_, c)| c) == Some(name) => found.push((l.name, p)),
+                    Ok(_) => {}
+                    Err(e) => unread.push(format!("{e:#}")),
                 }
             }
         }
     }
     found.sort();
+    unread.sort();
+    let unread = match unread.len() {
+        0 => String::new(),
+        n => format!("; {n} lock{} could not be read:\n  {}", if n == 1 { "" } else { "s" }, unread.join("\n  ")),
+    };
     match found.len() {
         1 => Ok(found.remove(0).1),
-        0 => crate::usage!("--case {name}: no lock of that name under {} (a case's lock is cases/<case>/{LOCK_FILE}, made by `aeiou-params lock`)", workloads.display()),
+        0 => crate::usage!("--case {name}: no lock of that name under {} (a case's lock is cases/<case>/{LOCK_FILE}, made by `aeiou-params lock`){unread}", workloads.display()),
         _ => crate::usage!("--case {name}: {} locks match ({}): name it as mechanism/case", found.len(), found.iter().map(|(n, p)| format!("{n} at {}", p.display())).collect::<Vec<_>>().join(", ")),
     }
 }
@@ -362,9 +368,21 @@ pub fn eval(e: &Value, get: &dyn Fn(&str) -> Option<Num>) -> Result<Num> {
                     (x, y) => Num::F(g(x.f(), y.f())),
                 })
             };
-            let cmp = |f: fn(f64, f64) -> bool| -> Result<Num> {
+            // two integers compare as integers: a byte count passes 2^53, where an f64 rounds
+            let cmp = |f: fn(Option<std::cmp::Ordering>) -> bool| -> Result<Num> {
                 let a = args(2)?;
-                Ok(Num::I(f(a[0].f(), a[1].f()) as i64))
+                let o = match (a[0], a[1]) {
+                    (Num::I(x), Num::I(y)) => Some(x.cmp(&y)),
+                    (x, y) => x.f().partial_cmp(&y.f()),
+                };
+                Ok(Num::I(f(o) as i64))
+            };
+            let nonzero = |op: &str| -> Result<()> {
+                let a = args(2)?;
+                if a[1].f() == 0.0 {
+                    bail!("`{op}` by zero");
+                }
+                Ok(())
             };
             match k.as_str() {
                 "fact" | "result" => {
@@ -374,20 +392,26 @@ pub fn eval(e: &Value, get: &dyn Fn(&str) -> Option<Num>) -> Result<Num> {
                 "add" => two(i64::checked_add, |x, y| x + y)?,
                 "sub" => two(i64::checked_sub, |x, y| x - y)?,
                 "mul" => two(i64::checked_mul, |x, y| x * y)?,
-                "div" => two(|x, y| (y != 0).then(|| x.div_euclid(y)), |x, y| (x / y).floor())?,
-                "mod" => two(|x, y| (y != 0).then(|| x.rem_euclid(y)), |x, y| x.rem_euclid(y))?,
+                "div" => {
+                    nonzero("div")?;
+                    two(|x, y| x.checked_div_euclid(y), |x, y| (x / y).floor())?
+                }
+                "mod" => {
+                    nonzero("mod")?;
+                    two(|x, y| x.checked_rem_euclid(y), |x, y| x.rem_euclid(y))?
+                }
                 "min" => two(|x, y| Some(x.min(y)), f64::min)?,
                 "max" => two(|x, y| Some(x.max(y)), f64::max)?,
                 "neg" => match eval(v, get)? {
                     Num::I(x) => Num::I(x.checked_neg().ok_or_else(|| anyhow!("`neg` of {x}"))?),
                     Num::F(x) => Num::F(-x),
                 },
-                "eq" => cmp(|x, y| x == y)?,
-                "ne" => cmp(|x, y| x != y)?,
-                "lt" => cmp(|x, y| x < y)?,
-                "le" => cmp(|x, y| x <= y)?,
-                "gt" => cmp(|x, y| x > y)?,
-                "ge" => cmp(|x, y| x >= y)?,
+                "eq" => cmp(|o| o.is_some_and(|o| o.is_eq()))?,
+                "ne" => cmp(|o| !o.is_some_and(|o| o.is_eq()))?,
+                "lt" => cmp(|o| o.is_some_and(|o| o.is_lt()))?,
+                "le" => cmp(|o| o.is_some_and(|o| o.is_le()))?,
+                "gt" => cmp(|o| o.is_some_and(|o| o.is_gt()))?,
+                "ge" => cmp(|o| o.is_some_and(|o| o.is_ge()))?,
                 "and" => {
                     let a = args(2)?;
                     Num::I((a[0].truth() && a[1].truth()) as i64)

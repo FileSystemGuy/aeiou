@@ -407,3 +407,164 @@ fn a_gate_constraint_is_judged_by_rank_0_on_every_host_and_refuses_them_all() {
         assert!(!String::from_utf8_lossy(&o.stdout).contains("start gate:"), "the gate never opened");
     }
 }
+
+/// Bug A: a comparison of two integers is exact. A byte count passes 2^53 at 9 PB, where an
+/// f64 no longer holds every integer, and a capacity constraint compares two such counts.
+#[test]
+fn a_constraint_compares_integers_as_integers() {
+    use aeiou::case::{eval, Num};
+    let e = |v: Value| eval(&v, &|_| None).map_err(|e| format!("{e:#}"));
+    let big = 1i64 << 53;
+    assert_eq!(e(json!({"eq": [big + 1, big]})), Ok(Num::I(0)));
+    assert_eq!(e(json!({"ne": [big + 1, big]})), Ok(Num::I(1)));
+    assert_eq!(e(json!({"gt": [big + 1, big]})), Ok(Num::I(1)));
+    assert_eq!(e(json!({"ge": [big, big + 1]})), Ok(Num::I(0)));
+    assert_eq!(e(json!({"lt": [big, big + 1]})), Ok(Num::I(1)));
+    assert_eq!(e(json!({"le": [big + 1, big]})), Ok(Num::I(0)));
+    // an integer and a float compare as floats
+    assert_eq!(e(json!({"lt": [1, 1.5]})), Ok(Num::I(1)));
+    assert_eq!(e(json!({"eq": [2, 2.0]})), Ok(Num::I(1)));
+}
+
+/// Bug B: a division by zero is refused, never an infinity or a NaN that passes or fails a
+/// constraint silently, and the refusal says so.
+#[test]
+fn a_constraint_refuses_a_division_by_zero() {
+    use aeiou::case::eval;
+    for op in ["div", "mod"] {
+        for (x, y) in [(json!(7), json!(0)), (json!(7.5), json!(0.0)), (json!(7), json!(0.0))] {
+            let mut m = serde_json::Map::new();
+            m.insert(op.into(), json!([x, y]));
+            let err = eval(&Value::Object(m), &|_| None).map(|n| n.show()).map_err(|e| format!("{e:#}"));
+            assert_eq!(err, Err(format!("`{op}` by zero")), "{op} {x} {y}");
+        }
+    }
+}
+
+/// Every operator of a constraint's expression, and what is not one.
+#[test]
+fn a_constraints_expression_takes_its_operators_and_refuses_others() {
+    use aeiou::case::{eval, Num};
+    let get = |n: &str| (n == "fact.x").then_some(Num::I(3));
+    let e = |v: Value| eval(&v, &get).map_err(|e| format!("{e:#}"));
+    assert_eq!(e(json!({"and": [1, {"not": 0}]})), Ok(Num::I(1)));
+    assert_eq!(e(json!({"and": [1, false]})), Ok(Num::I(0)));
+    assert_eq!(e(json!({"or": [0, 0.5]})), Ok(Num::I(1)));
+    assert_eq!(e(json!({"or": [false, 0]})), Ok(Num::I(0)));
+    assert_eq!(e(json!({"not": true})), Ok(Num::I(0)));
+    assert_eq!(e(json!({"neg": {"fact": "x"}})), Ok(Num::I(-3)));
+    assert_eq!(e(json!({"neg": 2.5})), Ok(Num::F(-2.5)));
+    assert_eq!(e(json!({"div": [-7, 2]})), Ok(Num::I(-4)), "Euclidean, as the abstract's");
+    assert_eq!(e(json!({"mod": [-7, 2]})), Ok(Num::I(1)));
+    assert_eq!(e(json!({"div": [7.0, 2]})), Ok(Num::F(3.0)));
+    assert_eq!(e(json!({"sub": [1, 0.5]})), Ok(Num::F(0.5)));
+    assert_eq!(e(json!({"min": [{"fact": "x"}, 2]})), Ok(Num::I(2)));
+    assert_eq!(e(json!({"max": [1.5, 2]})), Ok(Num::F(2.0)));
+    assert_eq!(e(json!({"neg": i64::MIN})), Err(format!("`neg` of {}", i64::MIN)));
+    assert_eq!(e(json!({"add": [i64::MAX, 1]})), Err(format!("`add` of {} and 1 is not an integer of 64 bits", i64::MAX)));
+    assert_eq!(e(json!({"add": [1]})), Err("`add` takes 2 operands".into()));
+    assert_eq!(e(json!({"pow": [1, 2]})), Err("`pow` is not an operator of a constraint".into()));
+    assert_eq!(e(json!({"fact": "y"})), Err("`fact.y` is not known here".into()));
+    assert_eq!(e(json!("x")), Err("\"x\": not an expression of a constraint".into()));
+    assert_eq!(e(json!({"add": [1, 2], "sub": [1, 2]})), Err("{\"add\":[1,2],\"sub\":[1,2]}: not an expression of a constraint".into()));
+}
+
+/// Bug C: `--case NAME` names the locks it could not read, so a broken lock of that case is
+/// reported as broken rather than as missing.
+#[test]
+fn a_lock_that_cannot_be_read_is_named_when_none_matches() {
+    let t = tree(json!({"k": {"default": 1}}), json!({}));
+    let w = t.workloads.display().to_string();
+    std::fs::write(&t.lock, r#"{"lock_version": 9, "name": "toy/job"}"#).unwrap();
+    let (code, _, err) = aeiou(&["dry-run", "--case", "job", "--workloads", &w, "--gpus", "1"]);
+    assert!(code == 2 && err.contains("--case job: no lock of that name under"), "{err}");
+    assert!(err.contains(&format!("1 lock could not be read:\n  lock {}: lock_version 9 (this runner reads 1)", t.lock.display())), "{err}");
+}
+
+/// What a lock file may hold, each refusal naming the lock.
+#[test]
+fn a_lock_with_an_unknown_key_or_value_is_refused() {
+    let t = tree(json!({"k": {"default": 1}}), json!({}));
+    let good: Value = serde_json::from_str(&std::fs::read_to_string(&t.lock).unwrap()).unwrap();
+    let refused = |edit: &dyn Fn(&mut Value), text: Option<String>, want: &str| {
+        let mut l = good.clone();
+        edit(&mut l);
+        std::fs::write(&t.lock, text.unwrap_or_else(|| l.to_string())).unwrap();
+        let (code, _, err) = t.aeiou("dry-run", &["--gpus", "1"]);
+        assert!(code != 0 && err.contains(&format!("lock {}: {want}", t.lock.display())), "{want}: {err}");
+    };
+    refused(&|l| l["extra"] = json!(1), None, "unknown key `extra`");
+    refused(&|l| l["runs"][0]["run"] = json!({"gpus": {"locked": 2}}), None, "runs/0/run: `gpus` is not an identity option (");
+    refused(&|_| {}, Some(good.to_string().replace("\"default\":1", "\"default\":18446744073709551616")), "");
+    refused(&|l| l["lock_version"] = json!(2), None, "lock_version 2 (this runner reads 1)");
+    // --workloads names a directory
+    std::fs::write(&t.lock, good.to_string()).unwrap();
+    let (code, _, err) = aeiou(&["dry-run", "--case-file", t.lock.to_str().unwrap(), "--gpus", "1", "--workloads", "/nonexistent/aeiou"]);
+    assert!(code == 2 && err.contains("--workloads /nonexistent/aeiou: not a directory"), "{err}");
+}
+
+/// Without --workloads, aeiou's `workloads/` is the one beside its `bin/`, as a release lays
+/// them out; none there is a usage error naming the option.
+#[test]
+fn a_lock_is_found_in_the_workloads_beside_the_executable() {
+    let t = tree(json!({"k": {"default": 1}}), json!({}));
+    let place = |dir: &std::path::Path| {
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let exe = dir.join("bin/aeiou");
+        if std::fs::hard_link(env!("CARGO_BIN_EXE_aeiou"), &exe).is_err() {
+            std::fs::copy(env!("CARGO_BIN_EXE_aeiou"), &exe).unwrap();
+        }
+        exe
+    };
+    let exe = place(t.workloads.parent().unwrap());
+    let run = |exe: &std::path::Path| {
+        let o = Command::new(exe).args(["dry-run", "--case", "job", "--gpus", "1"]).env_remove("AEIOU_CONFIG").output().unwrap();
+        (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+    };
+    let (code, out, err) = run(&exe);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&out, "case ").starts_with("case toy/job  run t"), "{out}");
+    let lone = tmpdir("lone");
+    let exe = place(&lone);
+    let (code, _, err) = run(&exe);
+    assert!(code == 2 && err.contains(&format!("aeiou's workloads/ is not beside {}", exe.display())) && err.contains("name it with --workloads DIR"), "{err}");
+}
+
+/// A lock's storage-reported entry keeps the abstract's rule: the number the storage gives is
+/// the run's, and the workload id holds the rule, not the number.
+#[test]
+fn a_storage_reported_value_in_a_lock_is_the_storages() {
+    let t = tree(json!({"k": {"default": 1}, "b": {"default": {"from": "st_blksize", "of": "d", "fallback": 4096}}}), json!({}));
+    let text = toy().replace("\"b\":{\"default\":4096", "\"b\":{\"default\":{\"fallback\":4096,\"from\":\"st_blksize\",\"of\":\"d\"}");
+    assert_ne!(text, toy());
+    std::fs::write(t.workloads.join("cat/toy/t.ast.json"), &text).unwrap();
+    let mut lock: Value = serde_json::from_str(&std::fs::read_to_string(&t.lock).unwrap()).unwrap();
+    lock["runs"][0]["ast_sha256"] = json!(aeiou::load_str(&text).unwrap().sha256);
+    std::fs::write(&t.lock, lock.to_string()).unwrap();
+    let (code, a, err) = t.aeiou("dry-run", &["--gpus", "1", "--st-blksize", "d=8192"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&a, "  b = ").starts_with("  b = 8192 "), "{a}");
+    let (_, b, _) = t.aeiou("dry-run", &["--gpus", "1", "--st-blksize", "d=65536"]);
+    assert!(line(&b, "  b = ").starts_with("  b = 65536 "), "{b}");
+    assert_eq!(id_of(&a), id_of(&b), "the rule is in the id, not the storage's number");
+    let (_, c, _) = t.aeiou("dry-run", &["--gpus", "1", "--param", "b=8192"]);
+    assert_ne!(id_of(&c), id_of(&a), "a number given in its place is another workload");
+}
+
+/// The workload id holds the lock's other runs by their entries, a required one included.
+#[test]
+fn the_workload_id_holds_the_locks_other_runs() {
+    let t = tree(json!({"k": {"default": 1}}), json!({}));
+    let mut lock: Value = serde_json::from_str(&std::fs::read_to_string(&t.lock).unwrap()).unwrap();
+    let mut second = lock["runs"][0].clone();
+    second["name"] = json!("u");
+    second["params"] = json!({"k": {"required": true}});
+    lock["runs"].as_array_mut().unwrap().push(second);
+    std::fs::write(&t.lock, lock.to_string()).unwrap();
+    let (code, out, err) = t.aeiou("dry-run", &["--gpus", "1", "--case-run", "t"]);
+    assert_eq!(code, 0, "{err}");
+    lock["runs"][1]["params"] = json!({"k": {"default": 2}});
+    std::fs::write(&t.lock, lock.to_string()).unwrap();
+    let (_, other, _) = t.aeiou("dry-run", &["--gpus", "1", "--case-run", "t"]);
+    assert_ne!(id_of(&other), id_of(&out), "another run of the lock changed: another workload");
+}

@@ -2330,7 +2330,9 @@ takes. `run`, `dry-run`, and `datagen` take one in place of the abstract:
 - `--case NAME` walks aeiou's `workloads/` (`--workloads DIR`; by default `../workloads` beside
   the executable, the release tarball's `bin/`, else the source checkout's) for every
   `case.lock.json` and takes the one whose `name` is `NAME` (`mechanism/case`) or whose case is;
-  none or several are a usage error listing every match. `--case-file PATH` reads the lock at
+  none or several are a usage error listing every match, and with none every lock that could
+  not be read and why (a broken lock of the case named is reported as broken, not as missing).
+  `--case-file PATH` reads the lock at
   `PATH`, no search. A lock of several runs (a writer and its reader) is run one at a time,
   `--case-run NAME` naming the run by its abstract; the flag is refused for a lock of one run.
 - The run's abstract is `workloads/` joined with the run's `abstract`, and its canonical hash
@@ -2380,8 +2382,9 @@ defined once here; a change of a definition is a recorded decision:
 | `result.busy_fraction` | after | compute × time-scale / (compute × time-scale + stall) over every take of every instance but each instance's first, which waits on the pipeline filling |
 | `result.min_gpu_busy_fraction` | after | the least, over the instances that take, of that busy fraction |
 
-A constraint is checked at the latest time of the names it reads, with integer arithmetic
-where both operands are integers (`div` and `mod` Euclidean) and a float otherwise. Every
+A constraint is checked at the latest time of the names it reads, with integer arithmetic and
+comparison where both operands are integers (`div` and `mod` Euclidean; exact past 2^53, where
+a float rounds a byte count) and a float otherwise; a `div` or `mod` by zero is refused. Every
 name is resolved when the lock is read, so a misspelled one fails at `dry-run`, never after a
 long run; `dry-run` judges the constraints known at resolve and lists the others with their
 time. A run judges them at resolve, before the model's first op; at the **gate**, on rank 0
