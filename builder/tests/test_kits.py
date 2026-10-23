@@ -137,13 +137,18 @@ DISKANN_BUILD = ROOT / "workloads" / "vector-search" / "diskann-build" / "kit"
 def test_diskann_build_params_from_a_trace_and_the_files_the_build_left(tmp_path):
     """`diskann-build/kit/params.py`: the base's shape from its header, the shard count and mean
     shard graph from the merge's reads, the merged graph from its writes (and its 8-byte
-    header), and the sizes of the files the build left."""
+    header), the graph's degree from the disk index's header (a node's length less its vector
+    and its count), and the sizes of the files the build left; a disk index whose header and
+    size disagree is refused; `--set` adds the compute, which no trace measures."""
     base = tmp_path / "base.fbin"
     base.write_bytes(struct.pack("<II", 1000, 16) + bytes(64))
     index = tmp_path / "index"
     index.mkdir()
     (index / "ann_pq_compressed.bin").write_bytes(bytes(8 + 1000 * 32))
-    (index / "ann_disk.index").write_bytes(bytes(4096 * 30 + 100))
+    # DiskANN's header: save_bin of nine u64s (npts, ndims, medoid, max_node_len, nnodes_per_sector, ...), then
+    # 1000 nodes of 16 dimensions at degree 8 (100 bytes), 40 to a sector, in 25 sectors after it
+    disk = struct.pack("<ii9Q", 9, 1, 1000, 16, 0, 100, 40, 0, 0, 0, 4096 * 26)
+    (index / "ann_disk.index").write_bytes(disk + bytes(4096 * 26 - len(disk)))
     (index / "ann_sample_ids.bin").write_bytes(bytes(8 + 4 * 77))
     trace = tmp_path / "trace.txt"
     trace.write_text("".join(
@@ -155,8 +160,16 @@ def test_diskann_build_params_from_a_trace_and_the_files_the_build_left(tmp_path
     assert r.returncode == 0, r.stderr
     f = json.loads(r.stdout)
     assert (f["abstract"], f["doc"]) == ("diskann_build", "a doc")
-    assert values_of(f) == {"dim": 16, "n": 1000, "shards": 3, "pq_code": 32, "shard_index_bytes": 2200 // 3, "index_bytes": 4204,
-                           "sectors": 30, "sample_rows": 77}
+    assert values_of(f) == {"dim": 16, "n": 1000, "shards": 3, "pq_code": 32, "degree": 8, "shard_index_bytes": 2200 // 3,
+                           "index_bytes": 4204, "sample_rows": 77}
+    (index / "ann_disk.index").write_bytes(disk + bytes(4096 * 30 - len(disk)))
+    r = _run(DISKANN_BUILD / "params.py", trace, base, index, "a doc")
+    assert r.returncode == 1 and r.stderr.strip() == ("params.py: ann_disk.index is 30 sectors where its header's 1,000 points of "
+                                                      "100 bytes take 26"), r.stderr
+    (index / "ann_disk.index").write_bytes(disk + bytes(4096 * 26 - len(disk)))
+    r = _run(DISKANN_BUILD / "params.py", trace, base, index, "a doc", "--set", "pq_train=59000000000", "--set", "build_time=2")
+    assert r.returncode == 0, r.stderr
+    assert values_of(json.loads(r.stdout))["pq_train"] == 59000000000 and values_of(json.loads(r.stdout))["build_time"] == 2
     trace.write_text("")
     r = _run(DISKANN_BUILD / "params.py", trace, base, index, "a doc")
     assert r.returncode == 1 and r.stderr.strip() == ("params.py: the trace reads no shard graph (subshard-N_mem.index): "

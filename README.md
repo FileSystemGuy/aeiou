@@ -378,8 +378,9 @@ slowest delays; the five input-pipeline abstracts take their job and GPU values 
 first), its write buffer the `st_blksize` of its output namespace, read by a probe file
 (contract 0.12), `dcp_load`, its read buffers the `st_blksize` of its input namespaces, and the
 three LMCache abstracts, the model's, the deployment's, and the load's values (contract 0.13:
-rule V3 judges a required parameter in an `at` offset when its value is given), and
-`safetensors_load`, the model's shards and tensor table and the deployment's `tp`.
+rule V3 judges a required parameter in an `at` offset when its value is given),
+`safetensors_load`, the model's shards and tensor table and the deployment's `tp`, and
+`diskann_build`, the base's shape, the build's configuration, its graphs, and its compute.
 
 Not built, in rough order of interest:
 
@@ -435,7 +436,7 @@ Not built, in rough order of interest:
 - Traces of the three containers never traced, `hdf5_map`, `parquet_stream`, and
   `tfrecord_stream`, each fitted to an example case that replaces its `unsettled` one (item
   36); a lognormal's `sigma` as an expression, so a case gives it (item 37); the job values of
-  the three abstracts outside the input pipelines still holding them moved to cases, one mechanism at a time
+  the two abstracts outside the input pipelines still holding them moved to cases, one mechanism at a time
   with the user (item 38); and a use case per accelerator, `unet3d-h100` the first (item 39).
 
 ## License

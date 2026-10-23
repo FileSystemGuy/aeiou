@@ -1139,6 +1139,13 @@ search.
 **Constructs used.** Sequential loops over phases; ~~`pick` without replacement is not needed
 (sample with replacement is what the real code does)~~ a namespace with two fields; `unlink`.
 
+*2026-10-23:* the committed abstract requires the base's shape (`dim`, `n`), the build's
+configuration (`shards`, `pq_code`, and the graph's `degree`, from which the disk index's
+`sectors` are now derived), its graphs (`shard_index_bytes`, `index_bytes`), `sample_rows`, and
+the compute (`pq_train`, `partition_time`, `build_time`), which a case gives (`DESIGN_REVIEW.md`
+§3.78; the billion-point defaults above are no case, the traced `sift1m-13-shards` is the
+only one).
+
 ---
 
 ## 8. KV-cache serving (prefix cache offloaded to storage)

@@ -26,7 +26,7 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("safetensors_load", 2, &crate::common::SAFETENSORS),
     ("diskann_search", 1, &[("queries", "100"), ("threads", "2")]),
     ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")]),
-    ("diskann_build", 1, &[("sectors", "1000"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000")]),
+    ("diskann_build", 1, &[("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000"), ("pq_train", "60000000000"), ("partition_time", "90000000000"), ("build_time", "1800000000000")]),
     ("lmcache_local_disk", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("lmcache_shared_fs_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),

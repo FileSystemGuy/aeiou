@@ -67,7 +67,9 @@ fn hashes_match_check_py() {
         // 2026-10-02: `enumerate` on by default; 2026-10-22: the job's and the GPU's values and the corpus's median
         // required (its unsettled case jpeg-50m), the read sizes st_blksize, DESIGN_REVIEW §3.78
         ("file_per_sample", "7d31eb53d7446f9da83cec42e2342f87ced07ac2c135702a4c699d9e8e8080f7"),
-        ("diskann_build", "244d8030df09c15b93d9a6b2f2a8f054be610d6ad64196d97b6d41c75b1e019e"),
+        // 2026-10-23: the base's shape, the build's configuration, its graphs, and its compute required, the
+        // disk index's sectors derived from the graph's degree (the traced example sift1m-13-shards), DESIGN_REVIEW §3.78
+        ("diskann_build", "a5118edd1ea8b33c4d51f5fd90e33506596f162a3d0f5bec13542e9ed05b46cf"),
         ("diskann_search", "ffcb384597882dcecc00085d8b25baea2a1fc7ecf79a431c852e4b2d6e705c03"),
         // 2026-10-15 (RC1 review): a step takes the shards whose first sample is in its batch, for
         // any batch and samples_per_file, in place of `every(samples_per_file div batch)`; the
@@ -128,12 +130,14 @@ fn golden_fingerprints() {
         ("safetensors_load", 2, &crate::common::SAFETENSORS, 0x2668387c7aa4126b, 24682),
         ("diskann_search", 1, &[("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
         ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
+        // re-recorded 2026-10-23 (§3.78): `sectors` derived from `degree` 64, 200,001 at these million points where
+        // 1,000 were given, so the layout writes twelve more calls of 64 MiB and a sector
         (
             "diskann_build",
             1,
-            &[("sectors", "1000"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000")],
-            0xeaf5da9b000203a1,
-            1229207,
+            &[("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000"), ("pq_train", "60000000000"), ("partition_time", "90000000000"), ("build_time", "1800000000000")],
+            0x93142e1f7cf15fb4,
+            1229219,
         ),
         // re-recorded 2026-10-02 (§3.59): the writes under the prefill-step loop's index, and the `trim` and `turns` draws
         // before the conversation and system-prompt picks move their sites, so a seed draws other prompts (the fitted

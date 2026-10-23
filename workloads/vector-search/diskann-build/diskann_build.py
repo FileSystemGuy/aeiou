@@ -8,36 +8,42 @@ sampling passes and the layout), and as one load into memory (PQ compression, an
 shard to pick its rows). Each shard's rows are copied to a file, read back, built, and saved
 as a graph and a second copy of the rows; the merge reads the graphs back with one `read`
 each and writes the merged graph with one `write`; the layout writes the index in 64 MiB
-pieces. Nothing is synced. `--time-scale` shrinks the compute.
+pieces. Nothing is synced. `--time-scale` shrinks the compute. The base's shape, the build's
+configuration, the graphs it makes, and its compute are required (DESIGN_REVIEW.md §3.78,
+2026-10-23): the traced example sift1m-13-shards gives them, and the billion-point stand-in
+the defaults held until then is no case (its metrics exceed the dry run's limit).
 """
 from aeiou import *
 
 w = Workload("diskann_build",
              doc="Single builder: PQ training and compression, partition into shards, per-shard build, merge, disk layout, sample.")
 P = w.P
-w.param("dim", 128, unit="count")
-w.param("n", 1_000_000_000, unit="count")
-w.param("shards", 40, unit="count", doc="[config] from the build's memory budget")
+w.param("dim", kind=int, unit="count", doc="the base's dimensions (fp32)")
+w.param("n", kind=int, unit="count", doc="the base's points")
+w.param("shards", kind=int, unit="count", doc="[config] from the build's memory budget")
 w.param("overlap", 2, unit="count", doc="shards a point is put in (traced)")
 w.param("cache", 64 * MiB, unit="bytes", doc="the block reader's and the layout writer's block (traced)")
 w.param("stream", 8191, unit="bytes", doc="the read length of a C++ stream on a file (traced)")
 w.param("chunk", 8192, unit="bytes", doc="the write length of a C++ stream (traced)")
 w.param("big", 0x7ffff000, unit="bytes", doc="one read or write call for a whole array; Linux transfers at most this much per call")
-w.param("pq_code", 32, unit="bytes", doc="[config] bytes of one PQ-compressed vector")
-w.param("shard_index_bytes", 5 * GiB, unit="bytes", doc="[config] a shard's graph: about 132 bytes per point of the shard (measured, degree 64)")
-w.param("index_bytes", 205 * GiB, unit="bytes", doc="[config] the merged graph: about 205 bytes per point (measured, degree 64)")
-w.param("sectors", 200_000_001, unit="count", doc="[config] 4 KiB sectors of the disk index, the header's included")
+w.param("pq_code", kind=int, unit="bytes", doc="[config] bytes of one PQ-compressed vector")
+w.param("degree", kind=int, unit="count", doc="[config] the graph's degree, as the disk layout reads it from the merged graph")
+w.param("shard_index_bytes", kind=int, unit="bytes", doc="a shard's graph (measured: about 132 bytes per point of the shard at degree 64)")
+w.param("index_bytes", kind=int, unit="bytes", doc="the merged graph (measured: about 205 bytes per point at degree 64)")
 w.param("sector", 4 * KiB, unit="bytes")
-w.param("sample_rows", 100_000_000, unit="count", doc="[config] rows of the sample of the base written for the search's warm-up; a tenth here, 100,131 of a million traced")
-w.param("pq_train", normal(60 * s, 5 * s, min=1 * s), unit="ns", doc="[measure] 59 s traced on 256,000 sampled rows, 20 cores")
-w.param("partition_time", normal(90 * s, 5 * s, min=1 * s), unit="ns", doc="[measure] 91 s traced at a million points")
-w.param("build_time", normal(1800 * s, 60 * s, min=1 * s), unit="ns", doc="per shard [measure]; scaled by --time-scale")
+w.param("sample_rows", kind=int, unit="count", doc="rows of the sample of the base written for the search's warm-up (100,131 of a million traced)")
+w.param("pq_train", kind=int, unit="ns", doc="[measure] PQ training: the build's on its hosts")
+w.param("partition_time", kind=int, unit="ns", doc="[measure] the partition into shards")
+w.param("build_time", kind=int, unit="ns", doc="[measure] per shard; scaled by --time-scale")
 
 row = P.dim * 4
 base_bytes = P.n * row + 8
 shard_rows = P.overlap * P.n // P.shards               # modeled equal; traced 52 to 111 MB of rows per shard, mean 79
 shard_bytes = shard_rows * row + 8
 ids_bytes = shard_rows * 4 + 8
+node = row + 4 + P.degree * 4                          # a node in the disk index: its vector, its degree, its neighbours
+# DiskANN's layout: a header sector, then whole nodes to a sector, or a node bigger than a sector in whole sectors
+sectors = 1 + ceil_div(P.n, max_(1, P.sector // node)) * ceil_div(node, P.sector)
 
 base = w.dataset("base", pattern="base/base.fbin", layout="array", access="indexed", count=P.n, slot=row,
                  size=const(row), seed=0x5eed_da7f)
@@ -157,7 +163,7 @@ with w.actor("gpu", count=1) as b:                    # one builder; --gpus 1
         b.close(m)
         x = b.let("x", out.object(name="disk.index"))
         b.open(x, "RDWR|CREAT|TRUNC")
-        put(b, x, P.sectors * P.sector, P.cache + P.sector)
+        put(b, x, sectors * P.sector, P.cache + P.sector)
         b.close(x)
     with b.phase("sample"):
         block_pass(b, base_f)

@@ -781,6 +781,24 @@ fn the_safetensors_case_is_the_run_the_old_defaults_made() {
     assert!(code == 1 && err.contains("required parameters with no value: bytes, hdr_len, off, row_bytes, rows, shard, shard_bytes, shards, split, tp"), "{err}");
 }
 
+/// diskann_build's job values (item 38; DESIGN_REVIEW §3.78): the traced example sift1m-13-shards
+/// runs the op multiset it ran on the abstract with defaults (its sectors now derived from the
+/// graph's degree, 200,001 either way); the abstract alone is refused, naming every value it now
+/// requires: the base's shape, the build's configuration, the graphs it makes, and its compute.
+/// The old defaults, a billion points, are no case: their metrics exceed the dry run's limit.
+#[test]
+fn the_diskann_build_case_is_the_run_its_trace_fitted() {
+    let w = crate::common::workloads().display().to_string();
+    let (code, out, err) = aeiou(&["dry-run", "--case", "sift1m-13-shards", "--workloads", &w, "--gpus", "1", "--seed", "1"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&out, "case ").contains("/sift1m-13-shards  run diskann_build"), "{out}");
+    assert_eq!(line(&out, "fingerprint "), "fingerprint 17a7cb1242f291bd");
+    assert!(line(&out, "  ops ").starts_with("  ops 1293972 "), "{out}");
+    let file = crate::common::workload_ast("diskann_build.ast.json").display().to_string();
+    let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+    assert!(code == 1 && err.contains("required parameters with no value: build_time, degree, dim, index_bytes, n, partition_time, pq_code, pq_train, sample_rows, shard_index_bytes, shards"), "{err}");
+}
+
 /// The LMCache abstracts' unsettled cases (item 38; DESIGN_REVIEW §3.78 points 1 and 4): each
 /// lock runs exactly what its abstract's defaults ran until 2026-10-23 (tests/golden.rs's
 /// fingerprints, 1 GPU, seed 1, 2 slots, 50 requests after 50 warm), the shared store's writer

@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-Single builder: PQ training and compression, partition into shards, per-shard build, merge, disk layout, sample. In the catalog it is `vector-search/diskann-build`: application `diskann`, format `diskann-index`, phase indexing, domain ai. An example case (`sift1m-13-shards`: vectors data), its parameters holding at 1 GPU. Traced: captured, but rows are outside; each has its recorded reason. `base` holds 1,000,000 samples, slots of one file (488.3 MiB in 1 file), looked up by id; sizes always 512 bytes. It writes the objects of `tmp`, each as written. It writes the objects of `out`, each as written. The one `gpu` actor: in phase `pq`, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close; compute for `draw(pq_train)`; open, lseek 3 times, read 64 MiB, lseek; once: read 2.0 GiB; lseek, close; on an object of `out`, open for writing; write 30.5 MiB; close; in phase `partition`, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close; compute for `draw(partition_time)`; open, lseek 3 times, read 64 MiB, lseek; once: read 2.0 GiB; lseek, close; 13 times: on an object of `tmp`, open for writing; 75 times: write 8 KiB; write 992 bytes; close; in phase `shard_build`, 13 times: on an object of `tmp`, open for writing, open, read 8.0 KiB; once: read 2.0 GiB; close, open, lseek 3 times, read 64 MiB, lseek; once: read 2.0 GiB; lseek, close; 9,615 times: write 8 KiB; write 3.0 KiB; close, open; 9,617 times: read 8.0 KiB; close; compute for `draw(build_time)`; on an object of `tmp`, open for writing; 2,698 times: write 8 KiB; write 4.0 KiB; close; on an object of `tmp`, open for writing; 9,615 times: write 8 KiB; write 3.0 KiB; close, unlink; in phase `merge`, 13 times: on an object of `tmp`, open, read 8.0 KiB; once: read 2.0 GiB; close; on an object of `tmp`, open; once: read 2.0 GiB; close; 13 times: unlink 3 times; on an object of `out`, open for writing; write 195.8 MiB; close; in phase `layout`, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close; on an object of `out`, open; 25,070 times: read 8.0 KiB; close; on an object of `out`, open for writing; 12 times: write 64.0 MiB; write 13.2 MiB; close; in phase `sample`, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close; on an object of `out`, open for writing; 6,258 times: write 8 KiB; write 1.5 KiB; close; on an object of `out`, open for writing; 48 times: write 8 KiB; write 7.1 KiB; close. Measured by dry run at 1 GPU (1,293,972 ops: 825,205 lseek, 292,414 write, 176,041 read, 130 close, 130 open, 52 unlink; 11.0 GiB read, 3.2 GiB written): read runs: large (448 MiB); write runs: large (64 MiB); read requests: large (1.8 GiB); write requests: tiny (8 KiB); share of bytes read: mixed (77.3%); metadata ops per data op: none (0.000666); reads its own writes: yes; share of bytes read that are re-reads: repeated (82.7%); share of accessed bytes on the most accessed 1% of bytes: uniform (5.21%).
+Single builder: PQ training and compression, partition into shards, per-shard build, merge, disk layout, sample. In the catalog it is `vector-search/diskann-build`: application `diskann`, format `diskann-index`, phase indexing, domain ai. An example case (`sift1m-13-shards`: vectors data), its parameters holding at 1 GPU. Traced: captured, but rows are outside; each has its recorded reason. `base` holds 1,000,000 samples, slots of one file (488.3 MiB in 1 file), looked up by id; sizes always 512 bytes. It writes the objects of `tmp`, each as written. It writes the objects of `out`, each as written. The one `gpu` actor: in phase `pq`, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close; compute for 59 s; open, lseek 3 times, read 64 MiB, lseek; once: read 2.0 GiB; lseek, close; on an object of `out`, open for writing; write 30.5 MiB; close; in phase `partition`, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close; compute for 91 s; open, lseek 3 times, read 64 MiB, lseek; once: read 2.0 GiB; lseek, close; 13 times: on an object of `tmp`, open for writing; 75 times: write 8 KiB; write 992 bytes; close; in phase `shard_build`, 13 times: on an object of `tmp`, open for writing, open, read 8.0 KiB; once: read 2.0 GiB; close, open, lseek 3 times, read 64 MiB, lseek; once: read 2.0 GiB; lseek, close; 9,615 times: write 8 KiB; write 3.0 KiB; close, open; 9,617 times: read 8.0 KiB; close; compute for 20 s; on an object of `tmp`, open for writing; 2,698 times: write 8 KiB; write 4.0 KiB; close; on an object of `tmp`, open for writing; 9,615 times: write 8 KiB; write 3.0 KiB; close, unlink; in phase `merge`, 13 times: on an object of `tmp`, open, read 8.0 KiB; once: read 2.0 GiB; close; on an object of `tmp`, open; once: read 2.0 GiB; close; 13 times: unlink 3 times; on an object of `out`, open for writing; write 195.8 MiB; close; in phase `layout`, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close; on an object of `out`, open; 25,070 times: read 8.0 KiB; close; on an object of `out`, open for writing; 12 times: write 64.0 MiB; write 13.2 MiB; close; in phase `sample`, open, lseek twice; 7 times: read 8.0 KiB, read 64.0 MiB; 5,157 times: read 8.0 KiB; 16 times: lseek twice; close; on an object of `out`, open for writing; 6,258 times: write 8 KiB; write 1.5 KiB; close; on an object of `out`, open for writing; 48 times: write 8 KiB; write 7.1 KiB; close. Measured by dry run at 1 GPU (1,293,972 ops: 825,205 lseek, 292,414 write, 176,041 read, 130 close, 130 open, 52 unlink; 11.0 GiB read, 3.2 GiB written): read runs: large (448 MiB); write runs: large (64 MiB); read requests: large (1.8 GiB); write requests: tiny (8 KiB); share of bytes read: mixed (77.3%); metadata ops per data op: none (0.000666); reads its own writes: yes; share of bytes read that are re-reads: repeated (82.7%); share of accessed bytes on the most accessed 1% of bytes: uniform (5.21%).
 
 ## The account
 
@@ -14,23 +14,23 @@ Single builder: PQ training and compression, partition into shards, per-shard bu
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `dim` | 128 | same | count |  |
-| `n` | 1,000,000 | 1,000,000,000 | count |  |
-| `shards` | 13 | 40 | count | [config] from the build's memory budget |
+| `dim` | 128 | none | count | the base's dimensions (fp32) |
+| `n` | 1,000,000 | none | count | the base's points |
+| `shards` | 13 | none | count | [config] from the build's memory budget |
 | `overlap` | 2 | same | count | shards a point is put in (traced) |
 | `cache` | 64 MiB | same | bytes | the block reader's and the layout writer's block (traced) |
 | `stream` | 8.0 KiB | same | bytes | the read length of a C++ stream on a file (traced) |
 | `chunk` | 8 KiB | same | bytes | the write length of a C++ stream (traced) |
 | `big` | 2.0 GiB | same | bytes | one read or write call for a whole array; Linux transfers at most this much per call |
-| `pq_code` | 32 bytes | same | bytes | [config] bytes of one PQ-compressed vector |
-| `shard_index_bytes` | 21.1 MiB | 5 GiB | bytes | [config] a shard's graph: about 132 bytes per point of the shard (measured, degree 64) |
-| `index_bytes` | 195.8 MiB | 205 GiB | bytes | [config] the merged graph: about 205 bytes per point (measured, degree 64) |
-| `sectors` | 200,001 | 200,000,001 | count | [config] 4 KiB sectors of the disk index, the header's included |
+| `pq_code` | 32 bytes | none | bytes | [config] bytes of one PQ-compressed vector |
+| `degree` | 64 | none | count | [config] the graph's degree, as the disk layout reads it from the merged graph |
+| `shard_index_bytes` | 21.1 MiB | none | bytes | a shard's graph (measured: about 132 bytes per point of the shard at degree 64) |
+| `index_bytes` | 195.8 MiB | none | bytes | the merged graph (measured: about 205 bytes per point at degree 64) |
 | `sector` | 4 KiB | same | bytes |  |
-| `sample_rows` | 100,131 | 100,000,000 | count | [config] rows of the sample of the base written for the search's warm-up; a tenth here, 100,131 of a million traced |
-| `pq_train` | normal, mean 60 s, standard deviation 5 s (5th–95th percentile 51.8 s to 68.2 s), clamped to at least 1 s | same | ns | [measure] 59 s traced on 256,000 sampled rows, 20 cores |
-| `partition_time` | normal, mean 90 s, standard deviation 5 s (5th–95th percentile 81.8 s to 98.2 s), clamped to at least 1 s | same | ns | [measure] 91 s traced at a million points |
-| `build_time` | normal, mean 1,800 s, standard deviation 60 s (5th–95th percentile 1,701 s to 1,899 s), clamped to at least 1 s | same | ns | per shard [measure]; scaled by --time-scale |
+| `sample_rows` | 100,131 | none | count | rows of the sample of the base written for the search's warm-up (100,131 of a million traced) |
+| `pq_train` | 59 s | none | ns | [measure] PQ training: the build's on its hosts |
+| `partition_time` | 91 s | none | ns | [measure] the partition into shards |
+| `build_time` | 20 s | none | ns | [measure] per shard; scaled by --time-scale |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.
 
@@ -58,7 +58,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
       - `lseek` `base_f` to 0 from the current position.
       - `lseek` `base_f` to 0 from the current position.
   - `close` `base_f`.
-  - Computes for `draw(pq_train)`, no I/O.
+  - Computes for 59 s (`pq_train`), no I/O.
   - `open` `base_f` (RDONLY).
   - `lseek` `base_f` to 0 from the end.
   - `lseek` `base_f` to 0 from the current position.
@@ -101,7 +101,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
       - `lseek` `base_f` to 0 from the current position.
       - `lseek` `base_f` to 0 from the current position.
   - `close` `base_f`.
-  - Computes for `draw(partition_time)`, no I/O.
+  - Computes for 91 s (`partition_time`), no I/O.
   - `open` `base_f` (RDONLY).
   - `lseek` `base_f` to 0 from the end.
   - `lseek` `base_f` to 0 from the current position.
@@ -149,7 +149,7 @@ The API the traced application used: `posix` sync (none declared); a run under a
     - 9,617 times (`⌈((overlap × n div shards) × (dim × 4) + 8) / stream⌉`), `rep` = 0 to 9,616:
       - `read` `d`: 8.0 KiB (`stream`) at the file position.
     - `close` `d`.
-    - Computes for `draw(build_time)`, no I/O.
+    - Computes for 20 s (`build_time`), no I/O.
     - `g` is the object of `tmp` named by k = `k`, part = `graph`.
     - `open` `g` (WRONLY|CREAT|TRUNC).
     - 2,698 times (`shard_index_bytes div chunk`), `rep` = 0 to 2,697:
@@ -209,10 +209,10 @@ The API the traced application used: `posix` sync (none declared); a run under a
   - `close` `m`.
   - `x` is the object of `out` named by name = `disk.index`.
   - `open` `x` (RDWR|CREAT|TRUNC).
-  - 12 times (`sectors × sector div (cache + sector)`), `rep` = 0 to 11:
+  - 12 times (`(1 + ⌈n / max(1, sector div (dim × 4 + 4 + degree × 4))⌉ × ⌈(dim × 4 + 4 + degree × 4) / sector⌉) × sector div (cache + sector)`), `rep` = 0 to 11:
     - `write` `x`: 64.0 MiB (`cache + sector`) at the file position.
-  - If `(sectors × sector mod (cache + sector)) > 0` (true here):
-    - `write` `x`: 13.2 MiB (`sectors × sector mod (cache + sector)`) at the file position.
+  - If `((1 + ⌈n / max(1, sector div (dim × 4 + 4 + degree × 4))⌉ × ⌈(dim × 4 + 4 + degree × 4) / sector⌉) × sector mod (cache + sector)) > 0` (true here):
+    - `write` `x`: 13.2 MiB (`(1 + ⌈n / max(1, sector div (dim × 4 + 4 + degree × 4))⌉ × ⌈(dim × 4 + 4 + degree × 4) / sector⌉) × sector mod (cache + sector)`) at the file position.
   - `close` `x`.
 - Phase `sample`:
   - `open` `base_f` (RDONLY).

@@ -16,7 +16,8 @@ python kit/build.py --fbin sift/sift_base.fvecs /mnt/nfs/base/base.fbin
 strace -f --seccomp-bpf -ttt -T -yy -v -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/build.py /mnt/nfs/base/base.fbin /mnt/nfs/index
 aeiou-trace metrics trace.txt --root /mnt/nfs -o $C/captures/2026-10-02/trace.metrics.json
-python kit/params.py trace.txt /mnt/nfs/base/base.fbin /mnt/nfs/index "…" > $C/params.json
+python kit/params.py trace.txt /mnt/nfs/base/base.fbin /mnt/nfs/index "…" --set pq_train=59000000000 \
+    --set partition_time=91000000000 --set build_time=20000000000 > $C/params.json   # the compute: not fitted
 aeiou dry-run diskann_build.ast.json --gpus 1 \
     --params-file $C/params.json --metrics-json abstract.metrics.json
 ```
@@ -26,5 +27,10 @@ every system call, traced or not, and the build's k-means spends its time there:
 attempt had finished two of 32 PQ chunks after 20 minutes; with the filter the whole build
 took 407 s. The trace is 1.3 million lines, of which 825,000 are `lseek`s that move nothing
 (a C++ stream asked for its position twice per row).
+
+The compute is not in the metrics a trace gives. The `--set` values are the traced run's: PQ
+training 59 s and the partition 91 s, and 20 s per shard, the 407 s of the build less those two
+over its 13 shards, an upper bound with the merge, the layout, and the I/O in it. `degree` is
+read from the disk index's header, a node's bytes as the layout wrote them.
 
 `builder/tests/test_trace.py` repeats the dry run against the committed metrics.

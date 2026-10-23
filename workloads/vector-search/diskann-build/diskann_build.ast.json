@@ -4,17 +4,19 @@
   "doc": "Single builder: PQ training and compression, partition into shards, per-shard build, merge, disk layout, sample.",
   "params": {
     "dim": {
-      "default": 128,
-      "unit": "count"
+      "unit": "count",
+      "doc": "the base's dimensions (fp32)",
+      "kind": "int"
     },
     "n": {
-      "default": 1000000000,
-      "unit": "count"
+      "unit": "count",
+      "doc": "the base's points",
+      "kind": "int"
     },
     "shards": {
-      "default": 40,
       "unit": "count",
-      "doc": "[config] from the build's memory budget"
+      "doc": "[config] from the build's memory budget",
+      "kind": "int"
     },
     "overlap": {
       "default": 2,
@@ -42,66 +44,48 @@
       "doc": "one read or write call for a whole array; Linux transfers at most this much per call"
     },
     "pq_code": {
-      "default": 32,
       "unit": "bytes",
-      "doc": "[config] bytes of one PQ-compressed vector"
+      "doc": "[config] bytes of one PQ-compressed vector",
+      "kind": "int"
+    },
+    "degree": {
+      "unit": "count",
+      "doc": "[config] the graph's degree, as the disk layout reads it from the merged graph",
+      "kind": "int"
     },
     "shard_index_bytes": {
-      "default": 5368709120,
       "unit": "bytes",
-      "doc": "[config] a shard's graph: about 132 bytes per point of the shard (measured, degree 64)"
+      "doc": "a shard's graph (measured: about 132 bytes per point of the shard at degree 64)",
+      "kind": "int"
     },
     "index_bytes": {
-      "default": 220117073920,
       "unit": "bytes",
-      "doc": "[config] the merged graph: about 205 bytes per point (measured, degree 64)"
-    },
-    "sectors": {
-      "default": 200000001,
-      "unit": "count",
-      "doc": "[config] 4 KiB sectors of the disk index, the header's included"
+      "doc": "the merged graph (measured: about 205 bytes per point at degree 64)",
+      "kind": "int"
     },
     "sector": {
       "default": 4096,
       "unit": "bytes"
     },
     "sample_rows": {
-      "default": 100000000,
       "unit": "count",
-      "doc": "[config] rows of the sample of the base written for the search's warm-up; a tenth here, 100,131 of a million traced"
+      "doc": "rows of the sample of the base written for the search's warm-up (100,131 of a million traced)",
+      "kind": "int"
     },
     "pq_train": {
-      "default": {
-        "normal": {
-          "mean": 60000000000,
-          "sd": 5000000000,
-          "min": 1000000000
-        }
-      },
       "unit": "ns",
-      "doc": "[measure] 59 s traced on 256,000 sampled rows, 20 cores"
+      "doc": "[measure] PQ training: the build's on its hosts",
+      "kind": "int"
     },
     "partition_time": {
-      "default": {
-        "normal": {
-          "mean": 90000000000,
-          "sd": 5000000000,
-          "min": 1000000000
-        }
-      },
       "unit": "ns",
-      "doc": "[measure] 91 s traced at a million points"
+      "doc": "[measure] the partition into shards",
+      "kind": "int"
     },
     "build_time": {
-      "default": {
-        "normal": {
-          "mean": 1800000000000,
-          "sd": 60000000000,
-          "min": 1000000000
-        }
-      },
       "unit": "ns",
-      "doc": "per shard [measure]; scaled by --time-scale"
+      "doc": "[measure] per shard; scaled by --time-scale",
+      "kind": "int"
     }
   },
   "datasets": {
@@ -361,9 +345,7 @@
               {
                 "compute": {
                   "ns": {
-                    "draw": {
-                      "param": "pq_train"
-                    }
+                    "param": "pq_train"
                   }
                 }
               },
@@ -1007,9 +989,7 @@
               {
                 "compute": {
                   "ns": {
-                    "draw": {
-                      "param": "partition_time"
-                    }
+                    "param": "partition_time"
                   }
                 }
               },
@@ -1827,9 +1807,7 @@
                     {
                       "compute": {
                         "ns": {
-                          "draw": {
-                            "param": "build_time"
-                          }
+                          "param": "build_time"
                         }
                       }
                     },
@@ -2750,7 +2728,89 @@
                       {
                         "mul": [
                           {
-                            "param": "sectors"
+                            "add": [
+                              1,
+                              {
+                                "mul": [
+                                  {
+                                    "ceil_div": [
+                                      {
+                                        "param": "n"
+                                      },
+                                      {
+                                        "max": [
+                                          1,
+                                          {
+                                            "div": [
+                                              {
+                                                "param": "sector"
+                                              },
+                                              {
+                                                "add": [
+                                                  {
+                                                    "add": [
+                                                      {
+                                                        "mul": [
+                                                          {
+                                                            "param": "dim"
+                                                          },
+                                                          4
+                                                        ]
+                                                      },
+                                                      4
+                                                    ]
+                                                  },
+                                                  {
+                                                    "mul": [
+                                                      {
+                                                        "param": "degree"
+                                                      },
+                                                      4
+                                                    ]
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "ceil_div": [
+                                      {
+                                        "add": [
+                                          {
+                                            "add": [
+                                              {
+                                                "mul": [
+                                                  {
+                                                    "param": "dim"
+                                                  },
+                                                  4
+                                                ]
+                                              },
+                                              4
+                                            ]
+                                          },
+                                          {
+                                            "mul": [
+                                              {
+                                                "param": "degree"
+                                              },
+                                              4
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "param": "sector"
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
                           },
                           {
                             "param": "sector"
@@ -2799,7 +2859,89 @@
                           {
                             "mul": [
                               {
-                                "param": "sectors"
+                                "add": [
+                                  1,
+                                  {
+                                    "mul": [
+                                      {
+                                        "ceil_div": [
+                                          {
+                                            "param": "n"
+                                          },
+                                          {
+                                            "max": [
+                                              1,
+                                              {
+                                                "div": [
+                                                  {
+                                                    "param": "sector"
+                                                  },
+                                                  {
+                                                    "add": [
+                                                      {
+                                                        "add": [
+                                                          {
+                                                            "mul": [
+                                                              {
+                                                                "param": "dim"
+                                                              },
+                                                              4
+                                                            ]
+                                                          },
+                                                          4
+                                                        ]
+                                                      },
+                                                      {
+                                                        "mul": [
+                                                          {
+                                                            "param": "degree"
+                                                          },
+                                                          4
+                                                        ]
+                                                      }
+                                                    ]
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "ceil_div": [
+                                          {
+                                            "add": [
+                                              {
+                                                "add": [
+                                                  {
+                                                    "mul": [
+                                                      {
+                                                        "param": "dim"
+                                                      },
+                                                      4
+                                                    ]
+                                                  },
+                                                  4
+                                                ]
+                                              },
+                                              {
+                                                "mul": [
+                                                  {
+                                                    "param": "degree"
+                                                  },
+                                                  4
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "param": "sector"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
                               },
                               {
                                 "param": "sector"
@@ -2832,7 +2974,89 @@
                             {
                               "mul": [
                                 {
-                                  "param": "sectors"
+                                  "add": [
+                                    1,
+                                    {
+                                      "mul": [
+                                        {
+                                          "ceil_div": [
+                                            {
+                                              "param": "n"
+                                            },
+                                            {
+                                              "max": [
+                                                1,
+                                                {
+                                                  "div": [
+                                                    {
+                                                      "param": "sector"
+                                                    },
+                                                    {
+                                                      "add": [
+                                                        {
+                                                          "add": [
+                                                            {
+                                                              "mul": [
+                                                                {
+                                                                  "param": "dim"
+                                                                },
+                                                                4
+                                                              ]
+                                                            },
+                                                            4
+                                                          ]
+                                                        },
+                                                        {
+                                                          "mul": [
+                                                            {
+                                                              "param": "degree"
+                                                            },
+                                                            4
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "ceil_div": [
+                                            {
+                                              "add": [
+                                                {
+                                                  "add": [
+                                                    {
+                                                      "mul": [
+                                                        {
+                                                          "param": "dim"
+                                                        },
+                                                        4
+                                                      ]
+                                                    },
+                                                    4
+                                                  ]
+                                                },
+                                                {
+                                                  "mul": [
+                                                    {
+                                                      "param": "degree"
+                                                    },
+                                                    4
+                                                  ]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "param": "sector"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
                                 },
                                 {
                                   "param": "sector"
@@ -3341,12 +3565,12 @@
   "provenance": {
     "generator": {
       "script": "diskann_build.py",
-      "sha256": "f1d45858211421727fd8b14520ad30babd3486dac7b1fdc4413f1f5b11dcd2db",
+      "sha256": "5f43732661ba42a7a9629221d8fe4cd6e05b6130beef0475de35a2d5dd70f376",
       "builder_version": "0.2.1",
-      "git": "28284ccdb8e1"
+      "git": "8301124b2892-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "244d8030df09c15b93d9a6b2f2a8f054be610d6ad64196d97b6d41c75b1e019e"
+    "ast_sha256": "a5118edd1ea8b33c4d51f5fd90e33506596f162a3d0f5bec13542e9ed05b46cf"
   }
 }

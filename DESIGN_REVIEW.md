@@ -7154,6 +7154,41 @@ Choices made in the build, open to revision:
   `test_params.py` judges an integer array's default by `dcp_load`'s `tail_back`, since `off`
   is now a required array (judged by its kind).
 
+**Built: `diskann_build`'s values** (2026-10-23, item 38's sixth mechanism). Decided with the
+user the same day, on the recommendation: the base's shape (`dim`, `n`), the build's
+configuration (`shards`, from its memory budget; `pq_code`; the graph's `degree`, new), the
+graphs it makes (`shard_index_bytes`, `index_bytes`, about 132 and 205 bytes a point at
+degree 64, which only a real build gives), the warm-up sample's `sample_rows`, and the
+compute (`pq_train`, `partition_time`, `build_time`, now integers like `step_time`) are
+required. The library's `overlap`, `cache`, `stream`, `chunk`, `big`, and `sector` stay
+defaults, all traced. No `scale`: `n` is the index being built, the job, not a dataset a site
+sizes to its memory (whether a benchmark lets submitters size it is the WG's). No
+`st_blksize`: the reads and writes are libstdc++ streams, whose `filebuf` holds `BUFSIZ`
+whatever the file system reports (hence the 8,191-byte reads). No contract change.
+
+- **`sectors` is derived from `degree`**: DiskANN's disk layout puts a header sector, then
+  whole nodes of `dim·4 + 4 + 4·degree` bytes to a 4 KiB sector, or a node bigger than a
+  sector in whole sectors (`max_(1, …)`, so a dimension of 1,024 and more no longer divides by
+  zero). 200,001 at the traced million points, as the trace's file was; 200,000,001 at the old
+  billion. From recollection of DiskANN's `create_disk_layout`, confirmed by the traced
+  file's size; the multi-sector branch is not traced. `kit/params.py` reads `degree` from
+  the disk index's header (`max_node_len`, DiskANN's `save_bin` of u64s) and refuses a file
+  whose size disagrees with it, the check on that reading.
+- **The old defaults are no case** (the user's choice over an unsettled case at them or at a
+  smaller `n`): the billion-point stand-in (40 shards, 5 and 205 GiB graphs, 60 s, 90 s, and
+  1,800 s per shard) was never measured, and the catalog could not measure it either: its
+  dry run is 436M ops (fingerprint 8e6cb4086b7bdf42, 96 s), and `--metrics` stops after 67 s
+  at 6.8 GB with more than 2^26 pieces in one instance. The traced example
+  `sift1m-13-shards` is the mechanism's only case; its fingerprint is unchanged
+  (17a7cb1242f291bd, 1,293,972 ops; `tests/cases.rs`).
+- **The example's compute is not fitted.** No trace metric holds time: PQ training 59 s and
+  the partition 91 s as traced, and 20 s per shard, the traced build's 407 s less those two
+  over its 13 shards, an upper bound with the merge, the layout, and the I/O in it.
+  `kit/params.py --set` gives them, as LMCache's `fit.py` does.
+- **The golden configuration moved:** `degree` 64 where `sectors` 1,000 was given, so 200,001
+  sectors at its million points and twelve more layout writes (0x93142e1f7cf15fb4, 1,229,219
+  ops).
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points
