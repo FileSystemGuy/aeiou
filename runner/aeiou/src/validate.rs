@@ -1808,7 +1808,8 @@ impl<'a> Checker<'a> {
 
     /// `e` provably ≥ `k`, `k` ∈ {0, 1} (rule V3): a literal ≥ k; a `ref`, `param`, or `draw` whose distribution has
     /// min ≥ k; `add` of a term ≥ k and a term ≥ 0. For k = 0 also any `mod` (Euclidean: in `[0, |b|)`) and an index
-    /// of `scope.nonneg_indices`. Judged on the document: parameter defaults, not the values a run was given.
+    /// of `scope.nonneg_indices`. Judged on the document: parameter defaults, not the values a run was given; a
+    /// required parameter passes on the document (contract 0.13) and is judged on the value `check_given` is given.
     fn at_least(&self, e: &'a Expr, k: i64, scope: &Scope<'a>) -> bool {
         match e {
             Expr::Lit(Literal::Int(n)) => *n >= k,
@@ -1824,6 +1825,8 @@ impl<'a> Checker<'a> {
                     let value = self.given.and_then(|g| g.get(name.as_str())).or_else(|| self.ast.params.get(name).and_then(|p| p.default.as_ref()));
                     match value {
                         Some(PValue::Dist(d)) => self.dist_at_least(d, k, scope),
+                        // a required parameter with no value yet: judged when one is given (contract 0.13)
+                        None => self.ast.params.get(name).is_some_and(|p| p.default.is_none()),
                         _ => false,
                     }
                 }

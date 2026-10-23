@@ -1,5 +1,5 @@
 {
-  "ast": "0.12",
+  "ast": "0.13",
   "name": "faiss_ivf_ondisk",
   "doc": "Per search call and OpenMP slice, prefetch threads touch every inverted list the slice's queries probe; lists chosen by popularity.",
   "posix": "mmap",
@@ -368,10 +368,10 @@
       "script": "faiss_ivf_ondisk.py",
       "sha256": "788a7e0903ed9fdad0b8152d401f7347be01ed0a3760e84328d5fdd577776f66",
       "builder_version": "0.2.1",
-      "git": "eb1032107f99"
+      "git": "28284ccdb8e1"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "39e771a7587e0067d1a42ca0064002934070b138b8623ba13cf2586e1f7a2e5e"
+    "ast_sha256": "14a33724b28cbc698197c4435d0e3d8161aba8e09539d852a096bd28f28d5177"
   }
 }

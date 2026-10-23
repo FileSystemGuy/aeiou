@@ -1,5 +1,5 @@
 {
-  "ast": "0.12",
+  "ast": "0.13",
   "name": "diskann_search",
   "doc": "Beam search over a sector-packed graph index: dependent rounds of `beam` concurrent 4 KiB reads per query.",
   "posix": "libaio",
@@ -539,10 +539,10 @@
       "script": "diskann_search.py",
       "sha256": "aa82e5d99b2eeff29a4eaa2dac89695a44f504dcd288659006918ed8eb3bc7f6",
       "builder_version": "0.2.1",
-      "git": "eb1032107f99"
+      "git": "28284ccdb8e1"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "1e625ecbe747a9db588059e5aaa46af602da2f7f159c0a8b506760198c9f2722"
+    "ast_sha256": "ffcb384597882dcecc00085d8b25baea2a1fc7ecf79a431c852e4b2d6e705c03"
   }
 }

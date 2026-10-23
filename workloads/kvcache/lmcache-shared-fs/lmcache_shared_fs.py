@@ -32,18 +32,23 @@ from aeiou import *
 def shape(name, reader, doc):
     w = Workload(name, doc=doc)
     P = w.P
-    w.param("concurrency", 64, unit="count")
-    w.param("warm", 2000, unit="count", doc="requests per slot before measurement (§9.5)")
-    w.param("requests", 20000, unit="count")
+    # A case gives the values with no default (DESIGN_REVIEW.md §3.78 points 1, 4): the model's on its GPU
+    # (chunk_bytes, context, keep, prefill_per_token, decode_per_token, prefill_step), the deployment's (retain),
+    # and the load's (concurrency, warm, requests, reuse, turn_in, turn_out, sys_prompts, sys_tokens, sys_pop).
+    # The defaults are the library's (chunk_tokens, meta_bytes) or a load's feature, off unless a case turns it on.
+    w.param("concurrency", kind=int, unit="count", doc="request slots per engine [load]")
+    w.param("warm", kind=int, unit="count", doc="requests per slot before measurement (§9.5)")
+    w.param("requests", kind=int, unit="count", doc="the measured requests per slot [load]: the case's length")
     w.param("chunk_tokens", 256, unit="tokens")
-    w.param("chunk_bytes", 32 * MiB, unit="bytes", doc="128 KiB/token × 256 [config]")
+    w.param("chunk_bytes", kind=int, unit="bytes", doc="the model's KV bytes per token × chunk_tokens (128 KiB × 256 for an 8B model)")
     w.param("meta_bytes", 28, unit="bytes", doc="the header in front of a chunk (traced: seven 32-bit integers)")
-    w.param("buf", 1 * MiB, unit="bytes", doc="Python BufferedReader size = st_blksize; the first read of a chunk file is this long")
-    w.param("sys_prompts", 50, unit="count")
-    w.param("sys_tokens", 1500, unit="tokens", doc="median system prompt length [measure]")
+    w.param("buf", st_blksize(of="kv", fallback=1 * MiB), unit="bytes",
+            doc="Python BufferedReader size = st_blksize of the chunk file (the store's, contract 0.12); the first read of a chunk file is this long")
+    w.param("sys_prompts", kind=int, unit="count", doc="system prompts [load]")
+    w.param("sys_tokens", kind=int, unit="tokens", doc="median system prompt length [load, measure]")
     w.param("sys_tokens_min", 1, unit="tokens", doc="bounds of the system prompt length; equal bounds give every prompt that length")
     w.param("sys_tokens_max", 100_000, unit="tokens")
-    w.param("sys_pop", zipf(s=1.1), doc="[measure]")
+    w.param("sys_pop", kind=Dist, doc="the system prompts' popularity, by index [load, measure]")
     w.param("sys_local", True, doc="[config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63)")
     w.param("sys_per_slot", False, doc="[config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop`")
     w.param("sub_prompts", 50, unit="count", doc="sub-agent prompts: a sub-agent's prompt is its own system prompt and tools, not the main agent's (Claude Code's documentation, §3.63)")
@@ -56,15 +61,15 @@ def shape(name, reader, doc):
     w.param("first_in", const(-1), unit="tokens", doc="the tokens of a new conversation's first prompt past its prefix; -1 draws them from `turn_in` as for any request (measured in the AgentX corpus: a chain's first prompt is not a turn's growth, §3.63)")
     w.param("sys_held", const(0), unit="tokens", doc="[config: GPU KV memory against the prefixes] the tokens of the system prompt the engine holds when a request arrives, apart from its conversation: a prefix many requests share stays in the engine's own cache (measured in the AgentX replay: the whole main-agent prefix in 89 of 103 requests, §3.63)")
     w.param("sub_held", const(0), unit="tokens", doc="[config: GPU KV memory against the prefixes] the same for a sub-agent prefix")
-    w.param("reuse", mixture((0.15, none), (0.85, const(40))),
-            doc="none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations "
+    w.param("reuse", kind=Dist,
+            doc="none for a new conversation (0.148 of ShareGPT's requests are first turns), or requests ago: the conversations "
                 "a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one")
-    w.param("keep", empirical({0: 91, 1_000_000: 9}), unit="tokens",
+    w.param("keep", kind=Dist, unit="tokens",
             doc="[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, "
                 "counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded. Drawn once "
                 "per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together")
-    w.param("retain", 5000, unit="count", doc="older chunks are evicted [config: capacity]")
-    w.param("context", 8192, unit="tokens", doc="[config: model] a conversation whose next prompt and reply would not fit starts anew")
+    w.param("retain", kind=int, unit="count", doc="older chunks are evicted [config: capacity]")
+    w.param("context", kind=int, unit="tokens", doc="[config: model] a conversation whose next prompt and reply would not fit starts anew")
     w.param("turns", const(0), unit="count",
             doc="[config: load] the requests a conversation has, drawn when it starts; 0 for no limit, the conversation then ends by "
                 "`reuse`'s none arm or the context. A session of many turns and a side call of one are the same slot's conversations "
@@ -73,13 +78,13 @@ def shape(name, reader, doc):
             doc="[config: load] tokens the client drops from the end of its conversation before a request (an agent editing its context; "
                 "measured in the AgentX corpus, §3.59); the chunks past the kept prefix are stored again under their names, where the "
                 "real store writes new files")
-    w.param("turn_in", empirical([1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944]), unit="tokens",
-            doc="the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean)")
-    w.param("turn_out", empirical([12, 34, 62, 92, 119, 148, 175, 201, 225, 248, 271, 294, 317, 342, 370, 407, 454, 519, 615, 785]), unit="tokens",
-            doc="generated tokens (measured: ShareGPT replies, the same way)")
-    w.param("prefill_per_token", 40 * us, unit="ns")
-    w.param("decode_per_token", 12 * ms, unit="ns")
-    w.param("prefill_step", 8192, unit="tokens",
+    w.param("turn_in", kind=Dist, unit="tokens",
+            doc="the tokens a request adds to its conversation's prompt [load] (ShareGPT's: user turns, twenty equal shares, each its mean)")
+    w.param("turn_out", kind=Dist, unit="tokens",
+            doc="generated tokens [load] (ShareGPT's replies, the same way)")
+    w.param("prefill_per_token", kind=int, unit="ns", doc="prefill compute per prompt token: the model's on its accelerator")
+    w.param("decode_per_token", kind=int, unit="ns", doc="decode compute per generated token: the model's on its accelerator")
+    w.param("prefill_step", kind=int, unit="tokens",
             doc="[config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 "
                 "otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens")
     w.param("think", const(0), unit="ns",

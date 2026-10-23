@@ -27,7 +27,7 @@ fn abstract_with(dir: &Path, lines: &str, count: Option<i64>) -> PathBuf {
     std::fs::write(dir.join("t.jsonl"), &text).unwrap();
     let count = count.map(|c| format!(r#""count": {c},"#)).unwrap_or_default();
     let ast = format!(
-        r#"{{"ast": "0.12", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
+        r#"{{"ast": "0.13", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
             "actors": {{"app": {{{count} "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{}"}}}}]}}}}}}"#,
         sha(text.as_bytes())
     );
@@ -610,7 +610,7 @@ fn a_trace_of_another_format_or_out_of_order_is_refused_at_load() {
     let good = sha(text.as_bytes());
     let doc = |other: &str| {
         format!(
-            r#"{{"ast": "0.12", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
+            r#"{{"ast": "0.13", "name": "trace_test", "doc": "t", "params": {{}}, "datasets": {{}},
             "actors": {{"app": {{"count": 1, "body": [{{"choose": {{"arms": [
                {{"weight": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{good}"}}}}]}},
                {{"weight": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{other}"}}}}]}}]}}}}]}}}}}}"#
@@ -644,7 +644,7 @@ fn a_traces_paths_are_checked_where_their_endpoints_place_them() {
     std::fs::write(
         &ast,
         format!(
-            r#"{{"ast": "0.12", "name": "trace_ep", "doc": "t", "params": {{}},
+            r#"{{"ast": "0.13", "name": "trace_ep", "doc": "t", "params": {{}},
              "datasets": {{"d": {{"layout": "whole", "pattern": "d/f{{id}}", "count": 1, "size": {{"const": 100}}, "seed": 3, "access": "map"}}}},
              "namespaces": {{"o": {{"pattern": "o/f{{k}}", "fields": {{"k": "int"}}, "size": "as_written", "seed": 1}}}},
              "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{}"}}}}]}}}}}}"#,

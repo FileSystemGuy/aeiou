@@ -16,18 +16,18 @@ mechanism's README) or what a storage system should do about it.
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `concurrency` | 1 | 64 | count |  |
-| `warm` | 0 | 2,000 | count | requests per slot before measurement (§9.5) |
-| `requests` | 300 | 20,000 | count |  |
+| `concurrency` | 1 | none | count | request slots per engine [load] |
+| `warm` | 0 | none | count | requests per slot before measurement (§9.5) |
+| `requests` | 300 | none | count | the measured requests per slot [load]: the case's length |
 | `chunk_tokens` | 256 tokens | same | tokens |  |
-| `chunk_bytes` | 3 MiB | 32 MiB | bytes | 128 KiB/token × 256 [config] |
+| `chunk_bytes` | 3 MiB | none | bytes | the model's KV bytes per token × chunk_tokens (128 KiB × 256 for an 8B model) |
 | `meta_bytes` | 28 bytes | same | bytes | the header in front of a chunk (traced: seven 32-bit integers) |
-| `buf` | 1 MiB | same | bytes | Python BufferedReader size = st_blksize; the first read of a chunk file is this long |
-| `sys_prompts` | 2 | 50 | count |  |
-| `sys_tokens` | 466 tokens | 1,500 tokens | tokens | median system prompt length [measure] |
+| `buf` | 1 MiB | same | bytes | Python BufferedReader size = st_blksize of the chunk file (the store's, contract 0.12); the first read of a chunk file is this long |
+| `sys_prompts` | 2 | none | count | system prompts [load] |
+| `sys_tokens` | 466 tokens | none | tokens | median system prompt length [load, measure] |
 | `sys_tokens_min` | 466 tokens | 1 token | tokens | bounds of the system prompt length; equal bounds give every prompt that length |
 | `sys_tokens_max` | 466 tokens | 100,000 tokens | tokens |  |
-| `sys_pop` | Zipf over the ids with exponent 1.1, in a rank order fixed by the dataset seed | same | — | [measure] |
+| `sys_pop` | Zipf over the ids with exponent 1.1, in a rank order fixed by the dataset seed | none | — | the system prompts' popularity, by index [load, measure] |
 | `sys_local` | true | same | — | [config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63) |
 | `sys_per_slot` | false | same | — | [config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop` |
 | `sub_prompts` | 50 | same | count | sub-agent prompts: a sub-agent's prompt is its own system prompt and tools, not the main agent's (Claude Code's documentation, §3.63) |
@@ -40,17 +40,17 @@ mechanism's README) or what a storage system should do about it.
 | `first_in` | always -1 tokens | same | tokens | the tokens of a new conversation's first prompt past its prefix; -1 draws them from `turn_in` as for any request (measured in the AgentX corpus: a chain's first prompt is not a turn's growth, §3.63) |
 | `sys_held` | always 0 tokens | same | tokens | [config: GPU KV memory against the prefixes] the tokens of the system prompt the engine holds when a request arrives, apart from its conversation: a prefix many requests share stays in the engine's own cache (measured in the AgentX replay: the whole main-agent prefix in 89 of 103 requests, §3.63) |
 | `sub_held` | always 0 tokens | same | tokens | [config: GPU KV memory against the prefixes] the same for a sub-agent prefix |
-| `reuse` | a mixture: 19.9% none; 80.1% always 8 | a mixture: 15% none; 85% always 40 | — | none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one |
-| `keep` | one of 20 weighted values, median 208 tokens, 5th–95th percentile 38 tokens to 3,623 tokens, mean 699 tokens | one of 0 tokens (91%), 1,000,000 tokens (9%) | tokens | [config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded. Drawn once per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together |
-| `retain` | 300 | 5,000 | count | older chunks are evicted [config: capacity] |
-| `context` | 4,096 tokens | 8,192 tokens | tokens | [config: model] a conversation whose next prompt and reply would not fit starts anew |
+| `reuse` | a mixture: 19.9% none; 80.1% always 8 | none | — | none for a new conversation (0.148 of ShareGPT's requests are first turns), or requests ago: the conversations a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one |
+| `keep` | one of 20 weighted values, median 208 tokens, 5th–95th percentile 38 tokens to 3,623 tokens, mean 699 tokens | none | tokens | [config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded. Drawn once per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together |
+| `retain` | 300 | none | count | older chunks are evicted [config: capacity] |
+| `context` | 4,096 tokens | none | tokens | [config: model] a conversation whose next prompt and reply would not fit starts anew |
 | `turns` | always 0 | same | count | [config: load] the requests a conversation has, drawn when it starts; 0 for no limit, the conversation then ends by `reuse`'s none arm or the context. A session of many turns and a side call of one are the same slot's conversations (measured in the AgentX corpus, §3.59) |
 | `trim` | always 0 tokens | same | tokens | [config: load] tokens the client drops from the end of its conversation before a request (an agent editing its context; measured in the AgentX corpus, §3.59); the chunks past the kept prefix are stored again under their names, where the real store writes new files |
-| `turn_in` | one of 20 weighted values, median 28 tokens, 5th–95th percentile 12 tokens to 166 tokens, mean 82.7 tokens | one of 20 weighted values, median 17 tokens, 5th–95th percentile 1 token to 214 tokens, mean 80.7 tokens | tokens | the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean) |
-| `turn_out` | one of 20 weighted values, median 245 tokens, 5th–95th percentile 17 tokens to 630 tokens, mean 298 tokens | one of 20 weighted values, median 248 tokens, 5th–95th percentile 12 tokens to 615 tokens, mean 284 tokens | tokens | generated tokens (measured: ShareGPT replies, the same way) |
-| `prefill_per_token` | 40 µs | same | ns |  |
-| `decode_per_token` | 12 ms | same | ns |  |
-| `prefill_step` | 8,192 tokens | same | tokens | [config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens |
+| `turn_in` | one of 20 weighted values, median 28 tokens, 5th–95th percentile 12 tokens to 166 tokens, mean 82.7 tokens | none | tokens | the tokens a request adds to its conversation's prompt [load] (ShareGPT's: user turns, twenty equal shares, each its mean) |
+| `turn_out` | one of 20 weighted values, median 245 tokens, 5th–95th percentile 17 tokens to 630 tokens, mean 298 tokens | none | tokens | generated tokens [load] (ShareGPT's replies, the same way) |
+| `prefill_per_token` | 40 µs | none | ns | prefill compute per prompt token: the model's on its accelerator |
+| `decode_per_token` | 12 ms | none | ns | decode compute per generated token: the model's on its accelerator |
+| `prefill_step` | 8,192 tokens | none | tokens | [config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens |
 | `think` | always 0 ns | same | ns | [config: load] the client's delay before a request (its user's or its agent's think time); zero sends a slot's requests back to back |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.
@@ -178,18 +178,18 @@ Ops in all (seed 1): 8,549: 1,336 `stat`, 1,190 `read`, 976 `close`, 976 `fstat`
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `concurrency` | 1 | 64 | count |  |
-| `warm` | 0 | 2,000 | count | requests per slot before measurement (§9.5) |
-| `requests` | 300 | 20,000 | count |  |
+| `concurrency` | 1 | none | count | request slots per engine [load] |
+| `warm` | 0 | none | count | requests per slot before measurement (§9.5) |
+| `requests` | 300 | none | count | the measured requests per slot [load]: the case's length |
 | `chunk_tokens` | 256 tokens | same | tokens |  |
-| `chunk_bytes` | 3 MiB | 32 MiB | bytes | 128 KiB/token × 256 [config] |
+| `chunk_bytes` | 3 MiB | none | bytes | the model's KV bytes per token × chunk_tokens (128 KiB × 256 for an 8B model) |
 | `meta_bytes` | 28 bytes | same | bytes | the header in front of a chunk (traced: seven 32-bit integers) |
-| `buf` | 1 MiB | same | bytes | Python BufferedReader size = st_blksize; the first read of a chunk file is this long |
-| `sys_prompts` | 2 | 50 | count |  |
-| `sys_tokens` | 466 tokens | 1,500 tokens | tokens | median system prompt length [measure] |
+| `buf` | 1 MiB | same | bytes | Python BufferedReader size = st_blksize of the chunk file (the store's, contract 0.12); the first read of a chunk file is this long |
+| `sys_prompts` | 2 | none | count | system prompts [load] |
+| `sys_tokens` | 466 tokens | none | tokens | median system prompt length [load, measure] |
 | `sys_tokens_min` | 466 tokens | 1 token | tokens | bounds of the system prompt length; equal bounds give every prompt that length |
 | `sys_tokens_max` | 466 tokens | 100,000 tokens | tokens |  |
-| `sys_pop` | Zipf over the ids with exponent 1.1, in a rank order fixed by the dataset seed | same | — | [measure] |
+| `sys_pop` | Zipf over the ids with exponent 1.1, in a rank order fixed by the dataset seed | none | — | the system prompts' popularity, by index [load, measure] |
 | `sys_local` | true | same | — | [config] the engine holds the system prompts in GPU memory and never reads their chunks (traced); false: a system prompt is a prefix like the conversation's own, and its chunks are read when the engine holds none of the conversation (a new one, or one whose `keep` draw is under a chunk: measured in the AgentX replay, where the engine held the system prompt and some of the conversation or neither, §3.63) |
 | `sys_per_slot` | false | same | — | [config: load] a slot's conversations all start with the system prompt of its own index (sessions of an agent, each with its own, §3.63); false picks one per conversation by `sys_pop` |
 | `sub_prompts` | 50 | same | count | sub-agent prompts: a sub-agent's prompt is its own system prompt and tools, not the main agent's (Claude Code's documentation, §3.63) |
@@ -202,17 +202,17 @@ Ops in all (seed 1): 8,549: 1,336 `stat`, 1,190 `read`, 976 `close`, 976 `fstat`
 | `first_in` | always -1 tokens | same | tokens | the tokens of a new conversation's first prompt past its prefix; -1 draws them from `turn_in` as for any request (measured in the AgentX corpus: a chain's first prompt is not a turn's growth, §3.63) |
 | `sys_held` | always 0 tokens | same | tokens | [config: GPU KV memory against the prefixes] the tokens of the system prompt the engine holds when a request arrives, apart from its conversation: a prefix many requests share stays in the engine's own cache (measured in the AgentX replay: the whole main-agent prefix in 89 of 103 requests, §3.63) |
 | `sub_held` | always 0 tokens | same | tokens | [config: GPU KV memory against the prefixes] the same for a sub-agent prefix |
-| `reuse` | a mixture: 19.9% none; 80.1% always 8 | a mixture: 15% none; 85% always 40 | — | none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one |
-| `keep` | one of 20 weighted values, median 208 tokens, 5th–95th percentile 38 tokens to 3,623 tokens, mean 699 tokens | one of 0 tokens (91%), 1,000,000 tokens (9%) | tokens | [config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded. Drawn once per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together |
-| `retain` | 300 | 5,000 | count | older chunks are evicted [config: capacity] |
-| `context` | 4,096 tokens | 8,192 tokens | tokens | [config: model] a conversation whose next prompt and reply would not fit starts anew |
+| `reuse` | a mixture: 19.9% none; 80.1% always 8 | none | — | none for a new conversation (0.148 of ShareGPT's requests are first turns), or requests ago: the conversations a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one |
+| `keep` | one of 20 weighted values, median 208 tokens, 5th–95th percentile 38 tokens to 3,623 tokens, mean 699 tokens | none | tokens | [config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are loaded. Drawn once per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together |
+| `retain` | 300 | none | count | older chunks are evicted [config: capacity] |
+| `context` | 4,096 tokens | none | tokens | [config: model] a conversation whose next prompt and reply would not fit starts anew |
 | `turns` | always 0 | same | count | [config: load] the requests a conversation has, drawn when it starts; 0 for no limit, the conversation then ends by `reuse`'s none arm or the context. A session of many turns and a side call of one are the same slot's conversations (measured in the AgentX corpus, §3.59) |
 | `trim` | always 0 tokens | same | tokens | [config: load] tokens the client drops from the end of its conversation before a request (an agent editing its context; measured in the AgentX corpus, §3.59); the chunks past the kept prefix are stored again under their names, where the real store writes new files |
-| `turn_in` | one of 20 weighted values, median 28 tokens, 5th–95th percentile 12 tokens to 166 tokens, mean 82.7 tokens | one of 20 weighted values, median 17 tokens, 5th–95th percentile 1 token to 214 tokens, mean 80.7 tokens | tokens | the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean) |
-| `turn_out` | one of 20 weighted values, median 245 tokens, 5th–95th percentile 17 tokens to 630 tokens, mean 298 tokens | one of 20 weighted values, median 248 tokens, 5th–95th percentile 12 tokens to 615 tokens, mean 284 tokens | tokens | generated tokens (measured: ShareGPT replies, the same way) |
-| `prefill_per_token` | 40 µs | same | ns |  |
-| `decode_per_token` | 12 ms | same | ns |  |
-| `prefill_step` | 8,192 tokens | same | tokens | [config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens |
+| `turn_in` | one of 20 weighted values, median 28 tokens, 5th–95th percentile 12 tokens to 166 tokens, mean 82.7 tokens | none | tokens | the tokens a request adds to its conversation's prompt [load] (ShareGPT's: user turns, twenty equal shares, each its mean) |
+| `turn_out` | one of 20 weighted values, median 245 tokens, 5th–95th percentile 17 tokens to 630 tokens, mean 298 tokens | none | tokens | generated tokens [load] (ShareGPT's replies, the same way) |
+| `prefill_per_token` | 40 µs | none | ns | prefill compute per prompt token: the model's on its accelerator |
+| `decode_per_token` | 12 ms | none | ns | decode compute per generated token: the model's on its accelerator |
+| `prefill_step` | 8,192 tokens | none | tokens | [config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens |
 | `think` | always 0 ns | same | ns | [config: load] the client's delay before a request (its user's or its agent's think time); zero sends a slot's requests back to back |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.

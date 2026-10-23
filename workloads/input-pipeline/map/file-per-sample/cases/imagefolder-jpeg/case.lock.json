@@ -5,7 +5,7 @@
     {
       "name": "file_per_sample",
       "abstract": "input-pipeline/map/file-per-sample/file_per_sample.ast.json",
-      "ast_sha256": "848f089b1e5be070a5f55094699b40b8696b3dcdd4b1374075fa5edc00ff8c70",
+      "ast_sha256": "7d31eb53d7446f9da83cec42e2342f87ced07ac2c135702a4c699d9e8e8080f7",
       "params": {
         "batch": {"default": 16},
         "files_per_directory": {"default": 1300},

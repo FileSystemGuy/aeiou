@@ -1,5 +1,5 @@
 {"params_version": 2, "abstract": "lmcache_shared_fs",
- "doc": "Fitted by ../lmcache-local-disk/kit/fit.py to the 2026-10-02 replay of ShareGPT through vLLM 0.30 + LMCache 0.5.5 (fs:// remote backend): Qwen2.5-0.5B (12,288 bytes per token, context 4,096), 300 requests, 8 conversations open and served in turn by one client, 2 system prompts of 466 tokens, 96 MiB of GPU KV memory. The same values in both files: the reader is run with the writer's parameters.",
+ "doc": "Fitted by ../lmcache-local-disk/kit/fit.py to the 2026-10-02 replay of ShareGPT through vLLM 0.30 + LMCache 0.5.5 (fs:// remote backend): Qwen2.5-0.5B (12,288 bytes per token, context 4,096), 300 requests, 8 conversations open and served in turn by one client, 2 system prompts of 466 tokens, 96 MiB of GPU KV memory. decode_per_token, prefill_per_token, prefill_step, and sys_pop: the values the abstract's defaults held until 2026-10-23 (DESIGN_REVIEW.md \u00a73.78), not fitted. The same values in both files: the reader is run with the writer's parameters.",
  "params": {
   "concurrency": {"default": 1},
   "warm": {"default": 0},
@@ -18,5 +18,8 @@
   "turn_out": {"default": {"empirical": {"values": [17, 47, 89, 124, 152, 175, 196, 215, 233, 245, 269, 292, 313, 346, 380, 439, 483, 545, 630, 761], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
   "chunk_bytes": {"default": 3145728},
   "meta_bytes": {"default": 28},
-  "buf": {"default": 1048576}},
+  "prefill_per_token": {"default": 40000},
+  "decode_per_token": {"default": 12000000},
+  "prefill_step": {"default": 8192},
+  "sys_pop": {"default": {"zipf": {"s": 1.1}}}},
  "provenance": {"conditions": {"model": "Qwen/Qwen2.5-0.5B-Instruct", "max_model_len": 4096, "kv_cache_memory_bytes": 100663296, "engine_pool_tokens": 8192, "cpu_tier_bytes": 0, "slots_per_engine": 8}}}

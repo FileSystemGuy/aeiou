@@ -1,0 +1,204 @@
+{
+  "shape_version": 3,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "lmcache_shared_fs",
+      "ast_sha256": "bc7d5b1493602dbc2acaf6943cb5afd2844352e4308fd6303c80d8dcc0c63baa",
+      "params": "case.lock.json",
+      "params_sha256": "63f186a890d59e2fb80304d38a9869366e39d0773088e9a746ddb1da5fc73d0a",
+      "gpus": 1,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": {
+        "param": "requests",
+        "case": 20000,
+        "check": 625
+      },
+      "stable": true,
+      "moving": [],
+      "ops": 80436696,
+      "counts": {
+        "close": 8809558,
+        "fstat": 8809558,
+        "ioctl": 8809558,
+        "lseek": 8809558,
+        "open": 8809558,
+        "read": 14069664,
+        "rename": 1774726,
+        "stat": 16995064,
+        "write": 3549452
+      },
+      "bytes_read": 236049988950720,
+      "bytes_written": 59549972577960,
+      "datasets": [
+        {
+          "bytes": 10546104396,
+          "directories": 50,
+          "files": 338,
+          "inventory_bytes": 0,
+          "mean_file": 31201492,
+          "name": "subp",
+          "samples": 50
+        },
+        {
+          "bytes": 10675213944,
+          "directories": 50,
+          "files": 342,
+          "inventory_bytes": 0,
+          "mean_file": 31214075,
+          "name": "sysp",
+          "samples": 50
+        }
+      ],
+      "attributes": {
+        "run_length_read": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_read": {
+          "value": 29360128,
+          "spread": 0,
+          "class": "medium"
+        },
+        "request_size_write": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "read_share": {
+          "value": 0.798391,
+          "spread": 0.00035526,
+          "class": "mixed"
+        },
+        "metadata": {
+          "value": 2.5667,
+          "spread": 0.00318411,
+          "class": "high"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.792458,
+          "spread": 0.000483196,
+          "class": "repeated"
+        },
+        "skew": {
+          "value": 0.0572646,
+          "spread": 0.000102025,
+          "class": "uniform"
+        }
+      }
+    },
+    {
+      "ast": "lmcache_shared_fs_reader",
+      "ast_sha256": "c61f4b8ff3f49fb5c181370324e29e57fc0cf3ef11235a8a5a59c0008551ebbb",
+      "params": "case.lock.json",
+      "params_sha256": "63f186a890d59e2fb80304d38a9869366e39d0773088e9a746ddb1da5fc73d0a",
+      "gpus": 1,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": {
+        "param": "requests",
+        "case": 20000,
+        "check": 625
+      },
+      "stable": true,
+      "moving": [],
+      "ops": 78604386,
+      "counts": {
+        "close": 8694244,
+        "fstat": 8694244,
+        "ioctl": 8694244,
+        "lseek": 8694244,
+        "open": 8694244,
+        "read": 17388488,
+        "stat": 17744678
+      },
+      "bytes_read": 291730662528240,
+      "bytes_written": 0,
+      "datasets": [
+        {
+          "bytes": 10546104396,
+          "directories": 50,
+          "files": 338,
+          "inventory_bytes": 0,
+          "mean_file": 31201492,
+          "name": "subp",
+          "samples": 50
+        },
+        {
+          "bytes": 10675213944,
+          "directories": 50,
+          "files": 342,
+          "inventory_bytes": 0,
+          "mean_file": 31214075,
+          "name": "sysp",
+          "samples": 50
+        }
+      ],
+      "attributes": {
+        "run_length_read": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 29360128,
+          "spread": 0,
+          "class": "medium"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 2.52221,
+          "spread": 0.00351319,
+          "class": "high"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.798066,
+          "spread": 0.000433626,
+          "class": "repeated"
+        },
+        "skew": {
+          "value": 0.0354766,
+          "spread": 6.22031e-05,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

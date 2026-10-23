@@ -276,7 +276,10 @@ def _params_of(ast: dict) -> dict:
 
 
 def _length_ok(ast: dict, name: str) -> bool:
+    """`name` is an integer parameter: its default an integer, or required of kind `int` (a case gives it)."""
     p = _params_of(ast).get(name)
+    if isinstance(p, dict) and "default" not in p:
+        return p.get("kind") == "int"
     return isinstance(p, dict) and isinstance(p.get("default"), int) and not isinstance(p.get("default"), bool)
 
 

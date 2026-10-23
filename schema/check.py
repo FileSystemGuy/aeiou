@@ -285,6 +285,11 @@ class Check:
             return d.get("fallback")
         return d
 
+    def required(self, name):
+        """Parameter `name` is declared with no default (contract 0.11): a later layer gives it."""
+        p = self.ast.get("params", {}).get(name)
+        return isinstance(p, dict) and "default" not in p
+
     def param_cycles(self) -> bool:
         """V1: a parameter whose value in effect names, through `param`s, the parameter itself
         is defined by nothing (and the rules that follow a `param` to its value, V3, V25, would
@@ -1153,7 +1158,8 @@ class Check:
         distribution has min >= k (uniform lo, normal/lognormal min, every empirical value, every
         non-null mixture arm, const); `add` of a term >= k and a term >= 0. For k = 0 also any
         `mod` (Euclidean: the result is in [0, |b|)) and a loop index whose `from` is absent or
-        provably >= 0 (steps are positive; `parallel` and `loader` indices start at 0)."""
+        provably >= 0 (steps are positive; `parallel` and `loader` indices start at 0). A required
+        parameter with no value given passes (contract 0.13): its value is judged when given."""
         if isinstance(e, (int, float)) and not isinstance(e, bool):
             return e >= k
         if not isinstance(e, dict):
@@ -1164,6 +1170,8 @@ class Check:
             return v is not None and self.at_least(v, k, scope)
         if kind == "param":
             d = self.param_value(a)
+            if d is None and self.required(a):
+                return True                   # judged when a value is given (contract 0.13)
             return isinstance(d, dict) and self.at_least(d, k, scope)
         if kind == "draw":
             return self.at_least(a, k, scope)

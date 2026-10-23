@@ -1,0 +1,104 @@
+{
+  "shape_version": 3,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "lmcache_local_disk",
+      "ast_sha256": "33b5f37ed0afcd1ad06898b9e8ef5616c83e812f61ca82014eca6cd59cb3efb4",
+      "params": "case.lock.json",
+      "params_sha256": "0935120a227195e582a1312ec53745a4f50f4ebb128d9f9abf6939cc13f36562",
+      "gpus": 1,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": {
+        "param": "requests",
+        "case": 20000,
+        "check": 625
+      },
+      "stable": true,
+      "moving": [],
+      "ops": 52857348,
+      "counts": {
+        "close": 8809558,
+        "fstat": 8809558,
+        "ioctl": 8809558,
+        "lseek": 8809558,
+        "open": 8809558,
+        "read": 7034832,
+        "write": 1774726
+      },
+      "bytes_read": 236049791975424,
+      "bytes_written": 59549922885632,
+      "datasets": [
+        {
+          "bytes": 10546104396,
+          "directories": 50,
+          "files": 338,
+          "inventory_bytes": 0,
+          "mean_file": 31201492,
+          "name": "subp",
+          "samples": 50
+        },
+        {
+          "bytes": 10675213944,
+          "directories": 50,
+          "files": 342,
+          "inventory_bytes": 0,
+          "mean_file": 31214075,
+          "name": "sysp",
+          "samples": 50
+        }
+      ],
+      "attributes": {
+        "run_length_read": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "run_length_write": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_read": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "request_size_write": {
+          "value": 33554432,
+          "spread": 0,
+          "class": "large"
+        },
+        "read_share": {
+          "value": 0.798391,
+          "spread": 0.00035526,
+          "class": "mixed"
+        },
+        "metadata": {
+          "value": 3.0,
+          "spread": 0.0,
+          "class": "high"
+        },
+        "reads_own_writes": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "yes"
+        },
+        "reread": {
+          "value": 0.792458,
+          "spread": 0.000483196,
+          "class": "repeated"
+        },
+        "skew": {
+          "value": 0.03549,
+          "spread": 6.92044e-05,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

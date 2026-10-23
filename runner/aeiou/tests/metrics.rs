@@ -8,6 +8,8 @@ use aeiou::metrics::{self, Opts};
 
 fn dry(name: &str, gpus: i64, params: &[(&str, &str)], threads: usize, opts: Option<Opts>) -> dryrun::Report {
     let text = std::fs::read_to_string(crate::common::workload_ast(name)).unwrap();
+    // the LMCache abstracts at the values their defaults held until 2026-10-23 (their unsettled cases chat-64-slots)
+    let params = if name.starts_with("lmcache") { crate::common::lmcache(params) } else { params.to_vec() };
     let cfg = Config { seed: 1, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![], st_blksize: Default::default() };
     let loaded = aeiou::load_str(&text).expect("valid abstract");
     let params = Params::new(&loaded.ast, &cfg).unwrap();
@@ -118,7 +120,7 @@ fn small_file_training_is_sequential_and_flat() {
 fn extents_by_hand() {
     use serde_json::{json, Value};
     let ast = json!({
-        "ast": "0.12", "name": "t",
+        "ast": "0.13", "name": "t",
         "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id}", "count": 1, "size": {"const": 1048576}, "seed": 1}},
         "actors": {"gpu": {"body": [
             {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},

@@ -5,7 +5,7 @@
     {
       "name": "lmcache_local_disk",
       "abstract": "kvcache/lmcache-local-disk/lmcache_local_disk.ast.json",
-      "ast_sha256": "bbbec624eae7d9b6ba5308f4f2fad7392086f86e4ee86360f54601b886ee79d3",
+      "ast_sha256": "16f242b5087cb86ea7ce2bc0f97871d017861b65c7598a810b4363ab1872374e",
       "params": {
         "chunk_bytes": {"default": 33554432},
         "chunk_tokens": {"default": 256},
@@ -48,13 +48,13 @@
         "chunk_tokens": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "concurrency": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "context": "kvcache/lmcache-local-disk/cases/agentx/params.json",
-        "decode_per_token": "abstract",
+        "decode_per_token": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "direct": "abstract",
         "first_in": "kvcache/lmcache-local-disk/cases/agentx/params.json",
-        "keep": "abstract",
+        "keep": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "kind": "kvcache/lmcache-local-disk/cases/agentx/params.json",
-        "prefill_per_token": "abstract",
-        "prefill_step": "abstract",
+        "prefill_per_token": "kvcache/lmcache-local-disk/cases/agentx/params.json",
+        "prefill_step": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "requests": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "retain": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "reuse": "kvcache/lmcache-local-disk/cases/agentx/params.json",
@@ -68,7 +68,7 @@
         "sys_held": "abstract",
         "sys_local": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "sys_per_slot": "abstract",
-        "sys_pop": "abstract",
+        "sys_pop": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "sys_prompts": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "sys_tokens": "kvcache/lmcache-local-disk/cases/agentx/params.json",
         "sys_tokens_max": "kvcache/lmcache-local-disk/cases/agentx/params.json",
@@ -85,6 +85,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "kvcache/lmcache-local-disk/cases/agentx/case.toml",
-    "fragments": [{"path": "kvcache/lmcache-local-disk/cases/agentx/params.json", "sha256": "e9b49575efa1baea33062431b0685db0c250f56a068db976a66f71e5a07e5872"}]
+    "fragments": [{"path": "kvcache/lmcache-local-disk/cases/agentx/params.json", "sha256": "23b69f295bdd24e9e0de1d54beeb9acbbec0fcaf0d2abda38af5a7d682d3dfc7"}]
   }
 }

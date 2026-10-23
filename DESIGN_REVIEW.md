@@ -7082,6 +7082,54 @@ Choices made in the build, open to revision:
   every file system we know of. Choosing the first object of the namespace's own pattern is
   open.
 
+**Built: contract 0.13 and the LMCache abstracts' cases** (2026-10-23, item 38's third and
+fourth mechanisms, `lmcache_local_disk` and `lmcache_shared_fs` with its reader). Decided with
+the user the same day, on the recommendation:
+
+- *Required*: the model's on its GPU, `chunk_bytes` (KV bytes per token × `chunk_tokens`),
+  `context`, `keep` (the GPU's KV memory against the open conversations), `prefill_per_token`,
+  `decode_per_token`, and `prefill_step` (vLLM's `max_num_batched_tokens`, whose own default
+  is the GPU's: 8192 or 2048); the deployment's `retain` (the store's capacity); and the load's
+  `concurrency`, `warm`, `requests`, `reuse`, `turn_in`, `turn_out`, `sys_prompts`,
+  `sys_tokens`, and `sys_pop`. The library's `chunk_tokens`, `meta_bytes`, and `direct`
+  (`use_odirect`) stay defaults.
+- *The load's features stay defaults, off* (the user's choice over requiring them):
+  `think`, `turns`, `trim`, `kind`, `first_in`, `sys_held`, `sub_held`, the per-slot
+  switches, the sub-agent prefixes, the prompt-length bounds, and `sys_local`; each default
+  turns its feature off, so a chat case does not spell out a sub-agent's prefix it never
+  draws.
+- *The shared store's `buf` is its `st_blksize`* (contract 0.12): the writer probes its
+  output root, the reader stats what the writer's manifest lists; `sharegpt-chat` no longer
+  gives it (1 MiB, the traced NFS mount's and the fallback).
+- *The old defaults are the unsettled cases `chat-64-slots`*, one per mechanism, the shared
+  store's with its writer and reader as two runs; each lock runs the fingerprints the
+  defaults ran (golden.rs's: 9f7017e7011639d5, c7d83399ee6948bc, 382dba518a89c85f at 1 GPU,
+  2 slots, 50 requests after 50 warm; `tests/cases.rs`).
+- *Contract 0.13* (the user's choice of option A over a bound declared with the parameter or
+  `reuse` kept a default): `reuse` is drawn as the distance of `turns @ (r − d)`, and rule V3,
+  which proved it from the default's minimum, could prove nothing of a required parameter, so
+  0.11 refused one in an `at` offset. Now a required parameter passes on the document, in the
+  builder, check.py, and the runner alike, and its value is judged when one is given:
+  `aeiou-params check` and `lock` on each fragment and the runner's `check_given` on the
+  values in effect, as every given value already was (§3.57). A declared bound
+  (`kind=Dist, min=1`) would have said more in the abstract, at the cost of schema surface only
+  `reuse` uses.
+
+Choices made in the build, open to revision:
+
+- **The traced cases give the values they fell back on**, the old defaults said to be not
+  fitted in each doc: `sharegpt-chat` (both mechanisms) and the AgentX fits the per-token
+  times, `prefill_step` where absent, and `sys_pop`, and `agentx` `keep` too. The kits write
+  no placeholder: `fit.py` and `agentx.py fit` take them by `--set`, which was already where
+  the model's and the backend's values went, and the READMEs' commands give them. Every
+  fingerprint is unchanged. The AgentX replays record the seconds per prompt and per reply
+  token they measured (`latency_s_per_prompt_token` and `_reply_token` in their provenance),
+  which a fit of `prefill_per_token` and `decode_per_token` could take: left for a use case.
+- **A case's `length` may name a required parameter of kind `int`** (`requests`): the
+  catalog took only an integer default.
+- **The tests keep their values** through one helper (`tests/common`, `LMCACHE`; the Python
+  trace test's `LMCACHE_OLD`).
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

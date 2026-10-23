@@ -24,7 +24,9 @@ the engine still held of the prompt; `grep "Inference Engine computed"` of it is
              at least that many: the distribution is the product-limit estimate over such
              censored observations, and the share beyond the longest is given the context.
 
-`--set` adds what belongs to the model and the backend (chunk_bytes, meta_bytes, buf).
+`--set` adds what belongs to the model on its GPU and the backend (chunk_bytes, prefill_per_token,
+decode_per_token, prefill_step, meta_bytes) and what the replay does not measure (sys_pop, the
+system prompts' popularity), each a value the abstract requires (DESIGN_REVIEW.md §3.78).
 
 The fit's conditions go into the file's `provenance` (never compared): what an engine holds
 is its KV pool against the load, so `keep` stands for the pool it was fitted at

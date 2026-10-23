@@ -5,9 +5,9 @@
     {
       "name": "lmcache_shared_fs",
       "abstract": "kvcache/lmcache-shared-fs/lmcache_shared_fs.ast.json",
-      "ast_sha256": "3d89da224f1b8ca4976bbdc87e170fc6dc4fd346fbe7793cdbcbc6888cd95902",
+      "ast_sha256": "2f895fd237fb993e88607ce7251f7b62b03d98a3514e2ad086075d21c9d621c6",
       "params": {
-        "buf": {"default": 1048576},
+        "buf": {"default": {"from": "st_blksize", "of": "kv", "fallback": 1048576}},
         "chunk_bytes": {"default": 3145728},
         "chunk_tokens": {"default": 256},
         "concurrency": {"default": 1},
@@ -45,18 +45,18 @@
         "warm": {"default": 0}
       },
       "sources": {
-        "buf": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
+        "buf": "abstract",
         "chunk_bytes": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "chunk_tokens": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "concurrency": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "context": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
-        "decode_per_token": "abstract",
+        "decode_per_token": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "first_in": "abstract",
         "keep": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "kind": "abstract",
         "meta_bytes": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
-        "prefill_per_token": "abstract",
-        "prefill_step": "abstract",
+        "prefill_per_token": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
+        "prefill_step": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "requests": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "retain": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "reuse": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
@@ -70,7 +70,7 @@
         "sys_held": "abstract",
         "sys_local": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "sys_per_slot": "abstract",
-        "sys_pop": "abstract",
+        "sys_pop": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "sys_prompts": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "sys_tokens": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
         "sys_tokens_max": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json",
@@ -86,9 +86,9 @@
     {
       "name": "lmcache_shared_fs_reader",
       "abstract": "kvcache/lmcache-shared-fs/lmcache_shared_fs_reader.ast.json",
-      "ast_sha256": "42bdf8c3616fa38eeadcec4b4251f335111d82e44f935ff3245bc303c9d7384c",
+      "ast_sha256": "18258eee5c9c56924e1f2a9ac4cfb375a47368d06b51e7b9af3b2713510a7b9d",
       "params": {
-        "buf": {"default": 1048576},
+        "buf": {"default": {"from": "st_blksize", "of": "kv", "fallback": 1048576}},
         "chunk_bytes": {"default": 3145728},
         "chunk_tokens": {"default": 256},
         "concurrency": {"default": 1},
@@ -126,18 +126,18 @@
         "warm": {"default": 0}
       },
       "sources": {
-        "buf": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
+        "buf": "abstract",
         "chunk_bytes": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "chunk_tokens": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "concurrency": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "context": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
-        "decode_per_token": "abstract",
+        "decode_per_token": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "first_in": "abstract",
         "keep": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "kind": "abstract",
         "meta_bytes": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
-        "prefill_per_token": "abstract",
-        "prefill_step": "abstract",
+        "prefill_per_token": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
+        "prefill_step": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "requests": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "retain": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "reuse": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
@@ -151,7 +151,7 @@
         "sys_held": "abstract",
         "sys_local": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "sys_per_slot": "abstract",
-        "sys_pop": "abstract",
+        "sys_pop": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "sys_prompts": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "sys_tokens": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
         "sys_tokens_max": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json",
@@ -168,6 +168,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/case.toml",
-    "fragments": [{"path": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json", "sha256": "403d13251fd405834ba1bf9fc4fa6cce77be2bc6af4dc468761b4956cac8a549"}, {"path": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json", "sha256": "9da1bf12c857e61a8c388f09a3302d46dd750bf3fc1650b3c470373a4a28c033"}]
+    "fragments": [{"path": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/reader.params.json", "sha256": "cb2f4d48581054eb53cde3e8b6d93362289f620d4db3d4696d90a80c0d0f3a11"}, {"path": "kvcache/lmcache-shared-fs/cases/sharegpt-chat/writer.params.json", "sha256": "bb842d2709f5dbd1060150f25e3b23a9cf634a30d202cfd3541231eb965630c7"}]
   }
 }

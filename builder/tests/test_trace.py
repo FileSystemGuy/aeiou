@@ -402,12 +402,20 @@ def _strace_works():
 needs_run = pytest.mark.skipif(not RUNNER.exists() or not _strace_works(), reason="needs the runner binary and a working strace")
 
 
+# the LMCache abstracts' defaults until 2026-10-23, required since (their unsettled cases chat-64-slots): the
+# values a test does not give, before its own (the runner's last `--param` of a name wins)
+LMCACHE_OLD = ["context=8192", "prefill_per_token=40000", "decode_per_token=12000000", "prefill_step=8192", "retain=5000",
+               'turn_in={"empirical": {"values": [1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944], "weights": %s}}' % ([1] * 20),
+               'turn_out={"empirical": {"values": [12, 34, 62, 92, 119, 148, 175, 201, 225, 248, 271, 294, 317, 342, 370, 407, 454, 519, 615, 785], "weights": %s}}' % ([1] * 20),
+               'sys_pop={"zipf": {"s": 1.1}}']
+
+
 @needs_run
 @pytest.mark.parametrize(
     "name, seed, params",
     [
         ("file_per_sample", 7, ["samples=600", "batch=4", "workers=2", "prefetch=2", "steps=12", "step_time=105000000", "sample_median=112640"]),
-        ("lmcache_local_disk", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
+        ("lmcache_local_disk", 5, LMCACHE_OLD + ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
                               'reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}',
                               'keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}']),
         ("diskann_search", 9, ["nodes=5000", "threads=2", "queries=6"]),
@@ -471,7 +479,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     assert r.returncode == 0, r.stderr
     sha = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("sha256 "))
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.12", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.13", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": exported.name, "sha256": sha}}]}}}))
     node_dry = tmp_path / "node.dry.json"
     r = run(RUNNER, "dry-run", node_ast, "--gpus", "1", "--metrics-json", node_dry)
@@ -698,8 +706,11 @@ def test_kv_cache_fitted_parameters_are_what_fit_py_takes_from_the_logs(tmp_path
     kit, cap = ast_path("lmcache_local_disk").parent / "kit", case / "captures" / "2026-10-02"
     have = json.loads((case / "params.json").read_text())
     out = tmp_path / "fit.json"
+    # the model's on its GPU, which the replay does not measure, and the system prompts' popularity,
+    # which two prompts do not fit: the values the abstract's defaults held until 2026-10-23, not fitted
+    unfitted = ["prefill_per_token=40000", "decode_per_token=12000000", "prefill_step=8192", 'sys_pop={"zipf": {"s": 1.1}}']
     r = subprocess.run([sys.executable, str(kit / "fit.py"), str(cap / "replay.log"), str(cap / "lmcache.log"), "--set", "chunk_bytes=3145728",
-                        "--doc", have["doc"], *[x for k, v in have["provenance"]["conditions"].items() if k != "slots_per_engine"
+                        *[x for s in unfitted for x in ("--set", s)], "--doc", have["doc"], *[x for k, v in have["provenance"]["conditions"].items() if k != "slots_per_engine"
                                                 for x in ("--condition", f"{k}={json.dumps(v)}")], "-o", str(out)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(out.read_text()) == have
@@ -843,10 +854,11 @@ def test_kv_shared_abstracts_match_the_traces_of_the_fs_backend(tmp_path):
     assert (tw["stat"], dw["stat"]) == (1418, 1336)       # 1,193 hits and a miss in most requests
     assert (tr["stat"], dr["stat"]) == (1564, 1499)       # every chunk of every prompt, and the directory once in the trace
     # the same parameter values in both files: the reader is run with the writer's; and they are the local-disk
-    # mechanism's ShareGPT case (the same requests, and the engine held the same of each) with the header and the buffer
+    # mechanism's ShareGPT case (the same requests, and the engine held the same of each) with the header; the
+    # buffer is the store's st_blksize (contract 0.12), its fallback 1 MiB in a dry run, the traced NFS mount's
     pw, pr = (values_of(json.loads((case / f).read_text())) for f in ("writer.params.json", "reader.params.json"))
     assert pw == pr
-    assert pw == {**values_of(json.loads((case_dir("lmcache_local_disk", "sharegpt-chat") / "params.json").read_text())), "meta_bytes": 28, "buf": 1048576}
+    assert pw == {**values_of(json.loads((case_dir("lmcache_local_disk", "sharegpt-chat") / "params.json").read_text())), "meta_bytes": 28}
 
 
 
@@ -1042,7 +1054,7 @@ def test_the_runner_loads_an_export_whose_first_line_did_not_start_first(tmp_pat
     out = tmp_path / "app.jsonl"
     sha = trace.write_export(str(out), h, ev)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.12", "name": "trace_started_first", "doc": "a call that returned last started first", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.13", "name": "trace_started_first", "doc": "a call that returned last started first", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -1364,7 +1376,7 @@ def test_the_runner_loads_an_export_that_mkdirs_its_root(tmp_path):
     out = tmp_path / "app.jsonl"
     sha = trace.write_export(str(out), h, ev)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.12", "name": "trace_root", "doc": "calls on the root itself", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.13", "name": "trace_root", "doc": "calls on the root itself", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -1408,7 +1420,7 @@ def test_a_short_or_failed_write_moves_what_it_returned(tmp_path):
 def test_the_trace_nodes_dry_run_moves_what_a_short_write_returned(tmp_path):
     _, _, out, sha = _short_write_export(tmp_path)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.12", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.13", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     dry = tmp_path / "node.dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1", "--metrics-json", str(dry)], capture_output=True, text=True)
@@ -1425,7 +1437,7 @@ def test_the_trace_nodes_run_leaves_the_file_a_short_write_left(tmp_path):
     backend, the sync one's `write(2)` at the file position included."""
     _, _, out, sha = _short_write_export(tmp_path)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.12", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.13", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     for backend in ("sync", "io_uring", "libaio"):
         root = tmp_path / ("root-" + backend)

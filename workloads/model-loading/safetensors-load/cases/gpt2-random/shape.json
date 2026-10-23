@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "safetensors_load",
-      "ast_sha256": "b7b39a5d6a397079ea4bc96f506292e704e8d4414622d44a37c6fd2153be3e67",
+      "ast_sha256": "0db7ca242f1d8fc8e48f6fd6732124f335374294e69472732921e2f848e5c1d8",
       "params": "case.lock.json",
-      "params_sha256": "e44a70df9850519fa540d351537096af6331640e45dec91f8a8a1b732c2a6271",
+      "params_sha256": "b3fbe2ad398c6c725f64d845343e1db1511dcf34bfec3e6dab92e02ad66f4e5c",
       "gpus": 1,
       "seeds": [
         1,

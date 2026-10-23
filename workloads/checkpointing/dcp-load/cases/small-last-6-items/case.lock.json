@@ -5,7 +5,7 @@
     {
       "name": "dcp_load",
       "abstract": "checkpointing/dcp-load/dcp_load.ast.json",
-      "ast_sha256": "bea867b79e9cf97bd93651842679689a860c90d370b26b951c1b37ad96f11af3",
+      "ast_sha256": "b7f3bf97db57763935d86586f84409a81b76fc6b6123cad13a67580bed5423d9",
       "params": {
         "buf": {"default": {"from": "st_blksize", "of": "ckpt", "fallback": 1048576}},
         "eocd_scan": {"default": 4096},

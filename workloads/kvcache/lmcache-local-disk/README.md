@@ -19,7 +19,9 @@ python kit/replay.py ShareGPT_V3_unfiltered_cleaned_split.json --requests 300 --
     > $C/replay.log                                                # once /health answers
 aeiou-trace metrics trace.txt --root /mnt/nfs -o $C/trace.metrics.json
 grep "Inference Engine computed" serve.log > $C/lmcache.log        # the server's output, colors stripped
-python kit/fit.py $C/replay.log $C/lmcache.log --set chunk_bytes=3145728 -o cases/sharegpt-chat/params.json
+python kit/fit.py $C/replay.log $C/lmcache.log --set chunk_bytes=3145728 \
+    --set prefill_per_token=40000 --set decode_per_token=12000000 --set prefill_step=8192 \
+    --set 'sys_pop={"zipf": {"s": 1.1}}' -o cases/sharegpt-chat/params.json   # not fitted: the replay does not measure them
 aeiou dry-run lmcache_local_disk.ast.json --gpus 1 \
     --params-file cases/sharegpt-chat/params.json --metrics-json abstract.metrics.json
 ```
@@ -67,7 +69,9 @@ the abstracts because of it (`turns`, `prefill_step`, `trim`, `think`).
 
 ```
 curl -L -o traces.jsonl https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126/resolve/main/traces.jsonl
-python kit/agentx.py fit traces.jsonl --set chunk_bytes=33554432 -o cases/agentx/params.json
+python kit/agentx.py fit traces.jsonl --set chunk_bytes=33554432 --set prefill_per_token=40000 \
+    --set decode_per_token=12000000 --set prefill_step=8192 --set 'sys_pop={"zipf": {"s": 1.1}}' \
+    --set 'keep={"empirical": {"values": [0, 1000000], "weights": [91, 9]}}' -o cases/agentx/params.json   # the --set values not fitted
 python kit/agentx.py reference traces.jsonl -o kit/agentx.reference.json      # the corpus's chunk accounting
 aeiou dry-run lmcache_local_disk.ast.json --gpus 1 --seed 1 --params-file cases/agentx/params.json
 ```
@@ -110,6 +114,7 @@ aeiou-trace metrics trace.txt --root /mnt/nfs --metrics-block 3145728 -o $C/trac
 python kit/agentx.py log serve.log -o $C/lmcache.log      # the lines of the server's log the fit reads
 python kit/agentx.py fit traces.jsonl --replay $C/replay.log $C/lmcache.log --context 131072 \
     --set chunk_bytes=3145728 --set prefill_step=2048 --set sys_local=false \
+    --set prefill_per_token=40000 --set decode_per_token=12000000 --set 'sys_pop={"zipf": {"s": 1.1}}' \
     -o $C/fitted.params.json
 python kit/agentx.py holds traces.jsonl --replay $C/replay.log serve.log [--pool TOKENS] [--clockless]
 ```

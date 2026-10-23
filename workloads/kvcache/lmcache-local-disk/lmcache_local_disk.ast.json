@@ -1,38 +1,41 @@
 {
-  "ast": "0.12",
+  "ast": "0.13",
   "name": "lmcache_local_disk",
   "doc": "One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one.",
   "params": {
     "concurrency": {
-      "default": 64,
-      "unit": "count"
+      "unit": "count",
+      "doc": "request slots per engine [load]",
+      "kind": "int"
     },
     "warm": {
-      "default": 2000,
       "unit": "count",
-      "doc": "requests per slot before measurement (§9.5)"
+      "doc": "requests per slot before measurement (§9.5)",
+      "kind": "int"
     },
     "requests": {
-      "default": 20000,
-      "unit": "count"
+      "unit": "count",
+      "doc": "the measured requests per slot [load]: the case's length",
+      "kind": "int"
     },
     "chunk_tokens": {
       "default": 256,
       "unit": "tokens"
     },
     "chunk_bytes": {
-      "default": 33554432,
       "unit": "bytes",
-      "doc": "128 KiB/token × 256 [config]; a file is exactly this, no header (traced)"
+      "doc": "the model's KV bytes per token × chunk_tokens (128 KiB × 256 for an 8B model); a file is exactly this, no header (traced)",
+      "kind": "int"
     },
     "sys_prompts": {
-      "default": 50,
-      "unit": "count"
+      "unit": "count",
+      "doc": "system prompts [load]",
+      "kind": "int"
     },
     "sys_tokens": {
-      "default": 1500,
       "unit": "tokens",
-      "doc": "median system prompt length [measure]"
+      "doc": "median system prompt length [load, measure]",
+      "kind": "int"
     },
     "sys_tokens_min": {
       "default": 1,
@@ -44,12 +47,8 @@
       "unit": "tokens"
     },
     "sys_pop": {
-      "default": {
-        "zipf": {
-          "s": 1.1
-        }
-      },
-      "doc": "[measure]"
+      "doc": "the system prompts' popularity, by index [load, measure]",
+      "kind": "dist"
     },
     "sys_local": {
       "default": true,
@@ -122,47 +121,23 @@
       "doc": "[config: GPU KV memory against the prefixes] the same for a sub-agent prefix"
     },
     "reuse": {
-      "default": {
-        "mixture": [
-          {
-            "weight": 0.15,
-            "dist": null
-          },
-          {
-            "weight": 0.85,
-            "dist": {
-              "const": 40
-            }
-          }
-        ]
-      },
-      "doc": "none for a new conversation (measured: 0.148 of ShareGPT's requests are first turns), or requests ago: the conversations a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one"
+      "doc": "none for a new conversation (0.148 of ShareGPT's requests are first turns), or requests ago: the conversations a slot has open and serves in turn [config: load]. One distance: with several, two requests can continue the same one",
+      "kind": "dist"
     },
     "keep": {
-      "default": {
-        "empirical": {
-          "values": [
-            0,
-            1000000
-          ],
-          "weights": [
-            91,
-            9
-          ]
-        }
-      },
       "unit": "tokens",
-      "doc": "[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are read. Drawn once per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together"
+      "doc": "[config: GPU KV memory against the open conversations] the tokens of a returning conversation the engine still holds, counted from its start: all of it when the draw exceeds its length, else the chunks past them are read. Drawn once per round of the open conversations (the GPU's memory is one state for all of them), so a round's loads come together",
+      "kind": "dist"
     },
     "retain": {
-      "default": 5000,
       "unit": "count",
-      "doc": "older chunks are evicted [config: capacity]"
+      "doc": "older chunks are evicted [config: capacity]",
+      "kind": "int"
     },
     "context": {
-      "default": 8192,
       "unit": "tokens",
-      "doc": "[config: model] a conversation whose next prompt and reply would not fit starts anew"
+      "doc": "[config: model] a conversation whose next prompt and reply would not fit starts anew",
+      "kind": "int"
     },
     "turns": {
       "default": {
@@ -179,121 +154,29 @@
       "doc": "[config: load] tokens the client drops from the end of its conversation before a request (an agent editing its context; measured in the AgentX corpus, §3.59); the chunks past the kept prefix are stored again under their names, where the real store writes new files"
     },
     "turn_in": {
-      "default": {
-        "empirical": {
-          "values": [
-            1,
-            4,
-            6,
-            7,
-            9,
-            10,
-            11,
-            13,
-            15,
-            17,
-            19,
-            22,
-            26,
-            31,
-            39,
-            50,
-            68,
-            107,
-            214,
-            944
-          ],
-          "weights": [
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1
-          ]
-        }
-      },
       "unit": "tokens",
-      "doc": "the tokens a request adds to its conversation's prompt (measured: ShareGPT user turns, twenty equal shares, each its mean)"
+      "doc": "the tokens a request adds to its conversation's prompt [load] (ShareGPT's: user turns, twenty equal shares, each its mean)",
+      "kind": "dist"
     },
     "turn_out": {
-      "default": {
-        "empirical": {
-          "values": [
-            12,
-            34,
-            62,
-            92,
-            119,
-            148,
-            175,
-            201,
-            225,
-            248,
-            271,
-            294,
-            317,
-            342,
-            370,
-            407,
-            454,
-            519,
-            615,
-            785
-          ],
-          "weights": [
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            1
-          ]
-        }
-      },
       "unit": "tokens",
-      "doc": "generated tokens (measured: ShareGPT replies, the same way)"
+      "doc": "generated tokens [load] (ShareGPT's replies, the same way)",
+      "kind": "dist"
     },
     "prefill_per_token": {
-      "default": 40000,
-      "unit": "ns"
+      "unit": "ns",
+      "doc": "prefill compute per prompt token: the model's on its accelerator",
+      "kind": "int"
     },
     "decode_per_token": {
-      "default": 12000000,
-      "unit": "ns"
+      "unit": "ns",
+      "doc": "decode compute per generated token: the model's on its accelerator",
+      "kind": "int"
     },
     "prefill_step": {
-      "default": 8192,
       "unit": "tokens",
-      "doc": "[config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens"
+      "doc": "[config: engine] tokens per prefill step (vLLM's max_num_batched_tokens: 8192 for an API server on a large GPU, 2048 otherwise); the chunks a step completes are stored after it, so a long prompt's writes come in bursts of prefill_step / chunk_tokens",
+      "kind": "int"
     },
     "think": {
       "default": {
@@ -2276,12 +2159,12 @@
   "provenance": {
     "generator": {
       "script": "lmcache_local_disk.py",
-      "sha256": "979c87b44cedb361676506beaecf7f477642f1ba81cb9866d853e9bac8468917",
+      "sha256": "8a2e4367b72100cc72b2ad9ef2b171c7ec792ec881b87ef12f0197e000f2fe43",
       "builder_version": "0.2.1",
-      "git": "eb1032107f99"
+      "git": "28284ccdb8e1-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "bbbec624eae7d9b6ba5308f4f2fad7392086f86e4ee86360f54601b886ee79d3"
+    "ast_sha256": "16f242b5087cb86ea7ce2bc0f97871d017861b65c7598a810b4363ab1872374e"
   }
 }

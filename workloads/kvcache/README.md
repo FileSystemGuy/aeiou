@@ -8,7 +8,7 @@ Also searched for as: kv cache, prefix cache, kv offload, inference.
 
 ## Mechanisms
 
-- [`lmcache-local-disk`](lmcache-local-disk/): vllm-lmcache, lmcache-chunks; cases: agentx, agentx-odirect, sharegpt-chat
-- [`lmcache-shared-fs`](lmcache-shared-fs/): vllm-lmcache, lmcache-chunks; cases: sharegpt-chat
+- [`lmcache-local-disk`](lmcache-local-disk/): vllm-lmcache, lmcache-chunks; cases: agentx, agentx-odirect, chat-64-slots, sharegpt-chat
+- [`lmcache-shared-fs`](lmcache-shared-fs/): vllm-lmcache, lmcache-chunks; cases: chat-64-slots, sharegpt-chat
 
 The catalog of every case: [`CATALOG.md`](../CATALOG.md).

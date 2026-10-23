@@ -1,5 +1,5 @@
 {"params_version": 2, "abstract": "lmcache_local_disk",
- "doc": "Fitted by agentx.py to traces.jsonl (8 sessions): 223 requests in 45 chains; 1.1% of continuing requests cut their chain (trim) and the chain grows by 101% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the median prefix a sub-agent's first prompt shares with its session; the requests replay_agentx.py sent (8 sessions as 8 slots, 28 requests each, back to back), and keep from the server's log: of 178 continuing requests the engine held the whole kept prefix in 6.",
+ "doc": "Fitted by agentx.py to traces.jsonl (8 sessions): 223 requests in 45 chains; 1.1% of continuing requests cut their chain (trim) and the chain grows by 101% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the median prefix a sub-agent's first prompt shares with its session; the requests replay_agentx.py sent (8 sessions as 8 slots, 28 requests each, back to back), and keep from the server's log: of 178 continuing requests the engine held the whole kept prefix in 6. decode_per_token, prefill_per_token, and sys_pop: the values the abstract's defaults held until 2026-10-23 (DESIGN_REVIEW.md \u00a73.78), not fitted.",
  "params": {
   "concurrency": {"default": 8},
   "warm": {"default": 0},
@@ -22,5 +22,8 @@
   "chunk_bytes": {"default": 3145728},
   "prefill_step": {"default": 2048},
   "sys_per_slot": {"default": true},
-  "direct": {"default": true}},
+  "direct": {"default": true},
+  "prefill_per_token": {"default": 40000},
+  "decode_per_token": {"default": 12000000},
+  "sys_pop": {"default": {"zipf": {"s": 1.1}}}},
  "provenance": {"conditions": {"model": "Qwen/Qwen2.5-0.5B-Instruct", "max_model_len": 131072, "kv_cache_memory_bytes": 2147483648, "engine_pool_tokens": 174752, "cpu_tier_bytes": 0, "slots_per_engine": 8, "latency_s_per_prompt_token": 0.000756, "latency_s_per_reply_token": 0.033}}}

@@ -1,5 +1,5 @@
 {"params_version": 2, "abstract": "lmcache_local_disk",
- "doc": "Fitted by agentx.py to traces.jsonl (8 sessions): 232 requests in 38 chains; 1.0% of continuing requests cut their chain (trim) and the chain grows by 101% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the main agent's prefix (the prefix its cuts most often keep), sub_tokens the median prefix a sub-agent's first prompt shares with its session, kind the chains' first prompts by the prefix they open with; the requests replay_agentx.py sent (8 sessions as 8 slots, 29 requests each, back to back), and keep from the server's log: of 194 continuing requests the engine held the whole kept prefix in 128.",
+ "doc": "Fitted by agentx.py to traces.jsonl (8 sessions): 232 requests in 38 chains; 1.0% of continuing requests cut their chain (trim) and the chain grows by 101% of the corpus's prompt growth (the reply counted whole where the model kept less of it); sys_tokens the main agent's prefix (the prefix its cuts most often keep), sub_tokens the median prefix a sub-agent's first prompt shares with its session, kind the chains' first prompts by the prefix they open with; the requests replay_agentx.py sent (8 sessions as 8 slots, 29 requests each, back to back), and keep from the server's log: of 194 continuing requests the engine held the whole kept prefix in 128. decode_per_token, prefill_per_token, and sys_pop: the values the abstract's defaults held until 2026-10-23 (DESIGN_REVIEW.md \u00a73.78), not fitted.",
  "params": {
   "concurrency": {"default": 8},
   "warm": {"default": 0},
@@ -28,5 +28,8 @@
   "sys_held": {"default": {"empirical": {"values": [0, 12160, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704, 32704], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
   "sub_held": {"default": {"empirical": {"values": [0, 16640, 16640, 17408, 18560, 18944, 19776, 19904, 23320, 24832, 24832, 24832, 25024, 25024, 25024, 25024, 25024, 25024, 25024, 25024], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}},
   "chunk_bytes": {"default": 3145728},
-  "prefill_step": {"default": 2048}},
+  "prefill_step": {"default": 2048},
+  "prefill_per_token": {"default": 40000},
+  "decode_per_token": {"default": 12000000},
+  "sys_pop": {"default": {"zipf": {"s": 1.1}}}},
  "provenance": {"conditions": {"model": "Qwen/Qwen2.5-0.5B-Instruct", "max_model_len": 131072, "kv_cache_memory_bytes": 6442450944, "engine_pool_tokens": 524288, "cpu_tier_bytes": 0, "slots_per_engine": 8, "latency_s_per_prompt_token": 6e-05, "latency_s_per_reply_token": 0.0723}}}

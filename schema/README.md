@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.12`, 2026-10-23 (~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.13`, 2026-10-23 (~~`0.12`, the same day~~; ~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -269,7 +269,10 @@ checkers enforce.
   falls below the loop's `from` evaluates the binding's non-recursive arm (the "fresh draw"
   of `ABSTRACTS.md` §9.5). The rule is judged on the document's parameter defaults; the
   runner judges it again on the parameter values in effect, before a run or a dry run, since
-  a value may replace a distribution with one whose minimum is lower. The runner clamps a
+  a value may replace a distribution with one whose minimum is lower. A required parameter
+  (no default) has no value on the document, so a `param` or `draw` of one qualifies there,
+  and its value is judged when one is given: by `aeiou-params check` and `lock` on each
+  fragment, and by the runner on the values in effect (contract 0.13). The runner clamps a
   `normal` or `lognormal` to `min` and then to `max`, so `min` bounds it only under a `max`
   that is known (a literal, or a parameter whose value is a number) and not below it, and a
   `min` above a known `max` is an error in its own right (2026-10-14). Under a proof that
@@ -491,8 +494,9 @@ checkers enforce.
 Contract 0.11 also states what V3, V23, and V27 make of a **required** parameter: its declared
 `kind` is the kind V23 and V27 judge (an `elem` of a required array its `items`), and V3,
 which needs a distribution's minimum, cannot prove anything of one until a value is given, so
-a required parameter in an `at` offset is refused at check and the runner judges the value
-given again, as for any other parameter.
+~~a required parameter in an `at` offset is refused at check and the runner judges the value
+given again, as for any other parameter~~ (until contract 0.13) a required parameter in an
+`at` offset passes on the document and its value is judged when given (V3).
 
 (V12 and V13 are listed above V11 to keep the numbering of the checker's messages; they were
 added on 2026-09-30.)
@@ -748,3 +752,9 @@ results are compared by.
   namespace's root (§1), for the write buffers of applications that write files (`dcp_save`'s
   `buf`). A 0.11 document is a 0.12 document with the version changed. Every committed AST was
   regenerated; no fingerprint and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.78.
+- **0.13** (2026-10-23): rule V3 on a required parameter (§4): a `param` or `draw` of one in an
+  `at` offset passes on the document, where 0.11 refused it, and its value is judged when given
+  (`aeiou-params check` and `lock`, the runner's resolve), for the LMCache abstracts' reuse
+  distance, a value of the load. A 0.12 document is a 0.13 document with the version changed.
+  Every committed AST was regenerated; no fingerprint and no dataset id changed. Reasoning in
+  `DESIGN_REVIEW.md` §3.78.

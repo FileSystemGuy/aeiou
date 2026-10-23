@@ -1244,6 +1244,15 @@ workload kv_cache_serving {
 lseek(b, 0, CUR), read(b, $chunk_bytes), close(b)`; `chunk_write` the same with
 `WRONLY|CREAT|TRUNC|CLOEXEC` and `write`.)
 
+*2026-10-23:* the committed abstracts (`lmcache_local_disk`, `lmcache_shared_fs` and its
+reader) require the model's values on its GPU (`chunk_bytes`, `context`, `keep`,
+`prefill_per_token`, `decode_per_token`, `prefill_step`), the deployment's (`retain`), and the
+load's (`concurrency`, `warm`, `requests`, `reuse`, `turn_in`, `turn_out`, `sys_prompts`,
+`sys_tokens`, `sys_pop`), which a case gives (`DESIGN_REVIEW.md` §3.78; the old defaults are the
+unsettled cases `chat-64-slots`); the load's features (`think`, `turns`, `trim`, `kind`, the
+sub-agent prefixes) stay off by default, and the shared store's `buf` is its `st_blksize`
+(contract 0.12). A required `reuse` in the `at` offset is judged when given (contract 0.13).
+
 **Trace (2026-10-02).** vLLM 0.30.0 with LMCache 0.5.5 (`LMCacheConnectorV1`, `local_disk` on
 the loopback NFS mount, `local_cpu` off), Qwen2.5-0.5B (12,288 bytes of KV per token), GPU KV
 memory limited to 96 MiB; 8 conversations of 5 turns round-robin from one client, 2 system

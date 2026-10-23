@@ -222,7 +222,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.12"
+    AST_VERSION = "0.13"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -781,7 +781,8 @@ class Cursor:
 
     def _at_least(self, e, k: int) -> bool:
         """`e` provably >= k, for k in {0, 1} (rule V3). Judged on the defaults; the runner judges
-        the same forms again on what it was given."""
+        the same forms again on what it was given. A required parameter has no value to judge yet
+        and passes (contract 0.13): its value is judged when one is given."""
         if isinstance(e, bool):
             return False
         if isinstance(e, (int, float)):
@@ -790,7 +791,10 @@ class Cursor:
             v = self._lookup(e.name)
             return v is not None and self._at_least(v, k)
         if isinstance(e, Param):
-            d = self.wl._param_specs.get(e.name, {}).get("default")
+            spec = self.wl._param_specs.get(e.name)
+            if spec is not None and spec["default"] is None:
+                return True
+            d = (spec or {}).get("default")
             return isinstance(d, Dist) and self._dist_at_least(d, k)
         if isinstance(e, Draw):
             d = e.dist

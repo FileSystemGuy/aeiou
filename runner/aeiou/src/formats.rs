@@ -952,7 +952,7 @@ mod tests {
     }
 
     fn abstract_of(dataset: &str) -> String {
-        format!(r#"{{"ast": "0.12", "name": "fmt_unit", "datasets": {{"d": {{{dataset}}}}}, "actors": {{"gpu": {{"body": []}}}}}}"#)
+        format!(r#"{{"ast": "0.13", "name": "fmt_unit", "datasets": {{"d": {{{dataset}}}}}, "actors": {{"gpu": {{"body": []}}}}}}"#)
     }
 
     fn seed_of(b: u64) -> u64 {

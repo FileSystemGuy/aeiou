@@ -16,7 +16,7 @@ fn tmpdir(tag: &str) -> crate::common::TempDir {
 /// in requests of `b` bytes, with `params` declared.
 fn doc(params: Value) -> String {
     json!({
-        "ast": "0.12", "name": "t", "params": params,
+        "ast": "0.13", "name": "t", "params": params,
         "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": {"const": 8192}, "seed": 1}},
         "actors": {"gpu": {"body": [
             {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},
@@ -168,7 +168,7 @@ fn ns_doc(params: Value, input: bool, more: Value) -> String {
                {"write": {"file": {"ref": "f"}, "len": {"param": "b"}}},
                {"close": {"file": {"ref": "f"}}}])
     };
-    let mut d = json!({"ast": "0.12", "name": if input { "r" } else { "w" }, "params": params, "namespaces": {"o": ns}, "actors": {"gpu": {"body": body}}});
+    let mut d = json!({"ast": "0.13", "name": if input { "r" } else { "w" }, "params": params, "namespaces": {"o": ns}, "actors": {"gpu": {"body": body}}});
     for (k, v) in more.as_object().unwrap() {
         d[k] = v.clone();
     }
@@ -276,7 +276,7 @@ struct Tree {
 
 fn toy() -> String {
     json!({
-        "ast": "0.12", "name": "t",
+        "ast": "0.13", "name": "t",
         "params": {"b": {"default": 4096, "unit": "bytes"}, "k": {"kind": "int", "unit": "count"}, "samples": {"default": 4, "scale": true}},
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/f{id:04}", "count": {"param": "samples"}, "size": {"const": 8192}, "seed": 1}},
         "actors": {"gpu": {"body": [
@@ -762,6 +762,41 @@ fn the_dcp_load_case_is_the_run_the_old_defaults_made() {
     let file = crate::common::workload_ast("dcp_load.ast.json").display().to_string();
     let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
     assert!(code == 1 && err.contains("required parameters with no value: item_bytes, item_off, items, meta_bytes, read_order, replicas, restore_step"), "{err}");
+}
+
+/// The LMCache abstracts' unsettled cases (item 38; DESIGN_REVIEW §3.78 points 1 and 4): each
+/// lock runs exactly what its abstract's defaults ran until 2026-10-23 (tests/golden.rs's
+/// fingerprints, 1 GPU, seed 1, 2 slots, 50 requests after 50 warm), the shared store's writer
+/// and its reader as the two runs of one case, whose `buf` is the namespace's st_blksize, its
+/// fallback in a dry run; each abstract alone is refused, naming every value it now requires.
+#[test]
+fn the_lmcache_cases_are_the_runs_the_old_defaults_made() {
+    let w = crate::common::workloads().display().to_string();
+    let small = ["--param", "concurrency=2", "--param", "warm=50", "--param", "requests=50"];
+    let required = "chunk_bytes, concurrency, context, decode_per_token, keep, prefill_per_token, prefill_step, requests, retain, reuse, sys_pop, sys_prompts, sys_tokens, turn_in, turn_out, warm";
+    for (case, run, fingerprint, ops, buf) in [
+        ("lmcache-local-disk/chat-64-slots", None, "9f7017e7011639d5", 1590, false),
+        ("lmcache-shared-fs/chat-64-slots", Some("lmcache_shared_fs"), "c7d83399ee6948bc", 3417, true),
+        ("lmcache-shared-fs/chat-64-slots", Some("lmcache_shared_fs_reader"), "382dba518a89c85f", 2986, true),
+    ] {
+        let mut a = vec!["dry-run", "--case", case, "--workloads", &w, "--gpus", "1", "--seed", "1"];
+        if let Some(r) = run {
+            a.extend(["--case-run", r]);
+        }
+        a.extend(small);
+        let (code, out, err) = aeiou(&a);
+        assert_eq!(code, 0, "{case}: {err}");
+        let ast = run.unwrap_or("lmcache_local_disk");
+        assert!(line(&out, "case ").contains(&format!("/chat-64-slots  run {ast}")), "{out}");
+        assert_eq!(line(&out, "fingerprint "), format!("fingerprint {fingerprint}"), "{ast}");
+        assert!(line(&out, "  ops ").starts_with(&format!("  ops {ops} ")), "{ast}: {out}");
+        if buf {
+            assert_eq!(line(&out, "storage-reported"), "storage-reported: buf=1048576 (st_blksize of `kv`: the fallback, none reported)");
+        }
+        let file = crate::common::workload_ast(&format!("{ast}.ast.json")).display().to_string();
+        let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+        assert!(code == 1 && err.contains(&format!("required parameters with no value: {required}")), "{ast}: {err}");
+    }
 }
 
 /// file_per_sample's unsettled case (item 33, part 5c; DESIGN_REVIEW §3.78 points 1 and 4): its

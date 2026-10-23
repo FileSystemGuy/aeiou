@@ -136,7 +136,9 @@ def test_given_values_are_judged_as_the_runner_judges_them(tmp_path):
     errs = params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": reuse})})
     assert errs and all(e.startswith("params: invalid with the parameters given: lmcache_local_disk: actors/") for e in errs)
     assert any("`kind @` names a binding of this loop body, so its index must be" in e and "provably >= 1" in e for e in errs)
-    assert params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": ast["params"]["reuse"]["default"]})}) == []
+    # the distance its defaults held until 2026-10-23 (required since; its unsettled case chat-64-slots)
+    old = {"mixture": [{"weight": 0.15, "dist": None}, {"weight": 0.85, "dist": {"const": 40}}]}
+    assert params.check(ast, {**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": old})}) == []
     # and the command says so, exit 1
     f = tmp_path / "reuse.params.json"
     f.write_text(json.dumps({**base, "abstract": "lmcache_local_disk", "params": v2({"reuse": reuse})}))
@@ -405,7 +407,7 @@ def test_a_file_pinned_to_the_builders_hash_is_taken_by_the_runner(tmp_path):
     123456789.12345679 one ULP off, so a parameter file pinned to the hash `aeiou-params` computes
     passed `check` and was refused by `dry-run --params-file` as a file for another AST (RC1 review)."""
     a, f = tmp_path / "h.ast.json", tmp_path / "h.params.json"
-    a.write_text('{"ast": "0.12", "name": "h", "params": {"sz": {"default": 123456789.12345679}}, '
+    a.write_text('{"ast": "0.13", "name": "h", "params": {"sz": {"default": 123456789.12345679}}, '
                  '"datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": 4096, "seed": 1}}, '
                  '"actors": {"gpu": {"body": [{"compute": {"ns": {"param": "sz"}}}]}}}')
     f.write_text(json.dumps({"params_version": 2, "abstract": "h", "ast_sha256": emit.sha256(emit.load(a)), "params": v2({})}))
@@ -451,7 +453,7 @@ def test_a_parameter_file_closing_a_cycle_is_refused_as_the_runner_refuses_it(tm
     review, R22): the runner's `check_given` and `aeiou-params check` refuse it with the cycle,
     rather than recursing without end in the rules that follow a `param` to its value."""
     a, f = tmp_path / "g.ast.json", tmp_path / "g.params.json"
-    a.write_text(json.dumps({"ast": "0.12", "name": "g", "params": {"pa": {"default": {"mixture": [{"weight": 1, "dist": {"param": "pb"}}]}}, "pb": {"default": {"const": 3}}},
+    a.write_text(json.dumps({"ast": "0.13", "name": "g", "params": {"pa": {"default": {"mixture": [{"weight": 1, "dist": {"param": "pb"}}]}}, "pb": {"default": {"const": 3}}},
                              "actors": {"gpu": {"body": [{"compute": {"ns": {"draw": {"param": "pa"}}}}]}}}))
     f.write_text(json.dumps({"params_version": 2, "abstract": "g", "params": v2({"pb": {"const": {"param": "pa"}}})}))
     want = ["g: params/pa: parameter `pa` is defined through itself (pa -> pb -> pa) (V1)",

@@ -146,7 +146,9 @@ each is a recorded decision and the golden tests pin them.
   `kp @ (r − (r mod d + 1))` is the draw at the last request of the previous round of `d`);
   since the proof is on the document's parameter defaults, `Params::new` runs the rules
   again on the values in effect and refuses, before the gate, a `--param` or parameter file
-  that lowers a distribution's minimum under an `at` (§3.57; it was a stack overflow).
+  that lowers a distribution's minimum under an `at` (§3.57; it was a stack overflow). A
+  required parameter there passes on the document and is judged only on its value (contract
+  0.13: the LMCache abstracts' `reuse`).
 - **Container layouts** (0.2). `size` and `offset` of a unit or column handle, `units`, and
   `unit_index` follow the formulas of `schema/README.md` §2 (*Container layout*) exactly, in
   integer arithmetic except a column's share `floor(size × weight)` in IEEE doubles, which

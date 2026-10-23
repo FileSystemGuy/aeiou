@@ -67,6 +67,33 @@ pub fn dcp_load<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
     all
 }
 
+/// The LMCache abstracts' defaults until 2026-10-23, which a case now gives (their unsettled cases
+/// chat-64-slots; DESIGN_REVIEW §3.78, item 38): the model's on its GPU, the deployment's, and the
+/// load's, the same in lmcache_local_disk, lmcache_shared_fs, and its reader. The tests that ran
+/// the abstracts on them pass them.
+pub const LMCACHE: [(&str, &str); 16] = [
+    ("chunk_bytes", "33554432"), ("context", "8192"), ("prefill_per_token", "40000"), ("decode_per_token", "12000000"),
+    ("keep", r#"{"empirical": {"values": [0, 1000000], "weights": [91, 9]}}"#), ("prefill_step", "8192"), ("retain", "5000"),
+    ("concurrency", "64"), ("requests", "20000"), ("warm", "2000"),
+    ("reuse", r#"{"mixture": [{"weight": 0.15, "dist": null}, {"weight": 0.85, "dist": {"const": 40}}]}"#),
+    ("turn_in", r#"{"empirical": {"values": [1, 4, 6, 7, 9, 10, 11, 13, 15, 17, 19, 22, 26, 31, 39, 50, 68, 107, 214, 944], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}"#),
+    ("turn_out", r#"{"empirical": {"values": [12, 34, 62, 92, 119, 148, 175, 201, 225, 248, 271, 294, 317, 342, 370, 407, 454, 519, 615, 785], "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}}"#),
+    ("sys_prompts", "50"), ("sys_tokens", "1500"), ("sys_pop", r#"{"zipf": {"s": 1.1}}"#),
+];
+
+/// `params`, then the LMCache abstracts' old defaults for every value `params` does not give.
+pub fn lmcache<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut all = params.to_vec();
+    all.extend(LMCACHE.iter().filter(|(k, _)| !params.iter().any(|(p, _)| p == k)));
+    all
+}
+
+/// The same as `--param NAME=VALUE` arguments, for every old default `given` (NAME=VALUE) does not name.
+pub fn lmcache_args(given: &[&str]) -> Vec<String> {
+    LMCACHE.iter().filter(|(k, _)| !given.iter().any(|g| g.split_once('=').map(|(n, _)| n) == Some(*k)))
+        .flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
+}
+
 /// file_per_sample as it was until 2026-10-22: the committed abstract with its old defaults back
 /// in place of the required values, and `hdr_read` and `inv_read` 1 MiB in place of the storage's
 /// st_blksize, so that a run and a dry run of it read alike; for the tests (the coordinator's)

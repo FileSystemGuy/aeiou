@@ -375,7 +375,7 @@ def every_kind() -> dict:
             {"mkdir": {"dir": r("h")}}, {"readdir": {"dir": r("h"), "repeat": "until_end"}}, {"rmdir": {"dir": r("h")}},
             {"rename": {"from": r("o"), "to": r("o")}}]}},
     ]
-    return {"ast": "0.12", "name": "every_kind", "doc": "Every kind.",
+    return {"ast": "0.13", "name": "every_kind", "doc": "Every kind.",
             "params": {"n": {"default": 8, "unit": "bytes"}, "on": {"default": False}, "arr": {"default": [1, 2, 3]}},
             "datasets": {"ds": {"pattern": "d/{id div 4}/f{id}", "layout": "compound", "access": "map", "count": 100,
                                 "samples_per_file": 5, "size": {"const": 4096}, "seed": 1,
@@ -613,6 +613,17 @@ def test_every_record_refusal_names_its_file(tree, change, message):
     assert any(p.startswith(message) or message in p for p in found), found
     with pytest.raises(catalog.BuildError, match=re.escape(message)):
         catalog.capture_pairs(tree)
+
+
+def test_a_length_is_an_integer_parameter_with_a_default_or_required():
+    """A case's `length` names an integer parameter of its abstract: one whose default is an
+    integer, or a required one of kind `int` (contract 0.11), whose value the case gives (the
+    LMCache abstracts' `requests`, required since 2026-10-23, DESIGN_REVIEW.md §3.78)."""
+    from aeiou import catalog
+    ast = {"params": {"n": {"default": 3}, "r": {"kind": "int"}, "f": {"kind": "float"}, "b": {"default": True},
+                      "d": {"kind": "dist"}, "x": {"default": 1.5}}}
+    assert catalog._length_ok(ast, "n") and catalog._length_ok(ast, "r")
+    assert not any(catalog._length_ok(ast, k) for k in ("f", "b", "d", "x", "nope"))
 
 
 @pytest.mark.parametrize("defaults, message", [
