@@ -1,5 +1,6 @@
 """The `dcp_load` parameters of a real DCP checkpoint, from its `.metadata`: the items of rank 0's
-shard in file order (storage bytes, offsets), and the order `dcp.load` reads them in (sorted names)."""
+shard in file order (storage bytes, offsets), and the order `dcp.load` reads them in (sorted names).
+`replicas` is 1: every rank of the kit's save wrote a shard file of its own."""
 import json, math, os, pickle, sys
 
 
@@ -14,7 +15,7 @@ def params(m, meta_bytes, step, doc):
     by_name = sorted(range(len(items)), key=lambda i: items[i][1])
     return {"params_version": 2, "abstract": "dcp_load", "doc": doc, "params": {k: {"default": v} for k, v in {
         "items": len(items), "item_bytes": [nbytes(f, o) for _, f, o in items], "item_off": [o for o, _, _ in items],
-        "read_order": by_name, "meta_bytes": meta_bytes, "restore_step": step}.items()}}
+        "read_order": by_name, "replicas": 1, "meta_bytes": meta_bytes, "restore_step": step}.items()}}
 
 
 def main():

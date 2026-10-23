@@ -49,7 +49,9 @@ fn hashes_match_check_py() {
     // 2026-10-22 for contract 0.11 and 2026-10-23 for contract 0.12, a namespace's st_blksize, every fingerprint
     // unchanged).
     let want = [
-        ("dcp_load", "0e313b5868f2ae17cb7a02abe955eafad127057a4c6344ee6870bd731e4a4605"),
+        // 2026-10-23: the job's and the model's values required (its unsettled case four-items), `buf` and `meta_buf`
+        // the st_blksize of its input namespaces (contract 0.12), DESIGN_REVIEW §3.78
+        ("dcp_load", "bea867b79e9cf97bd93651842679689a860c90d370b26b951c1b37ad96f11af3"),
         // 2026-10-23: the job's and the GPU's values required (its unsettled case four-items), `buf` and `xfer`
         // the st_blksize of its namespace (contract 0.12), DESIGN_REVIEW §3.78
         ("dcp_save", "0f4626531723e0a0677c450d785627ad78b03a2aac59a9a471c618f20640bed2"),
@@ -115,7 +117,8 @@ fn golden_fingerprints() {
         ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5"), ("walk", "false")], 0xa2c284c6137f9639, 50451),
         // dcp_save at the values its defaults held until 2026-10-23 (its unsettled case four-items; DESIGN_REVIEW §3.78)
         ("dcp_save", 2, &[("steps", "200"), ("step_time", "323000000"), ("ckpt_every", "100"), ("items", "4"), ("item_bytes", "[16777216, 33554432, 16777216, 8388608]"), ("meta_bytes", "2097152")], 0x850e8c9019b3bda8, 130),
-        ("dcp_load", 2, &[], 0x22990a88db4e6d4f, 368),
+        // dcp_load at the values its defaults held until 2026-10-23 (its unsettled case four-items; DESIGN_REVIEW §3.78)
+        ("dcp_load", 2, &crate::common::DCP_LOAD, 0x22990a88db4e6d4f, 368),
         ("safetensors_load", 2, &[], 0x2668387c7aa4126b, 24682),
         ("diskann_search", 1, &[("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
         ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
@@ -232,11 +235,11 @@ fn seed_changes_drawn_workloads_only() {
     assert_ne!(a, b, "the file order depends on the seed");
     // no draw anywhere: the seed is irrelevant, the parameters and the actor ids decide everything
     let text = std::fs::read_to_string(crate::common::workload_ast("dcp_load.ast.json")).unwrap();
-    let a = dry(&text, &config(2, 1, &[]), 2).total.fingerprint;
-    let b = dry(&text, &config(2, 2, &[]), 2).total.fingerprint;
+    let a = dry(&text, &config(2, 1, &crate::common::DCP_LOAD), 2).total.fingerprint;
+    let b = dry(&text, &config(2, 2, &crate::common::DCP_LOAD), 2).total.fingerprint;
     assert_eq!(a, b);
     // and the workload changes with G, by design
-    let c = dry(&text, &config(3, 1, &[]), 2).total.fingerprint;
+    let c = dry(&text, &config(3, 1, &crate::common::DCP_LOAD), 2).total.fingerprint;
     assert_ne!(a, c);
 }
 

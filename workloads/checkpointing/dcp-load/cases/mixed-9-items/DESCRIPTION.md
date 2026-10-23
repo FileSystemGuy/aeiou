@@ -14,19 +14,20 @@ DCP load: every rank reads .metadata, then the items of its shard file (fan-in `
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `items` | 9 | 4 | count | read items per rank [config]; 900 for an 8B model |
-| `item_bytes` | [16 MiB, 512 KiB, 32 MiB, 2.0 KiB, 2.0 KiB, 512 KiB, 16 MiB, 2.0 KiB, …] (9 values) | [16 MiB, 32 MiB, 16 MiB, 8 MiB] | bytes | [config] storage bytes of the item at each place in the file |
-| `item_off` | [0 bytes, 16.0 MiB, 16.5 MiB, 48.5 MiB, 48.5 MiB, 48.5 MiB, 49.0 MiB, 65.0 MiB, …] (9 values) | [0 bytes, 16.0 MiB, 48.0 MiB, 64.0 MiB] | bytes | [config] the item's offset in the file: prefix sums of hdr + item_bytes + trailer - item_bytes mod 64, as §3 writes them |
-| `read_order` | [0, 1, 2, 3, 4, 5, 6, 7, …] (9 values) | [0, 1, 2, 3] | count | [config] the place in the file of the k-th item read: the items sorted by name (layer.10 before layer.2), against the writer's state-dict order |
-| `replicas` | 1 | same | count | ranks that read the same shard file (replicated state saved once); 1 when fully sharded |
-| `meta_bytes` | 3.9 KiB | 2 MiB | bytes | [measure] .metadata size; traced 2,606 bytes for 6 items on 2 ranks |
+| `items` | 9 | none | count | read items per rank: the model's parameter table (about 900 for an 8B model under FSDP2) |
+| `item_bytes` | [16 MiB, 512 KiB, 32 MiB, 2.0 KiB, 2.0 KiB, 512 KiB, 16 MiB, 2.0 KiB, …] (9 values) | none | bytes | storage bytes of the item at each place in the file, on each rank: a case holds at the GPU counts it declares |
+| `item_off` | [0 bytes, 16.0 MiB, 16.5 MiB, 48.5 MiB, 48.5 MiB, 48.5 MiB, 49.0 MiB, 65.0 MiB, …] (9 values) | none | bytes | the item's offset in the file: prefix sums of hdr + item_bytes + trailer - item_bytes mod 64, as §3 writes them |
+| `read_order` | [0, 1, 2, 3, 4, 5, 6, 7, …] (9 values) | none | count | the place in the file of the k-th item read: the items sorted by name (layer.10 before layer.2), against the writer's state-dict order |
+| `replicas` | 1 | none | count | ranks that read the same shard file (replicated state saved once); 1 when fully sharded |
+| `meta_bytes` | 3.9 KiB | none | bytes | .metadata size, measured per job: the global plan's pickle (traced 2,606 bytes for 6 items on 2 ranks) |
+| `restore_step` | 200 | none | count | the checkpoint step read: one the writing run saved |
 | `hdr` | 704 bytes | same | bytes | per item, before the storage, as §3 writes it (traced 2026-10-01, torch 2.14) |
 | `trailer` | 873 bytes | same | bytes | per item, after the storage, less the storage's length mod 64 (the next record is aligned), as §3 writes it |
-| `buf` | 1 MiB | same | bytes | Python BufferedReader size = st_blksize; every buffer fill asks for this much |
 | `rec2` | 236 bytes | same | bytes | offset in an item of its second zip record, where the reader goes after the central directory (traced) |
 | `eocd_scan` | 4 KiB | same | bytes | the zip reader looks for the end record in the last 4096 bytes of an item |
 | `tail_back` | [22 bytes, 42 bytes, 98 bytes, 561 bytes, 727 bytes, 857 bytes] | same | bytes | the item at the end of the file only: a fill there stops at EOF and is used up by the read that caused it, so each later step of the zip reader (end record, zip64 locator and record, central directory, the two records after the storage) is a fill of its own, this many bytes before the end (traced) |
-| `restore_step` | 200 | 100 | count |  |
+| `buf` | 1 MiB | same | bytes | Python BufferedReader size = st_blksize of the shard file; every buffer fill asks for this much |
+| `meta_buf` | 1 MiB | same | bytes | pickle.load's BufferedReader size = st_blksize of the .metadata file |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.
 
@@ -44,8 +45,8 @@ The API the traced application used: `posix` sync (none declared); a run under a
   - `fstat` `m`.
   - `ioctl` `m` `TCGETS` (may fail with ENOTTY).
   - `lseek` `m` to 0 from the current position.
-  - Once (`⌈meta_bytes / buf⌉`), `rep` = 0 to 0:
-    - `read` `m`: 1 MiB (`buf`) at the file position.
+  - Once (`⌈meta_bytes / meta_buf⌉`), `rep` = 0 to 0:
+    - `read` `m`: 1 MiB (`meta_buf`) at the file position.
   - `close` `m`.
   - `c` is the object of `ckpt` named by step = 200 (`restore_step`), rank = `actor id div replicas`.
   - `open` `c` (RDONLY|CLOEXEC).

@@ -21,7 +21,7 @@ directories, a contribution going in the one whose description fits.
 | `dataprep/repack/` | — | — | Many small files into large shards or back, metadata-heavy on one side: tar and WebDataset packing, frame extraction. |
 | `dataprep/tokenize-pack/` | — | — | Text in, large binary token files and their index out (Megatron-style .bin and .idx). |
 | `dataprep/ingest/` | — | — | Many writers landing raw data, often as object PUTs: web crawls, sensor dumps. |
-| `checkpointing/` | 2 | 5 | Saving and restoring a job's state: a training run's, or a simulation's checkpoint and restart. |
+| `checkpointing/` | 2 | 6 | Saving and restoring a job's state: a training run's, or a simulation's checkpoint and restart. |
 | `model-loading/` | 1 | 1 | Loading a model's weights to serve it: start-up, scale-out, failover, a model swap. |
 | `kvcache/` | 2 | 4 | An inference engine's KV cache offloaded to storage and loaded back. |
 | `vector-search/` | 3 | 4 | Nearest-neighbour search over vectors: building an index and searching it, as a library or a vector database does. |
@@ -42,7 +42,7 @@ directories, a contribution going in the one whose description fits.
 
 | Mechanism | Application | Format | Phase | Domain | Cases |
 |---|---|---|---|---|---|
-| `checkpointing/dcp-load` | torch-dcp | dcp | training | ai | mixed-9-items, name-order-17-items, small-last-6-items |
+| `checkpointing/dcp-load` | torch-dcp | dcp | training | ai | four-items, mixed-9-items, name-order-17-items, small-last-6-items |
 | `checkpointing/dcp-save` | torch-dcp | dcp | training | ai | four-items, toy-6-items |
 | `input-pipeline/map/file-per-sample` | pytorch-dataloader | file-per-sample | training | ai | imagefolder-jpeg, jpeg-50m |
 | `input-pipeline/map/hdf5` | h5py | hdf5 | training | ai | rgb256-rows |
@@ -60,6 +60,7 @@ directories, a contribution going in the one whose description fits.
 
 | Mechanism | Case | Kind | Modality | Model family | AST | API | Writes | Inputs | Status | GPUs |
 |---|---|---|---|---|---|---|---|---|---|---|
+| `checkpointing/dcp-load` | four-items | unsettled | model-state | — | `dcp_load` | sync | no | yes | untraced | 2 |
 | `checkpointing/dcp-load` | mixed-9-items | example | model-state | — | `dcp_load` | sync | no | yes | accepted | 2 |
 | `checkpointing/dcp-load` | name-order-17-items | example | model-state | — | `dcp_load` | sync | no | yes | accepted | 2 |
 | `checkpointing/dcp-load` | small-last-6-items | example | model-state | — | `dcp_load` | sync | no | yes | accepted | 2 |
@@ -88,6 +89,8 @@ directories, a contribution going in the one whose description fits.
 
 Each case in a paragraph, generated from its AST, parameters, records, and measured shape; its
 `DESCRIPTION.md` has the account in full (`DESIGN_REVIEW.md` §3.76).
+
+**`checkpointing/dcp-load`, four-items** ([description](checkpointing/dcp-load/cases/four-items/DESCRIPTION.md)). DCP load: every rank reads .metadata, then the items of its shard file (fan-in `replicas`). In the catalog it is `checkpointing/dcp-load`: application `torch-dcp`, format `dcp`, phase training, domain ai. Not yet decided between the two; the case's README says why (`four-items`: model-state data), its parameters holding at 2 GPUs. Not traced yet. It reads the objects of `ckpt`, each 72.0 MiB. It reads the objects of `ckpt_meta`, each 2 MiB. Each of the 2 `gpu` actors (one per GPU): in phase `restore`, on an object of `ckpt_meta`, open, fstat, ioctl TCGETS, lseek; twice: read 1 MiB; close; on an object of `ckpt`, open, fstat, ioctl TCGETS, lseek; 4 times: when `not head_in`, lseek; lseek; when `not head_in`, lseek; twice: lseek; when `not head_in`, read 1 MiB; twice: lseek; when `not end_in`, when `o + n > be`, lseek; lseek 4 times, read 1 MiB; when `far`, lseek; lseek; when `far`, read 1 MiB; when `last`, 6 times: lseek, read 1 MiB; 8 times: lseek; when `far or last`, lseek; lseek; when `far or last`, read 1 MiB; 5 times: lseek; when `far or last`, lseek; lseek; when `far or last`, read 1 MiB; 3 times: lseek; when `far and hdr + item_bytes[t] > buf`, read `hdr + item_bytes[t] − buf`, otherwise 21 times: lseek; close; a barrier with every GPU. Measured by dry run at 2 GPUs (368 ops: 288 lseek, 64 read, 4 close, 4 fstat, 4 ioctl, 4 open; 178.0 MiB read, nothing written): read runs: medium (16 MiB); read requests: medium (14 MiB); share of bytes read: read-only (100%); metadata ops per data op: low (0.188); reads its own writes: no; share of bytes read that are re-reads: some (16.9%); share of accessed bytes on the most accessed 1% of bytes: uniform (4.1%).
 
 **`checkpointing/dcp-load`, mixed-9-items** ([description](checkpointing/dcp-load/cases/mixed-9-items/DESCRIPTION.md)). DCP load: every rank reads .metadata, then the items of its shard file (fan-in `replicas`). In the catalog it is `checkpointing/dcp-load`: application `torch-dcp`, format `dcp`, phase training, domain ai. An example case (`mixed-9-items`: model-state data), its parameters holding at 2 GPUs. Traced: a capture is within the tolerances. It reads the objects of `ckpt`, each 73.0 MiB. It reads the objects of `ckpt_meta`, each 3.9 KiB. Each of the 2 `gpu` actors (one per GPU): in phase `restore`, on an object of `ckpt_meta`, open, fstat, ioctl TCGETS, lseek; once: read 1 MiB; close; on an object of `ckpt`, open, fstat, ioctl TCGETS, lseek; 9 times: when `not head_in`, lseek; lseek; when `not head_in`, lseek; twice: lseek; when `not head_in`, read 1 MiB; twice: lseek; when `not end_in`, when `o + n > be`, lseek; lseek 4 times, read 1 MiB; when `far`, lseek; lseek; when `far`, read 1 MiB; when `last`, 6 times: lseek, read 1 MiB; 8 times: lseek; when `far or last`, lseek; lseek; when `far or last`, read 1 MiB; 5 times: lseek; when `far or last`, lseek; lseek; when `far or last`, read 1 MiB; 3 times: lseek; when `far and hdr + item_bytes[t] > buf`, read `hdr + item_bytes[t] − buf`, otherwise 21 times: lseek; close; a barrier with every GPU. Measured by dry run at 2 GPUs (626 ops: 548 lseek, 62 read, 4 close, 4 fstat, 4 ioctl, 4 open; 174.0 MiB read, nothing written): read runs: medium (16 MiB); read requests: medium (14 MiB); share of bytes read: read-only (100%); metadata ops per data op: low (0.194); reads its own writes: no; share of bytes read that are re-reads: some (16.1%); share of accessed bytes on the most accessed 1% of bytes: uniform (4.2%).
 
@@ -147,6 +150,7 @@ dataset: they describe the case at its length.
 
 | Mechanism | Case | Length | `run_length_read` | `run_length_write` | `request_size_read` | `request_size_write` | `read_share` | `metadata` | `reads_own_writes` | `reread` | `skew` |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+| `checkpointing/dcp-load` | four-items | — | medium (16 MiB) | — | medium (14 MiB) | — | read-only (1.00) | low (0.19) | no | some (0.17) | uniform (0.04) |
 | `checkpointing/dcp-load` | mixed-9-items | — | medium (16 MiB) | — | medium (14 MiB) | — | read-only (1.00) | low (0.19) | no | some (0.16) | uniform (0.04) |
 | `checkpointing/dcp-load` | name-order-17-items | — | medium (8 MiB) | — | medium (1 MiB) | — | read-only (1.00) | low (0.24) | no | some (0.22) | uniform (0.03) |
 | `checkpointing/dcp-load` | small-last-6-items | — | medium (16 MiB) | — | medium (14 MiB) | — | read-only (1.00) | low (0.17) | no | some (0.18) | uniform (0.04) |

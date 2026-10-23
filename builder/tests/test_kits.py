@@ -764,7 +764,7 @@ def test_dcp_load_params_from_a_checkpoint_s_metadata(monkeypatch):
         {"layer0.weight": Tensor(f32, [Chunk((8,), (8,)), Chunk((0,), (8,))]), "layer10.weight": Tensor(f32, [Chunk((0,), (4,))]),
          "layer2.weight": Tensor(f32, [Chunk((0,), (2,))])})
     assert dp.params(m, 777, 200, "d") == {"params_version": 2, "abstract": "dcp_load", "doc": "d", "params": {k: {"default": v} for k, v in {
-        "items": 3, "item_bytes": [32, 8, 16], "item_off": [0, 50, 100], "read_order": [0, 2, 1], "meta_bytes": 777, "restore_step": 200}.items()}}
+        "items": 3, "item_bytes": [32, 8, 16], "item_off": [0, 50, 100], "read_order": [0, 2, 1], "replicas": 1, "meta_bytes": 777, "restore_step": 200}.items()}}
 
 
 # --- kit scripts run whole against the stand-ins of builder/tests/standins/ (test fakes) ---------
@@ -892,7 +892,7 @@ def test_dcp_load_params_reads_the_metadata_in_the_checkpoint_it_is_given(tmp_pa
     r, _ = _standin_run(tmp_path, WL / "checkpointing/dcp-load/kit/params.py", "ckpt/step_000200", 200, "a doc", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == {"params_version": 2, "abstract": "dcp_load", "doc": "a doc", "params": {k: {"default": v} for k, v in {
-        "items": 2, "item_bytes": [24, 8], "item_off": [0, 30], "read_order": [0, 1],
+        "items": 2, "item_bytes": [24, 8], "item_off": [0, 30], "read_order": [0, 1], "replicas": 1,
         "meta_bytes": (ckpt / ".metadata").stat().st_size, "restore_step": 200}.items()}}
 
 

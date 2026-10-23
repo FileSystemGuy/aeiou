@@ -20,7 +20,7 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10")]),
     ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5")]),
     ("dcp_save", 2, &[("steps", "200"), ("step_time", "323000000"), ("ckpt_every", "100"), ("items", "4"), ("item_bytes", "[16777216, 33554432, 16777216, 8388608]"), ("meta_bytes", "2097152")]),
-    ("dcp_load", 2, &[]),
+    ("dcp_load", 2, &crate::common::DCP_LOAD),
     ("safetensors_load", 2, &[]),
     ("diskann_search", 1, &[("queries", "100"), ("threads", "2")]),
     ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")]),

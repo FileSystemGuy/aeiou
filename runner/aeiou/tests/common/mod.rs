@@ -53,6 +53,20 @@ pub fn dcp_save<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
     all
 }
 
+/// dcp_load's defaults until 2026-10-23, which a case now gives (its unsettled case four-items,
+/// the step 100 dcp_save's four-items writes; DESIGN_REVIEW §3.78, item 38): the tests that ran
+/// the abstract on them pass them.
+pub const DCP_LOAD: [(&str, &str); 7] = [("items", "4"), ("item_bytes", "[16777216, 33554432, 16777216, 8388608]"),
+    ("item_off", "[0, 16778793, 50334802, 67113595]"), ("read_order", "[0, 1, 2, 3]"), ("replicas", "1"), ("meta_bytes", "2097152"),
+    ("restore_step", "100")];
+
+/// `params`, then dcp_load's old defaults for every value `params` does not give.
+pub fn dcp_load<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut all = params.to_vec();
+    all.extend(DCP_LOAD.iter().filter(|(k, _)| !params.iter().any(|(p, _)| p == k)));
+    all
+}
+
 /// file_per_sample as it was until 2026-10-22: the committed abstract with its old defaults back
 /// in place of the required values, and `hdr_read` and `inv_read` 1 MiB in place of the storage's
 /// st_blksize, so that a run and a dry run of it read alike; for the tests (the coordinator's)

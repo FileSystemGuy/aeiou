@@ -378,7 +378,7 @@ fn write_then_restore_through_the_namespace_manifest() {
         ("item_off", "[0, 1050153, 3148882, 4199035]"),   // Σ (704 + item + 873) of the writer
         ("meta_bytes", "65536"),
     ];
-    let (rl, rcfg, rmodel) = leaked_model("dcp_load", config(2, 5, &rparams));
+    let (rl, rcfg, rmodel) = leaked_model("dcp_load", config(2, 5, &crate::common::dcp_load(&rparams)));
     let mut ro = opts(&root, BackendKind::Sync);
     ro.max_gap = Some(30.0);
     let (checks, input_objects) = run::check_input_namespaces(rl, rcfg, &root, &ro).unwrap();

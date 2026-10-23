@@ -607,6 +607,13 @@ workload ckpt_restore {
 }
 ```
 
+*2026-10-23:* the committed abstract (`dcp_load`) requires `items`, `item_bytes`,
+`item_off`, `read_order`, `replicas`, `meta_bytes`, and `restore_step`, which a case gives
+(`DESIGN_REVIEW.md` §3.78; three traced examples, and `four-items`, the abstract's old defaults
+kept as an unsettled case, the checkpoint `dcp_save`'s `four-items` writes at step 100); `buf` is
+the `st_blksize` of the `ckpt` namespace and the `.metadata`'s reader is `meta_buf`, the
+`st_blksize` of `ckpt_meta`, each read from what the writer's manifest lists (contract 0.12).
+
 **Trace (2026-10-01).** `workloads/checkpointing/dcp-load`: `dcp.load` on two ranks (gloo, CPU)
 into `DTensor`s, each rank reading its own shard, on the loopback NFS mount; torch 2.14.1.
 Three checkpoints: `mixed`, nine items of 16 MiB down to 2 KiB per rank with small ones

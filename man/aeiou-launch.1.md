@@ -119,11 +119,12 @@ aeiou-launch 'client[01-50]' -- aeiou run --case jpeg-50m --gpus 400 --root /mnt
 ```
 
 A write run on four hosts, then the restore on the same hosts with each reading what another
-wrote:
+wrote; `save.lock.json` and `load.lock.json` are the locks of a `dcp_save` case and of the
+`dcp_load` case that reads its checkpoint, both holding at 32 GPUs:
 
 ```
-aeiou-launch n1 n2 n3 n4 -- aeiou run dcp_save.ast.json --gpus 32 --root /mnt/sut --seed 7
-aeiou-launch n1 n2 n3 n4 -- aeiou run dcp_load.ast.json --gpus 32 --root /mnt/sut --seed 7 \
+aeiou-launch n1 n2 n3 n4 -- aeiou run --case-file save.lock.json --gpus 32 --root /mnt/sut --seed 7
+aeiou-launch n1 n2 n3 n4 -- aeiou run --case-file load.lock.json --gpus 32 --root /mnt/sut --seed 7 \
     --rank-rotate 1 --max-gap 30 --require-cold
 ```
 

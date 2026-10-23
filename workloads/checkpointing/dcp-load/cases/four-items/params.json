@@ -1,0 +1,3 @@
+{"params_version": 2, "abstract": "dcp_load",
+ "doc": "The values dcp_load's defaults held until 2026-10-23 (DESIGN_REVIEW.md §3.78): the checkpoint dcp_save's four-items writes at step 100, 4 items per rank of 16, 32, 16, and 8 MiB, a 2 MiB .metadata, every rank its own shard. Placeholders, not measured: no job stands behind them (the 2026-10-01 traces behind the abstract are the three examples).",
+ "params": {"items": {"default": 4}, "item_bytes": {"default": [16777216, 33554432, 16777216, 8388608]}, "item_off": {"default": [0, 16778793, 50334802, 67113595]}, "read_order": {"default": [0, 1, 2, 3]}, "replicas": {"default": 1}, "meta_bytes": {"default": 2097152}, "restore_step": {"default": 100}}}

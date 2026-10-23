@@ -5,14 +5,15 @@
     {
       "name": "dcp_load",
       "abstract": "checkpointing/dcp-load/dcp_load.ast.json",
-      "ast_sha256": "0e313b5868f2ae17cb7a02abe955eafad127057a4c6344ee6870bd731e4a4605",
+      "ast_sha256": "bea867b79e9cf97bd93651842679689a860c90d370b26b951c1b37ad96f11af3",
       "params": {
-        "buf": {"default": 1048576},
+        "buf": {"default": {"from": "st_blksize", "of": "ckpt", "fallback": 1048576}},
         "eocd_scan": {"default": 4096},
         "hdr": {"default": 704},
         "item_bytes": {"default": [16777216, 33554432, 16777216, 8388608, 524288, 2096]},
         "item_off": {"default": [0, 16778793, 50334802, 67113595, 75503780, 76029645]},
         "items": {"default": 6},
+        "meta_buf": {"default": {"from": "st_blksize", "of": "ckpt_meta", "fallback": 1048576}},
         "meta_bytes": {"default": 2606},
         "read_order": {"default": [0, 1, 2, 3, 4, 5]},
         "rec2": {"default": 236},
@@ -28,10 +29,11 @@
         "item_bytes": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
         "item_off": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
         "items": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
+        "meta_buf": "abstract",
         "meta_bytes": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
         "read_order": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
         "rec2": "abstract",
-        "replicas": "abstract",
+        "replicas": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
         "restore_step": "checkpointing/dcp-load/cases/small-last-6-items/params.json",
         "tail_back": "abstract",
         "trailer": "abstract"
@@ -41,6 +43,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "checkpointing/dcp-load/cases/small-last-6-items/case.toml",
-    "fragments": [{"path": "checkpointing/dcp-load/cases/small-last-6-items/params.json", "sha256": "01b1620ab352f90f213ec7beb11e08e5ac0fff6278101cfb22c97ffab0160755"}]
+    "fragments": [{"path": "checkpointing/dcp-load/cases/small-last-6-items/params.json", "sha256": "cc921bc80fc88682be21275b6b2de7bfe40d8ad859a5250d66e3494d3d140522"}]
   }
 }

@@ -7053,6 +7053,35 @@ Choices made in the build, open to revision:
   1 MiB item that a dry run's fallback coalesces, so the coordinator test gives its dry run
   the number the root reports.
 
+**Built: `dcp_load`'s case** (2026-10-23, item 38's second mechanism). Decided with the user
+the same day, on the recommendation: the model's and the job's values are required, `items`,
+`item_bytes`, `item_off`, `read_order`, `meta_bytes`, with `restore_step` (a step the writing
+run saved) and `replicas` (the job's parallelism, 1 when fully sharded); the library's `hdr`,
+`trailer`, `rec2`, `eocd_scan`, and `tail_back` stay defaults; and *two buffers* (the user's
+choice over one): the shard's `buf` is `st_blksize` of `ckpt`, and `pickle.load`'s reader of
+the `.metadata`, which read through `buf` until now, is `meta_buf`, `st_blksize` of
+`ckpt_meta`, each fallback 1 MiB, since the application opens two files and sizes each reader by
+its own. No contract change: 0.12 reads an input namespace's number from its manifest.
+
+Choices made in the build, open to revision:
+
+- **`item_off` stays a table**, required with the others: it is the prefix sums of `hdr +
+  item_bytes + trailer − item_bytes mod 64`, and the contract has no prefix sum to compute it.
+- **The old defaults are the unsettled case `four-items`**, the checkpoint `dcp_save`'s case of
+  that name writes at step 100, so a run of the one leaves what the other reads; its lock runs
+  the fingerprint the defaults ran (22990a88db4e6d4f, 368 ops at 2 GPUs; `tests/cases.rs`). The
+  shared name makes `--case four-items` ambiguous, which the runner already refuses with both
+  locks named, so the pair is `dcp-save/four-items` and `dcp-load/four-items`.
+- **The three traced examples gain `replicas` 1**, and the kit's `params.py` writes it (every
+  rank of its save wrote a file of its own); their fingerprints are unchanged.
+- **Not checked: that a load case agrees with the save case it reads** (the same `item_bytes`
+  and `meta_bytes`); the input namespace's manifest is the guard a run has.
+- **`meta_buf` is read where `buf` is.** `ckpt` and `ckpt_meta` share the root `ckpt/` and one
+  manifest, and the probe of an input namespace stats the first object the manifest lists,
+  which may be a shard rather than the `.metadata`: the same directory, so the same number on
+  every file system we know of. Choosing the first object of the namespace's own pattern is
+  open.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

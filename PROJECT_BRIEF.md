@@ -760,7 +760,9 @@ numbers; the order is this note's.
     scale, which reads follow `st_blksize`, and which case holds the values the defaults hold
     (a use case where they were measured as a job, `unsettled` where not). *2026-10-23:*
     `dcp_save` done (contract 0.12: a namespace's `st_blksize` for its write buffer; the case
-    `four-items` of kind `unsettled`; `DESIGN_REVIEW.md` §3.78); seven to go.
+    `four-items` of kind `unsettled`; `DESIGN_REVIEW.md` §3.78), then `dcp_load` the same day
+    (its two read buffers the `st_blksize` of its input namespaces; the case `four-items`, what
+    `dcp_save`'s writes at step 100); six to go.
 39. **A use case per accelerator (backlog, raised by the user 2026-10-22, `DESIGN_REVIEW.md`
     §3.78 point 1).** A job's compute per step and its batch (bounded by the accelerator's
     memory) are the model's on one accelerator, so a job is one use case per accelerator type

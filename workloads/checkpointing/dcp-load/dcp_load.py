@@ -21,25 +21,32 @@ from aeiou import *
 w = Workload("dcp_load",
              doc="DCP load: every rank reads .metadata, then the items of its shard file (fan-in `replicas`).")
 P = w.P
-w.param("items", 4, unit="count", doc="read items per rank [config]; 900 for an 8B model")
-w.param("item_bytes", [16 * MiB, 32 * MiB, 16 * MiB, 8 * MiB], unit="bytes", doc="[config] storage bytes of the item at each place in the file")
-w.param("item_off", [0, 16 * MiB + 1577, 48 * MiB + 2 * 1577, 64 * MiB + 3 * 1577], unit="bytes",
-        doc="[config] the item's offset in the file: prefix sums of hdr + item_bytes + trailer - item_bytes mod 64, as §3 writes them")
-w.param("read_order", [0, 1, 2, 3], unit="count",
-        doc="[config] the place in the file of the k-th item read: the items sorted by name (layer.10 before layer.2), "
+# the job's and the model's: a case gives them (DESIGN_REVIEW.md §3.78 points 1, 4), the checkpoint a dcp_save case wrote
+w.param("items", kind=int, unit="count", doc="read items per rank: the model's parameter table (about 900 for an 8B model under FSDP2)")
+w.param("item_bytes", kind=list[int], unit="bytes", doc="storage bytes of the item at each place in the file, on each rank: a case holds at the GPU counts it declares")
+w.param("item_off", kind=list[int], unit="bytes",
+        doc="the item's offset in the file: prefix sums of hdr + item_bytes + trailer - item_bytes mod 64, as §3 writes them")
+w.param("read_order", kind=list[int], unit="count",
+        doc="the place in the file of the k-th item read: the items sorted by name (layer.10 before layer.2), "
             "against the writer's state-dict order")
-w.param("replicas", 1, unit="count", doc="ranks that read the same shard file (replicated state saved once); 1 when fully sharded")
-w.param("meta_bytes", 2 * MiB, unit="bytes", doc="[measure] .metadata size; traced 2,606 bytes for 6 items on 2 ranks")
+w.param("replicas", kind=int, unit="count", doc="ranks that read the same shard file (replicated state saved once); 1 when fully sharded")
+w.param("meta_bytes", kind=int, unit="bytes",
+        doc=".metadata size, measured per job: the global plan's pickle (traced 2,606 bytes for 6 items on 2 ranks)")
+w.param("restore_step", kind=int, unit="count", doc="the checkpoint step read: one the writing run saved")
+# the library's (torch 2.14's torch.load of a torch.save framing)
 w.param("hdr", 704, unit="bytes", doc="per item, before the storage, as §3 writes it (traced 2026-10-01, torch 2.14)")
 w.param("trailer", 873, unit="bytes", doc="per item, after the storage, less the storage's length mod 64 (the next record is aligned), as §3 writes it")
-w.param("buf", 1 * MiB, unit="bytes", doc="Python BufferedReader size = st_blksize; every buffer fill asks for this much")
 w.param("rec2", 236, unit="bytes", doc="offset in an item of its second zip record, where the reader goes after the central directory (traced)")
 w.param("eocd_scan", 4096, unit="bytes", doc="the zip reader looks for the end record in the last 4096 bytes of an item")
 w.param("tail_back", [22, 42, 98, 561, 727, 857], unit="bytes",
         doc="the item at the end of the file only: a fill there stops at EOF and is used up by the read that caused it, so each "
             "later step of the zip reader (end record, zip64 locator and record, central directory, the two records after the "
             "storage) is a fill of its own, this many bytes before the end (traced)")
-w.param("restore_step", 100, unit="count")
+# the storage's, as the application reads it (point 11)
+w.param("buf", st_blksize(of="ckpt", fallback=1 * MiB), unit="bytes",
+        doc="Python BufferedReader size = st_blksize of the shard file; every buffer fill asks for this much")
+w.param("meta_buf", st_blksize(of="ckpt_meta", fallback=1 * MiB), unit="bytes",
+        doc="pickle.load's BufferedReader size = st_blksize of the .metadata file")
 
 SEED = 0x5eed_da82   # the same namespace seed §3 wrote with, so the bytes agree
 LAST = P.items - 1                                   # the item at the end of the file
@@ -56,7 +63,7 @@ with w.actor("gpu") as gpu:
         gpu.fstat(m)
         gpu.ioctl(m, "TCGETS", expect=["ENOTTY"])
         gpu.lseek(m, 0, "CUR")
-        gpu.read(m, P.buf, repeat=ceil_div(P.meta_bytes, P.buf))                    # pickle.load: fills, the last short; no EOF read
+        gpu.read(m, P.meta_buf, repeat=ceil_div(P.meta_bytes, P.meta_buf))                    # pickle.load: fills, the last short; no EOF read
         gpu.close(m)
         c = gpu.let("c", ckpt.object(step=P.restore_step, rank=gpu_id // P.replicas))   # fan-in
         gpu.open(c, "RDONLY|CLOEXEC")

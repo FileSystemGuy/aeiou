@@ -4,49 +4,42 @@
   "doc": "DCP load: every rank reads .metadata, then the items of its shard file (fan-in `replicas`).",
   "params": {
     "items": {
-      "default": 4,
       "unit": "count",
-      "doc": "read items per rank [config]; 900 for an 8B model"
+      "doc": "read items per rank: the model's parameter table (about 900 for an 8B model under FSDP2)",
+      "kind": "int"
     },
     "item_bytes": {
-      "default": [
-        16777216,
-        33554432,
-        16777216,
-        8388608
-      ],
       "unit": "bytes",
-      "doc": "[config] storage bytes of the item at each place in the file"
+      "doc": "storage bytes of the item at each place in the file, on each rank: a case holds at the GPU counts it declares",
+      "kind": "array",
+      "items": "int"
     },
     "item_off": {
-      "default": [
-        0,
-        16778793,
-        50334802,
-        67113595
-      ],
       "unit": "bytes",
-      "doc": "[config] the item's offset in the file: prefix sums of hdr + item_bytes + trailer - item_bytes mod 64, as §3 writes them"
+      "doc": "the item's offset in the file: prefix sums of hdr + item_bytes + trailer - item_bytes mod 64, as §3 writes them",
+      "kind": "array",
+      "items": "int"
     },
     "read_order": {
-      "default": [
-        0,
-        1,
-        2,
-        3
-      ],
       "unit": "count",
-      "doc": "[config] the place in the file of the k-th item read: the items sorted by name (layer.10 before layer.2), against the writer's state-dict order"
+      "doc": "the place in the file of the k-th item read: the items sorted by name (layer.10 before layer.2), against the writer's state-dict order",
+      "kind": "array",
+      "items": "int"
     },
     "replicas": {
-      "default": 1,
       "unit": "count",
-      "doc": "ranks that read the same shard file (replicated state saved once); 1 when fully sharded"
+      "doc": "ranks that read the same shard file (replicated state saved once); 1 when fully sharded",
+      "kind": "int"
     },
     "meta_bytes": {
-      "default": 2097152,
       "unit": "bytes",
-      "doc": "[measure] .metadata size; traced 2,606 bytes for 6 items on 2 ranks"
+      "doc": ".metadata size, measured per job: the global plan's pickle (traced 2,606 bytes for 6 items on 2 ranks)",
+      "kind": "int"
+    },
+    "restore_step": {
+      "unit": "count",
+      "doc": "the checkpoint step read: one the writing run saved",
+      "kind": "int"
     },
     "hdr": {
       "default": 704,
@@ -57,11 +50,6 @@
       "default": 873,
       "unit": "bytes",
       "doc": "per item, after the storage, less the storage's length mod 64 (the next record is aligned), as §3 writes it"
-    },
-    "buf": {
-      "default": 1048576,
-      "unit": "bytes",
-      "doc": "Python BufferedReader size = st_blksize; every buffer fill asks for this much"
     },
     "rec2": {
       "default": 236,
@@ -85,9 +73,23 @@
       "unit": "bytes",
       "doc": "the item at the end of the file only: a fill there stops at EOF and is used up by the read that caused it, so each later step of the zip reader (end record, zip64 locator and record, central directory, the two records after the storage) is a fill of its own, this many bytes before the end (traced)"
     },
-    "restore_step": {
-      "default": 100,
-      "unit": "count"
+    "buf": {
+      "default": {
+        "from": "st_blksize",
+        "of": "ckpt",
+        "fallback": 1048576
+      },
+      "unit": "bytes",
+      "doc": "Python BufferedReader size = st_blksize of the shard file; every buffer fill asks for this much"
+    },
+    "meta_buf": {
+      "default": {
+        "from": "st_blksize",
+        "of": "ckpt_meta",
+        "fallback": 1048576
+      },
+      "unit": "bytes",
+      "doc": "pickle.load's BufferedReader size = st_blksize of the .metadata file"
     }
   },
   "namespaces": {
@@ -249,7 +251,7 @@
                         "param": "meta_bytes"
                       },
                       {
-                        "param": "buf"
+                        "param": "meta_buf"
                       }
                     ]
                   },
@@ -260,7 +262,7 @@
                           "ref": "m"
                         },
                         "len": {
-                          "param": "buf"
+                          "param": "meta_buf"
                         }
                       }
                     }
@@ -1468,12 +1470,12 @@
   "provenance": {
     "generator": {
       "script": "dcp_load.py",
-      "sha256": "849a89bd67eaa730ce801dd8a81a45ed8bdce2a82d989afd1849c9abfc03208b",
+      "sha256": "438845dd5248c8e0f67d7a03b47b738c821bcb6efc31bb6bc1449d909406ba1c",
       "builder_version": "0.2.1",
-      "git": "eb1032107f99"
+      "git": "bcd48b4624b7-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "0e313b5868f2ae17cb7a02abe955eafad127057a4c6344ee6870bd731e4a4605"
+    "ast_sha256": "bea867b79e9cf97bd93651842679689a860c90d370b26b951c1b37ad96f11af3"
   }
 }

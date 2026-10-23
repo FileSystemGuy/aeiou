@@ -731,7 +731,7 @@ fn the_untraced_containers_cases_are_the_runs_the_old_defaults_made() {
 #[test]
 fn the_dcp_save_case_is_the_run_the_old_defaults_made() {
     let w = crate::common::workloads().display().to_string();
-    let (code, out, err) = aeiou(&["dry-run", "--case", "four-items", "--workloads", &w, "--gpus", "2", "--seed", "1", "--param", "steps=200"]);
+    let (code, out, err) = aeiou(&["dry-run", "--case", "dcp-save/four-items", "--workloads", &w, "--gpus", "2", "--seed", "1", "--param", "steps=200"]);
     assert_eq!(code, 0, "{err}");
     assert!(line(&out, "case ").contains("/four-items  run dcp_save"), "{out}");
     assert_eq!(line(&out, "fingerprint "), "fingerprint 850e8c9019b3bda8");
@@ -740,6 +740,28 @@ fn the_dcp_save_case_is_the_run_the_old_defaults_made() {
     let file = crate::common::workload_ast("dcp_save.ast.json").display().to_string();
     let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
     assert!(code == 1 && err.contains("required parameters with no value: ckpt_every, item_bytes, items, meta_bytes, step_time, steps"), "{err}");
+}
+
+/// dcp_load's unsettled case (item 38; DESIGN_REVIEW §3.78 points 1 and 4): its lock runs exactly
+/// what the abstract's defaults ran until 2026-10-23 (tests/golden.rs's fingerprint, 2 GPUs,
+/// seed 1), the step 100 dcp_save's four-items writes; the shard's `buf` and the `.metadata`'s
+/// `meta_buf` are each its own input namespace's st_blksize, their fallbacks in a dry run; the
+/// abstract alone is refused, naming every value it now requires.
+#[test]
+fn the_dcp_load_case_is_the_run_the_old_defaults_made() {
+    let w = crate::common::workloads().display().to_string();
+    // the pair's names agree, so the case's name alone is ambiguous
+    let (code, _, err) = aeiou(&["dry-run", "--case", "four-items", "--workloads", &w, "--gpus", "2"]);
+    assert!(code == 2 && err.contains("--case four-items: 2 locks match (dcp-load/four-items at ") && err.contains("name it as mechanism/case"), "{err}");
+    let (code, out2, err) = aeiou(&["dry-run", "--case", "dcp-load/four-items", "--workloads", &w, "--gpus", "2", "--seed", "1"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&out2, "case ").contains("/four-items  run dcp_load"), "{out2}");
+    assert_eq!(line(&out2, "fingerprint "), "fingerprint 22990a88db4e6d4f");
+    assert!(line(&out2, "  ops ").starts_with("  ops 368 "), "{out2}");
+    assert_eq!(line(&out2, "storage-reported"), "storage-reported: buf=1048576 (st_blksize of `ckpt`: the fallback, none reported)  meta_buf=1048576 (st_blksize of `ckpt_meta`: the fallback, none reported)");
+    let file = crate::common::workload_ast("dcp_load.ast.json").display().to_string();
+    let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+    assert!(code == 1 && err.contains("required parameters with no value: item_bytes, item_off, items, meta_bytes, read_order, replicas, restore_step"), "{err}");
 }
 
 /// file_per_sample's unsettled case (item 33, part 5c; DESIGN_REVIEW §3.78 points 1 and 4): its

@@ -5,14 +5,15 @@
     {
       "name": "dcp_load",
       "abstract": "checkpointing/dcp-load/dcp_load.ast.json",
-      "ast_sha256": "0e313b5868f2ae17cb7a02abe955eafad127057a4c6344ee6870bd731e4a4605",
+      "ast_sha256": "bea867b79e9cf97bd93651842679689a860c90d370b26b951c1b37ad96f11af3",
       "params": {
-        "buf": {"default": 1048576},
+        "buf": {"default": {"from": "st_blksize", "of": "ckpt", "fallback": 1048576}},
         "eocd_scan": {"default": 4096},
         "hdr": {"default": 704},
         "item_bytes": {"default": [16777216, 524288, 33554432, 2096, 2096, 524288, 16777216, 2096, 8388608]},
         "item_off": {"default": [0, 16778793, 17304658, 50860667, 50864292, 50867917, 51393782, 68172575, 68176200]},
         "items": {"default": 9},
+        "meta_buf": {"default": {"from": "st_blksize", "of": "ckpt_meta", "fallback": 1048576}},
         "meta_bytes": {"default": 3952},
         "read_order": {"default": [0, 1, 2, 3, 4, 5, 6, 7, 8]},
         "rec2": {"default": 236},
@@ -28,10 +29,11 @@
         "item_bytes": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
         "item_off": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
         "items": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
+        "meta_buf": "abstract",
         "meta_bytes": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
         "read_order": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
         "rec2": "abstract",
-        "replicas": "abstract",
+        "replicas": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
         "restore_step": "checkpointing/dcp-load/cases/mixed-9-items/params.json",
         "tail_back": "abstract",
         "trailer": "abstract"
@@ -41,6 +43,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "checkpointing/dcp-load/cases/mixed-9-items/case.toml",
-    "fragments": [{"path": "checkpointing/dcp-load/cases/mixed-9-items/params.json", "sha256": "743936137a9371dd8202010d4885bfe21ccd7038c209c9506ba0d4fcf9d50640"}]
+    "fragments": [{"path": "checkpointing/dcp-load/cases/mixed-9-items/params.json", "sha256": "2512a37bd71a2fced6b728730bcc7ead7ee88fff26dfdf1a0bc07d6c6bae1312"}]
   }
 }
