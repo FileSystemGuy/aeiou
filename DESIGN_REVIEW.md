@@ -6771,7 +6771,7 @@ proposed that day was decided, as the notes in points 8, 9, 11, and 12 say, and 
     `h100` and `H100-80G` cannot both appear. The directory name stays a label; code reads
     the record.
 
-**What changes, if decided.** *(Decided 2026-10-22; not yet built.)*
+**What changes, if decided.** *(Decided 2026-10-22; ~~not yet built~~ built 2026-10-22, the parts below, but for the abstracts outside the input pipelines, `PROJECT_BRIEF.md` §6 item 38.)*
 
 - Contract 0.11: the `scale` tag, the dot refused in parameter names, `{"from": …}` values;
   `params_version` 2 with states and a `run` table; a rules schema; both checkers.
@@ -6991,6 +6991,23 @@ revision:
 - **The tests keep their values.** Each test that relied on a default is given it: the runner's
   tests through one helper (`tests/common`, `FILE_PER_SAMPLE`), the Python tests where they
   call, every fingerprint unchanged.
+
+**Built: the docs, and where item 33 stops** (2026-10-22, part 6). The README's status,
+CLAUDE.md (contract 0.11, `runner/REFERENCE.md` §17, a case's lock and fragments, the
+workload id built), and `PROJECT_BRIEF.md` §6 item 33 marked built. Choices made, open to
+revision:
+
+- **The five input-pipeline abstracts are the migration; the eight others are item 38** (the
+  user's choice). `dcp_save`, `dcp_load`, the two LMCache abstracts, `safetensors_load`, the
+  two DiskANN abstracts, and `faiss_ivf_ondisk` keep their job values as defaults. Their
+  values are of other kinds than a training job's batch and step time (a model's size and
+  ranks, a session's prompts, an index and its queries), and which are required, which is the
+  scale, and which reads follow `st_blksize` is decided with the user per mechanism, not
+  assumed from the training five.
+- **A use case per accelerator is item 39.** Point 1 makes the batch and the step time the
+  model's on one accelerator, so `unet3d-h100` is the first of a family (`unet3d-b300`, …),
+  each a shared job fragment and an accelerator fragment; until then the traced examples carry
+  the old `step_time`, said to be not fitted.
 
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed

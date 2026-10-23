@@ -696,8 +696,9 @@ numbers; the order is this note's.
     `formats` (`runner/aeiou/src/datagen.rs`), which today points at it, pointing at the
     feature alone; the docs that name it (README, builder REFERENCE §6, the workloads'
     READMEs, QUICKSTART). `aeiou.formats` stays: the format classes are the builder's.
-33. **Use cases, benchmark rules, and the lock (backlog, decided 2026-10-21 and 2026-10-22,
-    `DESIGN_REVIEW.md` §3.78; nothing built).** Contract 0.11: the `scale` tag, the dot
+33. **Use cases, benchmark rules, and the lock (~~backlog,~~ decided 2026-10-21 and 2026-10-22,
+    `DESIGN_REVIEW.md` §3.78; ~~nothing built~~ built 2026-10-22, `runner/REFERENCE.md` §17,
+    but for the abstracts outside the input pipelines, item 38).** Contract 0.11: the `scale` tag, the dot
     refused in parameter names, `{"from": "st_blksize"}` values, `params_version` 2 with the
     states locked, default, and required and a `run` table, a rules schema. The builder:
     `aeiou-params lock CASE [--rules FILE]`, `aeiou-build` re-locking the committed cases of
@@ -709,7 +710,14 @@ numbers; the order is this note's.
     `aeiou-catalog check`: one lock per name, no case without a lock, no stale lock, the
     `accelerator` attribute. The abstracts: job and accelerator values become required
     (`npy_per_sample`'s H100 set moves to a `unet3d-h100` use case), `[config]` becomes
-    `scale`, the block-size reads become storage-reported; every AST hash changes.
+    `scale`, the block-size reads become storage-reported; every AST hash changes. *Built
+    2026-10-22 in six parts:* contract 0.11; `params_version` 2, the lock, and the catalog's
+    checks; the runner's side; the step times and the no-I/O test; the five input-pipeline
+    abstracts (`npy_per_sample` to the use case `unet3d-h100`, whose lock runs the golden
+    fingerprint; `file_per_sample`, `hdf5_map`, `parquet_stream`, `tfrecord_stream`, whose
+    placeholder defaults became cases of kind `unsettled`, `jpeg-50m`, `rgb256-rows`,
+    `imagenet-rows`, `imagenet-records`); the docs. The eight other abstracts keep their job
+    values as defaults (item 38), and a use case per accelerator is item 39.
 34. **Recapture the committed traces (backlog, 2026-10-22, `DESIGN_REVIEW.md` §3.79).** The
     locality metrics are taken over extents since 2026-10-22; the seventeen committed captures
     were taken before, kept no raw trace, and are judged on the block metrics that
@@ -741,6 +749,23 @@ numbers; the order is this note's.
     sigma 0.45 in the abstract. A contract change makes `sigma` an expression (the schema, the
     runner's AST and validator, the builder's `dists`, `rng`, `describe`, and `formats`), and
     then the three require it too.
+38. **Job values to cases in the other abstracts (backlog, the user's choice 2026-10-22,
+    `DESIGN_REVIEW.md` §3.78).** Item 33 moved the job and GPU values of the five
+    input-pipeline abstracts to cases; `dcp_save`, `dcp_load`, `lmcache_local_disk`,
+    `lmcache_shared_fs` (and its reader), `safetensors_load`, `diskann_build`,
+    `diskann_search`, and `faiss_ivf_ondisk` still hold theirs as defaults, with no required,
+    `scale`, or storage-reported parameter. Their job values are of other kinds (a model's
+    size and its ranks, a session's prompts, an index's size and its queries), so each is
+    taken with the user one mechanism at a time: which values are required, which is the
+    scale, which reads follow `st_blksize`, and which case holds the values the defaults hold
+    (a use case where they were measured as a job, `unsettled` where not).
+39. **A use case per accelerator (backlog, raised by the user 2026-10-22, `DESIGN_REVIEW.md`
+    §3.78 point 1).** A job's compute per step and its batch (bounded by the accelerator's
+    memory) are the model's on one accelerator, so a job is one use case per accelerator type
+    (`unet3d-h100`, `unet3d-b300`, …): a shared job fragment and one accelerator fragment
+    each, the case named from the `accelerator` attribute's vocabulary. Until then the
+    traced example cases carry the abstracts' old `step_time`, said in their parameter files
+    to be not fitted, and the number of cases multiplies when it is built.
 
 ## 7. Environment
 
