@@ -5,7 +5,7 @@
     {
       "name": "tfrecord_stream",
       "abstract": "input-pipeline/stream/tfrecord/tfrecord_stream.ast.json",
-      "ast_sha256": "e08042b48ca9d65aa785d98224deeccbe277891820d17c551dd1e3e203fa20ee",
+      "ast_sha256": "9f9979f8dc3267db0a2e597ac20f8e2a30ed7f382ad8c256be2972ef7c6f57ab",
       "params": {
         "batch": {"default": 256},
         "cycle": {"default": 4},

@@ -9,6 +9,6 @@ Also searched for as: checkpoint, restore, resume, checkpoint/restart.
 ## Mechanisms
 
 - [`dcp-load`](dcp-load/): torch-dcp, dcp; cases: mixed-9-items, name-order-17-items, small-last-6-items
-- [`dcp-save`](dcp-save/): torch-dcp, dcp; cases: toy-6-items
+- [`dcp-save`](dcp-save/): torch-dcp, dcp; cases: four-items, toy-6-items
 
 The catalog of every case: [`CATALOG.md`](../CATALOG.md).

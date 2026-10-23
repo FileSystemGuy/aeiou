@@ -758,7 +758,9 @@ numbers; the order is this note's.
     size and its ranks, a session's prompts, an index's size and its queries), so each is
     taken with the user one mechanism at a time: which values are required, which is the
     scale, which reads follow `st_blksize`, and which case holds the values the defaults hold
-    (a use case where they were measured as a job, `unsettled` where not).
+    (a use case where they were measured as a job, `unsettled` where not). *2026-10-23:*
+    `dcp_save` done (contract 0.12: a namespace's `st_blksize` for its write buffer; the case
+    `four-items` of kind `unsettled`; `DESIGN_REVIEW.md` §3.78); seven to go.
 39. **A use case per accelerator (backlog, raised by the user 2026-10-22, `DESIGN_REVIEW.md`
     §3.78 point 1).** A job's compute per step and its batch (bounded by the accelerator's
     memory) are the model's on one accelerator, so a job is one use case per accelerator type

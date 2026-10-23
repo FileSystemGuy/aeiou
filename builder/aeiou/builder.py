@@ -222,7 +222,7 @@ class Workload:
     """One abstract. Declarations first, then actors; `build()` validates and returns the AST."""
 
     _registry: list["Workload"] = []
-    AST_VERSION = "0.11"
+    AST_VERSION = "0.12"
     MAX_CANONICAL_BYTES = 4 * 1024 * 1024
 
     POSIX_APIS = ("sync", "posix-aio", "libaio", "io_uring", "mmap")
@@ -477,7 +477,7 @@ class Workload:
         if self.s3:
             ast["s3"] = self.s3
         if self._param_specs:
-            ast["params"] = {k: _param_ast(k, v, self._datasets) for k, v in self._param_specs.items()}
+            ast["params"] = {k: _param_ast(k, v, self._datasets, self._namespaces) for k, v in self._param_specs.items()}
         if self._datasets:
             ast["datasets"] = {k: _ast_deep(v.ast()) for k, v in self._datasets.items()}
         if self._namespaces:
@@ -552,19 +552,22 @@ def _seed(seed, name):
 
 class StBlksize:
     """A value the storage reports (contract 0.11): `st_blksize`, by `stat` of the first file of
-    dataset `of` at the gate, `fallback` where the storage reports none (an object store)."""
+    dataset `of` at the gate, or (0.12) of namespace `of`: the first object of an input one, a
+    probe file in an output one's root; `fallback` where the storage reports none (an object
+    store)."""
 
     def __init__(self, of, fallback: int):
-        self.of = of.name if isinstance(of, Dataset) else of
-        check_ident(self.of, "dataset")
+        self.of = of.name if isinstance(of, (Dataset, Namespace)) else of
+        check_ident(self.of, "dataset or namespace")
         if not isinstance(fallback, int) or isinstance(fallback, bool) or fallback < 1:
             raise BuildError(f"st_blksize(of={self.of!r}): the fallback is a positive byte count, got {fallback!r} (V28)")
         self.fallback = fallback
 
 
 def st_blksize(*, of, fallback: int) -> StBlksize:
-    """The `st_blksize` the storage of dataset `of` reports (Python's `BufferedReader` asks
-    for it), a parameter's default: `w.param("hdr_read", st_blksize(of="train", fallback=1 * MiB))`."""
+    """The `st_blksize` the storage of dataset or namespace `of` reports (Python's buffered
+    reader and writer ask for it), a parameter's default: `w.param("hdr_read",
+    st_blksize(of="train", fallback=1 * MiB))`, `w.param("buf", st_blksize(of="ckpt", …))`."""
     return StBlksize(of, fallback)
 
 
@@ -594,13 +597,13 @@ def _kind_of(v):
     return "int" if isinstance(v, int) else "float" if isinstance(v, float) else "str"
 
 
-def _param_ast(name, spec, datasets):
+def _param_ast(name, spec, datasets, namespaces):
     """A parameter as the AST holds it (contract 0.11): `default`, or `kind` (and `items`) for a
-    required one; a storage-reported default as its source."""
+    required one; a storage-reported default as its source (a dataset's or, 0.12, a namespace's)."""
     src = spec["source"]
     if src is not None:
-        if src.of not in datasets:
-            raise BuildError(f"parameter {name}: st_blksize(of={src.of!r}) names no declared dataset (V28)")
+        if src.of not in datasets and src.of not in namespaces:
+            raise BuildError(f"parameter {name}: st_blksize(of={src.of!r}) names no declared dataset or namespace (V28)")
         default = {"from": "st_blksize", "of": src.of, "fallback": src.fallback}
     else:
         default = None if spec["default"] is None else _ast_value(spec["default"])

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const AST_VERSION: &str = "0.11";
+pub const AST_VERSION: &str = "0.12";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

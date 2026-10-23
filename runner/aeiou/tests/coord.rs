@@ -363,8 +363,13 @@ fn free_port() -> u16 {
 }
 
 fn dry_fingerprint_cli(ast: &str, gpus: &str, params: &[&str]) -> String {
+    dry_fingerprint_cli_with(ast, gpus, params, &[])
+}
+
+/// The same with more arguments to the dry run (`--st-blksize`).
+fn dry_fingerprint_cli_with(ast: &str, gpus: &str, params: &[&str], extra: &[&str]) -> String {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-    c.arg("dry-run").arg(ast_path(ast)).arg("--gpus").arg(gpus);
+    c.arg("dry-run").arg(ast_path(ast)).arg("--gpus").arg(gpus).args(extra);
     for p in params {
         c.arg("--param").arg(p);
     }
@@ -436,8 +441,12 @@ fn a_host_that_only_receives_still_heartbeats() {
 #[test]
 fn checkpoint_write_and_restore_on_two_ranks_end_to_end() {
     let root = tmpdir("e2e");
-    let wparams = ["steps=4", "ckpt_every=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "meta_bytes=65536"];
-    let wfp = dry_fingerprint_cli("dcp_save.ast.json", "2", &wparams);
+    let wparams = ["steps=4", "step_time=323000000", "ckpt_every=2", "items=4", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "meta_bytes=65536"];
+    // the shard's `buf` is the st_blksize of `ckpt` (contract 0.12), which each rank reads by a
+    // probe in the shared root before the gate: the dry run is told what that storage reports
+    std::fs::create_dir_all(&root).unwrap();
+    let st = { use std::os::unix::fs::MetadataExt; let p = root.join("st"); std::fs::write(&p, b"").unwrap(); let n = std::fs::metadata(&p).unwrap().blksize(); std::fs::remove_file(&p).unwrap(); n };
+    let wfp = dry_fingerprint_cli_with("dcp_save.ast.json", "2", &wparams, &["--st-blksize", &format!("ckpt={st}")]);
     let outs = run_ranks("dcp_save.ast.json", &root, "2", &wparams, 2, &["--expect-fingerprint", &wfp]);
     for (ok, stdout, stderr) in &outs {
         assert!(*ok, "stdout:\n{stdout}\nstderr:\n{stderr}");

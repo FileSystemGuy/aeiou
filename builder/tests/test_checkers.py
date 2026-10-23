@@ -20,7 +20,7 @@ ROOT = HERE.parent.parent
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 _, check = _load()
 
-BASE = {"ast": "0.11", "name": "t",
+BASE = {"ast": "0.12", "name": "t",
         "params": {"n": {"default": 4}},
         "datasets": {"d": {"pattern": "d/{id}", "layout": "whole", "access": "map", "count": 8, "size": {"const": 10}, "seed": 1},
                      "arr": {"pattern": "a/v.bin", "layout": "array", "access": "indexed", "count": 4, "size": {"const": 4}, "slot": 4, "seed": 5},

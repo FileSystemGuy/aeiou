@@ -214,7 +214,7 @@ fn fixed_options_are_refused_from_the_environment_and_the_file() {
 #[test]
 fn two_ranks_record_every_host_and_print_the_differences_and_a_mismatch_names_the_field() {
     let root = tmpdir("two");
-    let params = ["steps=4", "ckpt_every=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "meta_bytes=65536"];
+    let params = ["steps=4", "step_time=323000000", "ckpt_every=2", "items=4", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "meta_bytes=65536"];
     let spawn = |rank: i64, port: u16, extra: &[&str], seed: &str| {
         let mut c = aeiou("run", "dcp_save.ast.json", &params);
         c.arg("--root").arg(&root).args(["--gpus", "2", "--time-scale", "0", "--ranks", "2", "--clean-namespaces"]).arg("--rank").arg(rank.to_string()).args(["--seed", seed]);

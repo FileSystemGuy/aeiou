@@ -441,6 +441,12 @@ at every item, so nothing is coalesced across items.
   }
 ```
 
+*2026-10-23:* the committed abstract (`dcp_save`) requires `ckpt_every`, `items`,
+`item_bytes`, and `meta_bytes`, with the loop's `steps` and `step_time`, which a case gives
+(`DESIGN_REVIEW.md` §3.78; `toy-6-items` the traced example, `four-items` the abstract's old
+defaults kept as an unsettled case), and `buf` is the `st_blksize` of the `ckpt` namespace, read by a
+probe file in its root (contract 0.12).
+
 **Trace (2026-10-01).** `workloads/checkpointing/dcp-save`: `dcp.save` on two ranks (gloo, CPU),
 six `DTensor` items of 16 MiB down to 2 KiB per rank, two checkpoints, on the loopback NFS
 mount; torch 2.14.1. Reasoning in `DESIGN_REVIEW.md` §3.45.

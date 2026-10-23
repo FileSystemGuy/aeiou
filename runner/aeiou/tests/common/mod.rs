@@ -41,6 +41,18 @@ pub fn file_per_sample_args() -> Vec<String> {
     FILE_PER_SAMPLE.iter().flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
 }
 
+/// dcp_save's defaults until 2026-10-23, which a case now gives (its unsettled case four-items;
+/// DESIGN_REVIEW §3.78, item 38): the tests that ran the abstract on them pass them.
+pub const DCP_SAVE: [(&str, &str); 6] = [("steps", "500"), ("step_time", "323000000"), ("ckpt_every", "100"), ("items", "4"),
+    ("item_bytes", "[16777216, 33554432, 16777216, 8388608]"), ("meta_bytes", "2097152")];
+
+/// `params`, then dcp_save's old defaults for every value `params` does not give.
+pub fn dcp_save<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut all = params.to_vec();
+    all.extend(DCP_SAVE.iter().filter(|(k, _)| !params.iter().any(|(p, _)| p == k)));
+    all
+}
+
 /// file_per_sample as it was until 2026-10-22: the committed abstract with its old defaults back
 /// in place of the required values, and `hdr_read` and `inv_read` 1 MiB in place of the storage's
 /// st_blksize, so that a run and a dry run of it read alike; for the tests (the coordinator's)

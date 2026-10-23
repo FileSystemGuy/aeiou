@@ -202,10 +202,12 @@ def test_a_category_with_classes_takes_its_mechanisms_inside_them(tree):
     shutil.move(tree / "input-pipeline" / "dcp-save", tree / "input-pipeline" / "map" / "dcp-save")
     # a lock names its abstract by its path below workloads/: a mechanism moved re-locks its cases
     found = problems(tree)
-    assert len(found) == 1 and "toy-6-items/case.lock.json: case.lock.json is stale" in found[0], found
+    cases = sorted((tree / "input-pipeline" / "map" / "dcp-save" / "cases").iterdir())
+    assert len(found) == len(cases) == 2, found
+    assert all(any(f"{c.name}/case.lock.json: case.lock.json is stale" in p for p in found) for c in cases), found
     from aeiou import lock
-    case = tree / "input-pipeline" / "map" / "dcp-save" / "cases" / "toy-6-items"
-    (case / lock.LOCK_FILE).write_text(lock.render(lock.make_lock(case, workloads=tree)))
+    for case in cases:
+        (case / lock.LOCK_FILE).write_text(lock.render(lock.make_lock(case, workloads=tree)))
     assert problems(tree) == []
 
 
@@ -373,7 +375,7 @@ def every_kind() -> dict:
             {"mkdir": {"dir": r("h")}}, {"readdir": {"dir": r("h"), "repeat": "until_end"}}, {"rmdir": {"dir": r("h")}},
             {"rename": {"from": r("o"), "to": r("o")}}]}},
     ]
-    return {"ast": "0.11", "name": "every_kind", "doc": "Every kind.",
+    return {"ast": "0.12", "name": "every_kind", "doc": "Every kind.",
             "params": {"n": {"default": 8, "unit": "bytes"}, "on": {"default": False}, "arr": {"default": [1, 2, 3]}},
             "datasets": {"ds": {"pattern": "d/{id div 4}/f{id}", "layout": "compound", "access": "map", "count": 100,
                                 "samples_per_file": 5, "size": {"const": 4096}, "seed": 1,

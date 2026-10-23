@@ -14,16 +14,16 @@ Every rank writes its shard file per checkpoint step; rank 0 writes .metadata th
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `steps` | 200 | 500 | count |  |
-| `step_time` | 323 ms | same | ns |  |
-| `ckpt_every` | 100 | same | count |  |
-| `items` | 6 | 4 | count | write items per rank [config]; 900 for an 8B model, 4 here to keep the example short |
-| `item_bytes` | [16 MiB, 32 MiB, 16 MiB, 8 MiB, 512 KiB, 2.0 KiB] | [16 MiB, 32 MiB, 16 MiB, 8 MiB] | bytes | per-item bytes, 1/G of each tensor [config] |
+| `steps` | 200 | none | count |  |
+| `step_time` | 323 ms | none | ns | compute per step: the model's on its accelerator |
+| `ckpt_every` | 100 | none | count |  |
+| `items` | 6 | none | count | write items per rank: the model's parameter table (about 900 for an 8B model under FSDP2) |
+| `item_bytes` | [16 MiB, 32 MiB, 16 MiB, 8 MiB, 512 KiB, 2.0 KiB] | none | bytes | per-item bytes on each rank, 1/G of each tensor: a case holds at the GPU counts it declares |
+| `meta_bytes` | 2.5 KiB | none | bytes | .metadata size, measured per job: the global plan's pickle, which grows with the items, ranks, and names (traced 2,602 bytes for 6 items on 2 ranks) |
 | `hdr` | 704 bytes | same | bytes | per item, before the storage: zip local headers, data.pkl, padding to 64 (traced 2026-10-01, torch 2.14) |
 | `trailer` | 873 bytes | same | bytes | per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01); less the storage's length mod 64, since the record after it is aligned |
-| `buf` | 1 MiB | same | bytes | Python BufferedWriter size = st_blksize; an item above it is written directly, one at or below it is coalesced with its header and trailer |
-| `meta_bytes` | 2.5 KiB | 2 MiB | bytes | [measure] .metadata size; traced 2,602 bytes for 6 items on 2 ranks, about 217 per item and rank |
-| `xfer` | 1 MiB | same | bytes |  |
+| `buf` | 1 MiB | same | bytes | Python BufferedWriter size = st_blksize of the shard file; an item above it is written directly, one at or below it is coalesced with its header and trailer |
+| `xfer` | 1 MiB | same | bytes | the readback's BufferedReader request size |
 | `readback` | false | same | — | read each shard back on the writing node after the final barrier; off by default, the restore is the separate dcp_load run on other nodes (PROJECT_BRIEF.md §8) |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.

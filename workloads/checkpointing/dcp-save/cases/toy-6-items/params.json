@@ -1,3 +1,3 @@
 {"params_version": 2, "abstract": "dcp_save",
- "doc": "Fitted to the 2026-10-01 trace of torch.distributed.checkpoint.save on 2 ranks: 6 DTensor items, 2 checkpoints.",
- "params": {"steps": {"default": 200}, "ckpt_every": {"default": 100}, "items": {"default": 6}, "item_bytes": {"default": [16777216, 33554432, 16777216, 8388608, 524288, 2096]}, "meta_bytes": {"default": 2602}}}
+ "doc": "Fitted to the 2026-10-01 trace of torch.distributed.checkpoint.save on 2 ranks: 6 DTensor items, 2 checkpoints. step_time is the abstract's default until 2026-10-23, 323 ms, not fitted: the kit saves back to back, computing nothing between checkpoints.",
+ "params": {"steps": {"default": 200}, "step_time": {"default": 323000000}, "ckpt_every": {"default": 100}, "items": {"default": 6}, "item_bytes": {"default": [16777216, 33554432, 16777216, 8388608, 524288, 2096]}, "meta_bytes": {"default": 2602}}}

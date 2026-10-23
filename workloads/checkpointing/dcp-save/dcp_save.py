@@ -10,18 +10,24 @@ from aeiou import *
 w = Workload("dcp_save",
              doc="Every rank writes its shard file per checkpoint step; rank 0 writes .metadata through a temp file and rename.")
 P = w.P
-w.param("steps", 500, unit="count")
-w.param("step_time", 323 * ms, unit="ns")
-w.param("ckpt_every", 100, unit="count")
-w.param("items", 4, unit="count",
-        doc="write items per rank [config]; 900 for an 8B model, 4 here to keep the example short")
-w.param("item_bytes", [16 * MiB, 32 * MiB, 16 * MiB, 8 * MiB], unit="bytes",
-        doc="per-item bytes, 1/G of each tensor [config]")
+# the job's and the model's on its accelerator: a case gives them (DESIGN_REVIEW.md §3.78 points 1, 4)
+w.param("steps", kind=int, unit="count")
+w.param("step_time", kind=int, unit="ns", doc="compute per step: the model's on its accelerator")
+w.param("ckpt_every", kind=int, unit="count")
+w.param("items", kind=int, unit="count",
+        doc="write items per rank: the model's parameter table (about 900 for an 8B model under FSDP2)")
+w.param("item_bytes", kind=list[int], unit="bytes",
+        doc="per-item bytes on each rank, 1/G of each tensor: a case holds at the GPU counts it declares")
+w.param("meta_bytes", kind=int, unit="bytes",
+        doc=".metadata size, measured per job: the global plan's pickle, which grows with the items, ranks, and names "
+            "(traced 2,602 bytes for 6 items on 2 ranks)")
+# the library's (torch 2.14's torch.save framing)
 w.param("hdr", 704, unit="bytes", doc="per item, before the storage: zip local headers, data.pkl, padding to 64 (traced 2026-10-01, torch 2.14)")
 w.param("trailer", 873, unit="bytes", doc="per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01); less the storage's length mod 64, since the record after it is aligned")
-w.param("buf", 1 * MiB, unit="bytes", doc="Python BufferedWriter size = st_blksize; an item above it is written directly, one at or below it is coalesced with its header and trailer")
-w.param("meta_bytes", 2 * MiB, unit="bytes", doc="[measure] .metadata size; traced 2,602 bytes for 6 items on 2 ranks, about 217 per item and rank")
-w.param("xfer", 1 * MiB, unit="bytes")
+# the storage's, as the application reads it (point 11)
+w.param("buf", st_blksize(of="ckpt", fallback=1 * MiB), unit="bytes",
+        doc="Python BufferedWriter size = st_blksize of the shard file; an item above it is written directly, one at or below it is coalesced with its header and trailer")
+w.param("xfer", st_blksize(of="ckpt", fallback=1 * MiB), unit="bytes", doc="the readback's BufferedReader request size")
 w.param("readback", False, doc="read each shard back on the writing node after the final barrier; off by default, "
                                 "the restore is the separate dcp_load run on other nodes (PROJECT_BRIEF.md §8)")
 

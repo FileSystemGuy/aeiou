@@ -53,7 +53,7 @@ fn opts(root: &std::path::Path, backend: BackendKind) -> RunOpts {
 
 /// Every op kind but `ioctl` on a namespace's files and directories, twice.
 const ALL_OPS: &str = r#"{
-  "ast": "0.11", "name": "allops",
+  "ast": "0.12", "name": "allops",
   "namespaces": {
     "o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": "as_written", "seed": 3},
     "dd": {"pattern": "dd/{v}", "fields": {"v": "int"}, "size": "as_written", "seed": 3}
@@ -114,7 +114,7 @@ fn every_backend_issues_every_posix_op_alike() {
 
 /// The descriptor ops of an open that failed (its errno expected): no descriptor, `EBADF`.
 const BAD_FD: &str = r#"{
-  "ast": "0.11", "name": "badfd",
+  "ast": "0.12", "name": "badfd",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"body": [
     {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"v": 0}}}}},
@@ -144,7 +144,7 @@ fn an_op_on_an_open_that_failed_is_ebadf_on_every_backend() {
 
 /// A read through a write-only open and a write through a read-only one: the kernel refuses.
 const WRONG_MODE: &str = r#"{
-  "ast": "0.11", "name": "wrongmode",
+  "ast": "0.12", "name": "wrongmode",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"body": [
     {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"v": 0}}}}},
@@ -175,7 +175,7 @@ fn a_request_the_kernel_refuses_is_its_errno_on_every_backend() {
 /// A file per GPU written, read back, and removed: on one loop, every instance's request at
 /// once.
 const WIDE: &str = r#"{
-  "ast": "0.11", "name": "wide",
+  "ast": "0.12", "name": "wide",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": "as_written", "seed": 3}},
   "actors": {"gpu": {"body": [
     {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"v": {"actor": "id"}}}}}},
@@ -215,7 +215,7 @@ fn a_loop_with_more_requests_than_its_rings_hold_submits_them_all() {
 
 /// A `DONTNEED` over a range of 4 GiB and one page: every page of the file written before it.
 const FADVISE_4G: &str = r#"{
-  "ast": "0.11", "name": "fadv",
+  "ast": "0.12", "name": "fadv",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": "as_written", "seed": 3}},
   "actors": {"gpu": {"body": [
     {"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"v": 0}}}}},
@@ -265,7 +265,7 @@ fn a_traces_gaps_are_waited_out_on_the_event_loops_as_on_the_threads() {
     let d = crate::common::tmpdir("cov-c2", "trace-gaps");
     std::fs::write(d.join("t.jsonl"), lines).unwrap();
     let sha: String = sha2::Sha256::digest(lines.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
-    let ast = format!(r#"{{"ast": "0.11", "name": "gaps", "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{sha}"}}}}]}}}}}}"#);
+    let ast = format!(r#"{{"ast": "0.12", "name": "gaps", "actors": {{"app": {{"count": 1, "body": [{{"trace": {{"file": "t.jsonl", "sha256": "{sha}"}}}}]}}}}}}"#);
     std::fs::write(d.join("t.ast.json"), ast).unwrap();
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&d.join("t.ast.json")).unwrap()));
     let cfg: &'static Config = Box::leak(Box::new(Config { seed: 1, gpus: 1, overrides: vec![], sets: vec![], st_blksize: Default::default() }));

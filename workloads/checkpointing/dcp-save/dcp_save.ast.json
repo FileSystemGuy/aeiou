@@ -1,34 +1,36 @@
 {
-  "ast": "0.11",
+  "ast": "0.12",
   "name": "dcp_save",
   "doc": "Every rank writes its shard file per checkpoint step; rank 0 writes .metadata through a temp file and rename.",
   "params": {
     "steps": {
-      "default": 500,
-      "unit": "count"
+      "unit": "count",
+      "kind": "int"
     },
     "step_time": {
-      "default": 323000000,
-      "unit": "ns"
+      "unit": "ns",
+      "doc": "compute per step: the model's on its accelerator",
+      "kind": "int"
     },
     "ckpt_every": {
-      "default": 100,
-      "unit": "count"
+      "unit": "count",
+      "kind": "int"
     },
     "items": {
-      "default": 4,
       "unit": "count",
-      "doc": "write items per rank [config]; 900 for an 8B model, 4 here to keep the example short"
+      "doc": "write items per rank: the model's parameter table (about 900 for an 8B model under FSDP2)",
+      "kind": "int"
     },
     "item_bytes": {
-      "default": [
-        16777216,
-        33554432,
-        16777216,
-        8388608
-      ],
       "unit": "bytes",
-      "doc": "per-item bytes, 1/G of each tensor [config]"
+      "doc": "per-item bytes on each rank, 1/G of each tensor: a case holds at the GPU counts it declares",
+      "kind": "array",
+      "items": "int"
+    },
+    "meta_bytes": {
+      "unit": "bytes",
+      "doc": ".metadata size, measured per job: the global plan's pickle, which grows with the items, ranks, and names (traced 2,602 bytes for 6 items on 2 ranks)",
+      "kind": "int"
     },
     "hdr": {
       "default": 704,
@@ -41,18 +43,22 @@
       "doc": "per item, after the storage: version, byteorder, central directory, EOCD (traced 2026-10-01); less the storage's length mod 64, since the record after it is aligned"
     },
     "buf": {
-      "default": 1048576,
+      "default": {
+        "from": "st_blksize",
+        "of": "ckpt",
+        "fallback": 1048576
+      },
       "unit": "bytes",
-      "doc": "Python BufferedWriter size = st_blksize; an item above it is written directly, one at or below it is coalesced with its header and trailer"
-    },
-    "meta_bytes": {
-      "default": 2097152,
-      "unit": "bytes",
-      "doc": "[measure] .metadata size; traced 2,602 bytes for 6 items on 2 ranks, about 217 per item and rank"
+      "doc": "Python BufferedWriter size = st_blksize of the shard file; an item above it is written directly, one at or below it is coalesced with its header and trailer"
     },
     "xfer": {
-      "default": 1048576,
-      "unit": "bytes"
+      "default": {
+        "from": "st_blksize",
+        "of": "ckpt",
+        "fallback": 1048576
+      },
+      "unit": "bytes",
+      "doc": "the readback's BufferedReader request size"
     },
     "readback": {
       "default": false,
@@ -593,11 +599,12 @@
   "provenance": {
     "generator": {
       "script": "dcp_save.py",
-      "sha256": "9ce92720fcaad20f37c4adf77e249093f0faffb4f06bef838c5d2f954ab6a410",
+      "sha256": "3910c8c059c9ead0e1305a342e72638f435f1551c31375b2c03df6f18f37e6f6",
       "builder_version": "0.2.1",
-      "git": "52bf0ab3f273"
+      "git": "eb1032107f99-dirty"
     },
     "python": "3.12.13",
-    "ast_sha256": "24d03dec648c90566f82fe3da1912744edbf20998b7130d29034811ff3934d18"
+    "built_twice_identical": true,
+    "ast_sha256": "0f4626531723e0a0677c450d785627ad78b03a2aac59a9a471c618f20640bed2"
   }
 }

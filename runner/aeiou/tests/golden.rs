@@ -45,31 +45,35 @@ fn hashes_match_check_py() {
     // and an `inventory` read added, off by default, every fingerprint unchanged; all again the same day for
     // contract 0.10, `div` by a parameter, DESIGN_REVIEW §3.75, with the standard names `samples`,
     // `samples_per_file`, and `files_per_directory`, every fingerprint unchanged; the five training
-    // abstracts again 2026-10-14, `sync_every` 1 by default, DESIGN_REVIEW §3.71 point 4, no fingerprint).
+    // abstracts again 2026-10-14, `sync_every` 1 by default, DESIGN_REVIEW §3.71 point 4, no fingerprint; all again
+    // 2026-10-22 for contract 0.11 and 2026-10-23 for contract 0.12, a namespace's st_blksize, every fingerprint
+    // unchanged).
     let want = [
-        ("dcp_load", "5c1cd53c7571c0d35315a8054714ba167a5fd44281be3047308f1914a4e4007b"),
-        ("dcp_save", "24d03dec648c90566f82fe3da1912744edbf20998b7130d29034811ff3934d18"),
-        ("lmcache_local_disk", "0e28eff7f149b1e5e811730bae9093f282ac848f0caec611d8b385d0ee5ac2f1"),
-        ("safetensors_load", "a7d78ac110f00a95713707a3c8d73690494941aec714c4d02c9a38792562e92e"),
+        ("dcp_load", "0e313b5868f2ae17cb7a02abe955eafad127057a4c6344ee6870bd731e4a4605"),
+        // 2026-10-23: the job's and the GPU's values required (its unsettled case four-items), `buf` and `xfer`
+        // the st_blksize of its namespace (contract 0.12), DESIGN_REVIEW §3.78
+        ("dcp_save", "0f4626531723e0a0677c450d785627ad78b03a2aac59a9a471c618f20640bed2"),
+        ("lmcache_local_disk", "bbbec624eae7d9b6ba5308f4f2fad7392086f86e4ee86360f54601b886ee79d3"),
+        ("safetensors_load", "63b735dc974e9e5e6a83b8019eb161990fdb1d1a27bb09e6757e145b98e046db"),
         // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13); 2026-10-22: the job's and the
         // GPU's values required (the use case unet3d-h100), the read sizes st_blksize, DESIGN_REVIEW §3.78
-        ("npy_per_sample", "55b72b04751401f05c6f865bf0ba670af4eed47723ec32e603537bbadd2976bc"),
+        ("npy_per_sample", "0b9514a3e1010784093c4abbc5bd1448d28351a3c6a7c77532b17dabce48254e"),
         // 2026-10-02: `enumerate` on by default; 2026-10-22: the job's and the GPU's values and the corpus's median
         // required (its unsettled case jpeg-50m), the read sizes st_blksize, DESIGN_REVIEW §3.78
-        ("file_per_sample", "66245ad85427712525bc8c0f26a5c460de490e63ea34e06a96d988cf35ca578a"),
-        ("diskann_build", "31adfa55583b5750ac70cf6b5af20669b116337935676f9693ba6d1f6175d752"),
-        ("diskann_search", "80642e20f54cf97933604cfd8acd766f46d5f4e16f1caf504ac2b74a2b036d1e"),
+        ("file_per_sample", "848f089b1e5be070a5f55094699b40b8696b3dcdd4b1374075fa5edc00ff8c70"),
+        ("diskann_build", "a99ef6d045673478fc7defd1f43f01f3f800e65e3804f0d439907390aee67a72"),
+        ("diskann_search", "1e625ecbe747a9db588059e5aaa46af602da2f7f159c0a8b506760198c9f2722"),
         // 2026-10-15 (RC1 review): a step takes the shards whose first sample is in its batch, for
         // any batch and samples_per_file, in place of `every(samples_per_file div batch)`; the
         // fingerprints where batch divides samples_per_file unchanged; the three again 2026-10-22, the job's and the GPU's
         // values required (each mechanism's untraced case holds the old defaults), DESIGN_REVIEW §3.78
-        ("tfrecord_stream", "e08042b48ca9d65aa785d98224deeccbe277891820d17c551dd1e3e203fa20ee"),
-        ("parquet_stream", "3988007cfb7616a19af3837388865810e0a78c79a53f527f6aae785500ac1afc"),
-        ("hdf5_map", "500ceff8e7d4398846457436094efddaf00fbb09dcfa0fd5de58e041d296177a"),
-        ("faiss_ivf_ondisk", "3e70625597b3f2cea10c617e49b6e287dfc58c4378ba53bc822a2d8b4884e837"),
+        ("tfrecord_stream", "9f9979f8dc3267db0a2e597ac20f8e2a30ed7f382ad8c256be2972ef7c6f57ab"),
+        ("parquet_stream", "e0a5cb1268d364d7ce35fea50e56dd1bf2e9726fabe737ddf4d4a4bc6d466cea"),
+        ("hdf5_map", "f1c5d2f21a90021d8ee641292d24c91e86d0c490bbeaec2dc57116ab9f0cb21e"),
+        ("faiss_ivf_ondisk", "39e771a7587e0067d1a42ca0064002934070b138b8623ba13cf2586e1f7a2e5e"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
-        ("lmcache_shared_fs", "f2b32e8022488a1906dc23599c522783aeffe9b7eb857ab51cd2987c0f9b0426"),
-        ("lmcache_shared_fs_reader", "d3a047efb88aeae7ef87b6741b05c92d23ea44a0c1c6912e4a5a543263b60d8a"),
+        ("lmcache_shared_fs", "3d89da224f1b8ca4976bbdc87e170fc6dc4fd346fbe7793cdbcbc6888cd95902"),
+        ("lmcache_shared_fs_reader", "42bdf8c3616fa38eeadcec4b4251f335111d82e44f935ff3245bc303c9d7384c"),
     ];
     for (name, sha) in want {
         let loaded = aeiou::load(&crate::common::workload_ast(name)).unwrap();
@@ -109,7 +113,8 @@ fn golden_fingerprints() {
         ("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10"), ("walk", "false")], 0x71628bdb4289c4c8, 5120),
         ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5")], 0xf755bd4187b75b78, 50491),
         ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5"), ("walk", "false")], 0xa2c284c6137f9639, 50451),
-        ("dcp_save", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
+        // dcp_save at the values its defaults held until 2026-10-23 (its unsettled case four-items; DESIGN_REVIEW §3.78)
+        ("dcp_save", 2, &[("steps", "200"), ("step_time", "323000000"), ("ckpt_every", "100"), ("items", "4"), ("item_bytes", "[16777216, 33554432, 16777216, 8388608]"), ("meta_bytes", "2097152")], 0x850e8c9019b3bda8, 130),
         ("dcp_load", 2, &[], 0x22990a88db4e6d4f, 368),
         ("safetensors_load", 2, &[], 0x2668387c7aa4126b, 24682),
         ("diskann_search", 1, &[("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
@@ -260,7 +265,7 @@ fn collect(text: &str, cfg: &Config, template: &str, count: i64) -> Vec<(i64, Ve
 }
 
 const CONSUME: &str = r#"{
-  "ast": "0.11", "name": "consume_test",
+  "ast": "0.12", "name": "consume_test",
   "params": {"batches": {"default": 24}, "batch": {"default": 4}},
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 100, "size": {"const": 10}, "seed": 7}},
   "actors": {"gpu": {"body": [
@@ -299,7 +304,7 @@ fn consume_is_a_permutation_per_epoch_across_actors() {
 }
 
 const CHAIN: &str = r#"{
-  "ast": "0.11", "name": "chain_test",
+  "ast": "0.12", "name": "chain_test",
   "params": {"reuse": {"default": {"mixture": [{"weight": 0.4, "dist": null}, {"weight": 0.6, "dist": {"uniform": {"lo": 1, "hi": 5}}}]}}},
   "namespaces": {"kv": {"pattern": "kv/{conv:016x}/d{d}", "fields": {"conv": "int", "d": "int"}, "size": 4096, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
@@ -340,7 +345,7 @@ fn at_chains_reach_the_original_conversation() {
 }
 
 const UNTIL_EOF: &str = r#"{
-  "ast": "0.11", "name": "eof_test",
+  "ast": "0.12", "name": "eof_test",
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id}", "count": 4, "size": {"const": 2621440}, "seed": 7}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 1, "body": [
@@ -387,7 +392,7 @@ fn rejects(text: &str, needle: &str) {
 fn validator_rejects_what_check_py_rejects() {
     let base = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.12", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{{datasets}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )
@@ -575,7 +580,7 @@ fn parameters_given_are_held_to_the_at_rule() {
 #[test]
 fn a_long_at_chain_is_one_link_per_iteration() {
     let text = r#"{
-  "ast": "0.11", "name": "long_chain",
+  "ast": "0.12", "name": "long_chain",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "k", "to": 200000, "body": [
@@ -599,7 +604,7 @@ fn a_long_at_chain_is_one_link_per_iteration() {
 #[test]
 fn an_at_in_a_short_loop_nested_in_a_long_one_stays_linear() {
     let text = r#"{
-  "ast": "0.11", "name": "nested_chain",
+  "ast": "0.12", "name": "nested_chain",
   "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "j", "to": 200000, "body": [
@@ -694,7 +699,7 @@ fn a_divisor_parameter_binds_the_names_the_directories_and_the_dataset_id() {
 #[test]
 fn a_compound_datasets_directories_are_counted_from_its_files() {
     let text = r#"{
-      "ast": "0.11", "name": "shards_in_dirs",
+      "ast": "0.12", "name": "shards_in_dirs",
       "params": {"samples": {"default": 10240}},
       "datasets": {"s": {"layout": "compound", "access": "stream", "pattern": "s/{id div 10:03}/shard-{id:05}", "count": {"param": "samples"},
                          "samples_per_file": 1024, "size": {"const": 4096}, "seed": 7}},
@@ -719,7 +724,7 @@ fn a_compound_datasets_directories_are_counted_from_its_files() {
 }
 
 const INVENTORY: &str = r#"{
-  "ast": "0.11", "name": "inventory_test",
+  "ast": "0.12", "name": "inventory_test",
   "params": {"files": {"default": 100000}},
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id div 1000:03}/f_{id:06}", "count": {"param": "files"},
                      "size": {"const": 4096}, "seed": 7, "inventory": {"name": "inventory.txt", "entry": 24}}},
@@ -771,7 +776,7 @@ fn an_inventory_is_count_times_entry_and_a_subset_caps_its_reads() {
 /// The `x @ i - d` loop of the rule V3 review (RC1, bug 30): `d` drawn from `DIST`.
 fn v3_chain(dist: &str, params: &str) -> String {
     r#"{
-  "ast": "0.11", "name": "v3_chain", "params": PARAMS,
+  "ast": "0.12", "name": "v3_chain", "params": PARAMS,
   "datasets": {"d": {"pattern": "d/f{id}", "layout": "whole", "access": "indexed", "count": 4, "size": {"const": 4096}, "seed": 1}},
   "actors": {"gpu": {"count": 1, "body": [
     {"loop": {"index": "i", "to": 4, "body": [
@@ -840,7 +845,7 @@ fn a_dataset_is_consumed_in_one_place() {
     // does not have). The second is refused with check.py's message and path (V6, RC1 review).
     let doc = |actors: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t",
+            r#"{{"ast": "0.12", "name": "t",
                 "datasets": {{"d": {{"layout": "whole", "access": "map", "pattern": "d/f{{id:04}}", "count": 16, "size": {{"const": 1}}, "seed": 1}}}},
                 "actors": {{{actors}}}}}"#
         )
@@ -870,7 +875,7 @@ fn a_dataset_size_is_never_below_zero() {
     let doc = |size: &str, params: &str, layout: &str| {
         let (pattern, extra) = if layout == "array" { ("d/all", r#", "slot": 64"#) } else { ("d/f{id:04}", "") };
         format!(
-            r#"{{"ast": "0.11", "name": "t", "params": {params},
+            r#"{{"ast": "0.12", "name": "t", "params": {params},
                 "datasets": {{"d": {{"layout": "{layout}", "access": "indexed", "pattern": "{pattern}", "count": 4, "size": {size}, "seed": 1{extra}}}}},
                 "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
         )
@@ -933,7 +938,7 @@ fn integers_outside_64_bits_are_refused_as_check_py_refuses_them() {
     // Python, which keeps it exact; one between i64 and u64 became a float literal.
     let doc = |n: &str, seed: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t", "params": {{"n": {{"default": {n}}}, "a": {{"default": [1, 3]}}}},
+            r#"{{"ast": "0.12", "name": "t", "params": {{"n": {{"default": {n}}}, "a": {{"default": [1, 3]}}}},
                 "datasets": {{"d": {{"layout": "whole", "access": "map", "pattern": "d/{{id}}", "count": 10, "size": {{"const": 1}}, "seed": {seed}}}}},
                 "actors": {{"gpu": {{"body": [{{"compute": {{"ns": {{"add": [1, 1.5e30]}}}}}}]}}}}}}"#
         )
@@ -970,7 +975,7 @@ fn integers_outside_64_bits_are_refused_as_check_py_refuses_them() {
 fn at_names_the_binding_its_body_shadows() {
     let paths = |text: &str| -> Vec<String> { collect(text, &config(1, 1, &[]), "gpu", 1).into_iter().map(|o| o.3).collect() };
     // the inner `x` counts j; `y` is the inner `x` one index back. The outer `x` is 1000·i.
-    let shadow = r#"{"ast": "0.11", "name": "shadow",
+    let shadow = r#"{"ast": "0.12", "name": "shadow",
  "namespaces": {"o": {"pattern": "o/{v}/{w}", "fields": {"v": "int", "w": "int"}, "size": 1, "seed": 3}},
  "actors": {"gpu": {"count": 1, "body": [
   {"loop": {"index": "i", "to": 3, "body": [
@@ -986,7 +991,7 @@ fn at_names_the_binding_its_body_shadows() {
     assert_eq!(paths(shadow), want);
     // `z` reads the outer `x` (the inner one comes after it), so `z @ (j-1)` is 1000·i + j-1;
     // `k` reads the outer `c` = 7, so `k @ (i-1)` is i-1 + 7, whatever `c` the inner body binds.
-    let scope = r#"{"ast": "0.11", "name": "shadow2",
+    let scope = r#"{"ast": "0.12", "name": "shadow2",
  "namespaces": {"o": {"pattern": "o/{v}/{w}", "fields": {"v": "int", "w": "int"}, "size": 1, "seed": 3}},
  "actors": {"gpu": {"count": 1, "body": [
   {"let": {"name": "c", "value": 7}},
@@ -1008,7 +1013,7 @@ fn at_names_the_binding_its_body_shadows() {
         .collect();
     assert_eq!(paths(scope), want);
     // a body that binds `x` twice: which one `x @` reads is not defined, so it is refused
-    let twice = r#"{"ast": "0.11", "name": "t",
+    let twice = r#"{"ast": "0.12", "name": "t",
  "namespaces": {"o": {"pattern": "o/{v}", "fields": {"v": "int"}, "size": 1, "seed": 3}},
  "actors": {"gpu": {"count": 1, "body": [
   {"loop": {"index": "i", "to": 3, "body": [
@@ -1029,7 +1034,7 @@ fn at_names_the_binding_its_body_shadows() {
 fn a_consume_is_under_loops_of_fixed_count() {
     let doc = |body: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t", "params": {{"n": {{"default": 3}}}},
+            r#"{{"ast": "0.12", "name": "t", "params": {{"n": {{"default": 3}}}},
                 "datasets": {{"d": {{"layout": "whole", "access": "map", "pattern": "d/f{{id:04}}", "count": 64, "size": {{"const": 1}}, "seed": 1}}}},
                 "actors": {{"gpu": {{"body": [{body}]}}}}}}"#
         )
@@ -1078,7 +1083,7 @@ fn integer_arithmetic_past_64_bits_is_refused_not_wrapped() {
     };
     let doc = |datasets: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t", "params": {{"min": {{"default": -9223372036854775808}}}}, "datasets": {{{datasets}}},
+            r#"{{"ast": "0.12", "name": "t", "params": {{"min": {{"default": -9223372036854775808}}}}, "datasets": {{{datasets}}},
                 "namespaces": {{"o": {{"pattern": "o/{{v}}", "fields": {{"v": "int"}}, "size": "as_written", "seed": 3}}}},
                 "actors": {{"gpu": {{"count": 1, "body": [{body}]}}}}}}"#
         )
@@ -1125,7 +1130,7 @@ fn integer_arithmetic_past_64_bits_is_refused_not_wrapped() {
 fn a_dataset_size_is_judged_and_printed_as_check_py_judges_and_prints_it() {
     let doc = |size: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t",
+            r#"{{"ast": "0.12", "name": "t",
                 "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}},
                 "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
         )
@@ -1150,7 +1155,7 @@ fn a_dataset_size_is_judged_and_printed_as_check_py_judges_and_prints_it() {
 fn min_above_max_is_judged_and_printed_as_check_py_judges_and_prints_it() {
     let doc = |size: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t",
+            r#"{{"ast": "0.12", "name": "t",
                 "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}},
                 "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
         )
@@ -1170,7 +1175,7 @@ fn min_above_max_is_judged_and_printed_as_check_py_judges_and_prints_it() {
 fn a_size_that_is_not_a_number_is_refused_whatever_the_order() {
     let doc = |size: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t",
+            r#"{{"ast": "0.12", "name": "t",
                 "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}},
                 "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
         )
@@ -1199,7 +1204,7 @@ fn a_size_that_is_not_a_number_is_refused_whatever_the_order() {
 /// its sub-actors, or declared again in each iteration of the actor's loop, is not.
 #[test]
 fn a_channel_or_loader_inside_a_fork_is_refused() {
-    let doc = |body: &str| format!(r#"{{"ast":"0.11","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |body: &str| format!(r#"{{"ast":"0.12","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     let chan = r#"{"channel":{"name":"c","capacity":2}}"#;
     let loader = |body: &str| format!(r#"{{"loader":{{"name":"q","index":"b","workers":2,"prefetch":1,"batches":2,"body":[{body}]}}}}"#);
     let par = |body: &str| format!(r#"{{"parallel":{{"index":"p","width":2,"body":[{body}]}}}}"#);
@@ -1226,7 +1231,7 @@ fn a_channel_or_loader_inside_a_fork_is_refused() {
 /// was the old channel or the new one as timing had it.
 #[test]
 fn a_channel_a_loaders_workers_use_is_declared_once_or_beside_it() {
-    let doc = |body: &str| format!(r#"{{"ast":"0.11","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |body: &str| format!(r#"{{"ast":"0.12","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     let chan = r#"{"channel":{"name":"c","capacity":2}}"#;
     let loader = |name: &str, body: &str| format!(r#"{{"loader":{{"name":"{name}","index":"b","workers":2,"prefetch":1,"batches":2,"body":[{body}]}}}}"#);
     let lput = loader("q", r#"{"put":{"channel":"c","seq":{"index":"b"}}}"#);
@@ -1260,7 +1265,7 @@ fn a_channel_a_loaders_workers_use_is_declared_once_or_beside_it() {
 /// io_uring at 1. A loader's body still puts (bug 77's rule).
 #[test]
 fn a_take_inside_a_loader_body_is_refused() {
-    let doc = |body: &str| format!(r#"{{"ast":"0.11","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
+    let doc = |body: &str| format!(r#"{{"ast":"0.12","name":"v26","actors":{{"gpu":{{"body":[{body}]}}}}}}"#);
     let chan = r#"{"channel":{"name":"c","capacity":4}}"#;
     let loader = |name: &str, body: &str| format!(r#"{{"loader":{{"name":"{name}","index":"b","workers":2,"prefetch":1,"batches":8,"body":[{body}]}}}}"#);
     let take = r#"{"take":{"channel":"c"}}"#;
@@ -1289,13 +1294,13 @@ fn a_take_inside_a_loader_body_is_refused() {
 fn float_literals_are_read_as_check_py_reads_them() {
     let doc = |size: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "t", "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}}, "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
+            r#"{{"ast": "0.12", "name": "t", "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}}, "actors": {{"gpu": {{"body": [{{"stat": {{"file": {{"file": {{"dataset": "d", "id": 0}}}}}}}}]}}}}}}"#
         )
     };
     for (x, sha) in [
-        ("4503599627370495.5", "a510d81c3e858e1a2c8aef22fceb98980b447fb16c77f5be1770668fa66c6e4a"),
-        ("9007199254740993.0", "78ebe166be9cc65d12f182dfe043177259fa2474630977983d3e63615d1eea1b"),
-        ("123456789.12345679", "059ecce311c1c94037f52ac472db202d808997b73a98168838ef9614408838dc"),
+        ("4503599627370495.5", "4fff1506bd4ed9ac9cbe9ef6450b0a30406824a30742ffbd35d6912d8ac518a9"),
+        ("9007199254740993.0", "dfde242b34f4dfa3a87082c93701d3a2e95b9917f17b9c94b733c71bb0f2be8e"),
+        ("123456789.12345679", "196332ba26ba6e12f552eda7447a0f43473eacece9c544c484835594c1d8bda9"),
     ] {
         let loaded = aeiou::load_str(&doc(&format!(r#"{{"const": {x}}}"#))).unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(loaded.sha256, sha, "{x}");
@@ -1316,7 +1321,7 @@ fn float_literals_are_read_as_check_py_reads_them() {
 fn a_value_of_a_kind_the_runner_refuses_is_refused_at_check() {
     let doc = |count: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "v27",
+            r#"{{"ast": "0.12", "name": "v27",
                 "params": {{"s": {{"default": "x"}}, "n": {{"default": 2}}, "d": {{"default": {{"uniform": {{"lo": 1, "hi": 4}}}}}}, "a": {{"default": [1, 2]}}}},
                 "datasets": {{"ds": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": 10, "seed": 1}}}},
                 "namespaces": {{"o": {{"pattern": "o/{{name}}-{{k:03}}", "fields": {{"name": "str", "k": "int"}}, "size": 10, "seed": 2}}}},
@@ -1377,7 +1382,7 @@ fn a_value_of_a_kind_the_runner_refuses_is_refused_at_check() {
 fn a_parameter_defined_through_itself_is_refused_with_its_cycle() {
     let doc = |params: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "cyc", "params": {{{params}}},
+            r#"{{"ast": "0.12", "name": "cyc", "params": {{{params}}},
                 "datasets": {{"d": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {{"param": "pa"}}, "seed": 1}}}},
                 "actors": {{"gpu": {{"body": [{{"loop": {{"index": "i", "to": 2, "body": [
                     {{"let": {{"name": "x", "value": {{"draw": {{"param": "pa"}}}}}}}},
@@ -1412,7 +1417,7 @@ fn a_parameter_defined_through_itself_is_refused_with_its_cycle() {
 fn a_draw_of_a_kind_the_runner_refuses_is_refused_at_check() {
     let doc = |size: &str, body: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "v27",
+            r#"{{"ast": "0.12", "name": "v27",
                 "params": {{"n": {{"default": 3}}, "d": {{"default": {{"uniform": {{"lo": 1, "hi": 4}}}}}}, "cd": {{"default": {{"const": {{"param": "d"}}}}}},
                             "cn": {{"default": {{"const": {{"param": "n"}}}}}}, "cs": {{"default": {{"const": "x"}}}}}},
                 "datasets": {{"ds": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": {size}, "seed": 1}}}},
@@ -1466,7 +1471,7 @@ fn a_draw_of_a_kind_the_runner_refuses_is_refused_at_check() {
 fn a_comparison_or_array_read_the_runner_refuses_is_refused_at_check() {
     let doc = |body: &str| {
         format!(
-            r#"{{"ast": "0.11", "name": "v27",
+            r#"{{"ast": "0.12", "name": "v27",
                 "params": {{"n": {{"default": 3}}, "s": {{"default": "x"}}, "z": {{"default": null}}, "arr": {{"default": [1, 2.5]}},
                             "sarr": {{"default": ["a", "b"]}}, "d": {{"default": {{"uniform": {{"lo": 1, "hi": 4}}}}}}}},
                 "datasets": {{"ds": {{"layout": "whole", "access": "indexed", "pattern": "d/f{{id:04}}", "count": 4, "size": 10, "seed": 1}}}},

@@ -359,7 +359,7 @@ fn whole(name: &str, n: i64) -> String {
 }
 
 fn doc(datasets: &[String]) -> String {
-    format!(r#"{{"ast": "0.11", "name": "dg", "params": {{}}, "datasets": {{{}}}, "actors": {{"a": {{"body": []}}}}}}"#, datasets.join(", "))
+    format!(r#"{{"ast": "0.12", "name": "dg", "params": {{}}, "datasets": {{{}}}, "actors": {{"a": {{"body": []}}}}}}"#, datasets.join(", "))
 }
 
 /// What a datagen is refused before it writes anything: a rank outside its ranks, several
@@ -429,7 +429,7 @@ fn rank_0s_headers_reach_every_rank_and_a_resume_must_make_the_same() {
     let ast = d.join("h5.ast.json");
     std::fs::write(
         &ast,
-        r#"{"ast": "0.11", "name": "h5", "params": {},
+        r#"{"ast": "0.12", "name": "h5", "params": {},
   "datasets": {"d": {"layout": "compound", "pattern": "h/{id:04}.h5", "count": 10, "samples_per_file": 4,
      "size": {"const": 300}, "seed": 11, "access": "stream", "format": {"class": "hdf5", "reader": "h5py", "version": "test", "framing": {"file_header": 2048, "writer": {"dataset": "records", "shape": [300], "dtype": "u1"}}}}},
   "actors": {"gpu": {"body": []}}}"#,

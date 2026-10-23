@@ -1,6 +1,6 @@
 # The AST contract
 
-Version `0.10`, 2026-10-13 (~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
+Version `0.12`, 2026-10-23 (~~`0.11`, 2026-10-22~~; ~~`0.10`, 2026-10-13~~; ~~`0.9`, the same day~~; ~~`0.5`, 2026-10-02~~; ~~`0.2`, 2026-09-30~~; the history is §9). This directory is layer 2 of the three-layer design in
 `GRAMMAR_OPTIONS.md` Option D: the Python builder (layer 1) emits an AST; the Rust runner
 (layer 3) loads, validates, and executes it. The AST is the only thing the runner executes and
 the only artifact a workload author publishes with a hash (for the MLPerf Storage WG, the
@@ -60,10 +60,12 @@ python3 schema/check.py path/to/x.ast.json   # one file
   element kind); a parameter with a default takes the default's kind, and never declares
   one. A value given for either keeps that kind (§8). `scale: true` marks what a submission
   sizes per site (`samples`): a benchmark's rules freeze every `scale` parameter to
-  required. A default may be **storage-reported**, `{"from": "st_blksize", "of": DATASET,
-  "fallback": BYTES}`: the `st_blksize` the storage of the dataset reports (Python's
-  `BufferedReader` asks for it), which the interposition test makes the system under test's,
-  read by `aeiou run` with `stat` of the dataset's first file before the model is built and
+  required. A default may be **storage-reported**, `{"from": "st_blksize", "of": NAME,
+  "fallback": BYTES}`: the `st_blksize` the storage of the dataset or (contract 0.12) the
+  namespace reports (Python's `BufferedReader` and `BufferedWriter` ask for it), which the
+  interposition test makes the system under test's, read by `aeiou run` with `stat` of the
+  dataset's first file (an input namespace's first object, a probe file in an output
+  namespace's root) before the model is built and
   given to `aeiou dry-run` with `--st-blksize`, `fallback` where the storage reports none
   (an object store). It is an `int` default like any other, which a later layer may
   replace; the rules judge its fallback (V28). The workload id covers the rule, the report
@@ -481,9 +483,10 @@ checkers enforce.
   handle's `of`) names a binding to a handle (2026-10-15): `let x = 1` then a `write` on
   `{"ref": "x"}` had passed both checkers and failed the run with "`x` is a int, not a handle".
 
-- **V28 a storage-reported value is read from a declared dataset** (added 2026-10-22, contract
-  0.11). The `of` of a `{"from": "st_blksize"}` default names a dataset of the abstract, and
-  its `fallback` is a positive byte count.
+- **V28 a storage-reported value is read from a declared dataset or namespace** (added
+  2026-10-22, contract 0.11; namespaces 2026-10-23, contract 0.12). The `of` of a `{"from":
+  "st_blksize"}` default names a dataset or a namespace of the abstract, not a name declared as
+  both (which would not say whose storage), and its `fallback` is a positive byte count.
 
 Contract 0.11 also states what V3, V23, and V27 make of a **required** parameter: its declared
 `kind` is the kind V23 and V27 judge (an `elem` of a required array its `items`), and V3,
@@ -740,3 +743,8 @@ results are compared by.
   lock (§8). A 0.10 document is
   a 0.11 document with the version changed. Every committed AST was regenerated; no
   fingerprint and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.78.
+- **0.12** (2026-10-23): a storage-reported default's `of` may name a namespace (V28), whose
+  `st_blksize` is read from an input namespace's first object or a probe file in an output
+  namespace's root (§1), for the write buffers of applications that write files (`dcp_save`'s
+  `buf`). A 0.11 document is a 0.12 document with the version changed. Every committed AST was
+  regenerated; no fingerprint and no dataset id changed. Reasoning in `DESIGN_REVIEW.md` §3.78.

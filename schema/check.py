@@ -382,11 +382,15 @@ class Check:
             self.err(["params"], "`gpus` is reserved and set by the runner")
         for pname, p in self.ast.get("params", {}).items():
             self.value(self.param_value(pname), ["params", pname])
-            # V28 (contract 0.11): a storage-reported value is read from a declared dataset's storage
+            # V28 (contract 0.11; a namespace, 0.12): a storage-reported value is read from the
+            # storage of a declared dataset or namespace, one name saying which
             src = p.get("default") if isinstance(p, dict) else None
             if isinstance(src, dict) and "from" in src:
-                if src.get("of") not in self.datasets:
-                    self.err(["params", pname, "default", "of"], f"`{src.get('of')}` is not a declared dataset (V28)")
+                of = src.get("of")
+                if of not in self.datasets and of not in self.namespaces:
+                    self.err(["params", pname, "default", "of"], f"`{of}` is not a declared dataset or namespace (V28)")
+                elif of in self.datasets and of in self.namespaces:
+                    self.err(["params", pname, "default", "of"], f"`{of}` is both a dataset and a namespace (V28)")
                 if not (isinstance(src.get("fallback"), int) and src["fallback"] >= 1):
                     self.err(["params", pname, "default", "fallback"], f"{src.get('fallback')} is not a positive byte count (V28)")
         # every rule after this one follows a `param` to its value; through a cycle it would

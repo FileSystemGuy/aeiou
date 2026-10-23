@@ -16,7 +16,7 @@ fn tmpdir(tag: &str) -> crate::common::TempDir {
 /// in requests of `b` bytes, with `params` declared.
 fn doc(params: Value) -> String {
     json!({
-        "ast": "0.11", "name": "t", "params": params,
+        "ast": "0.12", "name": "t", "params": params,
         "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id:04}", "count": 4, "size": {"const": 8192}, "seed": 1}},
         "actors": {"gpu": {"body": [
             {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},
@@ -95,8 +95,6 @@ fn a_storage_reported_value_is_the_number_given_else_its_fallback() {
     assert_eq!(value(&[], &[]), 4096);
     assert_eq!(value(&[("d", 1 << 20)], &[]), 1 << 20);
     assert_eq!(value(&[("d", 1 << 20)], &[("b", "512")]), 512, "a value given replaces it, as any default");
-    let e = aeiou::load_str(&doc(json!({"b": {"default": {"from": "st_blksize", "of": "nope", "fallback": 4096}}}))).err().unwrap();
-    assert_eq!(format!("{e:#}"), "invalid abstract:\n  t: params/b/default/of: `nope` is not a declared dataset (V28)");
 }
 
 fn aeiou(args: &[&str]) -> (i32, String, String) {
@@ -124,7 +122,7 @@ fn the_storage_reports_st_blksize_to_a_run_and_a_dry_run_is_told_it() {
     assert_ne!(line(&fallback, "fingerprint"), line(&big, "fingerprint"), "two requests of 4 KiB, or one of 8 KiB");
     let (_, named, _) = aeiou(&["dry-run", a, "--gpus", "1", "--st-blksize", "d=8192"]);
     assert_eq!(line(&named, "fingerprint"), line(&big, "fingerprint"));
-    for (bad, want) in [("e=8192", "--st-blksize e=8192: no storage-reported parameter reads dataset `e`"), ("0", "--st-blksize 0: expected a positive byte count, or DATASET=BYTES")] {
+    for (bad, want) in [("e=8192", "--st-blksize e=8192: no storage-reported parameter reads `e`"), ("0", "--st-blksize 0: expected a positive byte count, or NAME=BYTES")] {
         let (code, _, err) = aeiou(&["dry-run", a, "--gpus", "1", "--st-blksize", bad]);
         assert_eq!(code, 2);
         assert!(err.contains(want), "{err}");
@@ -148,6 +146,123 @@ fn the_storage_reports_st_blksize_to_a_run_and_a_dry_run_is_told_it() {
     assert_eq!(line(&told, "fingerprint").split_whitespace().nth(1), doc["verdict"]["fingerprint"].as_str());
 }
 
+// ---------------------------------------------------------------- a namespace's st_blksize
+
+/// An abstract over namespace `o` (`out/o{n}`) whose one actor writes object 0 in two writes
+/// of `b` bytes (`input`: reads it, 8 KiB, in requests of `b` instead), with `params` declared and
+/// `more` merged into the document (a dataset, to make a name ambiguous).
+fn ns_doc(params: Value, input: bool, more: Value) -> String {
+    let mut ns = json!({"pattern": "out/o{n}", "fields": {"n": "int"}, "size": "as_written", "seed": 7});
+    let body = if input {
+        // the writer's two writes of 4096 bytes: a size the reader can read to its end
+        ns["input"] = json!(true);
+        ns["size"] = json!(8192);
+        json!([{"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"n": 0}}}}},
+               {"open": {"file": {"ref": "f"}, "flags": ["RDONLY"]}},
+               {"read": {"file": {"ref": "f"}, "len": {"param": "b"}, "repeat": "until_eof"}},
+               {"close": {"file": {"ref": "f"}}}])
+    } else {
+        json!([{"let": {"name": "f", "value": {"object": {"namespace": "o", "fields": {"n": 0}}}}},
+               {"open": {"file": {"ref": "f"}, "flags": ["WRONLY", "CREAT", "TRUNC"]}},
+               {"write": {"file": {"ref": "f"}, "len": {"param": "b"}}},
+               {"write": {"file": {"ref": "f"}, "len": {"param": "b"}}},
+               {"close": {"file": {"ref": "f"}}}])
+    };
+    let mut d = json!({"ast": "0.12", "name": if input { "r" } else { "w" }, "params": params, "namespaces": {"o": ns}, "actors": {"gpu": {"body": body}}});
+    for (k, v) in more.as_object().unwrap() {
+        d[k] = v.clone();
+    }
+    d.to_string()
+}
+
+fn from_o() -> Value {
+    json!({"b": {"default": {"from": "st_blksize", "of": "o", "fallback": 4096}}})
+}
+
+/// Contract 0.12: the `of` of a storage-reported value may name a namespace; a name declared
+/// as both a dataset and a namespace says neither, and one declared as neither is refused.
+#[test]
+fn a_storage_reported_value_may_name_a_namespace_never_an_ambiguous_name() {
+    assert!(aeiou::load_str(&ns_doc(from_o(), false, json!({}))).is_ok());
+    let both = json!({"datasets": {"o": {"layout": "whole", "access": "indexed", "pattern": "d/f{id}", "count": 1, "size": {"const": 1}, "seed": 1}}});
+    let e = aeiou::load_str(&ns_doc(from_o(), false, both)).err().unwrap();
+    assert!(format!("{e:#}").contains("params/b/default/of: `o` is both a dataset and a namespace (V28)"), "{e:#}");
+    let e = aeiou::load_str(&doc(json!({"b": {"default": {"from": "st_blksize", "of": "nope", "fallback": 4096}}}))).err().unwrap();
+    assert_eq!(format!("{e:#}"), "invalid abstract:\n  t: params/b/default/of: `nope` is not a declared dataset or namespace (V28)");
+}
+
+/// An output namespace is empty at the start, so `aeiou run` reads its `st_blksize` from a
+/// probe file it creates under the namespace's root and removes before the gate (one per
+/// host, named apart); another host's probe there does not make the root not empty, and is
+/// left alone. A dry run is told the number by the namespace's name.
+#[test]
+fn an_output_namespace_reports_st_blksize_by_a_probe_file_it_removes() {
+    let dir = tmpdir("ns-st-blksize");
+    let ast = dir.join("w.ast.json");
+    std::fs::write(&ast, ns_doc(from_o(), false, json!({}))).unwrap();
+    let a = ast.to_str().unwrap();
+    let (code, out, err) = aeiou(&["dry-run", a, "--gpus", "1", "--st-blksize", "o=8192"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(line(&out, "storage-reported"), "storage-reported: b=8192 (st_blksize of `o`, --st-blksize)");
+    for (bad, want) in [("e=8192", "--st-blksize e=8192: no storage-reported parameter reads `e`"), ("x", "--st-blksize x: expected a positive byte count, or NAME=BYTES")] {
+        let (code, _, err) = aeiou(&["dry-run", a, "--gpus", "1", "--st-blksize", bad]);
+        assert_eq!(code, 2);
+        assert!(err.contains(want), "{err}");
+    }
+
+    use std::os::unix::fs::MetadataExt;
+    let root = dir.join("root");
+    std::fs::create_dir_all(root.join("out")).unwrap();
+    let other = root.join("out/.aeiou-blksize-otherhost-1");
+    std::fs::write(&other, b"").unwrap();
+    let st = std::fs::metadata(&other).unwrap().blksize();
+    let report = dir.join("report.json");
+    let (code, out, err) = aeiou(&["run", a, "--gpus", "1", "--root", root.to_str().unwrap(), "--report-json", report.to_str().unwrap()]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(line(&out, "storage-reported"), format!("storage-reported: b={st} (st_blksize of `o`, stat of a probe file in its root)"));
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
+    assert_eq!(doc["storage_reported"]["b"], json!({"from": "st_blksize", "of": "o", "value": st, "reported": true}));
+    let mut names: Vec<String> = std::fs::read_dir(root.join("out")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, [".aeiou-blksize-otherhost-1", ".aeiou-namespace.json", "o0"], "our probe is gone, the other host's left");
+    assert_eq!(std::fs::metadata(root.join("out/o0")).unwrap().len(), 2 * st as u64);
+
+    // a fresh root, which the run creates: the probe goes where the namespace will be
+    let fresh = dir.join("fresh");
+    let (code, out, err) = aeiou(&["run", a, "--gpus", "1", "--root", fresh.to_str().unwrap()]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(line(&out, "storage-reported"), format!("storage-reported: b={st} (st_blksize of `o`, stat of a probe file in its root)"));
+}
+
+/// An input namespace is read-only (V14), so it is never probed: its `st_blksize` is that of
+/// the first object its manifest lists, or of the manifest when it lists none.
+#[test]
+fn an_input_namespace_reports_the_st_blksize_of_its_first_object() {
+    let dir = tmpdir("in-st-blksize");
+    let (w, r) = (dir.join("w.ast.json"), dir.join("r.ast.json"));
+    std::fs::write(&w, ns_doc(json!({"b": {"default": 4096}}), false, json!({}))).unwrap();
+    std::fs::write(&r, ns_doc(from_o(), true, json!({}))).unwrap();
+    let root = dir.join("root");
+    let rt = root.to_str().unwrap();
+    let (code, _, err) = aeiou(&["run", w.to_str().unwrap(), "--gpus", "1", "--root", rt]);
+    assert_eq!(code, 0, "{err}");
+    use std::os::unix::fs::MetadataExt;
+    let st = std::fs::metadata(root.join("out/o0")).unwrap().blksize();
+    let (code, out, err) = aeiou(&["run", r.to_str().unwrap(), "--gpus", "1", "--root", rt]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(line(&out, "storage-reported"), format!("storage-reported: b={st} (st_blksize of `o`, stat of its first object)"));
+    let names: Vec<String> = std::fs::read_dir(root.join("out")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(!names.iter().any(|n| n.starts_with(".aeiou-blksize")), "an input root is never written: {names:?}");
+    // a manifest that lists no objects (a namespace past the listing's limit)
+    let mpath = root.join("out/.aeiou-namespace.json");
+    let mut m: Value = serde_json::from_str(&std::fs::read_to_string(&mpath).unwrap()).unwrap();
+    m.as_object_mut().unwrap().remove("objects");
+    std::fs::write(&mpath, m.to_string()).unwrap();
+    let (code, out, err) = aeiou(&["run", r.to_str().unwrap(), "--gpus", "1", "--root", rt]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(line(&out, "storage-reported"), format!("storage-reported: b={st} (st_blksize of `o`, stat of its manifest)"));
+}
+
 // ---------------------------------------------------------------- the lock
 
 /// An abstract whose op stream reads `k` files of dataset `d` (four of 8 KiB) in requests of
@@ -161,7 +276,7 @@ struct Tree {
 
 fn toy() -> String {
     json!({
-        "ast": "0.11", "name": "t",
+        "ast": "0.12", "name": "t",
         "params": {"b": {"default": 4096, "unit": "bytes"}, "k": {"kind": "int", "unit": "count"}, "samples": {"default": 4, "scale": true}},
         "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/f{id:04}", "count": {"param": "samples"}, "size": {"const": 8192}, "seed": 1}},
         "actors": {"gpu": {"body": [
@@ -607,6 +722,24 @@ fn the_untraced_containers_cases_are_the_runs_the_old_defaults_made() {
         let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
         assert!(code == 1 && err.contains(&format!("required parameters with no value: {required}")), "{ast}: {err}");
     }
+}
+
+/// dcp_save's unsettled case (item 38; DESIGN_REVIEW §3.78 points 1 and 4): its lock runs exactly
+/// what the abstract's defaults ran until 2026-10-23 (tests/golden.rs's fingerprint, 2 GPUs,
+/// seed 1, 200 steps), the shard's `buf` the namespace's st_blksize, its fallback in a dry run;
+/// the abstract alone is refused, naming every value it now requires.
+#[test]
+fn the_dcp_save_case_is_the_run_the_old_defaults_made() {
+    let w = crate::common::workloads().display().to_string();
+    let (code, out, err) = aeiou(&["dry-run", "--case", "four-items", "--workloads", &w, "--gpus", "2", "--seed", "1", "--param", "steps=200"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&out, "case ").contains("/four-items  run dcp_save"), "{out}");
+    assert_eq!(line(&out, "fingerprint "), "fingerprint 850e8c9019b3bda8");
+    assert!(line(&out, "  ops ").starts_with("  ops 130 "), "{out}");
+    assert_eq!(line(&out, "storage-reported"), "storage-reported: buf=1048576 (st_blksize of `ckpt`: the fallback, none reported)  xfer=1048576 (st_blksize of `ckpt`: the fallback, none reported)");
+    let file = crate::common::workload_ast("dcp_save.ast.json").display().to_string();
+    let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+    assert!(code == 1 && err.contains("required parameters with no value: ckpt_every, item_bytes, items, meta_bytes, step_time, steps"), "{err}");
 }
 
 /// file_per_sample's unsettled case (item 33, part 5c; DESIGN_REVIEW §3.78 points 1 and 4): its

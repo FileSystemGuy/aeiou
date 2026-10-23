@@ -471,7 +471,7 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     assert r.returncode == 0, r.stderr
     sha = next(line.split()[1] for line in r.stdout.splitlines() if line.startswith("sha256 "))
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.11", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.12", "name": f"trace_{name}", "doc": "the exported trace", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": exported.name, "sha256": sha}}]}}}))
     node_dry = tmp_path / "node.dry.json"
     r = run(RUNNER, "dry-run", node_ast, "--gpus", "1", "--metrics-json", node_dry)
@@ -1042,7 +1042,7 @@ def test_the_runner_loads_an_export_whose_first_line_did_not_start_first(tmp_pat
     out = tmp_path / "app.jsonl"
     sha = trace.write_export(str(out), h, ev)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.11", "name": "trace_started_first", "doc": "a call that returned last started first", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.12", "name": "trace_started_first", "doc": "a call that returned last started first", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -1364,7 +1364,7 @@ def test_the_runner_loads_an_export_that_mkdirs_its_root(tmp_path):
     out = tmp_path / "app.jsonl"
     sha = trace.write_export(str(out), h, ev)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.11", "name": "trace_root", "doc": "calls on the root itself", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.12", "name": "trace_root", "doc": "calls on the root itself", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -1408,7 +1408,7 @@ def test_a_short_or_failed_write_moves_what_it_returned(tmp_path):
 def test_the_trace_nodes_dry_run_moves_what_a_short_write_returned(tmp_path):
     _, _, out, sha = _short_write_export(tmp_path)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.11", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.12", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     dry = tmp_path / "node.dry.json"
     r = subprocess.run([str(RUNNER), "dry-run", str(node_ast), "--gpus", "1", "--metrics-json", str(dry)], capture_output=True, text=True)
@@ -1425,7 +1425,7 @@ def test_the_trace_nodes_run_leaves_the_file_a_short_write_left(tmp_path):
     backend, the sync one's `write(2)` at the file position included."""
     _, _, out, sha = _short_write_export(tmp_path)
     node_ast = tmp_path / "node.ast.json"
-    node_ast.write_text(json.dumps({"ast": "0.11", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
+    node_ast.write_text(json.dumps({"ast": "0.12", "name": "trace_short_write", "doc": "a short and a failed write", "params": {}, "datasets": {},
                                     "actors": {"app": {"count": 1, "body": [{"trace": {"file": out.name, "sha256": sha}}]}}}))
     for backend in ("sync", "io_uring", "libaio"):
         root = tmp_path / ("root-" + backend)

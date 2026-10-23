@@ -81,9 +81,11 @@ the value of a real fact of the layer that sets it (a library's chunk size), or 
 **required**: `kind=int`, `float`, `bool`, `str`, `Dist`, or `list[int]` and the like, and no
 default, for a value that varies with every use case (the job's batch and step time), so a run
 that forgets it is refused instead of running another job. `scale=True` marks what a
-submission sizes per site. `st_blksize(of=DATASET, fallback=BYTES)` is a default the storage
-reports: `aeiou run` reads it by `stat` of the dataset's first file, `aeiou dry-run` takes it
-with `--st-blksize`, `fallback` where the storage reports none. A parameter's name never
+submission sizes per site. `st_blksize(of=NAME, fallback=BYTES)` is a default the storage
+reports: `aeiou run` reads it by `stat` of the dataset's first file or (contract 0.12) of a
+namespace's, an input one's first object or a probe file in an output one's root (a shard's
+`BufferedWriter`, `dcp_save`'s `buf`), `aeiou dry-run` takes it with `--st-blksize`,
+`fallback` where the storage reports none. A parameter's name never
 has a dot (an identifier), so it never takes a runner fact's or result's name.
 
 **Declarations** on the `Workload`: `param(name, default, unit=, doc=, cli=)` or

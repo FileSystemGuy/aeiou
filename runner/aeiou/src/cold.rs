@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn the_residency_of_a_chunked_dataset_samples_one_chunk_of_each_file() {
-        let text = r#"{"ast": "0.11", "name": "t",
+        let text = r#"{"ast": "0.12", "name": "t",
             "datasets": {"d": {"layout": "chunked", "access": "indexed", "pattern": "d/{id}/{k}", "count": 3, "chunk": 4096, "size": {"const": 10000}, "seed": 1}},
             "actors": {"gpu": {"body": []}}}"#;
         let loaded = crate::load_str(text).unwrap();

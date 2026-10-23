@@ -588,11 +588,14 @@ impl<'a> Checker<'a> {
             if let Some(v) = self.given.and_then(|g| g.get(pname.as_str())).or(param.default.as_ref()) {
                 self.pvalue(v, &path);
             }
-            // V28 (contract 0.11): a storage-reported value is read from a declared dataset's
-            // storage, and its fallback is a request size
+            // V28 (contract 0.11; a namespace, 0.12): a storage-reported value is read from the
+            // storage of a declared dataset or namespace, one name saying which, and its
+            // fallback is a request size
             if let Some(src) = &param.source {
-                if !ast.datasets.contains_key(&src.of) {
-                    self.err(&p(&path, &["default", "of"]), format!("`{}` is not a declared dataset (V28)", src.of));
+                match (ast.datasets.contains_key(&src.of), ast.namespaces.contains_key(&src.of)) {
+                    (false, false) => self.err(&p(&path, &["default", "of"]), format!("`{}` is not a declared dataset or namespace (V28)", src.of)),
+                    (true, true) => self.err(&p(&path, &["default", "of"]), format!("`{}` is both a dataset and a namespace (V28)", src.of)),
+                    _ => {}
                 }
                 if src.fallback < 1 {
                     self.err(&p(&path, &["default", "fallback"]), format!("{} is not a positive byte count (V28)", src.fallback));

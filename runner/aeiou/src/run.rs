@@ -2244,12 +2244,21 @@ fn dataset_manifest(loaded: &crate::Loaded, name: &str, root: &(impl Place + ?Si
     Ok((rel, dir, m))
 }
 
-/// The `st_blksize` the storage of each dataset a storage-reported parameter names reports
-/// (contract 0.11, `DESIGN_REVIEW.md` §3.78 point 11): `stat` of the dataset's first file,
-/// what the application's `fstat` of a file it opens sees. A directory's is no guide: Linux's
-/// NFS client reports its READDIR size there, not the file's. A dataset in an object store
-/// reports none, and its parameters take their fallback.
-pub fn st_blksize(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized)) -> Result<BTreeMap<String, i64>> {
+/// The prefix of the probe file `st_blksize` creates in an output namespace's root, followed
+/// by the host and the process so that hosts sharing the root probe apart; no generated name
+/// begins with `.aeiou` (V13), and an empty root's check passes over one (another host's).
+pub const BLKSIZE_PROBE_PREFIX: &str = ".aeiou-blksize-";
+
+/// The `st_blksize` the storage of each dataset or namespace a storage-reported parameter
+/// names reports, with how it was read (`DESIGN_REVIEW.md` §3.78 point 11; contract 0.11,
+/// namespaces 0.12): what the application's `fstat` of a file it opens sees. A dataset's is
+/// `stat` of its first file; an input namespace's, which is read-only (V14), that of the first
+/// object its manifest lists, or of the manifest where it lists none; an output namespace's,
+/// empty at the start, that of a probe file created under its root and removed at once,
+/// before the gate. A directory's is no guide: Linux's NFS client reports its READDIR size
+/// there, not the file's. A name in an object store reports none, and its parameters take
+/// their fallback.
+pub fn st_blksize(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Sized)) -> Result<BTreeMap<String, (i64, &'static str)>> {
     use std::os::unix::fs::MetadataExt;
     let names: BTreeSet<&str> = loaded.ast.params.values().filter_map(|p| p.source.as_ref()).map(|s| s.of.as_str()).collect();
     let mut out = BTreeMap::new();
@@ -2259,6 +2268,35 @@ pub fn st_blksize(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Si
     let params = Params::new(&loaded.ast, cfg)?;
     let model = crate::eval::build_model(&loaded.ast, cfg, &params)?;
     for name in names {
+        if let Some(ns) = loaded.ast.namespaces.get(name) {
+            let rel = payload::namespace_root(&loaded.ast, name)?;
+            if root.object(&rel).is_some() {
+                continue;
+            }
+            let dir = root.at(&rel);
+            if ns.input.unwrap_or(false) {
+                let m = NamespaceManifest::read(&dir).with_context(|| format!("namespace `{name}`, whose st_blksize a parameter reads"))?;
+                let (path, how) = match m.objects.as_ref().and_then(|o| o.first()) {
+                    Some((first, _)) => (root.at(first), "stat of its first object"),
+                    None => (dir.join(payload::NAMESPACE_MANIFEST_NAME), "stat of its manifest"),
+                };
+                let md = std::fs::metadata(&path).with_context(|| format!("namespace `{name}`: {}, whose st_blksize a parameter reads", path.display()))?;
+                out.insert(name.to_string(), (md.blksize() as i64, how));
+            } else {
+                std::fs::create_dir_all(&dir).with_context(|| format!("creating namespace root {}", dir.display()))?;
+                let probe = dir.join(format!("{BLKSIZE_PROBE_PREFIX}{}-{}", hostname(), std::process::id()));
+                let f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&probe)
+                    .with_context(|| format!("namespace `{name}`: creating {}, whose st_blksize a parameter reads", probe.display()))?;
+                let md = f.metadata();
+                drop(f);
+                std::fs::remove_file(&probe).with_context(|| format!("removing {}", probe.display()))?;
+                out.insert(name.to_string(), (md?.blksize() as i64, "stat of a probe file in its root"));
+            }
+            continue;
+        }
         let ds = &model.datasets[*model.ds_index.get(name).ok_or_else(|| anyhow!("no dataset `{name}`"))?];
         let k = matches!(ds, crate::eval::DsMeta::Files { chunk: Some(_), .. }).then_some(0);
         let rel = ds.file_path(0, k)?;
@@ -2267,7 +2305,7 @@ pub fn st_blksize(loaded: &crate::Loaded, cfg: &Config, root: &(impl Place + ?Si
         }
         let path = root.at(&rel);
         let md = std::fs::metadata(&path).with_context(|| format!("dataset `{name}`: its first file {}, whose st_blksize a parameter reads: run `aeiou datagen` first", path.display()))?;
-        out.insert(name.to_string(), md.blksize() as i64);
+        out.insert(name.to_string(), (md.blksize() as i64, "stat of its first file"));
     }
     Ok(out)
 }
@@ -2608,6 +2646,10 @@ pub fn prepare_namespaces(ast: &Ast, root: &(impl Place + ?Sized), clean: bool) 
             let entry = entry?;
             let p = entry.path();
             if dataset_roots.iter().any(|d| d.starts_with(&p) || p.starts_with(d)) {
+                continue;
+            }
+            // another host's st_blksize probe, there for an instant (V13 keeps generated names off it)
+            if entry.file_name().to_string_lossy().starts_with(BLKSIZE_PROBE_PREFIX) {
                 continue;
             }
             stale.push(p);

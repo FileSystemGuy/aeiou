@@ -884,7 +884,7 @@ def test_an_endpoint_places_a_container_dataset_for_both_writers_and_the_runner(
 @needs_runner
 def test_size_draws_match_the_runner(tmp_path):
     """The Python `sample_size` port against sizes the Rust datagen wrote."""
-    ast = {"ast": "0.11", "name": "sizes", "datasets": {"d": {"pattern": "d/{id:04}", "layout": "whole", "access": "indexed", "count": 40, "seed": 99,
+    ast = {"ast": "0.12", "name": "sizes", "datasets": {"d": {"pattern": "d/{id:04}", "layout": "whole", "access": "indexed", "count": 40, "seed": 99,
            "size": {"mixture": [{"weight": 1, "dist": {"normal": {"mean": 50000, "sd": 20000, "min": 100}}},
                                 {"weight": 1, "dist": {"lognormal": {"median": 30000, "sigma": 0.7, "min": 1, "max": 90000}}},
                                 {"weight": 1, "dist": {"uniform": {"lo": 10, "hi": 5000}}},

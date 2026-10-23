@@ -1,5 +1,5 @@
 {
-  "ast": "0.11",
+  "ast": "0.12",
   "name": "lmcache_local_disk",
   "doc": "One engine per actor; `concurrency` request slots; each request continues an earlier conversation or starts one.",
   "params": {
@@ -2278,9 +2278,10 @@
       "script": "lmcache_local_disk.py",
       "sha256": "979c87b44cedb361676506beaecf7f477642f1ba81cb9866d853e9bac8468917",
       "builder_version": "0.2.1",
-      "git": "52bf0ab3f273"
+      "git": "eb1032107f99"
     },
     "python": "3.12.13",
-    "ast_sha256": "0e28eff7f149b1e5e811730bae9093f282ac848f0caec611d8b385d0ee5ac2f1"
+    "built_twice_identical": true,
+    "ast_sha256": "bbbec624eae7d9b6ba5308f4f2fad7392086f86e4ee86360f54601b886ee79d3"
   }
 }

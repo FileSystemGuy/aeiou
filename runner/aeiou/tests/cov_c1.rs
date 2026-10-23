@@ -58,7 +58,7 @@ fn op_codes_come_back_as_the_values_they_were_made_from() {
 #[test]
 fn an_ast_of_another_contract_version_is_refused() {
     let e = aeiou::ast::parse(r#"{"ast": "0.9", "name": "t", "actors": {}}"#).unwrap_err();
-    assert_eq!(e.to_string(), "ast version `0.9` is not `0.11`");
+    assert_eq!(e.to_string(), "ast version `0.9` is not `0.12`");
 }
 
 /// A cloned draw keeps the site `sites::annotate` gave it, so a clone draws what the original does.
@@ -97,7 +97,7 @@ impl<'m, 'a> Sink<'m, 'a> for Rec {
 }
 
 fn doc(params: Value, datasets: Value, namespaces: Value, body: Value) -> String {
-    json!({"ast": "0.11", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
+    json!({"ast": "0.12", "name": "t", "params": params, "datasets": datasets, "namespaces": namespaces, "actors": {"gpu": {"body": body}}}).to_string()
 }
 
 /// One plain dataset `d` of ten one-byte files.

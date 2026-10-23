@@ -41,7 +41,7 @@ fn collect(text: &str, cfg: &Config, count: i64) -> Vec<(i64, OpKind, String, i6
 /// A TFRecord-shaped shard dataset: 100 records of 1000 bytes in shards of 10, each record
 /// framed by a 12-byte header and a 4-byte footer, read sequentially under `stream`.
 const TFRECORD: &str = r#"{
-  "ast": "0.11", "name": "stream_test",
+  "ast": "0.12", "name": "stream_test",
   "params": {"batches": {"default": 10}, "xfer": {"default": 4096}},
   "datasets": {"shards": {"layout": "compound", "pattern": "s/{id:04}.tfrecord", "count": 100, "samples_per_file": 10,
      "size": {"const": 1000}, "seed": 7, "access": "stream",
@@ -98,7 +98,7 @@ fn stream_consume_shuffles_shards_and_frames_records() {
 /// column of 8 bytes per row and a 22-byte page header); 4 magic bytes before the groups and a
 /// footer of 200 + 120 per group after them.
 const PARQUET: &str = r#"{
-  "ast": "0.11", "name": "parquet_test",
+  "ast": "0.12", "name": "parquet_test",
   "params": {"groups": {"default": 3}},
   "datasets": {"t": {"layout": "compound", "pattern": "p/{id:04}.parquet", "count": 192, "samples_per_file": 192,
      "size": {"const": 100000}, "seed": 7, "access": "stream",
@@ -163,7 +163,7 @@ fn framed_layout_geometry_by_hand() {
 /// Alignment: tar members (512-byte header, data padded to 512), the archive padded to
 /// 10240 after two zero blocks.
 const TAR: &str = r#"{
-  "ast": "0.11", "name": "tar_test",
+  "ast": "0.12", "name": "tar_test",
   "datasets": {"t": {"layout": "compound", "pattern": "w/{id:04}.tar", "count": 25, "samples_per_file": 10,
      "size": {"const": 1000}, "seed": 7, "access": "stream",
      "format": {"class": "webdataset", "framing": {"file_footer": 1024, "file_align": 10240,
@@ -201,7 +201,7 @@ fn alignment_and_short_last_shard() {
 
 /// `fadvise` runs against a real file and is part of the fingerprint.
 const FADVISE: &str = r#"{
-  "ast": "0.11", "name": "fadvise_test",
+  "ast": "0.12", "name": "fadvise_test",
   "datasets": {"d": {"layout": "whole", "access": "map", "pattern": "d/{id:04}", "count": 4, "size": {"const": 20000}, "seed": 3}},
   "actors": {"gpu": {"body": [
     {"loop": {"index": "i", "to": 4, "body": [
@@ -287,7 +287,7 @@ fn layout_rules_are_enforced() {
 /// headers (the varint band of a 6.4 MB page), the footer of `parquet_stream`.
 #[cfg(feature = "formats")]
 const PARQUET_WRITE: &str = r#"{
-  "ast": "0.11", "name": "parquet_write",
+  "ast": "0.12", "name": "parquet_write",
   "datasets": {"t": {"layout": "compound", "pattern": "p/{id:04}.parquet", "count": 384, "samples_per_file": 192,
      "size": {"const": 100000}, "seed": 7, "access": "stream",
      "format": {"class": "parquet", "reader": "pyarrow", "version": "25.0.1", "framing": {
@@ -350,7 +350,7 @@ fn parquet_geometry_refused_before_anything_is_written() {
 /// A WebDataset of one 8 GiB sample per tar: past ustar's 11-digit octal size field.
 #[cfg(feature = "formats")]
 const TAR_WRITE: &str = r#"{
-  "ast": "0.11", "name": "tar_write",
+  "ast": "0.12", "name": "tar_write",
   "datasets": {"t": {"layout": "compound", "pattern": "w/{id:04}.tar", "count": 2, "samples_per_file": 1,
      "size": {"const": 8589934592}, "seed": 7, "access": "stream",
      "format": {"class": "webdataset", "reader": "tarfile (CPython)", "framing": {"file_footer": 1024, "file_align": 10240,
@@ -379,7 +379,7 @@ fn tar_member_past_ustar_refused_before_anything_is_written() {
 #[cfg(feature = "formats")]
 fn container(pattern: &str, n: i64, spf: i64, size: i64, format: &str) -> String {
     format!(
-        r#"{{"ast": "0.11", "name": "container_rt", "params": {{"n": {{"default": {n}}}}},
+        r#"{{"ast": "0.12", "name": "container_rt", "params": {{"n": {{"default": {n}}}}},
   "datasets": {{"d": {{"layout": "compound", "pattern": "{pattern}", "count": {{"param": "n"}}, "samples_per_file": {spf},
      "size": {{"const": {size}}}, "seed": 11, "access": "stream", "format": {format}}}}},
   "actors": {{"gpu": {{"body": [

@@ -1,0 +1,3 @@
+{"params_version": 2, "abstract": "dcp_save",
+ "doc": "The values dcp_save's defaults held until 2026-10-23 (DESIGN_REVIEW.md §3.78): 4 write items per rank of 16, 32, 16, and 8 MiB, a 2 MiB .metadata, a checkpoint every 100 of 500 steps of 323 ms. Placeholders, not measured: no job stands behind them (the 2026-10-01 trace behind the abstract is the example toy-6-items).",
+ "params": {"steps": {"default": 500}, "step_time": {"default": 323000000}, "ckpt_every": {"default": 100}, "items": {"default": 4}, "item_bytes": {"default": [16777216, 33554432, 16777216, 8388608]}, "meta_bytes": {"default": 2097152}}}

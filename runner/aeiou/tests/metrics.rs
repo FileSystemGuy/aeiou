@@ -19,7 +19,7 @@ fn dry(name: &str, gpus: i64, params: &[(&str, &str)], threads: usize, opts: Opt
 const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10")]),
     ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5")]),
-    ("dcp_save", 2, &[("steps", "200")]),
+    ("dcp_save", 2, &[("steps", "200"), ("step_time", "323000000"), ("ckpt_every", "100"), ("items", "4"), ("item_bytes", "[16777216, 33554432, 16777216, 8388608]"), ("meta_bytes", "2097152")]),
     ("dcp_load", 2, &[]),
     ("safetensors_load", 2, &[]),
     ("diskann_search", 1, &[("queries", "100"), ("threads", "2")]),
@@ -118,7 +118,7 @@ fn small_file_training_is_sequential_and_flat() {
 fn extents_by_hand() {
     use serde_json::{json, Value};
     let ast = json!({
-        "ast": "0.11", "name": "t",
+        "ast": "0.12", "name": "t",
         "datasets": {"d": {"layout": "whole", "access": "indexed", "pattern": "d/f{id}", "count": 1, "size": {"const": 1048576}, "seed": 1}},
         "actors": {"gpu": {"body": [
             {"let": {"name": "f", "value": {"file": {"dataset": "d", "id": 0}}}},

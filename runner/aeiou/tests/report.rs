@@ -154,7 +154,7 @@ fn one_host_report_matches_the_text_and_failures_are_written() {
 #[test]
 fn two_ranks_merged_on_rank_0_and_own_on_rank_1() {
     let root = tmpdir("two");
-    let params = ["steps=4", "ckpt_every=2", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "meta_bytes=65536"];
+    let params = ["steps=4", "step_time=323000000", "ckpt_every=2", "items=4", "item_bytes=[1048576, 2097152, 1048576, 1048576]", "meta_bytes=65536"];
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let mut children = Vec::new();
     for rank in 0..2 {

@@ -7009,6 +7009,50 @@ revision:
   each a shared job fragment and an accelerator fragment; until then the traced examples carry
   the old `step_time`, said to be not fitted.
 
+**Built: contract 0.12 and `dcp_save`'s case** (2026-10-23, item 38's first mechanism;
+`PROJECT_BRIEF.md` §6 item 38). Decided with the user the same day, on four questions:
+
+- *A write buffer is the storage's too* (the user's choice of the namespace form over a
+  library default kept at 1 MiB, or a `stat` of the root directory). `dcp_save`'s `buf` is the
+  `BufferedWriter` of the shard file, sized by its `st_blksize` like a reader's, and decides
+  which items are written in one call and which coalesce with their framing; a file system
+  reporting 4 KiB, 1 MiB (NFS at wsize 1 MiB), or a Lustre stripe of 4 MiB sees another
+  split. Point 11 named a dataset, and `dcp_save` has none, so contract 0.12 lets `of` name a
+  namespace. An output namespace is empty at the start, so the runner creates a probe file
+  under its root, `stat`s it, and removes it before the gate: a file created there inherits
+  what the probe did (a directory's own number is the READDIR size on NFS, the reason 0.11
+  reads a file). An input namespace is read-only (V14), so it is read from the first object
+  its manifest lists, or from the manifest where it lists none (past the listing's limit).
+- *The old defaults are an unsettled case* (the user's choice): `four-items`, whose lock runs
+  the fingerprint the defaults ran (`tests/cases.rs`; golden.rs's configuration).
+- *`meta_bytes` is required* (the user's choice over an equation of 217 bytes per item and
+  rank): the `.metadata` pickle grows with the parameter names and the plan, and two traces of
+  the same six items measured 2,602 and 2,606 bytes, so a case measures it.
+- *`item_bytes` stays each rank's bytes* (the user's choice over tensor shapes divided by
+  `gpus`): FSDP2 shards dim 0 in chunks of ceil(n/G), so later ranks get less or nothing and
+  an even split would be wrong; a case holds at the GPU counts it declares.
+
+Choices made in the build, open to revision:
+
+- **Required:** `steps`, `step_time`, `ckpt_every`, `items`, `item_bytes`, `meta_bytes`; the
+  library's `hdr` and `trailer` and the scored write's `readback` (off) stay defaults; `buf`
+  and the readback's `xfer` are `st_blksize` of `ckpt`, fallback 1 MiB. No `scale` parameter:
+  there is no dataset, and the checkpoint's size is the model's, so the submission's scale is
+  `gpus` alone.
+- **`toy-6-items` carries the old `step_time`, 323 ms, said to be not fitted**: the kit saves
+  back to back and computes nothing between checkpoints.
+- **Probes are named apart and passed over.** Every host probes the shared root before the
+  gate, with no order between them and rank 0's emptying of the root, so a probe is
+  `.aeiou-blksize-HOST-PID`, created exclusively, and the empty-root check skips that prefix
+  and leaves such a file alone, even under `--clean-namespaces` (it is another host's, there
+  for an instant). The coordinator test runs two ranks probing one root.
+- **A name both a dataset and a namespace is refused** by both checkers (V28); the builder
+  already refuses the second declaration of a name.
+- **The tests keep their values**: the runner's through one helper (`tests/common`,
+  `DCP_SAVE`), every fingerprint unchanged; a run on a file system reporting 4 KiB splits a
+  1 MiB item that a dry run's fallback coalesces, so the coordinator test gives its dry run
+  the number the root reports.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

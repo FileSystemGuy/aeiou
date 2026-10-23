@@ -370,12 +370,19 @@ What runs where, and what is checked. The design reasoning is `DESIGN_REVIEW.md`
   (contract 0.11) has no default: a run, a dry run, or a datagen without a value for it is
   refused before anything else, every such name listed (`required parameters with no value:
   batch, step_time`), and a value given is held to its declared `kind`.
-- **Storage-reported values** (contract 0.11, `DESIGN_REVIEW.md` §3.78 point 11). A
-  parameter whose default is `{"from": "st_blksize", "of": D, "fallback": N}` takes, under
-  `aeiou run`, the `st_blksize` of `stat` on dataset `D`'s first file (what the application's
-  `fstat` of a file it opens sees; a directory's is no guide, since Linux's NFS client reports
-  its READDIR size there), read on every host before the model is built, so a host whose
-  storage reports another number has another identity and the coordinator refuses it.
+- **Storage-reported values** (contract 0.11, `DESIGN_REVIEW.md` §3.78 point 11; a
+  namespace's, 0.12). A parameter whose default is `{"from": "st_blksize", "of": D,
+  "fallback": N}` takes, under `aeiou run`, the `st_blksize` of `stat` on dataset `D`'s first
+  file (what the application's `fstat` of a file it opens sees; a directory's is no guide,
+  since Linux's NFS client reports its READDIR size there). Where `D` is a namespace: an
+  input one's (read-only, V14) is that of the first object its manifest lists, or of the
+  manifest where it lists none; an output one's, empty at the start, is that of a probe file,
+  `.aeiou-blksize-HOST-PID`, created under its root (the root made if missing) and removed at
+  once, so a file the run creates there gets what the probe got. Each host probes apart in
+  the shared root, and rank 0's check that an output root is empty passes over another
+  host's probe and leaves it (V13 keeps generated names off `.aeiou`). The number is read on
+  every host before the model is built, so a host whose storage reports another number has
+  another identity and the coordinator refuses it.
   `N` where `D` is in an object store; `aeiou dry-run --st-blksize [D=]BYTES` stands in for
   the storage, and without it the dry run takes `N`. The header prints a `storage-reported:`
   line with each number and where it came from, and the report holds them under

@@ -29,7 +29,7 @@
   "additionalProperties": false,
   "properties": {
     "ast": {
-      "const": "0.11",
+      "const": "0.12",
       "description": "Schema version this document conforms to."
     },
     "name": {
@@ -1910,7 +1910,7 @@
     },
     "source": {
       "type": "object",
-      "description": "A value the storage reports (contract 0.11, DESIGN_REVIEW.md §3.78 point 11): `st_blksize`, read by `stat` of the first file of dataset `of` at the gate (`aeiou dry-run --st-blksize` in place of the storage), `fallback` where the storage reports none (an object store). The system under test's by the interposition test: the workload id covers the rule, the report the number. Rule V28.",
+      "description": "A value the storage reports (contract 0.11, DESIGN_REVIEW.md §3.78 point 11): `st_blksize`, read before the gate by `stat` of the first file of dataset `of` or (contract 0.12) of namespace `of`: the first object its manifest lists for an input namespace (the manifest where it lists none), a probe file created and removed in its root for an output one (`aeiou dry-run --st-blksize` in place of the storage), `fallback` where the storage reports none (an object store). The system under test's by the interposition test: the workload id covers the rule, the report the number. Rule V28.",
       "required": [
         "from",
         "of",

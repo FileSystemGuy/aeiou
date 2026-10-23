@@ -1557,7 +1557,7 @@ pub(crate) mod tests {
     fn dataset(n: i64, spf: i64, format: &str) -> String {
         format!(
             r#"{{
-  "ast": "0.11", "name": "geom_test",
+  "ast": "0.12", "name": "geom_test",
   "datasets": {{"d": {{"layout": "compound", "pattern": "d/{{id:04}}.bin", "count": {n}, "samples_per_file": {spf},
      "size": {{"lognormal": {{"median": 1000, "sigma": 0.5, "min": 1}}}}, "seed": 7, "access": "map"{format}}}}},
   "actors": {{"gpu": {{"body": [

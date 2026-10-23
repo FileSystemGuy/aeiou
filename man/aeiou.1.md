@@ -289,14 +289,15 @@ turns it off, and the last one on the line wins.
 - **--expect-workload-id** *SHA256*
 
   Refuse a run whose workload id is not this one, before anything is done.
-- **--st-blksize** *[DATASET=]BYTES*
+- **--st-blksize** *[NAME=]BYTES*
 
   The `st_blksize` the storage reports, for the parameters whose default is
-  `{"from": "st_blksize"}` (contract 0.11): *BYTES* for every dataset they read, or
-  *DATASET*`=`*BYTES* for one. Repeatable. Without it each such parameter takes its
-  `fallback`; `aeiou run` reads the number from the storage itself, by `stat` of the
-  dataset's first file, and prints and reports it, so a dry run of another run's ops takes
-  the number that run's report gives.
+  `{"from": "st_blksize"}` (contract 0.11; a namespace's, 0.12): *BYTES* for every dataset
+  or namespace they read, or *NAME*`=`*BYTES* for one. Repeatable. Without it each such
+  parameter takes its `fallback`; `aeiou run` reads the number from the storage itself, by
+  `stat` of a dataset's first file, an input namespace's first object, or a probe file it
+  creates and removes in an output namespace's root, and prints and reports it, so a dry run
+  of another run's ops takes the number that run's report gives.
 
 **Output**
 
