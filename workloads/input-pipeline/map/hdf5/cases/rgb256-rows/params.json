@@ -1,0 +1,3 @@
+{"params_version": 2, "abstract": "hdf5_map",
+ "doc": "The values hdf5_map's defaults held until 2026-10-22 (DESIGN_REVIEW.md §3.78): 1,000,000 RGB images of 256 × 256 as fixed rows of 192 KiB, 512 to a container of 96 MiB; batch 32 over 8 DataLoader workers each 2 ahead, 500 steps of 105 ms. Placeholders, not measured, and untraced: no application run stands behind them.",
+ "params": {"batch": {"default": 32}, "workers": {"default": 8}, "prefetch": {"default": 2}, "steps": {"default": 500}, "step_time": {"default": 105000000}, "samples_per_file": {"default": 512}, "samples": {"default": 1000000}}}

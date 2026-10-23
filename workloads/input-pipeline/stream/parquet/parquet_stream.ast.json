@@ -4,28 +4,29 @@
   "doc": "pyarrow over Parquet shards: footer read, then WILLNEED and one pread per coalesced run of row groups.",
   "params": {
     "batch": {
-      "default": 256,
       "unit": "count",
-      "doc": "[config] samples per step"
+      "doc": "samples per step: the model's on its accelerator, whose memory sets it",
+      "kind": "int"
     },
     "samples_per_file": {
-      "default": 1024,
       "unit": "count",
-      "doc": "[config] samples per shard"
+      "doc": "samples per shard: the job's corpus",
+      "kind": "int"
     },
     "cycle": {
-      "default": 4,
       "unit": "count",
-      "doc": "[config] interleave cycle_length: shards one GPU's pipeline streams concurrently"
+      "doc": "interleave cycle_length: shards one GPU's pipeline streams concurrently; the job's",
+      "kind": "int"
     },
     "prefetch": {
-      "default": 1,
       "unit": "count",
-      "doc": "[config] shards finished ahead of the training loop, per cycle slot"
+      "doc": "shards finished ahead of the training loop, per cycle slot; the job's",
+      "kind": "int"
     },
     "steps": {
-      "default": 500,
-      "unit": "count"
+      "unit": "count",
+      "doc": "steps of the run: the job's",
+      "kind": "int"
     },
     "sync_every": {
       "default": 1,
@@ -33,14 +34,14 @@
       "doc": "synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)"
     },
     "step_time": {
-      "default": 105000000,
       "unit": "ns",
-      "doc": "[measure] GPU step time on the target accelerator"
+      "doc": "compute per step: the model's on its accelerator",
+      "kind": "int"
     },
     "decode": {
-      "default": 0,
       "unit": "ns",
-      "doc": "[measure] decode compute per shard in the input pipeline; 0 = I/O bound"
+      "doc": "decode compute per shard in the input pipeline, the job's; 0 = I/O bound",
+      "kind": "int"
     },
     "xfer": {
       "default": 262144,
@@ -48,14 +49,15 @@
       "doc": "[verify] the reader library's read buffer (TFRecord)"
     },
     "samples": {
-      "default": 1281167,
       "unit": "count",
-      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+      "doc": "corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5)",
+      "scale": true,
+      "kind": "int"
     },
     "sample_median": {
-      "default": 112640,
       "unit": "bytes",
-      "doc": "[measure] corpus"
+      "doc": "median sample size: the job's corpus",
+      "kind": "int"
     }
   },
   "datasets": {
@@ -811,11 +813,12 @@
   "provenance": {
     "generator": {
       "script": "parquet_stream.py",
-      "sha256": "51cb4b2aaf285fd1b78b8cf80086f249b03ad49bec65e437a4cbae92ff325815",
+      "sha256": "f1746c64aca7853f1664dd261265b3900e94fc40b86bfd65da4d4aabc3820ec6",
       "builder_version": "0.2.1",
-      "git": "52bf0ab3f273"
+      "git": "cb978da6d352-dirty"
     },
     "python": "3.12.13",
-    "ast_sha256": "dfa952a7486ec07dd00a0c5e5f6c7f124fd66e812c5268a2429d3f6bad728ec8"
+    "built_twice_identical": true,
+    "ast_sha256": "3988007cfb7616a19af3837388865810e0a78c79a53f527f6aae785500ac1afc"
   }
 }

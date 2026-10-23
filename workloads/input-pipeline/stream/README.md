@@ -8,5 +8,5 @@ Also searched for as: iterable, sharded, webdataset.
 
 ## Mechanisms
 
-- [`parquet`](parquet/): pyarrow, parquet; cases: none yet
-- [`tfrecord`](tfrecord/): tf-data, tfrecord; cases: none yet
+- [`parquet`](parquet/): pyarrow, parquet; cases: imagenet-rows
+- [`tfrecord`](tfrecord/): tf-data, tfrecord; cases: imagenet-records

@@ -1734,6 +1734,11 @@ Capture for these: `tf.data` and `pyarrow` pipelines on an NFS mount of the targ
 (`strace -f -e trace=%file,%desc`), compare the per-shard syscall sequence with the class's
 protocol, and fit `xfer`, `cycle`, `decode`, and `per_shard`.
 
+*2026-10-22* (`DESIGN_REVIEW.md` §3.78): none of the three is traced yet. Their job and GPU
+values (and `samples`, the submission's scale) have no default; the values the defaults held,
+placeholders, are each mechanism's one case of kind `unsettled` (`rgb256-rows`,
+`imagenet-rows`, `imagenet-records`), until the capture above (`PROJECT_BRIEF.md` §6 item 36).
+
 ## 11. Trace capture plan (to replace [verify] and fill [measure])
 
 One small run per workload on an NFS mount of the target class, one process, a few hundred

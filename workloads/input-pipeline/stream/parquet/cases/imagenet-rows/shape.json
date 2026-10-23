@@ -3,10 +3,10 @@
   "tool": "aeiou-catalog",
   "runs": [
     {
-      "ast": "tfrecord_stream",
-      "ast_sha256": "68faaced57c1896892c1c6016c4e947c1a27e28cb1135b683568150ca5433a97",
-      "params": null,
-      "params_sha256": null,
+      "ast": "parquet_stream",
+      "ast_sha256": "d9e1cbafbfbea5279c3f82f6b9e3a731518cfa9bc11c811bec0dc41e2fbb3e1a",
+      "params": "case.lock.json",
+      "params_sha256": "8eb2c137156a4a87f2c8bad3b78fad2ccb45e3a5d00dfbc1610454d4f11a4c22",
       "gpus": 1,
       "seeds": [
         1,
@@ -16,21 +16,23 @@
       "length": null,
       "stable": true,
       "moving": [],
-      "ops": 61308,
+      "ops": 1681,
       "counts": {
         "close": 125,
+        "fadvise": 528,
+        "fstat": 250,
         "open": 125,
-        "read": 61058
+        "read": 653
       },
-      "bytes_read": 15957363747,
+      "bytes_read": 15965139747,
       "bytes_written": 0,
       "datasets": [
         {
-          "bytes": 159725698441,
+          "bytes": 159724993133,
           "directories": 1,
           "files": 1252,
           "inventory_bytes": 0,
-          "mean_file": 127576436,
+          "mean_file": 127575873,
           "name": "shards",
           "samples": 1281167
         }
@@ -47,9 +49,9 @@
           "class": null
         },
         "request_size_read": {
-          "value": 262144,
+          "value": 29360128,
           "spread": 0,
-          "class": "small"
+          "class": "medium"
         },
         "request_size_write": {
           "value": null,
@@ -62,9 +64,9 @@
           "class": "read-only"
         },
         "metadata": {
-          "value": 0.00409319,
-          "spread": 1.1435e-05,
-          "class": "none"
+          "value": 0.734214,
+          "spread": 0.0378947,
+          "class": "medium"
         },
         "reads_own_writes": {
           "value": 0.0,
@@ -72,13 +74,13 @@
           "class": "no"
         },
         "reread": {
-          "value": 0.0,
-          "spread": 0.0,
+          "value": 0.000491334,
+          "spread": 1.39669e-06,
           "class": "none"
         },
         "skew": {
-          "value": 0.01,
-          "spread": 0.0,
+          "value": 0.0104864,
+          "spread": 1.38272e-06,
           "class": "uniform"
         }
       }

@@ -584,3 +584,27 @@ fn the_unet3d_h100_use_case_is_the_run_the_old_defaults_made() {
     let (code, _, err) = aeiou(&["dry-run", &ast, "--gpus", "1"]);
     assert!(code == 1 && err.contains("required parameters with no value: batch, prefetch, sample_mean, sample_sd, samples, step_time, steps, workers"), "{err}");
 }
+
+/// The untraced containers' cases (item 33, part 5b; DESIGN_REVIEW §3.78 points 1 and 4): each
+/// lock runs exactly what its abstract's defaults ran until 2026-10-22 (the fingerprints taken at
+/// cb978da, 2 GPUs, seed 1, 8 steps), and the abstract alone is refused, naming every value it
+/// now requires.
+#[test]
+fn the_untraced_containers_cases_are_the_runs_the_old_defaults_made() {
+    let w = crate::common::workloads().display().to_string();
+    let stream = "batch, cycle, decode, prefetch, sample_median, samples, samples_per_file, step_time, steps";
+    for (case, ast, fingerprint, ops, required) in [
+        ("rgb256-rows", "hdf5_map", "32456fa46e566c10", 6144, "batch, prefetch, samples, samples_per_file, step_time, steps, workers"),
+        ("imagenet-rows", "parquet_stream", "627b8aaa7cdc75ae", 56, stream),
+        ("imagenet-records", "tfrecord_stream", "aa31f120e5b4cd9c", 1941, stream),
+    ] {
+        let (code, out, err) = aeiou(&["dry-run", "--case", case, "--workloads", &w, "--gpus", "2", "--seed", "1", "--param", "steps=8"]);
+        assert_eq!(code, 0, "{case}: {err}");
+        assert!(line(&out, "case ").contains(&format!("/{case}  run {ast}")), "{out}");
+        assert_eq!(line(&out, "fingerprint "), format!("fingerprint {fingerprint}"), "{case}");
+        assert!(line(&out, "  ops ").starts_with(&format!("  ops {ops} ")), "{case}: {out}");
+        let file = crate::common::workload_ast(&format!("{ast}.ast.json")).display().to_string();
+        let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+        assert!(code == 1 && err.contains(&format!("required parameters with no value: {required}")), "{ast}: {err}");
+    }
+}

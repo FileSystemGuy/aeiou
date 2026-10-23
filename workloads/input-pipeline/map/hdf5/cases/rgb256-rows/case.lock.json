@@ -1,0 +1,36 @@
+{
+  "lock_version": 1,
+  "name": "hdf5/rgb256-rows",
+  "runs": [
+    {
+      "name": "hdf5_map",
+      "abstract": "input-pipeline/map/hdf5/hdf5_map.ast.json",
+      "ast_sha256": "500ceff8e7d4398846457436094efddaf00fbb09dcfa0fd5de58e041d296177a",
+      "params": {
+        "batch": {"default": 32},
+        "prefetch": {"default": 2},
+        "samples": {"default": 1000000},
+        "samples_per_file": {"default": 512},
+        "step_time": {"default": 105000000},
+        "steps": {"default": 500},
+        "sync_every": {"default": 1},
+        "workers": {"default": 8}
+      },
+      "sources": {
+        "batch": "input-pipeline/map/hdf5/cases/rgb256-rows/params.json",
+        "prefetch": "input-pipeline/map/hdf5/cases/rgb256-rows/params.json",
+        "samples": "input-pipeline/map/hdf5/cases/rgb256-rows/params.json",
+        "samples_per_file": "input-pipeline/map/hdf5/cases/rgb256-rows/params.json",
+        "step_time": "input-pipeline/map/hdf5/cases/rgb256-rows/params.json",
+        "steps": "input-pipeline/map/hdf5/cases/rgb256-rows/params.json",
+        "sync_every": "abstract",
+        "workers": "input-pipeline/map/hdf5/cases/rgb256-rows/params.json"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "input-pipeline/map/hdf5/cases/rgb256-rows/case.toml",
+    "fragments": [{"path": "input-pipeline/map/hdf5/cases/rgb256-rows/params.json", "sha256": "d1136ab3b96913293b82723677ad0024a20aae2fe9ebb92aba35ab89ce830402"}]
+  }
+}

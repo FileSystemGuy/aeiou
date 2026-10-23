@@ -12,14 +12,16 @@ SHAPE = (256, 256, 3)                       # one sample: 196,608 bytes, larger 
 w = Workload("hdf5_map",
              doc="DataLoader over HDF5 containers of fixed-size rows: open, metadata reads, one positioned row read, close per sample.")
 P = w.P
-w.param("batch", 32, unit="count")
-w.param("workers", 8, unit="count")
-w.param("prefetch", 2, unit="count")
-w.param("steps", 500, unit="count")
+# the job and the model on a GPU are a case's (DESIGN_REVIEW.md §3.78 point 1): required here; the
+# placeholders the defaults held until 2026-10-22, never measured, are cases/rgb256-rows (untraced)
+w.param("batch", kind=int, unit="count", doc="samples per step: the model's on its accelerator, whose memory sets it")
+w.param("workers", kind=int, unit="count", doc="DataLoader worker processes per GPU: the job's")
+w.param("prefetch", kind=int, unit="count", doc="batches each worker keeps ahead (prefetch_factor): the job's")
+w.param("steps", kind=int, unit="count", doc="steps of the run: the job's")
 w.param("sync_every", 1, unit="count", doc="synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)")
-w.param("step_time", 105 * ms, unit="ns", doc="[measure] GPU step time on the target accelerator")
-w.param("samples_per_file", 512, unit="count", doc="[config] samples per container (96 MiB each)")
-w.param("samples", 1_000_000, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
+w.param("step_time", kind=int, unit="ns", doc="compute per step: the model's on its accelerator")
+w.param("samples_per_file", kind=int, unit="count", doc="samples per container: the job's corpus")
+w.param("samples", kind=int, scale=True, unit="count", doc="corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5)")
 
 train = w.dataset("train", pattern="train/samples-{id:05}.h5", layout="compound", access="map", count=P.samples, samples_per_file=P.samples_per_file,
                   size=const(SHAPE[0] * SHAPE[1] * SHAPE[2]), seed=0x5eed_da91,

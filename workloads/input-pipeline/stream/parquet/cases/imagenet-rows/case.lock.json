@@ -1,0 +1,42 @@
+{
+  "lock_version": 1,
+  "name": "parquet/imagenet-rows",
+  "runs": [
+    {
+      "name": "parquet_stream",
+      "abstract": "input-pipeline/stream/parquet/parquet_stream.ast.json",
+      "ast_sha256": "3988007cfb7616a19af3837388865810e0a78c79a53f527f6aae785500ac1afc",
+      "params": {
+        "batch": {"default": 256},
+        "cycle": {"default": 4},
+        "decode": {"default": 0},
+        "prefetch": {"default": 1},
+        "sample_median": {"default": 112640},
+        "samples": {"default": 1281167},
+        "samples_per_file": {"default": 1024},
+        "step_time": {"default": 105000000},
+        "steps": {"default": 500},
+        "sync_every": {"default": 1},
+        "xfer": {"default": 262144}
+      },
+      "sources": {
+        "batch": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "cycle": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "decode": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "prefetch": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "sample_median": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "samples": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "samples_per_file": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "step_time": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "steps": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json",
+        "sync_every": "abstract",
+        "xfer": "abstract"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "input-pipeline/stream/parquet/cases/imagenet-rows/case.toml",
+    "fragments": [{"path": "input-pipeline/stream/parquet/cases/imagenet-rows/params.json", "sha256": "32d1de4274c1420bfaaf2a61429b58fe0633b66a10a258bbe6b66629e420ea3b"}]
+  }
+}

@@ -723,7 +723,16 @@ numbers; the order is this note's.
     `format.framing`, in the dry run and, from the same layout, in `aeiou-trace`. Payload
     reuse under `consume` is the epoch count; framing reuse is what rewards a footer or
     metadata cache, and a fit that matches the total re-read with the wrong mix would show.
-    To design with the HDF5, Parquet, and TFRecord example cases (item 33, part 5b).
+    To design with the HDF5, Parquet, and TFRecord example cases (~~item 33, part 5b~~ item 36,
+    their traces; 5b gave them untraced cases, the user's choice 2026-10-22).
+36. **Trace the untraced containers (backlog, the user's choice 2026-10-22, `DESIGN_REVIEW.md`
+    §3.78).** `hdf5_map`, `parquet_stream`, and `tfrecord_stream` have never been traced; each
+    has one case of kind `unsettled` (`rgb256-rows`, `imagenet-rows`, `imagenet-records`)
+    holding the placeholders its defaults held until 2026-10-22. Each gets a kit (h5py under a
+    PyTorch `DataLoader`; `pyarrow.parquet.ParquetFile`; `tf.data.TFRecordDataset` with
+    interleave, which needs TensorFlow installed), a capture taken as `aeiou_metrics: 2`, and an
+    example case fitted to it, which replaces the unsettled one; item 35 is designed on the
+    framing those traces show.
 
 ## 7. Environment
 

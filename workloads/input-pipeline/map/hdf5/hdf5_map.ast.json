@@ -4,20 +4,24 @@
   "doc": "DataLoader over HDF5 containers of fixed-size rows: open, metadata reads, one positioned row read, close per sample.",
   "params": {
     "batch": {
-      "default": 32,
-      "unit": "count"
+      "unit": "count",
+      "doc": "samples per step: the model's on its accelerator, whose memory sets it",
+      "kind": "int"
     },
     "workers": {
-      "default": 8,
-      "unit": "count"
+      "unit": "count",
+      "doc": "DataLoader worker processes per GPU: the job's",
+      "kind": "int"
     },
     "prefetch": {
-      "default": 2,
-      "unit": "count"
+      "unit": "count",
+      "doc": "batches each worker keeps ahead (prefetch_factor): the job's",
+      "kind": "int"
     },
     "steps": {
-      "default": 500,
-      "unit": "count"
+      "unit": "count",
+      "doc": "steps of the run: the job's",
+      "kind": "int"
     },
     "sync_every": {
       "default": 1,
@@ -25,19 +29,20 @@
       "doc": "synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)"
     },
     "step_time": {
-      "default": 105000000,
       "unit": "ns",
-      "doc": "[measure] GPU step time on the target accelerator"
+      "doc": "compute per step: the model's on its accelerator",
+      "kind": "int"
     },
     "samples_per_file": {
-      "default": 512,
       "unit": "count",
-      "doc": "[config] samples per container (96 MiB each)"
+      "doc": "samples per container: the job's corpus",
+      "kind": "int"
     },
     "samples": {
-      "default": 1000000,
       "unit": "count",
-      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+      "doc": "corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5)",
+      "scale": true,
+      "kind": "int"
     }
   },
   "datasets": {
@@ -301,11 +306,12 @@
   "provenance": {
     "generator": {
       "script": "hdf5_map.py",
-      "sha256": "6d3f232a2699cc0315a72af7d9ed1fc5db9e0f43f21cb7828dbc1287da17035d",
+      "sha256": "5026527195a24311aa5706ac03a6e272420b97a4543c5ad19feff68f02e6777e",
       "builder_version": "0.2.1",
-      "git": "52bf0ab3f273"
+      "git": "cb978da6d352-dirty"
     },
     "python": "3.12.13",
-    "ast_sha256": "8d70ac5707041c8b0e569b8d09ed1bbb0ff88a439a7f80494cf2e17cac7c74e1"
+    "built_twice_identical": true,
+    "ast_sha256": "500ceff8e7d4398846457436094efddaf00fbb09dcfa0fd5de58e041d296177a"
   }
 }

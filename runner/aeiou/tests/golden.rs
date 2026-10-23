@@ -54,10 +54,11 @@ fn hashes_match_check_py() {
         ("diskann_search", "80642e20f54cf97933604cfd8acd766f46d5f4e16f1caf504ac2b74a2b036d1e"),
         // 2026-10-15 (RC1 review): a step takes the shards whose first sample is in its batch, for
         // any batch and samples_per_file, in place of `every(samples_per_file div batch)`; the
-        // fingerprints where batch divides samples_per_file unchanged
-        ("tfrecord_stream", "afd21c318ee1d90eb6a7d799e3cfb9a43bd4c8a7d8906085ef9ab5ca6edeeeb8"),
-        ("parquet_stream", "dfa952a7486ec07dd00a0c5e5f6c7f124fd66e812c5268a2429d3f6bad728ec8"),
-        ("hdf5_map", "8d70ac5707041c8b0e569b8d09ed1bbb0ff88a439a7f80494cf2e17cac7c74e1"),
+        // fingerprints where batch divides samples_per_file unchanged; the three again 2026-10-22, the job's and the GPU's
+        // values required (each mechanism's untraced case holds the old defaults), DESIGN_REVIEW §3.78
+        ("tfrecord_stream", "e08042b48ca9d65aa785d98224deeccbe277891820d17c551dd1e3e203fa20ee"),
+        ("parquet_stream", "3988007cfb7616a19af3837388865810e0a78c79a53f527f6aae785500ac1afc"),
+        ("hdf5_map", "500ceff8e7d4398846457436094efddaf00fbb09dcfa0fd5de58e041d296177a"),
         ("faiss_ivf_ondisk", "3e70625597b3f2cea10c617e49b6e287dfc58c4378ba53bc822a2d8b4884e837"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52)
         ("lmcache_shared_fs", "f2b32e8022488a1906dc23599c522783aeffe9b7eb857ab51cd2987c0f9b0426"),
@@ -121,9 +122,10 @@ fn golden_fingerprints() {
         ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0xc7d83399ee6948bc, 3417),
         ("lmcache_shared_fs_reader", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")], 0x382dba518a89c85f, 2986),
         // the container workloads (contract 0.2, 2026-09-30), at builder/tests/test_formats.py's configurations
-        ("tfrecord_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0xd48ec6c021d88539, 263),
-        ("parquet_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2")], 0x74a8ab1574196e74, 28),
-        ("hdf5_map", 2, &[("samples", "64"), ("samples_per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4")], 0x3dd38374803bff38, 384),
+        // and, since 2026-10-22, the defaults their job and GPU values had (required since; DESIGN_REVIEW §3.78)
+        ("tfrecord_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2"), ("prefetch", "1"), ("step_time", "105000000"), ("decode", "0"), ("sample_median", "112640")], 0xd48ec6c021d88539, 263),
+        ("parquet_stream", 2, &[("samples", "768"), ("samples_per_file", "128"), ("batch", "32"), ("steps", "8"), ("cycle", "2"), ("prefetch", "1"), ("step_time", "105000000"), ("decode", "0"), ("sample_median", "112640")], 0x74a8ab1574196e74, 28),
+        ("hdf5_map", 2, &[("samples", "64"), ("samples_per_file", "16"), ("batch", "4"), ("workers", "2"), ("steps", "4"), ("prefetch", "2"), ("step_time", "105000000")], 0x3dd38374803bff38, 384),
     ];
     for (name, gpus, params, fp, ops) in cases {
         let text = std::fs::read_to_string(crate::common::workload_ast(name)).unwrap();

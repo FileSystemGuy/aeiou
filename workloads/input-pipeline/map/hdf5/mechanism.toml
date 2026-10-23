@@ -6,7 +6,3 @@ format = "hdf5"
 phase = ["training"]
 domain = ["ai"]
 
-# No case yet: the catalog's row is the abstract at its defaults (shape.defaults.json).
-[defaults]
-ast = "hdf5_map"
-gpus = 1

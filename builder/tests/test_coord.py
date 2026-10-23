@@ -24,7 +24,7 @@ from aeiou.nodes import BuildError  # noqa: E402
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 needs_runner = pytest.mark.skipif(not RUNNER.exists(), reason="runner binary not built")
 # six shards of 128 samples, the last short (700 samples)
-PARAMS = ["samples=700", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"]
+PARAMS = ["samples=700", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000", "prefetch=1", "step_time=105000000", "decode=0"]
 
 
 def ast_path(name):

@@ -151,6 +151,11 @@ class FormatClass:
     def framing(self, mean_bytes: float) -> dict:
         raise NotImplementedError
 
+    def sample_mean(self, size, params) -> float:
+        """The mean sample size the framing is placed by: none for a class whose framing does not
+        depend on it, so a size naming a required parameter frames."""
+        return 0.0
+
     def writer_settings(self) -> dict:
         """What `aeiou-datagen` needs to rebuild this class from the AST (`framing.writer`)."""
         raise NotImplementedError
@@ -161,8 +166,7 @@ class FormatClass:
             raise BuildError(f"format class `{self.name}` supports {sorted(self.modes)} access, not `{access}` "
                              f"(schema/README.md V9, GRAMMAR_OPTIONS.md §6.2)")
         self.check_size(size, params)
-        mean = expected_sample_bytes(size, params) if size is not None else 0.0
-        framing = dict(self.framing(mean))
+        framing = dict(self.framing(self.sample_mean(size, params)))
         framing["writer"] = self.writer_settings()
         spec = {"class": self.name, "reader": self.reader}
         v = self.version()
@@ -491,8 +495,11 @@ class Parquet(FormatClass):
     FOOTER_READ = 64 * KiB
     RANGE_LIMIT = 32 * MiB
 
-    def __init__(self, rows_per_group=64, columns=(("image", "binary"), ("label", "int64"))):
+    def __init__(self, rows_per_group=64, columns=(("image", "binary"), ("label", "int64")), band_sample_bytes=None):
         self.rows = _plain_int(rows_per_group, "parquet rows_per_group", 1)
+        # the sample size the page headers' varint band is placed by, in place of the size's mean:
+        # for a size naming a required parameter, which has no mean at build time
+        self.band = None if band_sample_bytes is None else _plain_int(band_sample_bytes, "parquet band_sample_bytes", 1)
         self.columns = [(str(n), str(t)) for n, t in columns]
         if sum(1 for _, t in self.columns if t == "binary") != 1:
             raise BuildError("parquet: exactly one `binary` column carries the sample")
@@ -506,6 +513,17 @@ class Parquet(FormatClass):
 
     def footer_base(self) -> int:
         return 128 + 32 * len(self.columns)
+
+    def sample_mean(self, size, params):
+        if self.band is not None:
+            return float(self.band)
+        if size is None:
+            return 0.0
+        try:
+            return expected_sample_bytes(size, params)
+        except BuildError as e:
+            raise BuildError(f"{e}; a size naming a required parameter has no mean at build time: give parquet(band_sample_bytes=…), "
+                             f"the sample size its page headers' varint band is placed by") from None
 
     def footer_per_unit(self) -> int:
         return 32 + 64 * len(self.columns)

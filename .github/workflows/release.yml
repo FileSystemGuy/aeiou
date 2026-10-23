@@ -3,7 +3,7 @@ name: release
 # A tag `vX.Y.Z` builds one tarball for x86_64 Linux and attaches it to a GitHub Release:
 # the runner binary, `aeiou-header` beside it (one file carrying Python, numpy, h5py, and
 # libhdf5 at the versions uv.lock pins; DESIGN_REVIEW.md §3.70), and `aeiou-launch`, the manual pages as roff and as Markdown, the
-# committed abstracts under workloads/ with their parameter files, READMEs, descriptions, and catalog records, the builder's wheel, and
+# committed abstracts under workloads/ with their parameter files, case locks, READMEs, descriptions, and catalog records, the builder's wheel, and
 # QUICKSTART.md. Built on ubuntu-22.04 so the binary runs on glibc 2.34 and later (RHEL 9,
 # Ubuntu 22.04, Debian 12 and newer); the runner links nothing but the C runtime (its S3 client
 # uses rustls, no OpenSSL). Nothing is
@@ -77,7 +77,7 @@ jobs:
               "$p" -o "$d/share/man/man$sec/$page"
           done
           cp man/*.md "$d/man/"
-          git ls-files workloads | grep -E '(\.ast\.json|params\.json|README\.md|DESCRIPTION(\.defaults)?\.md|CATALOG\.md|\.toml|shape(\.defaults)?\.json)$' | tar -cf - -T - | tar -xf - -C "$d"
+          git ls-files workloads | grep -E '(\.ast\.json|params\.json|case\.lock\.json|README\.md|DESCRIPTION\.md|CATALOG\.md|\.toml|shape\.json)$' | tar -cf - -T - | tar -xf - -C "$d"
           cp wheel/*.whl "$d/wheel/"
           cp QUICKSTART.md LICENSE "$d/"
           tar czf "$d.tar.gz" "$d"
@@ -92,8 +92,9 @@ jobs:
           ! grep -aq 'built without the object engine' bin/aeiou
           bin/aeiou-header --version
           # HDF5 through the aeiou-header beside aeiou, in an environment with no Python
-          env -i PATH=/usr/bin:/bin bin/aeiou datagen workloads/input-pipeline/map/hdf5/hdf5_map.ast.json --root /tmp/smoke-h5 \
-            --param samples=20 --param samples_per_file=8 | grep "header(s) from"
+          # (through its case's lock, which gives the job's values the abstract requires)
+          env -i PATH=/usr/bin:/bin bin/aeiou datagen --case-file workloads/input-pipeline/map/hdf5/cases/rgb256-rows/case.lock.json \
+            --root /tmp/smoke-h5 --param samples=20 --param samples_per_file=8 | grep "header(s) from"
           bin/aeiou check $(find workloads -name '*.ast.json')
           bin/aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 1 \
             --params-file workloads/input-pipeline/map/file-per-sample/params/smoke.params.json | tail -3

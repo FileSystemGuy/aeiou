@@ -26,17 +26,19 @@ from aeiou.formats import parquet
 def shape(name, pattern, make_format, doc):
     w = Workload(name, doc=doc)
     P = w.P
-    w.param("batch", 256, unit="count", doc="[config] samples per step")
-    w.param("samples_per_file", 1024, unit="count", doc="[config] samples per shard")
-    w.param("cycle", 4, unit="count", doc="[config] interleave cycle_length: shards one GPU's pipeline streams concurrently")
-    w.param("prefetch", 1, unit="count", doc="[config] shards finished ahead of the training loop, per cycle slot")
-    w.param("steps", 500, unit="count")
+    # the job and the model on a GPU are a case's (DESIGN_REVIEW.md §3.78 point 1): required here; the
+    # placeholders the defaults held until 2026-10-22, never measured, are cases/imagenet-rows (untraced)
+    w.param("batch", kind=int, unit="count", doc="samples per step: the model's on its accelerator, whose memory sets it")
+    w.param("samples_per_file", kind=int, unit="count", doc="samples per shard: the job's corpus")
+    w.param("cycle", kind=int, unit="count", doc="interleave cycle_length: shards one GPU's pipeline streams concurrently; the job's")
+    w.param("prefetch", kind=int, unit="count", doc="shards finished ahead of the training loop, per cycle slot; the job's")
+    w.param("steps", kind=int, unit="count", doc="steps of the run: the job's")
     w.param("sync_every", 1, unit="count", doc="synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)")
-    w.param("step_time", 105 * ms, unit="ns", doc="[measure] GPU step time on the target accelerator")
-    w.param("decode", 0, unit="ns", doc="[measure] decode compute per shard in the input pipeline; 0 = I/O bound")
+    w.param("step_time", kind=int, unit="ns", doc="compute per step: the model's on its accelerator")
+    w.param("decode", kind=int, unit="ns", doc="decode compute per shard in the input pipeline, the job's; 0 = I/O bound")
     w.param("xfer", 256 * KiB, unit="bytes", doc="[verify] the reader library's read buffer (TFRecord)")
-    w.param("samples", 1_281_167, unit="count", doc="[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)")
-    w.param("sample_median", 110 * KiB, unit="bytes", doc="[measure] corpus")
+    w.param("samples", kind=int, scale=True, unit="count", doc="corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5)")
+    w.param("sample_median", kind=int, unit="bytes", doc="median sample size: the job's corpus")
     shards = w.dataset("shards", pattern=pattern, layout="compound", access="stream", count=P.samples, samples_per_file=P.samples_per_file,
                        size=lognormal(median=P.sample_median, sigma=0.45), seed=0x5eed_da90,
                        format=make_format(P))
@@ -59,8 +61,11 @@ def shape(name, pattern, make_format, doc):
                 gpu.barrier("global")
 
 
+# the page headers' widths are fixed at build time by the varint band of a row group's chunk; `sample_median`
+# is required, so the band is placed by a sample of 110 KiB: 4-byte varints, chunks of 1 MiB to 128 MiB at 64
+# rows (samples of about 16 KiB to 2 MiB), and a chunk outside it is refused when it is written
 for w, worker, shards, s in shape("parquet_stream", "train/shard-{id:05}.parquet",
-                                  lambda P: parquet(rows_per_group=64, columns=(("image", "binary"), ("label", "int64"))),
+                                  lambda P: parquet(rows_per_group=64, columns=(("image", "binary"), ("label", "int64")), band_sample_bytes=110 * KiB),
                                   "pyarrow over Parquet shards: footer read, then WILLNEED and one pread per coalesced run of row groups."):
     shards.format.open_reads(worker, s)
     shards.format.read_all(worker, s)

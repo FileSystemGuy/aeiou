@@ -238,3 +238,66 @@ def test_the_example_cases_of_npy_per_sample_give_every_required_value():
         doc = json.loads((NPY / "cases" / case / "params.json").read_text())
         assert required <= set(doc["params"]), case
         assert doc["params"]["step_time"] == {"default": 323_000_000} and "not fitted" in doc["doc"], case
+
+
+# ---------------------------------------------------------------- the untraced containers and their cases
+
+# what each abstract's defaults held until 2026-10-22, placeholders never measured: a case of kind
+# `unsettled` holds them, untraced (item 33, part 5b; DESIGN_REVIEW.md §3.78 points 1 and 4)
+STREAM_DEFAULTS = {"batch": 256, "samples_per_file": 1024, "cycle": 4, "prefetch": 1, "steps": 500,
+                   "step_time": 105_000_000, "decode": 0, "samples": 1_281_167, "sample_median": 110 << 10}
+UNTRACED = {
+    "hdf5_map": (WORKLOADS / "input-pipeline/map/hdf5", "rgb256-rows",
+                 {"batch": 32, "workers": 8, "prefetch": 2, "steps": 500, "step_time": 105_000_000,
+                  "samples_per_file": 512, "samples": 1_000_000}),
+    "parquet_stream": (WORKLOADS / "input-pipeline/stream/parquet", "imagenet-rows", STREAM_DEFAULTS),
+    "tfrecord_stream": (WORKLOADS / "input-pipeline/stream/tfrecord", "imagenet-records", STREAM_DEFAULTS),
+}
+
+
+@pytest.mark.parametrize("ast", sorted(UNTRACED))
+def test_the_untraced_containers_leave_the_job_and_the_gpu_to_a_case(ast):
+    """DESIGN_REVIEW.md §3.78 points 1 and 4: the job's values and the model's on a GPU have no
+    default, and `samples` is the submission's scale; the library's values keep theirs."""
+    mech, _, old = UNTRACED[ast]
+    p = json.loads((mech / f"{ast}.ast.json").read_text())["params"]
+    for k in old:
+        assert "default" not in p[k] and p[k]["kind"] == "int", k
+    assert p["samples"].get("scale") is True
+    assert {k for k, v in p.items() if "default" not in v} == set(old)
+
+
+@pytest.mark.parametrize("ast", sorted(UNTRACED))
+def test_an_untraced_container_has_an_unsettled_case_of_its_old_defaults(ast):
+    """Each mechanism's one case holds the values its defaults held, each a default, said to be
+    untraced: kind `unsettled`, no capture, a lock that is current, and no `[defaults]` row left."""
+    import tomllib
+    mech, name, old = UNTRACED[ast]
+    case = mech / "cases" / name
+    rec = tomllib.loads((case / "case.toml").read_text())
+    assert rec["kind"] == "unsettled" and "accelerator" not in rec
+    assert rec["run"] == [{"ast": ast, "params": "params.json"}]
+    assert not (case / "captures").exists()
+    doc = json.loads((case / "params.json").read_text())
+    assert "untraced" in doc["doc"] and "not measured" in doc["doc"]
+    assert doc["params"] == {k: {"default": v} for k, v in old.items()}
+    (run,) = json.loads((case / lock.LOCK_FILE).read_text())["runs"]
+    assert {k: run["params"][k] for k in old} == {k: {"default": v} for k, v in old.items()}
+    assert lock.stale(case, workloads=WORKLOADS) is None
+    assert "untraced" in (case / "README.md").read_text()
+    assert "defaults" not in tomllib.loads((mech / "mechanism.toml").read_text())
+    assert not (mech / "shape.defaults.json").exists() and not (mech / "DESCRIPTION.defaults.md").exists()
+
+
+def test_the_release_tarball_carries_every_lock_and_what_it_pins():
+    """The release workflow's file filter (`.github/workflows/release.yml`) keeps every case's
+    lock and the abstract each lock pins, so `aeiou run --case` works in the unpacked tarball."""
+    m = re.search(r"git ls-files workloads \| grep -E '([^']+)'", (ROOT / ".github/workflows/release.yml").read_text())
+    keep = re.compile(m.group(1))
+    files = subprocess.run(["git", "ls-files", "workloads"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    shipped = {f for f in files if keep.search(f)}
+    locks = sorted(f for f in files if f.endswith("/" + lock.LOCK_FILE))
+    assert locks and set(locks) <= shipped, sorted(set(locks) - shipped)
+    for f in locks:
+        for run in json.loads((ROOT / f).read_text())["runs"]:
+            assert "workloads/" + run["abstract"] in shipped, (f, run["abstract"])

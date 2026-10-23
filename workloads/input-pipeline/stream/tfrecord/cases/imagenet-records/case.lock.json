@@ -1,0 +1,42 @@
+{
+  "lock_version": 1,
+  "name": "tfrecord/imagenet-records",
+  "runs": [
+    {
+      "name": "tfrecord_stream",
+      "abstract": "input-pipeline/stream/tfrecord/tfrecord_stream.ast.json",
+      "ast_sha256": "e08042b48ca9d65aa785d98224deeccbe277891820d17c551dd1e3e203fa20ee",
+      "params": {
+        "batch": {"default": 256},
+        "cycle": {"default": 4},
+        "decode": {"default": 0},
+        "prefetch": {"default": 1},
+        "sample_median": {"default": 112640},
+        "samples": {"default": 1281167},
+        "samples_per_file": {"default": 1024},
+        "step_time": {"default": 105000000},
+        "steps": {"default": 500},
+        "sync_every": {"default": 1},
+        "xfer": {"default": 262144}
+      },
+      "sources": {
+        "batch": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "cycle": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "decode": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "prefetch": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "sample_median": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "samples": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "samples_per_file": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "step_time": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "steps": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json",
+        "sync_every": "abstract",
+        "xfer": "abstract"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "input-pipeline/stream/tfrecord/cases/imagenet-records/case.toml",
+    "fragments": [{"path": "input-pipeline/stream/tfrecord/cases/imagenet-records/params.json", "sha256": "c9b7450ecabe6fa0426fc0d09d471967be8500c0b06e7a05bf5fa9c2c50d0c73"}]
+  }
+}

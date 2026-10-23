@@ -6940,6 +6940,32 @@ made in the build, open to revision:
   one of its values). The vocabulary starts with `h100` alone; each accelerator is added with
   its first case.
 
+**Built: the untraced containers' cases** (2026-10-22, part 5b). Choices made in the build, open
+to revision:
+
+- **Untraced, by the user's choice.** `hdf5_map`, `parquet_stream`, and `tfrecord_stream` had
+  no trace and no case. Every example case has a capture, which these cannot have without
+  kits, and two of the three applications (PyTorch with h5py, TensorFlow) are not installed;
+  the user chose to finish item 33 first. Each abstract's job and GPU values are required
+  (`batch`, `step_time`, `steps`, `prefetch`, `samples_per_file`; `workers` in `hdf5_map`;
+  `cycle`, `decode`, `sample_median` in the streams) and `samples` is `scale`; the values
+  their defaults held, placeholders never measured, are one case each of kind `unsettled`
+  (`rgb256-rows`, `imagenet-rows`, `imagenet-records`), with a lock and no capture, whose
+  locks run the fingerprints the defaults did (`tests/cases.rs`). The mechanisms' `[defaults]`
+  rows are gone; the catalog keeps `[defaults]` for a mechanism added before its first case.
+  Their traces are `PROJECT_BRIEF.md` §6 item 36, and item 35 is designed on them.
+- **`decode` is required.** It was 0 by default, "I/O bound", a placeholder marked
+  `[measure]`; point 4 makes a value that varies with every use case required. The cases give 0.
+- **A format class takes the mean sample size only when its framing needs it.** Parquet's
+  page headers are fixed at build time by the varint band of a row group's chunk, which was
+  read from `sample_median`'s default. A size naming a required parameter has no mean, so
+  `parquet(band_sample_bytes=…)` places the band (`parquet_stream` gives 110 KiB: the same
+  4-byte band, an identical framing), and the class refuses without it, naming the argument;
+  TFRecord, WebDataset, and HDF5 frame without a mean.
+- **The release tarball carries the locks.** Its file filter left out `case.lock.json`, so a
+  released tree could not run `--case` (unet3d-h100's included); found writing the HDF5
+  smoke step through a lock, held by `test_lock.py` since.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

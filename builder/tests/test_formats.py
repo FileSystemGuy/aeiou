@@ -122,9 +122,9 @@ def test_specs_probes_and_v9():
 # ---- datagen round trips ----
 
 CASES = {
-    "tfrecord_stream": ["samples=768", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
-    "parquet_stream": ["samples=768", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000"],
-    "hdf5_map": ["samples=64", "samples_per_file=16", "batch=4", "workers=2", "steps=4"],
+    "tfrecord_stream": ["samples=768", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000", "prefetch=1", "step_time=105000000", "decode=0"],
+    "parquet_stream": ["samples=768", "samples_per_file=128", "batch=32", "steps=8", "cycle=2", "sample_median=20000", "prefetch=1", "step_time=105000000", "decode=0"],
+    "hdf5_map": ["samples=64", "samples_per_file=16", "batch=4", "workers=2", "steps=4", "prefetch=2", "step_time=105000000"],
 }
 
 
@@ -170,6 +170,28 @@ def test_datagen_tfrecord_round_trip(tmp_path):
     r = _tool("datagen", [ast_path("tfrecord_stream"), "--root", root, *sum([["--param", p] for p in CASES["tfrecord_stream"]], [])])
     assert r.returncode == 1 and "not empty" in r.stderr
 
+
+
+def test_a_size_with_no_default_is_framed_by_what_the_class_needs_of_it():
+    """A size naming a required parameter (DESIGN_REVIEW.md §3.78 point 4) has no mean at build
+    time. The classes whose framing does not depend on it build; Parquet, whose page headers take
+    the varint band of the chunk size, takes the band from `band_sample_bytes` and refuses
+    without it, naming the argument."""
+    w = Workload("band")
+    w.param("median", kind=int, unit="bytes")
+    size, params = lognormal(median=w.P.median, sigma=0.45), {"median": None}
+    assert formats.tfrecord().spec("stream", size, params)["framing"]["columns"] == [{"row_header": 12, "row_footer": 4, "weight": 1}]
+    assert formats.webdataset().spec("stream", size, params)["framing"]["columns"][0]["row_footer"] == 1024
+    with pytest.raises(BuildError, match="band_sample_bytes"):
+        formats.parquet(rows_per_group=64).spec("stream", size, params)
+    hinted = formats.parquet(rows_per_group=64, band_sample_bytes=100000).spec("stream", size, params)
+    assert hinted["framing"] == formats.parquet(rows_per_group=64).spec("stream", const(100000), {})["framing"]
+    # the hint is the band's alone: a default, when there is one, is not consulted
+    assert formats.parquet(rows_per_group=64, band_sample_bytes=100000).spec("stream", const(10), {})["framing"] == hinted["framing"]
+    # with no size at all, the band is a chunk of the length prefixes alone, as before
+    assert formats.parquet(rows_per_group=64).spec("stream")["framing"]["columns"][0]["header"] == formats.parquet_page_header(64 * 4, 64)
+    with pytest.raises(BuildError, match="parquet band_sample_bytes must be a plain integer >= 1"):
+        formats.parquet(band_sample_bytes=0)
 
 def test_datagen_parquet_reads_back_with_pyarrow(tmp_path):
     import pyarrow.parquet as pq
@@ -302,7 +324,7 @@ def webdataset_ast(tmp_path, members=(("jpg", None), ("cls", 4), ("json", 700)))
     a = json.loads(ast_path("tfrecord_stream").read_text())
     f = a["datasets"]["shards"]
     f["pattern"] = "train/shard-{id:05}.tar"
-    f["format"] = formats.webdataset(members=members).spec("stream", f["size"], {k: p["default"] for k, p in a["params"].items()})
+    f["format"] = formats.webdataset(members=members).spec("stream", f["size"], {k: p.get("default") for k, p in a["params"].items()})
     a["name"] = "webdataset_stream"
     p = tmp_path / "webdataset_stream.ast.json"
     p.write_text(json.dumps(a))
@@ -314,25 +336,26 @@ def parquet_types_ast(tmp_path):
     a = json.loads(ast_path("parquet_stream").read_text())
     f = a["datasets"]["shards"]
     cols = (("a", "int8"), ("b", "uint8"), ("c", "int16"), ("image", "binary"), ("d", "float32"), ("e", "int32"), ("g", "float64"), ("h", "int64"))
-    f["format"] = formats.parquet(rows_per_group=64, columns=cols).spec("stream", f["size"], {k: p["default"] for k, p in a["params"].items()})
+    f["format"] = formats.parquet(rows_per_group=64, columns=cols, band_sample_bytes=110 * KiB).spec("stream", f["size"], {k: p.get("default") for k, p in a["params"].items()})
     a["name"] = "parquet_types"
     p = tmp_path / "parquet_types.ast.json"
     p.write_text(json.dumps(a))
     return p
 
 
-# each writer's case: the abstract, its corpus parameters (a short last file), and the run's
+# each writer's case: the abstract, its corpus parameters (a short last file) with the job's and the GPU's
+# values the abstract requires (DESIGN_REVIEW.md §3.78; datagen takes every one), and the run's
+STREAM_JOB = ["batch=32", "steps=4", "cycle=4", "prefetch=1", "step_time=105000000", "decode=0"]
 RUST_CASES = {
-    "tfrecord": (lambda tmp: ast_path("tfrecord_stream"), ["samples=700", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
-    "webdataset": (webdataset_ast, ["samples=700", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
-    "hdf5": (lambda tmp: ast_path("hdf5_map"), ["samples=70", "samples_per_file=16"], ["batch=4", "workers=2", "steps=4"]),
+    "tfrecord": (lambda tmp: ast_path("tfrecord_stream"), ["samples=700", "samples_per_file=128", "sample_median=20000", *STREAM_JOB], ["batch=32", "steps=4"]),
+    "webdataset": (webdataset_ast, ["samples=700", "samples_per_file=128", "sample_median=20000", *STREAM_JOB], ["batch=32", "steps=4"]),
+    "hdf5": (lambda tmp: ast_path("hdf5_map"), ["samples=70", "samples_per_file=16", "batch=4", "workers=2", "steps=4", "prefetch=2", "step_time=105000000"], ["batch=4", "workers=2", "steps=4"]),
     # whole row groups and no short last file (brief item 31)
-    "parquet": (lambda tmp: ast_path("parquet_stream"), ["samples=768", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
-    "parquet_types": (parquet_types_ast, ["samples=768", "samples_per_file=128", "sample_median=20000"], ["batch=32", "steps=4"]),
+    "parquet": (lambda tmp: ast_path("parquet_stream"), ["samples=768", "samples_per_file=128", "sample_median=20000", *STREAM_JOB], ["batch=32", "steps=4"]),
+    "parquet_types": (parquet_types_ast, ["samples=768", "samples_per_file=128", "sample_median=20000", *STREAM_JOB], ["batch=32", "steps=4"]),
     # a file of one sample: its payload unit is its set among 8 × D ids by size (aeiou-positional/4)
-    "tfrecord_one": (lambda tmp: ast_path("tfrecord_stream"), ["samples=40", "samples_per_file=1", "sample_median=20000"], ["batch=4", "steps=2"]),
+    "tfrecord_one": (lambda tmp: ast_path("tfrecord_stream"), ["samples=40", "samples_per_file=1", "sample_median=20000", *STREAM_JOB], ["batch=4", "steps=2"]),
 }
-
 
 def _params(names):
     return sum([["--param", p] for p in names], [])

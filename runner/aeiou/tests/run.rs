@@ -797,7 +797,7 @@ fn dedupe_gives_near_the_ratio_in_4_kib_blocks() {
     #[cfg(feature = "formats")]
     {
         let tfr = tmpdir("ddr-tfr");
-        datagen_into("tfrecord_stream", &[("samples", "256"), ("samples_per_file", "64")], 2, &tfr);
+        datagen_into("tfrecord_stream", &[("samples", "256"), ("samples_per_file", "64"), ("sample_median", "112640"), ("batch", "256"), ("cycle", "4"), ("prefetch", "1"), ("steps", "500"), ("step_time", "105000000"), ("decode", "0")], 2, &tfr);
         let r = block_dedupe(&tfr);
         // a block holding a record's framing differs, and so does the larger file's tail
         assert!(r > 1.75 && r <= 2.0, "tfrecord_stream --dedupe 2: {r}");
@@ -1262,7 +1262,7 @@ fn stream_abstracts_take_every_shard_for_any_batch() {
     for name in ["tfrecord_stream", "parquet_stream"] {
         for (batch, steps) in [("32", "8"), ("48", "8"), ("200", "4")] {
             let root = tmpdir(&format!("stream-{name}-{batch}"));
-            let params = [("samples", "768"), ("samples_per_file", "128"), ("sample_median", "20000"), ("cycle", "2"), ("batch", batch), ("steps", steps)];
+            let params = [("samples", "768"), ("samples_per_file", "128"), ("sample_median", "20000"), ("cycle", "2"), ("prefetch", "1"), ("step_time", "105000000"), ("decode", "0"), ("batch", batch), ("steps", steps)];
             let (loaded, cfg, model) = leaked_model(name, config(1, 5, &params));
             gen(loaded, cfg, model, &root);
             run::check_datasets(loaded, cfg, &root).unwrap();
