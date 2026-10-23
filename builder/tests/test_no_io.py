@@ -44,8 +44,13 @@ def test_a_run_touches_no_file_system_of_its_own_between_the_gate_and_the_end(tm
                         "--time-scale", "0.01", "--report-json", str(report)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     lines = trace.read_text().splitlines()
-    on_data = [i for i, line in enumerate(lines) if f"{root}/train/" in line and "/.aeiou" not in line]
+    # the run's ops are its actors' threads; the main thread's stat of the first file before the
+    # gate (hdr_read's st_blksize, runner/REFERENCE.md) is the gate's, not the run's
+    main = lines[0].split()[0]
+    on_data = [i for i, line in enumerate(lines) if f"{root}/train/" in line and "/.aeiou" not in line and line.split()[0] != main]
     assert len(on_data) > 100, "the run's own ops are in the trace"
+    probe = [i for i, line in enumerate(lines) if line.split()[0] == main and "statx(" in line and f"{root}/train/00000/img_000000000.jpg" in line]
+    assert probe and probe[0] < on_data[0], "st_blksize is read before the run"
     first, last = on_data[0], on_data[-1]
     own = []
     for line in lines[first:last + 1]:

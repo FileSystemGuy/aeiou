@@ -301,3 +301,54 @@ def test_the_release_tarball_carries_every_lock_and_what_it_pins():
     for f in locks:
         for run in json.loads((ROOT / f).read_text())["runs"]:
             assert "workloads/" + run["abstract"] in shipped, (f, run["abstract"])
+
+
+# ---------------------------------------------------------------- file_per_sample and its case
+
+FPS = WORKLOADS / "input-pipeline/map/file-per-sample"
+# what file_per_sample's defaults held until 2026-10-22, placeholders never measured as a job: a
+# case of kind `unsettled` holds them (item 33, part 5c; DESIGN_REVIEW.md §3.78 points 1 and 4)
+FPS_DEFAULTS = {"batch": 32, "workers": 8, "prefetch": 2, "steps": 500, "step_time": 105_000_000,
+                "samples": 50_000_000, "sample_median": 110 << 10}
+
+
+def test_file_per_sample_leaves_the_job_and_the_gpu_to_a_case():
+    """DESIGN_REVIEW.md §3.78 points 1, 4, and 11: the job's values, the model's on a GPU, and the
+    corpus's size distribution have no default, `samples` is the submission's scale, and the reads
+    Python's BufferedReader sizes are st_blksize, which the storage reports."""
+    p = json.loads((FPS / "file_per_sample.ast.json").read_text())["params"]
+    for k, v in FPS_DEFAULTS.items():
+        assert "default" not in p[k] and p[k]["kind"] == type(v).__name__, k
+    assert p["samples"].get("scale") is True
+    assert {k for k, v in p.items() if "default" not in v} == set(FPS_DEFAULTS)
+    for k in ("hdr_read", "inv_read"):
+        assert p[k]["default"] == {"from": "st_blksize", "of": "train", "fallback": 1 << 20}, k
+
+
+def test_file_per_sample_has_an_unsettled_case_of_its_old_defaults():
+    """`jpeg-50m` holds the values the defaults held, each a default, said to be not measured: kind
+    `unsettled`, no capture, and a lock that is current."""
+    import tomllib
+    case = FPS / "cases/jpeg-50m"
+    rec = tomllib.loads((case / "case.toml").read_text())
+    assert rec["kind"] == "unsettled" and "accelerator" not in rec
+    assert rec["run"] == [{"ast": "file_per_sample", "params": "params.json"}]
+    assert not (case / "captures").exists()
+    doc = json.loads((case / "params.json").read_text())
+    assert "not measured" in doc["doc"]
+    assert doc["params"] == {k: {"default": v} for k, v in FPS_DEFAULTS.items()}
+    (run,) = json.loads((case / lock.LOCK_FILE).read_text())["runs"]
+    assert {k: run["params"][k] for k in FPS_DEFAULTS} == {k: {"default": v} for k, v in FPS_DEFAULTS.items()}
+    assert lock.stale(case, workloads=WORKLOADS) is None
+    assert "not measured" in (case / "README.md").read_text()
+
+
+def test_the_example_case_of_file_per_sample_gives_every_required_value():
+    """The traced example gives every value the abstract requires: the corpus kit/mkcorpus.py
+    writes, and `step_time` the old default, said so (never fitted: the trace's compute is the
+    stand-in's)."""
+    required = {k for k, p in json.loads((FPS / "file_per_sample.ast.json").read_text())["params"].items() if "default" not in p}
+    doc = json.loads((FPS / "cases/imagefolder-jpeg/params.json").read_text())
+    assert required and required <= set(doc["params"])
+    assert doc["params"]["step_time"] == {"default": 105_000_000} and "not fitted" in doc["doc"]
+    assert doc["params"]["sample_median"] == {"default": 110 << 10}

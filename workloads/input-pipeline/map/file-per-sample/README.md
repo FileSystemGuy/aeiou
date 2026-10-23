@@ -12,6 +12,7 @@ Versions: Python 3.12.3, torch 2.14.1+cpu, torchvision 0.29.1+cpu, Pillow 12.3.0
 | `kit/train.py` | the traced application: `ImageFolder` + `DataLoader(shuffle, drop_last)`, batch 16, 2 workers, 2 epochs = 400 steps |
 | `cases/imagefolder-jpeg/params.json` | the abstract's parameters for that run |
 | `cases/imagefolder-jpeg/captures/2026-10-01/trace.metrics.json` | `aeiou-trace metrics` of the trace (the trace itself is 34 MB and is not kept) |
+| `cases/jpeg-50m/params.json` | a case of kind `unsettled`: the values the abstract's defaults held until 2026-10-22, placeholders never measured as a job (`DESIGN_REVIEW.md` §3.78); `aeiou run --case jpeg-50m` |
 
 ```
 C=cases/imagefolder-jpeg                              # from this directory

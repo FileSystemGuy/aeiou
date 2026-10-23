@@ -114,8 +114,8 @@ wanted. If **aeiou-launch** itself is killed (`SIGKILL`), the commands are not s
 The corpus written by the fifty hosts that will run against it, then a run on them:
 
 ```
-aeiou-launch 'client[01-50]' -- aeiou datagen file_per_sample.ast.json --gpus 400 --root /mnt/sut
-aeiou-launch 'client[01-50]' -- aeiou run file_per_sample.ast.json --gpus 400 --root /mnt/sut --drop-caches
+aeiou-launch 'client[01-50]' -- aeiou datagen --case jpeg-50m --gpus 400 --root /mnt/sut
+aeiou-launch 'client[01-50]' -- aeiou run --case jpeg-50m --gpus 400 --root /mnt/sut --drop-caches
 ```
 
 A write run on four hosts, then the restore on the same hosts with each reading what another

@@ -1,0 +1,3 @@
+{"params_version": 2, "abstract": "file_per_sample",
+ "doc": "The values file_per_sample's defaults held until 2026-10-22 (DESIGN_REVIEW.md §3.78): 50,000,000 JPEGs of a median 110 KiB in directories of 1,300; batch 32, 8 workers each 2 batches ahead, 500 steps of 105 ms. Placeholders, not measured: no job stands behind them (the 2026-10-01 trace behind the abstract is the example imagefolder-jpeg).",
+ "params": {"batch": {"default": 32}, "workers": {"default": 8}, "prefetch": {"default": 2}, "steps": {"default": 500}, "step_time": {"default": 105000000}, "samples": {"default": 50000000}, "sample_median": {"default": 112640}}}

@@ -15,6 +15,9 @@ fn tmpdir(tag: &str) -> crate::common::TempDir {
 fn aeiou(sub: &str, ast: &str, params: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
     c.arg(sub).arg(crate::common::workload_ast(ast));
+    if ast == "file_per_sample.ast.json" {
+        c.args(crate::common::file_per_sample_args());      // its old defaults, required since 2026-10-22
+    }
     for p in params {
         c.arg("--param").arg(p);
     }
@@ -223,7 +226,10 @@ fn the_declared_backend_is_the_default_and_another_is_named() {
     assert_eq!(d["fingerprint"], fp, "the backend never changes the op stream");
 
     // an abstract that declares none is `sync`, and buffered against direct is a difference too
-    let (_, text, _) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2", "--cache", "direct"]));
+    // (its dataset there, whose st_blksize the run reads before it prints its backend)
+    let (ok, _, err) = out(aeiou("datagen", "file_per_sample.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2"]));
+    assert!(ok, "{err}");
+    let (_, text, _) = out(aeiou("run", "file_per_sample.ast.json", &SMALL).arg("--root").arg(&root).args(["--gpus", "2", "--time-scale", "0", "--cache", "direct"]));
     assert!(text.contains("posix sync  cache direct is not the abstract's (posix sync  cache per-open)"), "{text}");
 }
 
@@ -245,7 +251,7 @@ fn a_parallel_s_file_closes_when_the_abstract_closes_it_under_every_engine() {
     std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
     let cmd = |sub: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-        c.arg(sub).arg(&path).args(["--param", "samples=60", "--param", "walk=false", "--gpus", "1"]).arg("--root").arg(&root);
+        c.arg(sub).arg(&path).args(crate::common::file_per_sample_args()).args(["--param", "samples=60", "--param", "walk=false", "--gpus", "1"]).arg("--root").arg(&root);
         c
     };
     let (ok, _, err) = out(&mut cmd("datagen"));
@@ -310,7 +316,7 @@ fn the_mmap_backend_s_own_fstat_calls_are_reported() {
     std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
     let cmd = |sub: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-        c.arg(sub).arg(&path).args(["--param", "samples=60", "--param", "walk=false", "--gpus", "1"]).arg("--root").arg(&root);
+        c.arg(sub).arg(&path).args(crate::common::file_per_sample_args()).args(["--param", "samples=60", "--param", "walk=false", "--gpus", "1"]).arg("--root").arg(&root);
         c
     };
     let (ok, _, err) = out(&mut cmd("datagen"));

@@ -62,7 +62,10 @@ def test_defaults_round_trip(tmp_path):
     assert r.returncode == 0, r.stderr
     pset = params.load(out)
     assert pset["ast_sha256"] == sha
-    assert pset["params"] == {k: {"default": p["default"]} for k, p in ast["params"].items()}
+    # a required parameter stays required, a storage-reported one (hdr_read, inv_read) is the storage's
+    assert pset["params"] == {k: {"default": p["default"]} if "default" in p else {"required": True}
+                              for k, p in ast["params"].items() if k not in ("hdr_read", "inv_read")}
+    assert pset["params"]["steps"] == {"required": True} and pset["params"]["walk"] == {"default": True}
     assert params.check(ast, pset, ast_sha256=sha) == []
     r = _run(["check", ast_path("file_per_sample"), out, ast_path("file_per_sample").parent / "params" / "smoke.params.json"])
     assert r.returncode == 0, r.stdout + r.stderr
@@ -76,8 +79,9 @@ def test_value_rules():
     assert params.check(ast, {**base, "ast_sha256": "0" * 64}, ast_sha256=sha)[0].startswith("params: for AST 0000")
     assert params.check(ast, {**base, "params": v2({"nope": 1})}) == ["params: no parameter `nope` in `file_per_sample`"]
     assert params.check(ast, {**base, "params": v2({"gpus": 4})})[0].endswith("--gpus, not by a parameter file")
-    assert "the default is a scalar, the value is an array" in params.check(ast, {**base, "params": v2({"steps": [1]})})[0]
-    assert "the default is a scalar, the value is a distribution" in params.check(ast, {**base, "params": v2({"steps": {"const": 1}})})[0]
+    assert "the default is a scalar, the value is an array" in params.check(ast, {**base, "params": v2({"inv_entry": [1]})})[0]
+    assert "the default is a scalar, the value is a distribution" in params.check(ast, {**base, "params": v2({"inv_entry": {"const": 1}})})[0]
+    assert "the kind is a scalar, the value is an array" in params.check(ast, {**base, "params": v2({"steps": [1]})})[0]     # required since 2026-10-22
     assert params.check(ast, {**base, "params": v2({"steps": 7, "walk": True, "hdr_read": 4096})}) == []
     ast, _ = _ast("safetensors_load")
     assert params.check(ast, {**base, "abstract": "safetensors_load", "params": v2({"off": [1, 2, 3]})}) == []      # arrays may change length
@@ -92,7 +96,8 @@ def test_an_integral_float_is_the_integer_its_default_is(tmp_path):
     ast, _ = _ast("file_per_sample")
     base = {"params_version": 2, "abstract": "file_per_sample", "params": {}}
     assert params.check(ast, {**base, "params": v2({"samples": 3000.0, "files_per_directory": 1.3e3})}) == []
-    assert params.check(ast, {**base, "params": v2({"samples": 20.7})}) == ["params: samples: the default is an integer, the value 20.7 is not"]
+    assert params.check(ast, {**base, "params": v2({"samples": 20.7})}) == ["params: samples: the kind is an integer, the value 20.7 is not"]
+    assert params.check(ast, {**base, "params": v2({"inv_entry": 20.7})}) == ["params: inv_entry: the default is an integer, the value 20.7 is not"]
     sast, _ = _ast("safetensors_load")
     sbase = {**base, "abstract": "safetensors_load"}
     assert params.check(sast, {**sbase, "params": v2({"off": [1, 2.0]})}) == []
@@ -103,11 +108,12 @@ def test_an_integral_float_is_the_integer_its_default_is(tmp_path):
         pytest.skip("runner binary not built")
     for value, ok in ((3000.0, True), (20.7, False)):
         f = tmp_path / "f.params.json"
-        f.write_text(json.dumps({**base, "params": v2({"samples": value, "files_per_directory": 1300.0})}))
+        job = {"batch": 32, "workers": 8, "prefetch": 2, "step_time": 105_000_000, "sample_median": 112_640}   # required since 2026-10-22
+        f.write_text(json.dumps({**base, "params": v2({**job, "samples": value, "files_per_directory": 1300.0})}))
         r = subprocess.run([str(runner), "dry-run", "--gpus", "1", str(ast_path("file_per_sample")), "--params-file", str(f), "--param", "steps=1"],
                            capture_output=True, text=True, cwd=str(tmp_path))
         assert (r.returncode == 0) == ok, r.stderr
-        assert ok or "samples: the default is an integer, the value 20.7 is not" in r.stderr, r.stderr
+        assert ok or "samples: the kind is an integer, the value 20.7 is not" in r.stderr, r.stderr
 
 
 def test_given_values_are_judged_as_the_runner_judges_them(tmp_path):

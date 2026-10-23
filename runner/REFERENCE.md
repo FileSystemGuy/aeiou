@@ -10,11 +10,11 @@ cd runner
 cargo build --release
 cargo test --release
 ./target/release/aeiou check $(find ../workloads -name '*.ast.json')
-./target/release/aeiou dry-run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
+./target/release/aeiou dry-run --case jpeg-50m --workloads ../workloads --gpus 8 --seed 1
 ./target/release/aeiou dry-run ../workloads/kvcache/lmcache-local-disk/lmcache_local_disk.ast.json --gpus 1 \
     --param concurrency=2 --param requests=20 --gpu 0 --steps 1..2 --limit 50
-./target/release/aeiou datagen ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param samples=4000
-./target/release/aeiou run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+./target/release/aeiou datagen --case jpeg-50m --workloads ../workloads --root /mnt/sut --param samples=4000
+./target/release/aeiou run --case jpeg-50m --workloads ../workloads --root /mnt/sut --gpus 8 --seed 1 \
     --param samples=4000 --param steps=50 --posix sync
 ./target/release/aeiou dry-run ../workloads/model-loading/safetensors-load/safetensors_load.ast.json --gpus 8 \
     --params-file ../workloads/model-loading/safetensors-load/params/synthetic.params.json      # a parameter file (§4)
@@ -1781,7 +1781,7 @@ instances [{template, actor, elapsed_ns, takes, stall_ns, compute_ns, take_recor
   the end of §10). A change that removes or renames a field raises `aeiou_report`.
 
 ```
-aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 7 --root DIR --report-json r.json
+aeiou run --case jpeg-50m --gpus 2 --seed 7 --root DIR --param samples=4000 --param steps=50 --report-json r.json
 python3 -c 'import json; d = json.load(open("r.json")); print(d["verdict"]["ok"], d["result"]["latency"]["read"]["p99_ns"])'
 ```
 

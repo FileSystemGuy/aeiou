@@ -17,7 +17,7 @@ fn dry(name: &str, gpus: i64, params: &[(&str, &str)], threads: usize, opts: Opt
 
 /// The golden configurations of `tests/golden.rs`.
 const CASES: &[(&str, i64, &[(&str, &str)])] = &[
-    ("file_per_sample", 2, &[("steps", "10")]),
+    ("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10")]),
     ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5")]),
     ("dcp_save", 2, &[("steps", "200")]),
     ("dcp_load", 2, &[]),
@@ -101,7 +101,7 @@ fn diskann_structure_is_recovered() {
 /// Small-file training: every file is read whole, front to back, and once per epoch.
 #[test]
 fn small_file_training_is_sequential_and_flat() {
-    let r = dry("file_per_sample", 2, &[("steps", "10")], 2, Some(Opts::default()));
+    let r = dry("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10")], 2, Some(Opts::default()));
     let m = r.total.metrics.as_ref().unwrap();
     let p = m.popularity_objects();
     assert_eq!(p.max, p.counts.last().unwrap().0, "every file has the same number of data ops");

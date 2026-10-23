@@ -13,6 +13,11 @@ fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
     Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![], st_blksize: Default::default() }
 }
 
+/// `config` for file_per_sample: its old defaults under `params` (required since 2026-10-22).
+fn fps(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
+    config(gpus, seed, &crate::common::file_per_sample(params))
+}
+
 fn dry(text: &str, cfg: &Config, threads: usize) -> dryrun::Report {
     let loaded = aeiou::load_str(text).expect("valid abstract");
     let params = Params::new(&loaded.ast, cfg).unwrap();
@@ -49,7 +54,9 @@ fn hashes_match_check_py() {
         // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13); 2026-10-22: the job's and the
         // GPU's values required (the use case unet3d-h100), the read sizes st_blksize, DESIGN_REVIEW §3.78
         ("npy_per_sample", "55b72b04751401f05c6f865bf0ba670af4eed47723ec32e603537bbadd2976bc"),
-        ("file_per_sample", "c23a6656eb966f92f0836168f70c3779329d4956646133d699bfa26d727ac2f4"),   // 2026-10-02: `enumerate` on by default
+        // 2026-10-02: `enumerate` on by default; 2026-10-22: the job's and the GPU's values and the corpus's median
+        // required (its unsettled case jpeg-50m), the read sizes st_blksize, DESIGN_REVIEW §3.78
+        ("file_per_sample", "66245ad85427712525bc8c0f26a5c460de490e63ea34e06a96d988cf35ca578a"),
         ("diskann_build", "31adfa55583b5750ac70cf6b5af20669b116337935676f9693ba6d1f6175d752"),
         ("diskann_search", "80642e20f54cf97933604cfd8acd766f46d5f4e16f1caf504ac2b74a2b036d1e"),
         // 2026-10-15 (RC1 review): a step takes the shards whose first sample is in its batch, for
@@ -97,8 +104,9 @@ fn golden_fingerprints() {
         // actor in file_per_sample (38,462 directories), four per directory in npy_per_sample; with
         // `enumerate=false` both are what they were; npy_per_sample at the values its defaults held until 2026-10-22, its
         // job and GPU values required since (the use case unet3d-h100, DESIGN_REVIEW §3.78)
-        ("file_per_sample", 2, &[("steps", "10")], 0xfb3215e5607b32ae, 389740),
-        ("file_per_sample", 2, &[("steps", "10"), ("walk", "false")], 0x71628bdb4289c4c8, 5120),
+        // since 2026-10-22 with the defaults its job and GPU values had (required since; DESIGN_REVIEW §3.78)
+        ("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10")], 0xfb3215e5607b32ae, 389740),
+        ("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10"), ("walk", "false")], 0x71628bdb4289c4c8, 5120),
         ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5")], 0xf755bd4187b75b78, 50491),
         ("npy_per_sample", 2, &[("batch", "7"), ("workers", "4"), ("prefetch", "2"), ("step_time", "323000000"), ("samples", "50000"), ("sample_mean", "146800640"), ("sample_sd", "4194304"), ("steps", "5"), ("walk", "false")], 0xa2c284c6137f9639, 50451),
         ("dcp_save", 2, &[("steps", "200")], 0x850e8c9019b3bda8, 130),
@@ -146,17 +154,19 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
     let set = ParamSet::load(&crate::common::workloads().join("input-pipeline/map/file-per-sample/params/smoke.params.json")).unwrap();
     assert_eq!(set.abstract_name, "file_per_sample");
     // the set (files 4000, steps 50) under --param steps=10 equals the same values given as overrides
-    let mut cfg = config(2, 1, &[("steps", "10")]);
+    let mut cfg = config(2, 1, &[("steps", "10")]);      // the smoke set gives every required value
     cfg.sets = vec![set.clone()];
     let by_file = dry(&text, &cfg, 1);
-    let by_cli = dry(&text, &config(2, 1, &[("samples", "4000"), ("steps", "10")]), 1);
+    let by_cli = dry(&text, &fps(2, 1, &[("samples", "4000"), ("steps", "10")]), 1);
     assert_eq!(by_file.total.fingerprint, by_cli.total.fingerprint);
-    assert_ne!(by_file.total.fingerprint, dry(&text, &config(2, 1, &[("steps", "10")]), 1).total.fingerprint, "samples=4000 changes the permutation");
+    assert_ne!(by_file.total.fingerprint, dry(&text, &fps(2, 1, &[("steps", "10")]), 1).total.fingerprint, "samples=4000 changes the permutation");
     // the rules (schema/README.md §8)
     let loaded = aeiou::load_str(&text).unwrap();
     let outcome = |json: &str| -> String {
         let set = ParamSet::parse(json, "x.params.json").unwrap();
-        let cfg = Config { sets: vec![set], ..config(2, 1, &[]) };
+        // the job values the file does not name, required since 2026-10-22, from the command line
+        let job: Vec<_> = crate::common::FILE_PER_SAMPLE.into_iter().filter(|(k, _)| !json.contains(&format!("\"{k}\""))).collect();
+        let cfg = Config { sets: vec![set], ..config(2, 1, &job) };
         match Params::new(&loaded.ast, &cfg) {
             Ok(_) => "accepted".into(),
             Err(e) => format!("{e:#}"),
@@ -164,7 +174,8 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
     };
     assert!(outcome(r#"{"params_version":2,"abstract":"other","params":{}}"#).contains("for abstract `other`"));
     assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"nope":{"default":1}}}"#).contains("no parameter `nope`"));
-    assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"steps":{"default":[1]}}}"#).contains("the default is a scalar, the value is an array"));
+    assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"inv_entry":{"default":[1]}}}"#).contains("the default is a scalar, the value is an array"));
+    assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"steps":{"default":[1]}}}"#).contains("the kind is a scalar, the value is an array"));
     assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"step_time":{"locked":{"const":5}}}}"#).contains("the value is a distribution"));
     assert!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"gpus":{"default":2}}}"#).contains("--gpus"));
     assert_eq!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"walk":{"default":true},"hdr_read":{"locked":4096}}}"#), "accepted");
@@ -172,7 +183,9 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
     assert_eq!(outcome(r#"{"params_version":2,"abstract":"file_per_sample","params":{"steps":{"required":true},"batch":{"required":true}}}"#), "required parameters with no value: batch, steps (give each in a parameter file or with --param NAME=VALUE)");
     let two = |a: &str, b: &str, cli: &[(&str, &str)]| {
         let sets = [a, b].iter().enumerate().map(|(i, j)| ParamSet::parse(&format!(r#"{{"params_version":2,"abstract":"file_per_sample","params":{j}}}"#), &format!("{i}.params.json")).unwrap()).collect();
-        Params::new(&loaded.ast, &Config { sets, ..config(2, 1, cli) }).map(|_| ()).map_err(|e| format!("{e:#}"))
+        let mut job: Vec<_> = crate::common::FILE_PER_SAMPLE.into_iter().filter(|(k, _)| *k != "steps").collect();
+        job.extend_from_slice(cli);
+        Params::new(&loaded.ast, &Config { sets, ..config(2, 1, &job) }).map(|_| ()).map_err(|e| format!("{e:#}"))
     };
     assert_eq!(two(r#"{"steps":{"locked":5}}"#, r#"{"steps":{"default":6}}"#, &[]), Err("1.params.json: steps: locked by 0.params.json".into()));
     assert_eq!(two(r#"{"steps":{"locked":5}}"#, r#"{}"#, &[("steps", "6")]), Err("--param steps: locked by 0.params.json".into()));
@@ -209,8 +222,8 @@ fn parameter_files_apply_over_defaults_and_under_overrides() {
 #[test]
 fn seed_changes_drawn_workloads_only() {
     let text = std::fs::read_to_string(crate::common::workload_ast("file_per_sample.ast.json")).unwrap();
-    let a = dry(&text, &config(2, 1, &[("steps", "10")]), 2).total.fingerprint;
-    let b = dry(&text, &config(2, 2, &[("steps", "10")]), 2).total.fingerprint;
+    let a = dry(&text, &fps(2, 1, &[("steps", "10")]), 2).total.fingerprint;
+    let b = dry(&text, &fps(2, 2, &[("steps", "10")]), 2).total.fingerprint;
     assert_ne!(a, b, "the file order depends on the seed");
     // no draw anywhere: the seed is irrelevant, the parameters and the actor ids decide everything
     let text = std::fs::read_to_string(crate::common::workload_ast("dcp_load.ast.json")).unwrap();
@@ -619,20 +632,22 @@ fn an_integral_float_is_the_integer_its_default_is() {
     let text = std::fs::read_to_string(&path).unwrap();
     let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
     let loaded = aeiou::load_str(&text).unwrap();
-    let file = |json: &str| Config { sets: vec![ParamSet::parse(&format!(r#"{{"params_version":2,"abstract":"file_per_sample","params":{json}}}"#), "x.params.json").unwrap()], ..config(1, 0, &[]) };
+    // the job values the file does not give, required since 2026-10-22
+    let job: Vec<_> = crate::common::FILE_PER_SAMPLE.into_iter().filter(|(k, _)| *k != "samples").collect();
+    let file = |json: &str| Config { sets: vec![ParamSet::parse(&format!(r#"{{"params_version":2,"abstract":"file_per_sample","params":{json}}}"#), "x.params.json").unwrap()], ..config(1, 0, &job) };
     let resolved = |cfg: &Config| aeiou::payload::resolved_dataset(&doc, "train", cfg).unwrap();
-    let want = resolved(&config(1, 0, &[("samples", "3000"), ("files_per_directory", "1300")]));
+    let want = resolved(&fps(1, 0, &[("samples", "3000"), ("files_per_directory", "1300")]));
     assert_eq!(want["count"], serde_json::json!(3000));
-    for cfg in [config(1, 0, &[("samples", "3e3"), ("files_per_directory", "1300.0")]), config(1, 0, &[("samples", "3000.0")]), file(r#"{"samples":{"default":3000.0},"files_per_directory":{"locked":1.3e3}}"#)] {
+    for cfg in [fps(1, 0, &[("samples", "3e3"), ("files_per_directory", "1300.0")]), fps(1, 0, &[("samples", "3000.0")]), file(r#"{"samples":{"default":3000.0},"files_per_directory":{"locked":1.3e3}}"#)] {
         assert_eq!(resolved(&cfg), want, "{:?} {:?}", cfg.overrides, cfg.sets.first().map(|s| &s.values));
         let params = Params::new(&loaded.ast, &cfg).unwrap();
         assert!(matches!(params.values["samples"], aeiou::ast::PValue::Scalar(aeiou::ast::Literal::Int(3000))), "{:?}", params.values["samples"]);
         build_model(&loaded.ast, &cfg, &params).unwrap();
     }
     let refused = |cfg: &Config| Params::new(&loaded.ast, cfg).err().map(|e| format!("{e:#}")).unwrap_or_default();
-    assert_eq!(refused(&config(1, 0, &[("samples", "20.7")])), "--param samples: the default is an integer, the value 20.7 is not");
-    assert_eq!(refused(&file(r#"{"samples":{"default":1.5}}"#)), "x.params.json: samples: the default is an integer, the value 1.5 is not");
-    assert!(aeiou::payload::resolved_dataset(&doc, "train", &config(1, 0, &[("samples", "20.7")])).is_err());
+    assert_eq!(refused(&fps(1, 0, &[("samples", "20.7")])), "--param samples: the kind is an integer, the value 20.7 is not");
+    assert_eq!(refused(&file(r#"{"samples":{"default":1.5}}"#)), "x.params.json: samples: the kind is an integer, the value 1.5 is not");
+    assert!(aeiou::payload::resolved_dataset(&doc, "train", &fps(1, 0, &[("samples", "20.7")])).is_err());
 }
 
 /// A divisor named in a pattern (contract 0.10, DESIGN_REVIEW §3.75) is bound to the parameter's
@@ -644,7 +659,7 @@ fn a_divisor_parameter_binds_the_names_the_directories_and_the_dataset_id() {
     let text = std::fs::read_to_string(&path).unwrap();
     let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(doc["datasets"]["train"]["pattern"], "train/{id div files_per_directory:05}/img_{id:09}.jpg");
-    let resolved = |doc: &serde_json::Value, params: &[(&str, &str)]| aeiou::payload::resolved_dataset(doc, "train", &config(1, 0, params)).unwrap();
+    let resolved = |doc: &serde_json::Value, params: &[(&str, &str)]| aeiou::payload::resolved_dataset(doc, "train", &fps(1, 0, params)).unwrap();
     let at_default = resolved(&doc, &[("samples", "5000")]);
     assert_eq!(at_default["pattern"], "train/{id div 1300:05}/img_{id:09}.jpg");
     let mut literal = doc.clone();
@@ -656,7 +671,7 @@ fn a_divisor_parameter_binds_the_names_the_directories_and_the_dataset_id() {
 
     let loaded = aeiou::load_str(&text).unwrap();
     for (width, dirs, name) in [("1300", 4, "train/00003/img_000004000.jpg"), ("4096", 2, "train/00000/img_000004000.jpg")] {
-        let cfg = config(1, 0, &[("samples", "5000"), ("files_per_directory", width)]);
+        let cfg = fps(1, 0, &[("samples", "5000"), ("files_per_directory", width)]);
         let params = Params::new(&loaded.ast, &cfg).unwrap();
         let model = build_model(&loaded.ast, &cfg, &params).unwrap();
         match &model.datasets[model.dataset("train").unwrap()] {
@@ -667,7 +682,7 @@ fn a_divisor_parameter_binds_the_names_the_directories_and_the_dataset_id() {
             _ => unreachable!(),
         }
     }
-    let cfg = config(1, 0, &[("files_per_directory", "0")]);
+    let cfg = fps(1, 0, &[("files_per_directory", "0")]);
     let params = Params::new(&loaded.ast, &cfg).unwrap();
     let e = format!("{:#}", build_model(&loaded.ast, &cfg, &params).err().unwrap());
     assert!(e.contains("`div files_per_directory` is 0: it needs a positive divisor"), "{e}");

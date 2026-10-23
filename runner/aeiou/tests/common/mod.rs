@@ -22,6 +22,55 @@ fn find(dir: &Path, file: &str) -> Option<PathBuf> {
         .or_else(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find(p, file)))
 }
 
+/// file_per_sample's job and GPU values and its corpus's sizes, required since 2026-10-22 (item 33,
+/// part 5c; DESIGN_REVIEW.md §3.78): the defaults they held until then, which its unsettled case
+/// `jpeg-50m` keeps, for the tests that ran on them.
+pub const FILE_PER_SAMPLE: [(&str, &str); 7] = [("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("steps", "500"),
+    ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640")];
+
+/// `params`, then file_per_sample's old defaults for every value `params` does not give.
+pub fn file_per_sample<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut all = params.to_vec();
+    all.extend(FILE_PER_SAMPLE.iter().filter(|(k, _)| !params.iter().any(|(p, _)| p == k)));
+    all
+}
+
+/// The same as `--param NAME=VALUE` arguments, to go before a test's own (the last `--param` of a
+/// name wins) and after any `--params-file` they would override.
+pub fn file_per_sample_args() -> Vec<String> {
+    FILE_PER_SAMPLE.iter().flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
+}
+
+/// file_per_sample as it was until 2026-10-22: the committed abstract with its old defaults back
+/// in place of the required values, and `hdr_read` and `inv_read` 1 MiB in place of the storage's
+/// st_blksize, so that a run and a dry run of it read alike; for the tests (the coordinator's)
+/// that start the binary in many ways and ran on those defaults.
+pub fn file_per_sample_doc() -> serde_json::Value {
+    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(workload_ast("file_per_sample.ast.json")).unwrap()).unwrap();
+    let params = doc["params"].as_object_mut().unwrap();
+    let old = FILE_PER_SAMPLE.iter().map(|(k, v)| (*k, serde_json::json!(v.parse::<i64>().unwrap()))).chain([("hdr_read", 1 << 20), ("inv_read", 1 << 20)].map(|(k, v)| (k, serde_json::json!(v))));
+    for (k, v) in old {
+        let p = params[k].as_object_mut().unwrap();
+        p.remove("kind");
+        p.remove("scale");
+        p.insert("default".into(), v);
+    }
+    doc
+}
+
+/// `file_per_sample_doc` written once per test process, its file named as the committed one's.
+pub fn file_per_sample_as_it_was() -> PathBuf {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("fixture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("file_per_sample.ast.json");
+        std::fs::write(&path, serde_json::to_vec(&file_per_sample_doc()).unwrap()).unwrap();
+        path
+    })
+    .clone()
+}
+
 /// Set (to anything but empty or `0`) to keep every test's scratch directory and print where it
 /// is, for debugging; a test-only hook, reserved in `options.rs` so the runner does not warn of it.
 pub const KEEP_TEST_DIRS: &str = "AEIOU_KEEP_TEST_DIRS";

@@ -84,7 +84,7 @@ fn dry_fingerprint(model: &Model<'_>) -> (u64, u64, u64) {
 fn small_files_training_round_trip() {
     let root = tmpdir("tsf");
     let params = [("samples", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("walk", "true")];
-    let (loaded, cfg, model) = leaked_model("file_per_sample", config(2, 7, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(2, 7, &crate::common::file_per_sample(&params)));
     gen(loaded, cfg, model, &root);
     let checks = run::check_datasets(loaded, cfg, &root).unwrap();
     assert_eq!(checks.len(), 1);
@@ -118,17 +118,17 @@ fn small_files_training_round_trip() {
 #[test]
 fn manifest_mismatch_and_missing_are_refused() {
     let root = tmpdir("manifest");
-    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 1, &[("samples", "50")]));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 1, &crate::common::file_per_sample(&[("samples", "50")])));
     // nothing generated yet
     assert!(run::check_datasets(loaded, cfg, &root).unwrap_err().to_string().contains("datagen"));
     gen(loaded, cfg, model, &root);
     run::check_datasets(loaded, cfg, &root).unwrap();
     // a different count resolves to a different definition
-    let (loaded2, cfg2, _) = leaked_model("file_per_sample", config(1, 1, &[("samples", "51")]));
+    let (loaded2, cfg2, _) = leaked_model("file_per_sample", config(1, 1, &crate::common::file_per_sample(&[("samples", "51")])));
     let e = run::check_datasets(loaded2, cfg2, &root).unwrap_err();
     assert!(e.to_string().contains("count: 51 vs 50"), "{e:#}");
     // datagen refuses a non-empty root
-    let (loaded3, cfg3, model3) = leaked_model("file_per_sample", config(1, 1, &[("samples", "50")]));
+    let (loaded3, cfg3, model3) = leaked_model("file_per_sample", config(1, 1, &crate::common::file_per_sample(&[("samples", "50")])));
     let params = Params::new(&loaded3.ast, cfg3).unwrap();
     let o = DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 1, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false };
     let mut log = Vec::new();
@@ -331,7 +331,7 @@ fn loader_delivers_in_order_and_bounds_prefetch() {
     // non-zero step time the stall of every take after the first is about one batch's I/O.
     let root = tmpdir("loader");
     let params = [("samples", "200"), ("batch", "2"), ("workers", "3"), ("prefetch", "1"), ("steps", "30"), ("step_time", "2000000")];
-    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 11, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 11, &crate::common::file_per_sample(&params)));
     gen(loaded, cfg, model, &root);
     let (fp, _, _) = dry_fingerprint(model);
     let mut o = opts(&root, BackendKind::Sync);
@@ -609,7 +609,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
 fn io_uring_loader_delivers_in_order_and_bounds_prefetch() {
     let root = tmpdir("uring-loader");
     let params = [("samples", "200"), ("batch", "2"), ("workers", "3"), ("prefetch", "1"), ("steps", "30"), ("step_time", "2000000")];
-    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 11, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 11, &crate::common::file_per_sample(&params)));
     gen(loaded, cfg, model, &root);
     let (fp, _, _) = dry_fingerprint(model);
     let mut o = opts(&root, BackendKind::Uring);
@@ -661,7 +661,7 @@ fn residency_check_sees_the_page_cache_and_require_cold_refuses() {
     // cache, so there the pages stay.
     use aeiou::cold;
     let root = tmpdir("cold");
-    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 3, &[("samples", "300")]));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 3, &crate::common::file_per_sample(&[("samples", "300")])));
     gen(loaded, cfg, model, &root);
     let fstype = aeiou::counters::MountSnapshot::for_path(&root).map(|m| m.fstype).unwrap_or_default();
     let r = cold::residency(model, &root).unwrap();
@@ -756,8 +756,8 @@ fn dedupe_sets_files_of_near_sizes_and_does_not_depend_on_the_count() {
     // prefixes of its largest
     let forty = tmpdir("dd40");
     let seventeen = tmpdir("dd17");
-    let m40 = datagen_into("file_per_sample", &[("samples", "40")], 2, &forty);
-    datagen_into("file_per_sample", &[("samples", "17")], 2, &seventeen);
+    let m40 = datagen_into("file_per_sample", &crate::common::file_per_sample(&[("samples", "40")]), 2, &forty);
+    datagen_into("file_per_sample", &crate::common::file_per_sample(&[("samples", "17")]), 2, &seventeen);
     let file = |root: &PathBuf, id: i64| std::fs::read(root.join(m40.datasets[0].file_path(id, None).unwrap().as_ref())).unwrap();
     let shares = |a: &[u8], b: &[u8]| {
         let n = a.len().min(b.len());
@@ -787,11 +787,11 @@ fn dedupe_gives_near_the_ratio_in_4_kib_blocks() {
     // shared bytes off the 4 KiB grid (TFRecord at `--dedupe 2`: 1.07), and grouped `id div D`,
     // so files of lognormal sizes kept the larger's tail (file_per_sample: 1.6)
     let whole = tmpdir("ddr-whole");
-    datagen_into("file_per_sample", &[("samples", "320")], 2, &whole);
+    datagen_into("file_per_sample", &crate::common::file_per_sample(&[("samples", "320")]), 2, &whole);
     let r = block_dedupe(&whole);
     assert!(r > 1.8 && r <= 2.0, "file_per_sample --dedupe 2: {r}");
     let three = tmpdir("ddr-three");
-    datagen_into("file_per_sample", &[("samples", "240")], 3, &three);
+    datagen_into("file_per_sample", &crate::common::file_per_sample(&[("samples", "240")]), 3, &three);
     let r = block_dedupe(&three);
     assert!(r > 2.6 && r <= 3.0, "file_per_sample --dedupe 3: {r}");
     #[cfg(feature = "formats")]
@@ -911,7 +911,7 @@ fn a_fork_leaves_the_parents_file_positions_as_run_does() {
 fn an_op_whose_buffer_cannot_be_allocated_ends_the_run_with_its_error() {
     let root = tmpdir("alloc");
     let params = [("samples", "40"), ("batch", "2"), ("workers", "2"), ("steps", "4"), ("hdr_read", "70368744177664")];
-    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 5, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(1, 5, &crate::common::file_per_sample(&params)));
     gen(loaded, cfg, model, &root);
     for backend in [BackendKind::Sync, BackendKind::Uring, BackendKind::LibAio] {
         let o = opts(&root, backend);
@@ -1068,7 +1068,7 @@ fn a_loader_in_a_loop_runs_once_per_iteration() {
     std::fs::write(&path, serde_json::to_string(&ast).unwrap()).unwrap();
     let params = [("samples", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("walk", "false")];
     let loaded: &'static aeiou::Loaded = Box::leak(Box::new(aeiou::load(&path).unwrap()));
-    let cfg: &'static Config = Box::leak(Box::new(config(2, 7, &params)));
+    let cfg: &'static Config = Box::leak(Box::new(config(2, 7, &crate::common::file_per_sample(&params))));
     let p: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg).unwrap()));
     let model: &'static Model<'static> = Box::leak(Box::new(build_model(&loaded.ast, cfg, p).unwrap()));
     let data = root.join("data");

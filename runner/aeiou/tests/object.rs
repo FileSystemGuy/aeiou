@@ -116,7 +116,14 @@ fn curl(m: &Minio, path: &str, args: &[&str]) -> Output {
 /// `aeiou` with the store of `m` in its environment (none when `m` is `None`).
 fn aeiou(m: Option<&Minio>, args: &[&str]) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-    c.args(args).env_remove("AEIOU_CONFIG");
+    for a in args {
+        c.arg(a);
+        // file_per_sample's old defaults, required since 2026-10-22, before the test's own values
+        if (a.ends_with("/file_per_sample.ast.json") || a.ends_with("/file_per_sample.object.ast.json")) && args.first() != Some(&"check") {
+            c.args(crate::common::file_per_sample_args());
+        }
+    }
+    c.env_remove("AEIOU_CONFIG");
     for k in ["AWS_ENDPOINT_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_ALLOW_HTTP"] {
         c.env_remove(k);
     }

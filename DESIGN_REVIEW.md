@@ -6966,6 +6966,32 @@ to revision:
   released tree could not run `--case` (unet3d-h100's included); found writing the HDF5
   smoke step through a lock, held by `test_lock.py` since.
 
+**Built: `file_per_sample`'s case** (2026-10-22, part 5c). Choices made in the build, open to
+revision:
+
+- **An unsettled case, not a use case** (the user's choice). The defaults (batch 32, 8 workers,
+  2 ahead, 500 steps of 105 ms, 50,000,000 files of a median 110 KiB) were never measured as a
+  job and are not the brief's reference job, unlike `npy_per_sample`'s, so they are the case
+  `jpeg-50m` of kind `unsettled`, whose lock runs the fingerprint the defaults did
+  (`tests/cases.rs`). The traced example `imagefolder-jpeg` gives every required value:
+  `step_time` the old 105 ms, said to be not fitted, and the median its kit's corpus has.
+- **The median is required, the sigma is not** (the user's choice). A lognormal's `sigma` is a
+  number in the contract, so it stays 0.45 in the abstract, as in the streams; making it an
+  expression is a contract change, `PROJECT_BRIEF.md` §6 item 37.
+- **`hdr_read` and `inv_read` are `st_blksize`** (fallback 1 MiB), as in `npy_per_sample`.
+  The run's `stat` of the first file, before the gate, is now in every run of the mechanism;
+  `test_no_io.py` takes the run's window from the actors' threads, so the gate's own `stat`
+  is outside it, and the runner-against-strace test of `test_trace.py` tells the dry run
+  the `st_blksize` the run reads.
+- **A run whose storage cannot report says which run it was.** `aeiou run` read `st_blksize`
+  before it recorded the run's identity and printed its options, so a run on a root with no
+  dataset failed with a report naming no abstract and no warnings for options passed over
+  (`npy_per_sample` since part 5a; no test ran one there until this part). The identity and
+  the option block now come first.
+- **The tests keep their values.** Each test that relied on a default is given it: the runner's
+  tests through one helper (`tests/common`, `FILE_PER_SAMPLE`), the Python tests where they
+  call, every fingerprint unchanged.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

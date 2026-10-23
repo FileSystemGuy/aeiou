@@ -14,19 +14,20 @@ PyTorch DataLoader over an ImageFolder-style corpus; W workers, B files per batc
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `batch` | 16 | 32 | count |  |
-| `workers` | 2 | 8 | count |  |
-| `prefetch` | 2 | same | count |  |
-| `steps` | 400 | 500 | count |  |
+| `batch` | 16 | none | count | samples per step: the model's on its accelerator, whose memory sets it |
+| `workers` | 2 | none | count | DataLoader worker processes per GPU: the job's |
+| `prefetch` | 2 | none | count | batches each worker keeps ahead (prefetch_factor): the job's |
+| `steps` | 400 | none | count | steps of the run: the job's |
 | `sync_every` | 1 | same | count | synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14) |
-| `step_time` | 105 ms | same | ns | [measure] GPU step time on the target accelerator |
+| `step_time` | 105 ms | none | ns | compute per step: the model's on its accelerator |
 | `hdr_read` | 1 MiB | same | bytes | Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01) |
 | `walk` | true | same | — | the startup directory walk, as ImageFolder does it in every process (ABSTRACTS.md §9.8); on by default since 2026-10-02 (`enumerate` until 2026-10-13) |
 | `inventory` | false | same | — | the startup read of the corpus's inventory, every process, in place of the walk at scale (DESIGN_REVIEW.md §3.73) |
 | `inv_entry` | 24 bytes | same | bytes | [measure] inventory bytes per file: the name below the root (`00000/img_000000000.jpg`) and a newline |
 | `inv_read` | 1 MiB | same | bytes | [measure] the inventory reader's request; Python's BufferedReader asks st_blksize |
-| `samples` | 3,200 | 50,000,000 | count | [config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5) |
+| `samples` | 3,200 | none | count | corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5) |
 | `files_per_directory` | 1,300 | same | count | [config] files a directory holds, {id div files_per_directory} (contract 0.10); 1,300 is ImageNet-1k's most images in a class, as kit/mkcorpus.py writes them |
+| `sample_median` | 110 KiB | none | bytes | median sample file size: the job's corpus |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.
 

@@ -1,0 +1,92 @@
+{
+  "shape_version": 3,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "file_per_sample",
+      "ast_sha256": "7482d25aacf0f286fdd43a6b3e912513b6fbb53e0db8442208db4f503a53ae21",
+      "params": "case.lock.json",
+      "params_sha256": "628087e2824db53467c26aabbac5b86d3ae9dfd9ca01d252eac26dd78370844b",
+      "gpus": 1,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": true,
+      "moving": [],
+      "ops": 320310,
+      "counts": {
+        "close": 54462,
+        "fstat": 54462,
+        "ioctl": 16000,
+        "lseek": 32000,
+        "open": 54462,
+        "read": 32000,
+        "readdir": 38462,
+        "stat": 38462
+      },
+      "bytes_read": 1994088083,
+      "bytes_written": 0,
+      "datasets": [
+        {
+          "bytes": 6233410928350,
+          "directories": 38462,
+          "files": 50000000,
+          "inventory_bytes": 1200000000,
+          "mean_file": 124644,
+          "name": "train",
+          "samples": 50000000
+        }
+      ],
+      "attributes": {
+        "run_length_read": {
+          "value": 131072,
+          "spread": 0,
+          "class": "small"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 1048576,
+          "spread": 0,
+          "class": "medium"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 7.50969,
+          "spread": 0.0,
+          "class": "high"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "none"
+        },
+        "skew": {
+          "value": 0.01,
+          "spread": 0.0,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

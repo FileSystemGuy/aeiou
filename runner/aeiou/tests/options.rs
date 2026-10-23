@@ -18,6 +18,9 @@ fn tmpdir(tag: &str) -> crate::common::TempDir {
 fn aeiou(sub: &str, ast: &str, params: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
     c.arg(sub).arg(crate::common::workload_ast(ast));
+    if ast == "file_per_sample.ast.json" {
+        c.args(crate::common::file_per_sample_args());      // its old defaults, required since 2026-10-22
+    }
     for p in params {
         c.arg("--param").arg(p);
     }

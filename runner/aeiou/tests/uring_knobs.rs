@@ -84,7 +84,7 @@ fn io_uring_knobs_keep_the_fingerprint() {
     // skipped would pass with that knob untested, its message hidden.
     let root = tmpdir("uring-knobs");
     let params = [("samples", "300"), ("batch", "4"), ("workers", "3"), ("prefetch", "2"), ("steps", "10"), ("walk", "true")];
-    let (loaded, cfg, model) = leaked_model("file_per_sample", config(3, 11, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(3, 11, &crate::common::file_per_sample(&params)));
     gen(loaded, cfg, model, &root);
     run::check_datasets(loaded, cfg, &root).unwrap();
     run::prepare_namespaces(&loaded.ast, &root, false).unwrap();

@@ -608,3 +608,20 @@ fn the_untraced_containers_cases_are_the_runs_the_old_defaults_made() {
         assert!(code == 1 && err.contains(&format!("required parameters with no value: {required}")), "{ast}: {err}");
     }
 }
+
+/// file_per_sample's unsettled case (item 33, part 5c; DESIGN_REVIEW §3.78 points 1 and 4): its
+/// lock runs exactly what the abstract's defaults ran until 2026-10-22 (the fingerprint taken at
+/// 1663e7e, 2 GPUs, seed 1, 8 steps), and the abstract alone is refused, naming every value it
+/// now requires.
+#[test]
+fn the_file_per_sample_case_is_the_run_the_old_defaults_made() {
+    let w = crate::common::workloads().display().to_string();
+    let (code, out, err) = aeiou(&["dry-run", "--case", "jpeg-50m", "--workloads", &w, "--gpus", "2", "--seed", "1", "--param", "steps=8"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&out, "case ").contains("/jpeg-50m  run file_per_sample"), "{out}");
+    assert_eq!(line(&out, "fingerprint "), "fingerprint b7ed35ea7708d600");
+    assert!(line(&out, "  ops ").starts_with("  ops 388716 "), "{out}");
+    let file = crate::common::workload_ast("file_per_sample.ast.json").display().to_string();
+    let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+    assert!(code == 1 && err.contains("required parameters with no value: batch, prefetch, sample_median, samples, step_time, steps, workers"), "{err}");
+}

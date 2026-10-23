@@ -406,7 +406,7 @@ needs_run = pytest.mark.skipif(not RUNNER.exists() or not _strace_works(), reaso
 @pytest.mark.parametrize(
     "name, seed, params",
     [
-        ("file_per_sample", 7, ["samples=600", "batch=4", "workers=2", "prefetch=2", "steps=12"]),
+        ("file_per_sample", 7, ["samples=600", "batch=4", "workers=2", "prefetch=2", "steps=12", "step_time=105000000", "sample_median=112640"]),
         ("lmcache_local_disk", 5, ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
                               'reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}',
                               'keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}']),
@@ -422,7 +422,8 @@ def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):
     r = run(RUNNER, "datagen", *common, "--root", root)
     assert r.returncode == 0, r.stderr
     dry = tmp_path / "dry.json"
-    r = run(RUNNER, "dry-run", *common, "--seed", seed, "--metrics-json", dry)
+    # the run reads st_blksize from the storage (hdr_read and inv_read in file_per_sample): the dry run is told it
+    r = run(RUNNER, "dry-run", *common, "--seed", seed, "--metrics-json", dry, "--st-blksize", os.stat(root).st_blksize)
     assert r.returncode == 0, r.stderr
     st = tmp_path / "strace.txt"
     r = run("strace", "-f", "-ttt", "-T", "-yy", "-e", "trace=%file,%desc,%process,io_setup,io_submit,io_getevents,io_destroy", "-o", st, RUNNER, "run", *common, "--seed", seed, "--root", root, "--time-scale", "0")

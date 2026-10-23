@@ -1624,9 +1624,21 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     } else {
         Vec::new()
     };
+    let layers: &Layers = layers;
+    // the run's identity first, so the report of a run that fails a check still says which run,
+    // the storage's own among them (a dataset not there to report its st_blksize)
+    doc.set("abstract", serde_json::json!({"name": loaded.ast.name, "sha256": loaded.sha256}));
+    doc.set("seed", serde_json::json!(cfg.seed));
+    doc.set("gpus", serde_json::json!(cfg.gpus));
+    doc.set("host", serde_json::json!(run::hostname()));
+    doc.set("rank", serde_json::json!(a.rank));
+    doc.set("ranks", serde_json::json!(a.ranks));
+    doc.set("layers", layers.json());
+    let mut out = stdout();
+    writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
+    layers.print(&mut out)?;
     // the values the storage reports (contract 0.11), read before the model is built
     cfg.st_blksize = run::st_blksize(loaded, &cfg, &(a.root.as_path(), &endpoints))?;
-    let layers: &Layers = layers;
     let cfg: &'static Config = Box::leak(Box::new(cfg));
     let params: &'static Params = Box::leak(Box::new(Params::new(&loaded.ast, cfg)?));
     let model = Box::leak(Box::new(build_model(&loaded.ast, cfg, params)?));
@@ -1636,10 +1648,6 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     for s in &subsets {
         model.cap_inventory(&s.name);
     }
-    // the run's identity first, so the report of a run that fails a check still says which run
-    doc.set("abstract", serde_json::json!({"name": loaded.ast.name, "sha256": loaded.sha256}));
-    doc.set("seed", serde_json::json!(cfg.seed));
-    doc.set("gpus", serde_json::json!(cfg.gpus));
     doc.set("params", payload::params_json(&loaded.doc, cfg, params)?);
     doc.set("storage_reported", storage_reported(&loaded.ast, cfg));
     // each protocol's API, null for a protocol the abstract has no names on
@@ -1649,10 +1657,6 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
     doc.set("posix_declared", serde_json::json!(used.posix.then(|| declared.api.name())));
     doc.set("cache_declared", serde_json::json!(used.posix.then(|| declared.cache.name())));
     doc.set("s3_declared", serde_json::json!(used.s3.then(|| declared_s3.name())));
-    doc.set("host", serde_json::json!(run::hostname()));
-    doc.set("rank", serde_json::json!(a.rank));
-    doc.set("ranks", serde_json::json!(a.ranks));
-    doc.set("layers", layers.json());
     doc.expected_fingerprint = expect_fingerprint;
     let view = match &a.case {
         Some(c) => {
@@ -1673,9 +1677,6 @@ fn run_checked(a: &mut RunOptions, layers: &mut Layers, doc: &mut aeiou::report:
         None => None,
     };
 
-    let mut out = stdout();
-    writeln!(out, "abstract {}  sha256 {}", loaded.ast.name, loaded.sha256)?;
-    layers.print(&mut out)?;
     writeln!(out, "seed {}  gpus {}  params: {}", cfg.seed, cfg.gpus, params_line(cfg))?;
     if let Some(line) = storage_line(&loaded.ast, cfg, "stat of its first file") {
         writeln!(out, "{line}")?;

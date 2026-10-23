@@ -168,11 +168,13 @@ def test_the_frames_are_the_runners(tmp_path):
     names the difference to both hosts."""
     addr = f"127.0.0.1:{free_port()}"
     ast = ast_path("file_per_sample")
+    # its job values, required since 2026-10-22 (DESIGN_REVIEW.md §3.78): the defaults they held
+    JOB = [x for p in ("batch=32", "workers=8", "prefetch=2", "steps=500", "step_time=105000000", "sample_median=112640") for x in ("--param", p)]
     rust = subprocess.Popen([str(RUNNER), "datagen", str(ast), "--root", str(tmp_path / "r"), "--ranks", "2", "--rank", "0",
-                             "--coordinator", addr, "--dedupe", "2", "--param", "samples=100"],
+                             "--coordinator", addr, "--dedupe", "2", "--param", "samples=100", *JOB],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_env())
     py = subprocess.run([sys.executable, "-m", "aeiou.datagen", str(ast), "--root", str(tmp_path / "p"), "--ranks", "2", "--rank", "1",
-                         "--coordinator", addr, "--param", "samples=100"], capture_output=True, text=True, cwd=str(BUILDER), env=_env(), timeout=300)
+                         "--coordinator", addr, "--param", "samples=100", *JOB], capture_output=True, text=True, cwd=str(BUILDER), env=_env(), timeout=300)
     ro, re_ = rust.communicate(timeout=300)
     assert rust.returncode != 0 and py.returncode == 1, ro + re_ + py.stdout + py.stderr
     assert "dedupe 1 differs from rank 0's 2" in py.stderr, py.stderr

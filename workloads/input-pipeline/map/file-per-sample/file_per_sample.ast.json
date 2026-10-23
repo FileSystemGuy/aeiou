@@ -4,20 +4,24 @@
   "doc": "PyTorch DataLoader over an ImageFolder-style corpus; W workers, B files per batch, in-order delivery.",
   "params": {
     "batch": {
-      "default": 32,
-      "unit": "count"
+      "unit": "count",
+      "doc": "samples per step: the model's on its accelerator, whose memory sets it",
+      "kind": "int"
     },
     "workers": {
-      "default": 8,
-      "unit": "count"
+      "unit": "count",
+      "doc": "DataLoader worker processes per GPU: the job's",
+      "kind": "int"
     },
     "prefetch": {
-      "default": 2,
-      "unit": "count"
+      "unit": "count",
+      "doc": "batches each worker keeps ahead (prefetch_factor): the job's",
+      "kind": "int"
     },
     "steps": {
-      "default": 500,
-      "unit": "count"
+      "unit": "count",
+      "doc": "steps of the run: the job's",
+      "kind": "int"
     },
     "sync_every": {
       "default": 1,
@@ -25,12 +29,16 @@
       "doc": "synchronous data parallel (DDP, FSDP): every step waits for the slowest GPU (DESIGN_REVIEW.md §3.71 point 4; 500, the brief's reference workload, until 2026-10-14)"
     },
     "step_time": {
-      "default": 105000000,
       "unit": "ns",
-      "doc": "[measure] GPU step time on the target accelerator"
+      "doc": "compute per step: the model's on its accelerator",
+      "kind": "int"
     },
     "hdr_read": {
-      "default": 1048576,
+      "default": {
+        "from": "st_blksize",
+        "of": "train",
+        "fallback": 1048576
+      },
       "unit": "bytes",
       "doc": "Python BufferedReader request = st_blksize; 1 MiB on NFS with rsize 1 MiB (traced 2026-10-01)"
     },
@@ -48,19 +56,29 @@
       "doc": "[measure] inventory bytes per file: the name below the root (`00000/img_000000000.jpg`) and a newline"
     },
     "inv_read": {
-      "default": 1048576,
+      "default": {
+        "from": "st_blksize",
+        "of": "train",
+        "fallback": 1048576
+      },
       "unit": "bytes",
       "doc": "[measure] the inventory reader's request; Python's BufferedReader asks st_blksize"
     },
     "samples": {
-      "default": 50000000,
       "unit": "count",
-      "doc": "[config] corpus size; sized to the dataset rule (PROJECT_BRIEF.md §5)"
+      "doc": "corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5)",
+      "scale": true,
+      "kind": "int"
     },
     "files_per_directory": {
       "default": 1300,
       "unit": "count",
       "doc": "[config] files a directory holds, {id div files_per_directory} (contract 0.10); 1,300 is ImageNet-1k's most images in a class, as kit/mkcorpus.py writes them"
+    },
+    "sample_median": {
+      "unit": "bytes",
+      "doc": "median sample file size: the job's corpus",
+      "kind": "int"
     }
   },
   "datasets": {
@@ -73,7 +91,9 @@
       },
       "size": {
         "lognormal": {
-          "median": 112640,
+          "median": {
+            "param": "sample_median"
+          },
           "sigma": 0.45
         }
       },
@@ -411,11 +431,12 @@
   "provenance": {
     "generator": {
       "script": "file_per_sample.py",
-      "sha256": "b133bf1b27d8ac86623338fc731c964450dffa7a1c7960bb1860db084ddc2641",
+      "sha256": "436b924102e2f3b8e592bf6a9ae3b10d10ae9e2871d2b84478c29a5cb00ce49e",
       "builder_version": "0.2.1",
-      "git": "52bf0ab3f273"
+      "git": "1663e7ebc934-dirty"
     },
     "python": "3.12.13",
-    "ast_sha256": "c23a6656eb966f92f0836168f70c3779329d4956646133d699bfa26d727ac2f4"
+    "built_twice_identical": true,
+    "ast_sha256": "66245ad85427712525bc8c0f26a5c460de490e63ea34e06a96d988cf35ca578a"
   }
 }

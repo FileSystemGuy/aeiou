@@ -13,7 +13,13 @@ const MISSING: &str = "the following required arguments were not provided:";
 
 fn aeiou(args: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-    c.args(args);
+    for a in args {
+        c.arg(a);
+        // file_per_sample's old defaults, required since 2026-10-22, before the test's own values
+        if a.ends_with("/file_per_sample.ast.json") && args.first() != Some(&"check") {
+            c.args(crate::common::file_per_sample_args());
+        }
+    }
     for (k, _) in std::env::vars() {
         if k.starts_with("AEIOU_") {
             c.env_remove(k);

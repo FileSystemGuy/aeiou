@@ -954,7 +954,7 @@ aeiou check $(find workloads -name '*.ast.json')
 The fingerprint and totals of eight instances of a training workload at seed 1:
 
 ```
-aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
+aeiou dry-run --case jpeg-50m --gpus 8 --seed 1
 ```
 
 One instance's stream, the first fifty operations of its second step:
@@ -968,8 +968,8 @@ Generate a small corpus, then run against it under the abstract's own backend, h
 run to the dry run's fingerprint:
 
 ```
-aeiou datagen workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --param samples=4000
-aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+aeiou datagen --case jpeg-50m --root /mnt/sut --param samples=4000
+aeiou run --case jpeg-50m --root /mnt/sut --gpus 8 --seed 1 \
     --param samples=4000 --param steps=50 --expect-fingerprint 3f1c... --report-json run.json
 ```
 
@@ -977,7 +977,7 @@ The first 2,600 files of that corpus (two whole directories of 1,300), the finge
 dry run gives for `samples=2600`:
 
 ```
-aeiou run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+aeiou run --case jpeg-50m --root /mnt/sut --gpus 8 --seed 1 \
     --param samples=2000 --param steps=50 --subset
 ```
 
@@ -985,7 +985,7 @@ The same run on io_uring with a capped io-wq, the metrics of the stream to a fil
 
 ```
 aeiou run ... --posix io_uring --threads 4 --iowq-max-workers 2
-aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --metrics-json abstract.metrics.json
+aeiou dry-run --case jpeg-50m --gpus 8 --metrics-json abstract.metrics.json
 ```
 
 A parameter file over the defaults:

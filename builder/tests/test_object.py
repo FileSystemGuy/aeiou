@@ -29,8 +29,10 @@ from aeiou import datagen  # noqa: E402
 RUNNER = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou"))
 USER, SECRET = "aeiou", "aeiou-secret"
 
-# the job and GPU values the stream abstracts and hdf5_map require (DESIGN_REVIEW.md §3.78), as flags
+# the job and GPU values the stream abstracts, file_per_sample, and hdf5_map require (DESIGN_REVIEW.md §3.78), as flags
 STREAM_JOB = ["--param", "batch=32", "--param", "steps=8", "--param", "cycle=2", "--param", "prefetch=1", "--param", "step_time=105000000", "--param", "decode=0"]
+
+FPS_JOB = ["--param", "batch=32", "--param", "workers=8", "--param", "prefetch=2", "--param", "steps=500", "--param", "step_time=105000000", "--param", "sample_median=112640"]
 
 HDF5_JOB = ["--param", "batch=4", "--param", "workers=2", "--param", "steps=4", "--param", "prefetch=2", "--param", "step_time=105000000"]
 
@@ -254,7 +256,7 @@ def test_aeiou_datagen_resumes_into_the_bucket(name, minio, tmp_path):
     if name == "tfrecord":
         ast_file, flags = ast_path("tfrecord_stream"), ["--param", "samples=700", "--param", "samples_per_file=128", "--param", "sample_median=120000", *STREAM_JOB]
     else:
-        ast_file, flags = ast_path("file_per_sample"), ["--param", "samples=40"]
+        ast_file, flags = ast_path("file_per_sample"), ["--param", "samples=40", *FPS_JOB]
     obj = json.loads(pathlib.Path(ast_file).read_text())
     (ds,) = obj["datasets"]
     obj["datasets"][ds]["protocol"] = "s3"
@@ -298,7 +300,7 @@ def test_aeiou_datagen_grows_and_shrinks_in_the_bucket(name, minio, tmp_path):
     if name == "tfrecord":
         ast_file, flags, count, sizes = ast_path("tfrecord_stream"), ["--param", "samples_per_file=128", "--param", "sample_median=20000", *STREAM_JOB], "samples", (700, 900, 300)
     else:
-        ast_file, flags, count, sizes = ast_path("file_per_sample"), [], "samples", (40, 60, 25)
+        ast_file, flags, count, sizes = ast_path("file_per_sample"), FPS_JOB, "samples", (40, 60, 25)
     obj = json.loads(pathlib.Path(ast_file).read_text())
     (ds,) = obj["datasets"]
     obj["datasets"][ds]["protocol"] = "s3"
@@ -347,7 +349,7 @@ def test_aeiou_datagen_settles_an_interrupted_shrink_in_the_bucket(minio, tmp_pa
 
     def fresh(prefix, n):
         r = subprocess.run([RUNNER, "datagen", obj_file, "--root", tmp_path / "unused", "--endpoint", f"{ds}=s3://bench/{prefix}",
-                            "--writers", "3", "--param", f"samples={n}"], capture_output=True, text=True, env=minio.env)
+                            "--writers", "3", "--param", f"samples={n}", *FPS_JOB], capture_output=True, text=True, env=minio.env)
         assert r.returncode == 0, r.stdout + r.stderr
 
     def contents(prefix):

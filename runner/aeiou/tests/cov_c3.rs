@@ -327,16 +327,18 @@ fn a_silent_coordinator_is_declared_gone() {
         .arg(crate::common::workload_ast("file_per_sample.ast.json"))
         .arg("--root")
         .arg(&*root)
+        .args(crate::common::file_per_sample_args())
         .args(["--param", "samples=10", "--ranks", "2", "--rank", "1", "--coordinator", &addr])
         .env("AEIOU_COORD_HEARTBEAT_MS", "50")
         .env_remove("AEIOU_CONFIG")
         .output()
         .unwrap();
     tx.send(()).unwrap();
-    h.join().unwrap();
+    // judged before the join: a host that fails before it connects leaves the server in accept
     let err = String::from_utf8_lossy(&o.stderr);
     assert_eq!(o.status.code(), Some(1), "{err}");
     assert!(err.contains(&format!("coordinator {addr}: no message for 300ms")), "{err}");
+    h.join().unwrap();
 }
 
 // ---------------------------------------------------------------- datagen's refusals

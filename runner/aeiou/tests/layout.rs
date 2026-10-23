@@ -600,7 +600,7 @@ fn strace_datagen(tag: &str, calls: &str) -> Option<(crate::common::TempDir, Str
     let log = dir.join("strace.log");
     let o = std::process::Command::new("strace").args(["-f", "-yy", "-e", &format!("trace={calls}"), "-o"]).arg(&log).arg(env!("CARGO_BIN_EXE_aeiou"))
         .arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(dir.join("root"))
-        .args(["--param", "samples=300", "--param", "files_per_directory=30", "--writers", "2"]).env_remove("AEIOU_CONFIG").output().unwrap();
+        .args(crate::common::file_per_sample_args()).args(["--param", "samples=300", "--param", "files_per_directory=30", "--writers", "2"]).env_remove("AEIOU_CONFIG").output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let text = std::fs::read_to_string(&log).unwrap();
     Some((dir, text))

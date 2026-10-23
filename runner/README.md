@@ -11,8 +11,8 @@ cargo build --release   # default features, the release binary's: formats (the T
                         # writers of datagen) and object (the object engine, for names declared `protocol: s3`)
 TEST_MINIO_BIN=/path/to/minio cargo test --release   # the object tests start that MinIO server
 ./target/release/aeiou check $(find ../workloads -name '*.ast.json')
-./target/release/aeiou dry-run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 8 --seed 1
-./target/release/aeiou run ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --root /mnt/sut --gpus 8 --seed 1 \
+./target/release/aeiou dry-run --case jpeg-50m --workloads ../workloads --gpus 8 --seed 1
+./target/release/aeiou run --case jpeg-50m --workloads ../workloads --root /mnt/sut --gpus 8 --seed 1 \
     --param samples=4000 --param steps=50
 ```
 

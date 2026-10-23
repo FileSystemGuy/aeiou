@@ -25,8 +25,16 @@ fn config(gpus: i64, seed: u64, params: &[(&str, &str)]) -> Config {
     Config { seed, gpus, overrides: params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), sets: vec![], st_blksize: Default::default() }
 }
 
+/// The committed abstract `name`, but file_per_sample as it was (`common::file_per_sample_as_it_was`).
+fn ast_path(name: &str) -> PathBuf {
+    match name {
+        "file_per_sample" | "file_per_sample.ast.json" => crate::common::file_per_sample_as_it_was(),
+        _ => crate::common::workload_ast(name),
+    }
+}
+
 fn leaked_model(name: &str, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {
-    leaked_model_at(&crate::common::workload_ast(name), cfg)
+    leaked_model_at(&ast_path(name), cfg)
 }
 
 fn leaked_model_at(ast: &Path, cfg: Config) -> (&'static aeiou::Loaded, &'static Config, &'static Model<'static>) {
@@ -308,7 +316,7 @@ fn a_refusal_reaches_every_host_before_rank_0_can_exit() {
 fn two_hosts_reproduce_the_dry_run_fingerprint() {
     let root = tmpdir("two");
     let params = [("samples", "600"), ("batch", "4"), ("workers", "2"), ("prefetch", "2"), ("steps", "12"), ("walk", "true")];
-    let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &params));
+    let (loaded, cfg, model) = leaked_model("file_per_sample", config(4, 7, &crate::common::file_per_sample(&params)));
     let dparams = Params::new(&loaded.ast, cfg).unwrap();
     let mut log = Vec::new();
     datagen(loaded, cfg, &dparams, model, &DatagenOpts { root: root.clone(), endpoints: Default::default(), writers: 4, dedupe: 1, compress: 1, datasets: vec![], rank: 0, ranks: 1, progress: std::time::Duration::from_secs(30), resume: None, resize: None, settle: None, sigint: false, ignore_space: false }, None, &mut log).unwrap();
@@ -356,7 +364,7 @@ fn free_port() -> u16 {
 
 fn dry_fingerprint_cli(ast: &str, gpus: &str, params: &[&str]) -> String {
     let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-    c.arg("dry-run").arg(crate::common::workload_ast(ast)).arg("--gpus").arg(gpus);
+    c.arg("dry-run").arg(ast_path(ast)).arg("--gpus").arg(gpus);
     for p in params {
         c.arg("--param").arg(p);
     }
@@ -374,7 +382,7 @@ fn run_ranks(ast: &str, root: &PathBuf, gpus: &str, params: &[&str], ranks: i64,
     let mut children = Vec::new();
     for rank in 0..ranks {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-        c.arg("run").arg(crate::common::workload_ast(ast)).arg("--gpus").arg(gpus).arg("--root").arg(root).arg("--time-scale").arg("0");
+        c.arg("run").arg(ast_path(ast)).arg("--gpus").arg(gpus).arg("--root").arg(root).arg("--time-scale").arg("0");
         c.arg("--ranks").arg(ranks.to_string()).arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}"));
         for p in params {
             c.arg("--param").arg(p);
@@ -402,14 +410,14 @@ fn run_ranks(ast: &str, root: &PathBuf, gpus: &str, params: &[&str], ranks: i64,
 #[test]
 fn a_host_that_only_receives_still_heartbeats() {
     let root = tmpdir("oneway");
-    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root).args(["--param", "samples=500"]).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::file_per_sample_as_it_was()).arg("--root").arg(&root).args(["--param", "samples=500"]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let port = free_port();
     let t = std::time::Instant::now();
     let children: Vec<_> = (0..3)
         .map(|rank| {
             let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-            c.arg("run").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--gpus").arg("4").arg("--root").arg(&root);
+            c.arg("run").arg(crate::common::file_per_sample_as_it_was()).arg("--gpus").arg("4").arg("--root").arg(&root);
             c.args(["--param", "samples=500", "--param", "batch=4", "--param", "steps=30", "--param", "step_time=100000000"]);
             c.arg("--ranks").arg("3").arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}"));
             c.env("AEIOU_COORD_HEARTBEAT_MS", "100");
@@ -578,7 +586,7 @@ fn datagen_ranks(root: &PathBuf, params: &[&str], ranks: i64, extra: impl Fn(i64
     let mut children = Vec::new();
     for rank in 0..ranks {
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-        c.arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(root).arg("--writers").arg("2");
+        c.arg("datagen").arg(crate::common::file_per_sample_as_it_was()).arg("--root").arg(root).arg("--writers").arg("2");
         c.arg("--ranks").arg(ranks.to_string()).arg("--rank").arg(rank.to_string()).arg("--coordinator").arg(format!("127.0.0.1:{port}"));
         for p in params {
             c.arg("--param").arg(p);
@@ -759,7 +767,7 @@ fn a_resume_takes_nothing_the_manifest_fixes() {
     assert_eq!(o.status.code(), Some(2));
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(e.contains("--param, --dedupe given too"), "{e}");
-    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root).args(["--param", "samples=30"]).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg("datagen").arg(crate::common::file_per_sample_as_it_was()).arg("--root").arg(&root).args(["--param", "samples=30"]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).args(["datagen", "--resume"]).arg(root.join("train")).output().unwrap();
     assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).contains("the manifest says `complete`; nothing to write"), "{o:?}");
@@ -784,7 +792,7 @@ fn resize_ranks(op: &str, n: i64, at: &std::path::Path, ranks: i64, extra: &[&st
 }
 
 fn datagen_one(root: &PathBuf, files: i64) {
-    datagen_at(&crate::common::workload_ast("file_per_sample.ast.json"), root, files);
+    datagen_at(&crate::common::file_per_sample_as_it_was(), root, files);
 }
 
 fn datagen_at(ast: &Path, root: &PathBuf, files: i64) {
@@ -800,7 +808,7 @@ fn datagen_at(ast: &Path, root: &PathBuf, files: i64) {
 /// failed with ENOSPC). A datagen of 20,000 of them still takes some 0.6 s here, thirty
 /// windows of 20 ms, so a kill or a signal lands while it writes.
 fn small_corpus_ast(dir: &Path) -> PathBuf {
-    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(crate::common::workload_ast("file_per_sample.ast.json")).unwrap()).unwrap();
+    let mut doc = crate::common::file_per_sample_doc();
     doc["datasets"]["train"]["size"] = serde_json::json!({"lognormal": {"median": 8192, "sigma": 0.45}});
     let path = dir.join("file_per_sample.ast.json");
     std::fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
@@ -1216,7 +1224,7 @@ fn a_signal_stops_a_run_with_its_report_and_tells_the_other_hosts() {
         let what = format!("{ranks} rank(s), signal {sig} on rank {at}, {posix}");
         let mut children: Vec<std::process::Child> = (0..ranks).map(|rank| {
             let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-            c.arg("run").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(&root).args(["--gpus", "2", "--posix", posix]);
+            c.arg("run").arg(crate::common::file_per_sample_as_it_was()).arg("--root").arg(&root).args(["--gpus", "2", "--posix", posix]);
             // 10 ms steps without end: only the signal stops it
             c.args(["--param", "samples=256", "--param", "batch=4", "--param", "steps=100000", "--param", "step_time=10000000"]);
             c.arg("--report-json").arg(root.join(format!("signal-{rank}.json")));
@@ -1339,7 +1347,7 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
     assert!(e.contains("differs from the corpus's in more than its count") && e.contains("{id div 1000:05}"), "{e}");
 
     // a flat corpus whose directory the abstract lists: the listing would be the whole corpus
-    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(crate::common::workload_ast("file_per_sample.ast.json")).unwrap()).unwrap();
+    let mut doc = crate::common::file_per_sample_doc();
     doc["datasets"]["train"]["pattern"] = serde_json::json!("train/img_{id:09}.jpg");
     let flat = tmpdir("subset-flat");
     let ast = flat.join("file_per_sample.ast.json");
@@ -1385,7 +1393,7 @@ fn a_failing_datagen_host_fails_the_others_with_its_reason() {
     for rank in 0..3i64 {
         let at = if rank == 2 { &*elsewhere } else { &*root };
         let mut c = Command::new(env!("CARGO_BIN_EXE_aeiou"));
-        c.arg("datagen").arg(crate::common::workload_ast("file_per_sample.ast.json")).arg("--root").arg(at);
+        c.arg("datagen").arg(crate::common::file_per_sample_as_it_was()).arg("--root").arg(at);
         c.args(["--param", "samples=4000", "--param", "files_per_directory=50", "--writers", "2"]);
         c.args(["--ranks", "3", "--rank", &rank.to_string(), "--coordinator", &format!("127.0.0.1:{port}")]);
         children.push(c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap());
@@ -1514,7 +1522,7 @@ fn an_unfinished_corpus_points_at_resume_and_settle() {
     let mut m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     m["state"] = "writing".into();
     std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
-    let a = crate::common::workload_ast("file_per_sample.ast.json");
+    let a = crate::common::file_per_sample_as_it_was();
     let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--param".as_ref(), "samples=30".as_ref()]);
     let want = format!("dataset `train`: {d} holds a corpus a datagen did not finish (its manifest is `writing`): `aeiou datagen --resume {d}` finishes it, `--settle {d}` keeps what it reached, or remove it first", d = at.display());
     assert!(!o.0 && o.2.contains(&want), "{o:?}");
@@ -1530,7 +1538,7 @@ fn an_unfinished_corpus_points_at_resume_and_settle() {
 /// payload, and so the dataset id, is the ratio asked, as it was.
 #[test]
 fn a_compress_ratio_a_piece_cannot_hold_is_recorded_as_made() {
-    let a = crate::common::workload_ast("file_per_sample.ast.json");
+    let a = crate::common::file_per_sample_as_it_was();
     for (c, made) in [("3", Some(4096.0 / 1366.0)), ("1000", Some(819.2)), ("4", None), ("4096", None)] {
         let root = tmpdir("dg-compress");
         let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--param".as_ref(), "samples=2".as_ref(), "--compress".as_ref(), c.as_ref()]);

@@ -733,6 +733,14 @@ numbers; the order is this note's.
     interleave, which needs TensorFlow installed), a capture taken as `aeiou_metrics: 2`, and an
     example case fitted to it, which replaces the unsettled one; item 35 is designed on the
     framing those traces show.
+37. **A lognormal's sigma as an expression (backlog, the user's choice 2026-10-22,
+    `DESIGN_REVIEW.md` §3.78).** A size distribution varies with every corpus, so its values
+    are a case's (point 4), but a lognormal's `sigma` is a number in the contract (`ast.rs`,
+    the schema, the builder's `lognormal`), where only `median` may be an expression; so
+    `file_per_sample`, `parquet_stream`, and `tfrecord_stream` require the median and keep
+    sigma 0.45 in the abstract. A contract change makes `sigma` an expression (the schema, the
+    runner's AST and validator, the builder's `dists`, `rng`, `describe`, and `formats`), and
+    then the three require it too.
 
 ## 7. Environment
 

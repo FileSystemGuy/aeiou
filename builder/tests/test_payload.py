@@ -47,16 +47,21 @@ def test_every_piece_and_every_prefix_compresses_at_the_ratio(c):
     assert zlib.compress(payload_block(99, 1).tobytes(), 1).__len__() >= BLOCK
 
 
+# file_per_sample's job values, required since 2026-10-22 (DESIGN_REVIEW.md §3.78): the defaults they held
+JOB = [x for p in ("batch=32", "workers=8", "prefetch=2", "steps=500", "step_time=105000000", "sample_median=112640") for x in ("--param", p)]
+
+
 @needs_runner
 def test_the_rust_writer_writes_the_same_bytes(tmp_path):
     """`aeiou datagen` writes `file_per_sample` with dedupe and compression; every file is the
     Python payload of its unit, so the two writers can share a corpus's definition."""
     ast = next((ROOT / "workloads").rglob("file_per_sample.ast.json"))
     root = tmp_path / "r"
-    r = subprocess.run([str(RUNNER), "datagen", str(ast), "--root", str(root), "--param", "samples=12", "--dedupe", "2",
+    r = subprocess.run([str(RUNNER), "datagen", str(ast), "--root", str(root), "--param", "samples=12", *JOB, "--dedupe", "2",
                         "--compress", "3", "--writers", "2"], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     train = json.loads(ast.read_text())["datasets"]["train"]
+    train["size"]["lognormal"]["median"] = 110 << 10      # {"param": "sample_median"}, as given
     m = json.loads((root / "train" / ".aeiou-dataset.json").read_text())
     assert m["payload"]["generator"] == "sfc64" and m["payload"]["wrapper"] == "aeiou-positional/4"
     units = [dedupe_unit(train["size"], train["seed"], i, 2, True) for i in range(12)]

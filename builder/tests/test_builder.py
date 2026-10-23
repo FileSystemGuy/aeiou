@@ -1242,10 +1242,10 @@ def test_non_json_numbers_are_refused_as_the_runner_refuses_them(tmp_path, lit):
     literal sits (a scalar, inside an array, inside an object)."""
     from aeiou.usage import UsageError
     text = ast_path("file_per_sample").read_text(encoding="utf-8")
-    assert '"default": 105000000' in text and '"default": 32' in text
+    assert text.count('"default": 1300') == 1
     for i, sub in enumerate([lit, f"[1, {lit}]", f'{{"x": [{lit}]}}']):
         f = tmp_path / f"t{i}.ast.json"
-        f.write_text(text.replace('"default": 105000000', f'"default": {sub}', 1), encoding="utf-8")
+        f.write_text(text.replace('"default": 1300', f'"default": {sub}', 1), encoding="utf-8")
         out = subprocess.run([sys.executable, str(ROOT / "schema" / "check.py"), str(f)], capture_output=True, text=True)
         assert out.returncode == 1 and out.stdout.splitlines()[0] == f"FAIL {f.name}", out.stdout + out.stderr
         assert f"{f.name}: not an abstract (" in out.stdout and "Traceback" not in out.stderr, out.stdout + out.stderr

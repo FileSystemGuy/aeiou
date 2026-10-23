@@ -5,15 +5,16 @@
     {
       "name": "file_per_sample",
       "abstract": "input-pipeline/map/file-per-sample/file_per_sample.ast.json",
-      "ast_sha256": "c23a6656eb966f92f0836168f70c3779329d4956646133d699bfa26d727ac2f4",
+      "ast_sha256": "66245ad85427712525bc8c0f26a5c460de490e63ea34e06a96d988cf35ca578a",
       "params": {
         "batch": {"default": 16},
         "files_per_directory": {"default": 1300},
-        "hdr_read": {"default": 1048576},
+        "hdr_read": {"default": {"from": "st_blksize", "of": "train", "fallback": 1048576}},
         "inv_entry": {"default": 24},
-        "inv_read": {"default": 1048576},
+        "inv_read": {"default": {"from": "st_blksize", "of": "train", "fallback": 1048576}},
         "inventory": {"default": false},
         "prefetch": {"default": 2},
+        "sample_median": {"default": 112640},
         "samples": {"default": 3200},
         "step_time": {"default": 105000000},
         "steps": {"default": 400},
@@ -29,8 +30,9 @@
         "inv_read": "abstract",
         "inventory": "abstract",
         "prefetch": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/params.json",
+        "sample_median": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/params.json",
         "samples": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/params.json",
-        "step_time": "abstract",
+        "step_time": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/params.json",
         "steps": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/params.json",
         "sync_every": "abstract",
         "walk": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/params.json",
@@ -41,6 +43,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/case.toml",
-    "fragments": [{"path": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/params.json", "sha256": "e9897b286ca566e87c5868f0668efc99110e2d28586ca21180531a4effad31ad"}]
+    "fragments": [{"path": "input-pipeline/map/file-per-sample/cases/imagefolder-jpeg/params.json", "sha256": "0a6e2da1777b45f6b1e001734494be1161949a3b3c1b160aa75c1a6b73c5dbf8"}]
   }
 }

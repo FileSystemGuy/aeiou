@@ -3,7 +3,12 @@
   "abstract": "file_per_sample",
   "doc": "A laptop-sized run of the shape: the smoke parameters of runner/REFERENCE.md (4000 files, 50 steps). Not a reference set.",
   "params": {
+    "batch": {"default": 32},
+    "workers": {"default": 8},
+    "prefetch": {"default": 2},
+    "step_time": {"default": 105000000},
     "samples": {"default": 4000},
-    "steps": {"default": 50}
+    "steps": {"default": 50},
+    "sample_median": {"default": 112640}
   }
 }

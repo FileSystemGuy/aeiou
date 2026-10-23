@@ -141,6 +141,13 @@ workload train_small_files {
 }
 ```
 
+*2026-10-22* (`DESIGN_REVIEW.md` §3.78): the job's values (`workers`, `prefetch`, `steps`, the
+median sample size), the model's on its GPU (`batch`, `step_time`), and the corpus size `samples`
+(the submission's scale) have no default in the abstract; the values above, placeholders never
+measured as a job, are the case `jpeg-50m`'s, of kind `unsettled`. The size's sigma, 0.45, stays
+in the abstract (a lognormal's sigma is a number in the contract, not an expression).
+`hdr_read` and `inv_read` are `st_blksize` as the storage reports it, 1 MiB where it reports none.
+
 **Parameters and sources.**
 
 | Slot | Source |
