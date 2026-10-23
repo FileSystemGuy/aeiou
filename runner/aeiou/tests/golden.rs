@@ -58,7 +58,9 @@ fn hashes_match_check_py() {
         // 2026-10-23: the model's on its GPU, the deployment's, and the load's values required (its unsettled case
         // chat-64-slots), DESIGN_REVIEW §3.78
         ("lmcache_local_disk", "16f242b5087cb86ea7ce2bc0f97871d017861b65c7598a810b4363ab1872374e"),
-        ("safetensors_load", "dfa240a4a3e8a266c699415f403b32688c7d09fe2eb6ce4d0536d151480feb75"),
+        // 2026-10-23: the model's shards and tensor table and the deployment's tp required (its unsettled case
+        // five-tensors), DESIGN_REVIEW §3.78
+        ("safetensors_load", "3cfab3b2572475f1ee9949af25d58a40de618fcaa050259dbdd0f91c89bee1a7"),
         // 2026-10-02: the `enumerate` phase, on by default (`walk` since 2026-10-13); 2026-10-22: the job's and the
         // GPU's values required (the use case unet3d-h100), the read sizes st_blksize, DESIGN_REVIEW §3.78
         ("npy_per_sample", "54aacfd3477c5708f60dc230b381270d40d68dc2c32d4e8c3194b53b85090760"),
@@ -122,7 +124,8 @@ fn golden_fingerprints() {
         ("dcp_save", 2, &[("steps", "200"), ("step_time", "323000000"), ("ckpt_every", "100"), ("items", "4"), ("item_bytes", "[16777216, 33554432, 16777216, 8388608]"), ("meta_bytes", "2097152")], 0x850e8c9019b3bda8, 130),
         // dcp_load at the values its defaults held until 2026-10-23 (its unsettled case four-items; DESIGN_REVIEW §3.78)
         ("dcp_load", 2, &crate::common::DCP_LOAD, 0x22990a88db4e6d4f, 368),
-        ("safetensors_load", 2, &[], 0x2668387c7aa4126b, 24682),
+        // safetensors_load at the values its defaults held until 2026-10-23 (its unsettled case five-tensors; DESIGN_REVIEW §3.78)
+        ("safetensors_load", 2, &crate::common::SAFETENSORS, 0x2668387c7aa4126b, 24682),
         ("diskann_search", 1, &[("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
         ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
         (

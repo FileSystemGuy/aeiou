@@ -764,8 +764,9 @@ numbers; the order is this note's.
     (its two read buffers the `st_blksize` of its input namespaces; the case `four-items`, what
     `dcp_save`'s writes at step 100); then the three LMCache abstracts the same day (contract 0.13:
     rule V3 judges a required `at` offset when it is given; the cases `chat-64-slots` of kind
-    `unsettled`); four to go: `safetensors_load`, `diskann_build`, `diskann_search`,
-    `faiss_ivf_ondisk`.
+    `unsettled`); then `safetensors_load` the same day (the model's shards and tensor table
+    and the deployment's `tp`; the case `five-tensors` of kind `unsettled`); three to go:
+    `diskann_build`, `diskann_search`, `faiss_ivf_ondisk`.
 39. **A use case per accelerator (backlog, raised by the user 2026-10-22, `DESIGN_REVIEW.md`
     §3.78 point 1).** A job's compute per step and its batch (bounded by the accelerator's
     memory) are the model's on one accelerator, so a job is one use case per accelerator type

@@ -7130,6 +7130,30 @@ Choices made in the build, open to revision:
 - **The tests keep their values** through one helper (`tests/common`, `LMCACHE`; the Python
   trace test's `LMCACHE_OLD`).
 
+**Built: `safetensors_load`'s case** (2026-10-23, item 38's fifth mechanism). Decided with the
+user the same day, on the recommendation: the model's values are required, its layout
+(`shards`, `shard_bytes`, `hdr_len`) and its tensor table (`shard`, `off`, `bytes`, `split`,
+`rows`, `row_bytes`), which only `aeiou-params safetensors` makes from a real model's shards,
+and so is the deployment's `tp`, which defaulted to 8 unseen. `configs` (the JSON files
+transformers reads, the library's) and `config_bytes` (three small files modeled at one size:
+the user's choice to keep it a default) stay defaults. No `scale`: the model fixes every byte,
+and only the GPU count grows. No `st_blksize`: the application maps the shards and calls no
+`read` there, so there is no buffer to size, and Python reads each JSON file in one call. No
+contract change: a loop bound taken from a required array's length (`shard.len`) already passed.
+
+Choices made in the build, open to revision:
+
+- **The old defaults are the unsettled case `five-tensors`**, the stand-in of two 5 GiB shards
+  at `tp` 8; its lock runs the fingerprint the defaults ran (2668387c7aa4126b, 24,682 ops at 2
+  GPUs; `tests/cases.rs`). The example `gpt2-random` and the fixture
+  `params/synthetic.params.json` gave every value already: re-locked, unchanged.
+- **Not checked: that the GPU count is a multiple of `tp`**, nor that the table's arrays agree
+  in length; a table from `aeiou-params safetensors` is consistent by construction, and the
+  abstract indexes the others by `shard`'s length, as before.
+- **The tests keep their values** through one helper (`tests/common`, `SAFETENSORS`);
+  `test_params.py` judges an integer array's default by `dcp_load`'s `tail_back`, since `off`
+  is now a required array (judged by its kind).
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

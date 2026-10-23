@@ -5,26 +5,25 @@
   "posix": "mmap",
   "params": {
     "shards": {
-      "default": 2,
       "unit": "count",
-      "doc": "[config]; 4 here would be a 20 GiB model, 2 keeps the example short"
+      "doc": "the model's shard files",
+      "kind": "int"
     },
     "shard_bytes": {
-      "default": 5368709120,
       "unit": "bytes",
-      "doc": "[config] every shard is modeled at the largest shard's size"
+      "doc": "every shard is modeled at the largest shard's size",
+      "kind": "int"
     },
     "hdr_len": {
-      "default": [
-        98304,
-        98304
-      ],
       "unit": "bytes",
-      "doc": "[config] JSON header per shard"
+      "doc": "JSON header per shard",
+      "kind": "array",
+      "items": "int"
     },
     "tp": {
-      "default": 8,
-      "unit": "count"
+      "unit": "count",
+      "doc": "the deployment's tensor-parallel degree: rank gpu mod tp takes a 1/tp slice",
+      "kind": "int"
     },
     "configs": {
       "default": 3,
@@ -37,65 +36,39 @@
       "doc": "[config] modeled at one size; traced 832, 5,701 and 203 bytes"
     },
     "shard": {
-      "default": [
-        0,
-        0,
-        1,
-        1,
-        1
-      ],
       "unit": "count",
-      "doc": "which shard holds tensor t"
+      "doc": "which shard holds tensor t",
+      "kind": "array",
+      "items": "int"
     },
     "off": {
-      "default": [
-        98312,
-        536969224,
-        98312,
-        67207176,
-        1140949000
-      ],
-      "unit": "bytes"
+      "unit": "bytes",
+      "doc": "tensor t's offset in its shard",
+      "kind": "array",
+      "items": "int"
     },
     "bytes": {
-      "default": [
-        536870912,
-        134217728,
-        67108864,
-        1073741824,
-        16384
-      ],
-      "unit": "bytes"
+      "unit": "bytes",
+      "doc": "tensor t's length",
+      "kind": "array",
+      "items": "int"
     },
     "split": {
-      "default": [
-        "column",
-        "row",
-        "column",
-        "row",
-        "full"
-      ],
-      "doc": "column: contiguous 1/tp slice; row: one piece per row; full: replicated, read whole"
+      "doc": "column: contiguous 1/tp slice; row: one piece per row; full: replicated, read whole",
+      "kind": "array",
+      "items": "str"
     },
     "rows": {
-      "default": [
-        1,
-        4096,
-        1,
-        8192,
-        1
-      ],
-      "unit": "count"
+      "unit": "count",
+      "doc": "tensor t's rows (1 unless its split is row)",
+      "kind": "array",
+      "items": "int"
     },
     "row_bytes": {
-      "default": [
-        536870912,
-        32768,
-        67108864,
-        131072,
-        16384
-      ],
-      "unit": "bytes"
+      "unit": "bytes",
+      "doc": "the bytes of one of tensor t's rows",
+      "kind": "array",
+      "items": "int"
     }
   },
   "datasets": {
@@ -631,12 +604,12 @@
   "provenance": {
     "generator": {
       "script": "safetensors_load.py",
-      "sha256": "12c67ce1da37b50389b25e87468cf61780409d51f85de1963000fad32f789ae4",
+      "sha256": "e27058845c3402fe146123afa2db964cc9cacfa275db4801a9291de18568a2db",
       "builder_version": "0.2.1",
-      "git": "28284ccdb8e1"
+      "git": "59eba370b03d-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "dfa240a4a3e8a266c699415f403b32688c7d09fe2eb6ce4d0536d151480feb75"
+    "ast_sha256": "3cfab3b2572475f1ee9949af25d58a40de618fcaa050259dbdd0f91c89bee1a7"
   }
 }

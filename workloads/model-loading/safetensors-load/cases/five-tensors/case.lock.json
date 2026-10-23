@@ -1,0 +1,44 @@
+{
+  "lock_version": 1,
+  "name": "safetensors-load/five-tensors",
+  "runs": [
+    {
+      "name": "safetensors_load",
+      "abstract": "model-loading/safetensors-load/safetensors_load.ast.json",
+      "ast_sha256": "3cfab3b2572475f1ee9949af25d58a40de618fcaa050259dbdd0f91c89bee1a7",
+      "params": {
+        "bytes": {"default": [536870912, 134217728, 67108864, 1073741824, 16384]},
+        "config_bytes": {"default": 4096},
+        "configs": {"default": 3},
+        "hdr_len": {"default": [98304, 98304]},
+        "off": {"default": [98312, 536969224, 98312, 67207176, 1140949000]},
+        "row_bytes": {"default": [536870912, 32768, 67108864, 131072, 16384]},
+        "rows": {"default": [1, 4096, 1, 8192, 1]},
+        "shard": {"default": [0, 0, 1, 1, 1]},
+        "shard_bytes": {"default": 5368709120},
+        "shards": {"default": 2},
+        "split": {"default": ["column", "row", "column", "row", "full"]},
+        "tp": {"default": 8}
+      },
+      "sources": {
+        "bytes": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "config_bytes": "abstract",
+        "configs": "abstract",
+        "hdr_len": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "off": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "row_bytes": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "rows": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "shard": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "shard_bytes": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "shards": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "split": "model-loading/safetensors-load/cases/five-tensors/params.json",
+        "tp": "model-loading/safetensors-load/cases/five-tensors/params.json"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "model-loading/safetensors-load/cases/five-tensors/case.toml",
+    "fragments": [{"path": "model-loading/safetensors-load/cases/five-tensors/params.json", "sha256": "ddfeebe21a86098a2fdfc3542b33beaaf6c355bfd4e29d2a6efefffb374c8d86"}]
+  }
+}

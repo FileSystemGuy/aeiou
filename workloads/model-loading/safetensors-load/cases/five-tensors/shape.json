@@ -1,0 +1,101 @@
+{
+  "shape_version": 3,
+  "tool": "aeiou-catalog",
+  "runs": [
+    {
+      "ast": "safetensors_load",
+      "ast_sha256": "a0f570ea20a9f229298bec2a2ff5cb21029f36090262334f4be98aef1ecd2d76",
+      "params": "case.lock.json",
+      "params_sha256": "aece3fdf1caf9d3d9e24c1c2de04059c5a923764fc8a744b1a3ea239d24b7295",
+      "gpus": 2,
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "length": null,
+      "stable": true,
+      "moving": [],
+      "ops": 24682,
+      "counts": {
+        "close": 14,
+        "fadvise": 4,
+        "fstat": 20,
+        "ioctl": 6,
+        "lseek": 12,
+        "open": 14,
+        "read": 24602,
+        "stat": 10
+      },
+      "bytes_read": 453435424,
+      "bytes_written": 0,
+      "datasets": [
+        {
+          "bytes": 12288,
+          "directories": 1,
+          "files": 3,
+          "inventory_bytes": 0,
+          "mean_file": 4096,
+          "name": "config",
+          "samples": 3
+        },
+        {
+          "bytes": 10737418240,
+          "directories": 1,
+          "files": 2,
+          "inventory_bytes": 0,
+          "mean_file": 5368709120,
+          "name": "model",
+          "samples": 2
+        }
+      ],
+      "attributes": {
+        "run_length_read": {
+          "value": 16384,
+          "spread": 0,
+          "class": "small"
+        },
+        "run_length_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "request_size_read": {
+          "value": 16384,
+          "spread": 0,
+          "class": "small"
+        },
+        "request_size_write": {
+          "value": null,
+          "spread": null,
+          "class": null
+        },
+        "read_share": {
+          "value": 1.0,
+          "spread": 0.0,
+          "class": "read-only"
+        },
+        "metadata": {
+          "value": 0.00235753,
+          "spread": 0.0,
+          "class": "none"
+        },
+        "reads_own_writes": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "no"
+        },
+        "reread": {
+          "value": 0.0,
+          "spread": 0.0,
+          "class": "none"
+        },
+        "skew": {
+          "value": 0.0104919,
+          "spread": 0.0,
+          "class": "uniform"
+        }
+      }
+    }
+  ]
+}

@@ -12,32 +12,32 @@ GPUs was not traced): the traced loader touches none until the tensor is used. T
 column-parallel weights, one piece per row for row-parallel ones (a page-fault storm under
 `--posix mmap`), and the whole tensor for replicated ones (norms, biases). The tensor
 table is a set of parallel parameter arrays indexed by t; `tensors_in(s)` of the paper form is
-a loop over all tensors guarded by `shard[t] == s`. The defaults are a five-tensor stand-in; a
-real model's table is a parameter file built by `aeiou-params safetensors` from its shards
-(schema/README.md §8), the shape/parameters split this abstract motivated (DESIGN_REVIEW.md
-§3.19, §3.27).
+a loop over all tensors guarded by `shard[t] == s`. The model's shards and tensor table and the
+deployment's `tp` are required (DESIGN_REVIEW.md §3.78, 2026-10-23): a real model's table is a
+parameter file built by `aeiou-params safetensors` from its shards (schema/README.md §8), the
+shape/parameters split this abstract motivated (DESIGN_REVIEW.md §3.19, §3.27), and the
+five-tensor stand-in the defaults held until then is the case five-tensors, not measured.
 """
 from aeiou import *
 
 w = Workload("safetensors_load", posix="mmap",     # safetensors maps the shards and never calls read
              doc="Every process reads every safetensors shard, touching its tensor-parallel slice of each tensor (fan-in G).")
 P = w.P
-w.param("shards", 2, unit="count", doc="[config]; 4 here would be a 20 GiB model, 2 keeps the example short")
-w.param("shard_bytes", 5 * GiB, unit="bytes", doc="[config] every shard is modeled at the largest shard's size")
-w.param("hdr_len", [96 * KiB, 96 * KiB], unit="bytes", doc="[config] JSON header per shard")
-w.param("tp", 8, unit="count")
+w.param("shards", kind=int, unit="count", doc="the model's shard files")
+w.param("shard_bytes", kind=int, unit="bytes", doc="every shard is modeled at the largest shard's size")
+w.param("hdr_len", kind=list[int], unit="bytes", doc="JSON header per shard")
+w.param("tp", kind=int, unit="count", doc="the deployment's tensor-parallel degree: rank gpu mod tp takes a 1/tp slice")
 w.param("configs", 3, unit="count", doc="small JSON files read before the shards: config.json, model.safetensors.index.json, generation_config.json (traced)")
 w.param("config_bytes", 4 * KiB, unit="bytes", doc="[config] modeled at one size; traced 832, 5,701 and 203 bytes")
-# the tensor table [config], one column per parameter array; index t (a real model's table comes from
+# the tensor table, one column per parameter array; index t (a real model's table comes from
 # `aeiou-params safetensors`, workloads/model-loading/safetensors-load/params/synthetic.params.json is one)
-w.param("shard", [0, 0, 1, 1, 1], unit="count", doc="which shard holds tensor t")
-w.param("off", [96 * KiB + 8, 96 * KiB + 8 + 512 * MiB, 96 * KiB + 8, 96 * KiB + 8 + 64 * MiB, 96 * KiB + 8 + 64 * MiB + 1 * GiB],
-        unit="bytes")
-w.param("bytes", [512 * MiB, 128 * MiB, 64 * MiB, 1 * GiB, 16 * KiB], unit="bytes")
-w.param("split", ["column", "row", "column", "row", "full"],
+w.param("shard", kind=list[int], unit="count", doc="which shard holds tensor t")
+w.param("off", kind=list[int], unit="bytes", doc="tensor t's offset in its shard")
+w.param("bytes", kind=list[int], unit="bytes", doc="tensor t's length")
+w.param("split", kind=list[str],
         doc="column: contiguous 1/tp slice; row: one piece per row; full: replicated, read whole")
-w.param("rows", [1, 4096, 1, 8192, 1], unit="count")
-w.param("row_bytes", [512 * MiB, 32 * KiB, 64 * MiB, 128 * KiB, 16 * KiB], unit="bytes")
+w.param("rows", kind=list[int], unit="count", doc="tensor t's rows (1 unless its split is row)")
+w.param("row_bytes", kind=list[int], unit="bytes", doc="the bytes of one of tensor t's rows")
 
 model = w.dataset("model", pattern="model/model-{id:05}.safetensors", layout="whole", access="indexed", count=P.shards,
                   size=const(P.shard_bytes), seed=0x5eed_da7c)

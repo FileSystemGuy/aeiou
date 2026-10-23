@@ -14,18 +14,18 @@ Every process reads every safetensors shard, touching its tensor-parallel slice 
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `shards` | 5 | 2 | count | [config]; 4 here would be a 20 GiB model, 2 keeps the example short |
-| `shard_bytes` | 125.0 MiB | 5 GiB | bytes | [config] every shard is modeled at the largest shard's size |
-| `hdr_len` | [128 bytes, 2.3 KiB, 2.2 KiB, 2.0 KiB, 1,000 bytes] | [96 KiB, 96 KiB] | bytes | [config] JSON header per shard |
-| `tp` | 1 | 8 | count |  |
+| `shards` | 5 | none | count | the model's shard files |
+| `shard_bytes` | 125.0 MiB | none | bytes | every shard is modeled at the largest shard's size |
+| `hdr_len` | [128 bytes, 2.3 KiB, 2.2 KiB, 2.0 KiB, 1,000 bytes] | none | bytes | JSON header per shard |
+| `tp` | 1 | none | count | the deployment's tensor-parallel degree: rank gpu mod tp takes a 1/tp slice |
 | `configs` | 3 | same | count | small JSON files read before the shards: config.json, model.safetensors.index.json, generation_config.json (traced) |
 | `config_bytes` | 4 KiB | same | bytes | [config] modeled at one size; traced 832, 5,701 and 203 bytes |
-| `shard` | [0, 1, 1, 1, 1, 1, 1, 1, …] (76 values) | [0, 0, 1, 1, 1] | count | which shard holds tensor t |
-| `off` | [136 bytes, 2.3 KiB, 14.3 KiB, 12.0 MiB, 12.0 MiB, 16.0 MiB, 16.0 MiB, 16.0 MiB, …] (76 values) | [96.0 KiB, 512.1 MiB, 96.0 KiB, 64.1 MiB, 1.1 GiB] | bytes |  |
-| `bytes` | [125 MiB, 12 KiB, 12 MiB, 4 KiB, 4 MiB, 4 KiB, 4 KiB, 4 KiB, …] (76 values) | [512 MiB, 128 MiB, 64 MiB, 1 GiB, 16 KiB] | bytes |  |
-| `split` | [`full`, `full`, `full`, `full`, `full`, `full`, `full`, `full`, …] (76 values) | [`column`, `row`, `column`, `row`, `full`] | — | column: contiguous 1/tp slice; row: one piece per row; full: replicated, read whole |
-| `rows` | [1, 1, 1, 1, 1, 1, 1, 1, …] (76 values) | [1, 4,096, 1, 8,192, 1] | count |  |
-| `row_bytes` | [125 MiB, 12 KiB, 12 MiB, 4 KiB, 4 MiB, 4 KiB, 4 KiB, 4 KiB, …] (76 values) | [512 MiB, 32 KiB, 64 MiB, 128 KiB, 16 KiB] | bytes |  |
+| `shard` | [0, 1, 1, 1, 1, 1, 1, 1, …] (76 values) | none | count | which shard holds tensor t |
+| `off` | [136 bytes, 2.3 KiB, 14.3 KiB, 12.0 MiB, 12.0 MiB, 16.0 MiB, 16.0 MiB, 16.0 MiB, …] (76 values) | none | bytes | tensor t's offset in its shard |
+| `bytes` | [125 MiB, 12 KiB, 12 MiB, 4 KiB, 4 MiB, 4 KiB, 4 KiB, 4 KiB, …] (76 values) | none | bytes | tensor t's length |
+| `split` | [`full`, `full`, `full`, `full`, `full`, `full`, `full`, `full`, …] (76 values) | none | — | column: contiguous 1/tp slice; row: one piece per row; full: replicated, read whole |
+| `rows` | [1, 1, 1, 1, 1, 1, 1, 1, …] (76 values) | none | count | tensor t's rows (1 unless its split is row) |
+| `row_bytes` | [125 MiB, 12 KiB, 12 MiB, 4 KiB, 4 MiB, 4 KiB, 4 KiB, 4 KiB, …] (76 values) | none | bytes | the bytes of one of tensor t's rows |
 
 The API the traced application used: `posix` mmap; a run under another backend is another workload.
 

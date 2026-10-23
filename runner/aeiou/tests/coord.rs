@@ -1379,6 +1379,7 @@ fn a_subset_runs_whole_directories_of_the_corpus() {
     let st = crate::common::workload_ast("safetensors_load.ast.json");
     let mut args: Vec<String> = vec!["datagen".into(), st.display().to_string(), "--root".into(), r.into(), "--gpus".into(), "2".into()];
     args.extend(small.iter().flat_map(|p| ["--param".to_string(), p.to_string()]));
+    args.extend(crate::common::safetensors_args(&small));
     let v: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     assert!(cli(&v).status.success());
     args[0] = "run".into();
@@ -1485,7 +1486,10 @@ fn the_direct_findings_are_each_roots_own() {
     // `config` (written first) on the test's root, `model` on tmpfs; both with unaligned tails
     let a = crate::common::workload_ast("safetensors_load.ast.json");
     let ep = format!("model={}", elsewhere.0.join("model").display());
-    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--endpoint".as_ref(), ep.as_ref(), "--param".as_ref(), "config_bytes=5000".as_ref(), "--param".as_ref(), "shard_bytes=10000".as_ref(), "--writers".as_ref(), "1".as_ref()]);
+    let old = crate::common::safetensors_args(&["shard_bytes=10000"]);    // its old defaults, required since 2026-10-23
+    let mut args = vec![a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--endpoint".as_ref(), ep.as_ref(), "--param".as_ref(), "config_bytes=5000".as_ref(), "--param".as_ref(), "shard_bytes=10000".as_ref(), "--writers".as_ref(), "1".as_ref()];
+    args.extend(old.iter().map(|s| s.as_ref() as &std::ffi::OsStr));
+    let o = datagen_cli(&args);
     assert!(o.0, "{o:?}");
     let part = |dir: &Path| aeiou::payload::Manifest::read(dir).unwrap().provenance["hosts"][0].clone();
     let (config, model) = (part(&root.join("config")), part(&elsewhere.0.join("model")));
@@ -1516,7 +1520,10 @@ fn a_root_that_cannot_be_made_leaves_nothing_behind() {
     // `config` is made first under --root; `model` cannot be, a file is in its way
     let a = crate::common::workload_ast("safetensors_load.ast.json");
     let ep = format!("model={}", root.join("blocker/model").display());
-    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), fresh.as_os_str(), "--endpoint".as_ref(), ep.as_ref(), "--param".as_ref(), "shard_bytes=10000".as_ref()]);
+    let old = crate::common::safetensors_args(&["shard_bytes=10000"]);    // its old defaults, required since 2026-10-23
+    let mut args = vec![a.as_os_str(), "--root".as_ref(), fresh.as_os_str(), "--endpoint".as_ref(), ep.as_ref(), "--param".as_ref(), "shard_bytes=10000".as_ref()];
+    args.extend(old.iter().map(|s| s.as_ref() as &std::ffi::OsStr));
+    let o = datagen_cli(&args);
     assert!(!o.0 && o.2.contains("blocker/model: Not a directory"), "{o:?}");
     assert!(!fresh.exists(), "left behind: {:?}", listing(&root));
 }

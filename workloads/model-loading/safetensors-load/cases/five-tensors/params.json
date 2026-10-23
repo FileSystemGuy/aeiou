@@ -1,0 +1,6 @@
+{"params_version": 2, "abstract": "safetensors_load",
+ "doc": "The values safetensors_load's defaults held until 2026-10-23 (DESIGN_REVIEW.md §3.78): a five-tensor stand-in in two 5 GiB shards with 96 KiB headers, two column-parallel tensors, two row-parallel ones, and a replicated one, at tp 8. Placeholders, not measured: no model's table stands behind them (the 2026-10-01 trace behind the abstract is the example gpt2-random).",
+ "params": {"shards": {"default": 2}, "shard_bytes": {"default": 5368709120}, "hdr_len": {"default": [98304, 98304]}, "tp": {"default": 8},
+            "shard": {"default": [0, 0, 1, 1, 1]}, "off": {"default": [98312, 536969224, 98312, 67207176, 1140949000]},
+            "bytes": {"default": [536870912, 134217728, 67108864, 1073741824, 16384]}, "split": {"default": ["column", "row", "column", "row", "full"]},
+            "rows": {"default": [1, 4096, 1, 8192, 1]}, "row_bytes": {"default": [536870912, 32768, 67108864, 131072, 16384]}}}

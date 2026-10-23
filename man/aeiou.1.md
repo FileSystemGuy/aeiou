@@ -989,7 +989,7 @@ aeiou run ... --posix io_uring --threads 4 --iowq-max-workers 2
 aeiou dry-run --case jpeg-50m --gpus 8 --metrics-json abstract.metrics.json
 ```
 
-A parameter file over the defaults:
+A parameter file that gives the values the abstract requires (here a model's tensor table):
 
 ```
 aeiou dry-run workloads/model-loading/safetensors-load/safetensors_load.ast.json --gpus 8 \

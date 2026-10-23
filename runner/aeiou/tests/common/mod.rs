@@ -94,6 +94,29 @@ pub fn lmcache_args(given: &[&str]) -> Vec<String> {
         .flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
 }
 
+/// safetensors_load's defaults until 2026-10-23, which a case now gives (its unsettled case
+/// five-tensors; DESIGN_REVIEW §3.78, item 38): the model's shards and tensor table and the
+/// deployment's tp. The tests that ran the abstract on them pass them.
+pub const SAFETENSORS: [(&str, &str); 10] = [
+    ("shards", "2"), ("shard_bytes", "5368709120"), ("hdr_len", "[98304, 98304]"), ("tp", "8"), ("shard", "[0, 0, 1, 1, 1]"),
+    ("off", "[98312, 536969224, 98312, 67207176, 1140949000]"), ("bytes", "[536870912, 134217728, 67108864, 1073741824, 16384]"),
+    ("split", r#"["column", "row", "column", "row", "full"]"#), ("rows", "[1, 4096, 1, 8192, 1]"),
+    ("row_bytes", "[536870912, 32768, 67108864, 131072, 16384]"),
+];
+
+/// `params`, then safetensors_load's old defaults for every value `params` does not give.
+pub fn safetensors<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut all = params.to_vec();
+    all.extend(SAFETENSORS.iter().filter(|(k, _)| !params.iter().any(|(p, _)| p == k)));
+    all
+}
+
+/// The same as `--param NAME=VALUE` arguments, for every old default `given` (NAME=VALUE) does not name.
+pub fn safetensors_args(given: &[&str]) -> Vec<String> {
+    SAFETENSORS.iter().filter(|(k, _)| !given.iter().any(|g| g.split_once('=').map(|(n, _)| n) == Some(*k)))
+        .flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
+}
+
 /// file_per_sample as it was until 2026-10-22: the committed abstract with its old defaults back
 /// in place of the required values, and `hdr_read` and `inv_read` 1 MiB in place of the storage's
 /// st_blksize, so that a run and a dry run of it read alike; for the tests (the coordinator's)

@@ -101,7 +101,11 @@ def test_an_integral_float_is_the_integer_its_default_is(tmp_path):
     sast, _ = _ast("safetensors_load")
     sbase = {**base, "abstract": "safetensors_load"}
     assert params.check(sast, {**sbase, "params": v2({"off": [1, 2.0]})}) == []
-    assert params.check(sast, {**sbase, "params": v2({"off": [1, 2.5]})}) == ["params: off[1]: the default is an integer, the value 2.5 is not"]
+    assert params.check(sast, {**sbase, "params": v2({"off": [1, 2.5]})}) == ["params: off[1]: the kind is an integer, the value 2.5 is not"]
+    dast, _ = _ast("dcp_load")            # an array whose default holds integers (safetensors_load's `off` is required since 2026-10-23)
+    dbase = {**base, "abstract": "dcp_load"}
+    assert params.check(dast, {**dbase, "params": v2({"tail_back": [1, 2.0]})}) == []
+    assert params.check(dast, {**dbase, "params": v2({"tail_back": [1, 2.5]})}) == ["params: tail_back[1]: the default is an integer, the value 2.5 is not"]
     # the runner takes and refuses the same files
     runner = pathlib.Path(os.environ.get("AEIOU_RUNNER", ROOT / "runner" / "target" / "release" / "aeiou")).resolve()
     if not runner.exists():

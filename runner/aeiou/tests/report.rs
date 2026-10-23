@@ -18,6 +18,9 @@ fn aeiou(sub: &str, ast: &str, params: &[&str]) -> Command {
     if ast == "file_per_sample.ast.json" {
         c.args(crate::common::file_per_sample_args());      // its old defaults, required since 2026-10-22
     }
+    if ast == "safetensors_load.ast.json" {
+        c.args(crate::common::safetensors_args(params));    // its old defaults, required since 2026-10-23
+    }
     for p in params {
         c.arg("--param").arg(p);
     }

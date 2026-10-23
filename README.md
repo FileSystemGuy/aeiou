@@ -362,8 +362,8 @@ review (2026-10-14 to 2026-10-16, `RC1_BUG_LOG.md`: 176 bugs, each fixed with it
 and release 0.2.0 (2026-10-16), then 0.2.1 the same day, every build with the object engine and
 the container writers (`object` and `formats` default features, `DESIGN_REVIEW.md` §3.65). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
-with its directory, twelve of them still empty): thirteen mechanisms and twenty-five cases under
-`workloads/` (fifteen examples, one use case, nine `unsettled`), each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
+with its directory, twelve of them still empty): thirteen mechanisms and twenty-six cases under
+`workloads/` (fifteen examples, one use case, ten `unsettled`), each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
 its dry run measures, checked in CI by `aeiou-catalog`. Use cases and the lock (2026-10-22,
 `PROJECT_BRIEF.md` §6 item 33, `DESIGN_REVIEW.md` §3.78, `runner/REFERENCE.md` §17): contract
 0.11 (required parameters, the `scale` tag, values the storage reports, `st_blksize`),
@@ -378,7 +378,8 @@ slowest delays; the five input-pipeline abstracts take their job and GPU values 
 first), its write buffer the `st_blksize` of its output namespace, read by a probe file
 (contract 0.12), `dcp_load`, its read buffers the `st_blksize` of its input namespaces, and the
 three LMCache abstracts, the model's, the deployment's, and the load's values (contract 0.13:
-rule V3 judges a required parameter in an `at` offset when its value is given).
+rule V3 judges a required parameter in an `at` offset when its value is given), and
+`safetensors_load`, the model's shards and tensor table and the deployment's `tp`.
 
 Not built, in rough order of interest:
 
@@ -434,7 +435,7 @@ Not built, in rough order of interest:
 - Traces of the three containers never traced, `hdf5_map`, `parquet_stream`, and
   `tfrecord_stream`, each fitted to an example case that replaces its `unsettled` one (item
   36); a lognormal's `sigma` as an expression, so a case gives it (item 37); the job values of
-  the four abstracts outside the input pipelines still holding them moved to cases, one mechanism at a time
+  the three abstracts outside the input pipelines still holding them moved to cases, one mechanism at a time
   with the user (item 38); and a use case per accelerator, `unet3d-h100` the first (item 39).
 
 ## License

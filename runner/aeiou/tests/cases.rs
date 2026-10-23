@@ -764,6 +764,23 @@ fn the_dcp_load_case_is_the_run_the_old_defaults_made() {
     assert!(code == 1 && err.contains("required parameters with no value: item_bytes, item_off, items, meta_bytes, read_order, replicas, restore_step"), "{err}");
 }
 
+/// safetensors_load's unsettled case (item 38; DESIGN_REVIEW §3.78 points 1 and 4): its lock runs
+/// exactly what the abstract's defaults ran until 2026-10-23 (tests/golden.rs's fingerprint, 2
+/// GPUs, seed 1), the five-tensor stand-in at tp 8; the abstract alone is refused, naming every
+/// value it now requires: the model's shards and tensor table and the deployment's tp.
+#[test]
+fn the_safetensors_case_is_the_run_the_old_defaults_made() {
+    let w = crate::common::workloads().display().to_string();
+    let (code, out, err) = aeiou(&["dry-run", "--case", "five-tensors", "--workloads", &w, "--gpus", "2", "--seed", "1"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&out, "case ").contains("/five-tensors  run safetensors_load"), "{out}");
+    assert_eq!(line(&out, "fingerprint "), "fingerprint 2668387c7aa4126b");
+    assert!(line(&out, "  ops ").starts_with("  ops 24682 "), "{out}");
+    let file = crate::common::workload_ast("safetensors_load.ast.json").display().to_string();
+    let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+    assert!(code == 1 && err.contains("required parameters with no value: bytes, hdr_len, off, row_bytes, rows, shard, shard_bytes, shards, split, tp"), "{err}");
+}
+
 /// The LMCache abstracts' unsettled cases (item 38; DESIGN_REVIEW §3.78 points 1 and 4): each
 /// lock runs exactly what its abstract's defaults ran until 2026-10-23 (tests/golden.rs's
 /// fingerprints, 1 GPU, seed 1, 2 slots, 50 requests after 50 warm), the shared store's writer

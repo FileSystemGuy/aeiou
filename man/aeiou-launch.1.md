@@ -128,15 +128,17 @@ aeiou-launch n1 n2 n3 n4 -- aeiou run --case-file load.lock.json --gpus 32 --roo
     --rank-rotate 1 --max-gap 30 --require-cold
 ```
 
-Two hundred hosts from a file:
+Two hundred hosts from a file, loading a model whose tensor table `llama.params.json` holds
+(made by **aeiou-params**(1) `safetensors` from its shards):
 
 ```
-aeiou-launch -f hosts.txt -- aeiou run safetensors_load.ast.json --gpus 1600 --root /mnt/sut
+aeiou-launch -f hosts.txt -- aeiou run safetensors_load.ast.json --gpus 1600 --root /mnt/sut \
+    --params-file llama.params.json
 ```
 
 ## SEE ALSO
 
-**aeiou**(1), **aeiou-datagen**(1), **aeiou-config**(5), **pdsh**(1).
+**aeiou**(1), **aeiou-datagen**(1), **aeiou-params**(1), **aeiou-config**(5), **pdsh**(1).
 
 The reference: `runner/REFERENCE.md` §6 (the coordinator), §14 (the option layers across
 hosts).

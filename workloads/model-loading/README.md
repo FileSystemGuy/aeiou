@@ -8,6 +8,6 @@ Also searched for as: inference, serving, cold start, weights.
 
 ## Mechanisms
 
-- [`safetensors-load`](safetensors-load/): transformers-safetensors, safetensors; cases: gpt2-random
+- [`safetensors-load`](safetensors-load/): transformers-safetensors, safetensors; cases: five-tensors, gpt2-random
 
 The catalog of every case: [`CATALOG.md`](../CATALOG.md).

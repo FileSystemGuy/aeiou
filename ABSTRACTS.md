@@ -714,6 +714,11 @@ shards by `aeiou-params safetensors` (`schema/README.md` §8); the five-tensor d
 script are a stand-in. Shards are modeled at the largest shard's size (`shard_bytes`), and the
 dataset pattern is ~~`model-{id:05}.safetensors`~~ `model/model-{id:05}.safetensors` since 2026-10-01 (the names are the dataset's, not the model's).
 
+*2026-10-23:* the committed abstract requires the model's shards (`shards`, `shard_bytes`,
+`hdr_len`), its tensor table, and the deployment's `tp`, which a case gives (`DESIGN_REVIEW.md`
+§3.78; the five-tensor stand-in is the unsettled case `five-tensors`); `configs` and
+`config_bytes` stay defaults.
+
 **Trace (2026-10-01).** `workloads/model-loading/safetensors-load`: `AutoModelForCausalLM.from_pretrained`
 on a local directory of five safetensors shards (GPT-2 shape, random weights, 437 MB) on the
 loopback NFS mount; safetensors 0.8.0, transformers 5.18, torch 2.14.1 on CPU. Reasoning in
