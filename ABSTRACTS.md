@@ -1005,6 +1005,13 @@ policy on a mapping, are what the storage sees.
 **Constructs used.** `regions` with a size distribution; `pick` with `zipf`; `size(c)` and
 `offset(c)` on a region; nested `parallel`; a parameter array for the index file's reads.
 
+*2026-10-23:* the committed abstract requires the index (`lists`, `code_size`, `list_bytes`,
+`index_bytes`, `index_reads`), the search's configuration (`nprobe`, `batch`, `list_pop`), the
+load (`threads`, `calls`), and the CPU (`distance`), which a case gives, and derives the prefetch
+threads, `min_(prefetch_nthread, batch·nprobe)`, in place of `prefetch = 32` above
+(`DESIGN_REVIEW.md` §3.78; the million-list defaults above are no case, the traced
+`sift1m-ivf1024-pq32` the only one).
+
 ---
 
 ## 7. Index build (DiskANN)

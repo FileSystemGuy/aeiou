@@ -532,7 +532,7 @@ fn tree(root: &PathBuf) -> std::collections::BTreeMap<String, Vec<u8>> {
 fn datagen_on_two_ranks_writes_the_one_host_corpus() {
     // a files dataset (120 files, one directory: both ranks create in it) and a corpus with a
     // array file above one 64 MiB piece plus a one-file dataset (rank 1's slice is empty)
-    for (ast, gpus, params) in [("file_per_sample", 2, vec![("samples", "120")]), ("faiss_ivf_ondisk", 1, vec![("lists", "280"), ("index_bytes", "1048576")])] {
+    for (ast, gpus, params) in [("file_per_sample", 2, vec![("samples", "120")]), ("faiss_ivf_ondisk", 1, crate::common::faiss(&[("lists", "280"), ("index_bytes", "1048576")]))] {
         let one = tmpdir("dg-one");
         let two = tmpdir("dg-two");
         let (loaded, cfg, model) = leaked_model(ast, config(gpus, 7, &params));
@@ -1575,7 +1575,10 @@ fn a_compress_ratio_a_piece_cannot_hold_is_recorded_as_made() {
 fn an_array_files_progress_is_live() {
     let root = tmpdir("dg-array-progress");
     let a = crate::common::workload_ast("faiss_ivf_ondisk.ast.json");
-    let o = datagen_cli(&[a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--dataset".as_ref(), "lists".as_ref(), "--param".as_ref(), "lists=4096".as_ref(), "--writers".as_ref(), "1".as_ref(), "--progress-secs".as_ref(), "0.01".as_ref()]);
+    let old = crate::common::faiss_args(&["lists=4096"]);
+    let mut args: Vec<&std::ffi::OsStr> = vec![a.as_os_str(), "--root".as_ref(), root.as_os_str(), "--dataset".as_ref(), "lists".as_ref(), "--param".as_ref(), "lists=4096".as_ref(), "--writers".as_ref(), "1".as_ref(), "--progress-secs".as_ref(), "0.01".as_ref()];
+    args.extend(old.iter().map(std::ffi::OsStr::new));
+    let o = datagen_cli(&args);
     assert!(o.0, "{o:?}");
     let partial: Vec<&str> = o.1.lines().filter(|l| l.starts_with("progress ") && l.contains(" 0/1 files")).collect();
     assert!(!partial.is_empty(), "no window while the file was written: {}", o.1);

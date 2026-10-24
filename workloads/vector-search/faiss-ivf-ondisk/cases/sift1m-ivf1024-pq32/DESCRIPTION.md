@@ -14,18 +14,18 @@ Per search call and OpenMP slice, prefetch threads touch every inverted list the
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `threads` | 1 | 32 | count | [config] OpenMP threads: a search call of n queries runs min(threads, n) slices |
-| `calls` | 20 | 100,000 | count | search calls |
-| `batch` | 1 | same | count | [config] queries per slice per call (the call's batch is threads * batch) |
-| `nprobe` | 64 | same | count |  |
-| `prefetch` | 32 | same | count | prefetch threads per slice: min(32, batch * nprobe) (traced); batch * nprobe is modeled as a multiple of it |
-| `list_pop` | Zipf over the ids with exponent 0.2, in a rank order fixed by the dataset seed | same | — | list popularity; measured 0.20-0.25 on SIFT1M with its own query set |
-| `distance` | 400 µs | same | ns | [measure] scan time per query |
-| `lists` | 1,024 | 1,000,000 | count | [config] inverted lists |
-| `list_bytes` | lognormal, median 36,247, σ 0.39 (5th–95th percentile 19,084 to 68,844), clamped to at least 2,720 and at most 175,960 | lognormal, median 40,960, σ 0.4 (5th–95th percentile 21,214 to 79,086) | — | [config] codes + ids of one list: vectors per list * (code size + 8); sigma measured 0.39 on SIFT1M |
-| `code_size` | 32 bytes | same | bytes | [config] bytes of one vector's code (PQ32); its id is 8 more |
-| `index_bytes` | 664.3 KiB | 528.1 MiB | bytes | [config] the index file: centroids (lists * dimension * 4 bytes; 128 dimensions here), codebooks, 16 bytes per list |
-| `index_reads` | [8 KiB, 504 KiB, 8 KiB, 120 KiB, 8 KiB, 16 KiB, 8 KiB] | [8 KiB, 512.0 MiB, 8 KiB, 120 KiB, 8 KiB, 16.0 MiB, 8 KiB] | bytes | [config] read lengths on the index file: stdio fills 8,192 bytes, and reads the bulk of each large array (centroids, codebooks, list table) directly |
+| `threads` | 1 | none | count | [config] OpenMP threads: a search call of n queries runs min(threads, n) slices |
+| `calls` | 20 | none | count | search calls |
+| `batch` | 1 | none | count | [config] queries per slice per call (the call's batch is threads * batch) |
+| `nprobe` | 64 | none | count | [config] lists probed per query |
+| `prefetch_nthread` | 32 | same | count | the library's prefetch threads per slice at most (`OnDiskInvertedLists::prefetch_nthread`, traced) |
+| `list_pop` | Zipf over the ids with exponent 0.2, in a rank order fixed by the dataset seed | none | — | list popularity over the queries (params.py fits it; 0.20-0.25 on SIFT1M with its own query set) |
+| `distance` | 400 µs | none | ns | [measure] scan time per query (no trace measures it: the traced example takes 0.4 ms, the value the defaults held, not fitted) |
+| `lists` | 1,024 | none | count | [config] inverted lists |
+| `list_bytes` | lognormal, median 36,247, σ 0.39 (5th–95th percentile 19,084 to 68,844), clamped to at least 2,720 and at most 175,960 | none | — | [config] codes + ids of one list: vectors per list * (code size + 8), a distribution over the lists (params.py fits it); its max no larger than the slot |
+| `code_size` | 32 bytes | none | bytes | [config] bytes of one vector's code (32 for PQ32); its id is 8 more |
+| `index_bytes` | 664.3 KiB | none | bytes | [config] the index file: centroids (lists * dimension * 4 bytes), codebooks, 16 bytes per list |
+| `index_reads` | [8 KiB, 504 KiB, 8 KiB, 120 KiB, 8 KiB, 16 KiB, 8 KiB] | none | bytes | [config] read lengths on the index file: stdio fills 8,192 bytes, and reads the bulk of each large array (centroids, codebooks, list table) directly (params.py reads them from the trace) |
 
 The API the traced application used: `posix` mmap; a run under another backend is another workload.
 
@@ -47,8 +47,8 @@ The API the traced application used: `posix` mmap; a run under another backend i
 - `close` `i`.
 - 20 times (`calls`), `q` = 0 to 19:
   - 1 (`threads`) in parallel, `th` = 0 onward, joined at the end:
-    - 32 (`prefetch`) in parallel, `p` = 0 onward, joined at the end:
-      - Twice (`batch × nprobe div prefetch`), `k` = 0 to 1:
+    - 32 (`min(prefetch_nthread, batch × nprobe)`) in parallel, `p` = 0 onward, joined at the end:
+      - Twice (`batch × nprobe div min(prefetch_nthread, batch × nprobe)`), `k` = 0 to 1:
         - `c` is a sample of `lists` drawn with replacement, Zipf over the ids of `lists` with exponent 0.2, in a rank order fixed by the dataset seed (`list_pop`).
         - `ids` = `size(c) × 8 div (code_size + 8)`.
         - `read` `f`: `ids` at offset `offset(c) + size(c) − ids`.

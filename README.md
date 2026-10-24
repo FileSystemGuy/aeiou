@@ -381,7 +381,9 @@ three LMCache abstracts, the model's, the deployment's, and the load's values (c
 rule V3 judges a required parameter in an `at` offset when its value is given),
 `safetensors_load`, the model's shards and tensor table and the deployment's `tp`, and
 `diskann_build`, the base's shape, the build's configuration, its graphs, and its compute, and
-`diskann_search`, the same index, the search's configuration and load, and its CPU.
+`diskann_search`, the same index, the search's configuration and load, and its CPU, and
+`faiss_ivf_ondisk`, its index, the search's configuration and load, and its CPU, the prefetch
+threads derived.
 
 Not built, in rough order of interest:
 
@@ -436,9 +438,9 @@ Not built, in rough order of interest:
   split by byte role, a format's framing against its payload (item 35).
 - Traces of the three containers never traced, `hdf5_map`, `parquet_stream`, and
   `tfrecord_stream`, each fitted to an example case that replaces its `unsettled` one (item
-  36); a lognormal's `sigma` as an expression, so a case gives it (item 37); the job values of
-  `faiss_ivf_ondisk`, the last abstract outside the input pipelines still holding them, moved to a case
-  with the user (item 38); and a use case per accelerator, `unet3d-h100` the first (item 39).
+  36); a lognormal's `sigma` as an expression, so a case gives it (item 37); `faiss_ivf_ondisk`'s
+  index-file reads derived from its arrays' sizes, as stdio's buffer follows `st_blksize` (item
+  38's open point); and a use case per accelerator, `unet3d-h100` the first (item 39).
 
 ## License
 

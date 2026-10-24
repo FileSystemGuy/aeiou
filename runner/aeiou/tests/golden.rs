@@ -80,7 +80,9 @@ fn hashes_match_check_py() {
         ("tfrecord_stream", "bf10f07938e49198907ae94b4a2438f49a5e7954e1bf1e415be7f171c0500bff"),
         ("parquet_stream", "444efde72b074b8dcfff9ee4abb5810a630ff8bc5ec466b022de795d91d179d2"),
         ("hdf5_map", "9f758776089271be97f5fa1e2e94e60a90c82b0876ce776ecf4fb4363f5c5051"),
-        ("faiss_ivf_ondisk", "14a33724b28cbc698197c4435d0e3d8161aba8e09539d852a096bd28f28d5177"),
+        // 2026-10-23: the index, the search's configuration, its load, and its CPU required, the prefetch threads
+        // derived (the traced example sift1m-ivf1024-pq32), DESIGN_REVIEW §3.78
+        ("faiss_ivf_ondisk", "9a5b8371dc75aed9b19b64c83634529f41583a294e21acbba5792f8a32a96ef2"),
         // the shared store and its cold reader, 2026-10-02 (DESIGN_REVIEW §3.52); 2026-10-23 as lmcache_local_disk,
         // and `buf` the st_blksize of the store (contract 0.12)
         ("lmcache_shared_fs", "2f895fd237fb993e88607ce7251f7b62b03d98a3514e2ad086075d21c9d621c6"),
@@ -132,7 +134,8 @@ fn golden_fingerprints() {
         ("safetensors_load", 2, &crate::common::SAFETENSORS, 0x2668387c7aa4126b, 24682),
         // diskann_search at the values its defaults held until 2026-10-23 (no case holds them; DESIGN_REVIEW §3.78)
         ("diskann_search", 1, &[("n", "999999995"), ("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("beam", "4"), ("hops", r#"{"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [1, 135, 536, 269, 47, 9, 2]}}"#), ("entry", r#"{"hotset": {"fraction": 2e-7, "weight": 1.0}}"#), ("near", r#"{"hotset": {"fraction": 1e-5, "weight": 1.0}}"#), ("node_cache", "0"), ("rerank", "500000"), ("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
-        ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
+        // faiss_ivf_ondisk at the values its defaults held until 2026-10-23 (no case holds them; DESIGN_REVIEW §3.78)
+        ("faiss_ivf_ondisk", 1, &[("threads", "2"), ("calls", "100"), ("batch", "1"), ("nprobe", "64"), ("list_pop", r#"{"zipf": {"s": 0.2}}"#), ("distance", "400000"), ("lists", "1000000"), ("list_bytes", r#"{"lognormal": {"median": 40960, "sigma": 0.4}}"#), ("code_size", "32"), ("index_bytes", "553779476"), ("index_reads", "[8192, 536862720, 8192, 122880, 8192, 16769024, 8192]")], 0x42c16b5296ebaefc, 25612),
         // re-recorded 2026-10-23 (§3.78): `sectors` derived from `degree` 64, 200,001 at these million points where
         // 1,000 were given, so the layout writes twelve more calls of 64 MiB and a sector
         (

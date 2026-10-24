@@ -984,7 +984,7 @@ fn a_failed_run_reports_its_cause_not_the_abort_it_raised() {
 fn array_datagen_writes_only_the_slots_contents() {
     use std::os::unix::fs::MetadataExt;
     let root = tmpdir("faiss-sparse");
-    let params = [("lists", "300"), ("index_bytes", "4096"), ("calls", "20"), ("threads", "1")];
+    let params = crate::common::faiss(&[("lists", "300"), ("index_bytes", "4096"), ("calls", "20"), ("threads", "1")]);
     let (loaded, cfg, model) = leaked_model("faiss_ivf_ondisk", config(1, 9, &params));
     let meta = model.datasets.iter().find(|m| m.name() == "lists").unwrap();
     let p = aeiou::project::project(meta, 2).unwrap();

@@ -772,7 +772,12 @@ numbers; the order is this note's.
     only one); then `diskann_search` the same day (the index as `diskann_build` names it, its
     sectors derived; the search's configuration, the deployment's `node_cache`, the load, and
     the CPU; no case for the defaults, the traced `sift1m-nocache` and `sift1m-cache` the only
-    ones); one to go: `faiss_ivf_ondisk`.
+    ones); then `faiss_ivf_ondisk` the same day (the index, the search's configuration with the
+    lists' popularity, the load, and the CPU; the prefetch threads derived, `min_(prefetch_nthread,
+    batch·nprobe)`; no case for the million-list defaults, the traced `sift1m-ivf1024-pq32` the
+    only one). Every abstract outside the input pipelines is done. Open from it: the index
+    file's stdio fills follow its `st_blksize` (glibc, [verify]), so `index_reads` derived from
+    the arrays' sizes; nothing checks that the lists' 256 KiB slot holds the largest list.
 39. **A use case per accelerator (backlog, raised by the user 2026-10-22, `DESIGN_REVIEW.md`
     §3.78 point 1).** A job's compute per step and its batch (bounded by the accelerator's
     memory) are the model's on one accelerator, so a job is one use case per accelerator type

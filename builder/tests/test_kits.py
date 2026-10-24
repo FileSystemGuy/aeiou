@@ -725,7 +725,8 @@ def _load(monkeypatch, path, name):
 def test_faiss_params_fit_list_sizes_popularity_and_the_index_reads(monkeypatch, tmp_path):
     """`faiss-ivf-ondisk/kit/params.py`: list bytes log-normal over the non-empty lists (median the
     geometric mean), list popularity a Zipf fitted to the more probed half of the lists, and the
-    lengths `read_index` asked for on the index file."""
+    lengths `read_index` asked for on the index file; `--set` adds what no trace measures (the
+    scan's `distance`); the prefetch threads are the abstract's to derive, never written."""
     np = pytest.importorskip("numpy")
     import argparse
     fp = _load(monkeypatch, FAISS / "params.py", "faiss_params")
@@ -735,13 +736,14 @@ def test_faiss_params_fit_list_sizes_popularity_and_the_index_reads(monkeypatch,
     trace = ['9 1.0 read(5</mnt/nfs/out/populated.index>, "IwPQ"..., 8192) = 8192 <0.000010>\n',
              '9 1.1 read(5</mnt/nfs/out/populated.index>, ""..., 516096) = 400000 <0.000010>\n',    # the length asked for
              '9 1.2 read(6</mnt/nfs/out/merged_index.ivfdata>, ""..., 4096) = 4096 <0.000010>\n']
-    a = argparse.Namespace(doc="d", threads=1, calls=20, batch=2, nprobe=64)
-    f = fp.params(a, size, probes, 32, 32, trace, 680212)
+    a = argparse.Namespace(doc="d", threads=1, calls=20, batch=2, nprobe=64, set=["distance=400000", 'list_pop={"zipf": {"s": 0.5}}'])
+    f = fp.params(a, size, probes, 32, trace, 680212)
     p = values_of(f)
-    assert (f["abstract"], f["doc"], p["lists"], p["code_size"], p["prefetch"], p["index_bytes"]) == ("faiss_ivf_ondisk", "d", 8, 32, 32, 680212)
+    assert (f["abstract"], f["doc"], p["lists"], p["code_size"], p["index_bytes"], p["distance"]) == ("faiss_ivf_ondisk", "d", 8, 32, 680212, 400000)
+    assert "prefetch" not in p and "prefetch_nthread" not in p
     assert p["list_bytes"] == {"lognormal": {"median": 2000, "sigma": 0.52, "min": 0, "max": 4000}}
-    assert p["list_pop"] == {"zipf": {"s": 2.0}} and p["index_reads"] == [8192, 516096]
-    assert values_of(fp.params(argparse.Namespace(doc="d", threads=1, calls=20, batch=1, nprobe=16), size, probes, 32, 32, [], 1))["prefetch"] == 16
+    assert p["list_pop"] == {"zipf": {"s": 0.5}} and p["index_reads"] == [8192, 516096]    # a value --set replaces the fitted one
+    assert values_of(fp.params(argparse.Namespace(doc="d", threads=1, calls=20, batch=1, nprobe=16, set=[]), size, probes, 32, [], 1))["list_pop"] == {"zipf": {"s": 2.0}}
     v = np.array([[3, 0, 0, 0], [3, 0, 0, 0]], dtype="int32")
     v[:, 1:] = np.array([[1.5, 2, 3], [4, 5, 6.25]], dtype="float32").view("int32")
     v.tofile(tmp_path / "q.fvecs")
@@ -1068,12 +1070,12 @@ def test_faiss_kit_builds_searches_fits_and_faults_the_case_s_index(tmp_path):
     (tmp_path / "trace.txt").write_text(
         f'9 1.0 read(5<{tmp_path}/out/populated.index>, "IwPQ"..., 8192) = 8192 <0.000010>\n'
         f'9 1.1 read(5<{tmp_path}/out/populated.index>, ""..., 516096) = 400 <0.000010>\n')
-    r, calls = _standin_run(tmp_path, kit / "params.py", "out", "sift/sift_query.fvecs", "trace.txt", "a doc", cwd=tmp_path)
+    r, calls = _standin_run(tmp_path, kit / "params.py", "out", "sift/sift_query.fvecs", "trace.txt", "a doc", "--set", f"distance={case['distance']}", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     f = json.loads(r.stdout)
     p = values_of(f)
     assert (f["abstract"], f["doc"], set(p)) == ("faiss_ivf_ondisk", "a doc", set(case))
-    same = ("threads", "calls", "batch", "nprobe", "prefetch", "lists", "code_size")
+    same = ("threads", "calls", "batch", "nprobe", "lists", "code_size", "distance")
     assert {k: p[k] for k in same} == {k: case[k] for k in same}
     assert p["index_bytes"] == (tmp_path / "out/populated.index").stat().st_size and p["index_reads"] == [8192, 516096]
     assert (p["list_bytes"]["lognormal"]["min"], p["list_bytes"]["lognormal"]["max"]) == (0, case["code_size"] + 8)

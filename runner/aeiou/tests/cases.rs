@@ -818,6 +818,49 @@ fn the_diskann_search_cases_are_the_runs_their_traces_fitted() {
     assert!(code == 1 && err.contains("required parameters with no value: beam, degree, dim, entry, hops, n, near, node_cache, pq_code, queries, rerank, threads"), "{err}");
 }
 
+/// faiss_ivf_ondisk's job values (item 38; DESIGN_REVIEW §3.78): the traced example
+/// sift1m-ivf1024-pq32 runs the op multiset it ran before (its prefetch threads now derived,
+/// min(prefetch_nthread, batch * nprobe), 32 either way); the abstract alone is refused, naming
+/// every value it now requires: the index, the search's configuration, its load, and its CPU.
+#[test]
+fn the_faiss_case_is_the_run_its_trace_fitted() {
+    let w = crate::common::workloads().display().to_string();
+    let (code, out, err) = aeiou(&["dry-run", "--case", "sift1m-ivf1024-pq32", "--workloads", &w, "--gpus", "1", "--seed", "1"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(line(&out, "case ").contains("/sift1m-ivf1024-pq32  run faiss_ivf_ondisk"), "{out}");
+    assert_eq!(line(&out, "fingerprint "), "fingerprint d7deee5f942abc7e");
+    assert!(line(&out, "  ops ").starts_with("  ops 2572 "), "{out}");
+    let file = crate::common::workload_ast("faiss_ivf_ondisk.ast.json").display().to_string();
+    let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+    assert!(code == 1 && err.contains("required parameters with no value: batch, calls, code_size, distance, index_bytes, index_reads, list_bytes, list_pop, lists, nprobe, threads"), "{err}");
+}
+
+/// faiss_ivf_ondisk's prefetch threads are derived (2026-10-23): min(prefetch_nthread, batch *
+/// nprobe), so a slice probing fewer lists than FAISS's 32 threads starts one thread a list and
+/// reads every list it probes (two reads each, the ids and the codes); a fixed 32 read none. A
+/// remainder over the threads is dropped, as the abstract has always modeled it.
+#[test]
+fn faiss_prefetch_threads_are_derived_from_the_lists_a_slice_probes() {
+    let file = crate::common::workload_ast("faiss_ivf_ondisk.ast.json").display().to_string();
+    // batch * nprobe is modeled as a multiple of the threads: 48 lists on 32 threads read 32
+    for (nprobe, batch, prefetch_nthread, reads) in [("16", "1", None, 16), ("64", "1", None, 64), ("16", "2", None, 32), ("16", "3", None, 32), ("64", "1", Some("8"), 64), ("12", "1", Some("8"), 8)] {
+        let mut given = vec![format!("nprobe={nprobe}"), format!("batch={batch}"), "calls=3".to_string(), "threads=2".to_string()];
+        if let Some(n) = prefetch_nthread {
+            given.push(format!("prefetch_nthread={n}"));
+        }
+        let given: Vec<&str> = given.iter().map(String::as_str).collect();
+        let mut args = vec!["dry-run".to_string(), file.clone(), "--gpus".into(), "1".into()];
+        for g in &given {
+            args.extend(["--param".to_string(), g.to_string()]);
+        }
+        args.extend(crate::common::faiss_args(&given));
+        let (code, out, err) = aeiou(&args.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(code, 0, "{err}");
+        // the index file's 7 reads, then per call and slice two reads of each list prefetched
+        assert!(out.contains(&format!(" read={} ", 7 + 3 * 2 * 2 * reads)), "nprobe {nprobe} batch {batch}: {out}");
+    }
+}
+
 /// The LMCache abstracts' unsettled cases (item 38; DESIGN_REVIEW §3.78 points 1 and 4): each
 /// lock runs exactly what its abstract's defaults ran until 2026-10-23 (tests/golden.rs's
 /// fingerprints, 1 GPU, seed 1, 2 slots, 50 requests after 50 warm), the shared store's writer

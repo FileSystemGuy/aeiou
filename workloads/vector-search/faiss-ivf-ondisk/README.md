@@ -14,7 +14,7 @@ python kit/mkindex.py sift /mnt/nfs/out                   # train, four shard in
 strace -f -ttt -T -yy -v -e trace=%file,%desc,%network,%process,io_setup,io_submit,io_getevents,io_pgetevents,io_destroy -o trace.txt \
     python kit/search.py /mnt/nfs/out sift/sift_query.fvecs --queries 20 --threads 1
 aeiou-trace metrics trace.txt --root /mnt/nfs -o $C/captures/2026-10-01/trace.metrics.json
-python kit/params.py /mnt/nfs/out sift/sift_query.fvecs trace.txt "…" > $C/params.json
+python kit/params.py /mnt/nfs/out sift/sift_query.fvecs trace.txt "…" --set distance=400000 > $C/params.json
 aeiou dry-run faiss_ivf_ondisk.ast.json --gpus 1 \
     --params-file $C/params.json --metrics-json abstract.metrics.json
 python kit/faults.py /mnt/nfs/out sift/sift_query.fvecs --queries 1 --threads 1
@@ -30,6 +30,9 @@ every probed list is resident afterwards, with the kernel's read-around on top.
 
 `kit/params.py` fits the parameter file from the index (list count, code size, the log-normal
 fit of list bytes, the Zipf fit of list popularity over the 10,000 SIFT queries) and takes
-the index file's read lengths from the trace.
+the index file's read lengths from the trace. `distance`, the scan time of a query, is in no
+trace (the scan reads the lists through the mapping): 0.4 ms, the value the abstract's defaults
+held until 2026-10-23, not fitted, given by `--set`. The prefetch threads are the abstract's to
+derive, `min(prefetch_nthread, batch × nprobe)`, so `params.py` writes none.
 
 `builder/tests/test_trace.py` repeats the dry run against the committed metrics.

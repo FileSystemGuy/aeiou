@@ -7220,6 +7220,43 @@ already passed, and a hot set is one.
   header and the PQ file's size, refuses a disk index whose header and size disagree (the
   derivation's check), and takes `--set` for `rerank`.
 
+**Built: `faiss_ivf_ondisk`'s values** (2026-10-23, item 38's eighth mechanism, the last outside
+the input pipelines). Decided with the user the same day ("let's start on faiss_ivf_ondisk", on
+the recommendation): the index (`lists`, `code_size`, `list_bytes`, `index_bytes`,
+`index_reads`), the search's configuration (`nprobe`, `batch`, and `list_pop`, the popularity of
+lists over the job's queries, fitted, so the job's), the load (`threads`, `calls`), and the CPU
+(`distance`, the scan time of a query) are required. The prefetch threads are derived as FAISS
+starts them: `min_(prefetch_nthread, batch·nprobe)` per slice, `prefetch_nthread` a new
+default of 32, the library's `OnDiskInvertedLists::prefetch_nthread`, in place of `prefetch`,
+which a case had to keep consistent with `batch` and `nprobe` by hand (at 16 probes a fixed 32
+read nothing: the inner loop's `batch·nprobe // prefetch` was 0). `batch·nprobe` is still
+modeled as a multiple of the threads; a remainder is dropped, as before. No `scale`: the index
+fixes every byte. No contract change: a required `list[int]` (dcp_save's `item_bytes`) and a
+required `Dist` already passed.
+
+- **No `st_blksize`, and a follow-up.** The lists are a mapping, with no buffer to size. The
+  index file is read through stdio, whose buffer glibc sizes from the `st_blksize` of the file
+  (`min(BUFSIZ, st_blksize)`, a [verify] claim from glibc's `_IO_file_doallocate`, not
+  re-read for this decision): on a local file system the 8,192-byte fills would be 4,096. The
+  trace's 8,192-byte fills on the NFS mount imply its `st_blksize` was at least that (inferred,
+  not recorded), so the case's lengths hold there; modeling it
+  needs `index_reads` derived from the arrays' sizes, which `read_index` reads directly once
+  they exceed the buffer. Left as an open item, not built.
+- **The old defaults are no case**: a million lists of 40 KiB, 32 threads of 100,000 calls at
+  `nprobe` 64 is about 410M reads (two per list probed), past what the catalog measures. The
+  tests keep them through `tests/common`'s `FAISS`.
+- **The example's fingerprint is unchanged** (sift1m-ivf1024-pq32 d7deee5f942abc7e, 2,572 ops;
+  `tests/cases.rs`): its `prefetch` 32 is what the derivation gives at `batch` 1 and `nprobe`
+  64. It gained `distance` 0.4 ms, the value the defaults held: no trace measures the scan
+  (the lists are read through the mapping), so it is not fitted.
+- **The golden configuration did not move** (0x42c16b5296ebaefc, 25,612 ops), its values now
+  from `FAISS`; only the AST's hash was re-recorded.
+- **`kit/params.py`** writes no `prefetch` (the abstract derives it) and takes `--set` for
+  `distance`, or to replace a fitted value.
+- **Noted, not checked:** the lists dataset's slot is 256 KiB, which must hold the largest
+  list (`list_bytes`'s max; 175,960 bytes in the case). A case with longer lists needs a larger
+  slot; nothing refuses one whose lists overflow it.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

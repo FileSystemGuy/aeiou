@@ -5,6 +5,8 @@ issues the application's calls; not a job anyone runs as a benchmark (`DESIGN_RE
 
 `params.json` (faiss_ivf_ondisk): Fitted to the 2026-10-01 trace of IndexIVFPQ.search over OnDiskInvertedLists: SIFT1M, IVF1024,PQ32, nprobe 64, 20 calls of one query, one OpenMP thread.
 
+Its CPU (`distance`) is not fitted: 0.4 ms a query, the value the abstract's defaults held.
+
 Its parameters hold at 1 GPU, the count it was traced at. Captures:
 
 - `captures/2026-10-01/`: `trace.metrics.json`, `trace.tolerances.json`

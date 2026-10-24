@@ -140,6 +140,28 @@ pub fn diskann_search_args(given: &[&str]) -> Vec<String> {
         .flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
 }
 
+/// faiss_ivf_ondisk's defaults until 2026-10-23, which no case holds (DESIGN_REVIEW §3.78, item 38):
+/// the index (a million lists of 40 KiB, PQ32, its 528 MiB file and the reads `read_index` makes of
+/// it), the search's configuration, its load, and its CPU. The tests that ran the abstract on them pass them.
+pub const FAISS: [(&str, &str); 11] = [
+    ("threads", "32"), ("calls", "100000"), ("batch", "1"), ("nprobe", "64"), ("list_pop", r#"{"zipf": {"s": 0.2}}"#),
+    ("distance", "400000"), ("lists", "1000000"), ("list_bytes", r#"{"lognormal": {"median": 40960, "sigma": 0.4}}"#),
+    ("code_size", "32"), ("index_bytes", "553779476"), ("index_reads", "[8192, 536862720, 8192, 122880, 8192, 16769024, 8192]"),
+];
+
+/// `params`, then faiss_ivf_ondisk's old defaults for every value `params` does not give.
+pub fn faiss<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut all = params.to_vec();
+    all.extend(FAISS.iter().filter(|(k, _)| !params.iter().any(|(p, _)| p == k)));
+    all
+}
+
+/// The same as `--param NAME=VALUE` arguments, for every old default `given` (NAME=VALUE) does not name.
+pub fn faiss_args(given: &[&str]) -> Vec<String> {
+    FAISS.iter().filter(|(k, _)| !given.iter().any(|g| g.split_once('=').map(|(n, _)| n) == Some(*k)))
+        .flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
+}
+
 /// file_per_sample as it was until 2026-10-22: the committed abstract with its old defaults back
 /// in place of the required values, and `hdr_read` and `inv_read` 1 MiB in place of the storage's
 /// st_blksize, so that a run and a dry run of it read alike; for the tests (the coordinator's)

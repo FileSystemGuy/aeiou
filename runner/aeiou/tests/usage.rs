@@ -314,7 +314,8 @@ fn two_datasets_in_one_place_are_a_usage_error() {
     let dir = crate::common::tmpdir("usage", "datasets-apart");
     let (root, shared) = (dir.join("root"), dir.join("shared"));
     let (r, s) = (root.to_str().unwrap(), shared.to_str().unwrap());
-    let params = ["--param", "lists=40", "--param", "index_bytes=5000"];
+    let old = crate::common::faiss_args(&["lists=40", "index_bytes=5000"]);
+    let params: Vec<&str> = ["--param", "lists=40", "--param", "index_bytes=5000"].into_iter().chain(old.iter().map(String::as_str)).collect();
     let gen = |extra: &[&str]| frame(&mut aeiou(&[&["datagen", &ast, "--root", r][..], &params[..], extra].concat()), "aeiou datagen").0;
     let m = gen(&["--endpoint", &format!("lists={s}"), "--endpoint", &format!("index={s}")]);
     assert_eq!(m, format!("datasets `index` and `lists` would share a place: `index` at {s} (--endpoint index={s}), `lists` at {s} (--endpoint lists={s}); each dataset's root is a directory or prefix of its own, never the same as or inside another's (one manifest at each, V13)"));

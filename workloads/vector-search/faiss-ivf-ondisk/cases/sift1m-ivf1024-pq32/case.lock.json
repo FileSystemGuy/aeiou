@@ -5,7 +5,7 @@
     {
       "name": "faiss_ivf_ondisk",
       "abstract": "vector-search/faiss-ivf-ondisk/faiss_ivf_ondisk.ast.json",
-      "ast_sha256": "14a33724b28cbc698197c4435d0e3d8161aba8e09539d852a096bd28f28d5177",
+      "ast_sha256": "9a5b8371dc75aed9b19b64c83634529f41583a294e21acbba5792f8a32a96ef2",
       "params": {
         "batch": {"default": 1},
         "calls": {"default": 20},
@@ -17,21 +17,21 @@
         "list_pop": {"default": {"zipf": {"s": 0.2}}},
         "lists": {"default": 1024},
         "nprobe": {"default": 64},
-        "prefetch": {"default": 32},
+        "prefetch_nthread": {"default": 32},
         "threads": {"default": 1}
       },
       "sources": {
         "batch": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
         "calls": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
         "code_size": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
-        "distance": "abstract",
+        "distance": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
         "index_bytes": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
         "index_reads": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
         "list_bytes": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
         "list_pop": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
         "lists": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
         "nprobe": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
-        "prefetch": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json",
+        "prefetch_nthread": "abstract",
         "threads": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json"
       }
     }
@@ -39,6 +39,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/case.toml",
-    "fragments": [{"path": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json", "sha256": "46bc63a7d5162fb2096c63e3b1f08ccf8dca77ff552c289c9ceec2bfed4684e4"}]
+    "fragments": [{"path": "vector-search/faiss-ivf-ondisk/cases/sift1m-ivf1024-pq32/params.json", "sha256": "dd03b02b736ec2af616801b680faf67153cc6bf65ced5067053de4982034d135"}]
   }
 }

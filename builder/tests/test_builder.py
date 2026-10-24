@@ -589,7 +589,7 @@ def test_check_mode_reports_drift(tmp_path):
     assert r.returncode == 0 and "ok" in r.stdout
     p = tmp_path / "faiss_ivf_ondisk.ast.json"
     doc = emit.load(p)
-    doc["params"]["nprobe"]["default"] = 65
+    doc["params"]["prefetch_nthread"]["default"] = 65
     p.write_text(emit.render(doc))
     r = _run_cli(["--check", "-o", tmp_path, script])
     assert r.returncode == 1 and "DRIFT" in r.stdout

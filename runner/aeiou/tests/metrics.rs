@@ -25,7 +25,7 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("dcp_load", 2, &crate::common::DCP_LOAD),
     ("safetensors_load", 2, &crate::common::SAFETENSORS),
     ("diskann_search", 1, &[("n", "999999995"), ("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("beam", "4"), ("hops", r#"{"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [1, 135, 536, 269, 47, 9, 2]}}"#), ("entry", r#"{"hotset": {"fraction": 2e-7, "weight": 1.0}}"#), ("near", r#"{"hotset": {"fraction": 1e-5, "weight": 1.0}}"#), ("node_cache", "0"), ("rerank", "500000"), ("queries", "100"), ("threads", "2")]),
-    ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")]),
+    ("faiss_ivf_ondisk", 1, &[("threads", "2"), ("calls", "100"), ("batch", "1"), ("nprobe", "64"), ("list_pop", r#"{"zipf": {"s": 0.2}}"#), ("distance", "400000"), ("lists", "1000000"), ("list_bytes", r#"{"lognormal": {"median": 40960, "sigma": 0.4}}"#), ("code_size", "32"), ("index_bytes", "553779476"), ("index_reads", "[8192, 536862720, 8192, 122880, 8192, 16769024, 8192]")]),
     ("diskann_build", 1, &[("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000"), ("pq_train", "60000000000"), ("partition_time", "90000000000"), ("build_time", "1800000000000")]),
     ("lmcache_local_disk", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
     ("lmcache_shared_fs", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),

@@ -5,78 +5,63 @@
   "posix": "mmap",
   "params": {
     "threads": {
-      "default": 32,
       "unit": "count",
-      "doc": "[config] OpenMP threads: a search call of n queries runs min(threads, n) slices"
+      "doc": "[config] OpenMP threads: a search call of n queries runs min(threads, n) slices",
+      "kind": "int"
     },
     "calls": {
-      "default": 100000,
       "unit": "count",
-      "doc": "search calls"
+      "doc": "search calls",
+      "kind": "int"
     },
     "batch": {
-      "default": 1,
       "unit": "count",
-      "doc": "[config] queries per slice per call (the call's batch is threads * batch)"
+      "doc": "[config] queries per slice per call (the call's batch is threads * batch)",
+      "kind": "int"
     },
     "nprobe": {
-      "default": 64,
-      "unit": "count"
+      "unit": "count",
+      "doc": "[config] lists probed per query",
+      "kind": "int"
     },
-    "prefetch": {
+    "prefetch_nthread": {
       "default": 32,
       "unit": "count",
-      "doc": "prefetch threads per slice: min(32, batch * nprobe) (traced); batch * nprobe is modeled as a multiple of it"
+      "doc": "the library's prefetch threads per slice at most (`OnDiskInvertedLists::prefetch_nthread`, traced)"
     },
     "list_pop": {
-      "default": {
-        "zipf": {
-          "s": 0.2
-        }
-      },
-      "doc": "list popularity; measured 0.20-0.25 on SIFT1M with its own query set"
+      "doc": "list popularity over the queries (params.py fits it; 0.20-0.25 on SIFT1M with its own query set)",
+      "kind": "dist"
     },
     "distance": {
-      "default": 400000,
       "unit": "ns",
-      "doc": "[measure] scan time per query"
+      "doc": "[measure] scan time per query (no trace measures it: the traced example takes 0.4 ms, the value the defaults held, not fitted)",
+      "kind": "int"
     },
     "lists": {
-      "default": 1000000,
       "unit": "count",
-      "doc": "[config] inverted lists"
+      "doc": "[config] inverted lists",
+      "kind": "int"
     },
     "list_bytes": {
-      "default": {
-        "lognormal": {
-          "median": 40960,
-          "sigma": 0.4
-        }
-      },
-      "doc": "[config] codes + ids of one list: vectors per list * (code size + 8); sigma measured 0.39 on SIFT1M"
+      "doc": "[config] codes + ids of one list: vectors per list * (code size + 8), a distribution over the lists (params.py fits it); its max no larger than the slot",
+      "kind": "dist"
     },
     "code_size": {
-      "default": 32,
       "unit": "bytes",
-      "doc": "[config] bytes of one vector's code (PQ32); its id is 8 more"
+      "doc": "[config] bytes of one vector's code (32 for PQ32); its id is 8 more",
+      "kind": "int"
     },
     "index_bytes": {
-      "default": 553779476,
       "unit": "bytes",
-      "doc": "[config] the index file: centroids (lists * dimension * 4 bytes; 128 dimensions here), codebooks, 16 bytes per list"
+      "doc": "[config] the index file: centroids (lists * dimension * 4 bytes), codebooks, 16 bytes per list",
+      "kind": "int"
     },
     "index_reads": {
-      "default": [
-        8192,
-        536862720,
-        8192,
-        122880,
-        8192,
-        16769024,
-        8192
-      ],
       "unit": "bytes",
-      "doc": "[config] read lengths on the index file: stdio fills 8,192 bytes, and reads the bulk of each large array (centroids, codebooks, list table) directly"
+      "doc": "[config] read lengths on the index file: stdio fills 8,192 bytes, and reads the bulk of each large array (centroids, codebooks, list table) directly (params.py reads them from the trace)",
+      "kind": "array",
+      "items": "int"
     }
   },
   "datasets": {
@@ -208,7 +193,21 @@
                       "parallel": {
                         "index": "p",
                         "width": {
-                          "param": "prefetch"
+                          "min": [
+                            {
+                              "param": "prefetch_nthread"
+                            },
+                            {
+                              "mul": [
+                                {
+                                  "param": "batch"
+                                },
+                                {
+                                  "param": "nprobe"
+                                }
+                              ]
+                            }
+                          ]
                         },
                         "body": [
                           {
@@ -227,7 +226,21 @@
                                     ]
                                   },
                                   {
-                                    "param": "prefetch"
+                                    "min": [
+                                      {
+                                        "param": "prefetch_nthread"
+                                      },
+                                      {
+                                        "mul": [
+                                          {
+                                            "param": "batch"
+                                          },
+                                          {
+                                            "param": "nprobe"
+                                          }
+                                        ]
+                                      }
+                                    ]
                                   }
                                 ]
                               },
@@ -366,12 +379,11 @@
   "provenance": {
     "generator": {
       "script": "faiss_ivf_ondisk.py",
-      "sha256": "788a7e0903ed9fdad0b8152d401f7347be01ed0a3760e84328d5fdd577776f66",
+      "sha256": "b1ded7e7ec784e7eb6c647409a51607a21e1d859f2be671495fc8ea615ba1f38",
       "builder_version": "0.2.1",
-      "git": "28284ccdb8e1"
+      "git": "e9565f0efbdc-dirty"
     },
     "python": "3.12.13",
-    "built_twice_identical": true,
-    "ast_sha256": "14a33724b28cbc698197c4435d0e3d8161aba8e09539d852a096bd28f28d5177"
+    "ast_sha256": "9a5b8371dc75aed9b19b64c83634529f41583a294e21acbba5792f8a32a96ef2"
   }
 }
