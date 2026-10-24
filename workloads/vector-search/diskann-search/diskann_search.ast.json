@@ -5,67 +5,37 @@
   "posix": "libaio",
   "params": {
     "threads": {
-      "default": 32,
       "unit": "count",
-      "doc": "search threads per node (an actor is a search node)"
+      "doc": "search threads per node (an actor is a search node)",
+      "kind": "int"
     },
     "queries": {
-      "default": 100000,
       "unit": "count",
-      "doc": "per thread; finite"
+      "doc": "per thread; finite",
+      "kind": "int"
     },
     "beam": {
-      "default": 4,
-      "unit": "count"
+      "unit": "count",
+      "doc": "[config] the beam width: sector reads per round",
+      "kind": "int"
     },
     "hops": {
-      "default": {
-        "empirical": {
-          "values": [
-            24,
-            25,
-            26,
-            27,
-            28,
-            29,
-            30
-          ],
-          "weights": [
-            1,
-            135,
-            536,
-            269,
-            47,
-            9,
-            2
-          ]
-        }
-      },
       "unit": "count",
-      "doc": "rounds of a query after the two near the entry points; measured on SIFT1M at search list 100, beam 4"
+      "doc": "rounds of a query after the two near the entry points: the index's at its search list and beam (hops.py fits it)",
+      "kind": "dist"
     },
     "entry": {
-      "default": {
-        "hotset": {
-          "fraction": 2e-07,
-          "weight": 1
-        }
-      },
-      "doc": "[config] the entry points' sectors: medoids / sectors (one medoid per build shard; 40 here)"
+      "doc": "the entry points' sectors, a hot set: medoids / sectors (one medoid per build shard; hops.py fits it)",
+      "kind": "dist"
     },
     "near": {
-      "default": {
-        "hotset": {
-          "fraction": 1e-05,
-          "weight": 1
-        }
-      },
-      "doc": "[config] the sectors of the entry points' neighbours: about 0.8 * medoids * degree / sectors (661 distinct sectors for 13 medoids of degree 64, measured)"
+      "doc": "the sectors of the entry points' neighbours, a hot set: about 0.8 * medoids * degree / sectors (661 distinct sectors for 13 medoids of degree 64, measured)",
+      "kind": "dist"
     },
     "node_cache": {
-      "default": 0,
       "unit": "count",
-      "doc": "[config] sector reads that fill the node cache at load (about one per cached node); with a cache, queries skip the two rounds near the entry points"
+      "doc": "[config] sector reads that fill the node cache at load (about one per cached node), 0 for none; with a cache, queries skip the two rounds near the entry points",
+      "kind": "int"
     },
     "cache_batch": {
       "default": 8,
@@ -73,28 +43,33 @@
       "doc": "requests per submit while the node cache loads (traced)"
     },
     "rerank": {
-      "default": 500000,
       "unit": "ns",
-      "doc": "CPU of one query; measured 0.5 ms of user time over 28 rounds, one host"
+      "doc": "[measure] CPU of one query (0.5 ms of user time over 28 rounds measured on SIFT1M, one host)",
+      "kind": "int"
     },
     "sector": {
       "default": 4096,
       "unit": "bytes"
     },
-    "nodes": {
-      "default": 200000000,
+    "n": {
       "unit": "count",
-      "doc": "[config] sectors of the index (a sector holds per_sector graph nodes)"
+      "doc": "the index's points",
+      "kind": "int"
     },
-    "per_sector": {
-      "default": 5,
+    "dim": {
       "unit": "count",
-      "doc": "[config] graph nodes per sector: 4 KiB over (vector bytes + 4 + 4 * degree)"
+      "doc": "the points' dimensions (fp32)",
+      "kind": "int"
+    },
+    "degree": {
+      "unit": "count",
+      "doc": "[config] the graph's degree, as the disk layout read it from the merged graph",
+      "kind": "int"
     },
     "pq_code": {
-      "default": 32,
       "unit": "bytes",
-      "doc": "[config] bytes of one PQ-compressed vector, held in memory"
+      "doc": "[config] bytes of one PQ-compressed vector, held in memory",
+      "kind": "int"
     },
     "stream": {
       "default": 8191,
@@ -113,7 +88,89 @@
       "layout": "array",
       "access": "indexed",
       "count": {
-        "param": "nodes"
+        "add": [
+          1,
+          {
+            "mul": [
+              {
+                "ceil_div": [
+                  {
+                    "param": "n"
+                  },
+                  {
+                    "max": [
+                      1,
+                      {
+                        "div": [
+                          {
+                            "param": "sector"
+                          },
+                          {
+                            "add": [
+                              {
+                                "add": [
+                                  {
+                                    "mul": [
+                                      {
+                                        "param": "dim"
+                                      },
+                                      4
+                                    ]
+                                  },
+                                  4
+                                ]
+                              },
+                              {
+                                "mul": [
+                                  {
+                                    "param": "degree"
+                                  },
+                                  4
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "ceil_div": [
+                  {
+                    "add": [
+                      {
+                        "add": [
+                          {
+                            "mul": [
+                              {
+                                "param": "dim"
+                              },
+                              4
+                            ]
+                          },
+                          4
+                        ]
+                      },
+                      {
+                        "mul": [
+                          {
+                            "param": "degree"
+                          },
+                          4
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "param": "sector"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "size": {
         "const": {
@@ -136,14 +193,7 @@
             {
               "mul": [
                 {
-                  "mul": [
-                    {
-                      "param": "nodes"
-                    },
-                    {
-                      "param": "per_sector"
-                    }
-                  ]
+                  "param": "n"
                 },
                 {
                   "param": "pq_code"
@@ -537,12 +587,12 @@
   "provenance": {
     "generator": {
       "script": "diskann_search.py",
-      "sha256": "aa82e5d99b2eeff29a4eaa2dac89695a44f504dcd288659006918ed8eb3bc7f6",
+      "sha256": "ed9cdf0993612d42c9179ba31bebc375dc565b97cf6ebf16bc1ea00343916f3e",
       "builder_version": "0.2.1",
-      "git": "28284ccdb8e1"
+      "git": "039b13d2868d-dirty"
     },
     "python": "3.12.13",
     "built_twice_identical": true,
-    "ast_sha256": "ffcb384597882dcecc00085d8b25baea2a1fc7ecf79a431c852e4b2d6e705c03"
+    "ast_sha256": "41b6a22231bea721f46358a119512747a2858b535e883667f9dbc777437e785a"
   }
 }

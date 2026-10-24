@@ -380,7 +380,8 @@ first), its write buffer the `st_blksize` of its output namespace, read by a pro
 three LMCache abstracts, the model's, the deployment's, and the load's values (contract 0.13:
 rule V3 judges a required parameter in an `at` offset when its value is given),
 `safetensors_load`, the model's shards and tensor table and the deployment's `tp`, and
-`diskann_build`, the base's shape, the build's configuration, its graphs, and its compute.
+`diskann_build`, the base's shape, the build's configuration, its graphs, and its compute, and
+`diskann_search`, the same index, the search's configuration and load, and its CPU.
 
 Not built, in rough order of interest:
 
@@ -436,7 +437,7 @@ Not built, in rough order of interest:
 - Traces of the three containers never traced, `hdf5_map`, `parquet_stream`, and
   `tfrecord_stream`, each fitted to an example case that replaces its `unsettled` one (item
   36); a lognormal's `sigma` as an expression, so a case gives it (item 37); the job values of
-  the two abstracts outside the input pipelines still holding them moved to cases, one mechanism at a time
+  `faiss_ivf_ondisk`, the last abstract outside the input pipelines still holding them, moved to a case
   with the user (item 38); and a use case per accelerator, `unet3d-h100` the first (item 39).
 
 ## License

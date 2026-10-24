@@ -4,10 +4,11 @@ medoid's sector, which only an index without a node cache issues), rounds and
 sector reads; how the sector reads spread over the file; and the submits of more than 32
 requests (the node cache's breadth-first levels), which are only counted.
 
-    python hops.py TRACE INDEX_DIR [--prefix ann] [--tail N] [--params DOC]
+    python hops.py TRACE INDEX_DIR [--prefix ann] [--tail N] [--params DOC [--set name=value]...]
 
 `--tail N` keeps only the last N queries of each thread (the queries after a warm-up).
-`--params DOC` prints the `diskann_search` parameter file fitted to the trace instead.
+`--params DOC` prints the `diskann_search` parameter file fitted to the trace instead, the index
+as `diskann_build` names it; `--set` adds what no trace measures (`rerank`, a query's CPU).
 """
 import argparse, collections, json, os, re, struct, sys
 import numpy as np
@@ -28,6 +29,8 @@ def main():
     ap.add_argument("--prefix", default="ann")
     ap.add_argument("--tail", type=int, default=0)
     ap.add_argument("--params", metavar="DOC", help="print the abstract's parameter file, with this description")
+    ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                    help="with --params, a value no trace measures (rerank, the CPU of a query), as JSON")
     a = ap.parse_args()
     disk = os.path.join(a.index, a.prefix + "_disk.index")
     with open(disk, "rb") as f:
@@ -81,13 +84,23 @@ def main():
         k = 0 if cached else 2
         hops = collections.Counter(len(x) - k for x in queries)
         load = sum(bulk) + (loadinfo["requests"] if loadinfo else 0)
-        print(json.dumps({"params_version": 2, "abstract": "diskann_search", "doc": a.params, "params": {k: {"default": v} for k, v in {
+        # the index as diskann_build names it, whose sectors the abstract derives as DiskANN's layout does
+        want = 1 + -(-npts // max(1, 4096 // max_node_len)) * -(-max_node_len // 4096)
+        if sectors != want:
+            sys.exit(f"hops.py: {a.prefix}_disk.index is {sectors} sectors where its header's {npts:,} points "
+                     f"of {max_node_len} bytes take {want}")
+        pq = os.path.getsize(os.path.join(a.index, a.prefix + "_pq_compressed.bin"))
+        params = {
             "threads": len(q), "queries": len(queries) // len(q), "beam": max(batch),
             "hops": {"empirical": {"values": sorted(hops), "weights": [hops[h] for h in sorted(hops)]}},
             "entry": {"hotset": {"fraction": (len(med_off) - 0.5) / sectors, "weight": 1.0}},
             **({} if cached else {"near": {"hotset": {"fraction": (len(set(second)) - 0.5) / sectors, "weight": 1.0}}}),
             "node_cache": load if cached else 0,
-            "nodes": sectors, "per_sector": per_sector}.items()}}))
+            "n": npts, "dim": ndims, "degree": (max_node_len - ndims * 4 - 4) // 4, "pq_code": (pq - 8) // npts}
+        for kv in a.set:
+            k, v = kv.split("=", 1)
+            params[k] = json.loads(v)
+        print(json.dumps({"params_version": 2, "abstract": "diskann_search", "doc": a.params, "params": {k: {"default": v} for k, v in params.items()}}))
         return
     out = {
         "second_round": {"reads": len(second), "distinct_sectors": len(set(second))},

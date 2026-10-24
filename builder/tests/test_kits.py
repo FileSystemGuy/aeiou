@@ -61,9 +61,10 @@ def index(tmp_path):
     d = tmp_path / "index"
     d.mkdir()
     hdr = bytearray(4096)
-    struct.pack_into("<QQQQQ", hdr, 8, 1000, 128, 7, 600, 5)   # npts, ndims, medoid, max_node_len, per_sector
-    (d / "ann_disk.index").write_bytes(bytes(hdr) + bytes(4096 * 199))
+    struct.pack_into("<QQQQQ", hdr, 8, 1000, 128, 7, 772, 5)   # npts, ndims, medoid, max_node_len (degree 64), per_sector
+    (d / "ann_disk.index").write_bytes(bytes(hdr) + bytes(4096 * 200))
     (d / "ann_disk.index_medoids.bin").write_bytes(struct.pack("<5I", 3, 1, 5, 10, 15))
+    (d / "ann_pq_compressed.bin").write_bytes(bytes(8 + 1000 * 32))
     return d
 
 
@@ -105,7 +106,9 @@ def test_hops_refuses_a_query_round_over_the_bulk_size(tmp_path, index):
 def test_hops_without_marks_starts_a_query_at_a_medoid_read(tmp_path, index):
     """Without search.py's marks a query starts at a one-request submit of a medoid's sector (an index
     without a node cache); `--tail N` keeps each thread's last N queries; the parameters then count
-    hops past the medoid's round and the first hop, whose sectors are the `near` hot set."""
+    hops past the medoid's round and the first hop, whose sectors are the `near` hot set, and give
+    the index as `diskann_build` names it (its points, dimensions, degree, PQ code), refusing a
+    disk index whose header and size disagree; `--set` adds the CPU, which no trace measures."""
     pytest.importorskip("numpy")
     t, lines = 1.0, []
     for tid, rounds in ((100, [[2], range(10, 14), range(14, 18)]), (100, [[3], range(20, 24)]), (200, [[4], range(50, 54)]),
@@ -125,8 +128,16 @@ def test_hops_without_marks_starts_a_query_at_a_medoid_read(tmp_path, index):
     assert (rep["sector_reads"], rep["share_of_reads_on_medoid_sectors"]) == (26, round(4 / 26, 4))
     p = values_of(json.loads(_hops(trace, index, "--params", "doc").stdout))
     assert p["hops"]["empirical"] == {"values": [0, 1], "weights": [2, 2]} and p["node_cache"] == 0
-    assert (p["threads"], p["queries"], p["beam"], p["nodes"], p["per_sector"]) == (2, 2, 4, 200, 5)
-    assert p["entry"]["hotset"]["fraction"] == 2.5 / 200 and p["near"]["hotset"]["fraction"] == 13.5 / 200
+    assert (p["threads"], p["queries"], p["beam"], p["n"], p["dim"], p["degree"], p["pq_code"]) == (2, 2, 4, 1000, 128, 64, 32)
+    assert "nodes" not in p and "per_sector" not in p and "rerank" not in p
+    assert p["entry"]["hotset"]["fraction"] == 2.5 / 201 and p["near"]["hotset"]["fraction"] == 13.5 / 201
+    p = values_of(json.loads(_hops(trace, index, "--params", "doc", "--set", "rerank=500000").stdout))
+    assert p["rerank"] == 500000
+    (index / "ann_disk.index").write_bytes((index / "ann_disk.index").read_bytes() + bytes(4096))
+    r = _hops(trace, index, "--params", "doc")
+    assert r.returncode == 1 and r.stderr.strip() == ("hops.py: ann_disk.index is 202 sectors where its header's 1,000 points "
+                                                      "of 772 bytes take 201"), r.stderr
+    (index / "ann_disk.index").write_bytes((index / "ann_disk.index").read_bytes()[:-4096])
     rep = json.loads(_hops(trace, index, "--tail", "1").stdout)
     assert (rep["queries"], rep["rounds_per_query"]) == (2, {"2": 1, "3": 1})
 

@@ -17,7 +17,7 @@ $T trace.cache.txt $E python kit/search.py /mnt/nfs/index query.fbin --queries 1
     --cache 10000 --cache-mechanism 2
 aeiou-trace metrics trace.nocache.txt --root /mnt/nfs -o $C/captures/2026-10-02/trace.metrics.json
 python kit/hops.py trace.nocache.txt /mnt/nfs/index              # rounds, batch sizes, sector spread
-python kit/hops.py trace.nocache.txt /mnt/nfs/index --params "…" > $C/params.json
+python kit/hops.py trace.nocache.txt /mnt/nfs/index --params "…" --set rerank=500000 > $C/params.json
 aeiou dry-run diskann_search.ast.json --gpus 1 \
     --params-file $C/params.json --metrics-json abstract.metrics.json
 ```
@@ -39,5 +39,10 @@ Three things about the capture:
 `--cache-mechanism 1`, diskannpy's default, searches the build's sample of the base (100,131
 queries here, 2.7 million sector reads) before the first query, whatever `--cache` is.
 DiskANN's own `search_disk_index` uses breadth-first levels, mechanism 2.
+
+`rerank`, a query's CPU, is in no trace: 0.5 ms is the user time measured over the traced
+queries (0.46 to 0.62 ms), given by `--set`. A trace with a node cache never reads the sectors
+near the entry points, so `hops.py` fits no `near` from it; `sift1m-cache` gives the uncached
+trace's, the same index (`--set 'near={"hotset": …}'`).
 
 `builder/tests/test_trace.py` repeats the two dry runs against the committed metrics.

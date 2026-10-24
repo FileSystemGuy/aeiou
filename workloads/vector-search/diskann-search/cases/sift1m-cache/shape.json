@@ -4,9 +4,9 @@
   "runs": [
     {
       "ast": "diskann_search",
-      "ast_sha256": "b6d4be2901c6c7b5f789e50f6f384cd4da1c2aff2ce79640d3c937bf35f836c2",
+      "ast_sha256": "517915714b9727c5d1c3d8c4d7b445f57e5d643e42200b9837e1abd54147dc38",
       "params": "case.lock.json",
-      "params_sha256": "06b1caf96986fe5c1fabfc8f447241b27fc094c3dc692dff14f27af4bccc42ed",
+      "params_sha256": "326ba2222ac2981ca537bee2e0a516a14672663d5e136d11d643393f9c86cf02",
       "gpus": 1,
       "seeds": [
         1,
@@ -27,7 +27,7 @@
         "open": 3,
         "read": 115407
       },
-      "bytes_read": 504703143,
+      "bytes_read": 504702983,
       "bytes_written": 0,
       "datasets": [
         {
@@ -40,11 +40,11 @@
           "samples": 200001
         },
         {
-          "bytes": 32000168,
+          "bytes": 32000008,
           "directories": 1,
           "files": 1,
           "inventory_bytes": 0,
-          "mean_file": 32000168,
+          "mean_file": 32000008,
           "name": "pq",
           "samples": 1
         }

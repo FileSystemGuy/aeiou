@@ -892,6 +892,13 @@ another workload (`DESIGN_REVIEW.md` §3.48).
 ~~a `when` expression choosing a distribution by loop index;~~ `pick` with `hotset`; a file handle
 bound outside a `parallel` and shared by its sub-actors; a `parallel` of one.
 
+*2026-10-23:* the committed abstract requires the index, named as §7's build names it (`n`,
+`dim`, `degree`, `pq_code`, in place of `nodes` and `per_sector`; its sectors derived), the
+search's configuration (`beam`, `hops`, `entry`, `near`), the deployment's `node_cache`, the
+load (`threads`, `queries`), and the CPU (`rerank`), which a case gives (`DESIGN_REVIEW.md`
+§3.78; the billion-point defaults above are no case, the traced `sift1m-nocache` and
+`sift1m-cache` the only ones).
+
 ---
 
 ## 6. Vector-database search, IVF (inverted lists on storage)

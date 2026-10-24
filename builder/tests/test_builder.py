@@ -831,6 +831,13 @@ def test_literal_distribution_arguments_the_runner_cannot_draw_from_are_refused(
         (lambda: normal(4096, 10, min=8192, max=4096), "normal: min 8192 is above max 4096"),
         (lambda: zipf(inf), "zipf s"),
         (lambda: zipf(nan), "zipf s"),
+        (lambda: hotset(0, 1.0), "hotset needs 0 < fraction <= 1"),
+        (lambda: hotset(0.5, 1.5), "hotset needs 0 < fraction <= 1"),
+        (lambda: empirical([]), "empirical values must be non-empty scalars"),
+        (lambda: empirical([const(1)]), "empirical values must be non-empty scalars"),
+        (lambda: empirical([1, 2], [1]), "empirical: values and weights differ in length"),
+        (lambda: mixture((1, none, 2)), r"each mixture arm is \(weight, dist-or-none\)"),
+        (lambda: mixture(), "mixture needs at least one arm"),
     ]
     for mk, msg in refused:
         with pytest.raises(BuildError, match=msg):
@@ -839,6 +846,10 @@ def test_literal_distribution_arguments_the_runner_cannot_draw_from_are_refused(
     w, P, ds = _wl()
     uniform(4095, 4096), normal(4096, 0), normal(4096, 1, min=4096, max=4096)
     empirical([1, 2], [0, 1]), mixture((0, none), (1, const(1)))
+    # the forms the builder also takes: a dict of value to weight, of weight to arm; a hot set's edges
+    assert empirical({4096: 1, 8192: 3}).ast() == empirical([4096, 8192], [1, 3]).ast()
+    assert mixture({0.25: none, 0.75: const(1)}).ast() == mixture((0.25, none), (0.75, const(1))).ast()
+    assert hotset(1, 0).ast() == {"hotset": {"fraction": 1.0, "weight": 0.0}}
     uniform(P.n, P.n), normal(4096, P.n, min=P.n, max=0), lognormal(P.n, 1.0)
 
 

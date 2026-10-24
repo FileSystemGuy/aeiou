@@ -94,7 +94,7 @@ fn the_estimate_matches_the_counted_peak() {
 /// and a context per beam slot (2 instances × 32 threads × beam 4).
 #[test]
 fn a_truncated_walk_scales_by_the_fork_width() {
-    let (_, _, model) = leaked_model("diskann_search", config(2, 1, &[]));
+    let (_, _, model) = leaked_model("diskann_search", config(2, 1, &crate::common::DISKANN_SEARCH));
     let need = limits::estimate(model, &opts(&PathBuf::from("/nonexistent"), BackendKind::Sync)).unwrap();
     assert_eq!(need, Need { open_files: 2, contexts: 2 * 32 * 4, truncated: true });
     // host 1 of 2 runs one of the two instances

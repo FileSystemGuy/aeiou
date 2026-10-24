@@ -7189,6 +7189,37 @@ whatever the file system reports (hence the 8,191-byte reads). No contract chang
   sectors at its million points and twelve more layout writes (0x93142e1f7cf15fb4, 1,229,219
   ops).
 
+**Built: `diskann_search`'s values** (2026-10-23, item 38's seventh mechanism). Decided with
+the user the same day, on the recommendation: the index is required and named as
+`diskann_build` names it (`n`, `dim`, `degree`, `pq_code`), in place of `nodes` and
+`per_sector`, so that a search case and a build case of one index give the same values; its
+sectors are derived by the build's formula (200,001 at SIFT1M, what the cases gave), and the PQ
+file is `n·pq_code + 8` bytes, the traced file's size (`nodes·per_sector·pq_code + 8` was 160
+bytes more at SIFT1M). The search's configuration (`beam`; `hops`, the index's at its search
+list and beam; the hot sets `entry` and `near`, fitted, not derived from a medoid count, since
+`near`'s 0.8 is measured), the deployment's `node_cache` (a silent 0 changes the op set: the
+user's choice to require it, unlike LMCache's load features off by default), the load
+(`threads`, `queries`), and the CPU (`rerank`) are required. `cache_batch`, `sector`, `stream`,
+and `pq_read` stay defaults. No `scale`: the index fixes every byte. No `st_blksize`: the
+queries are 4 KiB `O_DIRECT` reads, aligned, not buffered, and the two first reads go through a
+libstdc++ stream, which ignores it. No contract change: a required `Dist` (LMCache's `sys_pop`)
+already passed, and a hot set is one.
+
+- **The old defaults are no case**, as for the build: 200M sectors and 32 threads of 100,000
+  queries is about 360M reads, past what the catalog measures; their `hops`, `near`, and
+  `rerank` were SIFT1M's anyway. The tests keep them through `tests/common`'s
+  `DISKANN_SEARCH` (`n` 999,999,995, whose derived sectors are the 200,000,000 `nodes` gave;
+  likewise 99,995 and 24,995 for the tests' 20,000 and 5,000).
+- **The examples' fingerprints are unchanged** (sift1m-nocache ecbaca064f7812d0, 109,840 ops;
+  sift1m-cache 49dcd7182152e40a, 115,416; `tests/cases.rs`). Both gained `rerank` 0.5 ms (the
+  traces' user time, not fitted per case) and the index's four values; sift1m-cache gained
+  `near`, the uncached trace's, the same index (a cache skips those rounds).
+- **The golden configuration did not move** (0x4b25fcd827dbfa0f, 21,970 ops), its values now
+  from `DISKANN_SEARCH`; only the AST's hash was re-recorded.
+- **`kit/hops.py --params`** writes the index as the build names it, from the disk index's
+  header and the PQ file's size, refuses a disk index whose header and size disagree (the
+  derivation's check), and takes `--set` for `rerank`.
+
 ~~**Open.** The exit status's number (3 proposed); whether accelerator names in use case
 directories (`unet3d-h100`) need a vocabulary in `workloads/attributes.toml`; the proposed
 points (8's prefixes, 11's mechanism, 12's tool name).~~ Every one decided 2026-10-22 (points

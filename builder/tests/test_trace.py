@@ -409,6 +409,12 @@ LMCACHE_OLD = ["context=8192", "prefill_per_token=40000", "decode_per_token=1200
                'turn_out={"empirical": {"values": [12, 34, 62, 92, 119, 148, 175, 201, 225, 248, 271, 294, 317, 342, 370, 407, 454, 519, 615, 785], "weights": %s}}' % ([1] * 20),
                'sys_pop={"zipf": {"s": 1.1}}']
 
+# diskann_search's defaults until 2026-10-23, required since (no case holds them): the values a test does
+# not give, before its own; `n` 24,995 is the 5,000 sectors the old `nodes=5000` gave
+DISKANN_SEARCH_OLD = ["dim=128", "degree=64", "pq_code=32", "beam=4", "node_cache=0", "rerank=500000",
+                      'hops={"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [1, 135, 536, 269, 47, 9, 2]}}',
+                      'entry={"hotset": {"fraction": 2e-7, "weight": 1.0}}', 'near={"hotset": {"fraction": 1e-5, "weight": 1.0}}']
+
 
 @needs_run
 @pytest.mark.parametrize(
@@ -418,7 +424,7 @@ LMCACHE_OLD = ["context=8192", "prefill_per_token=40000", "decode_per_token=1200
         ("lmcache_local_disk", 5, LMCACHE_OLD + ["sys_prompts=3", "sys_tokens=6", "chunk_bytes=262144", "concurrency=3", "warm=4", "requests=8",
                               'reuse={"mixture": [{"weight": 0.3, "dist": null}, {"weight": 0.7, "dist": {"const": 2}}]}',
                               'keep={"empirical": {"values": [0, 50, 100], "weights": [1, 1, 1]}}']),
-        ("diskann_search", 9, ["nodes=5000", "threads=2", "queries=6"]),
+        ("diskann_search", 9, DISKANN_SEARCH_OLD + ["n=24995", "threads=2", "queries=6"]),
     ],
 )
 def test_trace_of_the_runner_matches_its_dry_run(tmp_path, name, seed, params):

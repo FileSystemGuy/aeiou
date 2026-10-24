@@ -14,19 +14,20 @@ Beam search over a sector-packed graph index: dependent rounds of `beam` concurr
 
 | Parameter | Value | Default | Unit | What it is |
 |---|---|---|---|---|
-| `threads` | 1 | 32 | count | search threads per node (an actor is a search node) |
-| `queries` | 1,000 | 100,000 | count | per thread; finite |
-| `beam` | 4 | same | count |  |
-| `hops` | one of 7 weighted values, median 26, 5th–95th percentile 25 to 28, mean 26.2 | one of 7 weighted values, median 26, 5th–95th percentile 25 to 28, mean 26.3 | count | rounds of a query after the two near the entry points; measured on SIFT1M at search list 100, beam 4 |
-| `entry` | 100% of draws over the hottest 0.00625% of the ids (a rank order fixed by the dataset seed), the rest over the others | 100% of draws over the hottest 2e-05% of the ids (a rank order fixed by the dataset seed), the rest over the others | — | [config] the entry points' sectors: medoids / sectors (one medoid per build shard; 40 here) |
-| `near` | 100% of draws over the hottest 0.001% of the ids (a rank order fixed by the dataset seed), the rest over the others | same | — | [config] the sectors of the entry points' neighbours: about 0.8 * medoids * degree / sectors (661 distinct sectors for 13 medoids of degree 64, measured) |
-| `node_cache` | 10,765 | 0 | count | [config] sector reads that fill the node cache at load (about one per cached node); with a cache, queries skip the two rounds near the entry points |
+| `threads` | 1 | none | count | search threads per node (an actor is a search node) |
+| `queries` | 1,000 | none | count | per thread; finite |
+| `beam` | 4 | none | count | [config] the beam width: sector reads per round |
+| `hops` | one of 7 weighted values, median 26, 5th–95th percentile 25 to 28, mean 26.2 | none | count | rounds of a query after the two near the entry points: the index's at its search list and beam (hops.py fits it) |
+| `entry` | 100% of draws over the hottest 0.00625% of the ids (a rank order fixed by the dataset seed), the rest over the others | none | — | the entry points' sectors, a hot set: medoids / sectors (one medoid per build shard; hops.py fits it) |
+| `near` | 100% of draws over the hottest 0.33% of the ids (a rank order fixed by the dataset seed), the rest over the others | none | — | the sectors of the entry points' neighbours, a hot set: about 0.8 * medoids * degree / sectors (661 distinct sectors for 13 medoids of degree 64, measured) |
+| `node_cache` | 10,765 | none | count | [config] sector reads that fill the node cache at load (about one per cached node), 0 for none; with a cache, queries skip the two rounds near the entry points |
 | `cache_batch` | 8 | same | count | requests per submit while the node cache loads (traced) |
-| `rerank` | 500 µs | same | ns | CPU of one query; measured 0.5 ms of user time over 28 rounds, one host |
+| `rerank` | 500 µs | none | ns | [measure] CPU of one query (0.5 ms of user time over 28 rounds measured on SIFT1M, one host) |
 | `sector` | 4 KiB | same | bytes |  |
-| `nodes` | 200,001 | 200,000,000 | count | [config] sectors of the index (a sector holds per_sector graph nodes) |
-| `per_sector` | 5 | same | count | [config] graph nodes per sector: 4 KiB over (vector bytes + 4 + 4 * degree) |
-| `pq_code` | 32 bytes | same | bytes | [config] bytes of one PQ-compressed vector, held in memory |
+| `n` | 1,000,000 | none | count | the index's points |
+| `dim` | 128 | none | count | the points' dimensions (fp32) |
+| `degree` | 64 | none | count | [config] the graph's degree, as the disk layout read it from the merged graph |
+| `pq_code` | 32 bytes | none | bytes | [config] bytes of one PQ-compressed vector, held in memory |
 | `stream` | 8.0 KiB | same | bytes | the first read of a C++ stream on a file (traced) |
 | `pq_read` | 2.0 GiB | same | bytes | the stream reads the rest of the PQ file in one call; Linux returns at most this much per read |
 
@@ -34,7 +35,7 @@ The API the traced application used: `posix` libaio; a run under another backend
 
 ### Data
 
-**`index`**, a dataset (`array`, `indexed`): 200,001 samples (`nodes`), one file of 200,001 slots of 4 KiB (`sector`) each; looked up by id, never consumed. Named `diskann/index.bin`. Sample sizes: always 4 KiB. At these parameters `aeiou datagen` writes 1 file in 0 directories, 781.3 MiB in all (a mean file of 781.3 MiB). Dataset seed `0x5eedda7d`.
+**`index`**, a dataset (`array`, `indexed`): 200,001 samples (`1 + ⌈n / max(1, sector div (dim × 4 + 4 + degree × 4))⌉ × ⌈(dim × 4 + 4 + degree × 4) / sector⌉`), one file of 200,001 slots of 4 KiB (`sector`) each; looked up by id, never consumed. Named `diskann/index.bin`. Sample sizes: always 4 KiB. At these parameters `aeiou datagen` writes 1 file in 0 directories, 781.3 MiB in all (a mean file of 781.3 MiB). Dataset seed `0x5eedda7d`.
 
 **`pq`**, a dataset (`whole`, `indexed`): 1 sample, one sample a file; looked up by id, never consumed. Named `pq/pq_compressed-{id}.bin`. Sample sizes: always 30.5 MiB. At these parameters `aeiou datagen` writes 1 file in 1 directory, 30.5 MiB in all (a mean file of 30.5 MiB). Dataset seed `0x5eedda80`.
 
@@ -65,7 +66,7 @@ The API the traced application used: `posix` libaio; a run under another backend
         - `e` is a sample of `index` drawn with replacement, 100% of draws over the hottest 0.00625% of the ids of `index` (a rank order fixed by the dataset seed), the rest over the others (`entry`).
         - `read` `f`: 4 KiB (`sector`) at offset `offset(e)`.
       - 4 (`beam`) in parallel, `nb` = 0 onward, joined at the end:
-        - `s` is a sample of `index` drawn with replacement, 100% of draws over the hottest 0.001% of the ids of `index` (a rank order fixed by the dataset seed), the rest over the others (`near`).
+        - `s` is a sample of `index` drawn with replacement, 100% of draws over the hottest 0.33% of the ids of `index` (a rank order fixed by the dataset seed), the rest over the others (`near`).
         - `read` `f`: 4 KiB (`sector`) at offset `offset(s)`.
     - For `hop` from 0 while below `draw(hops)`:
       - 4 (`beam`) in parallel, `bm` = 0 onward, joined at the end:

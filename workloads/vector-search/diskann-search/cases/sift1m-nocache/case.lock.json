@@ -5,16 +5,17 @@
     {
       "name": "diskann_search",
       "abstract": "vector-search/diskann-search/diskann_search.ast.json",
-      "ast_sha256": "ffcb384597882dcecc00085d8b25baea2a1fc7ecf79a431c852e4b2d6e705c03",
+      "ast_sha256": "41b6a22231bea721f46358a119512747a2858b535e883667f9dbc777437e785a",
       "params": {
         "beam": {"default": 4},
         "cache_batch": {"default": 8},
+        "degree": {"default": 64},
+        "dim": {"default": 128},
         "entry": {"default": {"hotset": {"fraction": 6.249968750156249e-05, "weight": 1.0}}},
         "hops": {"default": {"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [1, 135, 536, 270, 47, 9, 2]}}},
+        "n": {"default": 1000000},
         "near": {"default": {"hotset": {"fraction": 0.003302483487582562, "weight": 1.0}}},
         "node_cache": {"default": 0},
-        "nodes": {"default": 200001},
-        "per_sector": {"default": 5},
         "pq_code": {"default": 32},
         "pq_read": {"default": 2147479552},
         "queries": {"default": 500},
@@ -26,16 +27,17 @@
       "sources": {
         "beam": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
         "cache_batch": "abstract",
+        "degree": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
+        "dim": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
         "entry": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
         "hops": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
+        "n": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
         "near": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
         "node_cache": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
-        "nodes": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
-        "per_sector": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
-        "pq_code": "abstract",
+        "pq_code": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
         "pq_read": "abstract",
         "queries": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
-        "rerank": "abstract",
+        "rerank": "vector-search/diskann-search/cases/sift1m-nocache/params.json",
         "sector": "abstract",
         "stream": "abstract",
         "threads": "vector-search/diskann-search/cases/sift1m-nocache/params.json"
@@ -45,6 +47,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "vector-search/diskann-search/cases/sift1m-nocache/case.toml",
-    "fragments": [{"path": "vector-search/diskann-search/cases/sift1m-nocache/params.json", "sha256": "56d30985c1b92371c9097fc88c73812f3c8913cbaddea2e2289d852b389a35ef"}]
+    "fragments": [{"path": "vector-search/diskann-search/cases/sift1m-nocache/params.json", "sha256": "8c6c8703a2aa3798dfc9ec5329f05d04914e64282ce8f9518f01ad29486c2b45"}]
   }
 }

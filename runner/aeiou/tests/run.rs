@@ -307,7 +307,7 @@ fn kv_shared_store_filled_by_one_engine_and_read_by_a_cold_one() {
 #[test]
 fn array_dataset_nested_parallel_and_direct_reads() {
     let root = tmpdir("diskann");
-    let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
+    let params = crate::common::diskann_search(&[("n", "24995"), ("threads", "2"), ("queries", "6")]);    // 5,000 sectors
     let (loaded, cfg, model) = leaked_model("diskann_search", config(1, 9, &params));
     gen(loaded, cfg, model, &root);
     assert_eq!(std::fs::metadata(root.join("diskann/index.bin")).unwrap().len(), 5000 * 4096);
@@ -466,7 +466,7 @@ fn io_uring_reproduces_the_sync_runs() {
     }
     {
         let root = tmpdir("uring-diskann");
-        let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
+        let params = crate::common::diskann_search(&[("n", "24995"), ("threads", "2"), ("queries", "6")]);    // 5,000 sectors
         let (loaded, cfg, model) = leaked_model("diskann_search", config(2, 9, &params));
         gen(loaded, cfg, model, &root);
         let (fp, ops, bytes) = dry_fingerprint(model);
@@ -545,7 +545,7 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
     }
     {
         let root = tmpdir("more-diskann");
-        let params = [("nodes", "5000"), ("threads", "2"), ("queries", "6")];
+        let params = crate::common::diskann_search(&[("n", "24995"), ("threads", "2"), ("queries", "6")]);    // 5,000 sectors
         let (loaded, cfg, model) = leaked_model("diskann_search", config(2, 9, &params));
         gen(loaded, cfg, model, &root);
         let (fp, ops, bytes) = dry_fingerprint(model);
@@ -572,15 +572,15 @@ fn posix_aio_libaio_and_mmap_reproduce_the_sync_runs() {
                 let m = r.mmap.as_ref().unwrap();
                 assert_eq!((m.mode, m.consume), (mode, consume), "{m:?}");
                 // one mapping per open, whoever reads: each of the 2 instances opens the PQ
-                // file once and the index twice, and its search threads and their beam
+                // file (24,995 points' codes and its header) once and the index twice, and its search threads and their beam
                 // sub-actors read the index through the second mapping
-                assert_eq!((m.maps, m.mapped_bytes), (6, 2 * (5000 * 5 * 32 + 8 + 2 * 5000 * 4096)), "{m:?}");
+                assert_eq!((m.maps, m.mapped_bytes), (6, 2 * (24995 * 32 + 8 + 2 * 5000 * 4096)), "{m:?}");
                 let reads = r.stats.counts[&aeiou::vm::OpKind::Read];
                 assert_eq!(m.advised, if mode == MmapMode::Fault { 0 } else { reads }, "{m:?}");
                 let (touched, copied) = match (consume, mode) {
                     (MmapConsume::Copy, _) => (0, bytes),
                     (MmapConsume::Touch, MmapMode::Populate) => (0, 0),
-                    (MmapConsume::Touch, _) => ((bytes - 2 * (5000 * 5 * 32 + 8 + 8191)) / 4096 + 2 * (2 + 195 + 2), 0),
+                    (MmapConsume::Touch, _) => ((bytes - 2 * (24995 * 32 + 8 + 8191)) / 4096 + 2 * (2 + 195 + 2), 0),
                 };
                 assert_eq!((m.touched_pages, m.copied_bytes), (touched, copied), "{m:?}");
                 assert!(r.counters.minor_faults + r.counters.major_faults > 0, "{:?}", r.counters);

@@ -402,10 +402,13 @@ fn object_names_need_object_endpoints() {
     let mut d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&vdb).unwrap()).unwrap();
     d["s3"] = "async".into();
     std::fs::write(&vdb, d.to_string()).unwrap();
-    refused(&aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb"]), "dataset `index`: an `array` dataset is a sparse layout written at offsets and has no object form");
+    let old = crate::common::diskann_search_args(&["pq_code=1000000000"]);    // its old defaults, required since 2026-10-23
+    let mut args = vec!["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb"];
+    args.extend(old.iter().map(|s| s.as_str()));
+    refused(&aeiou(None, &[&args[..], &["--param", "pq_code=32"]].concat()), "dataset `index`: an `array` dataset is a sparse layout written at offsets and has no object form");
     // and before the space, which a refused datagen never asks to be freed: its posix `pq`,
     // grown to 888 PiB, fits on no host
-    let o = aeiou(None, &["datagen", vdb.to_str().unwrap(), "--root", root, "--endpoint", "index=s3://bench/vdb", "--param", "pq_code=1000000000"]);
+    let o = aeiou(None, &[&args[..], &["--param", "pq_code=1000000000"]].concat());
     refused(&o, "dataset `index`: an `array` dataset is a sparse layout written at offsets and has no object form");
     assert!(!String::from_utf8_lossy(&o.stderr).contains("space:"), "{}", String::from_utf8_lossy(&o.stderr));
 }

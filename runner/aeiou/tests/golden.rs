@@ -70,7 +70,9 @@ fn hashes_match_check_py() {
         // 2026-10-23: the base's shape, the build's configuration, its graphs, and its compute required, the
         // disk index's sectors derived from the graph's degree (the traced example sift1m-13-shards), DESIGN_REVIEW §3.78
         ("diskann_build", "a5118edd1ea8b33c4d51f5fd90e33506596f162a3d0f5bec13542e9ed05b46cf"),
-        ("diskann_search", "ffcb384597882dcecc00085d8b25baea2a1fc7ecf79a431c852e4b2d6e705c03"),
+        // 2026-10-23: the index (as diskann_build names it, its sectors derived), the search's configuration, its
+        // load, and its CPU required (the traced examples sift1m-nocache and sift1m-cache), DESIGN_REVIEW §3.78
+        ("diskann_search", "41b6a22231bea721f46358a119512747a2858b535e883667f9dbc777437e785a"),
         // 2026-10-15 (RC1 review): a step takes the shards whose first sample is in its batch, for
         // any batch and samples_per_file, in place of `every(samples_per_file div batch)`; the
         // fingerprints where batch divides samples_per_file unchanged; the three again 2026-10-22, the job's and the GPU's
@@ -128,7 +130,8 @@ fn golden_fingerprints() {
         ("dcp_load", 2, &crate::common::DCP_LOAD, 0x22990a88db4e6d4f, 368),
         // safetensors_load at the values its defaults held until 2026-10-23 (its unsettled case five-tensors; DESIGN_REVIEW §3.78)
         ("safetensors_load", 2, &crate::common::SAFETENSORS, 0x2668387c7aa4126b, 24682),
-        ("diskann_search", 1, &[("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
+        // diskann_search at the values its defaults held until 2026-10-23 (no case holds them; DESIGN_REVIEW §3.78)
+        ("diskann_search", 1, &[("n", "999999995"), ("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("beam", "4"), ("hops", r#"{"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [1, 135, 536, 269, 47, 9, 2]}}"#), ("entry", r#"{"hotset": {"fraction": 2e-7, "weight": 1.0}}"#), ("near", r#"{"hotset": {"fraction": 1e-5, "weight": 1.0}}"#), ("node_cache", "0"), ("rerank", "500000"), ("queries", "100"), ("threads", "2")], 0x4b25fcd827dbfa0f, 21970),
         ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")], 0x42c16b5296ebaefc, 25612),
         // re-recorded 2026-10-23 (§3.78): `sectors` derived from `degree` 64, 200,001 at these million points where
         // 1,000 were given, so the layout writes twelve more calls of 64 MiB and a sector

@@ -769,7 +769,10 @@ numbers; the order is this note's.
     the same day (the base's shape, the build's configuration with the graph's `degree`, from
     which the disk index's sectors are derived, its graphs, and its compute; no case for the
     billion-point defaults, which the catalog cannot measure, the traced `sift1m-13-shards` the
-    only one); two to go: `diskann_search`, `faiss_ivf_ondisk`.
+    only one); then `diskann_search` the same day (the index as `diskann_build` names it, its
+    sectors derived; the search's configuration, the deployment's `node_cache`, the load, and
+    the CPU; no case for the defaults, the traced `sift1m-nocache` and `sift1m-cache` the only
+    ones); one to go: `faiss_ivf_ondisk`.
 39. **A use case per accelerator (backlog, raised by the user 2026-10-22, `DESIGN_REVIEW.md`
     §3.78 point 1).** A job's compute per step and its batch (bounded by the accelerator's
     memory) are the model's on one accelerator, so a job is one use case per accelerator type

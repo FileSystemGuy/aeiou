@@ -799,6 +799,25 @@ fn the_diskann_build_case_is_the_run_its_trace_fitted() {
     assert!(code == 1 && err.contains("required parameters with no value: build_time, degree, dim, index_bytes, n, partition_time, pq_code, pq_train, sample_rows, shard_index_bytes, shards"), "{err}");
 }
 
+/// diskann_search's job values (item 38; DESIGN_REVIEW §3.78): the traced examples sift1m-nocache
+/// and sift1m-cache run the op multisets they ran before (the index now the build's `n`, `dim`,
+/// and `degree`, its sectors derived, 200,001 either way); the abstract alone is refused, naming
+/// every value it now requires: the index, the search's configuration, its load, and its CPU.
+#[test]
+fn the_diskann_search_cases_are_the_runs_their_traces_fitted() {
+    let w = crate::common::workloads().display().to_string();
+    for (case, fp, ops) in [("sift1m-nocache", "ecbaca064f7812d0", "109840"), ("sift1m-cache", "49dcd7182152e40a", "115416")] {
+        let (code, out, err) = aeiou(&["dry-run", "--case", case, "--workloads", &w, "--gpus", "1", "--seed", "1"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(line(&out, "case ").contains(&format!("/{case}  run diskann_search")), "{out}");
+        assert_eq!(line(&out, "fingerprint "), format!("fingerprint {fp}"), "{case}");
+        assert!(line(&out, "  ops ").starts_with(&format!("  ops {ops} ")), "{out}");
+    }
+    let file = crate::common::workload_ast("diskann_search.ast.json").display().to_string();
+    let (code, _, err) = aeiou(&["dry-run", &file, "--gpus", "1"]);
+    assert!(code == 1 && err.contains("required parameters with no value: beam, degree, dim, entry, hops, n, near, node_cache, pq_code, queries, rerank, threads"), "{err}");
+}
+
 /// The LMCache abstracts' unsettled cases (item 38; DESIGN_REVIEW §3.78 points 1 and 4): each
 /// lock runs exactly what its abstract's defaults ran until 2026-10-23 (tests/golden.rs's
 /// fingerprints, 1 GPU, seed 1, 2 slots, 50 requests after 50 warm), the shared store's writer

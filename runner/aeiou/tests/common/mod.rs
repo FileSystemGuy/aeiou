@@ -117,6 +117,29 @@ pub fn safetensors_args(given: &[&str]) -> Vec<String> {
         .flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
 }
 
+/// diskann_search's defaults until 2026-10-23, which no case holds (DESIGN_REVIEW §3.78, item 38):
+/// the index (`n` at 999,999,995 points, whose derived sectors are the 200,000,000 `nodes` it gave),
+/// the search's configuration, its load, and its CPU. The tests that ran the abstract on them pass them.
+pub const DISKANN_SEARCH: [(&str, &str); 12] = [
+    ("n", "999999995"), ("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("beam", "4"),
+    ("hops", r#"{"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [1, 135, 536, 269, 47, 9, 2]}}"#),
+    ("entry", r#"{"hotset": {"fraction": 2e-7, "weight": 1.0}}"#), ("near", r#"{"hotset": {"fraction": 1e-5, "weight": 1.0}}"#),
+    ("node_cache", "0"), ("rerank", "500000"), ("threads", "32"), ("queries", "100000"),
+];
+
+/// `params`, then diskann_search's old defaults for every value `params` does not give.
+pub fn diskann_search<'a>(params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut all = params.to_vec();
+    all.extend(DISKANN_SEARCH.iter().filter(|(k, _)| !params.iter().any(|(p, _)| p == k)));
+    all
+}
+
+/// The same as `--param NAME=VALUE` arguments, for every old default `given` (NAME=VALUE) does not name.
+pub fn diskann_search_args(given: &[&str]) -> Vec<String> {
+    DISKANN_SEARCH.iter().filter(|(k, _)| !given.iter().any(|g| g.split_once('=').map(|(n, _)| n) == Some(*k)))
+        .flat_map(|(k, v)| ["--param".to_string(), format!("{k}={v}")]).collect()
+}
+
 /// file_per_sample as it was until 2026-10-22: the committed abstract with its old defaults back
 /// in place of the required values, and `hdr_read` and `inv_read` 1 MiB in place of the storage's
 /// st_blksize, so that a run and a dry run of it read alike; for the tests (the coordinator's)

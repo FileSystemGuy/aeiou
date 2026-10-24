@@ -24,7 +24,7 @@ const CASES: &[(&str, i64, &[(&str, &str)])] = &[
     ("dcp_save", 2, &[("steps", "200"), ("step_time", "323000000"), ("ckpt_every", "100"), ("items", "4"), ("item_bytes", "[16777216, 33554432, 16777216, 8388608]"), ("meta_bytes", "2097152")]),
     ("dcp_load", 2, &crate::common::DCP_LOAD),
     ("safetensors_load", 2, &crate::common::SAFETENSORS),
-    ("diskann_search", 1, &[("queries", "100"), ("threads", "2")]),
+    ("diskann_search", 1, &[("n", "999999995"), ("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("beam", "4"), ("hops", r#"{"empirical": {"values": [24, 25, 26, 27, 28, 29, 30], "weights": [1, 135, 536, 269, 47, 9, 2]}}"#), ("entry", r#"{"hotset": {"fraction": 2e-7, "weight": 1.0}}"#), ("near", r#"{"hotset": {"fraction": 1e-5, "weight": 1.0}}"#), ("node_cache", "0"), ("rerank", "500000"), ("queries", "100"), ("threads", "2")]),
     ("faiss_ivf_ondisk", 1, &[("calls", "100"), ("threads", "2")]),
     ("diskann_build", 1, &[("dim", "128"), ("degree", "64"), ("pq_code", "32"), ("shards", "2"), ("n", "1000000"), ("shard_index_bytes", "4194304"), ("index_bytes", "8388608"), ("sample_rows", "1000"), ("pq_train", "60000000000"), ("partition_time", "90000000000"), ("build_time", "1800000000000")]),
     ("lmcache_local_disk", 1, &[("concurrency", "2"), ("warm", "50"), ("requests", "50")]),
@@ -80,7 +80,7 @@ fn metrics_do_not_depend_on_the_thread_count() {
 /// read continues another, and the entry points show as reuse and as skew.
 #[test]
 fn diskann_structure_is_recovered() {
-    let r = dry("diskann_search", 1, &[("queries", "2000"), ("threads", "2"), ("nodes", "20000")], 2, Some(Opts::default()));
+    let r = dry("diskann_search", 1, &crate::common::diskann_search(&[("queries", "2000"), ("threads", "2"), ("n", "99995")]), 2, Some(Opts::default()));
     let m = r.total.metrics.as_ref().unwrap();
     assert_eq!(m.depth.keys().copied().collect::<Vec<_>>(), vec![1, 26, 27, 28, 29, 30, 31, 32]); // 1: the thread fork
     let chains: u64 = m.depth.iter().filter(|(k, _)| **k >= 26).map(|(_, v)| v).sum();
@@ -91,7 +91,7 @@ fn diskann_structure_is_recovered() {
     }
     assert_eq!(m.fan_out.keys().copied().collect::<Vec<_>>(), vec![1, 2, 4]);
     assert_eq!(m.runs[0].ops.max, 2); // the two stream reads of the PQ file at load
-    assert_eq!(m.runs[0].multi_op_bytes, 20000 * 5 * 32 + 8);
+    assert_eq!(m.runs[0].multi_op_bytes, 99995 * 32 + 8);    // the PQ file: its points' codes and its header
     // the first round of every query reads an entry point's sector and the second lands on the entry
     // points' neighbours: at 20,000 sectors both sets are one sector, which takes over 4 %
     // of the accesses, where the uniform rounds alone would give the top 1 % about 1.5 %

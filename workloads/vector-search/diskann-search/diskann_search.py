@@ -8,37 +8,46 @@ submitted eight at a time. A query is a beam search: each round submits up to `b
 reads in one `io_submit` and waits for all of them. Without a node cache the first round is
 one read, the sector of an entry point (a medoid), and the second round lands on the entry
 points' neighbours; every later round is spread over the whole index. A node cache of 1 % of
-the nodes holds exactly those two rounds.
+the nodes holds exactly those two rounds. The index (named as `diskann_build` names it, its
+sectors derived), the search's configuration, its load, and its CPU are required
+(DESIGN_REVIEW.md §3.78, 2026-10-23): the traced examples sift1m-nocache and sift1m-cache give
+them, and the billion-point stand-in the defaults held until then is no case.
 """
 from aeiou import *
 
 w = Workload("diskann_search", posix="libaio",   # DiskANN on Linux: io_submit on an O_DIRECT descriptor
              doc="Beam search over a sector-packed graph index: dependent rounds of `beam` concurrent 4 KiB reads per query.")
 P = w.P
-w.param("threads", 32, unit="count", doc="search threads per node (an actor is a search node)")
-w.param("queries", 100_000, unit="count", doc="per thread; finite")
-w.param("beam", 4, unit="count")
-w.param("hops", empirical([24, 25, 26, 27, 28, 29, 30], [1, 135, 536, 269, 47, 9, 2]), unit="count",
-        doc="rounds of a query after the two near the entry points; measured on SIFT1M at search list 100, beam 4")
-w.param("entry", hotset(fraction=2e-7, weight=1.0),
-        doc="[config] the entry points' sectors: medoids / sectors (one medoid per build shard; 40 here)")
-w.param("near", hotset(fraction=1e-5, weight=1.0),
-        doc="[config] the sectors of the entry points' neighbours: about 0.8 * medoids * degree / sectors (661 distinct sectors for 13 medoids of degree 64, measured)")
-w.param("node_cache", 0, unit="count",
-        doc="[config] sector reads that fill the node cache at load (about one per cached node); with a cache, queries skip the two rounds near the entry points")
+w.param("threads", kind=int, unit="count", doc="search threads per node (an actor is a search node)")
+w.param("queries", kind=int, unit="count", doc="per thread; finite")
+w.param("beam", kind=int, unit="count", doc="[config] the beam width: sector reads per round")
+w.param("hops", kind=Dist, unit="count",
+        doc="rounds of a query after the two near the entry points: the index's at its search list and beam (hops.py fits it)")
+w.param("entry", kind=Dist,
+        doc="the entry points' sectors, a hot set: medoids / sectors (one medoid per build shard; hops.py fits it)")
+w.param("near", kind=Dist,
+        doc="the sectors of the entry points' neighbours, a hot set: about 0.8 * medoids * degree / sectors (661 distinct sectors for 13 medoids of degree 64, measured)")
+w.param("node_cache", kind=int, unit="count",
+        doc="[config] sector reads that fill the node cache at load (about one per cached node), 0 for none; with a cache, queries skip the two rounds near the entry points")
 w.param("cache_batch", 8, unit="count", doc="requests per submit while the node cache loads (traced)")
-w.param("rerank", 500 * us, unit="ns", doc="CPU of one query; measured 0.5 ms of user time over 28 rounds, one host")
+w.param("rerank", kind=int, unit="ns", doc="[measure] CPU of one query (0.5 ms of user time over 28 rounds measured on SIFT1M, one host)")
 w.param("sector", 4 * KiB, unit="bytes")
-w.param("nodes", 200_000_000, unit="count", doc="[config] sectors of the index (a sector holds per_sector graph nodes)")
-w.param("per_sector", 5, unit="count", doc="[config] graph nodes per sector: 4 KiB over (vector bytes + 4 + 4 * degree)")
-w.param("pq_code", 32, unit="bytes", doc="[config] bytes of one PQ-compressed vector, held in memory")
+# the index, as diskann_build names it
+w.param("n", kind=int, unit="count", doc="the index's points")
+w.param("dim", kind=int, unit="count", doc="the points' dimensions (fp32)")
+w.param("degree", kind=int, unit="count", doc="[config] the graph's degree, as the disk layout read it from the merged graph")
+w.param("pq_code", kind=int, unit="bytes", doc="[config] bytes of one PQ-compressed vector, held in memory")
 w.param("stream", 8191, unit="bytes", doc="the first read of a C++ stream on a file (traced)")
 w.param("pq_read", 0x7ffff000, unit="bytes", doc="the stream reads the rest of the PQ file in one call; Linux returns at most this much per read")
 
-index = w.dataset("index", pattern="diskann/index.bin", layout="array", access="indexed", count=P.nodes, slot=P.sector,
+node = P.dim * 4 + 4 + P.degree * 4                    # a node in the disk index: its vector, its degree, its neighbours
+# DiskANN's layout: a header sector, then whole nodes to a sector, or a node bigger than a sector in whole sectors
+sectors = 1 + ceil_div(P.n, max_(1, P.sector // node)) * ceil_div(node, P.sector)
+
+index = w.dataset("index", pattern="diskann/index.bin", layout="array", access="indexed", count=sectors, slot=P.sector,
                   size=const(P.sector), seed=0x5eed_da7d)
 pq = w.dataset("pq", pattern="pq/pq_compressed-{id}.bin", layout="whole", access="indexed", count=1,
-               size=const(P.nodes * P.per_sector * P.pq_code + 8),
+               size=const(P.n * P.pq_code + 8),
                seed=0x5eed_da80)   # beside the index in the real layout; a dataset has its root to itself here (V13)
 
 with w.actor("gpu") as gpu:
