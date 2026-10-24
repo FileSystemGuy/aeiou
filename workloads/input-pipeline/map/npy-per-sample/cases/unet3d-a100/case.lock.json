@@ -1,0 +1,58 @@
+{
+  "lock_version": 1,
+  "name": "npy-per-sample/unet3d-a100",
+  "runs": [
+    {
+      "name": "npy_per_sample",
+      "abstract": "input-pipeline/map/npy-per-sample/npy_per_sample.ast.json",
+      "ast_sha256": "54aacfd3477c5708f60dc230b381270d40d68dc2c32d4e8c3194b53b85090760",
+      "params": {
+        "batch": {"default": 7},
+        "cd_len": {"default": 102},
+        "files_per_directory": {"default": 10000},
+        "framing": {"default": 498},
+        "hdr_read": {"default": {"from": "st_blksize", "of": "train", "fallback": 1048576}},
+        "inv_entry": {"default": 27},
+        "inv_read": {"default": {"from": "st_blksize", "of": "train", "fallback": 1048576}},
+        "inventory": {"default": false},
+        "np_chunk": {"default": 262144},
+        "prefetch": {"default": 2},
+        "sample_mean": {"default": 146600628},
+        "sample_sd": {"default": 68341808},
+        "samples": {"default": 50000},
+        "step_time": {"default": 636000000},
+        "steps": {"default": 500},
+        "sync_every": {"default": 1},
+        "walk": {"default": true},
+        "workers": {"default": 4},
+        "xfer": {"default": {"from": "st_blksize", "of": "train", "fallback": 1048576}}
+      },
+      "sources": {
+        "batch": "input-pipeline/map/npy-per-sample/cases/unet3d-a100/a100.params.json",
+        "cd_len": "abstract",
+        "files_per_directory": "abstract",
+        "framing": "abstract",
+        "hdr_read": "abstract",
+        "inv_entry": "abstract",
+        "inv_read": "abstract",
+        "inventory": "abstract",
+        "np_chunk": "abstract",
+        "prefetch": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "sample_mean": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "sample_sd": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "samples": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "step_time": "input-pipeline/map/npy-per-sample/cases/unet3d-a100/a100.params.json",
+        "steps": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "sync_every": "abstract",
+        "walk": "abstract",
+        "workers": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "xfer": "abstract"
+      }
+    }
+  ],
+  "provenance": {
+    "tool": "aeiou-params lock",
+    "case": "input-pipeline/map/npy-per-sample/cases/unet3d-a100/case.toml",
+    "fragments": [{"path": "input-pipeline/map/npy-per-sample/cases/unet3d-a100/a100.params.json", "sha256": "3d4215e652e6fe34a05e270a3800bc718f414a82acad2e736bea1631024f2afe"}, {"path": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json", "sha256": "2585ec9f741d31b5e39799028a140edf2dce8bcc0ac303446af1966b04161ff3"}]
+  }
+}

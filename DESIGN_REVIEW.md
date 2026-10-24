@@ -6928,8 +6928,10 @@ made in the build, open to revision:
   defaults held are the use case `unet3d-h100` (`job.params.json`, `h100.params.json`), whose
   lock runs the fingerprints the defaults did (`tests/golden.rs` and `tests/cases.rs` hold
   them). The two traced examples carry the old `step_time`, 323 ms, said to be not fitted (the
-  user's answer). Both fragments sit in the case's directory until a second accelerator shares
-  the job fragment; where a shared fragment lives is decided then.
+  user's answer). ~~Both fragments sit in the case's directory until a second accelerator shares
+  the job fragment; where a shared fragment lives is decided then.~~ *2026-10-23, §3.81: the
+  job fragment is the mechanism's (`jobs/unet3d.params.json`), shared by `unet3d-a100`,
+  `unet3d-h100`, and `unet3d-b200`, and holds the WG's sample sizes.*
 - **Its shape is the first at a real job's size**: about 490 GB read by one instance, which
   overflowed the metrics pass at 4 KiB blocks and led to the extent metrics (§3.79), built
   before this part was committed; it is measured exactly, in about two seconds a seed.
@@ -7410,6 +7412,43 @@ the near names of a `--case` that matches nothing.
 **Considered and not done.** A pointer to `CATALOG.md` alone (a document, not a query, and the
 cases multiply); a search tool in the Python wheel (not on the hosts that run cases); free-text
 search (the tags and a name match cover it, and `grep` the rest).
+
+### 3.81 A use case per accelerator: the Unet3D family (item 39; decided with the user and built 2026-10-23)
+
+**The problem.** §3.78 point 1 makes a job's batch and step time the model's on one
+accelerator, so one case cannot hold them for every accelerator; `unet3d-h100` held both
+fragments in its own directory until a second accelerator shared the job's (part 5a).
+
+**Decided with the user, on four questions:**
+
+1. *A shared job fragment is its mechanism's*, `npy-per-sample/jobs/unet3d.params.json`, each
+   case listing it beside its accelerator's (`["../../jobs/unet3d.params.json",
+   "h100.params.json"]`). `aeiou-catalog check` already takes a fragment of the case or its
+   mechanism, and a lock records it by its path under `workloads/`; no contract or checker
+   change.
+2. *The accelerators the WG has numbers for*: `unet3d-a100`, `unet3d-h100`, `unet3d-b200`, the
+   `accelerator` vocabulary gaining `a100` and `b200`. No B300 until one is measured: no
+   configuration gives one.
+3. *The values are the WG's reference parameters* (`PROJECT_BRIEF.md` §8), from its DLIO
+   workload configurations `unet3d_{a100,h100,b200}.yaml` (`batch_size`, `computation_time`):
+   batch 7 on all three, 636, 323, and 162 ms. These are the WG's per-GPU compute, not DLIO's
+   I/O, so the rule against DLIO abstracts does not apply. B200's 162 ms is the WG's H100
+   halved, not a measurement, and its fragment says so. The batch does not change with the
+   accelerator's memory in the WG's numbers.
+4. *The sample sizes are the WG's too, for now* (the user's answer): mean 146,600,628 bytes and
+   standard deviation 68,341,808 (`record_length_bytes`, `record_length_bytes_stdev`), in place
+   of 140 MiB and 4 MiB, whose source no record gave; provisional until the preprocessed KiTS19
+   corpus is measured. The normal stays, clamped at 1 MiB.
+
+**Built.** The three cases and the job fragment. The step time is compute, which the
+fingerprint does not cover, so the three issue one op multiset (`958ae6fd74afc74b` at 2 GPUs,
+seed 1, 5 steps, 51,143 ops, against `f755bd4187b75b78` and 50,491 at the old sizes; the
+abstract's own golden run in `tests/golden.rs` keeps the old values as parameters) and are three
+workloads by their ids (`tests/cases.rs`).
+
+**Open.** The sizes measured on the real corpus; a B300, and any accelerator, measured; the
+other jobs' accelerators when their use cases come (the input pipelines' other mechanisms have
+example and `unsettled` cases only).
 
 ## 4. Plan changes
 

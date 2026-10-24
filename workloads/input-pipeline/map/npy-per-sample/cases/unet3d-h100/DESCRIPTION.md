@@ -6,7 +6,7 @@ mechanism's README) or what a storage system should do about it.
 
 ## In brief
 
-np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back. In the catalog it is `input-pipeline/map/npy-per-sample`: application `numpy`, format `npz`, phase training, domain ai. A use case (`unet3d-h100`: volume data, a vision model), its parameters holding at 1 GPU. Not traced yet. `train` holds 50,000 samples, one a file (6.7 TiB in 50,000 files and 5 directories), consumed in a keyed shuffle without replacement; sizes normal, mean 140 MiB, standard deviation 4 MiB (5th–95th percentile 133.4 MiB to 146.6 MiB), clamped to at least 1 MiB. The one `gpu` actor (one per GPU): in phase `walk`, for each of the 5 directories of `train`: on a directory of `train`, open, fstat, readdir to the end, close; 4 loader workers build 500 batches, up to 2 ahead each; per batch, 7 times: on the next sample of `train`, open, fstat, ioctl TCGETS, lseek, read 1 MiB, lseek 3 times, read 1 MiB, lseek, read 1 MiB, lseek, read 1 MiB, lseek; for each `k` below `⌈(size(f) − framing) / np_chunk⌉ div (xfer div np_chunk)`: read 1 MiB; 4 times: lseek; for each `rep` below `⌈size(f) / xfer⌉ − (⌈(size(f) − framing) / np_chunk⌉ div (xfer div np_chunk))`: read 1 MiB; for each `t` below `(⌈(size(f) − framing) / np_chunk⌉ mod (xfer div np_chunk)) + 4`: lseek; close; in phase `train`, 500 times: take a batch from `batches`; compute for 323 ms; a barrier with every GPU. Measured by dry run at 1 GPU (2,519,734 ops: 2,000,009 lseek, 505,705 read, 3,505 close, 3,505 fstat, 3,505 open, 3,500 ioctl, 5 readdir; 481.9 GiB read, nothing written): read runs: large (128 MiB); read requests: medium (1 MiB); share of bytes read: read-only (100%); metadata ops per data op: low (0.0208); reads its own writes: no; share of bytes read that are re-reads: none (0.709%); share of accessed bytes on the most accessed 1% of bytes: uniform (1.7%).
+np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back. In the catalog it is `input-pipeline/map/npy-per-sample`: application `numpy`, format `npz`, phase training, domain ai. A use case (`unet3d-h100`: volume data, a vision model), its parameters holding at 1 GPU. Not traced yet. `train` holds 50,000 samples, one a file (6.7 TiB in 50,000 files and 5 directories), consumed in a keyed shuffle without replacement; sizes normal, mean 139.8 MiB, standard deviation 65.2 MiB (5th–95th percentile 32.6 MiB to 247.0 MiB), clamped to at least 1 MiB. The one `gpu` actor (one per GPU): in phase `walk`, for each of the 5 directories of `train`: on a directory of `train`, open, fstat, readdir to the end, close; 4 loader workers build 500 batches, up to 2 ahead each; per batch, 7 times: on the next sample of `train`, open, fstat, ioctl TCGETS, lseek, read 1 MiB, lseek 3 times, read 1 MiB, lseek, read 1 MiB, lseek, read 1 MiB, lseek; for each `k` below `⌈(size(f) − framing) / np_chunk⌉ div (xfer div np_chunk)`: read 1 MiB; 4 times: lseek; for each `rep` below `⌈size(f) / xfer⌉ − (⌈(size(f) − framing) / np_chunk⌉ div (xfer div np_chunk))`: read 1 MiB; for each `t` below `(⌈(size(f) − framing) / np_chunk⌉ mod (xfer div np_chunk)) + 4`: lseek; close; in phase `train`, 500 times: take a batch from `batches`; compute for 323 ms; a barrier with every GPU. Measured by dry run at 1 GPU (2,520,800 ops: 2,000,906 lseek, 505,874 read, 3,505 close, 3,505 fstat, 3,505 open, 3,500 ioctl, 5 readdir; 482.1 GiB read, nothing written): read runs: large (160 MiB); read requests: medium (1 MiB); share of bytes read: read-only (100%); metadata ops per data op: low (0.0208); reads its own writes: no; share of bytes read that are re-reads: none (0.709%); share of accessed bytes on the most accessed 1% of bytes: uniform (1.7%).
 
 ## The account
 
@@ -31,14 +31,14 @@ np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip
 | `inv_read` | 1 MiB | same | bytes | [measure] the inventory reader's request; Python's BufferedReader asks st_blksize |
 | `samples` | 50,000 | none | count | corpus size: the submission's, sized to the dataset rule (PROJECT_BRIEF.md §5) |
 | `files_per_directory` | 10,000 | same | count | [config] files a directory holds, {id div files_per_directory} (contract 0.10); 10,000 as kit/mkcorpus.py writes them |
-| `sample_mean` | 140 MiB | none | bytes | mean sample file size: the job's |
-| `sample_sd` | 4 MiB | none | bytes | standard deviation of the sample file size: the job's |
+| `sample_mean` | 139.8 MiB | none | bytes | mean sample file size: the job's |
+| `sample_sd` | 65.2 MiB | none | bytes | standard deviation of the sample file size: the job's |
 
 The API the traced application used: `posix` sync (none declared); a run under another backend is another workload.
 
 ### Data
 
-**`train`**, a dataset (`whole`, `map`): 50,000 samples (`samples`), one sample a file; consumed as samples, drawn without replacement from a keyed shuffle and split over the GPUs by position (`g + G·(b·B + j)`). Named `train/{id div files_per_directory:05}/sample_{id:09}.npz` (`files_per_directory` = 10,000). Sample sizes: normal, mean 140 MiB, standard deviation 4 MiB (5th–95th percentile 133.4 MiB to 146.6 MiB), clamped to at least 1 MiB. An inventory, `inventory.txt` in the dataset's root, 27 bytes (`inv_entry`) a sample. At these parameters `aeiou datagen` writes 50,000 files in 5 directories, 6.7 TiB in all, the inventory's 1.3 MiB included (a mean file of 140.0 MiB). Dataset seed `0x5eedda7b`.
+**`train`**, a dataset (`whole`, `map`): 50,000 samples (`samples`), one sample a file; consumed as samples, drawn without replacement from a keyed shuffle and split over the GPUs by position (`g + G·(b·B + j)`). Named `train/{id div files_per_directory:05}/sample_{id:09}.npz` (`files_per_directory` = 10,000). Sample sizes: normal, mean 139.8 MiB, standard deviation 65.2 MiB (5th–95th percentile 32.6 MiB to 247.0 MiB), clamped to at least 1 MiB. An inventory, `inventory.txt` in the dataset's root, 27 bytes (`inv_entry`) a sample. At these parameters `aeiou datagen` writes 50,000 files in 5 directories, 6.7 TiB in all, the inventory's 1.3 MiB included (a mean file of 141.0 MiB). Dataset seed `0x5eedda7b`.
 
 ### The `gpu` actor (1 instance, one per GPU)
 
@@ -96,11 +96,11 @@ The API the traced application used: `posix` sync (none declared); a run under a
 
 From `aeiou dry-run --metrics-json` at 1 GPU, the median of seeds 1, 2, 3.
 
-Ops in all (seed 1): 2,519,734: 2,000,009 `lseek`, 505,705 `read`, 3,505 `close`, 3,505 `fstat`, 3,505 `open`, 3,500 `ioctl`, 5 `readdir`; 481.9 GiB read, nothing written.
+Ops in all (seed 1): 2,520,800: 2,000,906 `lseek`, 505,874 `read`, 3,505 `close`, 3,505 `fstat`, 3,505 `open`, 3,500 `ioctl`, 5 `readdir`; 482.1 GiB read, nothing written.
 
 | Attribute | Class | Value |
 |---|---|---|
-| `run_length_read` (read runs) | large | 128 MiB |
+| `run_length_read` (read runs) | large | 160 MiB |
 | `run_length_write` (write runs) | — | — |
 | `request_size_read` (read requests) | medium | 1 MiB |
 | `request_size_write` (write requests) | — | — |

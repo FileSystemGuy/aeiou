@@ -684,17 +684,26 @@ fn the_workload_id_holds_the_locks_other_runs() {
     assert_ne!(id_of(&other), id_of(&out), "another run of the lock changed: another workload");
 }
 
-/// The brief's Unet3D on an H100 is a use case (DESIGN_REVIEW §3.78 points 1 and 18): its lock
-/// runs exactly what `npy_per_sample`'s defaults ran until 2026-10-22 (tests/golden.rs's
-/// fingerprint), and the abstract alone, whose job and GPU values are now required, is refused.
+/// The Unet3D job is a use case per accelerator (item 39, DESIGN_REVIEW §3.81): one job fragment
+/// and an accelerator's batch and step time. The step time is compute, which the fingerprint does
+/// not cover, so A100, H100, and B200 issue the same ops and are three workloads by their ids; the
+/// abstract alone, whose job and GPU values are required, is refused.
 #[test]
-fn the_unet3d_h100_use_case_is_the_run_the_old_defaults_made() {
+fn the_unet3d_use_cases_differ_by_accelerator_in_compute_alone() {
     let w = crate::common::workloads().display().to_string();
-    let (code, out, err) = aeiou(&["dry-run", "--case", "unet3d-h100", "--workloads", &w, "--gpus", "2", "--seed", "1", "--param", "steps=5"]);
-    assert_eq!(code, 0, "{err}");
-    assert!(line(&out, "case ").starts_with("case npy-per-sample/unet3d-h100  run npy_per_sample"), "{out}");
-    assert_eq!(line(&out, "fingerprint "), "fingerprint f755bd4187b75b78");
-    assert!(line(&out, "  ops ").starts_with("  ops 50491 "), "{out}");
+    let mut ids = Vec::new();
+    for (acc, step) in [("a100", "step_time = 636000000"), ("h100", "step_time = 323000000"), ("b200", "step_time = 162000000")] {
+        let case = format!("unet3d-{acc}");
+        let (code, out, err) = aeiou(&["dry-run", "--case", &case, "--workloads", &w, "--gpus", "2", "--seed", "1", "--param", "steps=5"]);
+        assert_eq!(code, 0, "{case}: {err}");
+        assert!(line(&out, "case ").starts_with(&format!("case npy-per-sample/{case}  run npy_per_sample")), "{out}");
+        assert_eq!(line(&out, "fingerprint "), "fingerprint 958ae6fd74afc74b", "{case}");
+        assert!(line(&out, "  ops ").starts_with("  ops 51143 "), "{case}: {out}");
+        assert!(out.contains(step), "{case}: {out}");
+        ids.push(id_of(&out));
+    }
+    ids.dedup();
+    assert_eq!(ids.len(), 3, "another accelerator is another workload: {ids:?}");
     let ast = crate::common::workload_ast("npy_per_sample.ast.json").display().to_string();
     let (code, _, err) = aeiou(&["dry-run", &ast, "--gpus", "1"]);
     assert!(code == 1 && err.contains("required parameters with no value: batch, prefetch, sample_mean, sample_sd, samples, step_time, steps, workers"), "{err}");

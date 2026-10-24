@@ -301,7 +301,10 @@ workload train_large_samples {
 *2026-10-22* (`DESIGN_REVIEW.md` §3.78): the job's values (`workers`, `prefetch`, `steps`, the sample
 sizes), the model's on its GPU (`batch`, `step_time`), and the corpus size `samples` (the
 submission's scale) have no default in the abstract; the values above are the use case
-`unet3d-h100`'s. `hdr_read`, `xfer`, and `inv_read` are `st_blksize` as the storage reports it,
+`unet3d-h100`'s. *2026-10-23* (`DESIGN_REVIEW.md` §3.81): a use case per accelerator,
+`unet3d-a100`, `unet3d-h100`, `unet3d-b200` (step times 636, 323, 162 ms), sharing the job
+fragment `jobs/unet3d.params.json`, whose sample sizes are now the WG's (mean 146,600,628 bytes,
+standard deviation 68,341,808; provisional). `hdr_read`, `xfer`, and `inv_read` are `st_blksize` as the storage reports it,
 1 MiB where it reports none.
 
 `per_fill = $xfer / $np_chunk` and `chunks(f) = ceil((size(f) − $framing) / $np_chunk)` are

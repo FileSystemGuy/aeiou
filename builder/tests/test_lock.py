@@ -196,9 +196,13 @@ def test_every_lock_fits_its_schema():
 # ---------------------------------------------------------------- npy_per_sample and its use case
 
 NPY = WORKLOADS / "input-pipeline/map/npy-per-sample"
-# what npy_per_sample's defaults held until 2026-10-22: the brief's Unet3D on an H100
-UNET3D_H100 = {"batch": 7, "workers": 4, "prefetch": 2, "steps": 500, "step_time": 323_000_000,
-               "samples": 50_000, "sample_mean": 140 << 20, "sample_sd": 4 << 20}
+# the Unet3D job: the WG's reference workload (its DLIO configs unet3d_{a100,h100,b200}.yaml, sizes
+# provisional, 2026-10-23), the job values shared and one fragment per accelerator (item 39)
+UNET3D_JOB = {"workers": 4, "prefetch": 2, "steps": 500, "samples": 50_000,
+              "sample_mean": 146_600_628, "sample_sd": 68_341_808}
+UNET3D_GPU = {"a100": {"batch": 7, "step_time": 636_000_000}, "h100": {"batch": 7, "step_time": 323_000_000},
+              "b200": {"batch": 7, "step_time": 162_000_000}}
+UNET3D_H100 = UNET3D_JOB | UNET3D_GPU["h100"]
 
 
 def test_npy_per_sample_leaves_the_job_and_the_gpu_to_its_use_case():
@@ -213,21 +217,28 @@ def test_npy_per_sample_leaves_the_job_and_the_gpu_to_its_use_case():
         assert p[k]["default"] == {"from": "st_blksize", "of": "train", "fallback": 1 << 20}, k
 
 
-def test_unet3d_h100_is_a_use_case_of_the_values_the_defaults_held():
-    """The use case `unet3d-h100`: a job fragment and an H100 fragment, whose lock holds the
-    values npy_per_sample's defaults held until 2026-10-22, each a default."""
+def test_unet3d_is_a_use_case_per_accelerator_sharing_one_job_fragment():
+    """Item 39 (DESIGN_REVIEW.md §3.81): the Unet3D job is one use case per accelerator, each the
+    mechanism's job fragment and its accelerator's (batch, step_time), the WG's reference values;
+    B200's step time is the WG's H100 halved, not a measurement, and says so."""
     import tomllib
-    case = NPY / "cases/unet3d-h100"
-    rec = tomllib.loads((case / "case.toml").read_text())
-    assert (rec["kind"], rec["accelerator"]) == ("use", "h100")
-    assert rec["run"] == [{"ast": "npy_per_sample", "params": ["job.params.json", "h100.params.json"]}]
-    job = json.loads((case / "job.params.json").read_text())["params"]
-    gpu = json.loads((case / "h100.params.json").read_text())["params"]
-    assert set(gpu) == {"batch", "step_time"}, "the model on a GPU (§3.78 point 1)"
-    assert set(job) == set(UNET3D_H100) - set(gpu)
-    (run,) = json.loads((case / lock.LOCK_FILE).read_text())["runs"]
-    assert {k: run["params"][k] for k in UNET3D_H100} == {k: {"default": v} for k, v in UNET3D_H100.items()}
-    assert lock.stale(case, workloads=WORKLOADS) is None
+    job = json.loads((NPY / "jobs/unet3d.params.json").read_text())
+    assert job["params"] == {k: {"default": v} for k, v in UNET3D_JOB.items()}
+    assert "provisional" in job["doc"]
+    vocabulary = tomllib.loads((WORKLOADS / "attributes.toml").read_text())["attribute"]["accelerator"]["values"]
+    for acc, values in UNET3D_GPU.items():
+        case = NPY / f"cases/unet3d-{acc}"
+        rec = tomllib.loads((case / "case.toml").read_text())
+        assert (rec["kind"], rec["accelerator"]) == ("use", acc) and acc in vocabulary
+        assert rec["run"] == [{"ast": "npy_per_sample", "params": ["../../jobs/unet3d.params.json", f"{acc}.params.json"]}]
+        gpu = json.loads((case / f"{acc}.params.json").read_text())
+        assert gpu["params"] == {k: {"default": v} for k, v in values.items()}, "the model on a GPU (§3.78 point 1)"
+        assert f"unet3d_{acc}.yaml" in gpu["doc"], acc
+        (run,) = json.loads((case / lock.LOCK_FILE).read_text())["runs"]
+        assert {k: run["params"][k] for k in UNET3D_JOB | values} == {k: {"default": v} for k, v in (UNET3D_JOB | values).items()}
+        assert run["sources"]["sample_sd"] == "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json"
+        assert lock.stale(case, workloads=WORKLOADS) is None
+    assert "not measured" in json.loads((NPY / "cases/unet3d-b200/b200.params.json").read_text())["doc"]
 
 
 def test_the_example_cases_of_npy_per_sample_give_every_required_value():

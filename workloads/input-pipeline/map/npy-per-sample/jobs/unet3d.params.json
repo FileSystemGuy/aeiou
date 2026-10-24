@@ -1,0 +1,3 @@
+{"params_version": 2, "abstract": "npy_per_sample",
+ "doc": "The Unet3D job, every accelerator's (item 39, DESIGN_REVIEW.md §3.81): .npz samples sized as the WG's reference workload sizes them (its DLIO configs unet3d_*.yaml, record_length_bytes 146,600,628 and record_length_bytes_stdev 68,341,808; provisional, 2026-10-23, until the preprocessed KiTS19 corpus is measured), 4 DataLoader workers per GPU (read_threads) each 2 batches ahead, 500 steps. `samples` is the submission's to size.",
+ "params": {"sample_mean": {"default": 146600628}, "sample_sd": {"default": 68341808}, "steps": {"default": 500}, "workers": {"default": 4}, "prefetch": {"default": 2}, "samples": {"default": 50000}}}

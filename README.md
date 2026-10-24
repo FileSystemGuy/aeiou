@@ -445,7 +445,8 @@ Not built, in rough order of interest:
   `tfrecord_stream`, each fitted to an example case that replaces its `unsettled` one (item
   36); a lognormal's `sigma` as an expression, so a case gives it (item 37); `faiss_ivf_ondisk`'s
   index-file reads derived from its arrays' sizes, as stdio's buffer follows `st_blksize` (item
-  38's open point); and a use case per accelerator, `unet3d-h100` the first (item 39).
+  38's open point); and a use case per accelerator (item 39) for the jobs after Unet3D, whose
+  `unet3d-a100`, `unet3d-h100`, and `unet3d-b200` are built, and a B300 once measured.
 
 ## License
 

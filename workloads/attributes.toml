@@ -177,7 +177,9 @@ source = "curated"
 level = "case"
 required = { kind = "use" }
 [attribute.accelerator.values]
+a100 = { meaning = "NVIDIA A100 (Ampere).", search = ["nvidia", "ampere", "gpu"] }
 h100 = { meaning = "NVIDIA H100 (Hopper).", search = ["nvidia", "hopper", "gpu"] }
+b200 = { meaning = "NVIDIA B200 (Blackwell).", search = ["nvidia", "blackwell", "gpu"] }
 
 # ---- derived ----
 

@@ -11,7 +11,7 @@ w = Workload("npy_per_sample",
              doc="np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.")
 P = w.P
 # the job and the model on a GPU are a use case's (DESIGN_REVIEW.md §3.78 point 1): required here, the
-# brief's Unet3D on an H100 (the defaults until 2026-10-22) in cases/unet3d-h100
+# Unet3D job (jobs/unet3d.params.json) on each accelerator in cases/unet3d-<accelerator> (§3.81)
 w.param("batch", kind=int, unit="count", doc="samples per step: the model's on its accelerator, whose memory sets it")
 w.param("workers", kind=int, unit="count", doc="DataLoader worker processes per GPU: the job's")
 w.param("prefetch", kind=int, unit="count", doc="batches each worker keeps ahead (prefetch_factor): the job's")

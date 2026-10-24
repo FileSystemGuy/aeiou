@@ -153,7 +153,9 @@
       "level": "case",
       "multiple": false,
       "values": [
-        "h100"
+        "a100",
+        "h100",
+        "b200"
       ]
     },
     {
@@ -776,6 +778,96 @@
       ]
     },
     {
+      "name": "npy-per-sample/unet3d-a100",
+      "dir": "input-pipeline/map/npy-per-sample/cases/unet3d-a100",
+      "lock": "input-pipeline/map/npy-per-sample/cases/unet3d-a100/case.lock.json",
+      "description": "input-pipeline/map/npy-per-sample/cases/unet3d-a100/DESCRIPTION.md",
+      "gpus": [
+        1
+      ],
+      "attributes": {
+        "category": "input-pipeline",
+        "class": "map",
+        "application": "numpy",
+        "format": "npz",
+        "phase": [
+          "training"
+        ],
+        "domain": [
+          "ai"
+        ],
+        "kind": "use",
+        "modality": "volume",
+        "model-family": "vision",
+        "accelerator": "a100"
+      },
+      "runs": [
+        {
+          "ast": "npy_per_sample",
+          "does": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
+          "is": "The Unet3D job, every accelerator's (item 39, DESIGN_REVIEW.md §3.81): .npz samples sized as the WG's reference workload sizes them (its DLIO configs unet3d_*.yaml, record_length_bytes 146,600,628 and record_length_bytes_stdev 68,341,808; provisional, 2026-10-23, until the preprocessed KiTS19 corpus is measured), 4 DataLoader workers per GPU (read_threads) each 2 batches ahead, 500 steps. `samples` is the submission's to size. Unet3D on an A100: batch 7 and 636 ms of compute per step, the WG's reference values (its DLIO config unet3d_a100.yaml: batch_size, computation_time).",
+          "attributes": {
+            "api": "sync",
+            "writes": "no",
+            "inputs": "no",
+            "status": "untraced",
+            "run_length_read": "large",
+            "request_size_read": "medium",
+            "read_share": "read-only",
+            "metadata": "low",
+            "reads_own_writes": "no",
+            "reread": "none",
+            "skew": "uniform"
+          }
+        }
+      ]
+    },
+    {
+      "name": "npy-per-sample/unet3d-b200",
+      "dir": "input-pipeline/map/npy-per-sample/cases/unet3d-b200",
+      "lock": "input-pipeline/map/npy-per-sample/cases/unet3d-b200/case.lock.json",
+      "description": "input-pipeline/map/npy-per-sample/cases/unet3d-b200/DESCRIPTION.md",
+      "gpus": [
+        1
+      ],
+      "attributes": {
+        "category": "input-pipeline",
+        "class": "map",
+        "application": "numpy",
+        "format": "npz",
+        "phase": [
+          "training"
+        ],
+        "domain": [
+          "ai"
+        ],
+        "kind": "use",
+        "modality": "volume",
+        "model-family": "vision",
+        "accelerator": "b200"
+      },
+      "runs": [
+        {
+          "ast": "npy_per_sample",
+          "does": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
+          "is": "The Unet3D job, every accelerator's (item 39, DESIGN_REVIEW.md §3.81): .npz samples sized as the WG's reference workload sizes them (its DLIO configs unet3d_*.yaml, record_length_bytes 146,600,628 and record_length_bytes_stdev 68,341,808; provisional, 2026-10-23, until the preprocessed KiTS19 corpus is measured), 4 DataLoader workers per GPU (read_threads) each 2 batches ahead, 500 steps. `samples` is the submission's to size. Unet3D on a B200: batch 7 and 162 ms of compute per step, the WG's reference values (its DLIO config unet3d_b200.yaml: batch_size, computation_time); the WG took the step time as H100's 323 ms halved, not measured.",
+          "attributes": {
+            "api": "sync",
+            "writes": "no",
+            "inputs": "no",
+            "status": "untraced",
+            "run_length_read": "large",
+            "request_size_read": "medium",
+            "read_share": "read-only",
+            "metadata": "low",
+            "reads_own_writes": "no",
+            "reread": "none",
+            "skew": "uniform"
+          }
+        }
+      ]
+    },
+    {
       "name": "npy-per-sample/unet3d-h100",
       "dir": "input-pipeline/map/npy-per-sample/cases/unet3d-h100",
       "lock": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/case.lock.json",
@@ -803,7 +895,7 @@
         {
           "ast": "npy_per_sample",
           "does": "np.load of one ~140 MiB .npz per sample through a PyTorch DataLoader; magic, zip tail, then the archive front to back.",
-          "is": "The Unet3D job as npy_per_sample's defaults held it until 2026-10-22 (DESIGN_REVIEW.md §3.78; ABSTRACTS.md §2): .npz samples of about 140 MiB, 4 DataLoader workers per GPU each 2 batches ahead, 500 steps. `samples` is the submission's to size. Unet3D on an H100: batch 7 (PROJECT_BRIEF.md §2) and 323 ms of compute per step, npy_per_sample's defaults until 2026-10-22 (DESIGN_REVIEW.md §3.78); neither re-measured since.",
+          "is": "The Unet3D job, every accelerator's (item 39, DESIGN_REVIEW.md §3.81): .npz samples sized as the WG's reference workload sizes them (its DLIO configs unet3d_*.yaml, record_length_bytes 146,600,628 and record_length_bytes_stdev 68,341,808; provisional, 2026-10-23, until the preprocessed KiTS19 corpus is measured), 4 DataLoader workers per GPU (read_threads) each 2 batches ahead, 500 steps. `samples` is the submission's to size. Unet3D on an H100: batch 7 and 323 ms of compute per step, the WG's reference values (its DLIO config unet3d_h100.yaml: batch_size, computation_time).",
           "attributes": {
             "api": "sync",
             "writes": "no",

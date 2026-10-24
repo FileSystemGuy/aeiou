@@ -17,8 +17,8 @@
         "inventory": {"default": false},
         "np_chunk": {"default": 262144},
         "prefetch": {"default": 2},
-        "sample_mean": {"default": 146800640},
-        "sample_sd": {"default": 4194304},
+        "sample_mean": {"default": 146600628},
+        "sample_sd": {"default": 68341808},
         "samples": {"default": 50000},
         "step_time": {"default": 323000000},
         "steps": {"default": 500},
@@ -37,15 +37,15 @@
         "inv_read": "abstract",
         "inventory": "abstract",
         "np_chunk": "abstract",
-        "prefetch": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/job.params.json",
-        "sample_mean": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/job.params.json",
-        "sample_sd": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/job.params.json",
-        "samples": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/job.params.json",
+        "prefetch": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "sample_mean": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "sample_sd": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
+        "samples": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
         "step_time": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/h100.params.json",
-        "steps": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/job.params.json",
+        "steps": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
         "sync_every": "abstract",
         "walk": "abstract",
-        "workers": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/job.params.json",
+        "workers": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json",
         "xfer": "abstract"
       }
     }
@@ -53,6 +53,6 @@
   "provenance": {
     "tool": "aeiou-params lock",
     "case": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/case.toml",
-    "fragments": [{"path": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/h100.params.json", "sha256": "179e22abf5d105a5acc8e9fa9307536e373ac7eef1c6b8c4d8d86c076ad6f697"}, {"path": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/job.params.json", "sha256": "f7e75e97e3e8d3227b165b9f0ccb47f615df3b6abfcfe00ad71c1e2295a6f008"}]
+    "fragments": [{"path": "input-pipeline/map/npy-per-sample/cases/unet3d-h100/h100.params.json", "sha256": "10bacf6dcbd0585b2f171deb54ff06c22aefa9a1eae01178ac044939dc07bbad"}, {"path": "input-pipeline/map/npy-per-sample/jobs/unet3d.params.json", "sha256": "2585ec9f741d31b5e39799028a140edf2dce8bcc0ac303446af1966b04161ff3"}]
   }
 }

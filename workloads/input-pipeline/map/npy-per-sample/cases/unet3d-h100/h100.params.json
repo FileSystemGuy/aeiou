@@ -1,3 +1,3 @@
 {"params_version": 2, "abstract": "npy_per_sample",
- "doc": "Unet3D on an H100: batch 7 (PROJECT_BRIEF.md §2) and 323 ms of compute per step, npy_per_sample's defaults until 2026-10-22 (DESIGN_REVIEW.md §3.78); neither re-measured since.",
+ "doc": "Unet3D on an H100: batch 7 and 323 ms of compute per step, the WG's reference values (its DLIO config unet3d_h100.yaml: batch_size, computation_time).",
  "params": {"batch": {"default": 7}, "step_time": {"default": 323000000}}}

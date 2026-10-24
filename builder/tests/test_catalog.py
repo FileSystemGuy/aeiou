@@ -133,7 +133,7 @@ CASE = "checkpointing/dcp-save/cases/toy-6-items"
     ('kind = "example"', 'kind = "example"\nlength = "items_total"', "not an integer parameter of dcp_save"),
     ('kind = "example"', 'kind = "example"\nmetrics_block = 4096', "`metrics_block` is not an attribute"),     # gone with blocks, DESIGN_REVIEW.md §3.79
     ('kind = "example"', 'kind = "use"', "`accelerator` is required when `kind` is use"),
-    ('kind = "example"', 'kind = "example"\naccelerator = "H100-80G"', "`accelerator` = 'H100-80G': not one of h100"),
+    ('kind = "example"', 'kind = "example"\naccelerator = "H100-80G"', "`accelerator` = 'H100-80G': not one of a100, h100, b200"),
 ])
 def test_case_records_are_refused(tree, old, new, message):
     edit(tree / CASE / "case.toml", old, new)
@@ -946,7 +946,7 @@ def test_the_index_holds_every_case_its_attributes_and_the_vocabulary():
     assert [(r["ast"], r["attributes"]["writes"], r["attributes"]["inputs"]) for r in shared["runs"]] == [
         ("lmcache_shared_fs", "yes", "no"), ("lmcache_shared_fs_reader", "no", "yes")]
     unet = next(c for c in doc["cases"] if c["name"] == "npy-per-sample/unet3d-h100")
-    frags = [json.loads((WORKLOADS / unet["dir"] / f).read_text())["doc"] for f in ("job.params.json", "h100.params.json")]
+    frags = [json.loads((WORKLOADS / unet["dir"] / f).read_text())["doc"] for f in ("../../jobs/unet3d.params.json", "h100.params.json")]
     assert unet["runs"][0]["is"] == " ".join(frags) and unet["attributes"]["accelerator"] == "h100"
 
 

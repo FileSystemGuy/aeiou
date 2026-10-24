@@ -10,4 +10,4 @@ Also searched for as: random access, map-style.
 
 - [`file-per-sample`](file-per-sample/): pytorch-dataloader, file-per-sample; cases: imagefolder-jpeg, jpeg-50m
 - [`hdf5`](hdf5/): h5py, hdf5; cases: rgb256-rows
-- [`npy-per-sample`](npy-per-sample/): numpy, npz; cases: npy-140mib, npy-8mib, unet3d-h100
+- [`npy-per-sample`](npy-per-sample/): numpy, npz; cases: npy-140mib, npy-8mib, unet3d-a100, unet3d-b200, unet3d-h100

@@ -1,0 +1,11 @@
+# The case (workloads/attributes.toml, DESIGN_REVIEW.md §3.66): its curated attributes and what it runs.
+kind = "use"
+modality = "volume"
+model-family = "vision"
+accelerator = "b200"
+gpus = [1]          # the GPU counts its parameters hold at; the shape is measured at the first
+
+# the job's fragment, shared by every accelerator, and the model's on this one (DESIGN_REVIEW.md §3.78 points 1 and 5, §3.81)
+[[run]]
+ast = "npy_per_sample"
+params = ["../../jobs/unet3d.params.json", "b200.params.json"]

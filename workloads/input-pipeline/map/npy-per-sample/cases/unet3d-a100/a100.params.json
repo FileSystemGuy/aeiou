@@ -1,0 +1,3 @@
+{"params_version": 2, "abstract": "npy_per_sample",
+ "doc": "Unet3D on an A100: batch 7 and 636 ms of compute per step, the WG's reference values (its DLIO config unet3d_a100.yaml: batch_size, computation_time).",
+ "params": {"batch": {"default": 7}, "step_time": {"default": 636000000}}}

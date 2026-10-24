@@ -120,7 +120,7 @@ fn golden_fingerprints() {
         // the directory walk is on by default since 2026-10-02 (DESIGN_REVIEW §3.54): five ops per class directory and
         // actor in file_per_sample (38,462 directories), four per directory in npy_per_sample; with
         // `enumerate=false` both are what they were; npy_per_sample at the values its defaults held until 2026-10-22, its
-        // job and GPU values required since (the use case unet3d-h100, DESIGN_REVIEW §3.78)
+        // job and GPU values required since (unet3d-h100 until it took the WG sizes, §3.81; DESIGN_REVIEW §3.78)
         // since 2026-10-22 with the defaults its job and GPU values had (required since; DESIGN_REVIEW §3.78)
         ("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10")], 0xfb3215e5607b32ae, 389740),
         ("file_per_sample", 2, &[("batch", "32"), ("workers", "8"), ("prefetch", "2"), ("step_time", "105000000"), ("samples", "50000000"), ("sample_median", "112640"), ("steps", "10"), ("walk", "false")], 0x71628bdb4289c4c8, 5120),
