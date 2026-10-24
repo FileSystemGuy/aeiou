@@ -77,7 +77,7 @@ jobs:
               "$p" -o "$d/share/man/man$sec/$page"
           done
           cp man/*.md "$d/man/"
-          git ls-files workloads | grep -E '(\.ast\.json|params\.json|case\.lock\.json|README\.md|DESCRIPTION\.md|CATALOG\.md|\.toml|shape\.json)$' | tar -cf - -T - | tar -xf - -C "$d"
+          git ls-files workloads | grep -E '(\.ast\.json|params\.json|case\.lock\.json|README\.md|DESCRIPTION\.md|CATALOG\.md|catalog\.json|\.toml|shape\.json)$' | tar -cf - -T - | tar -xf - -C "$d"
           cp wheel/*.whl "$d/wheel/"
           cp QUICKSTART.md LICENSE "$d/"
           tar czf "$d.tar.gz" "$d"

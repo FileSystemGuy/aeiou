@@ -21,6 +21,7 @@ pub mod formats;
 pub mod dryrun;
 pub mod eval;
 pub mod limits;
+pub mod listing;
 pub mod metrics;
 pub mod object;
 pub mod options;

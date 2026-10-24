@@ -54,12 +54,24 @@ Each command prints the options it resolved and where each came from (command li
 `AEIOU_*` environment, `--config` file, default) before it does anything, so the report
 and the command line of a run never disagree.
 
+## Use cases
+
+A case is an abstract with the values of one job, run by its name. `aeiou cases` lists every
+case this release can run, and `--where` narrows the list by the catalog's attributes
+(`aeiou cases --help` gives them all; `workloads/CATALOG.md` says what each means):
+
+```
+aeiou cases --where category=kvcache --where 'kind!=example'
+aeiou cases sift1m-nocache            # one case, and the commands that run it
+aeiou datagen --case diskann-search/sift1m-nocache --root /mnt/sut/aeiou-diskann
+aeiou run --case diskann-search/sift1m-nocache --gpus 1 --root /mnt/sut/aeiou-diskann
+```
+
 ## Other workloads
 
-Every `workloads/**/*.ast.json` runs the same way. `aeiou dry-run ABSTRACT --gpus 1` with no
-parameter file uses the abstract's defaults, which for the training and checkpoint
-workloads are the sizes of a real job (thousands of files, hundreds of steps); scale them
-down with `--param k=v` or a parameter file. The `tfrecord_stream`, `parquet_stream`, and
+Every `workloads/**/*.ast.json` runs the same way. Most abstracts require the values of a
+job, which a case gives (above) or a parameter file does; `aeiou dry-run ABSTRACT --gpus 1`
+alone names every value it still lacks, and `--param k=v` gives one. The `tfrecord_stream`, `parquet_stream`, and
 `hdf5_map` workloads read container files (TFRecord, Parquet, HDF5) that `aeiou datagen`
 writes as it writes any other. Each abstract's dataset lands under its `--root` (`train/`
 for `file_per_sample` and `parquet_stream` alike), so give each workload a root of its own:

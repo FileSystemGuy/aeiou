@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::Command;
 
-const SUBCOMMANDS: [&str; 4] = ["check", "dry-run", "datagen", "run"];
+const SUBCOMMANDS: [&str; 5] = ["check", "dry-run", "datagen", "run", "cases"];
 
 fn help(sub: &str) -> String {
     let o = Command::new(env!("CARGO_BIN_EXE_aeiou")).arg(sub).arg("--help").env_remove("AEIOU_CONFIG").output().unwrap();

@@ -35,7 +35,7 @@ pub const ENV_CONFIG: &str = "AEIOU_CONFIG";
 /// other unrecognized `AEIOU_*` is reported as a warning in the options block.
 pub const RESERVED_ENV: &[&str] = &[ENV_CONFIG, "AEIOU_SCHEMA_DIR", "AEIOU_RUNNER", "AEIOU_RSH", "AEIOU_COORD_HEARTBEAT_MS", "AEIOU_KEEP_TEST_DIRS"];
 /// The subcommands a config file may have a table for.
-pub const SUBCOMMANDS: &[&str] = &["check", "dry-run", "datagen", "run"];
+pub const SUBCOMMANDS: &[&str] = &["check", "dry-run", "datagen", "run", "cases"];
 /// Every option name of every subcommand (the long flag, or the positional's name), so an
 /// `AEIOU_*` for another subcommand's option is left alone, and anything else warns. A test in
 /// `main.rs` keeps it equal to the clap definitions.
@@ -44,7 +44,7 @@ pub const ALL_OPTIONS: &[&str] = &[
     "iowq-max-workers", "sqpoll", "sqpoll-shared", "defer-taskrun", "coop-taskrun", "aio-depth", "mmap-mode", "mmap-consume", "object-threads", "object-part-mib", "rank", "ranks",
     "coordinator", "rank-rotate", "subset", "expect-fingerprint", "expect-dataset-id", "max-gap", "require-cold", "drop-caches", "clean-namespaces",
     "ignore-limits", "ignore-space", "report-json", "report-takes", "dedupe", "compress", "dataset", "gpu", "steps", "limit", "metrics", "metrics-block",
-    "metrics-json", "st-blksize", "writers", "progress-secs", "resume", "grow", "shrink", "settle", "config",
+    "metrics-json", "st-blksize", "writers", "progress-secs", "resume", "grow", "shrink", "settle", "config", "name", "where", "json",
 ];
 
 /// Where a value came from.

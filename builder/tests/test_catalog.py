@@ -905,3 +905,62 @@ def test_a_search_starts_new_when_the_old_shape_is_unreadable_and_nothing_stale_
     mechanisms, _ = catalog.load(tree, ATTRS)
     shapes = catalog.measure_all(mechanisms, ATTRS, "false", every=False)
     assert shapes[tree / CASE / "shape.json"] == (WORKLOADS / CASE / "shape.json").read_text()
+
+
+# ---------------------------------------------------------------- catalog.json, what `aeiou cases` reads
+
+def test_the_index_holds_every_case_its_attributes_and_the_vocabulary():
+    """`catalog.json` (item 40, DESIGN_REVIEW §3.80): every case a lock names, in the tree's
+    order, with its curated attributes (the mechanism's and its own), its GPU counts, its lock
+    and description, and per run what it does (the AST's doc), what it is (its parameter files'
+    docs), and its derived attributes and measured classes; and the vocabulary, every attribute
+    with its values (a measured one's classes), in the dictionary's order."""
+    mechanisms, problems = catalog.load(WORKLOADS, ATTRS)
+    assert problems == []
+    shapes = {catalog._shape_path(m, c): catalog._shape_path(m, c).read_text() for m, c, _ in catalog._targets(mechanisms)}
+    doc = json.loads(catalog.render_index(mechanisms, ATTRS, shapes))
+    assert (doc["catalog_version"], doc["tool"]) == (1, "aeiou-catalog")
+    assert [v["name"] for v in doc["attributes"]] == list(ATTRS)
+    for v, (name, a) in zip(doc["attributes"], ATTRS.items()):
+        assert (v["source"], v["level"], v["multiple"]) == (a["source"], a["level"], bool(a.get("multiple")))
+        assert v["values"] == ([c["name"] for c in a["classes"]] if a["source"] == "measured" else list(a["values"]))
+    locks = sorted(WORKLOADS.rglob("case.lock.json"))
+    assert sorted(c["lock"] for c in doc["cases"]) == sorted(str(p.relative_to(WORKLOADS)) for p in locks)
+    assert [c["name"] for c in doc["cases"]] == [json.loads((WORKLOADS / c["lock"]).read_text())["name"] for c in doc["cases"]]
+    faiss = next(c for c in doc["cases"] if c["name"] == "faiss-ivf-ondisk/sift1m-ivf1024-pq32")
+    assert faiss["dir"] == FAISS and faiss["description"] == f"{FAISS}/DESCRIPTION.md" and faiss["gpus"] == [1]
+    assert {k: faiss["attributes"][k] for k in ("category", "application", "kind", "modality")} == {
+        "category": "vector-search", "application": "faiss", "kind": "example", "modality": "vectors"}
+    (run,) = faiss["runs"]
+    ast = json.loads((WORKLOADS / "vector-search/faiss-ivf-ondisk/faiss_ivf_ondisk.ast.json").read_text())
+    pset = json.loads((WORKLOADS / FAISS / "params.json").read_text())
+    shape = json.loads((WORKLOADS / FAISS / "shape.json").read_text())["runs"][0]
+    assert (run["ast"], run["does"], run["is"]) == ("faiss_ivf_ondisk", ast["doc"], pset["doc"])
+    assert {k: run["attributes"][k] for k in ("api", "writes", "inputs")} == {"api": "mmap", "writes": "no", "inputs": "no"}
+    assert run["attributes"]["status"] in ATTRS["status"]["values"]
+    for name, a in ATTRS.items():
+        if a["source"] == "measured" and shape["attributes"][name]["class"] is not None:
+            assert run["attributes"][name] == shape["attributes"][name]["class"], name
+    # a case of two runs: each its own derived attributes; fragments' docs joined in order
+    shared = next(c for c in doc["cases"] if c["name"] == "lmcache-shared-fs/sharegpt-chat")
+    assert [(r["ast"], r["attributes"]["writes"], r["attributes"]["inputs"]) for r in shared["runs"]] == [
+        ("lmcache_shared_fs", "yes", "no"), ("lmcache_shared_fs_reader", "no", "yes")]
+    unet = next(c for c in doc["cases"] if c["name"] == "npy-per-sample/unet3d-h100")
+    frags = [json.loads((WORKLOADS / unet["dir"] / f).read_text())["doc"] for f in ("job.params.json", "h100.params.json")]
+    assert unet["runs"][0]["is"] == " ".join(frags) and unet["attributes"]["accelerator"] == "h100"
+
+
+def test_the_index_is_written_and_checked_as_catalog_md_is(tree, capsys):
+    """`write` writes catalog.json beside CATALOG.md and `check` fails when it differs from what
+    the records give now; a mechanism with no case is in no row (no lock to run)."""
+    assert catalog.main(["write", "--workloads", str(tree), "--no-shapes"]) == 0
+    index = tree / "catalog.json"
+    assert "wrote catalog.json" in capsys.readouterr().out
+    doc = json.loads(index.read_text())
+    assert sorted(c["name"] for c in doc["cases"]) == ["dcp-save/four-items", "dcp-save/toy-6-items"]
+    assert catalog.main(["check", "--workloads", str(tree), "--no-shapes"]) == 0
+    capsys.readouterr()
+    doc["cases"].pop()
+    index.write_text(json.dumps(doc))
+    assert catalog.main(["check", "--workloads", str(tree), "--no-shapes"]) == 1
+    assert "catalog.json: differs from what aeiou-catalog derives now (aeiou-catalog write)" in capsys.readouterr().out

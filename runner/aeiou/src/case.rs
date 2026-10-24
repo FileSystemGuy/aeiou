@@ -183,7 +183,7 @@ pub fn workloads_dir(given: Option<&Path>) -> Result<PathBuf> {
 /// `name` (`mechanism/case`) or by its case alone; none or several refused, every match listed,
 /// and with none every lock that could not be read, which may be the one named.
 pub fn find(workloads: &Path, name: &str) -> Result<PathBuf> {
-    let (mut found, mut unread) = (Vec::new(), Vec::new());
+    let (mut found, mut unread, mut all) = (Vec::new(), Vec::new(), Vec::new());
     let mut stack = vec![workloads.to_path_buf()];
     while let Some(d) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&d) else { continue };
@@ -193,8 +193,8 @@ pub fn find(workloads: &Path, name: &str) -> Result<PathBuf> {
                 stack.push(p);
             } else if p.file_name().and_then(|n| n.to_str()) == Some(LOCK_FILE) {
                 match Lock::load(&p) {
-                    Ok(l) if l.name == name || l.name.split_once('/').map(|(_, c)| c) == Some(name) => found.push((l.name, p)),
-                    Ok(_) => {}
+                    Ok(l) if crate::listing::matches_name(&l.name, name) => found.push((l.name, p)),
+                    Ok(l) => all.push(l.name),
                     Err(e) => unread.push(format!("{e:#}")),
                 }
             }
@@ -208,7 +208,10 @@ pub fn find(workloads: &Path, name: &str) -> Result<PathBuf> {
     };
     match found.len() {
         1 => Ok(found.remove(0).1),
-        0 => crate::usage!("--case {name}: no lock of that name under {} (a case's lock is cases/<case>/{LOCK_FILE}, made by `aeiou-params lock`){unread}", workloads.display()),
+        0 => {
+            all.sort();
+            crate::usage!("--case {name}: no lock of that name under {} (a case's lock is cases/<case>/{LOCK_FILE}, made by `aeiou-params lock`){}{unread}", workloads.display(), crate::listing::not_found(&all, name))
+        }
         _ => crate::usage!("--case {name}: {} locks match ({}): name it as mechanism/case", found.len(), found.iter().map(|(n, p)| format!("{n} at {}", p.display())).collect::<Vec<_>>().join(", ")),
     }
 }

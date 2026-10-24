@@ -385,6 +385,11 @@ rule V3 judges a required parameter in an `at` offset when its value is given),
 `faiss_ivf_ondisk`, its index, the search's configuration and load, and its CPU, the prefetch
 threads derived.
 
+`aeiou cases` (2026-10-23, item 40) lists the use cases a binary can run by `--case NAME`,
+filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
+one with the commands that run it; it reads `workloads/catalog.json`, which `aeiou-catalog
+write` generates beside `CATALOG.md`, and its `--help` gives the whole vocabulary.
+
 Not built, in rough order of interest:
 
 - ~~The abstract rendered as prose (`PROJECT_BRIEF.md` §6 item 27), from the AST and the case's
@@ -440,9 +445,7 @@ Not built, in rough order of interest:
   `tfrecord_stream`, each fitted to an example case that replaces its `unsettled` one (item
   36); a lognormal's `sigma` as an expression, so a case gives it (item 37); `faiss_ivf_ondisk`'s
   index-file reads derived from its arrays' sizes, as stdio's buffer follows `st_blksize` (item
-  38's open point); a use case per accelerator, `unet3d-h100` the first (item 39); and
-  `aeiou cases`, the use cases a binary can run, listed and filtered by the catalog's
-  attributes (item 40).
+  38's open point); and a use case per accelerator, `unet3d-h100` the first (item 39).
 
 ## License
 

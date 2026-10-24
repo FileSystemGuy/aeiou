@@ -79,7 +79,10 @@ large), read from the dry run's quarter-octave histograms, so a size is a bucket
 bound. The shape also keeps the first seed's op counts by kind, its bytes read and written,
 and each dataset's projection (samples, files, directories, bytes; `shape_version` 2 since
 2026-10-14). `workloads/CATALOG.md` is rendered from the records, the shapes, and the
-dictionary: the cases, a paragraph on each, their shapes, and the glossary.
+dictionary: the cases, a paragraph on each, their shapes, and the glossary. Beside it,
+`workloads/catalog.json` is the same catalog for a program: the vocabulary, and every case a
+lock names with its attributes (curated, derived, and the measured classes), GPU counts, lock,
+description, and what each run does and is; **aeiou cases** (**aeiou**(1)) reads it.
 
 Each case also has a **description**, `DESCRIPTION.md` in its directory
 (`DESCRIPTION.defaults.md` in a mechanism with no case): the abstract in prose, for readers
@@ -130,8 +133,8 @@ dataset projections (the first seed's at the case's own length, which the descri
 Make any category or class directory the dictionary defines and the tree lacks, validate
 the records, measure each stale shape (every one under `--all-shapes`) at the case's own
 parameters and find its check length,
-and write the shapes, the descriptions, `CATALOG.md`, and the category and class READMEs
-where they changed.
+and write the shapes, the descriptions, `CATALOG.md`, `catalog.json`, and the category and
+class READMEs where they changed.
 
 - **--workloads** *DIR*
 
@@ -141,7 +144,7 @@ where they changed.
   The runner binary. Default `aeiou`, found on the `PATH`.
 - **--no-shapes**
 
-  Write `CATALOG.md`, the descriptions, and the READMEs alone, from the committed shapes; a
+  Write `CATALOG.md`, `catalog.json`, the descriptions, and the READMEs alone, from the committed shapes; a
   shape measured on another AST or parameter file is reported.
 - **--jobs** *N*
 

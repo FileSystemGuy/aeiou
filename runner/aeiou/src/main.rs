@@ -1,7 +1,8 @@
 //! `aeiou`: the runner binary. Subcommands: `check` (validate ASTs and print their hashes,
 //! as `schema/check.py` does), `dry-run` (the op streams and the fingerprint, no I/O),
 //! `datagen` (write the corpus and its manifests), and `run` (execute against a directory
-//! through the abstract's I/O APIs, on one host or on several through the TCP coordinator).
+//! through the abstract's I/O APIs, on one host or on several through the TCP coordinator), and
+//! `cases` (the use cases it can run, from the catalog's index).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use aeiou::backend::{Api, BackendKind, Cache, MmapConsume, MmapMode, S3Api};
 use aeiou::coord::{Coordinator, Local, Server, Tcp};
@@ -50,6 +51,26 @@ enum Cmd {
     /// Execute the abstract against --root through the I/O APIs it declares, or --posix and --s3 (several hosts: --ranks R --rank r --coordinator HOST:PORT on each).
     #[command(after_help = NEGATION, override_usage = "aeiou run [OPTIONS] --gpus <GPUS> --root <DIR> <ABSTRACT_PATH>\n       (--root may also come from $AEIOU_ROOT or `root` in the [run] table of the config file)")]
     Run(RunCmd),
+    /// List the use cases this binary can run, filtered by the catalog's attributes, or show one and the commands that run it.
+    #[command(override_usage = "aeiou cases [OPTIONS] [NAME]")]
+    Cases(CasesArgs),
+}
+
+#[derive(Args)]
+struct CasesArgs {
+    /// One case by its lock's name (`mechanism/case`, or the case alone when one matches): its records, its attributes, what its lock fixes, and the commands that run it.
+    name: Option<String>,
+    /// Keep the cases that have a value of an attribute (ATTR=VALUE) or drop them (ATTR!=VALUE); several must all hold. The attributes and their values are below; workloads/CATALOG.md says what each means.
+    #[arg(long = "where", value_name = "ATTR=VALUE|ATTR!=VALUE")]
+    filters: Vec<String>,
+    /// The cases as JSON, each as the catalog's index holds it, with the options and the workloads directory.
+    #[arg(long = "[no-]json", alias = "json", overrides_with_all = ["json", "no_json"])]
+    json: bool,
+    #[arg(long = "no-json", hide = true, overrides_with_all = ["no_json", "json"])]
+    no_json: bool,
+    /// aeiou's workloads/ directory, whose catalog.json lists the cases [default: bin/../workloads beside the executable].
+    #[arg(long, value_name = "DIR")]
+    workloads: Option<PathBuf>,
 }
 
 /// Every boolean has a negation, shown as `--[no-]x` (runner/REFERENCE.md §14).
@@ -126,7 +147,7 @@ struct ShapeArgs {
     /// A parameter file (`.params.json`, schema/README.md §8), applied over the defaults and under --param; repeatable, in order.
     #[arg(long = "params-file", value_name = "FILE", help_heading = "Workload")]
     param_files: Vec<PathBuf>,
-    /// A use case by its lock's name (`mechanism/case`, or the case alone when one matches), found under aeiou's workloads/ (DESIGN_REVIEW.md §3.78); in place of ABSTRACT.
+    /// A use case by its lock's name (`mechanism/case`, or the case alone when one matches), found under aeiou's workloads/ (DESIGN_REVIEW.md §3.78); in place of ABSTRACT. `aeiou cases` lists them; workloads/CATALOG.md describes them.
     #[arg(long, value_name = "NAME", help_heading = "Workload", conflicts_with_all = ["abstract_path", "case_file"])]
     case: Option<String>,
     /// A use case by its lock's path (`case.lock.json`, aeiou-params lock), no search; in place of ABSTRACT.
@@ -844,7 +865,6 @@ struct DryRunArgs {
 }
 
 fn main() {
-    use clap::CommandFactory;
     // `args_os`: an argument that is not UTF-8 is clap's to judge (a path takes it, text is a
     // usage error), never a panic here
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -885,7 +905,20 @@ fn main() {
     if let Some(a) = args.iter().skip(1).find(|a| a.starts_with("--[no-]")) {
         usage_exit(&format!("{a}: `--[no-]x` is the help's notation for a boolean and its negation; type --{0} to turn it on or --no-{0} to turn it off", &a["--[no-]".len()..]));
     }
-    let cli = match Cli::try_parse() {
+    // `aeiou cases --help` gives the vocabulary of the catalog it would read (--workloads, or the default's)
+    let command = match sub.as_deref() {
+        Some("cases") => {
+            let given = args.iter().skip(1).enumerate().find_map(|(i, a)| match a.strip_prefix("--workloads") {
+                Some("") => args.get(i + 2).cloned(),
+                Some(rest) => rest.strip_prefix('=').map(str::to_string),
+                None => None,
+            });
+            let vocabulary = aeiou::listing::vocabulary_help(aeiou::case::workloads_dir(given.as_deref().map(Path::new)));
+            Cli::command().mut_subcommand("cases", |c| c.after_help(vocabulary))
+        }
+        _ => Cli::command(),
+    };
+    let cli = match command.try_get_matches_from(std::env::args_os()).and_then(|m| Cli::from_arg_matches(&m)) {
         Ok(cli) => cli,
         Err(e) => {
             use clap::error::ErrorKind;
@@ -934,7 +967,52 @@ fn real_main(cli: Cli) -> Result<()> {
         Cmd::DryRun(a) => dry_run(a, config),
         Cmd::Datagen(a) => datagen_cmd(a, config),
         Cmd::Run(a) => run_cmd(a, config),
+        Cmd::Cases(a) => cases_cmd(a, config),
     }
+}
+
+/// `aeiou cases` (DESIGN_REVIEW.md §3.80): the catalog's index of the cases, listed, filtered,
+/// or one shown; text or JSON.
+fn cases_cmd(a: CasesArgs, config: Option<&Path>) -> Result<()> {
+    use aeiou::listing::{self, Filter, Index};
+    if a.name.is_some() && !a.filters.is_empty() {
+        aeiou::usage!("--where filters the list; NAME shows one case: give one or the other");
+    }
+    let mut l = Layers::new("cases", config)?;
+    l.fixed("name", &a.name, a.name.is_some())?;
+    l.fixed("workloads", &a.workloads, a.workloads.is_some())?;
+    let filters = l.layered("where", (!a.filters.is_empty()).then(|| a.filters.clone()), Some(Vec::new()))?.unwrap_or_default();
+    let json = l.flag("json", neg(a.json, a.no_json), false)?;
+    l.finish()?;
+    let workloads = aeiou::case::workloads_dir(a.workloads.as_deref())?;
+    let index = Index::load(&workloads)?;
+    let mut out = stdout();
+    if let Some(name) = &a.name {
+        let case = index.find(name)?;
+        let lock = listing::lock_of(case, &workloads)?;
+        if json {
+            let runs: Vec<serde_json::Value> = case["runs"].as_array().into_iter().flatten().map(|r| {
+                let (locked, defaults, required) = listing::states(&lock, r["ast"].as_str().unwrap_or(""));
+                serde_json::json!({"run": r["ast"], "locked": locked, "defaults": defaults, "required": required})
+            }).collect();
+            let doc = serde_json::json!({"options": l.json(), "workloads": workloads.display().to_string(), "case": case, "lock": runs});
+            writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+        } else {
+            l.print(&mut out)?;
+            write!(out, "{}", listing::render_one(case, &lock, &index))?;
+        }
+        return Ok(());
+    }
+    let filters = filters.iter().map(|f| Filter::parse(f, &index)).collect::<Result<Vec<_>>>()?;
+    let shown: Vec<&serde_json::Value> = index.cases.iter().filter(|c| filters.iter().all(|f| f.holds(c))).collect();
+    if json {
+        let doc = serde_json::json!({"options": l.json(), "workloads": workloads.display().to_string(), "total": index.cases.len(), "cases": shown});
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+    } else {
+        l.print(&mut out)?;
+        write!(out, "{}", listing::render_list(&shown, index.cases.len(), &index))?;
+    }
+    Ok(())
 }
 
 fn datagen_cmd(mut a: DatagenArgs, config: Option<&Path>) -> Result<()> {

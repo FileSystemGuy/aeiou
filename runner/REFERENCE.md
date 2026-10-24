@@ -2444,3 +2444,42 @@ and last op on a dataset file, every path a call names and every file a write go
 `--root`, `/proc`, `/sys`, or `/dev`. Outside the runner's reach: a shell redirect of its
 output, and the `--report-json` path, belong off the system under test.
 
+## 18. Listing the cases: `aeiou cases` (2026-10-23)
+
+`aeiou cases` lists the use cases a binary can run by `--case NAME` (item 40,
+`DESIGN_REVIEW.md` §3.80). It reads `workloads/catalog.json` (`catalog_version` 1), the index
+`aeiou-catalog write` generates beside `CATALOG.md` and `check` holds to the records, and
+never the records themselves: the catalog's derivations (the API, writes, inputs, the
+captures' status, the measured classes) have one author, the Python tool. The index holds the
+vocabulary, a list of `{name, source, level, multiple, values}` in the dictionary's order (a
+measured attribute's values are its classes), and every case a lock names, in the tree's
+order: `name` (the lock's), `dir`, `lock`, `description`, `gpus`, its curated `attributes`
+(the mechanism's and its own), and per run `ast`, `does` (the AST's doc), `is` (its parameter
+files' docs, in order), and its derived and measured `attributes`. A mechanism with no case
+has no lock to run, and no row.
+
+- **The list.** Every case, of every kind, with its kind, GPU counts, category and class,
+  and application, and what each run does. `--where ATTR=VALUE` keeps the cases with the value
+  and `--where ATTR!=VALUE` drops them; every filter must hold. A case has a value when it or
+  its mechanism records it (one of several, for an attribute of several values) or when any of
+  its runs derives or measures it, so `--where inputs=yes` keeps a case whose reader reads what
+  its writer wrote. An attribute or a value outside the vocabulary is a usage error naming the
+  valid ones.
+- **One case.** `aeiou cases NAME` finds the case as `--case` finds a lock (`mechanism/case`,
+  or the case alone when one matches; several refused with each, none with the names near
+  it), and prints its records' paths, its attributes in the dictionary's order, per run what
+  it does and is, its attributes, and what its lock fixes (`locked`), leaves to a run
+  (`defaults`), and requires of a submission (`required`), then the `datagen` and `run`
+  commands at its first GPU count (`--case-run` for a lock of several runs, `--param NAME=VALUE`
+  for each required value). *NAME* with `--where` on the command line is a usage error.
+- **The vocabulary** is the help's: `aeiou cases --help` reads the index of `--workloads` (or
+  the default's) when it prints, every attribute with its values and no meanings, which
+  `CATALOG.md` gives; with no index it says why.
+- **Near names.** A name that matches nothing, for `aeiou cases NAME` and for `--case NAME` of
+  `dry-run`, `datagen`, and `run`, names those whose case contains it (three characters or
+  more) or is within two edits of it, eight at most, and `aeiou cases`.
+- **Options** (§14). *NAME* and `--workloads` are fixed, as for `--case`; `--where` (a list:
+  `AEIOU_WHERE` whitespace-separated, an array in the `[cases]` table) and `--[no-]json` are
+  layered, so a standing filter can live in a config file. The options block comes first, as
+  for every subcommand; `--json` carries it in the document instead, with the workloads
+  directory, the number of cases, and the matching rows as the index holds them.

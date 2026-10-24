@@ -7346,7 +7346,7 @@ against them.
 or nothing); a per-mechanism block (a knob that extents make unnecessary); a larger guard (20 GB
 for a unit no application reads in).
 
-### 3.80 Listing the use cases: `aeiou cases` (raised by the user 2026-10-23; the shape decided the same day, not built)
+### 3.80 Listing the use cases: `aeiou cases` (raised by the user 2026-10-23; the shape decided and built the same day)
 
 **The problem.** A use case runs by name (`--case NAME`, §3.78), but nothing tells a user which
 names exist or what each one is. `CATALOG.md` has it, as a document to read; the user expects
@@ -7357,8 +7357,21 @@ both useful and simple.
 **Decided (the user, on the recommendation).** A subcommand of the runner, not of
 `aeiou-catalog`: the person running a case on a system under test has the binary, while the
 Python wheel ships for authors; the release already carries every record under `workloads/`
-beside the binary, where `--case` looks; and the measured attributes' classes are already
-written in each `shape.json`, so the runner reads tags and re-derives nothing.
+beside the binary, where `--case` looks; ~~and the measured attributes' classes are already
+written in each `shape.json`, so the runner reads tags and re-derives nothing~~.
+
+**What it reads: a generated index, not the records** (the user, 2026-10-23, on the
+recommendation, once building showed it). Four attributes, `api`, `writes`, `inputs`, and
+`status`, are written in no record: `aeiou-catalog` derives them from the AST and the captures'
+verdicts. A Rust reader of the records would re-derive them, a second implementation held to the
+first by a test. Instead `aeiou-catalog write` also writes `workloads/catalog.json`, every case's
+attributes (curated, derived, and the measured classes), GPU counts, lock, description, and
+docs, with the vocabulary; `check` holds it byte for byte as it holds `CATALOG.md`, and the
+release ships it. The runner reads one JSON file and parses no TOML. The cost: a case someone
+adds appears only after `aeiou-catalog write`, but authoring a case already needs the Python
+tools (`aeiou-params lock`). The vocabulary is a list, not an object, so a reader keeps the
+dictionary's order without depending on its JSON library's (the runner's `serde_json` sorts
+keys).
 
 - `aeiou cases` lists **every** case of every kind, the kind its own column. Most cases today
   are traced examples or unsettled, so hiding them would leave the list nearly empty; the
@@ -7374,9 +7387,10 @@ written in each `shape.json`, so the runner reads tags and re-derives nothing.
   submission must still give, its `DESCRIPTION.md`, and the commands that run it.
 - A `--case NAME` matching nothing names the near matches and `aeiou cases`.
 
-**The cost.** A second reader of the records, in Rust, beside the Python one that writes the
+~~**The cost.** A second reader of the records, in Rust, beside the Python one that writes the
 catalog. A test holds `aeiou cases --json` equal to what `aeiou-catalog` loads from the
-committed tree, as the two checkers are held to agree.
+committed tree, as the two checkers are held to agree.~~ No second reader: the index above.
+`aeiou cases --json` prints the index's rows as they are.
 
 **Exclusion is `!=`, not `--no-where`** (the user, 2026-10-23, after first asking for
 `--no-where`): every `--no-x` of the suite turns a boolean off, the last one on the line winning
@@ -7384,8 +7398,14 @@ committed tree, as the two checkers are held to agree.
 kind=example` would read as the last one winning where both apply. One flag, its operator in
 the value, keeps the convention; `!` wants quoting in some shells.
 
-**Open.** How a repeated `where` reads from a `--config` file (a TOML array, to be settled
-against `runner/REFERENCE.md` §14).
+~~**Open.** How a repeated `where` reads from a `--config` file (a TOML array, to be settled
+against `runner/REFERENCE.md` §14).~~ Settled in the build: `where` is a layered list, as
+`--endpoint` is (§14): an array of strings in the `[cases]` table, whitespace-separated in
+`AEIOU_WHERE`, replaced whole by a higher layer; *NAME* and `--workloads` are fixed, as for
+`--case`.
+
+**Built** (`runner/REFERENCE.md` §18, `builder/REFERENCE.md` §8): `aeiou cases`, the index, and
+the near names of a `--case` that matches nothing.
 
 **Considered and not done.** A pointer to `CATALOG.md` alone (a document, not a query, and the
 cases multiply); a search tool in the Python wheel (not on the hosts that run cases); free-text

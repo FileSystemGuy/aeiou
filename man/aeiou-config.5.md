@@ -28,10 +28,11 @@ through four layers, a higher one replacing a lower one's value:
 
 The layers exist for one case above all: `--rank` from the environment. A launcher sets
 `AEIOU_RANK` from its own rank variable and the same command line runs on every host.
-"Replace" is the only merge rule. The one list, `--endpoint`, is replaced whole: a list
-from a higher layer is the list in effect, never merged with a lower one's. In the
-environment its values are separated by whitespace (`AEIOU_ENDPOINT="kv=/a sysp=/b"`), in
-the file it is an array of strings (`endpoint = ["kv=/a", "sysp=/b"]`).
+"Replace" is the only merge rule. The lists, `--endpoint` of `run` and `datagen` and
+`--where` of `cases`, are replaced whole: a list from a higher layer is the list in effect,
+never merged with a lower one's. In the environment its values are separated by whitespace
+(`AEIOU_ENDPOINT="kv=/a sysp=/b"`), in the file it is an array of strings (`endpoint =
+["kv=/a", "sysp=/b"]`).
 
 **Two kinds of option.** A *fixed* option is the command line's alone, and the environment
 and the file are refused when they name it: nothing the workload's identity, a dataset id,
@@ -102,7 +103,7 @@ non-interactive shell does not read the profile an interactive one does.
 
 TOML. One table per subcommand, keys spelled as the long flags, values typed as the flag's
 value: integers, numbers (`time-scale`, `max-gap`, `progress-secs`; an integer is taken),
-strings, booleans, and for `endpoint` an array of strings (or one string).
+strings, booleans, and for `endpoint` and `where` an array of strings (or one string).
 
 ```toml
 [run]
@@ -184,6 +185,9 @@ run compares), and for **aeiou datagen** `--ignore-space` (a safety check) and `
 `--params-file`) and the output and metrics flags. Layered: `--threads`, `--ranks`.
 
 **aeiou check.** Only `--config` itself; the block shows the files and the config file.
+
+**aeiou cases.** Fixed: *NAME* and `--workloads`, as for `--case`. Layered: `--where` (a
+standing filter, `where = ["kind!=example"]` in `[cases]`) and `--json`.
 
 `--root` is required from some layer for `run` and `datagen`; what no layer supplies is
 listed with everything else the command lacks, in one usage error.

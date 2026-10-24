@@ -791,6 +791,15 @@ runs are deterministic (positional randomness, no timing) and each search depend
 case's numbers alone, so the files are the same at any `N`; memory, not the CPUs, may bound
 `N`: a large case's dry run under `--metrics-json` takes gigabytes.
 
+*2026-10-23 (item 40, `DESIGN_REVIEW.md` §3.80):* `write` also writes `workloads/catalog.json`,
+the catalog for a program (`render_index`, `INDEX_VERSION` 1), and `check` holds it to the
+records as it holds `CATALOG.md`: the vocabulary as a list in the dictionary's order (a measured
+attribute's values its classes), and every case a lock names, in the tree's order, with its
+curated attributes, GPU counts, lock, description, and per run what it does (the AST's doc),
+what it is (its parameter files' docs), and its derived attributes and measured classes. The
+runner's `aeiou cases` reads it and never the records (`runner/REFERENCE.md` §18), so the
+derivations have this one author.
+
 *Choices made in the build, open to revision:* the shape at the case's own length, re-checked
 at a shorter one (above); KV cases measured in chunk-sized blocks (the shares are those at
 4 KiB, the work far less); a training job's `steps` is never a `length`; a tolerance may give
