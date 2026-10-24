@@ -86,9 +86,17 @@ clone the repository, which holds the authoring scripts) or to compare a trace w
 abstract:
 
 ```
-python3 -m venv .venv && .venv/bin/pip install 'aeiou[formats] @ ./wheel/aeiou-0.2.1-py3-none-any.whl'
-# or: uv tool install 'aeiou[formats] @ ./wheel/aeiou-0.2.1-py3-none-any.whl'
+uv venv --python "$(cat wheel/python-version)" --managed-python .venv
+uv pip install --python .venv/bin/python --require-hashes -r wheel/requirements.txt
+uv pip install --python .venv/bin/python --no-deps wheel/aeiou-0.2.1-py3-none-any.whl
 ```
+
+That is the environment the release was tested in: the Python in `wheel/python-version`, one
+[uv](https://docs.astral.sh/uv/) downloads (never the system's), and every library at the
+version and hash in `wheel/requirements.txt`. Without uv, `python3 -m venv .venv &&
+.venv/bin/pip install --require-hashes -r wheel/requirements.txt && .venv/bin/pip install
+--no-deps wheel/aeiou-0.2.1-py3-none-any.whl` installs the same libraries under whatever
+Python 3.12 or later the system has.
 
 The manual pages, in `share/man/` and as Markdown in `man/`: **aeiou**(1), the runner;
 **aeiou-launch**(1); **aeiou-build**(1), **aeiou-params**(1), **aeiou-trace**(1),

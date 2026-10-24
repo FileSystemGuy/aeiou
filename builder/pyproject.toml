@@ -24,12 +24,25 @@ aeiou-trace = "aeiou.trace:main"
 aeiou-catalog = "aeiou.catalog:main"
 aeiou-header = "aeiou.header:main"
 
+# Tools locked with the rest and installed only when asked (`uv sync --group NAME`): PyInstaller, which
+# makes the release's one-file aeiou-header (.github/workflows/release.yml), and the coverage of the
+# local full check (`pytest --cov`, coverage's `patch = subprocess` for the tools run as processes)
+[dependency-groups]
+release = ["pyinstaller==6.22.3"]
+coverage = ["pytest-cov>=7.1", "coverage>=7.16"]
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aeiou"]
+
+# The interpreter is builder/.python-version, exactly, and always one uv downloads, never the system's
+# (DESIGN_REVIEW.md §3.82); uv itself is this version, which setup-uv in CI reads from here.
+[tool.uv]
+required-version = "==0.13.5"
+python-preference = "only-managed"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

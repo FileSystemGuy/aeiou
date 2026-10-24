@@ -1,0 +1,7 @@
+# The Rust every build uses, here and in CI and the release (DESIGN_REVIEW.md §3.82): rustup reads
+# this from any directory of the checkout, so cargo run from builder/ with --manifest-path gets it
+# too. llvm-tools for cargo-llvm-cov. A newer Rust is a deliberate change of this line.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["llvm-tools-preview"]

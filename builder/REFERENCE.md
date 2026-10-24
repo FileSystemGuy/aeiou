@@ -27,7 +27,7 @@ builder/
 ```
 
 ```
-cd builder && uv sync --extra test --extra formats     # or: pip install -e '.[test,formats]'
+cd builder && uv sync --locked --extra test --extra formats     # uv, Python, and packages as pinned (DESIGN_REVIEW.md §3.82)
 uv run aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')   # each AST beside its script
 uv run pytest
 uv run aeiou-build --check $(find ../workloads -name '*.py' -not -path '*/kit/*')     # drift check (CI)

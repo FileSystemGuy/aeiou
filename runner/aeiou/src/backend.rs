@@ -890,7 +890,7 @@ impl Mmap {
     fn wrote(file: &OpenFile, end: Option<i64>) {
         match end {
             Some(end) => {
-                let _ = file.size.fetch_update(Ordering::AcqRel, Ordering::Acquire, |s| (s >= 0 && s < end).then_some(end));
+                let _ = file.size.try_update(Ordering::AcqRel, Ordering::Acquire, |s| (s >= 0 && s < end).then_some(end));
             }
             // at the descriptor's position, which this backend does not follow: ask again
             None => file.size.store(-1, Ordering::Release),

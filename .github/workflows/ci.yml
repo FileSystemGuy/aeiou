@@ -13,12 +13,19 @@ on:
 # integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers, the
 # runner's test binaries under cargo-nextest (every test its own process, 4 at a time; there
 # are no doctests for it to miss), and a kit pair's four seeds as four processes.
+# Every tool is a version the repository names (DESIGN_REVIEW.md §3.82): the image, Rust
+# (rust-toolchain.toml), nextest, uv (builder/pyproject.toml's required-version, by checksum), and
+# Python (builder/.python-version, always one uv downloads, never the image's), the packages
+# from uv.lock. strace is the image's, so a new image is a deliberate change here.
 jobs:
   abstracts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version-file: builder/pyproject.toml
+          checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
       - name: Install (locked)
         working-directory: builder
         run: uv sync --locked --extra test --extra formats
@@ -39,15 +46,18 @@ jobs:
           done
 
   runner-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: Rust, the version rust-toolchain.toml names
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: runner
           shared-key: runner
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.149
       - name: MinIO server, for the object engine's tests (the pinned release, as runner-object's)
         run: |
           curl -sSfL -o /tmp/minio https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
@@ -63,15 +73,18 @@ jobs:
   # The object engine (cargo feature `object`, on by default; runner/REFERENCE.md §16) against MinIO: the last
   # release that has binaries (the project archived its repository), checked by SHA-256.
   runner-object:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: Rust, the version rust-toolchain.toml names
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: runner
           shared-key: runner-object
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.149
       - name: MinIO server
         run: |
           curl -sSfL -o /tmp/minio https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
@@ -80,7 +93,10 @@ jobs:
       - name: Build with the object engine and test it
         working-directory: runner
         run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release --no-default-features --features object -E 'test(/object/) | test(/endpoint/)'
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version-file: builder/pyproject.toml
+          checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
       - name: Builder with the format classes' libraries and the S3 client
         working-directory: builder
         run: uv sync --locked --extra test --extra formats --extra s3
@@ -92,10 +108,11 @@ jobs:
           AEIOU_REQUIRE=runner,object,formats,header,minio,py-formats,py-s3 TEST_MINIO_BIN=/tmp/minio AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_object.py
 
   runner-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: Rust, the version rust-toolchain.toml names
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: runner
@@ -103,7 +120,10 @@ jobs:
       - name: Build the binary
         working-directory: runner
         run: cargo build --release --bin aeiou
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version-file: builder/pyproject.toml
+          checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
       - name: Builder with the format classes' libraries
         working-directory: builder
         run: uv sync --locked --extra test --extra formats

@@ -7450,6 +7450,51 @@ workloads by their ids (`tests/cases.rs`).
 other jobs' accelerators when their use cases come (the input pipelines' other mechanisms have
 example and `unsettled` cases only).
 
+### 3.82 Every tool a version the repository names (decided with the user and built 2026-10-24)
+
+**The problem.** `ubuntu-latest` began moving to Ubuntu 26 on 2026-10-19, and CI took its
+Python from the image: run 40068672434 used `/usr/bin/python3`, 3.12.3, while development used
+uv's 3.12.13, and `requires-python = ">=3.12"` would have taken the next image's Python without
+a word. uv was the newest each run (0.13.5 in CI, 0.11.2 locally), Rust the newest stable
+(1.99.1 in CI, 1.95.0 locally), nextest the newest, pandoc the release image's apt package, the
+build backend (`hatchling`) unpinned, PyInstaller pinned but beside the lock (`--with`), and the
+coverage tools installed by hand. The packages alone were locked.
+
+**Decided with the user** (the user's request: a uv venv, every Python version locked, nothing
+from outside the venv where that can be had):
+
+1. *The Python is one exact version, always one uv downloads*: `builder/.python-version`
+   (3.12.13, the version development used) and `python-preference = "only-managed"` in
+   `[tool.uv]`, so uv refuses the system's interpreter even where it would satisfy the version.
+   The interpreter is python-build-standalone, the same bytes on every host; what it needs of the
+   host is glibc, as every manylinux wheel does. `requires-python` stays `>=3.12`: it is the
+   wheel's, for its users.
+2. *uv is one version*, 0.13.5 (the user's choice, the version CI had passed with), as
+   `required-version`, which setup-uv (v10, a Node 24 action) reads from `builder/pyproject.toml`
+   and installs by its SHA-256.
+3. *Everything Python is in the lock*: PyInstaller as the dependency group `release`, the
+   coverage tools as `coverage` (neither installed unless asked), and `hatchling==1.32.4`.
+4. *Rust is one version*: `rust-toolchain.toml` at the root (1.99.1, CI's; with
+   `llvm-tools-preview` for `cargo llvm-cov`), so cargo run from `builder/` with
+   `--manifest-path` takes it too; CI runs `rustup toolchain install` in place of
+   `dtolnay/rust-toolchain@stable`. nextest is `0.9.149`.
+5. *The image is named*, `ubuntu-24.04` (the release stays on `ubuntu-22.04` for glibc 2.34).
+   strace is the image's, so a new image is a deliberate change. pandoc is its release
+   3.12.1, downloaded and checked by SHA-256 as MinIO is.
+6. *The release ships the environment it was tested in*: `wheel/requirements.txt` (`uv export
+   --locked`, versions and hashes) and `wheel/python-version`; `QUICKSTART.md` and the release's
+   smoke test install by them, `--require-hashes` and the wheel `--no-deps`. Plain pip stays the
+   fallback, the same libraries under the system's Python.
+
+`schema/check.py` loses its `python3` shebang (it was never executable) and names `uv run
+--project builder python` in its usage. `builder/tests/test_pins.py` holds all of this: the
+tests run under the pinned Python, and no workflow takes a version the day it runs.
+
+**Open.** How the tools are invoked outside `builder/` (the user, 2026-10-24, from the WG
+repository's `uv run --project` wrapper): `uv run --locked` checks the venv against the lock on
+every start; the entry points in `builder/.venv/bin/` already run the venv's interpreter by
+their shebang without uv, but do not notice a stale venv.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

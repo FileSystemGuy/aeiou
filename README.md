@@ -309,11 +309,14 @@ attached to every tag; [QUICKSTART.md](QUICKSTART.md) is the guide for it. From 
 ```
 # the runner, with its default features as the release binary has them (`formats`: aeiou
 # datagen's container writers; `object`: the object engine, for S3 stores); its object tests
-# start the MinIO server TEST_MINIO_BIN names (runner/REFERENCE.md §16)
+# start the MinIO server TEST_MINIO_BIN names (runner/REFERENCE.md §16); rustup takes the Rust
+# rust-toolchain.toml names
 cd runner && cargo build --release && TEST_MINIO_BIN=/path/to/minio cargo test --release && cd ..
 
-# the builder (or: pip install -e 'builder[test,formats]')
-cd builder && uv sync --extra test --extra formats && uv run pytest && cd ..
+# the builder, in builder/.venv: uv at the version builder/pyproject.toml requires, the Python
+# builder/.python-version names (one uv downloads, never the system's), every package uv.lock's
+# (DESIGN_REVIEW.md §3.82); the tools are then builder/.venv/bin/aeiou-* or `uv run --locked aeiou-*`
+cd builder && uv sync --locked --extra test --extra formats && uv run --locked pytest && cd ..
 
 # check, dry-run, generate, run
 runner/target/release/aeiou check $(find workloads -name '*.ast.json')
@@ -333,7 +336,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-22)
+## Status (2026-10-24)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -389,6 +392,14 @@ threads derived.
 filtered by the catalog's attributes (`--where ATTR=VALUE`, `--where ATTR!=VALUE`), and shows
 one with the commands that run it; it reads `workloads/catalog.json`, which `aeiou-catalog
 write` generates beside `CATALOG.md`, and its `--help` gives the whole vocabulary.
+
+Every tool a build uses is a version the repository names (2026-10-24, `DESIGN_REVIEW.md`
+§3.82): the Python (`builder/.python-version`, 3.12.13, always one uv downloads, never the
+system's), uv (0.13.5, `required-version` in `builder/pyproject.toml`, installed in CI by
+checksum), the packages and the build backend and PyInstaller (`uv.lock`), Rust
+(`rust-toolchain.toml`, 1.99.1), nextest, the CI image (`ubuntu-24.04`), and pandoc; the release
+ships the lock's requirements and the Python beside its wheel, which `QUICKSTART.md` installs.
+strace is the image's.
 
 Not built, in rough order of interest:
 

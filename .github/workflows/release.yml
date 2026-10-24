@@ -20,18 +20,19 @@ jobs:
   tarball:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: Rust, the version rust-toolchain.toml names
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: runner
           shared-key: release
-      - uses: astral-sh/setup-uv@v5
+      # uv at builder/pyproject.toml's required-version, by checksum; the Python is builder/.python-version,
+      # one uv downloads (the image's 3.10 is never used), the Python CI tests with (DESIGN_REVIEW.md §3.82)
+      - uses: astral-sh/setup-uv@v10
         with:
-          # ubuntu-22.04's own Python is 3.10, below requires-python, and uv otherwise takes the
-          # newest it can download, for which h5py may have no wheel yet (3.15 for v0.2.0: built
-          # from source, failing without libhdf5); 3.12 is the Python CI tests with (ubuntu-latest)
-          python-version: '3.12'
+          version-file: builder/pyproject.toml
+          checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
 
       - name: The tag is the version
         run: |
@@ -51,20 +52,29 @@ jobs:
 
       - name: Build the builder's wheel
         working-directory: builder
-        run: uv build --wheel -o ../wheel
+        # beside it, the lock's versions and hashes of what it needs, the format classes' libraries
+        # included, and the Python they were tested with, for an install that resolves nothing
+        run: |
+          uv build --wheel -o ../wheel
+          uv export --locked --extra formats --no-emit-project --no-dev -o ../wheel/requirements.txt
+          cp .python-version ../wheel/python-version
 
       - name: Build aeiou-header, one file, for bin/ beside aeiou
         working-directory: builder
         run: |
           printf 'import sys\nfrom aeiou.header import main\nsys.exit(main())\n' > /tmp/aeiou_header.py
-          # h5py and numpy are imported by name at run time, so PyInstaller is told of them
-          uv run --locked --extra formats --with pyinstaller==6.22.3 pyinstaller --onefile --name aeiou-header \
+          # h5py and numpy are imported by name at run time, so PyInstaller is told of them; PyInstaller
+          # is the lock's (the `release` group)
+          uv run --locked --extra formats --group release pyinstaller --onefile --name aeiou-header \
             --hidden-import h5py --hidden-import numpy --distpath ../header-dist --workpath /tmp/pyi --specpath /tmp \
             /tmp/aeiou_header.py
 
       - name: Assemble the tarball
         run: |
-          command -v pandoc >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q pandoc; }
+          # pandoc, the pinned release by checksum (not the image's)
+          curl -sSfL -o /tmp/pandoc.tgz https://github.com/jgm/pandoc/releases/download/3.12.1/pandoc-3.12.1-linux-amd64.tar.gz
+          echo "d0c90410e90204c9ca83b8539fac5c7aed01fd537207e4585849f8abc5df20b8  /tmp/pandoc.tgz" | sha256sum -c
+          tar xzf /tmp/pandoc.tgz -C /tmp && pandoc=/tmp/pandoc-3.12.1/bin/pandoc
           d="$DIST"
           mkdir -p "$d/bin" "$d/share/man/man1" "$d/share/man/man5" "$d/share/man/man7" \
                    "$d/man" "$d/wheel"
@@ -72,13 +82,13 @@ jobs:
           for p in man/*.[157].md; do
             page=$(basename "${p%.md}")        # aeiou.1
             sec=${page##*.}                     # 1
-            pandoc -s -t man --shift-heading-level-by=-1 \
+            "$pandoc" -s -t man --shift-heading-level-by=-1 \
               -V header="aeiou manual" -V footer="aeiou $VER" -V date="$(date -u +%Y-%m-%d)" \
               "$p" -o "$d/share/man/man$sec/$page"
           done
           cp man/*.md "$d/man/"
           git ls-files workloads | grep -E '(\.ast\.json|params\.json|case\.lock\.json|README\.md|DESCRIPTION\.md|CATALOG\.md|catalog\.json|\.toml|shape\.json)$' | tar -cf - -T - | tar -xf - -C "$d"
-          cp wheel/*.whl "$d/wheel/"
+          cp wheel/*.whl wheel/requirements.txt wheel/python-version "$d/wheel/"
           cp QUICKSTART.md LICENSE "$d/"
           tar czf "$d.tar.gz" "$d"
           sha256sum "$d.tar.gz" > "$d.tar.gz.sha256"
@@ -99,7 +109,10 @@ jobs:
           bin/aeiou dry-run workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json --gpus 2 --seed 1 \
             --params-file workloads/input-pipeline/map/file-per-sample/params/smoke.params.json | tail -3
           man -l share/man/man1/aeiou.1 | head -5
-          uv venv -q .venv && uv pip install -q --python .venv/bin/python "aeiou[formats] @ $(ls wheel/*.whl)"
+          # as QUICKSTART.md installs it
+          uv venv -q --python "$(cat wheel/python-version)" --managed-python .venv
+          uv pip install -q --python .venv/bin/python --require-hashes -r wheel/requirements.txt
+          uv pip install -q --python .venv/bin/python --no-deps wheel/*.whl
           .venv/bin/aeiou-build --help | head -2
 
       - name: Create the release
