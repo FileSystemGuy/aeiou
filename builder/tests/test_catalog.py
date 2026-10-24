@@ -3,6 +3,7 @@ dry run's metrics, and the refusals (DESIGN_REVIEW.md §3.66). The full check, e
 re-measured with the runner, is a CI step of its own; here the committed tree is checked
 without the dry runs, and one small case is re-measured when the runner binary is there."""
 import json
+import math
 import os
 import pathlib
 import re
@@ -264,7 +265,7 @@ def test_a_stale_shape_is_reported_without_the_runner(tree, capsys):
 def test_a_case_remeasured_is_its_shape(tree):
     """`write` on the copy gives the committed shape byte for byte (the dry run is deterministic)."""
     mechanisms, _ = catalog.load(tree, ATTRS)
-    shapes = catalog.measure_all(mechanisms, ATTRS, str(RUNNER))
+    shapes = catalog.measure_all(mechanisms, ATTRS, str(RUNNER), every=True)
     assert shapes[tree / CASE / "shape.json"] == (WORKLOADS / CASE / "shape.json").read_text()
     assert catalog.stale_shapes(mechanisms, tree, ATTRS, str(RUNNER)) == []
 
@@ -301,8 +302,7 @@ def test_counts_are_the_cases_length_when_the_check_length_is_shorter():
     length = recorded["length"]
     assert length["check"] == length["case"] == 20
     length["check"] = 10
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(len(catalog.SEEDS)) as pool:
+    with catalog.Scheduler(len(catalog.SEEDS)) as pool:
         differ = catalog.recheck(str(RUNNER), run, case["gpus"][0], recorded, ATTRS, pool)
         assert not set(differ) & set(catalog.COUNTED), differ
         recorded["datasets"][0]["directories"] += 7
@@ -650,10 +650,258 @@ def test_a_case_with_a_length_is_measured_down_to_its_check_length():
     """The halving of `shape`: the case's length, then shorter ones while the numbers hold;
     measured again here, the committed faiss shape entry, byte for byte (its check length is
     the case's: at half of it the numbers differ)."""
-    import concurrent.futures
     mechanisms, _ = catalog.load(WORKLOADS, ATTRS)
     m = next(m for m in mechanisms if m["rel"] == str(pathlib.Path(FAISS).parent.parent))
     case = next(c for c in m["cases"] if c["name"] == pathlib.Path(FAISS).name)
-    with concurrent.futures.ThreadPoolExecutor(len(catalog.SEEDS)) as pool:
+    with catalog.Scheduler(len(catalog.SEEDS)) as pool:
         s = catalog.shape(str(RUNNER), case["runs"][0], case["gpus"][0], case["length"], ATTRS, pool)
     assert s == json.loads((WORKLOADS / FAISS / "shape.json").read_text())["runs"][0]
+
+
+# ---------------------------------------------------------------- what write measures, and how many at once
+
+OTHER = "checkpointing/dcp-save/cases/four-items"
+
+
+def _fake_shape(monkeypatch, calls, tree=None):
+    """`begin_shape` and `finish_shape` that record which run was measured and with what the
+    shape committed before gave; with `tree`, the shape given is the committed one of that case
+    (for the descriptions)."""
+    def begin(runner, run, gpus, length, pool, previous=None):
+        calls.setdefault("runs", []).append(str(run["params"]))
+        calls.setdefault("previous", []).append(previous)
+        return {"run": run}
+
+    def finish(state, attrs):
+        run = state["run"]
+        if tree is not None:
+            rel = pathlib.Path(run["params"]).parent.relative_to(tree)
+            return json.loads((WORKLOADS / rel / "shape.json").read_text())["runs"][0]
+        return {"ast": run["ast"], "fake": True}
+    monkeypatch.setattr(catalog, "begin_shape", begin)
+    monkeypatch.setattr(catalog, "finish_shape", finish)
+
+
+def test_write_measures_only_the_stale_shapes(tree, monkeypatch, capsys):
+    """`write` keeps a shape measured on the AST, parameter file, and case record committed now,
+    byte for byte, and measures the others (here one whose parameter file's hash differs), from
+    what the stale shape recorded; `--all-shapes` measures every one."""
+    calls = {}
+    _fake_shape(monkeypatch, calls)
+    shape = tree / CASE / "shape.json"
+    doc = json.loads(shape.read_text())
+    doc["runs"][0]["params_sha256"] = "0" * 64
+    shape.write_text(json.dumps(doc))
+    kept = (tree / OTHER / "shape.json").read_text()
+    mechanisms, _ = catalog.load(tree, ATTRS)
+    shapes = catalog.measure_all(mechanisms, ATTRS, "true", every=False)
+    assert [pathlib.Path(p).parent.name for p in calls["runs"]] == ["toy-6-items"]
+    assert calls["previous"] == [doc["runs"][0]]
+    assert shapes[tree / OTHER / "shape.json"] == kept and '"fake": true' in shapes[shape]
+    calls.clear()
+    assert len(catalog.measure_all(mechanisms, ATTRS, "true", every=True)) == 2 and len(calls["runs"]) == 2
+    calls.clear()
+    _fake_shape(monkeypatch, calls, tree=tree)
+    assert catalog.main(["write", "--workloads", str(tree), "--runner", "true"]) == 0
+    assert "1 of 2 shapes measured" in capsys.readouterr().out and len(calls["runs"]) == 1
+    calls.clear()
+    assert catalog.main(["write", "--workloads", str(tree), "--runner", "true", "--all-shapes"]) == 0
+    assert "2 of 2 shapes measured" in capsys.readouterr().out and len(calls["runs"]) == 2
+
+
+def test_the_scheduler_runs_jobs_at_once_the_most_expensive_first():
+    """`Scheduler(jobs)` runs at most `jobs` calls at once, from one queue: the highest cost first
+    (an unknown cost, infinity, before any), in order of submission within one cost; nothing
+    starts while it is held, so every case's first dry runs are queued before one is chosen."""
+    import threading
+    import time
+    lock, now, peak, order = threading.Lock(), [0], [0], []
+
+    def job(name):
+        with lock:
+            now[0] += 1
+            peak[0] = max(peak[0], now[0])
+        time.sleep(0.05)
+        with lock:
+            now[0] -= 1
+            order.append(name)
+        return name
+    with catalog.Scheduler(1) as pool:
+        with pool.held():
+            fs = [pool.submit(1, job, "cheap"), pool.submit(5, job, "dear"), pool.submit(5, job, "dear2"),
+                  pool.submit(math.inf, job, "new"), pool.submit(3, job, "mid")]
+            time.sleep(0.1)
+            assert order == []
+        assert [f.result() for f in fs] == ["cheap", "dear", "dear2", "new", "mid"]
+    assert order == ["new", "dear", "dear2", "mid", "cheap"] and peak[0] == 1
+    peak[0] = 0
+    with catalog.Scheduler(3) as pool:
+        fs = [pool.submit(0, job, i) for i in range(9)]
+    assert peak[0] == 3 and all(f.done() for f in fs)
+
+    def boom():
+        raise ValueError("no")
+    with catalog.Scheduler(1) as pool:
+        f = pool.submit(0, boom)
+        with pytest.raises(ValueError):
+            f.result()
+
+
+def test_a_failure_drops_the_dry_runs_not_begun():
+    """Leaving the scheduler on an error cancels what is still queued, so a failed write waits
+    on the dry runs running and on no others."""
+    import time
+    ran = []
+    with pytest.raises(RuntimeError):
+        with catalog.Scheduler(1) as pool:
+            with pool.held():
+                fs = [pool.submit(0, lambda i=i: (time.sleep(0.05), ran.append(i))) for i in range(5)]
+            time.sleep(0.02)
+            raise RuntimeError("stop")
+    assert ran == [0] and all(f.cancelled() for f in fs[1:])
+
+
+def _search(monkeypatch, tmp_path, holds, jobs=8, previous=None, full=640):
+    """`shape` over a fake dry run whose numbers are the case's at any length >= `holds`; the
+    events, in order: ("start" | "end", length) per seed's dry run, and the shape."""
+    import threading
+    import time
+    events, lock = [], threading.Lock()
+
+    def dry(runner, run, gpus, seed, length, tmp):
+        with lock:
+            events.append(("start", length[1]))
+        time.sleep(0.01)
+        with lock:
+            events.append(("end", length[1]))
+        n = length[1]
+        return {"total": {"ops": n, "counts": {"read": n}, "bytes_read": n, "bytes_written": 0}, "datasets": []}
+    monkeypatch.setattr(catalog, "_dry_run", dry)
+    monkeypatch.setattr(catalog, "measure", lambda total: {m: (1.0 if total["ops"] >= holds else 9.0) for m in catalog.MEASURES})
+    run = {"abstract": {"doc": {"name": "x"}, "path": tmp_path / "x.ast.json", "sha256": "0"}, "params": None, "ast": "x"}
+    monkeypatch.setattr(catalog, "_values", lambda run: {})
+    monkeypatch.setattr(catalog, "_params_of", lambda doc: {"calls": {"default": full}})
+    with catalog.Scheduler(jobs) as pool:
+        s = catalog.shape("true", run, 1, "calls", ATTRS, pool, previous)
+    return events, s
+
+
+def _tried(events):
+    """The lengths in the order their first dry run started."""
+    out = []
+    for kind, n in events:
+        if kind == "start" and n not in out:
+            out.append(n)
+    return out
+
+
+@pytest.mark.parametrize("previous,tried,check", [
+    (None, [640, 10, 20, 40, 80, 160], 160),            # a new case: smallest first, then up
+    (160, [640, 160, 80], 160),                         # its recorded check length holds: one smaller
+    (40, [640, 40, 80, 160], 160),                      # it no longer holds: up
+    (640, [640, 320, 160, 80], 160),                    # the case's own: half of it first
+    (320, [640, 320, 160, 80], 160),                    # holds: down while it holds
+    (7, [640, 10, 20, 40, 80, 160], 160),               # a length not among the levels: a new case
+])
+def test_the_search_starts_from_the_recorded_check_length(monkeypatch, tmp_path, previous, tried, check):
+    """The check length is the smallest level (1/2 to 1/64 of the case's) whose numbers agree
+    with the case's own length's, each level judged on its three seeds against the full run
+    (never against another level); the search starts at the length the shape recorded before
+    (down while a level agrees, up while it differs), and a new case starts at the smallest."""
+    recorded = None if previous is None else {"ops": 1, "length": {"param": "calls", "case": 640, "check": previous}}
+    events, s = _search(monkeypatch, tmp_path, holds=160, previous=recorded)
+    assert _tried(events) == tried
+    assert s["length"] == {"param": "calls", "case": 640, "check": check}
+    assert [n for kind, n in events if kind == "start"].count(640) == 3
+
+
+def test_no_level_starts_before_its_cases_previous_decision(monkeypatch, tmp_path):
+    """Only the first level tried runs beside the case's own length; every later one starts
+    after the dry runs that decided the one before it (and the full run) have ended: no
+    speculation, so no dry run is wasted however many jobs there are."""
+    events, _ = _search(monkeypatch, tmp_path, holds=160, jobs=32)
+    tried = _tried(events)
+    for before, n in zip(tried[1:], tried[2:]):
+        first = events.index(("start", n))
+        assert events[:first].count(("end", before)) == 3 and events[:first].count(("end", 640)) == 3
+
+
+def test_the_check_length_is_the_same_at_any_jobs(monkeypatch, tmp_path):
+    for holds in (1, 10, 80, 160, 320, 640):
+        found = {_search(monkeypatch, tmp_path, holds=holds, jobs=jobs)[1]["length"]["check"] for jobs in (1, 2, 32)}
+        assert found == {max(10, holds)}, (holds, found)
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_jobs_bound_the_dry_runs_at_once_and_write_the_same(tree, monkeypatch):
+    """`--jobs N` runs at most N dry runs at once, over every shape being measured; the shapes
+    are the ones a single job measures, in the same files."""
+    import threading
+    import time
+    real, lock, now, peak = catalog._dry_run, threading.Lock(), [0], [0]
+
+    def dry(*args):
+        with lock:
+            now[0] += 1
+            peak[0] = max(peak[0], now[0])
+        time.sleep(0.05)
+        try:
+            return real(*args)
+        finally:
+            with lock:
+                now[0] -= 1
+    monkeypatch.setattr(catalog, "_dry_run", dry)
+    mechanisms, _ = catalog.load(tree, ATTRS)
+    one = catalog.measure_all(mechanisms, ATTRS, str(RUNNER), jobs=1)
+    assert peak[0] == 1
+    peak[0] = 0
+    four = catalog.measure_all(mechanisms, ATTRS, str(RUNNER), jobs=4)
+    assert peak[0] == 4 and four == one and list(four) == list(one)
+
+
+@pytest.mark.skipif(not RUNNER.exists(), reason="needs the runner binary")
+def test_the_most_expensive_case_is_measured_first(tree, monkeypatch):
+    """The dry runs are chosen by the op count the case's shape recorded, the largest first:
+    here four-items (325 ops) before toy-6-items (154), whichever the tree lists first, and
+    toy-6-items first once its recorded count is the larger."""
+    real, order = catalog._dry_run, []
+
+    def dry(runner, run, *args):
+        order.append(pathlib.Path(run["params"]).parent.name)
+        return real(runner, run, *args)
+    monkeypatch.setattr(catalog, "_dry_run", dry)
+    mechanisms, _ = catalog.load(tree, ATTRS)
+    catalog.measure_all(mechanisms, ATTRS, str(RUNNER), jobs=1)
+    assert order == ["four-items"] * 3 + ["toy-6-items"] * 3
+    shape = tree / CASE / "shape.json"
+    doc = json.loads(shape.read_text())
+    doc["runs"][0]["ops"] = 10 ** 9
+    shape.write_text(json.dumps(doc))
+    order.clear()
+    catalog.measure_all(mechanisms, ATTRS, str(RUNNER), jobs=1)
+    assert order == ["toy-6-items"] * 3 + ["four-items"] * 3
+    order.clear()
+    catalog.stale_shapes(mechanisms, tree, ATTRS, str(RUNNER), jobs=1)
+    assert order[:3] == ["toy-6-items"] * 3
+
+
+def test_jobs_default_to_the_cpus_this_process_may_use_and_refuse_zero(monkeypatch, capsys):
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(20)))
+    assert catalog.parser()[0].parse_args(["write"]).jobs == 20
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {3})
+    assert catalog.parser()[0].parse_args(["check"]).jobs == 1
+    assert catalog.main(["check", "--jobs", "0", "--no-shapes"]) == 2
+    assert "--jobs 0: must be at least 1" in capsys.readouterr().err
+
+
+def test_a_search_starts_new_when_the_old_shape_is_unreadable_and_nothing_stale_runs_nothing(tree, tmp_path):
+    """What a stale shape recorded is where its search starts; a shape file that is not there or
+    not a shape gives nothing, so its case searches as a new one. With no shape stale, `write`
+    runs no dry run (the runner is never called: here it is one that fails)."""
+    assert catalog._previous(tmp_path / "absent.json") == {}
+    for text in ("not json", "[]", '{"runs": [{"no": "ast"}]}'):
+        (tmp_path / "s.json").write_text(text)
+        assert catalog._previous(tmp_path / "s.json") == {}
+    mechanisms, _ = catalog.load(tree, ATTRS)
+    shapes = catalog.measure_all(mechanisms, ATTRS, "false", every=False)
+    assert shapes[tree / CASE / "shape.json"] == (WORKLOADS / CASE / "shape.json").read_text()

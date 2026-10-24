@@ -7,8 +7,8 @@ aeiou-catalog - the workload catalog: check the records under workloads/ against
 ## SYNOPSIS
 
 ```
-aeiou-catalog check [--workloads DIR] [--runner PATH] [--no-shapes]
-aeiou-catalog write [--workloads DIR] [--runner PATH] [--no-shapes]
+aeiou-catalog check [--workloads DIR] [--runner PATH] [--no-shapes] [--jobs N]
+aeiou-catalog write [--workloads DIR] [--runner PATH] [--no-shapes] [--jobs N] [--all-shapes]
 aeiou-catalog describe [--params-file FILE] [--gpus N] [--workloads DIR] [--runner PATH] [--no-shapes] AST
 aeiou-catalog --help | --version
 ```
@@ -64,10 +64,16 @@ numbers on which the seeds differ by more than the attribute's tolerance (the ca
 statistical error, shown in the catalog). A shorter run is never taken for the case: on a
 fixed dataset a reuse share grows with the run (a DiskANN search over SIFT1M re-reads 24 % of
 its blocks at 500 queries and 97 % at 32,000), and a fixed load is amortized only over a long
-one. For a case with a length parameter, **write** also halves it, down to 1/64, while the
-numbers stay the case's within their tolerances, and records the smallest such length;
-**check** re-measures there, so a long case costs its full length three times only when it is
-written, and once (the first seed, for the counts below) when it is checked.
+one. For a case with a length parameter, **write** also finds its check length, the smallest
+of its halves, down to 1/64, whose numbers are the case's within their tolerances, each half
+judged on its three seeds against the case's own length; **check** re-measures there, so a long
+case costs its full length three times only when it is written, and once (the first seed, for
+the counts below) when it is checked. The search starts at the check length recorded before,
+going down while a length agrees and up while it differs, and a new case at the smallest; a
+length is measured only once the one before it is decided, so no dry run is wasted.
+**write** measures only the shapes that are stale, missing or measured on records other than
+the ones committed now, and keeps the others as committed; `--all-shapes` measures every one.
+Both commands run `--jobs` dry runs at once, the case whose shape recorded the most ops first.
 Sizes are byte-weighted medians (half the bytes move in runs or requests at least this
 large), read from the dry run's quarter-octave histograms, so a size is a bucket's lower
 bound. The shape also keeps the first seed's op counts by kind, its bytes read and written,
@@ -112,11 +118,18 @@ dataset projections (the first seed's at the case's own length, which the descri
   `shape_version`, and was measured on the AST and the parameter file committed now (their
   SHA-256 in `shape.json`) and on the case's GPU count, block, and length parameter, and
   render `CATALOG.md` and the descriptions from the shapes.
+- **--jobs** *N*
+
+  Dry runs at once, over every shape, the case whose shape recorded the most ops first (a
+  case never measured before any). Default the CPUs this process may run on. The shapes are
+  the same at any *N*. Memory, not the CPUs, may bound it: a large case's dry run under
+  `--metrics-json` takes gigabytes.
 
 ### aeiou-catalog write
 
 Make any category or class directory the dictionary defines and the tree lacks, validate
-the records, measure every shape at the case's own parameters and find its check length,
+the records, measure each stale shape (every one under `--all-shapes`) at the case's own
+parameters and find its check length,
 and write the shapes, the descriptions, `CATALOG.md`, and the category and class READMEs
 where they changed.
 
@@ -130,6 +143,13 @@ where they changed.
 
   Write `CATALOG.md`, the descriptions, and the READMEs alone, from the committed shapes; a
   shape measured on another AST or parameter file is reported.
+- **--jobs** *N*
+
+  Dry runs at once, as for **check**. Default the CPUs this process may run on.
+- **--all-shapes**
+
+  Measure every shape, not only the stale ones: after a change to the runner's metrics, which
+  no recorded hash shows.
 
 ### aeiou-catalog describe
 

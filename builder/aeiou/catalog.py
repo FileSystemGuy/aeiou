@@ -46,14 +46,19 @@ that each shape was measured on the AST, parameter file, and case record committ
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import hashlib
+import heapq
+import itertools
 import json
 import math
+import os
 import pathlib
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import tomllib
 
 from .params import values_of
@@ -537,9 +542,82 @@ def _median(xs: list):
     return xs[len(xs) // 2]
 
 
-def _at(runner: str, run: dict, gpus: int, length: tuple | None, pool, tmp) -> tuple[dict, list[dict], dict]:
+class Scheduler:
+    """`jobs` dry runs at once, from one queue: the highest cost first (a case's recorded op
+    count; a case with none, infinity, first of all), in order of submission within one cost,
+    so the longest case starts first and never ends the write alone. Nothing starts while it
+    is `held`, so every case's first dry runs are queued before one is chosen. Leaving it waits
+    on what runs; on an error what is still queued is dropped."""
+
+    def __init__(self, jobs: int):
+        self._queue, self._order = [], itertools.count()
+        self._cv = threading.Condition()
+        self._held = self._closed = False
+        self._workers = [threading.Thread(target=self._work, daemon=True) for _ in range(jobs)]
+        for w in self._workers:
+            w.start()
+
+    def submit(self, cost, fn, *args) -> concurrent.futures.Future:
+        f = concurrent.futures.Future()
+        with self._cv:
+            heapq.heappush(self._queue, (-cost, next(self._order), f, fn, args))
+            self._cv.notify()
+        return f
+
+    @contextlib.contextmanager
+    def held(self):
+        with self._cv:
+            self._held = True
+        try:
+            yield self
+        finally:
+            with self._cv:
+                self._held = False
+                self._cv.notify_all()
+
+    def _work(self) -> None:
+        while True:
+            with self._cv:
+                while self._held or not (self._queue or self._closed):
+                    self._cv.wait()
+                if not self._queue:
+                    return
+                *_, f, fn, args = heapq.heappop(self._queue)
+            if f.set_running_or_notify_cancel():
+                try:
+                    f.set_result(fn(*args))
+                except BaseException as e:
+                    f.set_exception(e)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, *_):
+        with self._cv:
+            if kind is not None:
+                for *_, f, _, _ in self._queue:
+                    f.cancel()
+            self._held, self._closed = False, True
+            self._cv.notify_all()
+        for w in self._workers:
+            w.join()
+
+
+def _cost(recorded: dict | None) -> float:
+    """What orders a case's dry runs on the scheduler: the op count its shape recorded, at the
+    case's own length; a case never measured, infinity (it may be the longest)."""
+    ops = (recorded or {}).get("ops")
+    return ops if isinstance(ops, int) else math.inf
+
+
+def _start(runner: str, run: dict, gpus: int, length: tuple | None, pool, tmp, cost=math.inf) -> list:
+    """The dry runs of every seed at one length, queued on the scheduler."""
+    return [pool.submit(cost, _dry_run, runner, run, gpus, seed, length, tmp) for seed in SEEDS]
+
+
+def _gathered(started: list) -> tuple[dict, list[dict], dict]:
     """The median of each measure over the seeds, each seed's numbers, and the first seed's dry run."""
-    docs = list(pool.map(lambda seed: _dry_run(runner, run, gpus, seed, length, tmp), SEEDS))
+    docs = [f.result() for f in started]
     values = [measure(d["total"]) for d in docs]
     return {n: _median([v[n] for v in values]) for n in MEASURES}, values, docs[0]
 
@@ -549,30 +627,86 @@ def _agrees(attrs: dict, a: dict, b: dict) -> list[str]:
     return [n for n in MEASURES if not agree(attrs[n], a[n], b[n])]
 
 
-def shape(runner: str, run: dict, gpus: int, length_param: str | None, attrs: dict, pool) -> dict:
-    """One run's shape (`shape.json`'s entry): the measures at the case's own parameters, the
-    median over the seeds and its spread; and, for a case with a length parameter, the
-    smallest length (halving down to 1/64) whose numbers are still the case's, where `check`
-    re-measures them. A shorter run is never taken for the case: a reuse share grows with the
-    run on a fixed dataset, and a fixed load is amortized only over a long one."""
+def _levels(full: int | None) -> list[int]:
+    """The lengths a check length may be, longest first: the case's own, then its halves down to 1/64."""
+    if not full:
+        return []
+    out, n = [full], full // 2
+    while n >= max(1, math.ceil(full / START)):
+        out.append(n)
+        n //= 2
+    return out
+
+
+def _first_level(levels: list[int], previous: dict | None) -> int:
+    """The level a search starts at: the check length the shape recorded before (half the case's
+    when that was the case's own), and for a new case, or a length no longer a level, the smallest."""
+    check = ((previous or {}).get("length") or {}).get("check")
+    if check not in levels:
+        return len(levels) - 1
+    return max(levels.index(check), 1) if len(levels) > 1 else 0
+
+
+def begin_shape(runner: str, run: dict, gpus: int, length_param: str | None, pool, previous: dict | None = None) -> dict:
+    """`shape`'s dry runs that never wait on a decision, queued: the case's own length's three
+    seeds and, for a case with a length parameter, the first level's beside them."""
     pset = _values(run)
     full = pset.get(length_param, _params_of(run["abstract"]["doc"])[length_param].get("default")) if length_param else None
-    with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
-        tmp = pathlib.Path(tmp)
-        med, seeds, first = _at(runner, run, gpus, (length_param, full) if full else None, pool, tmp)
-        check = full
-        if full:
-            n = full // 2
-            while n >= max(1, math.ceil(full / START)):
-                if _agrees(attrs, _at(runner, run, gpus, (length_param, n), pool, tmp)[0], med):
-                    break
-                check, n = n, n // 2
+    levels = _levels(full)
+    tmp = tempfile.TemporaryDirectory(prefix="aeiou-catalog.")
+    state = {"run": run, "runner": runner, "gpus": gpus, "param": length_param, "full": full, "levels": levels,
+             "pool": pool, "tmp": tmp, "cost": _cost(previous), "first": _first_level(levels, previous) if levels else 0}
+    state["own"] = _start(runner, run, gpus, (length_param, full) if full else None, pool, pathlib.Path(tmp.name), state["cost"])
+    state["started"] = {}
+    if state["first"]:
+        state["started"][state["first"]] = _start(runner, run, gpus, (length_param, levels[state["first"]]), pool, pathlib.Path(tmp.name), state["cost"])
+    return state
+
+
+def finish_shape(state: dict, attrs: dict) -> dict:
+    """One run's shape (`shape.json`'s entry) from what `begin_shape` queued: the measures at
+    the case's own parameters, the median over the seeds and its spread; and, for a case with
+    a length parameter, its check length, where `check` re-measures it: the smallest level
+    (1/2 to 1/64 of the case's) whose numbers are the case's own length's, each level judged on
+    its three seeds against the full run, never against another level. The search starts at
+    the check length recorded before: down while a level agrees, up while it differs; a new
+    case starts at the smallest, since most shapes hold there or nowhere. A level is queued
+    only once the one before it is decided, so no dry run is wasted. A shorter run is never
+    taken for the case: a reuse share grows with the run on a fixed dataset, and a fixed load
+    is amortized only over a long one."""
+    run, levels, started, tmp = state["run"], state["levels"], state["started"], pathlib.Path(state["tmp"].name)
+    try:
+        med, seeds, first = _gathered(state["own"])
+
+        def holds(i):
+            if i == 0:
+                return True
+            if i not in started:
+                started[i] = _start(state["runner"], run, state["gpus"], (state["param"], levels[i]), state["pool"], tmp, state["cost"])
+            return not _agrees(attrs, _gathered(started[i])[0], med)
+        i = state["first"]
+        if holds(i):
+            while i + 1 < len(levels) and holds(i + 1):
+                i += 1
+        else:
+            i -= 1
+            while not holds(i):
+                i -= 1
+        check = levels[i] if levels else None
+    finally:
+        # on an error the dry runs not begun are dropped, the rest finish before their directory goes
+        waiting = [f for fs in started.values() for f in fs] + state["own"]
+        for f in waiting:
+            f.cancel()
+        concurrent.futures.wait(waiting)
+        state["tmp"].cleanup()
+    full, length_param = state["full"], state["param"]
     # the numbers the seeds disagree on: the case's own statistical error is larger than the tolerance
     moving = [n for n in MEASURES if not all(agree(attrs[n], v[n], w[n]) for v in seeds for w in seeds)]
     spread = {n: None if med[n] is None else max(v[n] for v in seeds) - min(v[n] for v in seeds) for n in MEASURES}
     out = {"ast": run["abstract"]["doc"]["name"], "ast_sha256": run["abstract"]["sha256"],
            "params": run["params"].name if run["params"] else None, "params_sha256": _sha256(run["params"]) if run["params"] else None,
-           "gpus": gpus, "seeds": list(SEEDS),
+           "gpus": state["gpus"], "seeds": list(SEEDS),
            "length": None if full is None else {"param": length_param, "case": full, "check": check},
            "stable": not moving, "moving": moving, "ops": first["total"]["ops"],
            "counts": dict(sorted(first["total"]["counts"].items())), "bytes_read": first["total"]["bytes_read"],
@@ -580,6 +714,12 @@ def shape(runner: str, run: dict, gpus: int, length_param: str | None, attrs: di
     for name in MEASURES:
         out["attributes"][name] = {"value": _round(med[name]), "spread": _round(spread[name]), "class": classify(attrs[name], med[name])}
     return out
+
+
+def shape(runner: str, run: dict, gpus: int, length_param: str | None, attrs: dict, pool, previous: dict | None = None) -> dict:
+    """One run's shape, measured on the scheduler `pool` (`begin_shape`, then `finish_shape`),
+    its search started from `previous`, the entry the shape recorded before."""
+    return finish_shape(begin_shape(runner, run, gpus, length_param, pool, previous), attrs)
 
 
 COUNTED = ("ops", "counts", "bytes_read", "bytes_written", "datasets")   # the first seed's, at the case's length; exact
@@ -602,24 +742,40 @@ def _case_run(runner: str, run: dict, gpus: int, recorded: dict, tmp: pathlib.Pa
     return _dry_run(runner, run, gpus, SEEDS[0], (length["param"], length["case"]) if length else None, tmp)
 
 
-def recheck(runner: str, run: dict, gpus: int, recorded: dict, attrs: dict, pool, full=None) -> list[str]:
+def begin_recheck(runner: str, run: dict, gpus: int, recorded: dict, pool) -> dict:
+    """`recheck`'s dry runs, queued: the three seeds at the recorded check length and, when it is
+    shorter than the case's, the first seed's at the case's, which the counts are taken from."""
+    length, cost = recorded["length"], _cost(recorded)
+    tmp = tempfile.TemporaryDirectory(prefix="aeiou-catalog.")
+    full = pool.submit(cost, _case_run, runner, run, gpus, recorded, pathlib.Path(tmp.name)) if _short(recorded) else None
+    seeds = _start(runner, run, gpus, (length["param"], length["check"]) if length else None, pool, pathlib.Path(tmp.name), cost)
+    return {"recorded": recorded, "tmp": tmp, "full": full, "seeds": seeds}
+
+
+def finish_recheck(state: dict, attrs: dict) -> list[str]:
+    """The measures and counts that differ from the recorded ones, from what `begin_recheck` queued."""
+    recorded, waiting = state["recorded"], state["seeds"] + ([state["full"]] if state["full"] else [])
+    try:
+        med, _, first = _gathered(state["seeds"])
+        if state["full"] is not None:
+            first = state["full"].result()
+    finally:
+        for f in waiting:
+            f.cancel()
+        concurrent.futures.wait(waiting)
+        state["tmp"].cleanup()
+    counted = _counted(first)
+    return (_agrees(attrs, med, {n: a["value"] for n, a in recorded["attributes"].items()})
+            + [n for n in COUNTED if counted[n] != recorded.get(n)])
+
+
+def recheck(runner: str, run: dict, gpus: int, recorded: dict, attrs: dict, pool) -> list[str]:
     """`check` with the runner: the run re-measured at its recorded check length, against
     the recorded numbers, and the first seed's op counts, bytes, and datasets' projection
     against the recorded ones exactly (the description and CATALOG.md print them); the
     measures and counts that differ. The counts are the case's own length's: when the check
-    length is shorter, one more dry run, the first seed's at the case's length, gives them
-    (`full`, its future when the caller started it ahead)."""
-    length = recorded["length"]
-    with tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp:
-        tmp = pathlib.Path(tmp)
-        if _short(recorded) and full is None:
-            full = pool.submit(_case_run, runner, run, gpus, recorded, tmp)
-        med, _, first = _at(runner, run, gpus, (length["param"], length["check"]) if length else None, pool, tmp)
-        if full is not None:
-            first = full.result()
-    counted = _counted(first)
-    return (_agrees(attrs, med, {n: a["value"] for n, a in recorded["attributes"].items()})
-            + [n for n in COUNTED if counted[n] != recorded.get(n)])
+    length is shorter, one more dry run, the first seed's at the case's length, gives them."""
+    return finish_recheck(begin_recheck(runner, run, gpus, recorded, pool), attrs)
 
 
 def _round(v):
@@ -644,53 +800,99 @@ def _targets(mechanisms: list[dict]):
             yield m, None, [({"ast": d["ast"], "params": None, "abstract": m["asts"][d["ast"]]}, d["gpus"], d["length"])]
 
 
-def measure_all(mechanisms: list[dict], attrs: dict, runner: str) -> dict[pathlib.Path, str]:
-    """Every shape file's text, measured now."""
-    out = {}
-    with concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool:
-        for m, case, runs in _targets(mechanisms):
-            out[_shape_path(m, case)] = render_shape([shape(runner, run, gpus, length, attrs, pool) for run, gpus, length in runs])
-    return out
+def jobs_default() -> int:
+    """Dry runs at once by default: one per CPU this process may run on."""
+    return len(os.sched_getaffinity(0))
 
 
-def stale_shapes(mechanisms: list[dict], root: pathlib.Path, attrs: dict, runner: str | None) -> list[str]:
+def _recorded(m: dict, case: dict | None, runs: list) -> tuple[list[str], list[tuple]]:
+    """A shape file against the records committed now, without the runner: why it is stale
+    (missing, of another `shape_version`, other runs, or a run measured on another AST,
+    parameter file, GPU count, or length parameter), and the runs it holds that are current,
+    `(run, gpus, recorded)` each."""
+    path = _shape_path(m, case)
+    if not path.exists():
+        return ["missing"], []
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    if doc.get("shape_version") != SHAPE_VERSION:
+        return [f"shape_version {doc.get('shape_version')}, this aeiou-catalog writes {SHAPE_VERSION}"], []
+    have = {s["ast"]: s for s in doc["runs"]}
+    if set(have) != {run["ast"] for run, *_ in runs}:
+        return ["its runs are not the case's"], []
+    stale, current = [], []
+    for run, gpus, length in runs:
+        s = have[run["ast"]]
+        if (s["ast_sha256"] != run["abstract"]["sha256"] or (run["params"] and s["params_sha256"] != _sha256(run["params"]))
+                or s["gpus"] != gpus or (s["length"] or {}).get("param") != length):
+            stale.append(f"measured on another {run['ast']}, parameter file, or case.toml than the one committed")
+        else:
+            current.append((run, gpus, s))
+    return stale, current
+
+
+def _previous(path: pathlib.Path) -> dict:
+    """The entries a shape file holds now, by AST name, whatever made it stale: where each
+    search starts and what orders its dry runs. None when it is not there or not a shape."""
+    try:
+        return {s["ast"]: s for s in json.loads(path.read_text(encoding="utf-8"))["runs"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def _finished(finish, begun: list, attrs: dict) -> list:
+    """`finish` of every begun state, each on a thread of its own (they only wait on the
+    scheduler), in their order."""
+    if not begun:
+        return []
+    with concurrent.futures.ThreadPoolExecutor(len(begun)) as finishing:
+        return list(finishing.map(lambda s: finish(s, attrs), begun))
+
+
+def measure_all(mechanisms: list[dict], attrs: dict, runner: str, jobs: int = 1, every: bool = True) -> dict[pathlib.Path, str]:
+    """Every shape file's text: measured now, or, unless `every`, the committed text of a
+    shape `_recorded` finds current (one measured on the records committed now; that its
+    numbers still hold is `check`'s to say). Every run's dry runs share one scheduler of
+    `jobs`, the most expensive case's first; every case's first ones are queued before any
+    starts. The texts are the same at any `jobs`: the dry runs are deterministic, and each
+    search's next level depends on its own case's numbers alone."""
+    texts, units = {}, []
+    for m, case, runs in _targets(mechanisms):
+        path = _shape_path(m, case)
+        if not every and not _recorded(m, case, runs)[0]:
+            texts[path] = path.read_text(encoding="utf-8")
+            continue
+        texts[path] = None
+        previous = _previous(path)
+        units += [(path, run, gpus, length, previous.get(run["ast"])) for run, gpus, length in runs]
+    with Scheduler(jobs) as pool:
+        with pool.held():
+            begun = [begin_shape(runner, run, gpus, length, pool, previous) for _, run, gpus, length, previous in units]
+        shapes = _finished(finish_shape, begun, attrs)
+    for path in texts:
+        if texts[path] is None:
+            texts[path] = render_shape([s for (p, *_), s in zip(units, shapes) if p == path])
+    return texts
+
+
+def stale_shapes(mechanisms: list[dict], root: pathlib.Path, attrs: dict, runner: str | None, jobs: int = 1) -> list[str]:
     """The shape files missing, measured on an AST or parameter file other than the one
     committed now, or (with the runner) whose numbers the dry run no longer gives: the
     measures at the recorded check length, and the op counts, bytes, and datasets'
-    projection at the case's. The runs at a case's length that a shorter check length
-    leaves to do are started first, beside the rest, since they are the longest."""
+    projection at the case's. The dry runs share one scheduler of `jobs`, as `measure_all`'s."""
     problems, current = [], []
     for m, case, runs in _targets(mechanisms):
         path = _shape_path(m, case)
-        if not path.exists():
-            problems.append(f"{_rel(path, root)}: missing (aeiou-catalog write)")
-            continue
-        doc = json.loads(path.read_text(encoding="utf-8"))
-        if doc.get("shape_version") != SHAPE_VERSION:
-            problems.append(f"{_rel(path, root)}: shape_version {doc.get('shape_version')}, this aeiou-catalog writes {SHAPE_VERSION} (aeiou-catalog write)")
-            continue
-        have = {s["ast"]: s for s in doc["runs"]}
-        if set(have) != {run["ast"] for run, *_ in runs}:
-            problems.append(f"{_rel(path, root)}: its runs are not the case's (aeiou-catalog write)")
-            continue
-        for run, gpus, length in runs:
-            s = have[run["ast"]]
-            if (s["ast_sha256"] != run["abstract"]["sha256"] or (run["params"] and s["params_sha256"] != _sha256(run["params"]))
-                    or s["gpus"] != gpus or (s["length"] or {}).get("param") != length):
-                problems.append(f"{_rel(path, root)}: measured on another {run['ast']}, parameter file, or case.toml than the one committed (aeiou-catalog write)")
-            else:
-                current.append((path, run, gpus, s))
+        stale, ok = _recorded(m, case, runs)
+        problems += [f"{_rel(path, root)}: {why} (aeiou-catalog write)" for why in stale]
+        current += [(path, run, gpus, s) for run, gpus, s in ok]
     if not runner:
         return problems
-    long = [c for c in current if _short(c[3])]
-    with (tempfile.TemporaryDirectory(prefix="aeiou-catalog.") as tmp,
-          concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool,
-          concurrent.futures.ThreadPoolExecutor(max(1, len(long))) as ahead):
-        full = {id(s): ahead.submit(_case_run, runner, run, gpus, s, pathlib.Path(tmp)) for _, run, gpus, s in long}
-        for path, run, gpus, s in current:
-            differ = recheck(runner, run, gpus, s, attrs, pool, full.get(id(s)))
-            if differ:
-                problems.append(f"{_rel(path, root)}: {run['ast']}: the dry run no longer gives the recorded {', '.join(differ)} (aeiou-catalog write)")
+    with Scheduler(jobs) as pool:
+        with pool.held():
+            begun = [begin_recheck(runner, run, gpus, s, pool) for _, run, gpus, s in current]
+        differs = _finished(finish_recheck, begun, attrs)
+    problems += [f"{_rel(path, root)}: {run['ast']}: the dry run no longer gives the recorded {', '.join(differ)} (aeiou-catalog write)"
+                 for (path, run, _, _), differ in zip(current, differs) if differ]
     return problems
 
 
@@ -953,6 +1155,11 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
         p.add_argument("--workloads", type=pathlib.Path, default=pathlib.Path("workloads"), metavar="DIR", help="The workload tree [default: workloads]")
         p.add_argument("--runner", metavar="PATH", default="aeiou", help="The runner binary the shapes are measured with [default: aeiou, on the PATH]")
         p.add_argument("--no-shapes", action="store_true", help="Leave the shapes as committed (no dry run); check that each was measured on the AST and parameter file committed now")
+        p.add_argument("--jobs", type=int, default=jobs_default(), metavar="N",
+                       help="Dry runs at once, over every shape, the most expensive case's first [default: the CPUs this process may run on]")
+        if name == "write":
+            p.add_argument("--all-shapes", action="store_true",
+                           help="Measure every shape, not only those measured on records other than the ones committed now (after a change to the runner's metrics)")
         subs[name] = p
     p = sub.add_parser("describe", help="Print an abstract's description at a parameter set: its paragraph and its account, with its shape measured by dry run",
                        usage="aeiou-catalog describe [OPTIONS] <AST>")
@@ -976,6 +1183,8 @@ def main(argv=None) -> int:
         missing.want(a.cmd, "<COMMAND>", "one of check, write, describe")
         missing.check()
         sp = subs[a.cmd]
+        if a.cmd != "describe" and a.jobs < 1:
+            raise usage.UsageError(f"--jobs {a.jobs}: must be at least 1", sp)
         if a.cmd == "describe":
             missing = usage.Missing(sp)
             missing.want(a.ast, "<AST>", "the abstract to describe")
@@ -1008,7 +1217,7 @@ def _describe(a) -> int:
             raise BuildError(f"the runner {a.runner!r} is not there (--runner PATH; --no-shapes for the description without its shape)")
         if not (a.workloads / "attributes.toml").is_file():
             raise BuildError(f"{a.workloads}: not a workload tree (no attributes.toml), whose dictionary classes the shape (--workloads DIR; --no-shapes)")
-        with concurrent.futures.ThreadPoolExecutor(len(SEEDS)) as pool:
+        with Scheduler(len(SEEDS)) as pool:
             measured = shape(a.runner, run, a.gpus, None, load_dictionary(a.workloads), pool)
     para, account = describe_run(None, None, run, a.gpus, None, measured)
     sources = "the AST" + (f", `{a.params_file.name}`" if a.params_file else " at its defaults") + (", and its shape by dry run" if measured else "")
@@ -1041,10 +1250,13 @@ def _main(a) -> int:
         print(f"{len(problems)} problem(s) in the records")
         return 1
     cases = sum(len(m["cases"]) for m in mechanisms)
+    measured = None
     if a.cmd == "write" and not a.no_shapes:
-        shapes, stale = measure_all(mechanisms, attrs, a.runner), []
+        targets = list(_targets(mechanisms))
+        measured = sum(1 for m, c, runs in targets if a.all_shapes or _recorded(m, c, runs)[0]), len(targets)
+        shapes, stale = measure_all(mechanisms, attrs, a.runner, a.jobs, every=a.all_shapes), []
     else:
-        stale = stale_shapes(mechanisms, root, attrs, None if a.no_shapes else a.runner)
+        stale = stale_shapes(mechanisms, root, attrs, None if a.no_shapes else a.runner, a.jobs)
         shapes = {_shape_path(m, c): _shape_path(m, c).read_text(encoding="utf-8") for m, c, _ in _targets(mechanisms) if _shape_path(m, c).exists()}
     files = dict(shapes) if a.cmd == "write" else {}
     descriptions, briefs = render_descriptions(mechanisms, attrs, shapes)
@@ -1058,7 +1270,8 @@ def _main(a) -> int:
                 print(f"wrote {_rel(path, root)}")
         for p in stale:
             print(p)
-        print(f"{len(mechanisms)} mechanisms, {cases} cases" + ("" if not stale else f"; {len(stale)} shape(s) stale"))
+        print(f"{len(mechanisms)} mechanisms, {cases} cases" + ("" if measured is None else f"; {measured[0]} of {measured[1]} shapes measured")
+              + ("" if not stale else f"; {len(stale)} shape(s) stale"))
         return 1 if stale else 0
     drift = [f"{_rel(path, root)}: differs from what aeiou-catalog derives now (aeiou-catalog write)"
              for path, text in files.items() if not path.exists() or path.read_bytes() != text.encode("utf-8")]

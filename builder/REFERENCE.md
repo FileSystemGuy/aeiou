@@ -729,8 +729,10 @@ at 14 of 400 steps, 0.50 at 400); on a fixed index a search's reuse climbs with 
 2,000, 97 % at 32,000, and its 2 GiB PQ load dominates the read request sizes until about
 8,000 queries), and a test of agreement between successive doublings accepts such a slow
 trend at the short end, where it barely moves. So the length is the case's, and the rule
-serves the cost instead: for a case with a `length`, `write` halves it (down to 1/64) while
-the medians stay the case's within their tolerances and records the smallest such length as
+serves the cost instead: for a case with a `length`, `write` ~~halves it (down to 1/64) while
+the medians stay the case's within their tolerances and records the smallest such length~~
+finds the smallest of its halves (down to 1/64) whose medians are the case's within their
+tolerances (2026-10-23, below) and records it as
 `length.check`, and `check` re-measures there. The full AgentX corpus costs its 98,827
 requests three times, once a seed, when its shape is written; CI re-measures it at a fraction
 of that, and runs it once more at its full length, the first seed's, for the counts (below).
@@ -765,6 +767,29 @@ each shape is there and was measured on the AST, parameter file, GPU count, and 
 parameter committed now. `write` measures and writes the shapes, the descriptions, and
 `CATALOG.md`. CI runs
 `check` with the runner in the job that builds it.
+
+*2026-10-23 (the user's request, after a rewrite took 36 minutes on two or three of twenty
+cores; goal: the least wait, no CPU wasted):* `write` measures only the shapes that are stale
+by that same check (missing, of another `shape_version`, or measured on another AST, parameter
+file, GPU count, or length parameter) and keeps the rest as committed, since their numbers
+holding is `check`'s to say; `--all-shapes` measures every one, for a change to the runner's
+metrics, which no recorded hash shows. Both commands run their dry runs on one scheduler of
+`--jobs N` at once (default the CPUs the process may run on, `sched_getaffinity`: 20 on the
+development machine, 4 on CI's runners), from one queue ordered by the op count each case's
+shape recorded, the largest first (a case never measured first of all), so the longest case
+starts first instead of ending the write alone; every case's first dry runs are queued before
+any starts. The check length is searched, not halved in turn: the full length's three seeds and
+the first level's run at once; each level is decided on its three seeds against the full run's
+medians (never against a neighbouring level, as above), and the next level is queued only once
+it is decided: down while a level agrees, up while it differs. The search starts at the check
+length the shape recorded before (at half the case's when that was the case's own), and a new
+case at the smallest level, since the committed shapes hold at 1/32 (the LMCache AgentX and
+chat cases) or only at the full length (every other). A case whose shape changes not at all
+thus costs its full length and two levels. Nothing runs speculatively, so no dry run is
+wasted; speculating on the level after next would shorten the tail and was left out. The dry
+runs are deterministic (positional randomness, no timing) and each search depends on its own
+case's numbers alone, so the files are the same at any `N`; memory, not the CPUs, may bound
+`N`: a large case's dry run under `--metrics-json` takes gigabytes.
 
 *Choices made in the build, open to revision:* the shape at the case's own length, re-checked
 at a shorter one (above); KV cases measured in chunk-sized blocks (the shares are those at
