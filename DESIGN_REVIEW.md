@@ -7346,6 +7346,51 @@ against them.
 or nothing); a per-mechanism block (a knob that extents make unnecessary); a larger guard (20 GB
 for a unit no application reads in).
 
+### 3.80 Listing the use cases: `aeiou cases` (raised by the user 2026-10-23; the shape decided the same day, not built)
+
+**The problem.** A use case runs by name (`--case NAME`, §3.78), but nothing tells a user which
+names exist or what each one is. `CATALOG.md` has it, as a document to read; the user expects
+the cases to reach the middle double digits once a job is one case per accelerator (item 39),
+and the attributes are a fixed vocabulary (`workloads/attributes.toml`), so filtering on them is
+both useful and simple.
+
+**Decided (the user, on the recommendation).** A subcommand of the runner, not of
+`aeiou-catalog`: the person running a case on a system under test has the binary, while the
+Python wheel ships for authors; the release already carries every record under `workloads/`
+beside the binary, where `--case` looks; and the measured attributes' classes are already
+written in each `shape.json`, so the runner reads tags and re-derives nothing.
+
+- `aeiou cases` lists **every** case of every kind, the kind its own column. Most cases today
+  are traced examples or unsettled, so hiding them would leave the list nearly empty; the
+  default may change to leave out examples once validated use cases are many (the user's
+  note).
+- `--where ATTR=VALUE` keeps, `--where ATTR!=VALUE` drops, several ANDed; `--json`
+  for scripts. A bare `aeiou cases` lists (the user's choice over printing the help, as every
+  subcommand's bare form does its default action); `aeiou cases --help` gives the syntax and
+  the vocabulary, every attribute with its values, curated and measured, without their
+  meanings, which `CATALOG.md` gives. The vocabulary is read from the tree's `attributes.toml`
+  when the help is printed, not compiled in, so a binary and its `workloads/` never disagree.
+- `aeiou cases NAME`: one case's attributes, GPU counts, what its lock fixes and what a
+  submission must still give, its `DESCRIPTION.md`, and the commands that run it.
+- A `--case NAME` matching nothing names the near matches and `aeiou cases`.
+
+**The cost.** A second reader of the records, in Rust, beside the Python one that writes the
+catalog. A test holds `aeiou cases --json` equal to what `aeiou-catalog` loads from the
+committed tree, as the two checkers are held to agree.
+
+**Exclusion is `!=`, not `--no-where`** (the user, 2026-10-23, after first asking for
+`--no-where`): every `--no-x` of the suite turns a boolean off, the last one on the line winning
+(`runner/REFERENCE.md` §14), and `--no-where` is no boolean, so `--where kind=example --no-where
+kind=example` would read as the last one winning where both apply. One flag, its operator in
+the value, keeps the convention; `!` wants quoting in some shells.
+
+**Open.** How a repeated `where` reads from a `--config` file (a TOML array, to be settled
+against `runner/REFERENCE.md` §14).
+
+**Considered and not done.** A pointer to `CATALOG.md` alone (a document, not a query, and the
+cases multiply); a search tool in the Python wheel (not on the hosts that run cases); free-text
+search (the tags and a name match cover it, and `grep` the rest).
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

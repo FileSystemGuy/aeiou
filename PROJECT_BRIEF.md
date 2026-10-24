@@ -785,6 +785,24 @@ numbers; the order is this note's.
     each, the case named from the `accelerator` attribute's vocabulary. Until then the
     traced example cases carry the abstracts' old `step_time`, said in their parameter files
     to be not fitted, and the number of cases multiplies when it is built.
+40. **`aeiou cases`: the use cases a binary can run, listed and filtered (backlog, raised by
+    the user 2026-10-23, `DESIGN_REVIEW.md` §3.80).** `--case NAME` runs a case by name, but
+    nothing lists the names, and with item 39 the cases reach the middle double digits. A
+    subcommand of the runner, reading the records the release already ships under
+    `workloads/` (`case.toml`, `mechanism.toml`, each case's `shape.json`, and
+    `attributes.toml`): `aeiou cases [--where ATTR=VALUE | --where ATTR!=VALUE]... [--json]`
+    lists every case, of every kind, one row each (`mechanism/case`, kind, GPU counts,
+    category and class, its one-line doc); `--where ATTR=VALUE` keeps the cases with that value
+    and `--where ATTR!=VALUE` drops them (`--where 'kind!=example'`), several ANDed; an attribute
+    or value outside the dictionary is a usage error naming the valid ones. `aeiou cases NAME`
+    shows one: its attributes, its GPU counts, what its lock fixes and what a submission must
+    still give, its `DESCRIPTION.md`, and the `datagen` and `run` commands that run it.
+    `aeiou cases --help` gives the syntax and the whole vocabulary, every attribute and its
+    values, curated and measured, read from the tree's `attributes.toml` (no explanation of
+    the terms: `CATALOG.md` has them). A `--case NAME` that matches nothing names the near
+    matches and `aeiou cases`; the `--case` help of `dry-run`, `datagen`, and `run` points at
+    `aeiou cases` and `CATALOG.md`. A test holds `aeiou cases --json` to what `aeiou-catalog`
+    loads from the committed tree, so the two readers of the records never drift.
 
 ## 7. Environment
 
