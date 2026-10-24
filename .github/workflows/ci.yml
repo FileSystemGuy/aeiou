@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           version-file: builder/pyproject.toml
           checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
@@ -93,7 +93,7 @@ jobs:
       - name: Build with the object engine and test it
         working-directory: runner
         run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release --no-default-features --features object -E 'test(/object/) | test(/endpoint/)'
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           version-file: builder/pyproject.toml
           checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
@@ -120,7 +120,7 @@ jobs:
       - name: Build the binary
         working-directory: runner
         run: cargo build --release --bin aeiou
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           version-file: builder/pyproject.toml
           checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f

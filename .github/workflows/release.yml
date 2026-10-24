@@ -29,7 +29,7 @@ jobs:
           shared-key: release
       # uv at builder/pyproject.toml's required-version, by checksum; the Python is builder/.python-version,
       # one uv downloads (the image's 3.10 is never used), the Python CI tests with (DESIGN_REVIEW.md §3.82)
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           version-file: builder/pyproject.toml
           checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
