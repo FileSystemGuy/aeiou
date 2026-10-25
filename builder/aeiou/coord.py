@@ -225,15 +225,28 @@ class Client:
                     raise BuildError(self.reason)
                 self.cv.wait(0.05)
 
+    def _send(self, msg) -> None:
+        """A send the coordinator may have reset: rank 0 stops every host and exits, and a
+        message it did not read resets the connection, so the reason, which the reader has or
+        is about to have, is what this host fails with, not the reset."""
+        try:
+            self.conn.send(msg)
+        except OSError as e:
+            deadline = time.monotonic() + 1
+            with self.cv:
+                while self.reason is None and time.monotonic() < deadline:
+                    self.cv.wait(0.05)
+                raise BuildError(self.reason or f"coordinator {self.addr}: {e}") from None
+
     def ready(self) -> tuple:
         """This host's checks are done; blocks until every host's are (the start gate).
         Returns the common start time and the hosts by rank."""
-        self.conn.send("Ready")
+        self._send("Ready")
         return self._wait(lambda: self.started)
 
     def done(self, doc: dict) -> None:
         """This host's part, for rank 0 to gather."""
-        self.conn.send({"Done": doc})
+        self._send({"Done": doc})
 
     def result(self) -> tuple:
         """Rank 0's verdict: `(ok, fingerprint, error)`."""
