@@ -32,16 +32,20 @@ die() {
 }
 commas() { echo "$1" | sed 's/ /, /g'; }
 
-# The downloads: the tool, the URL of one release, and the SHA-256 of the file it serves
-# (MinIO's last release with binaries: the project archived its repository).
+# The downloads: the tool, the architecture (uname -m), the URL of one release, and the SHA-256 of
+# the file it serves (MinIO's last release with binaries: the project archived its repository).
+ARCHES="x86_64 aarch64"
 PINS=
 pin() {
-    PINS="$PINS$1 $2 $3
+    PINS="$PINS$1 $2 $3 $4
 "
 }
-pin minio https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z 7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f
-pin nextest https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.149/cargo-nextest-0.9.149-x86_64-unknown-linux-gnu.tar.gz 32d1d8c0567b7a80bee2bad8bb09125c846da96bc009b2de11ec08557290c770
-pin llvm-cov https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a
+pin minio x86_64 https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z 7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f
+pin minio aarch64 https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-arm64.RELEASE.2025-09-07T16-13-09Z 5c83cd2cf151717ba0243f73e1c7802ff36e272b67144bdd7f1f7d684fd6f03d
+pin nextest x86_64 https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.149/cargo-nextest-0.9.149-x86_64-unknown-linux-gnu.tar.gz 32d1d8c0567b7a80bee2bad8bb09125c846da96bc009b2de11ec08557290c770
+pin nextest aarch64 https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.149/cargo-nextest-0.9.149-aarch64-unknown-linux-gnu.tar.gz 6f82e375187cf3a1f3e336879a51940c315a5d0ce7253f7e517ad28295b74189
+pin llvm-cov x86_64 https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a
+pin llvm-cov aarch64 https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-aarch64-unknown-linux-gnu.tar.gz abf5f13c1520f8756d2192bfaaeadb0208f5b7eaa8cadc15bf847befa42b7360
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     cat <<EOT
@@ -54,15 +58,16 @@ Commands:
                   coverage group), and put aeiou-header beside the binary
   check [JOB]...  Run CI's jobs, the same steps: $(commas "$JOBS") (the default)
   cov             Coverage of the Rust (cargo-llvm-cov) and the Python (pytest-cov), per file, nothing skipped
-  fetch <TOOL>    Download one pinned tool, $(commas "$TOOLS"), checked by its SHA-256, and print its path
+  fetch <TOOL>    Download one pinned tool, $(commas "$TOOLS"), for this architecture, checked by its SHA-256,
+                  and print its path
 
 Options:
   -h, --help  Print help
 
 Needs rustup (https://rustup.rs) and uv (https://docs.astral.sh/uv/getting-started/installation/), and strace for
-the integration job and cov; the versions are the checkout's. Downloads are kept in \$AEIOU_DEV_CACHE (default
-\${XDG_CACHE_HOME:-~/.cache}/aeiou-dev) and checked again each time they are used. To run the benchmark, a
-release's tarball needs none of this (QUICKSTART.md).
+the integration job and cov; the versions are the checkout's. Downloads, x86_64 or aarch64, are kept in
+\$AEIOU_DEV_CACHE (default \${XDG_CACHE_HOME:-~/.cache}/aeiou-dev), a directory per architecture, and checked again
+each time they are used. To run the benchmark, a release's tarball needs none of this (QUICKSTART.md).
 EOT
     exit 0
 fi
@@ -84,21 +89,24 @@ need() {
     [ -z "$missing" ] || die "not on PATH, and needed:$missing"
 }
 
-# fetch TOOL: the pinned file, downloaded once into $CACHE and checked against its hash every
-# time; a tarball's one executable is unpacked beside it. Prints the executable's path.
+# fetch TOOL: this architecture's pinned file, downloaded once into $CACHE/ARCH (a cache on a
+# home directory hosts of both kinds mount) and checked against its hash every time; a tarball's
+# one executable is unpacked beside it. Prints the executable's path.
 fetch() {
-    line=$(printf '%s' "$PINS" | grep "^$1 ")
-    url=$(echo "$line" | cut -d' ' -f2)
-    sha=$(echo "$line" | cut -d' ' -f3)
-    [ "$(uname -m)" = x86_64 ] || die "$1: the pinned download is for x86_64, and this is $(uname -m)"
-    mkdir -p "$CACHE"
+    arch=$(uname -m)
+    line=$(printf '%s' "$PINS" | grep "^$1 $arch ") ||
+        die "$1: no download is pinned for $arch, only $(echo "$ARCHES" | sed 's/ / and /')"
+    url=$(echo "$line" | cut -d' ' -f3)
+    sha=$(echo "$line" | cut -d' ' -f4)
+    dir=$CACHE/$arch
+    mkdir -p "$dir"
     case $url in
-    *.tar.gz) file=$CACHE/$1.tar.gz ;;
-    *) file=$CACHE/$1 ;;
+    *.tar.gz) file=$dir/$1.tar.gz ;;
+    *) file=$dir/$1 ;;
     esac
     if ! { [ -f "$file" ] && printf '%s  %s\n' "$sha" "$file" | sha256sum -c --status 2>/dev/null; }; then
         rm -f "$file"
-        part=$CACHE/.download.$$
+        part=$dir/.download.$$
         if ! curl -sSfL --retry 3 -o "$part" "$url" 2>"$part.err"; then
             err=$(cat "$part.err")
             rm -f "$part" "$part.err"
@@ -114,8 +122,8 @@ fetch() {
     case $file in
     *.tar.gz)
         exe=$(tar tzf "$file" | head -n 1)
-        tar xzf "$file" -C "$CACHE" "$exe"
-        echo "$CACHE/$exe" ;;
+        tar xzf "$file" -C "$dir" "$exe"
+        echo "$dir/$exe" ;;
     *)
         chmod +x "$file"
         echo "$file" ;;

@@ -322,7 +322,7 @@ and strace to trace; everything else is a version the checkout names (`DESIGN_RE
 §3.83), which they and `dev.sh` fetch: Rust (`rust-toolchain.toml`), the crates
 (`runner/Cargo.lock`), uv's version, the Python (`builder/.python-version`, always one uv
 downloads, never the system's), the packages (`builder/uv.lock`), and nextest, MinIO, and
-cargo-llvm-cov (pinned in `dev.sh` by SHA-256).
+cargo-llvm-cov (pinned in `dev.sh` by SHA-256, for x86_64 and for aarch64).
 
 ```
 ./dev.sh setup          # the runner (target/release/aeiou), builder/.venv, aeiou-header beside the binary
@@ -347,7 +347,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-24)
+## Status (2026-10-25)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -412,7 +412,7 @@ checksum), the packages and the build backend and PyInstaller (`uv.lock`), Rust
 ships the lock's requirements and the Python beside its wheel, which `QUICKSTART.md` installs.
 strace is the image's. A clone builds and checks through `dev.sh` (2026-10-24, §3.83): `setup`, `check [JOB]...`
 (each CI job is `./dev.sh check JOB`), `cov`, and `fetch` (MinIO, nextest, cargo-llvm-cov by
-SHA-256); a tool run from a checkout under another Python warns, and the tests refuse a package
+SHA-256, for x86_64 and, since 2026-10-25, aarch64); a tool run from a checkout under another Python warns, and the tests refuse a package
 that is not the lock's. Submitters run the release.
 
 Not built, in rough order of interest:

@@ -7559,8 +7559,16 @@ workflow is now a matrix of two legs, `x86_64` on `ubuntu-22.04` and `aarch64` o
   artifacts and no release is made, so the arm leg can be tried before a tag; the version is then
   the checkout's (Cargo.toml and pyproject.toml must still agree).
 
-Not done: `dev.sh fetch` stays x86_64-only (its pinned nextest, cargo-llvm-cov, and MinIO
-downloads), so a contributor on aarch64 runs `./dev.sh check` with those tools from elsewhere.
+~~Not done: `dev.sh fetch` stays x86_64-only (its pinned nextest, cargo-llvm-cov, and MinIO
+downloads), so a contributor on aarch64 runs `./dev.sh check` with those tools from elsewhere.~~
+*Done 2026-10-25, at the user's request:* `dev.sh` pins each download per architecture
+(`pin TOOL ARCH URL SHA`, the architecture `uname -m`'s), the aarch64 files of the same three
+releases (MinIO's hash checked against its `.sha256sum`, nextest's and cargo-llvm-cov's against
+the digests GitHub records for the release assets, as neither project publishes a checksum
+file). The cache holds a directory per architecture, since a home directory, and so the default
+cache, is often one both kinds of host mount; an architecture with no pin is refused by name.
+Red first: `test_pins.py` requires both architectures' file of one version for each tool, and
+`test_dev.py` an aarch64 host fetching the arm64 file into its own directory.
 
 ## 4. Plan changes
 

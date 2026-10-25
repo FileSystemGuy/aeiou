@@ -74,10 +74,16 @@ def test_no_workflow_takes_a_version_the_day_it_runs():
 
 def test_dev_sh_pins_every_download_by_version_and_hash():
     text = (ROOT / "dev.sh").read_text(encoding="utf-8")
-    pins = re.findall(r"^pin (\S+) (https://\S+) ([0-9a-f]{64})$", text, re.M)
-    assert sorted(t for t, _, _ in pins) == ["llvm-cov", "minio", "nextest"], pins
-    for tool, url, _ in pins:
+    pins = re.findall(r"^pin (\S+) (\S+) (https://\S+) ([0-9a-f]{64})$", text, re.M)
+    assert sorted((t, a) for t, a, _, _ in pins) == [(t, a) for t in ["llvm-cov", "minio", "nextest"]
+                                                    for a in ["aarch64", "x86_64"]], pins
+    # each architecture's file, of the one version
+    names = {"x86_64": ("x86_64", "amd64"), "aarch64": ("aarch64", "arm64")}
+    for tool, arch, url, _ in pins:
         assert re.search(r"\d+\.\d+\.\d+|RELEASE\.\d{4}-", url) and "latest" not in url, (tool, url)
+        assert any(n in url.rsplit("/", 1)[1] for n in names[arch]), (tool, arch, url)
+        assert url.rsplit("/", 2)[1] == next(u for t, a, u, _ in pins if t == tool and a == "x86_64").rsplit("/", 2)[1]
+    assert len({s for _, _, _, s in pins}) == len(pins)
 
 
 def test_every_ci_job_is_its_dev_sh_check():

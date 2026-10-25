@@ -103,11 +103,12 @@ def test_a_download_whose_hash_is_not_the_pin_s_is_refused_and_not_kept(tmp_path
     assert "dev.sh: minio: the download's SHA-256 is not the pin's" in r.stderr
     assert not any(cache.rglob("*minio*")), list(cache.rglob("*"))
     # a corrupt file already in the cache is not trusted: it is fetched again, and refused again
-    cache.mkdir(exist_ok=True)
-    (cache / "minio").write_text("stale")
+    arch = os.uname().machine
+    (cache / arch).mkdir(parents=True, exist_ok=True)
+    (cache / arch / "minio").write_text("stale")
     r = dev("fetch", "minio", path=f"{bad}:{system(tmp_path)}", cache=cache)
     assert r.returncode == 1 and "SHA-256 is not the pin's" in r.stderr
-    assert not (cache / "minio").exists()
+    assert not (cache / arch / "minio").exists()
 
 
 def test_a_failed_download_is_reported_as_one(tmp_path):
@@ -118,9 +119,25 @@ def test_a_failed_download_is_reported_as_one(tmp_path):
     assert not any((tmp_path / "cache").rglob("*nextest*"))
 
 
-def test_the_downloads_are_pinned_for_x86_64_alone(tmp_path):
-    arm = fake(tmp_path, "uname", "echo aarch64\n")
-    r = dev("fetch", "minio", path=f"{arm}:{system(tmp_path)}", cache=tmp_path / "cache")
+def test_each_architecture_fetches_its_own_download_into_its_own_cache(tmp_path):
+    # a cache on a home directory both kinds of host mount: one host's file never stands for the other's
+    log = tmp_path / "urls"
+    curl = f'while [ $# -gt 1 ]; do [ "$1" = -o ] && out=$2; shift; done; echo "$1" >> {log}; echo x > "$out"\n'
+    fake(tmp_path, "curl", curl)
+    cache = tmp_path / "cache"
+    for arch, file in (("aarch64", "minio.linux-arm64."), ("x86_64", "minio.linux-amd64.")):
+        d = fake(tmp_path, "uname", f"echo {arch}\n")
+        (cache / arch).mkdir(parents=True, exist_ok=True)
+        (cache / arch / "minio").write_text("stale")
+        r = dev("fetch", "minio", path=f"{d}:{system(tmp_path)}", cache=cache)
+        assert r.returncode == 1 and "SHA-256 is not the pin's" in r.stderr, r.stderr
+        assert file in log.read_text().splitlines()[-1], log.read_text()
+        assert not (cache / arch / "minio").exists()
+
+
+def test_an_architecture_with_no_pinned_download_is_refused(tmp_path):
+    d = fake(tmp_path, "uname", "echo riscv64\n")
+    r = dev("fetch", "minio", path=f"{d}:{system(tmp_path)}", cache=tmp_path / "cache")
     assert (r.returncode, r.stdout) == (1, "")
-    assert r.stderr == "dev.sh: minio: the pinned download is for x86_64, and this is aarch64\n"
+    assert r.stderr == "dev.sh: minio: no download is pinned for riscv64, only x86_64 and aarch64\n"
     assert not (tmp_path / "cache").exists()
