@@ -4,19 +4,23 @@ on:
   push:
   pull_request:
 
-# Four jobs on four runners (4 cores each). The runner's whole suite, the object engine's tests
-# against MinIO included (`object` and `formats` are default features, 2026-10-16), runs in `runner-tests`; the
-# fourth, `runner-object`, runs the object engine's tests again in the build without `formats`, so
-# that build is compiled too, and the Python writer into a bucket read back by the engine. `abstracts` needs no Rust. The runner's own
-# tests and the Python tests that drive the built binary each build on their own runner from
-# one shared Rust cache: the test binaries are compiled only where they are run, and the
-# integration job builds the `aeiou` binary alone. The pytest suites run on 4 workers, the
-# runner's test binaries under cargo-nextest (every test its own process, 4 at a time; there
-# are no doctests for it to miss), and a kit pair's four seeds as four processes.
+# Four jobs on four runners (4 cores each), each `./dev.sh check JOB` (DESIGN_REVIEW.md §3.83):
+# the steps are dev.sh's, so a checkout runs exactly what CI runs, and this file only sets up
+# what dev.sh needs, rustup's Rust and uv. The runner's whole suite, the object engine's tests
+# against MinIO included (`object` and `formats` are default features, 2026-10-16), runs in
+# `runner-tests`; the fourth, `runner-object`, runs the object engine's tests again in the build
+# without `formats`, so that build is compiled too, and the Python writer into a bucket read back
+# by the engine. `abstracts` needs no Rust. The runner's own tests and the Python tests that drive
+# the built binary each build on their own runner from one shared Rust cache: the test binaries
+# are compiled only where they are run, and the integration job builds the `aeiou` binary alone.
+# The pytest suites run on every core, the runner's test binaries under cargo-nextest (every test
+# its own process; there are no doctests for it to miss), and a kit pair's four seeds as four
+# processes.
 # Every tool is a version the repository names (DESIGN_REVIEW.md §3.82): the image, Rust
-# (rust-toolchain.toml), nextest, uv (builder/pyproject.toml's required-version, by checksum), and
-# Python (builder/.python-version, always one uv downloads, never the image's), the packages
-# from uv.lock. strace is the image's, so a new image is a deliberate change here.
+# (rust-toolchain.toml), uv (builder/pyproject.toml's required-version, by checksum), and Python
+# (builder/.python-version, always one uv downloads, never the image's), the packages from
+# uv.lock, and nextest and MinIO (dev.sh, by SHA-256). strace is the image's, so a new image is a
+# deliberate change here.
 jobs:
   abstracts:
     runs-on: ubuntu-24.04
@@ -26,24 +30,10 @@ jobs:
         with:
           version-file: builder/pyproject.toml
           checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
-      - name: Install (locked)
-        working-directory: builder
-        run: uv sync --locked --extra test --extra formats
-      - name: Reference checker over the committed ASTs
-        run: builder/.venv/bin/python schema/check.py
-      - name: Builder tests
-        working-directory: builder
-        run: AEIOU_REQUIRE=py-formats .venv/bin/pytest -q -n 4
-      - name: Hermetic build-twice of every abstract, compared with the committed ASTs
-        working-directory: builder
-        run: .venv/bin/aeiou-build --hermetic --twice --check $(find ../workloads -name '*.py' -not -path '*/kit/*' | LC_ALL=C sort)
-      - name: Parameter files fit their abstracts
-        working-directory: builder
-        run: |
-          for f in $(find ../workloads -name '*params.json' | LC_ALL=C sort); do
-            a=$(.venv/bin/python -c 'import json, sys; print(json.load(open(sys.argv[1]))["abstract"])' "$f")
-            .venv/bin/aeiou-params check "$(find ../workloads -name "$a.ast.json")" "$f" || exit 1
-          done
+      # the reference checker over the committed ASTs, the builder's tests, the hermetic
+      # build-twice of every abstract against the committed ASTs, the parameter files against their abstracts
+      - name: dev.sh check abstracts
+        run: ./dev.sh check abstracts
 
   runner-tests:
     runs-on: ubuntu-24.04
@@ -55,23 +45,11 @@ jobs:
         with:
           workspaces: runner
           shared-key: runner
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest@0.9.149
-      - name: MinIO server, for the object engine's tests (the pinned release, as runner-object's)
-        run: |
-          curl -sSfL -o /tmp/minio https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
-          echo "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f  /tmp/minio" | sha256sum -c
-          chmod +x /tmp/minio
-      - name: Build and test, every test the object engine's included
-        working-directory: runner
-        run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release
-      - name: A build without the object engine refuses an object endpoint
-        working-directory: runner
-        run: "cargo test --release --no-default-features --lib endpoint::"
+      # every test, the object engine's against MinIO included; then a build without the object
+      # engine refuses an object endpoint
+      - name: dev.sh check runner
+        run: ./dev.sh check runner
 
-  # The object engine (cargo feature `object`, on by default; runner/REFERENCE.md §16) against MinIO: the last
-  # release that has binaries (the project archived its repository), checked by SHA-256.
   runner-object:
     runs-on: ubuntu-24.04
     steps:
@@ -82,30 +60,15 @@ jobs:
         with:
           workspaces: runner
           shared-key: runner-object
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest@0.9.149
-      - name: MinIO server
-        run: |
-          curl -sSfL -o /tmp/minio https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
-          echo "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f  /tmp/minio" | sha256sum -c
-          chmod +x /tmp/minio
-      - name: Build with the object engine and test it
-        working-directory: runner
-        run: TEST_MINIO_BIN=/tmp/minio cargo nextest run --release --no-default-features --features object -E 'test(/object/) | test(/endpoint/)'
       - uses: astral-sh/setup-uv@v10.3.2
         with:
           version-file: builder/pyproject.toml
           checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
-      - name: Builder with the format classes' libraries and the S3 client
-        working-directory: builder
-        run: uv sync --locked --extra test --extra formats --extra s3
-      - name: aeiou-datagen into the bucket, read back by the object engine to the dry-run fingerprint
-        working-directory: builder
-        run: |
-          cargo build --release --bin aeiou --manifest-path ../runner/Cargo.toml
-          ln -sf ../../../builder/.venv/bin/aeiou-header ../runner/target/release/aeiou-header
-          AEIOU_REQUIRE=runner,object,formats,header,minio,py-formats,py-s3 TEST_MINIO_BIN=/tmp/minio AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -rs tests/test_object.py
+      # the object engine (cargo feature `object`; runner/REFERENCE.md §16) against MinIO in the
+      # build without `formats`; then aeiou-datagen into the bucket, read back by the engine to
+      # the dry-run fingerprint
+      - name: dev.sh check object
+        run: ./dev.sh check object
 
   runner-integration:
     runs-on: ubuntu-24.04
@@ -117,32 +80,16 @@ jobs:
         with:
           workspaces: runner
           shared-key: runner
-      - name: Build the binary
-        working-directory: runner
-        run: cargo build --release --bin aeiou
       - uses: astral-sh/setup-uv@v10.3.2
         with:
           version-file: builder/pyproject.toml
           checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
-      - name: Builder with the format classes' libraries
-        working-directory: builder
-        run: uv sync --locked --extra test --extra formats
-      - name: aeiou-header beside the binary (the release ships one file there; here the venv's)
-        run: ln -sf ../../../builder/.venv/bin/aeiou-header runner/target/release/aeiou-header
-      - name: Rust checker agrees with the reference checker on every committed AST
-        run: |
-          builder/.venv/bin/python schema/check.py > /tmp/check.py.out
-          runner/target/release/aeiou check $(find workloads -name '*.ast.json' | LC_ALL=C sort) | sed '1,/^$/d' > /tmp/check.rs.out   # past the options block
-          diff /tmp/check.py.out /tmp/check.rs.out
-      # Every Python test against the binary, `AEIOU_REQUIRE` (builder/tests/conftest.py) failing any
-      # skipped for something this job built: container datasets to the dry-run fingerprint, traces
-      # and kit pairs, the catalog, the coordinator's frames, the payload, the usage frame
-      # (DESIGN_REVIEW.md §3.75: test_coord.py, test_payload.py, and test_usage.py ran in no job).
-      - name: The builder's tests against the binary, none skipped for what this job built
-        working-directory: builder
-        run: |
-          command -v strace || sudo apt-get install -y strace
-          AEIOU_REQUIRE=runner,formats,strace,header,py-formats AEIOU_RUNNER=../runner/target/release/aeiou .venv/bin/pytest -q -n 4 -rs
-      - name: The workload catalog, every shape re-measured at its check length and its counts at the case's length
-        working-directory: builder
-        run: .venv/bin/aeiou-catalog check --workloads ../workloads --runner ../runner/target/release/aeiou
+      - name: strace, the image's
+        run: command -v strace || sudo apt-get install -y strace
+      # the Rust checker against the reference checker on every committed AST; every Python
+      # test against the binary, `AEIOU_REQUIRE` (builder/tests/conftest.py) failing any skipped
+      # for something this job built: container datasets to the dry-run fingerprint, traces and
+      # kit pairs, the catalog, the coordinator's frames, the payload, the usage frame
+      # (DESIGN_REVIEW.md §3.75); the workload catalog, every shape re-measured at its check length
+      - name: dev.sh check integration
+        run: ./dev.sh check integration

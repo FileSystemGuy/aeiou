@@ -50,7 +50,7 @@ import sys
 import tempfile
 import time
 
-from . import __version__, coord, emit, options, params as params_mod, usage
+from . import __version__, checkout, coord, emit, options, params as params_mod, usage
 from .formats import FormatClass, Sink
 from .framing import FileGeometry, Framing
 from .nodes import BuildError
@@ -531,6 +531,7 @@ def parser() -> usage.Parser:
 
 def main(argv=None) -> int:
     ap = parser()
+    checkout.warn(ap.prog)
     try:
         a = ap.parse_args(argv)
         return _main(a, ap)

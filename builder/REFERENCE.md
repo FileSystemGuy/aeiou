@@ -27,12 +27,12 @@ builder/
 ```
 
 ```
-cd builder && uv sync --locked --extra test --extra formats     # uv, Python, and packages as pinned (DESIGN_REVIEW.md §3.82)
-uv run aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')   # each AST beside its script
-uv run pytest
-uv run aeiou-build --check $(find ../workloads -name '*.py' -not -path '*/kit/*')     # drift check (CI)
-uv run aeiou-params check ../workloads/model-loading/safetensors-load/safetensors_load.ast.json ../workloads/model-loading/safetensors-load/params/synthetic.params.json
-uv run aeiou-catalog check --workloads ../workloads --runner ../runner/target/release/aeiou   # the catalog (CI)
+./dev.sh setup && cd builder     # the venv (and the runner) at the checkout's pins (DESIGN_REVIEW.md §3.82, §3.83)
+.venv/bin/aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')   # each AST beside its script
+.venv/bin/pytest
+.venv/bin/aeiou-build --check $(find ../workloads -name '*.py' -not -path '*/kit/*')     # drift check (CI)
+.venv/bin/aeiou-params check ../workloads/model-loading/safetensors-load/safetensors_load.ast.json ../workloads/model-loading/safetensors-load/params/synthetic.params.json
+.venv/bin/aeiou-catalog check --workloads ../workloads --runner ../runner/target/release/aeiou   # the catalog (CI)
 ```
 
 The authoring scripts and their ASTs live under `workloads/` (`DESIGN_REVIEW.md` §3.66), one
@@ -203,10 +203,10 @@ shape live in a **parameter file** (`schema/README.md` §8, `schema/params.schem
 the shape is published once and its parameter sets separately. `aeiou-params` is the helper:
 
 ```
-uv run aeiou-params defaults ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json -o tsf.params.json --pin
-uv run aeiou-params check ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json tsf.params.json
-uv run aeiou-params safetensors ../workloads/model-loading/safetensors-load/safetensors_load.ast.json model-0000?-of-00004.safetensors -o llama.params.json --tp 8
-uv run aeiou-params npz ../workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_00000000?.npz [-o corpus.params.json]
+.venv/bin/aeiou-params defaults ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json -o tsf.params.json --pin
+.venv/bin/aeiou-params check ../workloads/input-pipeline/map/file-per-sample/file_per_sample.ast.json tsf.params.json
+.venv/bin/aeiou-params safetensors ../workloads/model-loading/safetensors-load/safetensors_load.ast.json model-0000?-of-00004.safetensors -o llama.params.json --tp 8
+.venv/bin/aeiou-params npz ../workloads/input-pipeline/map/npy-per-sample/npy_per_sample.ast.json corpus/train/00000/sample_00000000?.npz [-o corpus.params.json]
 ```
 
 `npz` (2026-10-02) reads `framing` and `cd_len`, the two archive numbers `npy_per_sample`
@@ -236,8 +236,8 @@ a file or a list of them); `aeiou-params lock CASE [--rules FILE]` (`aeiou/lock.
 resolves it into `CASE/case.lock.json`:
 
 ```
-uv run aeiou-params lock ../workloads/input-pipeline/map/npy-per-sample/cases/npy-8mib
-uv run aeiou-params lock ../workloads/…/cases/unet3d-h100 --rules bench.rules.json -o bench-unet3d-h100.lock.json
+.venv/bin/aeiou-params lock ../workloads/input-pipeline/map/npy-per-sample/cases/npy-8mib
+.venv/bin/aeiou-params lock ../workloads/…/cases/unet3d-h100 --rules bench.rules.json -o bench-unet3d-h100.lock.json
 ```
 
 The abstract gives each parameter its first state (its default, or required); the fragments

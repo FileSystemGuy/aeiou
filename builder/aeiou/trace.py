@@ -63,7 +63,7 @@ import re
 import sys
 from collections import Counter
 
-from . import __version__, usage
+from . import __version__, checkout, usage
 from .nodes import BuildError
 
 FORMAT = 2
@@ -1868,6 +1868,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
 @usage.tool
 def main(argv=None) -> int:
     ap, subs = parser()
+    checkout.warn(ap.prog)
     sp = ap
     try:
         args = ap.parse_args(argv)

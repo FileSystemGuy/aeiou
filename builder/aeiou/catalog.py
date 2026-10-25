@@ -62,7 +62,7 @@ import threading
 import tomllib
 
 from .params import values_of
-from . import __version__, emit, lock, params, usage
+from . import __version__, checkout, emit, lock, params, usage
 from .describe import Describer
 from .nodes import BuildError
 from .validate import validate
@@ -1219,6 +1219,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
 @usage.tool
 def main(argv=None) -> int:
     ap, subs = parser()
+    checkout.warn(ap.prog)
     sp = ap
     try:
         a = ap.parse_args(argv)

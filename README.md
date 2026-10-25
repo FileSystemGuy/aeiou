@@ -302,29 +302,40 @@ workflow that builds the release tarball and attaches it to a GitHub Release (`.
 
 ## Quick start
 
-A release tarball (the runner, `aeiou-header`, `aeiou-launch`, the manual pages, the
-abstracts with their cases and catalog, and the builder's wheel, for x86_64 Linux) is
-attached to every tag; [QUICKSTART.md](QUICKSTART.md) is the guide for it. From source:
+To run the benchmark, download a release: the tarball attached to every tag (the runner,
+`aeiou-header`, `aeiou-launch`, the manual pages, the abstracts with their cases and catalog,
+and the builder's wheel, for x86_64 Linux) needs no Rust, no Python, and no build;
+[QUICKSTART.md](QUICKSTART.md) is the guide for it.
 
 ```
-# the runner, with its default features as the release binary has them (`formats`: aeiou
-# datagen's container writers; `object`: the object engine, for S3 stores); its object tests
-# start the MinIO server TEST_MINIO_BIN names (runner/REFERENCE.md §16); rustup takes the Rust
-# rust-toolchain.toml names
-cd runner && cargo build --release && TEST_MINIO_BIN=/path/to/minio cargo test --release && cd ..
-
-# the builder, in builder/.venv: uv at the version builder/pyproject.toml requires, the Python
-# builder/.python-version names (one uv downloads, never the system's), every package uv.lock's
-# (DESIGN_REVIEW.md §3.82); the tools are then builder/.venv/bin/aeiou-* or `uv run --locked aeiou-*`
-cd builder && uv sync --locked --extra test --extra formats && uv run --locked pytest && cd ..
-
-# check, dry-run, generate, run
-runner/target/release/aeiou check $(find workloads -name '*.ast.json')
-runner/target/release/aeiou dry-run --case jpeg-50m --workloads workloads --gpus 8 --seed 1
-runner/target/release/aeiou datagen --case jpeg-50m --workloads workloads --root /mnt/sut --param samples=4000
-runner/target/release/aeiou run --case jpeg-50m --workloads workloads --root /mnt/sut --gpus 8 --seed 1 \
-    --param samples=4000 --param steps=50 --report-json run.json
+bin/aeiou cases                                                     # the use cases, and how to run each
+bin/aeiou dry-run --case jpeg-50m --gpus 8 --seed 1
+bin/aeiou datagen --case jpeg-50m --root /mnt/sut --param samples=4000
+bin/aeiou run --case jpeg-50m --root /mnt/sut --gpus 8 --seed 1 --param samples=4000 --param steps=50 --report-json run.json
 ```
+
+### Building from source
+
+A clone is for changing aeiou: authoring workloads, the runner, the builder. It needs
+[rustup](https://rustup.rs) and [uv](https://docs.astral.sh/uv/getting-started/installation/),
+and strace to trace; everything else is a version the checkout names (`DESIGN_REVIEW.md` §3.82,
+§3.83), which they and `dev.sh` fetch: Rust (`rust-toolchain.toml`), the crates
+(`runner/Cargo.lock`), uv's version, the Python (`builder/.python-version`, always one uv
+downloads, never the system's), the packages (`builder/uv.lock`), and nextest, MinIO, and
+cargo-llvm-cov (pinned in `dev.sh` by SHA-256).
+
+```
+./dev.sh setup          # the runner (target/release/aeiou), builder/.venv, aeiou-header beside the binary
+./dev.sh check          # CI's four jobs, the same steps (one: ./dev.sh check runner)
+./dev.sh cov            # coverage of the Rust and the Python, per file
+runner/target/release/aeiou cases      # the runner
+builder/.venv/bin/aeiou-build --help   # the Python tools, every one in builder/.venv/bin/
+```
+
+The Python tools run in `builder/.venv` by their own first line, from any directory, with
+nothing to activate. `pip install -e builder` takes none of these pins: a tool run from a
+checkout under another Python says so on stderr, and the tests refuse any package that is not
+`uv.lock`'s.
 
 The workloads shipped as abstracts: small-file training, large-sample training (`.npz`),
 checkpoint write and restore (`torch.distributed.checkpoint`), model load (safetensors),
@@ -399,7 +410,10 @@ system's), uv (0.13.5, `required-version` in `builder/pyproject.toml`, installed
 checksum), the packages and the build backend and PyInstaller (`uv.lock`), Rust
 (`rust-toolchain.toml`, 1.99.1), nextest, the CI image (`ubuntu-24.04`), and pandoc; the release
 ships the lock's requirements and the Python beside its wheel, which `QUICKSTART.md` installs.
-strace is the image's.
+strace is the image's. A clone builds and checks through `dev.sh` (2026-10-24, §3.83): `setup`, `check [JOB]...`
+(each CI job is `./dev.sh check JOB`), `cov`, and `fetch` (MinIO, nextest, cargo-llvm-cov by
+SHA-256); a tool run from a checkout under another Python warns, and the tests refuse a package
+that is not the lock's. Submitters run the release.
 
 Not built, in rough order of interest:
 

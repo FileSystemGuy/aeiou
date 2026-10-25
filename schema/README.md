@@ -17,8 +17,8 @@ published reference ASTs; `PROJECT_BRIEF.md` §8). Nothing here depends on Pytho
 | `../workloads/**/*params.json` | Parameter sets: a mechanism's test-sized ones in `params/`, a case's in `cases/<case>/params.json`, those fitted to a capture beside it; CI checks each against its abstract with `aeiou-params check`. The `safetensors-load/params/synthetic` set is generated (`builder/tests/test_params.py`), the `smoke` sets are hand-written. |
 
 ```
-uv run --project builder python schema/check.py                      # every committed AST (workloads/**/*.ast.json)
-uv run --project builder python schema/check.py path/to/x.ast.json   # one file
+builder/.venv/bin/python schema/check.py                      # every committed AST (workloads/**/*.ast.json)
+builder/.venv/bin/python schema/check.py path/to/x.ast.json   # one file
 ```
 
 ## 1. Form

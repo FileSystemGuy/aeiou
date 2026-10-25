@@ -30,7 +30,7 @@ import pathlib
 import re
 import sys
 
-from . import __version__, usage
+from . import __version__, checkout, usage
 from .nodes import BuildError
 
 PARAMS_VERSION = 2
@@ -482,6 +482,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
 @usage.tool
 def main(argv=None) -> int:
     ap, subs = parser()
+    checkout.warn(ap.prog)
     sp = ap
     try:
         a = ap.parse_args(argv)

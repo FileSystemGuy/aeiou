@@ -8,6 +8,10 @@ new application from an `strace`, or play one capture back)? The repository READ
 [Where to start](https://github.com/FileSystemGuy/aeiou#where-to-start) lays out each,
 with the recommended sequence of tools.
 
+A clone of the repository is for changing aeiou, not for running it: its README's
+[Building from source](https://github.com/FileSystemGuy/aeiou#building-from-source) is
+`./dev.sh setup`, after rustup and uv.
+
 ## What is in the tarball
 
 | Path | What |
@@ -18,7 +22,7 @@ with the recommended sequence of tools.
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
 | `man/` | The same pages as Markdown. |
 | `workloads/` | The committed abstracts (`*.ast.json`), the only thing the runner executes, one directory per I/O mechanism under its category (`input-pipeline/map/file-per-sample/`, `kvcache/lmcache-local-disk/`, …), each with its README and catalog record (`mechanism.toml`), its cases (`cases/<case>/params.json`: a parameter set describing one workload, with its records, its description in prose (`DESCRIPTION.md`), measured `shape.json`, and, where fitted, the parameters fitted to its captures), and, for some, test-sized parameter files in `params/`; the catalog, `CATALOG.md`, and its vocabulary, `attributes.toml`. The authoring scripts, capture kits, and trace metrics stay in the repository. |
-| `wheel/` | The Python builder, for those who want to author workloads, describe one in prose, or compare an `strace` of a real application with an abstract. Python 3.12 or newer. |
+| `wheel/` | The Python builder, for those who want to author workloads, describe one in prose, or compare an `strace` of a real application with an abstract, with `requirements.txt` (the versions and hashes of what it needs, from the lock it was tested with) and `python-version` (that Python); installed below. |
 | `QUICKSTART.md`, `LICENSE` | This guide; the Apache License 2.0. |
 
 ## First run

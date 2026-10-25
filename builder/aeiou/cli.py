@@ -21,7 +21,7 @@ import runpy
 import subprocess
 import sys
 
-from . import __version__, usage
+from . import __version__, checkout, usage
 from .nodes import BuildError
 
 
@@ -101,6 +101,7 @@ def parser() -> usage.Parser:
 @usage.tool
 def main(argv=None) -> int:
     ap = parser()
+    checkout.warn(ap.prog)
     try:
         a = ap.parse_args(argv)
         missing = usage.Missing(ap)

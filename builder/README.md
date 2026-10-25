@@ -12,9 +12,9 @@ pages are in [`../man/`](../man/README.md); the reference, the authoring API and
 choice made in building it, is [REFERENCE.md](REFERENCE.md).
 
 ```
-uv sync --locked --extra test --extra formats  # uv, Python, and packages as pinned (DESIGN_REVIEW.md §3.82)
-uv run aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')   # each AST beside its script
-uv run pytest
+../dev.sh setup          # the venv (and the runner) at the checkout's pins (DESIGN_REVIEW.md §3.82, §3.83)
+.venv/bin/aeiou-build --hermetic --twice $(find ../workloads -name '*.py' -not -path '*/kit/*')   # each AST beside its script
+.venv/bin/pytest
 ```
 
 ## What it is

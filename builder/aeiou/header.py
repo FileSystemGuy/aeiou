@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 
-from . import __version__, emit, usage
+from . import __version__, checkout, emit, usage
 from .formats import FormatClass
 from .nodes import BuildError
 
@@ -51,6 +51,7 @@ def parser() -> usage.Parser:
 @usage.tool
 def main(argv=None) -> int:
     ap = parser()
+    checkout.warn(ap.prog)
     try:
         a = ap.parse_args(argv)
         missing = usage.Missing(ap)

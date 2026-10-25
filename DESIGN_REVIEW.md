@@ -7490,10 +7490,52 @@ from outside the venv where that can be had):
 --project builder python` in its usage. `builder/tests/test_pins.py` holds all of this: the
 tests run under the pinned Python, and no workflow takes a version the day it runs.
 
-**Open.** How the tools are invoked outside `builder/` (the user, 2026-10-24, from the WG
+~~**Open.** How the tools are invoked outside `builder/` (the user, 2026-10-24, from the WG
 repository's `uv run --project` wrapper): `uv run --locked` checks the venv against the lock on
 every start; the entry points in `builder/.venv/bin/` already run the venv's interpreter by
-their shebang without uv, but do not notice a stale venv.
+their shebang without uv, but do not notice a stale venv.~~ Decided the same day: §3.83.
+
+### 3.83 The release for running, `dev.sh` for building (decided with the user and built 2026-10-24)
+
+**The problem.** The WG's own repository is cloned and run, there being no releases, so its
+`mlpstorage` is a `uv run --project` wrapper: a user who never ran uv, with no venv on PATH,
+still gets the locked environment. aeiou has releases.
+
+**Decided with the user:**
+
+1. *Submitters run the release*, never a clone: the tarball's runner, its one-file
+   `aeiou-header`, and the abstracts need no Rust, no Python, and no build. So no wrapper
+   scripts for running (the user: "we don't need uv or (re)building the Rust code or all the
+   complexity those bring"). Python is for authoring (`aeiou-build`, `aeiou-params lock`,
+   `aeiou-trace`, the catalog), which the wheel serves (§3.82 point 6). Not yet: an aarch64
+   release (Grace hosts build from source), and `aeiou-header` under a `noexec` `/tmp` (PyInstaller
+   unpacks a one-file executable into `$TMPDIR` each start; not tested).
+2. *A clone is for changing aeiou*, and needs rustup and uv; the rest the checkout names
+   (§3.82) and they fetch. What a contributor would otherwise have to know (the header link,
+   MinIO, the extras, the `AEIOU_REQUIRE` lists) is `dev.sh` at the root (the name kept over
+   `environment.sh`, which reads as a script to `source`, and this one exits on every error, and
+   `setup_environment.sh`, which names one of its four commands; and over `make`, whose download
+   checks would be a script behind it, two entry points): `setup` (the runner `--locked`, the venv
+   with every extra and the `coverage` group, `aeiou-header` beside the binary), `check [JOB]...`
+   (CI's four jobs, the same steps), `cov` (Rust by cargo-llvm-cov, Python by pytest-cov, the CLI
+   subprocesses included), and `fetch TOOL` (MinIO, nextest, cargo-llvm-cov, each one release by
+   SHA-256, kept in `$AEIOU_DEV_CACHE` and checked again on every use). A missing rustup, uv, or
+   strace is named with where to get it before anything runs. Each CI job is now
+   `./dev.sh check JOB` after setting up Rust and uv, so a checkout runs exactly what CI runs, and
+   `taiki-e/install-action` and the MinIO download leave the workflow. POSIX sh, usage errors in
+   the suite's frame (exit 2).
+3. *pip is noticed, not refused.* `pip install -e builder` takes none of the pins. A tool run from
+   a checkout (told by `builder/.python-version` beside the package) under another Python prints
+   one warning on stderr and goes on (`aeiou/checkout.py`; a wheel's install has no pin file, and
+   its users may run any Python it allows), since the HDF5 header bytes are libhdf5's: a pip-built
+   `aeiou-header` writes another dataset. And `test_pins.py` refuses any installed package that
+   is not `uv.lock`'s at the lock's version, naming `./dev.sh setup`, so the first test run finds a
+   pip install.
+
+`setup-uv` is named at its exact release (`v10.3.2`): it publishes no major tag, which run
+40143194028 found (three jobs failed at setup), and `test_pins.py` now requires the exact form.
+The tools in the docs run from `builder/.venv/bin/` (their first line is the venv's Python) in
+place of `uv run`, which without `--locked` re-locks a drifted `pyproject.toml`.
 
 ## 4. Plan changes
 
