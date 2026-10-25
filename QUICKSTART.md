@@ -16,7 +16,7 @@ A clone of the repository is for changing aeiou, not for running it: its README'
 
 | Path | What |
 |---|---|
-| `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 Linux, glibc 2.34 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. Reads and writes S3 object stores as well as directories (**aeiou**(1), OBJECT STORES). |
+| `bin/aeiou` | The runner: `check`, `dry-run`, `datagen`, `run`. x86_64 or aarch64 Linux (one tarball each, `-x86_64-linux` and `-aarch64-linux`), glibc 2.34 or newer (RHEL 9, Ubuntu 22.04, Debian 12 and later). Links nothing but libc. Reads and writes S3 object stores as well as directories (**aeiou**(1), OBJECT STORES). |
 | `bin/aeiou-header` | Made by `aeiou datagen`, never by you: the header of an HDF5 file, from libhdf5 (one file carrying Python, numpy, h5py). It must stay beside `bin/aeiou`; only the host of rank 0 runs it, so client hosts need `aeiou` alone. |
 | `bin/aeiou-launch` | One `aeiou run`, `aeiou datagen`, or `aeiou-datagen` rank per host over ssh. A POSIX shell script. |
 | `share/man/` | The manual pages as roff: `man -l share/man/man1/aeiou.1`, or `MANPATH=$PWD/share/man man aeiou`. |
@@ -28,7 +28,7 @@ A clone of the repository is for changing aeiou, not for running it: its README'
 ## First run
 
 ```
-tar xzf aeiou-0.2.1-x86_64-linux.tar.gz && cd aeiou-0.2.1-x86_64-linux
+tar xzf aeiou-0.2.1-x86_64-linux.tar.gz && cd aeiou-0.2.1-x86_64-linux     # or -aarch64-linux, from the next tag
 export PATH=$PWD/bin:$PATH
 
 # 1. the runner validates every shipped abstract and prints its hash and op counts

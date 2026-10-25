@@ -7507,8 +7507,8 @@ still gets the locked environment. aeiou has releases.
    `aeiou-header`, and the abstracts need no Rust, no Python, and no build. So no wrapper
    scripts for running (the user: "we don't need uv or (re)building the Rust code or all the
    complexity those bring"). Python is for authoring (`aeiou-build`, `aeiou-params lock`,
-   `aeiou-trace`, the catalog), which the wheel serves (§3.82 point 6). Not yet: an aarch64
-   release (Grace hosts build from source), and `aeiou-header` under a `noexec` `/tmp` (PyInstaller
+   `aeiou-trace`, the catalog), which the wheel serves (§3.82 point 6). Not yet: ~~an aarch64
+   release (Grace hosts build from source),~~ (built the same day, §3.84) and `aeiou-header` under a `noexec` `/tmp` (PyInstaller
    unpacks a one-file executable into `$TMPDIR` each start; not tested).
 2. *A clone is for changing aeiou*, and needs rustup and uv; the rest the checkout names
    (§3.82) and they fetch. What a contributor would otherwise have to know (the header link,
@@ -7536,6 +7536,29 @@ still gets the locked environment. aeiou has releases.
 40143194028 found (three jobs failed at setup), and `test_pins.py` now requires the exact form.
 The tools in the docs run from `builder/.venv/bin/` (their first line is the venv's Python) in
 place of `uv run`, which without `--locked` re-locks a drifted `pyproject.toml`.
+
+### 3.84 An aarch64 release, built on its own hardware (built 2026-10-24, at the user's request)
+
+Grace hosts (and any aarch64 client) had to build from source (§3.83 point 1). The release
+workflow is now a matrix of two legs, `x86_64` on `ubuntu-22.04` and `aarch64` on
+`ubuntu-22.04-arm`, each building, assembling, and smoke-testing its own tarball,
+`aeiou-VER-ARCH-linux.tar.gz`, and a last job that attaches both to the tag's release.
+
+- *Native, not cross-compiled.* The runner would cross-compile (it links nothing but libc), but
+  `aeiou-header` is a PyInstaller one-file executable, and PyInstaller builds only for the machine
+  it runs on; the smoke test, which runs both binaries and an HDF5 datagen through the header,
+  needs the hardware too. GitHub's arm runners are free for a public repository.
+- *The same image generation*, 22.04, so both binaries need glibc 2.34 or newer, as before.
+- *pandoc for each architecture*, the same release (3.12.1), each tarball by its own SHA-256
+  in the matrix (`test_pins.py` holds both legs and the checksum form).
+- *The smoke test checks the architecture*: `file(1)` must name the leg's for both `aeiou` and
+  `aeiou-header`, so a leg that ran on the wrong runner fails.
+- *A dispatch builds without publishing* (`workflow_dispatch`): both tarballs become the run's
+  artifacts and no release is made, so the arm leg can be tried before a tag; the version is then
+  the checkout's (Cargo.toml and pyproject.toml must still agree).
+
+Not done: `dev.sh fetch` stays x86_64-only (its pinned nextest, cargo-llvm-cov, and MinIO
+downloads), so a contributor on aarch64 runs `./dev.sh check` with those tools from elsewhere.
 
 ## 4. Plan changes
 

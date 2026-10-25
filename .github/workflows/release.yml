@@ -1,24 +1,39 @@
 name: release
 
-# A tag `vX.Y.Z` builds one tarball for x86_64 Linux and attaches it to a GitHub Release:
+# A tag `vX.Y.Z` builds one tarball per architecture, x86_64 and aarch64 Linux, and attaches them
+# to a GitHub Release:
 # the runner binary, `aeiou-header` beside it (one file carrying Python, numpy, h5py, and
 # libhdf5 at the versions uv.lock pins; DESIGN_REVIEW.md §3.70), and `aeiou-launch`, the manual pages as roff and as Markdown, the
 # committed abstracts under workloads/ with their parameter files, case locks, READMEs, descriptions, and catalog records, the builder's wheel, and
 # QUICKSTART.md. Built on ubuntu-22.04 so the binary runs on glibc 2.34 and later (RHEL 9,
 # Ubuntu 22.04, Debian 12 and newer); the runner links nothing but the C runtime (its S3 client
-# uses rustls, no OpenSSL). Nothing is
+# uses rustls, no OpenSSL). Each architecture is built and smoke-tested on its own hardware, since
+# PyInstaller makes aeiou-header for the machine it runs on (DESIGN_REVIEW.md §3.84). Nothing is
 # published to a registry. The tag must equal the version in runner/Cargo.toml and
-# builder/pyproject.toml.
+# builder/pyproject.toml. A dispatch builds and smoke-tests both tarballs, keeps them as the run's
+# artifacts, and publishes nothing.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   tarball:
-    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            pandoc: linux-amd64
+            pandoc-sha256: d0c90410e90204c9ca83b8539fac5c7aed01fd537207e4585849f8abc5df20b8
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            pandoc: linux-arm64
+            pandoc-sha256: 445d96fd08801fe636cab1158b4f017ee320ac3b7446328b4fe2f902117b19b9
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - name: Rust, the version rust-toolchain.toml names
@@ -26,7 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: runner
-          shared-key: release
+          shared-key: release-${{ matrix.arch }}
       # uv at builder/pyproject.toml's required-version, by checksum; the Python is builder/.python-version,
       # one uv downloads (the image's 3.10 is never used), the Python CI tests with (DESIGN_REVIEW.md §3.82)
       - uses: astral-sh/setup-uv@v10.3.2
@@ -36,13 +51,14 @@ jobs:
 
       - name: The tag is the version
         run: |
-          ver=${GITHUB_REF_NAME#v}
           cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' runner/Cargo.toml)
           py=$(sed -n 's/^version = "\(.*\)"/\1/p' builder/pyproject.toml)
+          # a dispatch has no tag, and takes the checkout's version
+          case "$GITHUB_REF" in refs/tags/v*) ver=${GITHUB_REF_NAME#v} ;; *) ver=$cargo ;; esac
           echo "tag=$ver cargo=$cargo pyproject=$py"
           [ "$ver" = "$cargo" ] && [ "$ver" = "$py" ] || { echo "version mismatch" >&2; exit 1; }
           echo "VER=$ver" >> "$GITHUB_ENV"
-          echo "DIST=aeiou-$ver-x86_64-linux" >> "$GITHUB_ENV"
+          echo "DIST=aeiou-$ver-${{ matrix.arch }}-linux" >> "$GITHUB_ENV"
 
       - name: Build the runner
         working-directory: runner
@@ -71,9 +87,9 @@ jobs:
 
       - name: Assemble the tarball
         run: |
-          # pandoc, the pinned release by checksum (not the image's)
-          curl -sSfL -o /tmp/pandoc.tgz https://github.com/jgm/pandoc/releases/download/3.12.1/pandoc-3.12.1-linux-amd64.tar.gz
-          echo "d0c90410e90204c9ca83b8539fac5c7aed01fd537207e4585849f8abc5df20b8  /tmp/pandoc.tgz" | sha256sum -c
+          # pandoc, the pinned release for this architecture by checksum (not the image's)
+          curl -sSfL -o /tmp/pandoc.tgz https://github.com/jgm/pandoc/releases/download/3.12.1/pandoc-3.12.1-${{ matrix.pandoc }}.tar.gz
+          echo "${{ matrix.pandoc-sha256 }}  /tmp/pandoc.tgz" | sha256sum -c
           tar xzf /tmp/pandoc.tgz -C /tmp && pandoc=/tmp/pandoc-3.12.1/bin/pandoc
           d="$DIST"
           mkdir -p "$d/bin" "$d/share/man/man1" "$d/share/man/man5" "$d/share/man/man7" \
@@ -98,6 +114,8 @@ jobs:
         run: |
           mkdir smoke && tar xzf "$DIST.tar.gz" -C smoke && cd "smoke/$DIST"
           bin/aeiou --version
+          # both built for this architecture (file(1) says x86-64 for x86_64)
+          file bin/aeiou bin/aeiou-header | tee /dev/stderr | grep -c "$(echo ${{ matrix.arch }} | tr _ -)" | grep -qx 2
           # the object engine is in (a build without it carries this refusal)
           ! grep -aq 'built without the object engine' bin/aeiou
           bin/aeiou-header --version
@@ -115,9 +133,27 @@ jobs:
           uv pip install -q --python .venv/bin/python --no-deps wheel/*.whl
           .venv/bin/aeiou-build --help | head -2
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.DIST }}
+          path: |
+            ${{ env.DIST }}.tar.gz
+            ${{ env.DIST }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    needs: tarball
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "aeiou $GITHUB_REF_NAME" --generate-notes \
-            "$DIST.tar.gz" "$DIST.tar.gz.sha256"
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "aeiou $GITHUB_REF_NAME" \
+            --generate-notes dist/*.tar.gz dist/*.tar.gz.sha256

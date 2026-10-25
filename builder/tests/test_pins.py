@@ -68,7 +68,7 @@ def test_no_workflow_takes_a_version_the_day_it_runs():
             assert "version-file: builder/pyproject.toml" in m.group(1) and re.search(r"checksum: [0-9a-f]{64}", m.group(1)), name
         assert text.count("uses: astral-sh/setup-uv@") == len(re.findall(r"uses: astral-sh/setup-uv@\S+\n\s+with:", text)), name
         for m in re.finditer(r"curl [^\n]*-o (\S+) (https://\S+)", text):
-            assert re.search(r"[0-9a-f]{64}  " + re.escape(m.group(1)), text), (name, m.group(2))
+            assert re.search(r"(?:[0-9a-f]{64}|\$\{\{ matrix\.[a-z0-9-]+ \}\})  " + re.escape(m.group(1)), text), (name, m.group(2))
 
 
 def test_dev_sh_pins_every_download_by_version_and_hash():
@@ -139,3 +139,18 @@ def test_the_release_ships_the_lock_and_the_python_and_quickstart_installs_them(
     qs = (ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
     assert '--python "$(cat wheel/python-version)" --managed-python' in qs
     assert "--require-hashes -r wheel/requirements.txt" in qs
+
+
+def test_the_release_builds_each_architecture_on_its_own_hardware():
+    """PyInstaller builds `aeiou-header` for the machine it runs on, so each tarball is built and
+    smoke-tested natively, on the glibc 2.35 image, with pandoc for that architecture by checksum;
+    a dispatch builds both and publishes nothing (DESIGN_REVIEW.md §3.84)."""
+    rel = workflows()["release.yml"]
+    legs = re.findall(r"- arch: (\S+)\n\s+runner: (\S+)\n\s+pandoc: (\S+)\n\s+pandoc-sha256: ([0-9a-f]{64})\n", rel)
+    assert [(a, r, p) for a, r, p, _ in legs] == [("x86_64", "ubuntu-22.04", "linux-amd64"),
+                                                  ("aarch64", "ubuntu-22.04-arm", "linux-arm64")], legs
+    assert "runs-on: ${{ matrix.runner }}" in rel
+    assert 'echo "${{ matrix.pandoc-sha256 }}  /tmp/pandoc.tgz" | sha256sum -c' in rel
+    assert "DIST=aeiou-$ver-${{ matrix.arch }}-linux" in rel
+    assert "workflow_dispatch:" in rel
+    assert "if: startsWith(github.ref, 'refs/tags/v')" in rel
