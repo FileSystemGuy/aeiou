@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Abstract-driven I/O benchmark runner (Rust + `io-uring` crate + a pure-Rust TCP coordinator for multi-host; no MPI). Released: v0.2.0 (2026-10-16), after the release-candidate review (`RC1_BUG_LOG.md`).
+Abstract-driven I/O benchmark runner (Rust + `io-uring` crate + a pure-Rust TCP coordinator for multi-host; no MPI). Released: v0.3.0 (2026-10-24), the first with an aarch64 tarball; v0.2.0 (2026-10-16) followed the release-candidate review (`RC1_BUG_LOG.md`).
 
 Built for the MLPerf Storage WG, meant to be general: name packages, modules, env vars, CLIs, files, and config keys for the mechanism or the repo (`aeiou`), never for MLPerf (convention in `PROJECT_BRIEF.md` §8: runner binary `aeiou` with subcommands, Python helpers `aeiou-build`, `aeiou-params`, `aeiou-trace`, `aeiou-catalog`, `aeiou-header`, `aeiou-datagen` (deprecated), and, not yet built, `aeiou-verify`, `aeiou-fit`); anything that is WG process (divisions, published hashes, reference parameters) is listed in `PROJECT_BRIEF.md` §8 and says so where it appears. Adding something WG-specific is a conscious, documented decision.
 

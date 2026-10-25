@@ -374,7 +374,7 @@ id order from one queue on rank 0, and Ctrl-C stopping every host with the manif
 (`{id div files_per_directory}`) and the layout parameters' standard names (the same day, §3.75), and the step barrier every step by default in the training workloads, its latency measured on up to 32 ranks (2026-10-14, §3.71 point 4), and the abstract in prose: every case's `DESCRIPTION.md`, a paragraph and an account generated from its AST, parameters, records, and shape, each paragraph in `CATALOG.md`, and `aeiou-catalog describe` for any AST (the same day, §3.76), and the release-candidate
 review (2026-10-14 to 2026-10-16, `RC1_BUG_LOG.md`: 176 bugs, each fixed with its evidence)
 and release 0.2.0 (2026-10-16), then 0.2.1 the same day, every build with the object engine and
-the container writers (`object` and `formats` default features, `DESIGN_REVIEW.md` §3.65), and from the next tag an aarch64 tarball beside the x86_64 one, each built natively (2026-10-24, §3.84). The workload catalog
+the container writers (`object` and `formats` default features, `DESIGN_REVIEW.md` §3.65), then 0.3.0 (2026-10-24), an aarch64 tarball beside the x86_64 one, each built natively (§3.84). The workload catalog
 (2026-10-10, `workloads/CATALOG.md`; seventeen categories since 2026-10-11, AI and not, each
 with its directory, twelve of them still empty): thirteen mechanisms and twenty-six cases under
 `workloads/` (fifteen examples, one use case, ten `unsettled`), each labeled in the vocabulary of `workloads/attributes.toml`, with the shape
