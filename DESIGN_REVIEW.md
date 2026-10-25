@@ -7549,8 +7549,10 @@ workflow is now a matrix of two legs, `x86_64` on `ubuntu-22.04` and `aarch64` o
   it runs on; the smoke test, which runs both binaries and an HDF5 datagen through the header,
   needs the hardware too. GitHub's arm runners are free for a public repository.
 - *The same image generation*, 22.04, so both binaries need glibc 2.34 or newer, as before.
-- *pandoc for each architecture*, the same release (3.12.1), each tarball by its own SHA-256
-  in the matrix (`test_pins.py` holds both legs and the checksum form).
+- *pandoc and uv for each architecture*, the same releases (3.12.1, 0.13.5), each tarball by its
+  own SHA-256 in the matrix (`test_pins.py` holds both legs and the checksum form); the first
+  dispatch, run 40152549826, failed at setup-uv on the arm leg, whose download the x86_64
+  checksum refused. `fail-fast: false`, so one leg's failure no longer cancels the other's.
 - *The smoke test checks the architecture*: `file(1)` must name the leg's for both `aeiou` and
   `aeiou-header`, so a leg that ran on the wrong runner fails.
 - *A dispatch builds without publishing* (`workflow_dispatch`): both tarballs become the run's

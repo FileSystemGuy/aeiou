@@ -23,16 +23,19 @@ permissions:
 jobs:
   tarball:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x86_64
             runner: ubuntu-22.04
             pandoc: linux-amd64
             pandoc-sha256: d0c90410e90204c9ca83b8539fac5c7aed01fd537207e4585849f8abc5df20b8
+            uv-sha256: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
           - arch: aarch64
             runner: ubuntu-22.04-arm
             pandoc: linux-arm64
             pandoc-sha256: 445d96fd08801fe636cab1158b4f017ee320ac3b7446328b4fe2f902117b19b9
+            uv-sha256: 4bb69cf95ed13f23713bb7bc09f241896ea0c75b7c557e615a20604b82f9c403
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -42,12 +45,12 @@ jobs:
         with:
           workspaces: runner
           shared-key: release-${{ matrix.arch }}
-      # uv at builder/pyproject.toml's required-version, by checksum; the Python is builder/.python-version,
+      # uv at builder/pyproject.toml's required-version, by the checksum of this architecture's tarball; the Python is builder/.python-version,
       # one uv downloads (the image's 3.10 is never used), the Python CI tests with (DESIGN_REVIEW.md §3.82)
       - uses: astral-sh/setup-uv@v10.3.2
         with:
           version-file: builder/pyproject.toml
-          checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+          checksum: ${{ matrix.uv-sha256 }}
 
       - name: The tag is the version
         run: |
