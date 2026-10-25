@@ -83,13 +83,15 @@ def test_a_wrong_command_job_or_tool_is_a_usage_error(tmp_path):
 
 
 def test_without_uv_or_cargo_nothing_runs_and_both_installers_are_named(tmp_path):
-    for args in (["setup"], ["check"], ["check", "abstracts"], ["cov"]):
+    # each job needs what its steps run: abstracts no Rust, runner no Python (CI sets up no uv there)
+    for args, rust, python in ((["setup"], 1, 1), (["check"], 1, 1), (["check", "abstracts"], 0, 1),
+                               (["check", "runner"], 1, 0), (["check", "object"], 1, 1),
+                               (["check", "integration"], 1, 1), (["check", "abstracts", "runner"], 1, 1), (["cov"], 1, 1)):
         r = dev(*args, cache=tmp_path / "cache", tmp_path=tmp_path)
         assert r.returncode == 1, (args, r.stderr)
         assert r.stdout == ""
-        if args != ["check", "abstracts"]:                          # the one job without Rust
-            assert "cargo" in r.stderr and "https://rustup.rs" in r.stderr, args
-        assert "uv" in r.stderr and "https://docs.astral.sh/uv/getting-started/installation/" in r.stderr, args
+        assert ("https://rustup.rs" in r.stderr) == bool(rust), args
+        assert ("https://docs.astral.sh/uv/getting-started/installation/" in r.stderr) == bool(python), args
     assert not (tmp_path / "cache").exists()
 
 

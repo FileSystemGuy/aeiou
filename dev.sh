@@ -227,12 +227,21 @@ check)
   [possible values: $(commas "$JOBS")]" ;;
         esac
     done
-    # what the jobs asked for need, all of it named at once
-    case " $* " in
-    " abstracts ") need uv ;;
-    *" all "* | *" integration "*) need cargo uv strace ;;
-    *) need cargo uv ;;
-    esac
+    # what the jobs asked for need, all of it named at once: abstracts no Rust, runner no
+    # Python (CI sets up neither where its job has none)
+    tools=
+    for j in "$@"; do
+        case $j in
+        abstracts) want=uv ;;
+        runner) want=cargo ;;
+        object) want="cargo uv" ;;
+        integration | all) want="cargo uv strace" ;;
+        esac
+        for t in $want; do
+            case " $tools " in *" $t "*) ;; *) tools="$tools $t" ;; esac
+        done
+    done
+    need $tools
     for j in "$@"; do
         if [ "$j" = all ]; then
             set -- abstracts runner object integration
