@@ -347,7 +347,7 @@ so their fit rests on exact call counts and a page-residency probe instead); the
 workloads' reader protocols were traced at the library level, pyarrow, h5py, and `tarfile`
 on a loopback NFS mount, TFRecord's from source.
 
-## Status (2026-10-25)
+## Status (2026-10-28)
 
 A working proof of concept, measured so far on ext4 and on a loopback NFS v4.2 mount on
 one development box, whose GPU has now replayed the agentic KV-cache load through vLLM and
@@ -472,6 +472,24 @@ Not built, in rough order of interest:
   index-file reads derived from its arrays' sizes, as stdio's buffer follows `st_blksize` (item
   38's open point); and a use case per accelerator (item 39) for the jobs after Unet3D, whose
   `unet3d-a100`, `unet3d-h100`, and `unet3d-b200` are built, and a B300 once measured.
+- For the driver that runs aeiou as subprocesses (raised by `mlpstorage`'s planning note,
+  2026-10-28, `DESIGN_REVIEW.md` §3.85): a schema for the JSON report, the build identity in
+  it, and a reader in the wheel (`PROJECT_BRIEF.md` §6 item 41); `aeiou report check`, which
+  recomputes a report's lock hash, workload id, and fingerprint (item 42); the dry run's
+  projection as a report document (item 43); headline figures a lock declares as expressions,
+  tokens/s or samples/s, evaluated after the run (item 44); the WG's closed workloads as cases,
+  RetinaNet over `file_per_sample`, the Llama checkpoints, a `llama3.1-8b` KV model, Milvus
+  traced, and `mi355` (item 45); and an integrator's manual page with launcher one-liners and
+  an example rules file (item 46).
+- Fitting an abstract to a trace without the trace leaving its owner (raised by the user
+  2026-10-28, §3.85): `aeiou-trace digest`, the structural summary a fit is made from, with
+  every path literal a field, and `aeiou-catalog disclose`, every string and number a
+  contribution would publish (item 47); a fitting skill in the open skill format over those
+  tools and `aeiou-fit`, evaluated against the committed captures (item 48).
+- The case for calling aeiou a "scalable trace" (raised by the user 2026-10-28, §3.85): the
+  definition, the measured comparison of the `trace` node replicated against the abstract at
+  scale, a scale-invariance check in the catalog, `dry-run --emit-trace`, and the gaps stated
+  (item 49).
 
 ## License
 

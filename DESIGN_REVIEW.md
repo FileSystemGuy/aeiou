@@ -7570,6 +7570,65 @@ cache, is often one both kinds of host mount; an architecture with no pin is ref
 Red first: `test_pins.py` requires both architectures' file of one version for each tool, and
 `test_dev.py` an aarch64 host fetching the arm64 file into its own directory.
 
+### 3.85 The driver's planning note and the items it raises (discussed with the user 2026-10-28; items 41–49 queued the same day)
+
+The MLPerf Storage driver, `mlpstorage`, wrote a scoping note (2026-10-28, local to its tree)
+for replacing DLIO, its Milvus harness, and its KV-cache simulator with aeiou. Its survey of
+aeiou is accurate; its asks of this side are a report schema, the WG's closed workloads as
+catalog cases, the `mi355` accelerator, and three metrics it cannot find (AU, tokens/s, recall).
+The user asked for the appropriate asks to join the backlog as written, the rest restructured
+so the driver's integration gets easier, and three items of their own: a fitting skill, and the
+case for calling aeiou a "scalable trace". `PROJECT_BRIEF.md` §6 items 41–49.
+
+- *Taken as written:* a schema for `aeiou_report: 1` and the build identity in the report
+  (item 41); the closed workloads in the catalog (item 45). Two of the note's shortfalls are
+  smaller than it says: RetinaNet is a job over `file_per_sample`, not an abstract, and AU is
+  `result.busy_fraction` already. One is larger: `dcp_save`'s `item_bytes` is one list for every
+  rank (FSDP's 1/G of each tensor), and pipeline stages hold different layers, so the WG's
+  TP/PP cases may need an item list per rank class first; and whether DCP's op stream is what the
+  WG scores (its benchmark wrote with its own writer) is the WG's decision, raised to it.
+- *Restructured:* the note plans a result reader, a fingerprint check, sizing math, and a
+  tokens/s derivation in the driver. Each is a definition of ours, so each moves here as a
+  mechanism and stays out of the driver: a reader in the wheel (`aeiou.report`, item 41; it
+  reads a file, the process rule of §3.65 holds), `aeiou report check` recomputing lock hash,
+  workload id, and fingerprint from a report (item 42, the WG's validation step of §3.78
+  point 14), the dry run's projection as a report document (item 43), and headline figures as
+  expressions a lock declares (item 44: tokens/s, samples/s, queries/s, GB/s are formulas over
+  `result.` names and parameters; the runner evaluates and never interprets, and the WG's
+  "which metric scores" becomes a line in a lock it owns). An integrator's page gathers the
+  launcher one-liners (`AEIOU_RANK` from mpirun's or srun's rank variable), the exit codes, the
+  checkpoint sequence, and an example rules file (item 46). Refused: nothing; the five-run loop,
+  warm-up, sizing policy, and the lock in the driver's image stay the driver's (§3.74, §3.78).
+- *The fitting skill (items 47, 48).* The user's reasons: contributors who will not release a
+  trace may release its abstract; vendors recreating a customer's workload; the library's
+  growth; and an analysis that reassures a contributor about what leaves. Two flaws found in
+  the plan as stated, and the design around them. First, a hosted LLM reading a raw trace
+  discloses it to the LLM's vendor, which the contributor's policy usually forbids as much as
+  disclosure to us; so the raw trace is read only by a deterministic local tool, `aeiou-trace
+  digest`, whose output (path templates with every literal a field, op mix, size and offset
+  histograms, reuse, phases per thread) is what an LLM, hosted or local, or a person fits from,
+  and a contributor may send the digest alone. Second, an abstract is not free of proprietary
+  content until its path literals, prose, and provenance are scrubbed, and sizes alone can
+  identify a model or corpus; the honest statement is that it discloses the I/O shape and
+  scale, which is the point, and `aeiou-catalog disclose` lists exactly what would leave so the
+  contributor decides. The LLM decides structure, never numbers: the numeric fit is
+  `aeiou-fit`, the deterministic fitter the kits' `fit.py` scripts become, and
+  `aeiou-trace compare --judge` is the only acceptance gate. The skill is in the open skill
+  format, vendor-neutral, and measured: the committed captures are its evaluation set.
+- *"Scalable trace" (item 49).* The user's framing: a fixed trace replicated in parallel
+  amplifies its hot spots, in series repeats accesses never made, offset in time makes the
+  offset a free parameter; aeiou generates a stream of any length over any GPU and host count
+  with no replication artifact, by construction (positional randomness, the Feistel split).
+  Agreed, with the honest limits the note must carry: the claim is "no artifact from
+  replication", not "no amplification", since shared structure (a step barrier, an index's hot
+  nodes, a KV cache's shared prompts) is amplified exactly as the abstract models it, and every
+  fit is validated at one scale (no application traced at two scales, fitted at one, predicted
+  at the other). The evidence is measurable here: the `trace` node is the fixed trace and the
+  abstract the scalable one in the same runner (§3.58), so N offset copies of a trace against
+  the abstract at N, merged metrics side by side, is the experiment; `dry-run --emit-trace`
+  makes the scaled stream a file. The term is defined on first use; "trace-driven",
+  "model-driven", and "synthetic trace generation" are the literature's neighbours.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

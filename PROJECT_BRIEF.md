@@ -812,6 +812,138 @@ numbers; the order is this note's.
     loads from the committed tree, so the two readers of the records never drift.~~ One reader
     of the records: `aeiou-catalog check` holds `catalog.json` to them.
 
+41. **A schema for the report, and a reader (raised by the mlpstorage planning note,
+    2026-10-28).** `runner/REFERENCE.md` §12 is prose; a driver that scores from
+    `--report-json` wants a contract. `schema/report.schema.json` for `aeiou_report: 1`, held to
+    `report.rs` by a test that validates every report the suite writes and fails on a schema
+    field no report exercises; the report gains the binary's build identity (`runner`
+    {version, commit, features, target}) beside its version; §12 gains a table of the fields a
+    scorer reads (identity: abstract sha, case sha, workload id, fingerprint; the figures:
+    `result.busy_fraction`, `result.min_gpu_busy_fraction`, elapsed, bytes and rates, latency)
+    and what each means against DLIO's AU (compute ÷ (compute + stall), every take but the
+    first of each instance, under `time_scale`). The Python package gains `aeiou.report`, a
+    reader that validates a file against the schema and returns it as typed objects, so a
+    driver imports a reader instead of writing one; it reads a file, never links the runner
+    (§8, driver integration).
+
+42. **`aeiou report check`: does this report belong to this lock? (2026-10-28).** `PROJECT_BRIEF.md`
+    §8 point 14 has the WG validating an uploaded report by recomputing the lock's hash, the
+    workload id, and the fingerprint at the report's aeiou version. The definitions live in the
+    runner, so the recomputation does too: `aeiou report check REPORT [--case-file LOCK]`
+    re-derives all three from the report's embedded lock and abstract hash (the abstract found
+    under `--workloads`), compares them with what the report claims, checks the constraints'
+    recorded numbers against their expressions, and exits 0, 1, or 2 by the usage frame. A
+    report of another runner version says so and stops.
+
+43. **The dry run's projection as a document (2026-10-28).** `dry-run` prints each dataset's
+    samples, files, directories, and bytes, the op counts, and the compute per GPU, and writes
+    none of it as JSON (`--metrics-json` is the locality metrics alone). A sizing loop in a
+    driver re-implements the math today. `dry-run --report-json FILE` writes the report's
+    identity block, `datasets[]` with their projections, the per-kind op counts and bytes per
+    GPU and in total, the fingerprint, and the compute at `time_scale` 1 (the shortest a run
+    can take), as `aeiou_report: 1` with `scope: dry-run`, under item 41's schema.
+
+44. **A case names its headline figures (2026-10-28).** The report gives bytes, ops, and
+    latency; a benchmark's headline is a figure in its own units: samples per second for a
+    training case, tokens per second for a KV cache, queries per second for a search, GB/s for
+    a checkpoint. aeiou computes none of them because it never interprets content, but each is
+    a formula over `result.` names and parameters (`tokens_per_s = bytes_read / bytes_per_token
+    / elapsed_s`, with `bytes_per_token` a parameter of the model fragment). A `results` table
+    in the parameter file and the lock declares named expressions; the runner evaluates them
+    after the run, reports them under `result.derived`, prints them in the text report, and
+    lets a rules file's constraints name them. A figure's units and its formula are the case's,
+    published in the lock, never the runner's.
+
+45. **The WG's closed workloads in the catalog (2026-10-28; hardware-bound in parts).** What
+    the planning note finds missing, each in the catalog's own shape, the values from the
+    WG's DLIO configurations and tables where no job is measured, every fragment naming its
+    source as `unet3d`'s do (§3.81), the cases `unsettled` until traced:
+    (a) RetinaNet is a job over `file_per_sample`, not a new abstract: a job fragment
+    (OpenImages JPEGs, the WG's 322,957 B mean) and accelerator fragments `b200` and `mi355`,
+    the cases `retinanet-b200`, `retinanet-mi355`; the vocabulary gains `mi355` (and `b300`
+    when measured). A trace of the real loader (torchvision's detection reference) later,
+    never of DLIO.
+    (b) The Llama checkpoints over `dcp_save` and `dcp_load`: job fragments `llama3-8b`,
+    `-70b`, `-405b`, `-1t` at the WG's TP/PP/DP and Table 2 sizes. `item_bytes` is one list
+    for every rank (1/G of each tensor, FSDP-shaped), and pipeline stages hold different
+    layers, so first check whether the WG's sharding is expressible; if not, a small contract
+    change (an item list per rank class, indexed by an expression of `gpu_id`) comes first.
+    The WG's benchmark wrote checkpoints with its own writer; whether DCP's op stream is what
+    it scores is the WG's decision, raised to it.
+    (c) KV cache: a model fragment `llama3.1-8b` (layers, KV heads, head size, dtype, so
+    `chunk_bytes` and `bytes_per_token` follow) and the WG's loads as cases of
+    `lmcache_local_disk`; its 300 s become a request count (wall-clock phases are never
+    CLOSED). The holds fitted at the reference engine when the GPU can hold the model (item 24).
+    (d) Milvus: trace Milvus standalone with a DiskANN (Knowhere) index under a query load on
+    the development box and compare its metrics with `diskann_search`'s; a case
+    (`milvus-1m-1536`) if the op stream matches, a mechanism `vector-search/milvus-diskann` if
+    its segment loading makes it another workload. Recall stays out: the fit's `hops` and
+    `beam` carry the work a recall target costs (a sentence in the vector-search README).
+
+46. **The integrator's page (2026-10-28).** One manual page, `aeiou-integration(7)`, for a
+    driver that runs aeiou as subprocesses: the process model (one process per phase, never
+    linked), the launchers (`aeiou-launch`; `mpirun`, `srun`, and `pdsh` one-liners that set
+    `AEIOU_RANK` from the launcher's rank variable, tested under a fake launcher), the exit
+    codes, the checkpoint write-then-restore sequence, the datagen manifest and `--resume`, what
+    a scorer reads (item 41's table), and an example rules file under `schema/examples/rules/`
+    carrying constraints of the shape the WG's would (5× memory, 500 steps), labelled an
+    example and not the WG's. Held to the tools' `--help` like every page.
+
+47. **A trace's digest, and what an abstract discloses (2026-10-28).** Two deterministic tools
+    under the fitting of item 48, each useful alone. `aeiou-trace digest TRACE --root DIR`
+    writes the structural summary a fit is made from: path templates with every literal
+    turned into a field (`train/{a:05}/sample_{b:09}.npz`, with how many values each field
+    took and their range), the processes and threads and what each does in order (phases of
+    open-read-close, the think time between, the fan-out), the op mix, size and offset
+    histograms per template, the reuse distances, and the notes the metrics already carry
+    (truncation, I/O invisible to strace); no raw path unless `--paths` asks. `aeiou-catalog
+    disclose CASE` (and the same over a loose abstract and params) lists every string and
+    number that would leave with a contribution, by kind: path literals, the prose (`doc`,
+    `DESCRIPTION.md`), parameter values, provenance (hosts, roots, dates, logs under
+    `captures/`), so a contributor's reviewer reads exactly what is published; `--rename` maps
+    path literals to generic names and keeps the mapping locally (the fingerprint changes, the
+    shape does not).
+
+48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
+    2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its
+    references, plain Markdown plus the suite's CLIs, usable by any capable LLM, not one vendor's),
+    that takes a user from the strace recipe to a catalog-shaped directory: the digest (item
+    47), the choice of a committed mechanism from the catalog's vocabulary or the authoring of
+    a new `<name>.py`, the parameters (the numeric fit by `aeiou-fit`, the deterministic
+    fitter the kits' `fit.py` scripts become; the LLM decides structure, never numbers),
+    `dry-run --metrics-json` against `aeiou-trace metrics` under `compare --judge`, the
+    scaffold of the mechanism or case directory (`aeiou-catalog new`), `DESCRIPTION.md`, and
+    the disclosure report. Its evaluation set is the committed captures: given a capture's
+    trace, the skill must pick its mechanism and reach a fit the judge accepts; measured, and
+    kept green as the catalog grows. Three audiences, one artifact: a contributor who will not
+    release a trace but will release its abstract; a vendor recreating a customer's workload in
+    its lab; and this repository, which grows its library by it. A contributing guide names
+    the path. Names stay generic (the skill is "fit an abstract to a trace", not a vendor's or
+    the WG's).
+
+49. **Is aeiou a "scalable trace"? (raised by the user 2026-10-28).** A fixed trace is one
+    sequence of one length; replicating it in parallel amplifies its hot spots, in series
+    repeats accesses the application never made, and offset in time poses the offset as a free
+    parameter. aeiou generates a stream of any length over any GPU and host count from
+    positional randomness and a Feistel split, so no replication artifact exists by
+    construction, and it can emit that stream as a trace (`dry-run --gpu G --steps A..B`). The
+    item is the honest case for the term and what it lacks: a note defining the term (a
+    model fitted to a trace that regenerates the trace's per-instance statistics at any
+    scale, with the aggregate scaling as the modelled sharing says and never as the copy count
+    says), the measured evidence (one workload on the loopback mount: the `trace` node at one
+    instance against its abstract at one, then N copies of the trace offset in time against
+    the abstract at N, their merged locality metrics side by side, which needs `aeiou-trace
+    metrics` over several traces as one stream), a scale-invariance check in `aeiou-catalog`
+    (a case's per-GPU metrics at G and at 8G agree), and `dry-run --emit-trace FILE` in the
+    `aeiou_trace` format so the scaled trace is an inspectable file. The gaps the note must
+    state: every fit is validated at one scale (a trace of one application at two scales,
+    fitted at one and predicted at the other, has never been taken); shared structure (a
+    search index's hot nodes, a KV cache's shared prefixes, the step barrier) is amplified
+    exactly as the abstract models it, which is fidelity when the real system shares it and
+    only as right as the model; checkpoint sharding scales by parameter math, not by itself;
+    the coordinator has met only `localhost`; and the client-cache topology of emulated GPUs
+    is not scaled (item 28, the WG's 5× rule).
+
 ## 7. Environment
 
 The development machine is WSL2 (kernel 6.18, 20 cores, 31 GB RAM), with no realistic NFS
