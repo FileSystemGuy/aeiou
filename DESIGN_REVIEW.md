@@ -7687,6 +7687,85 @@ case for calling aeiou a "scalable trace". `PROJECT_BRIEF.md` §6 items 41–49.
   (item 45), and a transition to aeiou is a break in comparability with earlier results, to be
   stated, caused by the new generator being the more accurate one.
 
+### 3.86 How a trace becomes an abstract today, and what the digest must add (the user's question, 2026-10-28)
+
+The user asked how `aeiou-trace` and the builder scan a trace, find its patterns, and generate
+the AST, and what confidence to have that scripted sequences are correctly separated from
+operations that need randomness. The driving case: a vendor asks a prospective customer to trace
+their application and run `aeiou-trace` on it to find and describe the patterns, with no LLM
+anywhere. The answer, recorded as the starting point for item 47's design:
+
+**Nothing in aeiou scans a trace and finds its patterns.** The structure of every committed
+abstract was written by a person who read the trace beside the application's source and encoded
+the loops, draws, and parameters in the builder. `aeiou-trace` measures a trace, exports it for
+literal replay, and judges an abstract against it. The kits' fitters fill in numbers for an
+abstract whose shape already exists. Pattern detection is backlog (items 47, 48), and even the
+planned digest stops short of deciding what is scripted and what is random.
+
+What each piece does:
+
+- `aeiou-trace metrics` (§7 of `builder/REFERENCE.md`) parses the strace line by line, keeps the
+  calls on paths under the root, tracks each open file description's position through `open`,
+  `lseek`, and the bytes moved, follows `dup`, threads, and `fork`, and reduces the result to
+  the metrics document: read/write mix, request-size histograms, sequential run lengths per
+  thread and path, reuse distance over byte extents in completion order, popularity of extents
+  and objects, fan-out and depth where `io_submit` shows them. A reducer; it infers no loop,
+  template, or distribution.
+- `aeiou-trace export` writes the trace as the runner's `trace` node (§3.58): every call in
+  order, one lane per task. The zero-inference path: replayed literally, never CLOSED, no
+  scaling.
+- `aeiou-trace compare --judge` is the only acceptance gate: two metrics documents row by row,
+  a tolerance per metric class, widened by the abstract's own spread across seeds (`--self`).
+- The builder is a DSL. A person writes the loops, the `consume`, the reads, and names which
+  quantities are parameters; it emits the symbolic AST and never looks at a trace.
+- The kits' `fit.py` and `params.py` are per-abstract numeric fitters: given the shape, they
+  measure the trace or the application's own metadata (FAISS: list-size distribution and
+  popularity curve from a search trace; DCP: item offsets from the checkpoint's `.metadata`;
+  KV: reuse gaps from the replay log). Each knows what to look for because the structure was
+  decided first.
+
+**How scripted and random were separated in practice: by reading.** For each abstract the
+application's source gave the call stream, one file's merged call sequence from the trace
+confirmed it, and the two were matched: a sequence of calls recurring identically per file
+became a fixed sub-sequence, a position that varied became a draw whose distribution was
+checked against the metrics. Where the source was unavailable or the pattern data-dependent
+(DiskANN's hops, KV reuse), the distribution was a hypothesis and the gate the test. The
+reasoning for every such choice is in this document with its date, which is also the honest
+statement of how much judgment each abstract holds.
+
+**The confidence the gate warrants.** It is statistical, not sequential. Two abstracts that
+reproduce the same reuse-distance, run-length, request-size, and popularity histograms both
+pass, one of them with the loop nesting wrong. Three things it cannot see:
+
+- Order within a GPU, by design: issue order is timing-dependent and never hashed.
+- Causality: an `x @ i` dependency and a draw from a fitted reuse distribution give the same
+  reuse histogram at one scale and diverge at another, which is why item 49 says every fit is
+  validated at one scale only.
+- Anything strace cannot see: `io_uring` submissions and `mmap` faults.
+
+An abstract that passes reproduces the trace's locality at the traced scale within the stated
+tolerances. It does not prove the structure is the application's.
+
+**The customer's case.** Today the customer can run `aeiou-trace metrics` and send the metrics
+document, which carries no paths and no bytes of their data, only histograms and shares; the
+vendor authors the abstract from it and from knowledge of the application, and the customer runs
+`compare --judge` locally against the vendor's dry-run metrics. What the case needs and does not
+have is `aeiou-trace digest` (item 47): a deterministic structural summary with path templates
+in which every varying field becomes a variable, per-thread phase segmentation by repeated call
+motifs, offset-delta histograms that classify runs as sequential or not, and size and reuse
+histograms. That is as far as a deterministic tool goes without a model of the application: it
+can say "this thread repeated this 9-call motif 560 times per file with offsets advancing by
+256 KiB", a scripted sequence, and "file choice has a reuse-distance distribution of this
+shape", which needs a draw. It cannot name the loop nesting, tell a Feistel-shuffled epoch from
+a uniform draw with replacement, or tell a data-dependent dependency from a fitted distribution.
+Those remain a person's or an LLM's call, which is why item 48 puts the LLM on the structure,
+`aeiou-fit` on the numbers, and the gate on acceptance. With no LLM and no source reading, what
+a customer produces today is a metrics document, and after item 47 a digest. Either is
+something a vendor can fit to. Neither is an abstract.
+
+**Next (the user, 2026-10-28):** design and build the digest, starting from this section and
+item 47's list.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

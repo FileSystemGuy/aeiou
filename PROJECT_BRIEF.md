@@ -910,6 +910,8 @@ numbers; the order is this note's.
     `captures/`), so a contributor's reviewer reads exactly what is published; `--rename` maps
     path literals to generic names and keeps the mapping locally (the fingerprint changes, the
     shape does not).
+    *2026-10-28, `DESIGN_REVIEW.md` §3.86:* what the digest can and cannot decide without a model
+    of the application, recorded before its design; the next item to build.
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
     2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its
