@@ -356,7 +356,9 @@ def test_a_client_hears_a_stop_and_names_unexpected_messages():
 def test_a_send_after_the_coordinator_reset_fails_with_its_reason():
     """Rank 0 stops every host and exits, which resets a connection whose last message it did
     not read; the next `Ready` or `Done` of that host fails on the socket, and the host reports
-    the coordinator's reason, never the reset (CI run 40153591881, one run in 200 here)."""
+    the coordinator's reason, never the reset (CI run 40153591881, one run in 200 here). Without a
+    reason, the socket's own report, whichever the race gives: the reset on the send, or the reader's
+    end of stream when the reset arrived first (CI run 40766266894 saw the second)."""
     srv = socket.create_server(("127.0.0.1", 0))
     addr = "127.0.0.1:%d" % srv.getsockname()[1]
 
@@ -367,7 +369,7 @@ def test_a_send_after_the_coordinator_reset_fails_with_its_reason():
         s.sendall(_frame({"Welcome": {}}) + (_frame({"Stop": {"reason": "rank 1 (h1): not the same run"}}) if stop else b""))
         s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))   # a reset, as an exit with unread data
         s.close()
-    for stop, reason in ((True, "rank 1 \\(h1\\): not the same run"), (False, "Connection reset by peer")):
+    for stop, reason in ((True, "rank 1 \\(h1\\): not the same run"), (False, "Connection reset by peer|connection closed|Broken pipe")):
         t = threading.Thread(target=coordinator, args=(stop,))
         t.start()
         c = coord.Client(addr, 0, 2, "h0", {"a": 1}, {})
