@@ -480,7 +480,11 @@ Not built, in rough order of interest:
   tokens/s or samples/s, evaluated after the run (item 44); the WG's closed workloads as cases,
   RetinaNet over `file_per_sample`, the Llama checkpoints, a `llama3.1-8b` KV model, Milvus
   traced, and `mi355` (item 45); and an integrator's manual page with launcher one-liners and
-  an example rules file (item 46).
+  an example rules file (item 46). Measured the same day (`DESIGN_REVIEW.md` §3.46): the DLIO
+  fork's Unet3D read stream is not the real loader's (one whole-file read per sample, the
+  corpus re-read 1.3–2.5× by its worker pre-warm), so the WG's cases take its parameters and
+  never its op stream, and results across a transition to aeiou will not be comparable with
+  the ones before it.
 - Fitting an abstract to a trace without the trace leaving its owner (raised by the user
   2026-10-28, §3.85): `aeiou-trace digest`, the structural summary a fit is made from, with
   every path literal a field, and `aeiou-catalog disclose`, every string and number a

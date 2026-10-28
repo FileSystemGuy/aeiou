@@ -880,6 +880,13 @@ numbers; the order is this note's.
     its segment loading makes it another workload. Recall stays out: the fit's `hops` and
     `beam` carry the work a recall target costs (a sentence in the vector-search README).
 
+    *Measured 2026-10-28 (`DESIGN_REVIEW.md` §3.46):* the fork's Unet3D op stream is not the
+    loader's (one whole-file read per sample, nothing decoded, the corpus re-read 1.3–2.5× by
+    its worker pre-warm), so a case here and the WG's DLIO result of the same name are not
+    comparable, and results across a transition to aeiou will very likely not be, aeiou being
+    the more accurate of the two. A configuration supplies parameters, never an op stream; a
+    case's `unsettled` lifts only on a trace of the real application.
+
 46. **The integrator's page (2026-10-28).** One manual page, `aeiou-integration(7)`, for a
     driver that runs aeiou as subprocesses: the process model (one process per phase, never
     linked), the launchers (`aeiou-launch`; `mpirun`, `srun`, and `pdsh` one-liners that set

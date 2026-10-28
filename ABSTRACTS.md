@@ -316,7 +316,8 @@ the trace; `step_time` from the accelerator. ~~`members` and `lh_len`~~ are gone
 the reader takes one member and never reads a local header as a request of its own.
 
 **Trace (2026-10-01).** `workloads/input-pipeline/map/npy-per-sample`: upstream DLIO's read call (argonne-lcf
-`npz_reader.py`; the MLCommons fork reads differently and is not modeled, `DESIGN_REVIEW.md`
+`npz_reader.py`; the MLCommons fork reads differently, one whole-file read per sample and the corpus re-read by
+its worker pre-warm, measured against this loader 2026-10-28, and is not modeled, `DESIGN_REVIEW.md`
 §3.46) through a
 `DataLoader`, 2 workers, 2 epochs, on the loopback NFS mount, over corpora written the way
 DLIO's generator writes them; NumPy 2.5.2, Python 3.12.3. Reasoning in `DESIGN_REVIEW.md`

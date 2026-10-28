@@ -2042,6 +2042,53 @@ call from; §3.44 and `ABSTRACTS.md` §2 said "DLIO" without that qualifier and 
   workload; a direct backend refuses it at its traced parameters. To come back to, from a
   trace of a real direct checkpoint writer if one is found (`PROJECT_BRIEF.md` §6 item 19).
 
+**Measured 2026-10-28.** The user asked for the comparison the source reading above
+predicted. The fork (3.0.5, the driver's venv) and the loader behind `npy_per_sample`
+(`kit/train.py`, `np.load(...)["x"]` through a `DataLoader`) were traced on one corpus, 28
+`.npz` of about 140 MiB, two epochs, at batch 2 with 2 workers and at the WG's H100 shape,
+batch 7 with 4 workers, on local ext4 (the loopback mount needs root, which the session did not
+have). `aeiou-trace metrics` on each, `compare --judge` with the fork as *A* and the loader as
+*B*. Nothing of DLIO is modeled or committed; this is the evidence for the decision.
+
+| arm | ops under the root | reads | bytes read | whole-file reads | one sample read |
+|---|---|---|---|---|---|
+| loader, both shapes | 95,306 | 63,084 | 8.22 GB (1.00×) | 56 | 1,108 reads, 562 lseeks |
+| fork, batch 2 / 2 workers | 674 | 148 | 10.84 GB (1.32×) | 74 | 1 read of the file, 1 read of 1 byte |
+| fork, batch 7 / 4 workers | 1,268 | 280 | 20.55 GB (2.50×) | 140 | same |
+
+- The fork's sample read is `open`, `fstat`, `ioctl`, two `lseek`, `fstat`, one `read` of the
+  whole archive, one 1-byte `read` at EOF, `close`; nothing is decoded. The loader's is the zip
+  tail probes and then NumPy's 256 KiB chunks with one `lseek` each; on ext4 Python's buffer is
+  `st_blksize` = 4 KiB, so each chunk is a 4 KiB fill and a 252 KiB direct read (on the traced
+  NFS mount, 1 MiB fills, 144 reads per file).
+- The fork reads the corpus more often than its training loop does: `main.py` "pre-warms" the
+  loader's workers before epoch 1 and after every epoch for the next one, the epoch after the
+  last included, and each pre-warm iterates the dataset, whose reader prefetches the worker's
+  whole shard (`ThreadPoolExecutor(64)`). At the H100 shape a two-epoch run read the corpus
+  five times, 2.50× the loader's bytes; with 2 workers, 1.32×. Bytes-per-epoch figures taken
+  from this fork carry that factor.
+- Verdict: 15 of 21 judged rows outside at both shapes (data ops 22 % of ops against 66 %;
+  read request p50 1 B and p90 128 MiB against 4 KiB and 224 KiB; runs of one op against
+  1,024; first touches 38 % and 20 % against 50 %). Within: the read/write mix, the readdir
+  share, popularity of the top 0.1 % and 1 %.
+- Found beside it, a gap of the abstract and not of this decision: `xfer` and `hdr_read`
+  follow `st_blksize`, but the model issues one read per buffer fill; where `st_blksize` is
+  smaller than `np_chunk` the real reader issues a fill of `st_blksize` and a direct read of
+  the rest, so against the ext4 trace the abstract has half the reads and an lseek share of
+  50 % against 34 %, while reuse, popularity, run-length bytes, and mix are within. The
+  committed NFS captures are unaffected. Open, for `npy_per_sample`'s next revision.
+
+**The user's conclusion (2026-10-28).** Traces of the real application workloads are the
+requirement for supporting a workload in aeiou, not a refinement: the emulations the WG has
+been running have drifted further from the applications than believed. Said plainly, "Unet3D"
+run by aeiou and "Unet3D" run by DLIO are not comparable workloads, and if MLPerf Storage
+moves to aeiou as its workload generator, results from before the transition will very likely
+not be comparable with results after it, because aeiou is more accurate than the code before
+it, not less. For item 45 (§3.85): a case built from the WG's DLIO configuration takes DLIO's
+parameters, batch, step time, and sizes, never its op stream, and stays `unsettled` until the
+real application is traced. The traces, metrics, and compare tables stayed in the session's
+scratch; none are retained here.
+
 ### 3.47 The fourth row: `dcp.load` and safetensors `from_pretrained` (added 2026-10-01)
 
 Row 4 of the capture plan, both halves. Kits in `builder/traces/ckpt_restore` and
@@ -7628,6 +7675,17 @@ case for calling aeiou a "scalable trace". `PROJECT_BRIEF.md` §6 items 41–49.
   the abstract at N, merged metrics side by side, is the experiment; `dry-run --emit-trace`
   makes the scaled stream a file. The term is defined on first use; "trace-driven",
   "model-driven", and "synthetic trace generation" are the literature's neighbours.
+
+- *DLIO as a stand-in (measured 2026-10-28, §3.46).* A WG member's position that tracing DLIO
+  is tracing the application, since both drive PyTorch's `DataLoader`, was put to the test the
+  same day: the fork and the real `np.load` loader traced on one corpus at the WG's Unet3D
+  shape. True of the scheduling layer, false of the bytes: the fork reads each sample in one
+  call and never decodes it, and its worker pre-warm re-reads the corpus, 1.32× the loader's
+  bytes at 2 workers and 2.50× at the H100 configuration's 4; 15 of 21 judged rows outside.
+  The user's conclusion is recorded in §3.46: real-application traces are the requirement for
+  every supported workload, the WG's configurations supply parameters and never op streams
+  (item 45), and a transition to aeiou is a break in comparability with earlier results, to be
+  stated, caused by the new generator being the more accurate one.
 
 ## 4. Plan changes
 
