@@ -8094,6 +8094,17 @@ safetensors, DiskANN) and Milvus and Qdrant from their documentation with source
 reader. Real traces for checkpointing and vector search would make (2) through (4) honest; the
 kits produce them but need libraries this box lacks, so where to run them is the user's call.
 
+*Built 2026-10-29, step (2):* `analyze` and `document` split the digest so answers apply without
+re-reading the trace; `interview` over a console object (`say`, `ask`; end of input stops the
+asking); `fact_check` and the candidate check, with `evidence` naming what decided a verdict a
+replayed answer contradicts; `asserted` and `rejected` in the document and `asserted` beside a
+verdict that stays `undecided`; `--answers FILE`, `--no-questions`, `--answered-by NAME`, the
+answers file written beside `-o`'s document with the replay command printed, `-` refused, the
+trace's SHA-256 in both files. The facts in this step are per site, the files of its kind at
+scale and the passes the benchmark runs, the two `--candidates` and `--epochs` state; the
+field-level facts (ranks, steps, keys) come with the site kinds of step (4), whose questions
+need them. Seventeen tests, the module at 100 % line coverage; man page and REFERENCE §7.
+
 ## 4. Plan changes
 
 - Paper abstracts first, derived from `strace` of real loaders. Added a fourth: checkpoint

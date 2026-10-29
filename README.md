@@ -490,16 +490,16 @@ Not built, in rough order of interest:
   every path literal a field,~~ `aeiou-trace digest` built 2026-10-29 (`DESIGN_REVIEW.md`
   §3.87): path templates, lanes and phases, a verdict per site on what the trace decides
   between a permutation pass and a draw with replacement, on order, and on size, and the open
-  questions ranked by their divergence at the scale the benchmark will run; designed the same
-  day (§3.88), to build next: the digest asks those questions on a terminal, facts first, checks
-  every answer against the trace, and records answers with provenance in the document and an
-  answers file beside it; three more site kinds (keyed lookup for KV caches and RAG leaf
-  fetches, within one open for index traversal, bulk write); `applications/`, records of traced
-  applications by product and version so a user answers from a list; an object-store request
-  log the trace tools read; then `aeiou-catalog disclose`, every string and number a
-  contribution would publish (item 47); a fitting skill in the open skill format over those
-  tools and `aeiou-fit`, evaluated against the committed captures, beside a written procedure
-  for the same work without an LLM (item 48).
+  questions ranked by their divergence at the scale the benchmark will run; and, built the same
+  day (§3.88), the digest asks those questions on a terminal, facts first, checks every answer
+  against the trace, and records answers with provenance in the document and an answers file
+  beside it that `--answers` replays. To build next: three more site kinds (keyed lookup for KV
+  caches and RAG leaf fetches, within one open for index traversal, bulk write); `applications/`,
+  records of traced applications by product and version so a user answers from a list; an
+  object-store request log the trace tools read; then `aeiou-catalog disclose`, every string
+  and number a contribution would publish (item 47); a fitting skill in the open skill format
+  over those tools and `aeiou-fit`, evaluated against the committed captures, beside a written
+  procedure for the same work without an LLM (item 48).
 - The case for calling aeiou a "scalable trace" (raised by the user 2026-10-28, §3.85): the
   definition, the measured comparison of the `trace` node replicated against the abstract at
   scale, a scale-invariance check in the catalog, `dry-run --emit-trace`, and the gaps stated

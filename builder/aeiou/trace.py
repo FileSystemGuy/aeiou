@@ -1866,7 +1866,7 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     cp.add_argument("--self", dest="selfs", action="append", default=[], metavar="FILE", help="A metrics document of B's abstract at the same parameters and another seed (repeatable): a row's tolerance is raised by its largest distance between B and these; implies --judge")
     cp.add_argument("--only", action="append", default=[], metavar="PREFIX", help="Only the rows whose metric starts with PREFIX (repeatable)")
     dp = sub.add_parser("digest", help="Write the structural digest of a trace: path templates, lanes and their phases, a verdict per site on what the trace decides (permutation or draw, order, size), and the open questions ranked by their divergence at scale", usage="aeiou-trace digest [OPTIONS] --root <DIR> <TRACE>")
-    dp.add_argument("trace", nargs="?", help="The strace output file, or an exported trace file, or - for stdin")
+    dp.add_argument("trace", nargs="?", help="The strace output file, or an exported trace file (a file, never stdin: the comparison after the fit and a re-run with answers read it again)")
     dp.add_argument("--root", metavar="DIR", help="Digest only calls on paths under DIR, written relative to it (required for an strace, not for an exported trace file)")
     dp.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="Leave out paths whose part below the root matches GLOB (repeatable; * crosses /)")
     dp.add_argument("--cwd", metavar="DIR", help="Resolve relative paths against DIR when the trace does not say (no -y)")
@@ -1875,6 +1875,9 @@ def parser() -> tuple[usage.Parser, dict[str, usage.Parser]]:
     dp.add_argument("--paths", action="store_true", help="Include every raw path under each template (the digest otherwise carries templates and counts only)")
     dp.add_argument("--text", action="store_true", help="Print the text report instead of the JSON document (with -o, the report is printed beside the file anyway)")
     dp.add_argument("-o", "--out", metavar="FILE", help="Write the JSON document (aeiou_digest: 1) to FILE and print the text report")
+    dp.add_argument("--answers", metavar="FILE", help="The answers file (aeiou_answers: 1): replayed when it exists, so the questions are not asked; written there after an interactive run. Default after an interactive run with -o: the document's name with .answers.json")
+    dp.add_argument("--no-questions", action="store_true", help="Ask nothing even on a terminal: every undecided verdict stays open")
+    dp.add_argument("--answered-by", metavar="NAME", help="Record NAME as the one who answered (default: user@host)")
     ap.version(f"aeiou-trace {__version__}")
     return ap, {"metrics": mp, "export": ep, "compare": cp, "digest": dp}
 
@@ -1891,8 +1894,10 @@ def main(argv=None) -> int:
         missing.check()
         sp = subs[args.cmd]
         missing = usage.Missing(sp)
-        if args.cmd in ("metrics", "export", "digest"):
+        if args.cmd in ("metrics", "export"):
             missing.want(args.trace, "<TRACE>", "the strace output file, or - for stdin")
+        if args.cmd == "digest":
+            missing.want(args.trace, "<TRACE>", "the strace output file, or an exported trace file")
         if args.cmd == "export":
             missing.want(args.root, "--root <DIR>", "the directory the traced application's paths are under; the export is relative to it")
             missing.want(args.out, "-o <FILE>", "the trace file to write")
@@ -2013,6 +2018,8 @@ def _digest(args, dp: usage.Parser) -> int:
         dp.error("--epochs must be at least 1")
     if args.candidates is not None and args.candidates < 1:
         dp.error("--candidates must be at least 1")
+    if args.trace == "-":
+        dp.error("the digest reads the trace as a file, never stdin: the comparison after the fit and a re-run with answers read it again")
     f = _open_trace(args.trace)
     with f:
         first = f.readline()
@@ -2022,10 +2029,40 @@ def _digest(args, dp: usage.Parser) -> int:
             missing.need(False, "--root <DIR>", "digest only calls on paths under DIR", "needed for an strace; an exported trace file carries its root")
             missing.check()
         try:
-            doc = dg.digest_of(lines, args.root, epochs=args.epochs, candidates=args.candidates, paths=args.paths, exclude=args.exclude, cwd=args.cwd)
+            an = dg.analyze(lines, args.root, exclude=args.exclude, cwd=args.cwd)
         except BuildError as e:
             raise BuildError(f"{args.trace}: {e}") from None
+    sha = _sha256_of(args.trace)
+    by = args.answered_by or _who()
+    at = _now()
+    kw = dict(epochs=args.epochs, candidates=args.candidates, paths=args.paths)
+    said = []
+    if args.answers and os.path.exists(args.answers):
+        header, answers = dg.read_answers(args.answers)
+        by, at = header.get("by") or by, header.get("at") or at
+        doc = dg.document(an, answers=answers, by=by, at=at, **kw)
+        if header.get("trace_sha256") != sha:
+            doc["notes"]["answers_trace"] = f"{args.answers} was answered on another trace ({header.get('trace')}); its answers were checked against this one"
+    elif args.no_questions or not sys.stdin.isatty():
+        if args.answers:
+            raise BuildError(f"{args.answers}: no such answers file, and no terminal to ask on")
+        doc = dg.document(an, by=by, at=at, **kw)
+    else:
+        doc, answers = dg.interview(an, dg.Console(), by=by, at=at, **kw)
+        if answers:
+            path = args.answers or (_answers_beside(args.out) if args.out else None)
+            if path:
+                try:
+                    dg.write_answers(path, answers, trace=args.trace, trace_sha256=sha, by=by, at=at)
+                except OSError as e:
+                    raise BuildError(f"{path}: {_cause(e)}")
+                replay = ["aeiou-trace", "digest", args.trace] + (["--root", args.root] if args.root else []) + ["--answers", path] + (["-o", args.out] if args.out else [])
+                said.append(f"answers: {path}")
+                said.append("replay without questions: " + " ".join(replay))
+            else:
+                said.append("answers: in the document only (give -o or --answers FILE to keep them as a file)")
     doc["trace"] = args.trace
+    doc["trace_sha256"] = sha
     report = dg.render(doc)
     if args.out:
         try:
@@ -2041,7 +2078,35 @@ def _digest(args, dp: usage.Parser) -> int:
         sys.stdout.write(report)
     else:
         sys.stdout.write(json.dumps(doc, indent=2) + "\n")
+    for line in said:
+        print(line, file=sys.stderr)
     return 0
+
+
+def _answers_beside(out: str) -> str:
+    """The answers file an interactive run leaves beside the document it wrote."""
+    return out[: -len(".digest.json")] + ".answers.json" if out.endswith(".digest.json") else out + ".answers.json"
+
+
+def _sha256_of(path: str) -> str:
+    import hashlib
+    with open(path, "rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def _who() -> str:
+    import getpass
+    import socket
+    try:
+        user = getpass.getuser()
+    except (KeyError, OSError):   # no passwd entry for the uid (a container)
+        user = str(os.getuid())
+    return f"{user}@{socket.gethostname()}"
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _open_trace(path: str):

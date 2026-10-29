@@ -452,12 +452,18 @@ def touches_to_decide(n: int) -> int:
     return k
 
 
-def selection_of(paths: list[str], epochs: list[list[str]], candidates: int | None, notes: Counter, tid: int) -> dict:
-    k, d = len(paths), len(set(paths))
-    # the last pass is partial (the trace ended inside it) unless it is as long as the first
+def full_passes(epochs: list[list[str]]) -> list[list[str]]:
+    """The passes the trace completed: the last one is partial (the trace ended inside it)
+    unless it is as long as the first."""
     full = epochs[:-1] if len(epochs) > 1 else []
     if full and len(epochs[-1]) == len(epochs[0]):
         full = epochs
+    return full
+
+
+def selection_of(paths: list[str], epochs: list[list[str]], candidates: int | None, notes: Counter, tid: int) -> dict:
+    k, d = len(paths), len(set(paths))
+    full = full_passes(epochs)
     lengths = [len(e) for e in full]
     if candidates is not None and candidates < d:
         notes["candidates"] = f"--candidates {candidates} is fewer than the {d} distinct paths of template {tid}; the paths seen were used"
@@ -561,6 +567,11 @@ def size_of(touches: list[tuple[int, str, Unit]]) -> dict:
     return {"verdict": "per-path", "repeated_paths": len(repeated)}
 
 
+def paths_of(tpl: Template) -> list[str]:
+    """The paths of a template's opens, in time order."""
+    return [p for _, p, _ in sorted(tpl.touches, key=lambda x: x[0])]
+
+
 def site_of(tpl: Template, candidates: int | None, notes: Counter) -> dict:
     touches = sorted(tpl.touches, key=lambda x: x[0])
     paths = [p for _, p, _ in touches]
@@ -584,10 +595,16 @@ ASK = {
 }
 
 
+CANDIDATES = {"selection": ["consume", "choose"], "size": ["per-path", "drawn"], "order": ["sequential", "permuted"]}
+
+
 def open_of(sites: list[dict], epochs: int) -> list[dict]:
+    """The undecided verdicts as questions; a site's `projection` (its passes at scale, a fact
+    the owner gave) overrides `epochs` for that site."""
     items = []
     for s in sites:
         sel = s["selection"]
+        epochs = s.get("projection", {}).get("passes", epochs)
         if sel["verdict"] == "undecided":
             e = epochs
             never = math.exp(-e)
@@ -613,6 +630,10 @@ def open_of(sites: list[dict], epochs: int) -> list[dict]:
                 "ask": ASK["order"], "settles": s["order"]["settles"], "divergence": 0.0,
                 "at_scale": {"epochs": epochs, "note": "the op multiset is the same; the order within a pass differs, which read-ahead sees"},
             })
+    return ranked(items)
+
+
+def ranked(items: list[dict]) -> list[dict]:
     items.sort(key=lambda it: -it["divergence"])
     for i, it in enumerate(items, 1):
         it["rank"] = i
@@ -644,9 +665,22 @@ def _events_of_file(first: str, lines) -> tuple[dict, list[dict]]:
     return header, events
 
 
-def digest_of(lines, root: str | None, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, exclude=(), cwd=None) -> dict:
-    """The digest document of an strace (needs `root`) or of an exported trace file (carries
-    its root; `root`, when given, must be it)."""
+class Analysis:
+    """A trace reduced to what the document is made from, kept so that answers can be applied
+    and the document remade without reading the trace again (the interview does this twice)."""
+
+    def __init__(self, header: dict, source: str, root: str, digester: Digester):
+        self.header = header
+        self.source = source
+        self.root = root
+        self.d = digester
+        self.templates = sorted(digester.templates.values(), key=lambda t: t.id)
+        self.by_name = {t.name(): t for t in self.templates}
+
+
+def analyze(lines, root: str | None, *, exclude=(), cwd=None) -> Analysis:
+    """Read an strace (needs `root`) or an exported trace file (carries its root; `root`, when
+    given, must be it)."""
     import itertools
     it = iter(lines)
     first = next(it, "")
@@ -672,26 +706,274 @@ def digest_of(lines, root: str | None, *, epochs: int = 1, candidates: int | Non
     for e in events:
         d.event(e)
     d.finish()
+    return Analysis(header, source, root, d)
+
+
+def document(an: Analysis, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, answers=(), by: str | None = None, at: str | None = None) -> dict:
+    """The digest document, with `answers` (facts and answers to open questions, §3.88) checked
+    against the trace and recorded under `asserted` with `by` and `at`, or under `rejected`
+    with why; the verdicts stay the trace's."""
     notes = Counter()
-    for k, v in header.get("notes", {}).items():
+    for k, v in an.header.get("notes", {}).items():
         notes[k] = v
-    for k, v in d.notes.items():
+    for k, v in an.d.notes.items():
         notes[k] = v
-    templates = sorted(d.templates.values(), key=lambda t: t.id)
-    sites = [site_of(t, candidates, notes) for t in templates if t.opens >= 2]
+    asserted: list[dict] = []
+    rejected: list[tuple[int, dict]] = []     # (the answer's index, so rejections keep the answers' order)
+    facts: dict[int, dict] = {}
+    questions = []
+    index = {id(a): i for i, a in enumerate(answers)}
+
+    def reject(a: dict, why: str):
+        rejected.append((index[id(a)], {**a, "why": why}))
+
+    def record(tpl: Template, a: dict, kind: str, value):
+        e = {"site": tpl.id, "template": tpl.name(), kind: a[kind], ("value" if kind == "fact" else "answer"): value}
+        if a.get("note"):
+            e["note"] = a["note"]
+        e["by"], e["at"] = by, at
+        asserted.append(e)
+        return e
+
+    for a in answers:
+        tpl = an.by_name.get(a.get("template"))
+        if tpl is None:
+            reject(a, "no such template in the trace")
+        elif "fact" in a:
+            v = a.get("value")
+            if a["fact"] not in FACTS:
+                reject(a, f"no such fact: {', '.join(FACTS)}")
+            elif not isinstance(v, int) or isinstance(v, bool) or v < 1:
+                reject(a, "not a whole number of at least 1")
+            elif (why := fact_check(tpl, a["fact"], v)):
+                reject(a, why)
+            else:
+                facts.setdefault(tpl.id, {})[a["fact"]] = v
+                record(tpl, a, "fact", v)
+        elif "question" in a:
+            questions.append((tpl, a))
+        else:
+            reject(a, "neither a fact nor a question")
+
+    sites = []
+    for t in an.templates:
+        if t.opens < 2:
+            continue
+        f = facts.get(t.id, {})
+        c, p = f.get("candidates", candidates), f.get("passes", epochs)
+        s = site_of(t, c, notes)
+        s["projection"] = {"candidates": c, "passes": p, "asserted": sorted(f)}
+        sites.append(s)
+    by_tid = {s["template"]: s for s in sites}
+
+    for tpl, a in questions:
+        q, ans = a["question"], a.get("answer")
+        s = by_tid.get(tpl.id)
+        if q not in ASK:
+            reject(a, f"no such question: {', '.join(ASK)}")
+        elif s is None:
+            reject(a, "not a site: the template was opened once")
+        elif ans not in CANDIDATES[q] and ans != UNKNOWN:
+            reject(a, f"not one of {', '.join(CANDIDATES[q])}, {UNKNOWN}")
+        elif s[q]["verdict"] != "undecided":
+            if ans in (s[q]["verdict"], UNKNOWN):
+                notes["redundant_answers"] += 1
+            else:
+                reject(a, f"the trace decided {s[q]['verdict']}: {evidence(q, s[q], ans)}")
+        else:
+            e = record(tpl, a, "question", ans)
+            s[q]["asserted"] = {k: e[k] for k in ("answer", "by", "at", "note") if k in e}
+
+    open_items = []
+    for it in open_of(sites, epochs):
+        asserted_answer = by_tid[it["site"]][it["question"]].get("asserted", {}).get("answer")
+        if asserted_answer is None:
+            open_items.append(it)
+        elif asserted_answer == UNKNOWN:
+            it["answered"] = UNKNOWN
+            open_items.append(it)
+    rejected.sort(key=lambda r: r[0])
+    rejected = [r for _, r in rejected]
+    if rejected:
+        notes["rejected_answers"] = len(rejected)
     return {
         "aeiou_digest": FORMAT,
-        "source": source,
-        "root": root,
-        "ops": d.ops,
-        "contexts": len(d.lane_ops),
+        "source": an.source,
+        "root": an.root,
+        "ops": an.d.ops,
+        "contexts": len(an.d.lane_ops),
         "projection": {"epochs": epochs, "candidates": candidates},
         "notes": dict(sorted(notes.items())),
-        "templates": [t.out(paths) for t in templates],
-        "lanes": d.lanes_out(),
+        "templates": [t.out(paths) for t in an.templates],
+        "lanes": an.d.lanes_out(),
         "sites": sites,
-        "open": open_of(sites, epochs),
+        "open": ranked(open_items),
+        "asserted": asserted,
+        "rejected": rejected,
     }
+
+
+def digest_of(lines, root: str | None, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, exclude=(), cwd=None, answers=(), by=None, at=None) -> dict:
+    """`analyze` then `document`, in one call."""
+    return document(analyze(lines, root, exclude=exclude, cwd=cwd), epochs=epochs, candidates=candidates, paths=paths, answers=answers, by=by, at=at)
+
+
+# ---------------------------------------------------------------- the questions (§3.88)
+
+
+UNKNOWN = "unknown"
+ANSWERS_FORMAT = 1
+FACTS = {
+    "candidates": "How many files of this kind does the application have at the scale it runs?",
+    "passes": "How many passes over them will the benchmark run?",
+}
+LABELS = {
+    "consume": "each file exactly once per pass (a permutation over the set)",
+    "choose": "a draw with replacement: a file may come up again within a pass",
+    "per-path": "the bytes are a property of the file (its size)",
+    "drawn": "the bytes are chosen per access",
+    "sequential": "in their sorted order",
+    "permuted": "in a shuffled order",
+}
+
+
+def fact_check(tpl: Template, fact: str, value: int) -> str | None:
+    """Why the trace contradicts a fact, or None."""
+    paths = paths_of(tpl)
+    if fact == "candidates":
+        d = len(set(paths))
+        if value < d:
+            return f"the trace touched {d} distinct paths of this template; {value} is fewer"
+    else:
+        n = len(full_passes(epochs_of(paths)))
+        if value < n:
+            return f"the trace shows {n} full passes over the set; {value} is fewer"
+    return None
+
+
+def evidence(q: str, v: dict, against: str) -> str:
+    """What decided a verdict, said against the candidate an answer named."""
+    if q == "selection":
+        return v["refuted"].get(against) or f"passes {v.get('consume', {}).get('epoch', '')}".strip()
+    if q == "order":
+        return f"ascending {v['ascending']:.2f} of {v['pairs']} adjacent pairs, step of one {v['step_of_one']:.2f}"
+    if v["verdict"] == "constant":
+        return f"every open moved {v['bytes']} B"
+    if v["verdict"] == "per-path":
+        return f"{v['repeated_paths']} repeated path(s) always moved the same bytes"
+    return f"{v['paths_with_differing_bytes']} of {v['repeated_paths']} repeated path(s) moved differing bytes"
+
+
+class Console:
+    """The terminal: questions on stderr (stdout may be the document), answers read from stdin."""
+
+    def say(self, text: str) -> None:
+        import sys
+        sys.stderr.write(text + "\n")
+
+    def ask(self, prompt: str) -> str | None:
+        import sys
+        sys.stderr.write(prompt)
+        sys.stderr.flush()
+        line = sys.stdin.readline()
+        return None if line == "" else line.rstrip("\n")
+
+
+def interview(an: Analysis, io, *, epochs: int = 1, candidates: int | None = None, paths: bool = False, by: str, at: str) -> tuple[dict, list[dict]]:
+    """Ask the facts of every site with an open question, remake the document, then ask the
+    open items in rank order, each checked against the trace and re-asked when it contradicts
+    it; end of input stops the asking. Returns the document and the answers given, the list
+    `write_answers` keeps and `document` replays."""
+    kw = dict(epochs=epochs, candidates=candidates, paths=paths, by=by, at=at)
+    answers: list[dict] = []
+
+    def finish():
+        return document(an, answers=answers, **kw), answers
+
+    doc = document(an, **kw)
+    open_sites = {it["site"] for it in doc["open"]}
+    for s in doc["sites"]:
+        if s["template"] not in open_sites:
+            continue
+        tpl = an.templates[s["template"]]
+        io.say("")
+        io.say(f"site {s['template']}  {tpl.name()}: {s['distinct']} distinct files touched in {s['touches']} opens, passes {s['epochs']}")
+        for fact, question in FACTS.items():
+            io.say(f"  {question}")
+            while True:
+                line = io.ask("number (Enter for don't know): ")
+                if line is None:
+                    return finish()
+                line = line.strip()
+                if not line:
+                    break
+                if not line.isdigit() or int(line) < 1:
+                    io.say("  a whole number of at least 1, or Enter for don't know")
+                    continue
+                why = fact_check(tpl, fact, int(line))
+                if why:
+                    io.say(f"  {why}")
+                    continue
+                answers.append({"template": tpl.name(), "fact": fact, "value": int(line)})
+                break
+    doc = document(an, answers=answers, **kw)
+    for it in doc["open"]:
+        s = next(x for x in doc["sites"] if x["template"] == it["site"])
+        tpl = an.templates[it["site"]]
+        cands = it["candidates"]
+        io.say("")
+        io.say(f"site {it['site']}  {tpl.name()}: {s['touches']} touches of {s['distinct']} paths, passes {s['epochs']}; {it['question']} undecided")
+        io.say(f"  {it['ask']}")
+        for i, c in enumerate(cands, 1):
+            io.say(f"    {i}. {c}: {LABELS[c]}")
+        io.say(f"    {len(cands) + 1}. don't know")
+        sc = it["at_scale"]
+        if "choose" in sc:
+            io.say(f"  at {sc['epochs']} pass(es): a draw with replacement never reads {sc['choose']['never_read_share']:.1%} of the set and re-reads "
+                   f"{sc['choose']['repeat_share']:.1%} of what it touches; a permutation reads every file each pass")
+        else:
+            io.say(f"  at {sc['epochs']} pass(es): {sc['note']}")
+        io.say(f"  settles: {it['settles']}")
+        while True:
+            line = io.ask(f"answer [1-{len(cands) + 1}]: ")
+            if line is None:
+                return finish()
+            line = line.strip()
+            if line.isdigit() and 1 <= int(line) <= len(cands) + 1:
+                break
+            io.say(f"  a number from 1 to {len(cands) + 1}")
+        ans = cands[int(line) - 1] if int(line) <= len(cands) else UNKNOWN
+        a = {"template": tpl.name(), "question": it["question"], "answer": ans}
+        answers.append(a)
+        note = io.ask("how do you know? (Enter to skip): ")
+        if note is None:
+            return finish()
+        if note.strip():
+            a["note"] = note.strip()
+    return finish()
+
+
+def write_answers(path: str, answers: list[dict], *, trace: str, trace_sha256: str, by: str, at: str) -> None:
+    doc = {"aeiou_answers": ANSWERS_FORMAT, "trace": trace, "trace_sha256": trace_sha256, "by": by, "at": at, "answers": list(answers)}
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, indent=2) + "\n")
+
+
+def read_answers(path: str) -> tuple[dict, list[dict]]:
+    """The answers file: its header (trace, hash, by, at) and its answers."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except OSError as e:
+        raise BuildError(f"{path}: {e.strerror}") from None
+    except ValueError as e:
+        raise BuildError(f"{path}: {e}") from None
+    if not isinstance(doc, dict) or doc.get("aeiou_answers") != ANSWERS_FORMAT:
+        raise BuildError(f"{path}: not an aeiou_answers: {ANSWERS_FORMAT} file")
+    answers = doc.get("answers")
+    if not isinstance(answers, list) or not all(isinstance(a, dict) for a in answers):
+        raise BuildError(f"{path}: answers must be a list of objects")
+    return doc, answers
 
 
 # ---------------------------------------------------------------- the text
@@ -726,8 +1008,14 @@ def _p50(h: dict) -> int:
 def render(doc: dict) -> str:
     out = []
     what = doc.get("trace") or doc["root"]
-    out.append(f"digest of {what}: {doc['ops']} ops on {doc['contexts']} lane(s) under {doc['root']}; "
-               f"{len(doc['templates'])} path template(s), {len(doc['sites'])} site(s), {len(doc['open'])} open question(s)")
+    head = (f"digest of {what}: {doc['ops']} ops on {doc['contexts']} lane(s) under {doc['root']}; "
+            f"{len(doc['templates'])} path template(s), {len(doc['sites'])} site(s), {len(doc['open'])} open question(s)")
+    asserted, rejected = doc.get("asserted", []), doc.get("rejected", [])
+    if asserted:
+        head += f", {len(asserted)} asserted"
+    if rejected:
+        head += f", {len(rejected)} rejected"
+    out.append(head)
     out.append("templates:")
     for t in doc["templates"]:
         ops = ", ".join(f"{k} {v}" for k, v in t["ops"].items())
@@ -762,7 +1050,11 @@ def render(doc: dict) -> str:
             out.append(line)
     out.append("sites:")
     for s in doc["sites"]:
-        out.append(f"  site {s['template']} (template {s['template']}): {s['touches']} touches of {s['distinct']} paths, passes {s['epochs']}")
+        line = f"  site {s['template']} (template {s['template']}): {s['touches']} touches of {s['distinct']} paths, passes {s['epochs']}"
+        pr = s.get("projection")
+        if pr and pr["asserted"]:
+            line += f"; projected at {pr['passes']} pass(es)" + (f", {pr['candidates']} candidates" if pr["candidates"] else "") + f" (asserted: {', '.join(pr['asserted'])})"
+        out.append(line)
         sel = s["selection"]
         line = f"    selection: {sel['verdict']}"
         if sel["verdict"] == "undecided":
@@ -773,27 +1065,30 @@ def render(doc: dict) -> str:
             line += f"; {k} refuted: {why}"
         if sel.get("settles") and sel["settles"] != "decided":
             line += f"; settles: {sel['settles']}"
-        out.append(line)
+        out.append(line + _asserted(sel))
         o = s["order"]
         line = f"    order: {o['verdict']}"
         if o["pairs"]:
             line += f" (ascending {o['ascending']:.2f} of {o['pairs']} pairs, step of one {o['step_of_one']:.2f})"
         if o.get("note"):
             line += f"; {o['note']}"
-        out.append(line)
+        out.append(line + _asserted(o))
         z = s["size"]
         line = f"    size: {z['verdict']}"
         if z["verdict"] == "constant":
             line += f" {z['bytes']} B"
         elif z["verdict"] == "undecided":
             line += f"; settles: {z['settles']}"
-        out.append(line)
+        out.append(line + _asserted(z))
     pr = doc["projection"]
     out.append(f"open questions (projected over {pr['epochs']} pass(es)" + (f", {pr['candidates']} candidates" if pr["candidates"] else "") + "):")
     if not doc["open"]:
         out.append("  none: the trace decides every verdict")
     for it in doc["open"]:
-        out.append(f"  {it['rank']}. site {it['site']} {it['question']}: {' | '.join(it['candidates'])}; divergence {it['divergence']:.3f}")
+        line = f"  {it['rank']}. site {it['site']} {it['question']}: {' | '.join(it['candidates'])}; divergence {it['divergence']:.3f}"
+        if "answered" in it:
+            line += f"; answered: {it['answered']}"
+        out.append(line)
         out.append(f"     ask: {it['ask']}")
         out.append(f"     settles: {it['settles']}")
         sc = it["at_scale"]
@@ -802,4 +1097,22 @@ def render(doc: dict) -> str:
                        f"re-reads {sc['choose']['repeat_share']:.3f} and {sc['consume']['repeat_share']:.3f} of the touches")
         elif "note" in sc:
             out.append(f"     at scale: {sc['note']}")
+    if asserted:
+        out.append(f"asserted (by {asserted[0]['by']}, {asserted[0]['at']}):")
+        for a in asserted:
+            kind = "fact" if "fact" in a else "question"
+            line = f"  site {a['site']} {a[kind]}: {a['value'] if kind == 'fact' else a['answer']}"
+            if a.get("note"):
+                line += f" ({a['note']})"
+            out.append(line)
+    if rejected:
+        out.append("rejected:")
+        for r in rejected:
+            what = f"{r['fact']} {r.get('value')}" if "fact" in r else f"{r.get('question')} {r.get('answer')}"
+            out.append(f"  {r.get('template')} {what}: {r['why']}")
     return "\n".join(out) + "\n"
+
+
+def _asserted(v: dict) -> str:
+    a = v.get("asserted")
+    return f"; asserted {a['answer']}" if a else ""

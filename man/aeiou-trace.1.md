@@ -10,7 +10,7 @@ aeiou-trace - locality metrics of a real application from an strace of it, their
 aeiou-trace metrics [OPTIONS] [--root DIR]... [-o FILE] TRACE
 aeiou-trace export [OPTIONS] --root DIR -o FILE TRACE
 aeiou-trace compare [OPTIONS] A B
-aeiou-trace digest [OPTIONS] --root DIR [-o FILE] TRACE
+aeiou-trace digest [OPTIONS] --root DIR [-o FILE] [--answers FILE] [--no-questions] TRACE
 aeiou-trace --help | --version
 ```
 
@@ -121,9 +121,25 @@ verdict says how many touches would decide it. *Order* within a pass (`sequentia
 the same way, each `undecided` with what settles it. **Open**: every undecided verdict as a
 question in the application's terms, its candidate constructs, what evidence settles it,
 and the candidates' divergence at `--epochs` passes (the share of the set a draw with
-replacement never reads, e^-N, against zero for a pass), ranked largest first. The digest
-asks nothing; a person or the fitting skill asks, and an answer is recorded beside the
-capture with who gave it, never as a measurement.
+replacement never reads, e^-N, against zero for a pass), ranked largest first. **Asking**:
+on a terminal, before it writes, the digest asks the trace's owner what the trace cannot
+decide, facts first and then the open questions in rank order: for every site with an open
+question, how many files of its kind exist at the scale the application runs and how many
+passes the benchmark will make (Enter for don't know; a fact decides what it can, so a
+corpus small enough refutes a draw and no behavioral question follows), then each open item
+on one screen, the evidence, the question in the application's terms, numbered choices with
+"don't know" always among them, and what the choice changes at scale; an answer the trace
+contradicts is shown the evidence and asked again, never recorded. Every answer is recorded
+in the document under `asserted` with who gave it and when, beside the verdict it answers,
+which stays the trace's (`undecided`), never as a measurement; an optional "how do you know?"
+note goes with it; an answered item leaves the open list, a "don't know" stays on it, marked.
+The answers are also written as an answers file (`aeiou_answers: 1`), given with `--answers`
+or named after the document, which a later run replays without a terminal, so trace file plus
+answers file reproduces the digest. Without a terminal, or with `--no-questions`, nothing is
+asked and every undecided verdict stays open. An answer a replayed file carries against a
+verdict the trace decides is rejected with the evidence and listed under `rejected`; one
+agreeing with it is redundant and noted. The trace is read as a file, never from stdin: the
+comparison after the fit and a re-run with answers read it again.
 
 ## OPTIONS
 
@@ -220,7 +236,9 @@ capture with who gave it, never as a measurement.
 
 - *TRACE*
 
-  The strace output file, or an exported trace file, or `-` for stdin.
+  The strace output file, or an exported trace file. A file, never stdin (`-` is refused):
+  the comparison after the fit and a re-run with answers read it again. Its SHA-256 is
+  recorded in the document and in the answers file.
 - **--root** *DIR*
 
   Digest only calls on paths under *DIR*, written relative to it. Required for an strace;
@@ -254,6 +272,22 @@ capture with who gave it, never as a measurement.
 - **-o**, **--out** *FILE*
 
   Write the JSON document to *FILE* and print the text report.
+- **--answers** *FILE*
+
+  The answers file (`aeiou_answers: 1`). When it exists it is replayed and nothing is asked:
+  its facts and answers are checked against the trace and recorded, with the file's `by`
+  and `at` as their provenance, and a file answered on another trace is applied and noted.
+  When it does not exist and there is a terminal, the questions are asked and the answers
+  written there; without a terminal that is an error. Without this option an interactive
+  run with `-o` writes the answers beside the document, `NAME.answers.json` for
+  `NAME.digest.json` (else `FILE.answers.json`), and prints the command line that replays
+  them; without `-o` they live in the document only.
+- **--no-questions**
+
+  Ask nothing even on a terminal: every undecided verdict stays open.
+- **--answered-by** *NAME*
+
+  Record *NAME* as the one who answered. Default: `user@host`.
 
 ### Common
 
@@ -272,10 +306,20 @@ capture with who gave it, never as a measurement.
   --metrics-json`. The histograms are in full, per actor template and in total.
 - `*.digest.json`
 
-  A digest document, `aeiou_digest: 1`: `templates`, `lanes` with their `phases`, `sites`
-  with the `selection`, `order`, and `size` verdicts, and `open`, the ranked questions.
-  Times are nanoseconds from the first exported call; histograms are the metrics' quarter-
-  octave buckets.
+  A digest document, `aeiou_digest: 1`: `trace` and `trace_sha256`, `templates`, `lanes`
+  with their `phases`, `sites` with the `selection`, `order`, and `size` verdicts and a
+  `projection` (the candidates and passes the site was judged at, and which of them were
+  asserted), `open`, the ranked questions, `asserted`, every fact and answer recorded with
+  `site`, `template`, `by`, `at`, and its `note`, and `rejected`, every answer the trace
+  contradicted, with `why`. Times are nanoseconds from the first exported call; histograms
+  are the metrics' quarter-octave buckets.
+- `*.answers.json`
+
+  An answers file, `aeiou_answers: 1`: `trace`, `trace_sha256`, `by`, `at`, and `answers`,
+  a list of facts (`{"template", "fact": "candidates" | "passes", "value", "note"}`) and
+  answers (`{"template", "question": "selection" | "size" | "order", "answer", "note"}`,
+  the answer one of the question's candidates or `unknown`). Written by an interactive
+  `digest`, replayed by `--answers`; a hand-off, not a thing to edit.
 - `*.tolerances.json`
 
   A tolerance file, `aeiou_tolerances: 1`, kept beside a capture kit's trace document.
@@ -336,6 +380,7 @@ will run, and send the document rather than the trace:
 
 ```
 aeiou-trace digest trace.txt --root /mnt/data --epochs 4 --candidates 168 -o trace.digest.json
+aeiou-trace digest trace.txt --root /mnt/data --answers trace.answers.json -o trace.digest.json
 ```
 
 ## SEE ALSO

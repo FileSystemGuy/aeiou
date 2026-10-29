@@ -1,6 +1,8 @@
 """`aeiou-trace digest` (`PROJECT_BRIEF.md` item 47, `DESIGN_REVIEW.md` §3.86, §3.87): the
 structural summary a fit is made from, with a verdict per site on what the trace decides and an
-`open` list, ranked by projected divergence, of what it does not."""
+`open` list, ranked by projected divergence, of what it does not; and the questions it asks
+(§3.88): facts first, then the open items, every answer checked against the trace and recorded
+under `asserted` with provenance, never as a measurement."""
 import json
 import math
 import pathlib
@@ -319,7 +321,8 @@ def test_text_report_reads_like_a_summary():
 
 
 def run(*args, stdin=None):
-    return subprocess.run([sys.executable, "-m", "aeiou.trace", "digest", *args], capture_output=True, text=True, cwd=BUILDER, input=stdin)
+    # stdin is always a pipe here, never the terminal pytest may run on: the digest asks nothing
+    return subprocess.run([sys.executable, "-m", "aeiou.trace", "digest", *args], capture_output=True, text=True, cwd=BUILDER, input=stdin or "")
 
 
 def test_cli_writes_json_or_text(tmp_path):
@@ -339,7 +342,7 @@ def test_cli_writes_json_or_text(tmp_path):
     r = run(str(tr), "--root", "/d", "--text")
     assert r.returncode == 0 and r.stdout.startswith("digest of ") and "{" not in r.stdout.splitlines()[0]
     r = run("-", "--root", "/d", stdin=text)
-    assert r.returncode == 0 and json.loads(r.stdout)["trace"] == "-"
+    assert r.returncode == 2 and "never stdin" in r.stderr  # the trace is a file: the comparison and a re-run with answers read it again (§3.88)
 
 
 def test_cli_refusals(tmp_path):
@@ -470,3 +473,308 @@ def test_formatting_helpers():
     assert digest._p50({"n": 0, "max": 0, "buckets": []}) == 0
     assert digest.offsets_class([]) == ("none", 0)
     assert digest.compress(["a", "b", "a", "b", "c"]) == [("a b", 2), ("c", 1)]
+
+
+# ---------------------------------------------------------------- the questions (§3.88)
+
+
+BY, AT = "someone@host", "2026-10-29T12:00:00+00:00"
+
+
+def one_pass(n=28, seed=1):
+    return strace_of([f"s/{i:03}.npz" for i in permutation(n, seed)])
+
+
+def two_passes(n=20):
+    return strace_of([f"s/{i:03}.npz" for i in permutation(n, 1) + permutation(n, 2)])
+
+
+def open_all():
+    """Seven files once each, every one a different size, shuffled: all three verdicts undecided
+    (no repeat; no repeated path to compare bytes on; six adjacent pairs, under the eight order needs)."""
+    return strace_of([], per_open=[(f"s/{i:03}.npz", 4096 * (i + 1)) for i in permutation(7, 1)])
+
+
+def answered(text, answers, **kw):
+    return digest_of(text, answers=answers, by=BY, at=AT, **kw)
+
+
+def test_a_fact_about_the_corpus_decides_a_site_and_is_recorded_as_asserted():
+    d = answered(one_pass(), [{"template": "s/{a:03}.npz", "fact": "candidates", "value": 100, "note": "the dataset has 100 archives"}])
+    (s,) = d["sites"]
+    assert s["selection"]["verdict"] == "consume" and "choose" in s["selection"]["refuted"]
+    assert s["projection"] == {"candidates": 100, "passes": 1, "asserted": ["candidates"]}
+    assert d["asserted"] == [{"site": 0, "template": "s/{a:03}.npz", "fact": "candidates", "value": 100, "note": "the dataset has 100 archives", "by": BY, "at": AT}]
+    assert d["open"] == [] and d["rejected"] == []
+
+
+def test_a_fact_about_the_passes_changes_the_divergence_of_that_site_only():
+    text = one_pass() + strace_of([f"t/{i:02}.bin" for i in permutation(10, 3)], tid=101)
+    d = answered(text, [{"template": "s/{a:03}.npz", "fact": "passes", "value": 4}], epochs=1)
+    by = {it["site"]: it for it in d["open"] if it["question"] == "selection"}
+    assert by[0]["at_scale"]["epochs"] == 4 and by[0]["divergence"] == pytest.approx(math.exp(-4))
+    assert by[1]["at_scale"]["epochs"] == 1 and by[1]["divergence"] == pytest.approx(math.exp(-1))
+    assert d["sites"][0]["projection"] == {"candidates": None, "passes": 4, "asserted": ["passes"]}
+    assert d["sites"][1]["projection"] == {"candidates": None, "passes": 1, "asserted": []}
+    assert by[1]["rank"] == 1 and by[0]["rank"] == 2  # ranked by divergence, the larger first
+
+
+def test_a_fact_the_trace_contradicts_is_rejected_with_the_evidence():
+    d = answered(one_pass(), [{"template": "s/{a:03}.npz", "fact": "candidates", "value": 20}])
+    assert d["sites"][0]["selection"]["verdict"] == "undecided" and d["asserted"] == []
+    (r,) = d["rejected"]
+    assert r["fact"] == "candidates" and r["value"] == 20 and "28 distinct" in r["why"]
+    d = answered(two_passes(), [{"template": "s/{a:03}.npz", "fact": "passes", "value": 1}])
+    (r,) = d["rejected"]
+    assert r["fact"] == "passes" and "2 full passes" in r["why"]
+    d = answered(one_pass(), [{"template": "s/{a:03}.npz", "fact": "candidates", "value": "many"}, {"template": "s/{a:03}.npz", "fact": "sizes", "value": 3}])
+    assert [r["why"] for r in d["rejected"]] == ["not a whole number of at least 1", "no such fact: candidates, passes"]
+    assert d["notes"]["rejected_answers"] == 2
+
+
+def test_an_answer_to_an_open_question_moves_it_to_asserted_and_the_verdict_stays_the_traces():
+    d = answered(open_all(), [{"template": "s/{a:03}.npz", "question": "selection", "answer": "consume", "note": "DataLoader with shuffle=True"}])
+    (s,) = d["sites"]
+    assert s["selection"]["verdict"] == "undecided"   # the measurement is the trace's; the answer sits beside it
+    assert s["selection"]["asserted"] == {"answer": "consume", "by": BY, "at": AT, "note": "DataLoader with shuffle=True"}
+    assert [it["question"] for it in d["open"]] == ["size", "order"] and [it["rank"] for it in d["open"]] == [1, 2]
+    (a,) = d["asserted"]
+    assert a == {"site": 0, "template": "s/{a:03}.npz", "question": "selection", "answer": "consume", "note": "DataLoader with shuffle=True", "by": BY, "at": AT}
+
+
+def test_dont_know_is_recorded_and_leaves_the_item_open():
+    d = answered(one_pass(), [{"template": "s/{a:03}.npz", "question": "selection", "answer": "unknown"}])
+    assert d["asserted"][0]["answer"] == "unknown" and "note" not in d["asserted"][0]
+    it = d["open"][0]
+    assert it["question"] == "selection" and it["answered"] == "unknown"
+    assert d["sites"][0]["selection"]["asserted"]["answer"] == "unknown"
+
+
+def test_an_answer_against_a_decided_verdict_is_rejected_and_one_agreeing_is_redundant():
+    d = answered(two_passes(), [{"template": "s/{a:03}.npz", "question": "selection", "answer": "choose"}])
+    (r,) = d["rejected"]
+    assert r["answer"] == "choose" and r["why"].startswith("the trace decided consume") and "equal length" in r["why"]
+    assert d["asserted"] == []
+    d = answered(two_passes(), [{"template": "s/{a:03}.npz", "question": "selection", "answer": "consume"}])
+    assert d["asserted"] == [] and d["rejected"] == [] and d["notes"]["redundant_answers"] == 1
+
+
+def test_answers_that_name_nothing_in_the_trace_are_rejected():
+    d = answered(one_pass(), [
+        {"template": "elsewhere/{a}.bin", "question": "selection", "answer": "consume"},
+        {"template": "s/{a:03}.npz", "question": "colour", "answer": "blue"},
+        {"template": "s/{a:03}.npz", "question": "selection", "answer": "maybe"},
+        {"template": "s/{a:03}.npz", "answer": "consume"},
+    ])
+    assert [r["why"] for r in d["rejected"]] == [
+        "no such template in the trace",
+        "no such question: selection, size, order",
+        "not one of consume, choose, unknown",
+        "neither a fact nor a question",
+    ]
+
+
+def test_a_site_the_trace_decides_takes_no_facts_either():
+    d = answered(two_passes(), [{"template": "s/{a:03}.npz", "fact": "candidates", "value": 500}])
+    assert d["sites"][0]["selection"]["verdict"] == "consume" and d["asserted"][0]["fact"] == "candidates"
+    assert d["sites"][0]["projection"]["candidates"] == 500   # recorded; the verdict needed no help
+
+
+class Scripted:
+    """A console with the answers scripted: `None` for end of input."""
+
+    def __init__(self, *lines):
+        self.lines = list(lines)
+        self.said = []
+        self.asked = []
+
+    def say(self, text):
+        self.said.append(text)
+
+    def ask(self, prompt):
+        self.asked.append(prompt)
+        return self.lines.pop(0) if self.lines else None
+
+
+def interview(text, *lines, **kw):
+    an = digest.analyze(text.splitlines(True), "/d")
+    io = Scripted(*lines)
+    doc, answers = digest.interview(an, io, by=BY, at=AT, **kw)
+    return doc, answers, io
+
+
+def test_the_interview_asks_facts_first_then_the_open_items_by_rank():
+    doc, answers, io = interview(open_all(), "", "4", "1", "the loader is a DataLoader with shuffle=True", "3", "", "2", "")
+    # facts: candidates (don't know), passes 4; then selection (1: consume) with a note, size (3: don't know), order (2: permuted)
+    assert [a for a in answers if "fact" in a] == [{"template": "s/{a:03}.npz", "fact": "passes", "value": 4}]
+    assert [(a["question"], a["answer"]) for a in answers if "question" in a] == [("selection", "consume"), ("size", "unknown"), ("order", "permuted")]
+    assert answers[1]["note"] == "the loader is a DataLoader with shuffle=True" and "note" not in answers[2]
+    assert doc["sites"][0]["projection"]["passes"] == 4
+    assert [it["question"] for it in doc["open"]] == ["size"] and doc["open"][0]["answered"] == "unknown"
+    assert len(doc["asserted"]) == 4
+    screen = "\n".join(io.said)
+    assert "How many files of this kind" in screen and "How many passes" in screen
+    assert "1. consume" in screen and "2. choose" in screen and "3. don't know" in screen
+    assert "at 4 pass(es)" in screen   # the divergence line uses the fact just given
+    assert all(p.startswith("answer") or p.startswith("how do you know") or p.startswith("number") for p in io.asked)
+
+
+def test_the_interview_re_asks_on_nonsense_and_on_a_contradiction_and_stops_at_end_of_input():
+    doc, answers, io = interview(open_all(), "lots", "5", "2000", "", "9", "x", "2", "")
+    # candidates: "lots" re-asked, 5 contradicts the 7 seen (re-asked with the evidence), 2000 taken; passes: don't know
+    # selection: 9 and x re-asked, 2 = choose, no note; then end of input: size and order stay open, unasked
+    assert [a for a in answers if "fact" in a] == [{"template": "s/{a:03}.npz", "fact": "candidates", "value": 2000}]
+    assert [(a["question"], a["answer"]) for a in answers if "question" in a] == [("selection", "choose")]
+    said = "\n".join(io.said)
+    assert "7 distinct" in said and "a whole number" in said
+    assert doc["rejected"] == []   # a rejected interactive answer is re-asked, never recorded
+    assert [it["question"] for it in doc["open"]] == ["size", "order"] and "answered" not in doc["open"][0]
+    assert doc["sites"][0]["selection"]["verdict"] == "undecided"   # 2000 candidates do not refute a draw after 7 touches at 5 %
+
+
+def test_the_interview_asks_nothing_when_the_trace_decides_everything():
+    doc, answers, io = interview(two_passes())
+    assert answers == [] and io.asked == [] and doc["asserted"] == []
+
+
+def test_answers_file_round_trip(tmp_path):
+    f = tmp_path / "t.answers.json"
+    answers = [{"template": "s/{a:03}.npz", "fact": "passes", "value": 4}, {"template": "s/{a:03}.npz", "question": "selection", "answer": "consume", "note": "n"}]
+    digest.write_answers(str(f), answers, trace="t.txt", trace_sha256="ab" * 32, by=BY, at=AT)
+    header, back = digest.read_answers(str(f))
+    assert back == answers and header["aeiou_answers"] == 1 and header["trace"] == "t.txt" and header["by"] == BY and header["at"] == AT
+    (tmp_path / "bad.json").write_text("{}")
+    with pytest.raises(BuildError, match="not an aeiou_answers"):
+        digest.read_answers(str(tmp_path / "bad.json"))
+    (tmp_path / "junk.json").write_text("[")
+    with pytest.raises(BuildError):
+        digest.read_answers(str(tmp_path / "junk.json"))
+
+
+def test_render_shows_the_assertions_and_the_rejections():
+    d = answered(open_all(), [
+        {"template": "s/{a:03}.npz", "fact": "passes", "value": 4},
+        {"template": "s/{a:03}.npz", "question": "selection", "answer": "consume", "note": "shuffle=True"},
+        {"template": "s/{a:03}.npz", "question": "order", "answer": "unknown"},
+        {"template": "s/{a:03}.npz", "fact": "candidates", "value": 3},
+    ])
+    text = digest.render(d)
+    assert "3 asserted" in text.splitlines()[0] and "1 rejected" in text.splitlines()[0]
+    assert "asserted (by someone@host, 2026-10-29T12:00:00+00:00):" in text
+    assert "site 0 passes: 4" in text and "site 0 selection: consume (shuffle=True)" in text and "site 0 order: unknown" in text
+    assert "rejected:" in text and "candidates 3: " in text and "7 distinct" in text
+    assert "selection: undecided" in text and "asserted consume" in text   # the verdict stays the trace's, the assertion beside it
+    assert "answered: unknown" in text
+
+
+class Tty:
+    """A stdin that says it is a terminal and holds the lines typed."""
+
+    def __init__(self, *lines):
+        self.text = "".join(line + "\n" for line in lines)
+        self.pos = 0
+
+    def isatty(self):
+        return True
+
+    def readline(self):
+        nl = self.text.find("\n", self.pos)
+        if nl < 0:
+            return ""
+        line, self.pos = self.text[self.pos:nl + 1], nl + 1
+        return line
+
+
+def test_cli_asks_on_a_terminal_and_writes_the_answers_beside_the_document(tmp_path, monkeypatch, capsys):
+    tr = tmp_path / "t.txt"
+    tr.write_text(open_all())
+    out = tmp_path / "t.digest.json"
+    monkeypatch.setattr(sys, "stdin", Tty("7", "4", "1", "shuffle=True", "3", "", "2", "because"))
+    assert trace.main(["digest", str(tr), "--root", "/d", "-o", str(out), "--answered-by", "tester"]) == 0
+    err = capsys.readouterr().err
+    doc = json.loads(out.read_text())
+    assert doc["sites"][0]["selection"]["verdict"] == "consume"   # 7 candidates refute a draw after 7 touches without a repeat (e^-3 < 0.05)
+    assert [a.get("fact") or a["question"] for a in doc["asserted"]] == ["candidates", "passes", "size", "order"]
+    assert all(a["by"] == "tester" for a in doc["asserted"]) and doc["asserted"][0]["at"].endswith("+00:00")
+    assert len(doc["trace_sha256"]) == 64
+    af = tmp_path / "t.answers.json"
+    header, answers = digest.read_answers(str(af))
+    assert header["trace"] == str(tr) and header["trace_sha256"] == doc["trace_sha256"] and header["by"] == "tester"
+    assert len(answers) == 4
+    assert f"answers: {af}" in err and f"--answers {af}" in err and "aeiou-trace digest" in err
+    # the file replays without a terminal and produces the same assertions
+    monkeypatch.setattr(sys, "stdin", Tty())
+    out2 = tmp_path / "again.json"
+    assert trace.main(["digest", str(tr), "--root", "/d", "-o", str(out2), "--answers", str(af)]) == 0
+    doc2 = json.loads(out2.read_text())
+    assert doc2["asserted"] == doc["asserted"] and doc2["sites"] == doc["sites"]
+
+
+def test_cli_asks_nothing_without_a_terminal_or_with_no_questions(tmp_path, monkeypatch, capsys):
+    tr = tmp_path / "t.txt"
+    tr.write_text(open_all())
+    r = run(str(tr), "--root", "/d")
+    assert r.returncode == 0 and r.stderr == ""
+    doc = json.loads(r.stdout)
+    assert doc["asserted"] == [] and len(doc["open"]) == 3 and not list(tmp_path.glob("*.answers.json"))
+    monkeypatch.setattr(sys, "stdin", Tty("100"))
+    assert trace.main(["digest", str(tr), "--root", "/d", "--no-questions"]) == 0
+    cap = capsys.readouterr()
+    assert cap.err == "" and json.loads(cap.out)["asserted"] == []
+    # a terminal, no -o and no --answers: the answers live in the document only, and the report says so
+    monkeypatch.setattr(sys, "stdin", Tty("", "", "1", "", "3", "", "3", ""))
+    assert trace.main(["digest", str(tr), "--root", "/d", "--text"]) == 0
+    cap = capsys.readouterr()
+    assert "asserted" in cap.out and "in the document only" in cap.err and not list(tmp_path.glob("*.answers.json"))
+
+
+def test_cli_answers_file_refusals(tmp_path, monkeypatch):
+    tr = tmp_path / "t.txt"
+    tr.write_text(one_pass())
+    r = run(str(tr), "--root", "/d", "--answers", str(tmp_path / "absent.json"))
+    assert r.returncode == 1 and "absent.json" in r.stderr and "no terminal to ask on" in r.stderr
+    (tmp_path / "bad.json").write_text("{}")
+    r = run(str(tr), "--root", "/d", "--answers", str(tmp_path / "bad.json"))
+    assert r.returncode == 1 and "not an aeiou_answers" in r.stderr
+    # a file given on another trace is applied, and noted
+    af = tmp_path / "other.answers.json"
+    digest.write_answers(str(af), [{"template": "s/{a:03}.npz", "question": "selection", "answer": "consume"}], trace="elsewhere.txt", trace_sha256="00" * 32, by=BY, at=AT)
+    r = run(str(tr), "--root", "/d", "--answers", str(af))
+    assert r.returncode == 0, r.stderr
+    doc = json.loads(r.stdout)
+    assert doc["asserted"][0]["by"] == BY and "another trace" in doc["notes"]["answers_trace"]
+    # a terminal and an --answers path that does not exist yet: asked, then written there
+    monkeypatch.setattr(sys, "stdin", Tty("", "", "1", "", "3", "", "3", ""))
+    new = tmp_path / "new.json"
+    assert trace.main(["digest", str(tr), "--root", "/d", "--answers", str(new)]) == 0
+    assert digest.read_answers(str(new))[1][0]["answer"] == "consume"
+
+
+def test_the_rest_of_the_answer_branches(tmp_path):
+    # a question about a template opened once: not a site
+    d = answered(one_pass() + strace_of(["solo.bin"], tid=101), [{"template": "solo.bin", "question": "size", "answer": "drawn"}])
+    assert d["rejected"][0]["why"] == "not a site: the template was opened once"
+    # the evidence named against an answer the trace decided otherwise, per verdict kind
+    d = answered(one_pass(), [{"template": "s/{a:03}.npz", "question": "order", "answer": "sequential"}, {"template": "s/{a:03}.npz", "question": "size", "answer": "drawn"}])
+    assert d["rejected"][0]["why"].startswith("the trace decided permuted: ascending 0.48 of 27 adjacent pairs")
+    assert d["rejected"][1]["why"] == "the trace decided constant: every open moved 4096 B"
+    per_path = strace_of([], per_open=[(f"s/{i:03}.npz", 4096 * (i + 1)) for i in permutation(10, 1) + permutation(10, 2)])
+    d = answered(per_path, [{"template": "s/{a:03}.npz", "question": "size", "answer": "drawn"}])
+    assert d["rejected"][0]["why"] == "the trace decided per-path: 10 repeated path(s) always moved the same bytes"
+    drawn = strace_of([], per_open=[("s/001.npz", 4096), ("s/002.npz", 4096), ("s/001.npz", 8192)])
+    d = answered(drawn, [{"template": "s/{a:03}.npz", "question": "size", "answer": "per-path"}])
+    assert d["rejected"][0]["why"] == "the trace decided drawn: 1 of 1 repeated path(s) moved differing bytes"
+    # end of input while a fact is asked, and at the note
+    doc, answers, io = interview(open_all(), "lots")
+    assert answers == [] and doc["asserted"] == []
+    doc, answers, io = interview(open_all(), "", "", "1")
+    assert [(a["question"], a["answer"]) for a in answers] == [("selection", "consume")] and "note" not in answers[0]
+    assert doc["asserted"][0]["answer"] == "consume"
+    # an answers file that cannot be read, and one whose answers are not a list
+    with pytest.raises(BuildError, match="answers.json"):
+        digest.read_answers(str(tmp_path / "absent" / "x.answers.json"))
+    (tmp_path / "s.json").write_text('{"aeiou_answers": 1, "answers": "consume"}')
+    with pytest.raises(BuildError, match="a list of objects"):
+        digest.read_answers(str(tmp_path / "s.json"))
+    assert trace._answers_beside("a/t.digest.json") == "a/t.answers.json" and trace._answers_beside("a/t.json") == "a/t.json.answers.json"
+    assert "@" in trace._who() and trace._now().endswith("+00:00")

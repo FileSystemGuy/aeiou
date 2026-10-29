@@ -682,12 +682,24 @@ against `--candidates`, the corpus size; `order` within a pass, `sequential`, `p
 `other`; `size` per open, `constant`, `per-path`, or `drawn`. `open`: every undecided verdict
 as a question in the application's terms, its candidates, what settles it, and the
 candidates' divergence at `--epochs` passes (the share of the set a draw never reads, e^-N,
-against zero for a pass), ranked. As built, the digest asks nothing; designed 2026-10-29
-(`DESIGN_REVIEW.md` §3.88) and next to build: it asks these questions on a terminal, facts first,
-checks each answer against the trace, and records answers under `asserted` with provenance,
-never as measurements, in the document and in an answers file beside it that `--answers FILE`
-replays without a terminal. `tests/test_digest.py` holds the verdicts to constructed sequences
-and the command to its refusals.
+against zero for a pass), ranked. **Asking (built 2026-10-29, `DESIGN_REVIEW.md` §3.88):**
+`analyze` reads the trace once into an `Analysis` and `document(an, answers=...)` makes the
+document from it, so the interview remakes the document without re-reading. `interview(an,
+console)` asks, for every site with an open item, the two facts (`FACTS`: files of this kind at
+scale, passes the benchmark will run; each a number or Enter), remakes the document with them
+(a fact is that site's `--candidates` or `--epochs`, recorded in its `projection`), then asks
+each open item in rank order with its candidates labelled (`LABELS`) and "don't know" last;
+`fact_check` and the candidate check reject what the trace contradicts, and the interview
+re-asks, while a replayed file's rejected answer is listed under `rejected` with `why`
+(`evidence` names what decided the verdict). Accepted answers are recorded under `asserted`
+with `by` and `at` and beside the verdict as `asserted`, the verdict itself staying the
+trace's; an `unknown` stays in `open` marked `answered`. `write_answers` and `read_answers`
+are the answers file (`aeiou_answers: 1`), the list `interview` returns, replayed through
+`document`. The console is an object with `say` and `ask` (end of input stops the asking), so
+the tests script it; the command asks only when stdin is a terminal, no `--answers` file
+exists, and `--no-questions` is absent, and it refuses `-` as the trace. `tests/test_digest.py`
+holds the verdicts to constructed sequences, the answers to their checks, the interview to a
+scripted console, and the command to its refusals.
 
 ## 8. `aeiou-catalog`: the workload catalog (2026-10-10)
 
