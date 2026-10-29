@@ -880,6 +880,19 @@ numbers; the order is this note's.
     its segment loading makes it another workload. Recall stays out: the fit's `hops` and
     `beam` carry the work a recall target costs (a sentence in the vector-search README).
 
+    *Scope, 2026-10-29 (`DESIGN_REVIEW.md` §3.88, the user's point):* vector search is three
+    sub-workloads, the index traversal, the *leaf fetch* (an ANN query returns the neighbors'
+    identities; the application reads the neighbors themselves, chunks or media, from a store
+    that is never inside the index: an `indexed` dataset, POSIX or object), and the rebuild,
+    merge, or compaction that incorporates new content, a sub-workload the lookups invoke
+    periodically as training invokes checkpointing, with ingest's read pass over the new media
+    before it. For an index held in memory the leaf fetch is the whole storage workload. Whether
+    the leaf fetch and the rebuild are inside the WG's vector-search benchmark is the WG's
+    scope call (its Milvus harness measures queries only); aeiou models the lifecycle, cases
+    mark what a division scores, and §8 records the decision when made. The Milvus trace of
+    (d) then shows traversal, payload fetch, and compaction together, and needs the object
+    request log of item 49 beside the strace.
+
     *Measured 2026-10-28 (`DESIGN_REVIEW.md` §3.46):* the fork's Unet3D op stream is not the
     loader's (one whole-file read per sample, nothing decoded, the corpus re-read 1.3–2.5× by
     its worker pre-warm), so a case here and the WG's DLIO result of the same name are not
@@ -917,8 +930,18 @@ numbers; the order is this note's.
     order, and size, each `undecided` with what settles it, and the `open` list ranked by the
     candidates' divergence at `--epochs`. Decided the same day: the open questions are worth
     asking the application's owner, with provenance, as behavior not constructs, and with the
-    capture that would settle each; the digest never asks. Not yet: the answers file (item 48),
-    digest-to-digest comparison, `aeiou-catalog disclose`.
+    capture that would settle each; ~~the digest never asks~~. *2026-10-29, §3.88 (the user's
+    plan, which §3.87 had departed from):* the digest asks, on a terminal, facts first (a field's
+    range at scale, a phase's repeat count at scale, generic across training, checkpointing,
+    vector search, and KV cache) and then the open questions in rank order, checks every answer
+    against the trace, writes the answers under `asserted` with provenance and as an answers
+    file beside the document, and runs without a terminal from `--answers FILE` or with every
+    item left open; the trace is a file, never stdin. Its site model gains a keyed-lookup kind
+    (KV cache, RAG leaf fetch), a within-one-open kind (index traversal), and a bulk-write kind
+    (checkpoint, build, merge). Beside it, `applications/`, records of traced applications by
+    product directory and version file (signatures, storage-relevant options, defaults as
+    assertions weaker than the owner's, dated sources), so a user of a product answers from a
+    list. Not yet: all of the above, digest-to-digest comparison, `aeiou-catalog disclose`.
 
 48. **A fitting skill: from a trace to a fitted abstract and case (raised by the user
     2026-10-28).** A skill in the open skill format (`skills/fit-abstract/SKILL.md` and its
@@ -935,7 +958,11 @@ numbers; the order is this note's.
     release a trace but will release its abstract; a vendor recreating a customer's workload in
     its lab; and this repository, which grows its library by it. A contributing guide names
     the path. Names stay generic (the skill is "fit an abstract to a trace", not a vendor's or
-    the WG's).
+    the WG's). *2026-10-29 (`DESIGN_REVIEW.md` §3.88):* two pathways, one set of tools: a
+    customer who keeps an LLM away from its traces follows the same commands from a written
+    procedure page the skill follows too; the skill owns judgment and the authoring of a new
+    mechanism, never mechanics, and the digest's questions are the digest's (§3.88), asked by
+    the tool, in the skill's voice only from the tool's own list.
 
 49. **Is aeiou a "scalable trace"? (raised by the user 2026-10-28).** A fixed trace is one
     sequence of one length; replicating it in parallel amplifies its hot spots, in series
@@ -958,7 +985,11 @@ numbers; the order is this note's.
     exactly as the abstract models it, which is fidelity when the real system shares it and
     only as right as the model; checkpoint sharding scales by parameter math, not by itself;
     the coordinator has met only `localhost`; and the client-cache topology of emulated GPUs
-    is not scaled (item 28, the WG's 5× rule).
+    is not scaled (item 28, the WG's 5× rule). *Added 2026-10-29 (`DESIGN_REVIEW.md` §3.88):*
+    object-store I/O has no strace; a capture there needs a request log (MinIO audit, Ceph RGW
+    ops log, S3 server access logs or CloudTrail data events, a logging proxy in a lab) in a
+    format `aeiou-trace` reads, one line per request as issued, on a wall clock the strace's
+    timestamps merge with; a gap the note states until the reader exists.
 
 ## 7. Environment
 

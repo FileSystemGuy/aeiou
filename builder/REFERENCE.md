@@ -682,10 +682,12 @@ against `--candidates`, the corpus size; `order` within a pass, `sequential`, `p
 `other`; `size` per open, `constant`, `per-path`, or `drawn`. `open`: every undecided verdict
 as a question in the application's terms, its candidates, what settles it, and the
 candidates' divergence at `--epochs` passes (the share of the set a draw never reads, e^-N,
-against zero for a pass), ranked. The digest never asks; a person or the fitting skill (item
-48) does, and records the answer with its provenance beside the capture, never as a
-measurement. `tests/test_digest.py` holds the verdicts to constructed sequences and the
-command to its refusals.
+against zero for a pass), ranked. As built, the digest asks nothing; designed 2026-10-29
+(`DESIGN_REVIEW.md` §3.88) and next to build: it asks these questions on a terminal, facts first,
+checks each answer against the trace, and records answers under `asserted` with provenance,
+never as measurements, in the document and in an answers file beside it that `--answers FILE`
+replays without a terminal. `tests/test_digest.py` holds the verdicts to constructed sequences
+and the command to its refusals.
 
 ## 8. `aeiou-catalog`: the workload catalog (2026-10-10)
 

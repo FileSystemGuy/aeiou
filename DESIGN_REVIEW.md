@@ -7793,10 +7793,12 @@ what capture would settle it, because a slightly longer trace is sometimes cheap
 answer. The representativeness of the fitted abstract at scale is then conditional on the
 asserted answers, and the disclosure report (item 47's second half) must list them beside the
 measured facts. In the WG setting these are app-side facts fixed once per workload by whoever
-fits it (the rule of §3.64 applies: app-side facts are the WG's, never a submitter's choice). **The
+fits it (the rule of §3.64 applies: app-side facts are the WG's, never a submitter's choice). ~~**The
 digest itself asks nothing**; the asking is a person's or the fitting skill's (item 48), and an
 answers file the digest reads to move an item from `open` to `asserted` is that item's work,
-not built today.
+not built today.~~ *Reversed the same day, §3.88:* the digest asks, on a terminal, and writes the
+answers with provenance into the document and an answers file beside it; the sentence struck was
+this side's departure from the user's plan, not a decision of the user's.
 
 **What was built** (`builder/aeiou/digest.py`, standard library; `aeiou-trace digest`,
 `man/aeiou-trace.1.md`; 30 tests, the module at 100 % line coverage):
@@ -7867,12 +7869,230 @@ nestings give the same sequence, and a Feistel pass against any other permutatio
 construction, so no fidelity question). For the trace in hand, indistinguishable candidates are
 equally good; the open list exists for the scale the trace was not taken at.
 
-**Not built, in order:** an answers file with provenance that moves open items to `asserted`
-(item 48, where the questions are asked); digest-to-digest comparison, the fidelity loop made
+**Not built, in order:** ~~an answers file with provenance that moves open items to `asserted`
+(item 48, where the questions are asked)~~ the question loop and the answers file (§3.88, the
+digest's own); digest-to-digest comparison, the fidelity loop made
 literal by digesting an `strace` of `aeiou run` under the abstract's declared backend beside the
 application's and comparing verdict by verdict, since the runner has no op-stream dump and the
 interposition test says it should not need one; `aeiou-catalog disclose` (item 47's second
 half); a uniform-against-skewed verdict for `choose` (the numbers are reported, no verdict yet).
+
+### 3.88 The digest asks; the four workload types; application records; object-store logs (designed with the user 2026-10-29)
+
+Four design conversations with the user on the day the digest was built, each changing or
+widening §3.87. Recorded before any of it is built; the build order is at the end.
+
+**The digest asks: a reversal of §3.87.** §3.87 said the digest never asks and left the asking
+to a person or the fitting skill (item 48). That was this side's recommendation, written into the
+design reply without flagging that it departed from the user's stated plan, which was that
+`aeiou-trace digest` asks its questions interactively before it writes its conclusions; the
+user's "proceed" to the whole was taken as agreement to that point too. The user disputed it
+and the point is reversed. The reasons given for "never asks" were real, but they argue for a
+non-interactive *mode*, not for no interactive mode: the person at the console when the digest
+runs is the one who knows the application, and asking them then, with their answers shipped
+inside the digest, beats asking a vendor later who does not. Item 48 is about the fitting
+skill's prompt and workflow, a different and larger thing; the digest is a tool the skill
+runs, and since the skill will be run by people with little or no aeiou experience, answering
+must be easy: a question on the terminal, never a file to edit.
+
+Two consequences, both requirements rather than objections. (1) *The record stays a
+measurement.* A verdict that changes because of an answer must show the answer and who gave
+it, so answers go into the document under `asserted` with provenance, and a second run with
+the same answers produces the same document. (2) *The non-interactive callers.* The skill, a
+script, and the test suite need the tool to run without a terminal: the digest asks only when
+its standard input is a terminal and no answers were supplied; `--answers FILE` supplies them;
+a flag leaves every item open and asks nothing. Nothing else conflicts: the usage-error frame,
+the manual-page tests, and the catalog are untouched by a question loop.
+
+**The trace is a file.** The user asked whether reading the trace from standard input, carried
+over from `--metrics` and `export` where one reduction is the whole job, defeats the comparison
+of the fitted abstract's dry run against the trace and the re-run of the digest with answers.
+It does, twice: `aeiou-trace TRACE --metrics` after the fit needs the trace, and a re-run with
+the same answers must read the same trace. To be exact: answers never change how the trace is
+read; they settle verdicts the trace left undecided, and an answer the trace contradicts is
+rejected with the evidence shown. So trace file plus answers file reproduces the digest, and
+that pair plus the digest and the metrics is the record a capture keeps. Decided: the digest
+refuses `-`, records the trace's path and hash in the document, and keeps accepting the
+exported trace file as the compact form an owner may retain instead of a large raw strace.
+`--metrics` and `export` keep `-`.
+
+**The question experience.** Agreed with the user: (1) facts first, then behavior; the facts a
+person usually knows outright often decide verdicts without any behavioral question; (2) every
+answer is checked against the trace, and a contradicted answer is rejected, not recorded, the
+one place a tool can protect a fit from a confident wrong answer; (3) one question, one screen:
+the evidence in two lines, the behavioral question, numbered choices with "don't know" always
+present, one line on what the choice changes at scale, answered by number, then an optional
+"how do you know?" note for provenance; (4) the answers file is a by-product, written beside
+the document by the interactive run together with the command line that reproduces the run
+without questions, never something a person edits; (5) the digest owns the questions, their
+text, the consistency checks, and the answers format; the skill owns the workflow around the
+tool and may ask in its own voice from the tool's question list and pass the answers back, and
+both paths produce the same record.
+
+**The facts are generic, not training's.** The user objected that the two fact questions first
+proposed, how many files the dataset holds and how many passes the benchmark runs, are
+training's questions and meaningless for a KV cache, and asked that every question and verdict
+be measured against the four major types: training, checkpointing, vector search and RAG, and
+KV cache. Done below from the kits, the abstracts, and the committed captures (no raw trace is
+retained in the repository, and the kit libraries, torch, diskannpy, faiss, are not installed
+on the development box, so this is read from the sources, not run). The generic facts that
+replace the two: for each template field, its value range at scale (sample ids, ranks, steps,
+key counts); for each phase, its repeat count at scale (epochs, checkpoints, queries,
+requests); for a single open read at offsets, the file's size at scale. `--candidates` and
+`--epochs` are the command-line statements of two instances of these and stay as such.
+
+| type | what the digest of §3.87 sees | what is missing | the facts | the open questions |
+|---|---|---|---|---|
+| training (`npy-per-sample`, `file-per-sample`, `safetensors-load` as model loading) | sites, passes, `consume`/`choose`, order, size per path | nothing structural | field range (samples), phase repeats (epochs) | revisits within a pass; order; bytes per file |
+| checkpointing (`dcp-save`, `dcp-load`) | a site on the save template with fields rank and step, each path written once per checkpoint, so one pass per checkpoint | read-shaped wording ("does the application revisit a sample") on a write site; load is a fixed item list per rank class (item 45(b)), not a selection verdict | field ranges (ranks, steps), phase repeats (checkpoints), bytes per rank | whether names are new per step or overwritten; `fsync` placement; bytes scaling with model and ranks |
+| vector search and RAG (`diskann-search`, `diskann-build`, `faiss-ivf-ondisk`) | one index file opened once and read at many offsets: **no site at all** (a site needs two opens), `offsets: positioned` and nothing more | the within-one-open structure: reuse, runs, skew, dependency, the null-model rule of the invariants; the leaf fetch and the rebuild below | index size at scale; whether the index fits in memory at scale; k; query count; leaf size distribution; growth rate and merge policy | where the leaves live and under what protocol; full or incremental rebuild and its period |
+| KV cache (`lmcache-local-disk`, `lmcache-shared-fs`) | nothing: the committed captures hold server and replay logs, no strace (the fitter reads logs) | an strace would show hex-keyed files written once and read on a hit; the verdicts that matter are write-then-read lag and re-read share per key, which `consume`/`choose` does not express | requests at scale; pool size, which the WG fixes (§3.64) | hit rate at scale; prefix sharing |
+
+**Vector search is three sub-workloads (the user's scope point).** The user's understanding,
+confirmed with the confidence marked, since it is from this side's knowledge of the systems and
+not from reading their source this session, and the Milvus facts are to be checked against its
+documentation before any catalog record states them: an ANN query returns the *identities* of
+the k nearest neighbors, and the application needs the neighbors themselves, which are not in
+the index. The pure libraries, DiskANN, FAISS, hnswlib, ScaNN, return ids and distances only
+(high confidence); the managed databases, Milvus, Qdrant, Weaviate, pgvector, Pinecone, store a
+payload beside each vector and return it in the same query (high), but the payload is never
+inside the graph or IVF structure: Qdrant keeps it in a separate store on disk beside the
+index; Milvus keeps scalar fields in per-segment binlog files on its object store, pulled to
+local disk and memory by the query nodes (medium; confirm). So the *leaf fetch* is I/O distinct
+from the index traversal in every case, and in the WG's own Milvus harness it is inside Milvus's
+query path on local disk and S3 rather than a user-visible lookup. In text RAG the leaf is a
+chunk of a few hundred to a thousand tokens, one to four kilobytes (high), small beside a disk
+index's traversal of about a hundred 4 KiB reads per query; in multimodal retrieval, images,
+video, DICOM series, one leaf is megabytes and the traversal is noise; and where a production
+deployment holds an HNSW index entirely in memory, storage sees nothing of the traversal and
+the leaf fetch plus periodic persistence is the whole storage workload. The leaf fetch is not an
+addition to the vector-search workload; for in-memory indexes it *is* the workload.
+
+Rebuilds, the user's second scope point, are partially true as suspected: the static libraries
+need a rebuild to add content, classic DiskANN, FAISS IVF-PQ when the centroids drift, ScaNN
+(high); HNSW inserts incrementally by design with deletes as tombstones and an occasional
+rebuild to clean them (high); FreshDiskANN adds streaming inserts and deletes to DiskANN with a
+periodic background merge that rewrites the disk index, a large read-everything-write-everything
+event (medium); Milvus never rebuilds the collection: new vectors go to growing segments, sealed
+segments get their index built asynchronously, and compaction merges segments, so its background
+load is continuous rather than periodic (medium). The lifecycle is the same in every case, only
+the period and the grain differ, whole index or one segment at a time; and ingest adds a
+dataprep read pass over the new source media to embed it before the index work starts. The
+user's framing is adopted: as checkpointing is a sub-workload training invokes periodically to
+protect progress, an index rebuild (or merge, or compaction) is a sub-workload lookups invoke
+periodically to incorporate content, and ingest precedes it.
+
+Consequences: the language already has the parts. The leaf store is an `indexed` dataset,
+looked up by id and never consumed, which contract 0.8 (§3.72) created for exactly this, with
+its protocol declared per dataset so leaves on S3 use the object engine with no new grammar;
+the query phase draws k ids per query and reads them with the leaf size a positional
+distribution; the rebuild is a phase invoked every N queries or by elapsed time as checkpointing
+sits inside training; the ingest read pass precedes it. The catalog gains mechanisms named for
+the I/O: a merge or compaction mechanism, and search cases composing a search mechanism with a
+leaf dataset; item 45(d)'s Milvus trace becomes more valuable since one strace of Milvus under
+query load shows the traversal, the payload fetch from the segment cache, and the compaction
+writes together. Whether the leaf fetch and the rebuild are inside MLPerf Storage's vector-search
+benchmark is the WG's scope call (the Milvus harness as it stands measures queries only); aeiou
+models the whole lifecycle because it is general, and cases can mark which parts a division
+scores; this goes into the brief's §8 when the WG decides. The object-store gap stays real: no
+strace for leaves on S3, and the trace survey found no public object trace, so a capture there
+needs a request log, below.
+
+**Three site kinds, not four types.** With vector search decomposed, the digest's site model
+needs three kinds and every type is covered by them: a *keyed lookup* site, hex or integer ids
+read by id with a lag after their write, serving the KV cache and the leaf fetch alike; a
+*within-one-open* site, the index traversal, with verdicts on offset selection (reuse, runs,
+skew, dependency); a *bulk write* site, checkpoint save, index build, merge. The template site
+of §3.87 is the read side of a sample set and stays. Read sites and write sites get different
+question wording. The keyed kind comes first since two types share it.
+
+**Two pathways, one set of tools.** The user recalled that a customer may refuse an LLM near its
+traces, the reason `aeiou-trace` is deterministic rather than a prompt (§3.86), and asked whether
+needing both a skill path and a no-LLM path doubles the work or halves the skill's value. Neither.
+The skill owns no mechanics: everything it would do is a command, digest, answer the questions,
+pick or write a mechanism, `aeiou-fit`, `aeiou-catalog new`, `compare --judge`. The no-LLM path
+is those commands plus one written procedure page, which the skill follows too, so the page is
+written once. What the no-LLM path cannot do is write the builder script for a mechanism the
+catalog lacks; a person does that in Python with the digest in hand, which is how every
+mechanism so far was written. The skill's value is judgment, which mechanism matches, what a
+failed judge row means, authoring a new mechanism, not plumbing; and keeping the tools complete
+makes the skill checkable, since every step it takes is a command whose output item 48's
+evaluation harness can compare.
+
+**Application records (decided with the user).** A person may know the product they use and not
+its storage design. The user proposed asking "you appear to be using a vector database, which
+one?" from a list and then only the product's storage-relevant options, Milvus answering most
+questions itself. Assessed as modest code and real curation, and adopted as *data, not code*:
+adding a product or a version is a new file. Layout, the user's: a top-level `applications/`
+beside `workloads/`, reference data about traced applications rather than workloads, visible in
+the repository because that is where it is edited, and shipped in the wheel (hatch
+`force-include` into `aeiou/applications`, read through `importlib.resources`) so the digest at a
+customer site has it without a checkout; `--applications DIR` points at a checkout or extra
+records as `--workloads` does for cases. One directory per application, named as a user picks
+it from a list, lowercase and hyphenated (`milvus`, `qdrant`, `weaviate`, `opensearch`,
+`pgvector`, `diskann`, `faiss`, `pytorch-dcp`, `lmcache`, `safetensors`); inside, mirroring
+`mechanism.toml` and `case.toml`: `application.toml`, what does not change across versions, the
+display name, the kind (library, self-hosted service, managed service), the path signatures that
+identify it in a trace, the catalog mechanisms it maps to, home page and source repository; and
+`<version>.toml` per version range the facts were read for, named by the lowest version it
+covers (`2.5.toml`, `2.6.toml`), stating the range it claims, the structures offered with the
+default marked, the options that change the storage workload and the answer each implies, the
+mmap and blind-spot warnings, and per fact its source URL, the version read, and the date read.
+`applications/README.md` documents the format, `applications/attributes.toml` the shared
+vocabulary for kinds, structures, and option names, and the test suite walks every record
+against it as the trace tests walk the captures.
+
+Three rules keep it safe. (1) *The trace always wins*: a product default fills an undecided
+verdict or an at-scale fact, never overrides what the trace shows, and the consistency check
+that rejects a wrong human answer rejects a wrong default; Milvus's segment layout is in the
+trace already, the record is for what a short trace cannot show. (2) *Defaults are weaker than
+answers*: a fact from a record carries its own provenance ("product default, Milvus 2.5 docs,
+dated") and ranks below the owner's statement, so a reviewer sees which verdicts rest on
+documentation. (3) *Records are dated and versioned*: the digest asks the version once it has
+confirmed the application, picks the record whose range contains it, and otherwise takes the
+nearest lower record with every fact downgraded to a suggestion the person confirms; a record
+never claims a version it was not read for.
+
+Why it is worth more than it looks: signatures work across all four types (DCP's `.distcp` and
+`.metadata`, LMCache's directory, safetensors, DiskANN's `_disk.index` and `_pq_pivots.bin`,
+Qdrant's `payload_storage` and `vector_storage`, Lucene segment files under OpenSearch), so
+recognition is the first question for every trace and the bridge the no-LLM path needs ("this
+trace matches mechanism X; its cases are these"); the record knows when strace is blind (Milvus
+and Qdrant can serve vectors through mmap, where reads become page faults the trace never shows,
+and a record saying "mmap on by default for this index type" lets the digest warn that the
+capture undercounts, which no trace reading can discover); and it names the managed case
+(Pinecone, Zilliz Cloud, Atlas: the index I/O is on the vendor's storage, the measurable
+workload is the leaf store and ingest). Caveats: coverage is long-tailed and FAISS, the most
+common library, has no signature, so a "none of these" path always falls through to the plain
+questions; the question structure stays fixed, identify, confirm, then the open list, with the
+record only removing items from it; and the records are a maintenance commitment someone owns,
+a project decision rather than a tool one.
+
+**Object-store request logs (the user: "we will need to suggest and/or provide operation
+tracing techniques for object stores").** In order: (1) define the log `aeiou-trace` reads, one
+line per request with wall-clock time, thread, operation, bucket, key, byte range, bytes,
+status, and duration, keeping range requests and SDK retries as issued since the abstract is
+the application's request stream, with wall-clock time so a mixed POSIX-and-object application
+(Milvus) merges its two logs on a clock as the strace timestamps allow; (2) readers for the
+server-side logs that exist: MinIO's audit webhook, complete and real-time and what Milvus
+standalone stores segments on, so item 45(d) needs it anyway; Ceph RGW's ops log; S3 server
+access logs with the caveat that AWS delivers them best-effort and late, so CloudTrail data
+events are the complete source there; (3) for a lab with no server log, a small logging proxy
+the application's endpoint variable points at, since strace of a TLS client sees ciphertext;
+client-side SDK logging as a verbose, library-specific fallback. Item 49 states the reader as a
+gap until built.
+
+**Build order, each its own commit with `./dev.sh check all` and coverage:** (1) this record
+and the amendments to §3.87, brief items 45, 47, 48, 49, README's Status, and REFERENCE §7;
+(2) the question loop in the digest, tests first: the generic fact questions, the behavioral
+questions in rank order, the consistency check, `asserted` with provenance, the answers file
+beside the document, `--answers FILE`, the no-questions flag, `-` refused, man page and
+REFERENCE §7; (3) `applications/`: format, loader, signature matcher, confirm question, product
+defaults as weaker assertions, first records for the applications the kits trace (DCP, LMCache,
+safetensors, DiskANN) and Milvus and Qdrant from their documentation with sources and versions;
+(4) the keyed site kind, then within-one-open; (5) the object log format and the MinIO audit
+reader. Real traces for checkpointing and vector search would make (2) through (4) honest; the
+kits produce them but need libraries this box lacks, so where to run them is the user's call.
 
 ## 4. Plan changes
 
